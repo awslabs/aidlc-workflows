@@ -38,6 +38,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "cursor",
   harnessDir: ".cursor",
+  orchestratorSkillPath: ".cursor/skills/aidlc/SKILL.md",
   tierFlavor: "cursor",
 
   // Same core projection as claude, into .cursor/.
@@ -52,6 +53,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 
   harnessFiles: [

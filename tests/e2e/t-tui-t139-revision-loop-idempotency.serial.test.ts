@@ -56,8 +56,8 @@
 //     conversationally, Revision Count stuck at 0).
 //   - Completed counter == `- [x]` grid count (aidlc-state.ts:256-258 sync); the
 //     terminator + the cross-run comparison both read this field.
-//   - the AUQ gate footer + caret signal is gridHasMenu (tui-drive.ts; `❯` on
-//     tmux, `>` on Windows ConPTY — platform-invariant).
+//   - the AUQ gate footer + exact `❯` caret signal is gridHasMenu
+//     (tui-drive.ts; identical on tmux and Windows ConPTY).
 //
 // SERIAL (.serial. in the filename): two full back-to-back TUI run-throughs in one
 // test, each its own claude session, sequential. SPENDS REAL TOKENS (two bugfix
@@ -278,7 +278,7 @@ function launchBugfix(session: string, sandbox: string): void {
   expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
 
   // Explicit `--scope bugfix` (not the bare keyword) so the shipped
-  // AWS_AIDLC_DEFAULT_SCOPE=workshop env-default does NOT trigger a scope-
+  // AWS_AIDLC_DEFAULT_SCOPE=classic env-default does NOT trigger a scope-
   // disambiguation gate at START (the t50 lesson, SKILL.md:105 "explicit CLI flag
   // wins"). The trailing description satisfies the step-6 "what to build?" prompt
   // up front (answer-gate can't type free text).

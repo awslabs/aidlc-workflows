@@ -30,6 +30,8 @@ integration** (so the integration level rides along on every local
 shows where each level sits conceptually — the profile flags below are how you
 actually select them.
 
+The deterministic e2e slice (`bash tests/run-tests.sh --debug -P 8 --e2e --filter "^t[0-9]"`) runs in CI with `--no-llm`, while local development loops default to smoke + unit + integration. Branches that touch merge, worktree, or swarm paths should also run this slice locally before review rounds, because mode-boundary regressions between ordinary-Bolt and swarm execution are invisible to the default tier.
+
 **Filename convention.** A test's filename is `t<NN>[-description].test.ts` —
 just the level directory it lives in and an optional human description. There
 is **no mechanism segment** in the name: a test's mechanism (whether it spawns
@@ -104,8 +106,9 @@ bun tests/run-tests.ts [--ci | --all --debug -P 8]
 1. Install `bun`, Node.js, and the Claude Code CLI.
 2. Install Git for Windows if you are running the full suite or the POSIX wrapper compatibility smoke; the native runner path itself does not require Bash.
 3. For e2e TUI tests, install the dev dependencies with npm so node can resolve `node-pty` and `@xterm/headless`.
-4. Set `AIDLC_NODE_BIN` to the concrete `node.exe` path and set `AIDLC_TUI_LIVE=1` for a full acceptance run.
-5. Run `bun tests/run-tests.ts --all --debug -P 8`.
+4. Set `AIDLC_NODE_BIN` to the concrete `node.exe` path and set `AIDLC_TUI_LIVE=1` for live Claude TUI coverage.
+5. For the Kiro IDE slice, install and sign in to Kiro IDE, then set `AIDLC_KIRO_IDE_LIVE=1`. The default Windows binary is `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe`; override it with `AIDLC_KIRO_IDE_BIN`.
+6. Run `bun tests/run-tests.ts --all --debug -P 8`.
 
 No WSL or Docker is required; the supported validation substrate is native Windows.
 
@@ -149,7 +152,7 @@ No WSL or Docker is required; the supported validation substrate is native Windo
 
 `run-all.ps1` exports `AIDLC_NODE_BIN` and `AIDLC_TUI_LIVE=1` before invoking `bun tests/run-tests.ts --all --debug -P <N>`, so a green result cannot come from silently skipping the live TUI journeys. It probes the claude binary across `C:\Users\Administrator\.local\bin` and the systemprofile home, since the native installer drops `claude.exe` under whichever user ran the CloudFormation UserData bootstrap (Administrator under EC2Launch v2).
 
-The stack defaults to **`c5.4xlarge`** — the proven size for the full `--all -P 8` live run. The e2e tier carries per-test `bun:test` timeouts (the Bolt-worktree lifecycle test lands at ~5.5s of its 5s budget on c5.4xlarge), so a smaller box (e.g. `t3.large`) tips deterministic Bolt/runtime tests into spurious timeouts under parallel load. Shrink the `InstanceType` parameter only when running a lighter tier selection.
+The stack defaults to **`c5.4xlarge`** — the proven size for the full `--all -P 8` live run. The e2e tier carries per-test `bun:test` timeouts (the worktree lifecycle test for Bolts lands at ~5.5s of its 5s budget on c5.4xlarge), so a smaller box (e.g. `t3.large`) tips deterministic Bolt/runtime tests into spurious timeouts under parallel load. Shrink the `InstanceType` parameter only when running a lighter tier selection.
 
 ## Preflight Validation
 
@@ -269,7 +272,7 @@ Contents: 1 minimal .md file (functional-design) describing the todo-core unit's
 
 1. Choose the stage to test and identify what state fixture it needs (the state must show that stage as the current/next stage)
 2. Create or reuse a state fixture in `tests/fixtures/`
-3. Create `tests/integration/tNN-stage-SLUG.test.ts` and use the shared TypeScript harness helpers (`tests/harness/fixtures.ts`, `tests/harness/sdk-drive.ts`, or `tests/harness/tui-drive.ts`) rather than shell TAP helpers.
+3. Create `tests/integration/tNN-stage-SLUG.test.ts` and use the shared TypeScript harness helpers (`tests/harness/fixtures.ts`, `tests/harness/sdk-drive.ts`, `tests/harness/tui-drive.ts`, `tests/harness/plugin-kit.ts`, or `tests/harness/exec-drive.ts`) rather than shell TAP helpers.
 4. Run with `bun tests/run-tests.ts --integration` or directly: `bun test tests/integration/tNN-stage-SLUG.test.ts`
 
 ## How to Add Acceptance Assertions
@@ -301,6 +304,9 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_TEST_TIMEOUT` | `1800` | Per-`claude -p` call timeout in seconds. Set to `0` to disable. |
 | `AIDLC_TUI_SETTING_SOURCES` | `project` | Setting sources injected into live `claude` TUI launches. Use `default` or an empty value only for focused calibration that intentionally includes user/local Claude settings. |
 | `AIDLC_TUI_TRACE_POLL_MS` | `10000` | Minimum interval between `answer_gate_poll` snapshots in TUI NDJSON traces while a long journey is waiting for the next menu or disk terminator. |
+| `AIDLC_KIRO_IDE_LIVE` | unset | Set to `1` to run the signed-in Kiro IDE desktop journey on macOS or Windows. |
+| `AIDLC_KIRO_IDE_BIN` | platform default | Override the Kiro IDE executable. Defaults to `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
+| `AIDLC_KIRO_IDE_SEED` | generated seed | Optional Kiro user-data directory. The test copies it to a disposable temp directory before launch and never mutates the source profile. |
 
 ## CLI Reference
 

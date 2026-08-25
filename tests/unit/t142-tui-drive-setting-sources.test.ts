@@ -8,7 +8,14 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   readAllAuditShards,
@@ -19,11 +26,22 @@ import {
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
 import {
+  adaptWindowsLaunch,
+  fileSignalMet,
+  filterConsoleOwnedWindowsProcesses,
+  filterOwnedWindowsDescendants,
+  filterSpawnOwnedWindowsDescendants,
   gridHasOption,
   gridIsApprovalGate,
   normalizeTuiCommand,
+  newConsoleProcessIds,
+  parsePortablePath,
   pickRevisionOption,
   pickRevisionTypeSomethingOption,
+  resolvePortablePathPattern,
+  runBoundedCommand,
+  shouldForceKillWindowsChildRoot,
+  winSessionDir,
 } from "../harness/tui-drive.ts";
 import {
   cleanupTuiProject,
@@ -33,6 +51,24 @@ import {
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
+
+const REPO_ROOT = join(import.meta.dir, "..", "..");
+const KIRO_PROTOCOL = readFileSync(
+  join(
+    REPO_ROOT,
+    "dist",
+    "kiro",
+    ".kiro",
+    "aidlc-common",
+    "protocols",
+    "stage-protocol.md",
+  ),
+  "utf8",
+);
+const KIRO_SKILL = readFileSync(
+  join(REPO_ROOT, "dist", "kiro", ".kiro", "skills", "aidlc", "SKILL.md"),
+  "utf8",
+);
 
 function env(settingSources?: string): NodeJS.ProcessEnv {
   return settingSources === undefined
@@ -135,6 +171,396 @@ describe("tui-drive setting-source isolation", () => {
     expect(
       normalizeTuiCommand(["node", "script.js", "claude"], env()),
     ).toEqual(["node", "script.js", "claude"]);
+  });
+});
+
+describe("tui-drive structured Windows launch adapter", () => {
+  const specialArgs = [
+    "",
+    "two words",
+    'quote"inside',
+    "a&b|c<d>e^f%g!h(i)",
+    "trailing\\",
+  ];
+
+  test("keeps .exe and ordinary binaries on direct structured argv", () => {
+    expect(
+      adaptWindowsLaunch("C:\\Program Files\\Claude\\claude.exe", specialArgs),
+    ).toEqual({
+      file: "C:\\Program Files\\Claude\\claude.exe",
+      args: specialArgs,
+    });
+    expect(adaptWindowsLaunch("custom-binary", specialArgs)).toEqual({
+      file: "custom-binary",
+      args: specialArgs,
+    });
+  });
+
+  test("routes .ps1 through non-interactive PowerShell -File with argv intact", () => {
+    expect(
+      adaptWindowsLaunch(
+        "C:\\Program Files\\Claude\\claude.ps1",
+        specialArgs,
+      ),
+    ).toEqual({
+      file: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        "C:\\Program Files\\Claude\\claude.ps1",
+        ...specialArgs,
+      ],
+    });
+  });
+
+  test("routes .cmd and .bat through ComSpec with focused cmd quoting", () => {
+    for (const extension of ["cmd", "bat"]) {
+      const launch = adaptWindowsLaunch(
+        `C:\\Program Files\\Claude\\claude.${extension}`,
+        specialArgs,
+        { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      );
+      expect(launch).toEqual({
+        file: "C:\\Windows\\System32\\cmd.exe",
+        args: [
+          "/d",
+          "/s",
+          "/c",
+          `"C:\\Program^ Files\\Claude\\claude.${extension} ` +
+            `^^^"^^^" ^^^"two^^^ words^^^" ^^^"quote\\^^^"inside^^^" ` +
+            `^^^"a^^^&b^^^|c^^^<d^^^>e^^^^f^^^%g^^^!h^^^(i^^^)^^^" ` +
+            `^^^"trailing\\\\^^^""`,
+        ],
+        windowsVerbatimArguments: true,
+      });
+    }
+  });
+});
+
+describe("tui-drive portable until-file paths", () => {
+  test("parses POSIX, Git-Bash, drive, UNC, relative, and mixed forms structurally", () => {
+    expect(parsePortablePath("/var/tmp/project/signals/*/done.txt")).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["var", "tmp", "project", "signals", "*", "done.txt"],
+    });
+    expect(
+      parsePortablePath(
+        "/c/Users/dev/project/signals/*/done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "git-bash-absolute",
+      root: "C:\\",
+      segments: ["Users", "dev", "project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("c:\\Users\\dev\\project\\signals\\*\\done.txt")).toEqual({
+      kind: "drive-absolute",
+      root: "C:\\",
+      segments: ["Users", "dev", "project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("\\\\server\\share\\project\\signals/*\\done.txt")).toEqual({
+      kind: "unc-absolute",
+      root: "\\\\server\\share\\",
+      segments: ["project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("signals\\*\\done.txt")).toEqual({
+      kind: "relative",
+      root: "",
+      segments: ["signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("C:\\Users/dev\\project/signals\\*\\done.txt")).toEqual({
+      kind: "drive-absolute",
+      root: "C:\\",
+      segments: ["Users", "dev", "project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("/x/signals/done.txt", "posix")).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["x", "signals", "done.txt"],
+    });
+    expect(parsePortablePath("//x/share/done.txt", "posix")).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["x", "share", "done.txt"],
+    });
+  });
+
+  test("resolves each absolute root without flattening it into a relative string", () => {
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "signals\\*\\done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "relative",
+      root: "C:\\repo",
+      segments: ["signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "D:\\data\\signals\\*\\done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "drive-absolute",
+      root: "D:\\",
+      segments: ["data", "signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "/d/data/signals/*/done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "git-bash-absolute",
+      root: "D:\\",
+      segments: ["data", "signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "\\\\server\\share\\signals\\*\\done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "unc-absolute",
+      root: "\\\\server\\share\\",
+      segments: ["signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "/project",
+        "/x/signals/*/done.txt",
+        "posix",
+      ),
+    ).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["x", "signals", "*", "done.txt"],
+    });
+  });
+
+  test("matches wildcarded forward, backslash, mixed, and native absolute paths", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-until-file-"));
+    const signal = join(root, "signals", "record", "done.txt");
+    try {
+      mkdirSync(dirname(signal), { recursive: true });
+      writeFileSync(signal, "complete\n");
+
+      expect(fileSignalMet(root, "signals/*/done.txt")).toBe(true);
+      expect(fileSignalMet(root, "signals\\*\\done.txt")).toBe(true);
+      expect(fileSignalMet(root, "signals/*\\done.txt")).toBe(true);
+      expect(fileSignalMet(root, join(root, "signals", "*", "done.txt"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("tui-drive bounded Windows subprocesses", () => {
+  test("sanitized session-name collisions use distinct authenticated channels", () => {
+    expect(winSessionDir("a/b")).not.toBe(winSessionDir("a_b"));
+  });
+
+  test("the shared sync runner enforces its wall-clock timeout", () => {
+    const startedAt = Date.now();
+    const result = runBoundedCommand(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 10000)"],
+      100,
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.timedOut).toBe(true);
+    expect(result.errorCode).toBe("ETIMEDOUT");
+    expect(elapsedMs).toBeLessThan(2_000);
+  });
+
+  test("parent PID reuse cannot authorize children outside the recorded lifetime", () => {
+    const recordedRoot = {
+      pid: 4100,
+      parentPid: 100,
+      creationDate: "2026-08-24T08:00:00.000Z",
+      commandLine: "owned-root",
+    };
+    const legitimateChild = {
+      pid: 4101,
+      parentPid: 4100,
+      creationDate: "2026-08-24T08:00:01.000Z",
+      commandLine: "owned-child",
+    };
+    const reusedRoot = {
+      pid: 4100,
+      parentPid: 200,
+      creationDate: "2026-08-24T08:00:03.000Z",
+      commandLine: "unrelated-root",
+    };
+    const unrelatedChild = {
+      pid: 4102,
+      parentPid: 4100,
+      creationDate: "2026-08-24T08:00:03.100Z",
+      commandLine: "unrelated-child",
+    };
+
+    expect(
+      filterOwnedWindowsDescendants(
+        recordedRoot,
+        null,
+        [legitimateChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual([legitimateChild]);
+    expect(
+      filterOwnedWindowsDescendants(
+        recordedRoot,
+        reusedRoot,
+        [legitimateChild, unrelatedChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual([]);
+    expect(
+      filterOwnedWindowsDescendants(
+        recordedRoot,
+        null,
+        [unrelatedChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual([]);
+  });
+
+  test("authoritative spawn lifetimes cover fast exits without trusting a bare PID", () => {
+    const spawn = {
+      pid: 4150,
+      parentPid: 4100,
+      startedAfter: "2026-08-24T08:00:00.000Z",
+    };
+    const ownedChild = {
+      pid: 4151,
+      parentPid: 4150,
+      creationDate: "2026-08-24T08:00:00.100Z",
+      commandLine: "owned-child",
+    };
+    const preexistingChild = {
+      ...ownedChild,
+      pid: 4152,
+      creationDate: "2026-08-24T07:59:59.900Z",
+      commandLine: "preexisting-child",
+    };
+    const recycledChild = {
+      ...ownedChild,
+      pid: 4153,
+      creationDate: "2026-08-24T08:00:02.100Z",
+      commandLine: "recycled-child",
+    };
+    const recycledRoot = {
+      pid: 4150,
+      parentPid: 9000,
+      creationDate: "2026-08-24T08:00:02.050Z",
+      commandLine: "recycled-root",
+    };
+
+    expect(
+      filterSpawnOwnedWindowsDescendants(
+        spawn,
+        recycledRoot,
+        [ownedChild, preexistingChild, recycledChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual({ status: "ok", value: [ownedChild] });
+    expect(
+      filterSpawnOwnedWindowsDescendants(
+        spawn,
+        {
+          ...recycledRoot,
+          creationDate: "2026-08-24T08:00:01.000Z",
+        },
+        [ownedChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual({
+      status: "error",
+      message:
+        "target pid 4150 is still live or was reused inside its recorded lifetime",
+    });
+    expect(
+      filterSpawnOwnedWindowsDescendants(
+        spawn,
+        null,
+        [{ ...ownedChild, creationDate: "not-a-date" }],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual({
+      status: "error",
+      message:
+        "cannot verify child pid 4151 of target pid 4150: invalid creation time",
+    });
+  });
+
+  test("identity-less fast exits require stable ConPTY console membership", () => {
+    const legitimate = {
+      pid: 4201,
+      parentPid: 4200,
+      creationDate: "2026-08-24T08:00:00.100Z",
+      commandLine: "owned-child",
+    };
+    const unrelated = {
+      ...legitimate,
+      pid: 4202,
+      commandLine: "unrelated-recycled-child",
+    };
+
+    expect(
+      filterConsoleOwnedWindowsProcesses(
+        [4201, 4202],
+        [legitimate, unrelated],
+        [4201],
+      ),
+    ).toEqual([legitimate]);
+    expect(
+      filterConsoleOwnedWindowsProcesses([4201], [legitimate], []),
+    ).toEqual([]);
+    expect(newConsoleProcessIds([4201], [4202])).toEqual([4202]);
+    expect(
+      filterConsoleOwnedWindowsProcesses(
+        [4202],
+        [unrelated],
+        [4202],
+      ),
+    ).toEqual([unrelated]);
+  });
+
+  test("an exited or recycled ConPTY root never regains taskkill authority", () => {
+    const recorded = {
+      pid: 5100,
+      parentPid: 5000,
+      creationDate: "2026-08-24T08:00:00.000Z",
+      commandLine: "owned-child",
+    };
+    const recycled = {
+      ...recorded,
+      creationDate: "2026-08-24T08:01:00.000Z",
+      commandLine: "unrelated-child",
+    };
+
+    expect(
+      shouldForceKillWindowsChildRoot(undefined, recorded, recorded),
+    ).toBe(true);
+    expect(
+      shouldForceKillWindowsChildRoot(
+        "2026-08-24T08:00:30.000Z",
+        recorded,
+        recorded,
+      ),
+    ).toBe(false);
+    expect(
+      shouldForceKillWindowsChildRoot(undefined, recorded, recycled),
+    ).toBe(false);
   });
 });
 
@@ -360,6 +786,86 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.confirmedSummaries.size).toBe(2);
   });
 
+  test("prefers the latest summary prompt over a retained Q heading in tool output", () => {
+    const state = createKiroNumberedProseAnswerState();
+    const screen = [
+      "Editing intent-capture-questions.md",
+      "- ## Scope",
+      "+ ## Q8. Scope",
+      "",
+      "Does this all look correct before I generate the intent artifacts?",
+      "1. Looks correct",
+      "2. Request changes",
+    ].join("\n");
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBe("Looks correct");
+    expect(state.answeredQuestions.size).toBe(0);
+    expect(state.confirmedSummaries.size).toBe(1);
+  });
+
+  test("recognizes Kiro's Question N of M guide rendering", () => {
+    const state = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        "Question 1 of 8\nWhich outcome matters most?\n1. Recommended\n2. Other",
+        state,
+      ),
+    ).toBe("Q1: 1");
+    expect(state.answeredQuestions).toEqual(new Set([1]));
+  });
+
+  test("recognizes Kiro's Question N dash-rendered batches", () => {
+    const state = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        [
+          "Question 1 — What problem are we solving?",
+          "1. Personal task management",
+          "Question 2 — Who is the customer?",
+          "1. Just me",
+          "Question 3 — What does success look like?",
+          "1. It works reliably",
+        ].join("\n"),
+        state,
+      ),
+    ).toBe("Q1: 1, Q2: 1, Q3: 1");
+    expect(state.answeredQuestions).toEqual(new Set([1, 2, 3]));
+  });
+
+  test("answers an explicitly restated pending question without repainted options", () => {
+    const state = createKiroNumberedProseAnswerState();
+    state.answeredQuestions = new Set([2, 3, 4]);
+    expect(
+      nextKiroNumberedProseAnswer(
+        "Saved Q2-Q4. Q1 still pending.\n" +
+          "Waiting on your pick for Q1 above, then we'll do the last batch.",
+        state,
+      ),
+    ).toBe("Q1: 1");
+    expect(state.answeredQuestions).toEqual(new Set([1, 2, 3, 4]));
+  });
+
+  test("recognizes restated summary and approval choices after an unmatched reply", () => {
+    const summaryState = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        'I received "go ahead", but it did not match an offered choice.\n' +
+          "Does this all look correct before I generate the artifact?\n" +
+          "1. Looks correct\n2. Request changes",
+        summaryState,
+      ),
+    ).toBe("Looks correct");
+
+    const gateState = createKiroNumberedProseAnswerState();
+    gateState.learningsAnswered = 1;
+    expect(
+      nextKiroNumberedProseAnswer(
+        'I received "go ahead", but it did not match an offered choice.\n' +
+          "How would you like to proceed?\n1. Approve\n2. Request Changes",
+        gateState,
+      ),
+    ).toBe("Approve");
+  });
+
   test("answers an ad-hoc lettered clarification menu once, and a distinct one after it", () => {
     // A live hub that spots a contradiction between two recorded answers may
     // invent a mid-stage lettered menu (observed live: intent-capture Q3-vs-Q5
@@ -409,6 +915,28 @@ describe("Kiro numbered-prose answer classification", () => {
     ).toBe("Nothing to add");
     expect(state.learningsAnswered).toBe(2);
     expect(state.approvalsAnswered).toBe(1);
+  });
+});
+
+describe("Kiro non-matching checkpoint protocol", () => {
+  test("shared protocol acknowledges the reply, restates choices, and records nothing", () => {
+    expect(KIRO_PROTOCOL).toContain("### Non-matching checkpoint replies");
+    expect(KIRO_PROTOCOL).toContain("acknowledge the received reply");
+    expect(KIRO_PROTOCOL).toContain("state that it did not match an offered choice");
+    expect(KIRO_PROTOCOL).toContain("same structured question with every valid choice");
+    expect(KIRO_PROTOCOL).toContain("do not call `aidlc-orchestrate.ts report`");
+    expect(KIRO_PROTOCOL).toContain("do not treat the checkpoint as resolved");
+    expect(KIRO_PROTOCOL).toContain("original held gate");
+  });
+
+  test("runner repeats the rule for both summary confirmation and approval", () => {
+    expect(KIRO_SKILL).toContain(
+      "If the reply matches neither **Looks correct** nor **Request changes**",
+    );
+    expect(KIRO_SKILL).toContain(
+      "If the reply matches none of them, do not report it",
+    );
+    expect(KIRO_SKILL.match(/say it did not match an offered choice/g)).toHaveLength(2);
   });
 });
 

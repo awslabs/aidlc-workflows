@@ -29,7 +29,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,8 +64,40 @@ function makeFixture(harness: string, sourceHarness = harness): string {
   const root = mkdtempSync(join(tmpdir(), "aidlc-package-contract-"));
   copyDir(join(REPO_ROOT, "core"), join(root, "core"));
   copyDir(join(REPO_ROOT, "scripts"), join(root, "scripts"));
+  cpSync(join(REPO_ROOT, "package.json"), join(root, "package.json"));
+  cpSync(join(REPO_ROOT, "bun.lock"), join(root, "bun.lock"));
   mkdirSync(join(root, "harness"), { recursive: true });
   copyDir(join(REPO_ROOT, "harness", sourceHarness), join(root, "harness", harness));
+  // Emitter imports (notably smol-toml) resolve from the checkout, not from
+  // Bun's mutable global package cache.
+  const nodeModules = join(REPO_ROOT, "node_modules");
+  if (existsSync(nodeModules)) {
+    symlinkSync(
+      nodeModules,
+      join(root, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  } else if (sourceHarness === "codex") {
+    const cache = spawnSync(process.execPath, ["pm", "cache"], {
+      encoding: "utf-8",
+    });
+    const cacheRoot = (cache.stdout ?? "").trim();
+    const packageJson = JSON.parse(
+      readFileSync(join(REPO_ROOT, "package.json"), "utf-8"),
+    ) as { devDependencies?: Record<string, string> };
+    const version = packageJson.devDependencies?.["smol-toml"];
+    const cached =
+      cache.status === 0 && version
+        ? readdirSync(cacheRoot).find((name) =>
+            name.startsWith(`smol-toml@${version}`),
+          )
+        : undefined;
+    if (!cached) throw new Error("smol-toml is unavailable in Bun's package cache");
+    copyDir(
+      join(cacheRoot, cached),
+      join(root, "node_modules", "smol-toml"),
+    );
+  }
   if (harness === sourceHarness) {
     mkdirSync(join(root, "dist"), { recursive: true });
     copyDir(join(REPO_ROOT, "dist", harness), join(root, "dist", harness));
@@ -129,12 +163,17 @@ describe("t145 packaging parity — dist/ is in sync with core/ + harness/", () 
 });
 
 describe("t145 packager contract regressions", () => {
-  test("a synthetic harness passes its manifest harnessDir to graph and runner tools", () => {
+  test("a synthetic harness uses the default orchestrator path and passes harnessDir to tools", () => {
     const root = makeFixture("foo", "claude");
     try {
       const manifest = join(root, "harness", "foo", "manifest.ts");
       replaceOnce(manifest, 'name: "claude"', 'name: "foo"');
       replaceOnce(manifest, 'harnessDir: ".claude"', 'harnessDir: ".foo"');
+      replaceOnce(
+        manifest,
+        'orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",',
+        "",
+      );
 
       // A first build still needs the harness-neutral stage number/name seed.
       for (const file of ["stage-graph.json", "scope-grid.json"]) {
@@ -228,6 +267,11 @@ describe("t145 packager contract regressions", () => {
     try {
       const manifest = join(root, "harness", "claude", "manifest.ts");
       replaceOnce(manifest, 'harnessDir: ".claude"', 'harnessDir: ".foo"');
+      replaceOnce(
+        manifest,
+        'orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md"',
+        'orchestratorSkillPath: ".foo/skills/aidlc/SKILL.md"',
+      );
 
       const run = runPackage(root, "claude");
       expect(output(run)).toContain("[claude] regenerated dist/claude/.foo");

@@ -57,7 +57,6 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
-  activeSpace,
   auditLockOwnedByProcess,
   type AgentMetadata,
   errorMessage,
@@ -65,6 +64,7 @@ import {
   loadAgents,
   loadScopeMapping,
   loadScopeMetadata,
+  loadScopeMetadataAll,
   harnessDir,
   PHASES,
   type Phase,
@@ -78,6 +78,7 @@ import {
   parseStageFrontmatter,
   planFilePath,
   resolveProjectDir,
+  resolveWorkflowSelection,
   type ScopeDefinition,
   type StageEntry,
   stageEnabledBySelection,
@@ -120,13 +121,15 @@ export interface RuleResolution {
 // Per-sensor resolution row baked into each stage's sensors_applicable.
 // Pull authoring: the stage's frontmatter `sensors: [<id>]` declares the
 // import; the resolver looks the manifest up by id and copies its
-// capability filter (matches) verbatim. matches is omitted when the
-// manifest declares no path filter (e.g., required-sections,
-// upstream-coverage). The PostToolUse hook reads the snapshotted matches
-// off the graph node — never re-opens the manifest at fire time.
+// dispatch policy and capability metadata verbatim. matches is omitted when
+// the manifest declares no path filter. Runtime dispatchers read this
+// snapshotted binding off the graph node — never re-open the manifest.
 export interface SensorResolution {
   id: string;
   path: string;
+  fire_on: "write" | "gate";
+  default_severity: "advisory" | "blocking";
+  category?: string;
   matches?: string;
 }
 
@@ -330,7 +333,9 @@ function memoryDisplayPath(rel: string): string {
  *  `memorySegmentsForSpace`. (The TPL templates dir is this + "templates"; see
  *  `memoryTemplatesDir`.) */
 export function memoryDirFor(projectDir: string, space?: string): string {
-  return join(projectDir, ...memorySegmentsForSpace(space ?? activeSpace(projectDir)));
+  const resolvedSpace =
+    space ?? resolveWorkflowSelection(projectDir).space;
+  return join(projectDir, ...memorySegmentsForSpace(resolvedSpace));
 }
 
 /** The TPL template-override source-of-truth dir for a workspace:
@@ -342,7 +347,9 @@ export function memoryDirFor(projectDir: string, space?: string): string {
  *  gets teamB's templates. Kept here (not hardcoded in the dispatcher) so it
  *  stays byte-aligned with where the packager emits and the resolver reads. */
 export function memoryTemplatesDir(projectDir: string, space?: string): string {
-  return join(projectDir, ...memorySegmentsForSpace(space ?? activeSpace(projectDir)), "templates");
+  const resolvedSpace =
+    space ?? resolveWorkflowSelection(projectDir).space;
+  return join(projectDir, ...memorySegmentsForSpace(resolvedSpace), "templates");
 }
 
 /** The FRAMEWORK-DEFAULT templates dir — the read-only, engine-shipped middle
@@ -779,7 +786,15 @@ export function resolveSensorsForStage(
           `Known ids: ${known}`,
       );
     }
-    const entry: SensorResolution = { id: sensor.id, path: sensor.path };
+    const entry: SensorResolution = {
+      id: sensor.id,
+      path: sensor.path,
+      fire_on: sensor.manifest.fire_on,
+      default_severity: sensor.manifest.default_severity,
+    };
+    if (sensor.manifest.category !== undefined) {
+      entry.category = sensor.manifest.category;
+    }
     if (sensor.manifest.matches !== undefined) {
       entry.matches = sensor.manifest.matches;
     }
@@ -1042,7 +1057,7 @@ export function nearestStockScopes(
  *  numeric order, shaped `{slug, phase, action}` — byte-identical to
  *  lib.ts's stagesInScope() / the legacy scope-mapping-derived plan. The
  *  `aidlc-graph resolve` subcommand writes this to .aidlc-plan.json. The
- *  parity test asserts this matches the legacy plan across all 9 scopes. */
+ *  parity test asserts this matches the legacy plan across all 11 scopes. */
 export function resolvePlanForScope(
   scope: string
 ): Array<{ slug: string; phase: string; action: "EXECUTE" | "SKIP" }> {
@@ -1425,8 +1440,14 @@ export function canonicalScopeGridJson(grid: ScopeGrid): string {
  *  all-SKIP, an emptied plan with no diagnostic. Any on-disk entry whose
  *  scope name the transpose does not produce survives the recompile; keys
  *  re-sort so the canonical emitter stays deterministic. Unparseable or
- *  malformed on-disk grids contribute nothing (fresh wins). */
-export function mergeComposedScopes(fresh: ScopeGrid, onDiskJson: string | null): ScopeGrid {
+ *  malformed on-disk grids contribute nothing (fresh wins). When
+ *  `preserveNames` is supplied, an orphan grid column with no matching scope
+ *  identity file is dropped rather than mistaken for a composed scope. */
+export function mergeComposedScopes(
+  fresh: ScopeGrid,
+  onDiskJson: string | null,
+  preserveNames?: ReadonlySet<string>,
+): ScopeGrid {
   if (!onDiskJson) return fresh;
   let onDisk: unknown;
   try {
@@ -1438,6 +1459,7 @@ export function mergeComposedScopes(fresh: ScopeGrid, onDiskJson: string | null)
   const merged: ScopeGrid = { ...fresh };
   for (const [name, entry] of Object.entries(onDisk as Record<string, unknown>)) {
     if (name in merged) continue;
+    if (preserveNames !== undefined && !preserveNames.has(name)) continue;
     if (
       typeof entry === "object" && entry !== null && !Array.isArray(entry) &&
       typeof (entry as { stages?: unknown }).stages === "object"
@@ -1666,6 +1688,9 @@ export function compileStageGraph(): {
   const newByPrefix = new Map<number, NewStageSeed[]>();
   // Track slug-to-first-file so duplicate-slug errors name both files.
   const slugToFile = new Map<string, string>();
+  type StageDeclaration = { file: string; slug: string };
+  const artifactProducers = new Map<string, StageDeclaration[]>();
+  const artifactConsumers = new Map<string, StageDeclaration[]>();
 
   // Known agent slugs (the `name:` field of each .claude/agents/*.md), passed
   // to validateStageFrontmatter so a stage referencing a lead_agent or
@@ -1748,6 +1773,26 @@ export function compileStageGraph(): {
       }
       slugToFile.set(slug, filePath);
 
+      const declaration = { file: filePath, slug };
+      // Match producersOf(): required and optional outputs share one artifact
+      // producer namespace. Set semantics avoid counting one stage twice if an
+      // author repeats a name across both lists.
+      for (const artifact of new Set([
+        ...(validation.data.produces ?? []),
+        ...(validation.data.optional_produces ?? []),
+      ])) {
+        const producers = artifactProducers.get(artifact) ?? [];
+        producers.push(declaration);
+        artifactProducers.set(artifact, producers);
+      }
+      for (const artifact of new Set(
+        (validation.data.consumes ?? []).map((consume) => consume.artifact),
+      )) {
+        const consumers = artifactConsumers.get(artifact) ?? [];
+        consumers.push(declaration);
+        artifactConsumers.set(artifact, consumers);
+      }
+
       // Existing slug -> keep its pinned number + name (the "computed once,
       // stable thereafter" contract; a pinned row missing only its name
       // seeds the name inline). New slug -> DEFER numbering to the per-phase
@@ -1776,6 +1821,24 @@ export function compileStageGraph(): {
           newByPrefix.set(prefix, [{ data: validation.data, phase, prefix, name }]);
       }
     }
+  }
+
+  for (const [artifact, producers] of artifactProducers) {
+    if (producers.length < 2) continue;
+    const consumer = artifactConsumers.get(artifact)?.[0];
+    if (!consumer) continue;
+
+    // Shared artifact names are legal when unconsumed: traceability is
+    // produced by eight stages and consumed by none, so only consumed names
+    // require a unique producer.
+    const producerList = producers
+      .map(({ file, slug }) => `${file} (stage "${slug}")`)
+      .join(", ");
+    throw new Error(
+      `Duplicate producers for consumed artifact "${artifact}" in ${producerList} — ` +
+        `consumed by stage "${consumer.slug}" in ${consumer.file}. ` +
+        `Rename one produced artifact or update the consumer.`
+    );
   }
 
   // Per-phase topological seed for NEW slugs. Numbers are assigned by the
@@ -1859,8 +1922,9 @@ export function compileStageGraph(): {
   }
 
   // Resolve per-stage sensor imports. Pull authoring: each stage's
-  // sensors[] list is looked up against the manifest registry; matches
-  // is copied verbatim into the resolved entry. Unknown ids throw —
+  // sensors[] list is looked up against the manifest registry; dispatch
+  // policy, severity, category, and matches are copied into the resolved
+  // entry. Unknown ids throw —
   // authoring errors fail loud at compile, not at fire time.
   const sensorsById = loadSensors();
   for (const stage of stages) {
@@ -1931,7 +1995,12 @@ export function compileStageGraph(): {
     /* first compile: no grid on disk yet */
   }
   const selectedScopeNames = enabledScopeNames();
-  const composedNames = composedScopeNames(onDiskGrid, stockScopeNames);
+  const installedScopeNames = new Set(Object.keys(loadScopeMetadataAll()));
+  const composedNames = new Set(
+    [...composedScopeNames(onDiskGrid, stockScopeNames)].filter((name) =>
+      installedScopeNames.has(name),
+    ),
+  );
   const seededScopeNames =
     selectedScopeNames === null
       ? undefined
@@ -1946,6 +2015,7 @@ export function compileStageGraph(): {
             seededScopeNames,
           ),
           onDiskGrid,
+          composedNames,
         ),
         selectedScopeNames,
         composedNames,

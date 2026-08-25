@@ -1,4 +1,4 @@
-// covers: hook:aidlc-review-freeze, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED
+// covers: hook:aidlc-review-freeze, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED
 //
 // t264 - the deterministic PreToolUse enforcement of the §12a terminal-receipt
 // ordering (the receipt-invalidation loop's hook half; the prose half is
@@ -27,11 +27,19 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   blockReason,
   judgeFreeze,
+  REVIEW_FREEZE_FALLBACK_GUIDANCE,
+  reviewFreezeRecoveryGuidance,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -83,9 +91,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
     const v = judgeFreeze(RA, raFile, NONE, ready);
     expect(v.block).toBe(true);
     expect(v.stage).toBe("requirements-analysis");
-    // The reason redirects to the gate, not to a retry of the same write.
-    expect(blockReason(v)).toContain("Present the gate instead");
-    expect(blockReason(v)).toContain("terminal receipt ends artifact work");
+    expect(blockReason(v)).toContain("latest review is final");
+    expect(blockReason(v)).toContain("quote it at the gate");
+    expect(blockReason(v)).toContain("Request Changes");
   });
 
   test("blocks under a terminal NOT-READY receipt", () => {
@@ -118,47 +126,106 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
   });
 
+  test("only a validated pending recovery request suspends its exact scope", () => {
+    const raFile =
+      "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.md";
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        stagePending: { recovery: true, suspensionActive: true },
+      }).block,
+    ).toBe(false);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stagePending: { recovery: true, suspensionActive: true },
+      }).block,
+    ).toBe(true);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        stagePending: { recovery: false, suspensionActive: false },
+      }).block,
+    ).toBe(true);
+
+    const u3 =
+      "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
+    const u4 =
+      "/p/aidlc/spaces/default/intents/i1/construction/U04/nfr-requirements/nfr-requirements.md";
+    const receipts = {
+      stageVerdict: null,
+      unitVerdicts: new Map([
+        ["U03", "READY"],
+        ["U04", "READY"],
+      ]),
+      unitStale: new Set(["U03"]),
+      unitPending: new Map([
+        ["U03", { recovery: true, suspensionActive: true }],
+      ]),
+    };
+    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(false);
+    expect(judgeFreeze(NFR, u4, NONE, receipts).block).toBe(true);
+  });
+
+  test("guidance failures fall back without changing the freeze decision", () => {
+    const guidance = reviewFreezeRecoveryGuidance(
+      "/p",
+      "- [-] requirements-analysis — EXECUTE",
+      "requirements-analysis",
+      () => {
+        throw new Error("injected helper failure");
+      },
+    );
+    expect(guidance).toBe(REVIEW_FREEZE_FALLBACK_GUIDANCE);
+    expect(blockReason(judgeFreeze(RA, raFile, NONE, ready), guidance)).toContain(
+      REVIEW_FREEZE_FALLBACK_GUIDANCE,
+    );
+  });
+
   test("writeTargets: file tools and mutation-capable Bash contribute paths", () => {
+    const hostPath = (value: string): string => resolve(value);
     expect(writeTargets("Write", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Edit", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Read", { file_path: "/a/b.md" })).toEqual([]);
-    expect(writeTargets("Bash", { command: "printf x >> /a/b.md" })).toEqual(["/a/b.md"]);
-    expect(writeTargets("Bash", { command: "printf x>>/a/b.md" })).toEqual(["/a/b.md"]);
+    expect(writeTargets("Bash", { command: "printf x >> /a/b.md" })).toEqual([hostPath("/a/b.md")]);
+    expect(writeTargets("Bash", { command: "printf x>>/a/b.md" })).toEqual([hostPath("/a/b.md")]);
     expect(writeTargets("Bash", { command: 'printf x > "$PWD/a/b.md"' }, "/p")).toEqual([
-      "/p/a/b.md",
+      hostPath("/p/a/b.md"),
     ]);
-    expect(writeTargets("Bash", { command: "rm /a/b.md" })).toEqual(["/a/b.md"]);
+    expect(writeTargets("Bash", { command: "rm /a/b.md" })).toEqual([hostPath("/a/b.md")]);
     expect(writeTargets("Bash", { command: "command rm -f /a/b.md" })).toEqual([
-      "/a/b.md",
+      hostPath("/a/b.md"),
     ]);
     expect(writeTargets("Bash", { command: "cp /a/b.md /tmp/copy" })).not.toContain(
-      "/a/b.md",
+      hostPath("/a/b.md"),
     );
     expect(
       writeTargets("Bash", { command: "cp --target-directory=/tmp /a/b.md" }),
-    ).toEqual(["/tmp", "/tmp/b.md"]);
+    ).toEqual([hostPath("/tmp"), hostPath("/tmp/b.md")]);
     expect(writeTargets("Bash", { command: "cp -t /tmp /a/b.md" })).toEqual([
-      "/tmp",
-      "/tmp/b.md",
+      hostPath("/tmp"),
+      hostPath("/tmp/b.md"),
     ]);
     expect(
       writeTargets("Bash", {
         command: "cp /tmp/requirements.md /not-present/inception/requirements-analysis",
       }),
-    ).toEqual(["/not-present/inception/requirements-analysis"]);
+    ).toEqual([hostPath("/not-present/inception/requirements-analysis")]);
     expect(writeTargets("Bash", { command: "mv /a/b.md /tmp/moved" })).toEqual(
-      expect.arrayContaining(["/a/b.md", "/tmp/moved"]),
+      expect.arrayContaining([hostPath("/a/b.md"), hostPath("/tmp/moved")]),
     );
     expect(writeTargets("Bash", { command: "install -dv /a/b /tmp/c" })).toEqual([
-      "/a/b",
-      "/tmp/c",
+      hostPath("/a/b"),
+      hostPath("/tmp/c"),
     ]);
     expect(writeTargets("Bash", { command: "truncate -s 1 -o /a/b.md" })).toEqual([
-      "/a/b.md",
+      hostPath("/a/b.md"),
     ]);
     expect(
       writeTargets("Bash", { command: "command truncate -s 0 /a/b.md" }),
-    ).toEqual(["/a/b.md"]);
+    ).toEqual([hostPath("/a/b.md")]);
     for (const command of [
       "timeout 5 truncate -s 0 /a/b.md",
       "nice truncate -s 0 /a/b.md",
@@ -172,17 +239,17 @@ describe("t264 (a) judgeFreeze decision table", () => {
       "unbuffer truncate -s 0 /a/b.md",
       "env -S 'truncate -s 0 /a/b.md'",
     ]) {
-      expect(writeTargets("Bash", { command }), command).toContain("/a/b.md");
+      expect(writeTargets("Bash", { command }), command).toContain(hostPath("/a/b.md"));
     }
     expect(writeTargets("Bash", { command: "truncate -r /a/b.md /tmp/out" })).toEqual([
-      "/tmp/out",
+      hostPath("/tmp/out"),
     ]);
     expect(
       writeTargets("Bash", { command: "sed -i 's/x/y/' /a/b.md /tmp/c.md" }),
-    ).toEqual(["/a/b.md", "/tmp/c.md"]);
+    ).toEqual([hostPath("/a/b.md"), hostPath("/tmp/c.md")]);
     expect(
       writeTargets("Bash", { command: "perl -pi -e 's/x/y/' /a/b.md /tmp/c.md" }),
-    ).toEqual(["/a/b.md", "/tmp/c.md"]);
+    ).toEqual([hostPath("/a/b.md"), hostPath("/tmp/c.md")]);
     expect(writeTargets("Bash", { command: "sed -n '1p' /a/b.md" })).toEqual([]);
     expect(
       writeTargets("Bash", { command: "sed --version; cat /a/b.md" }),
@@ -195,19 +262,37 @@ describe("t264 (a) judgeFreeze decision table", () => {
 // (b) The shipped hook as a subprocess over a real ledger
 // ---------------------------------------------------------------------------
 
-function projWithGate(): string {
+function projBeforeGate(): string {
   const p = createTestProject();
   tempDirs.push(p);
   seedAidlcMemory(p);
   seedStateFile(p, join(FIXTURES_DIR, "state-mid-inception.md"));
-  const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+  const dir = join(
+    seededRecordDir(p),
+    "inception",
+    "requirements-analysis",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "requirements.md"), "# Requirements\n");
+  writeFileSync(
+    join(dir, "requirements-analysis-questions.md"),
+    "# Requirements Questions\n",
+  );
+  return p;
+}
+
+function openGate(p: string): void {
+  const env = {
+    ...process.env,
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  };
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", p],
     { encoding: "utf-8", env },
   );
   if ((r.status ?? -1) !== 0) throw new Error(`gate-start failed: ${r.stdout}${r.stderr}`);
-  return p;
 }
 
 function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
@@ -224,7 +309,13 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     p,
   ];
   for (const suffix of [[], ["--verdict", verdict]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const r = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      },
+    });
     if ((r.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${r.stdout}${r.stderr}`);
     }
@@ -232,7 +323,12 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
 }
 
 function reject(p: string): void {
-  const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+  const env = {
+    ...process.env,
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  };
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "reject", "requirements-analysis", "--feedback", "change it", "--project-dir", p],
@@ -264,7 +360,7 @@ function writePayload(file: string): Record<string, unknown> {
 
 describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
   test("allow before any receipt; block after READY; release on GATE_REJECTED; re-block after fresh READY", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     const file = raArtifact(p);
 
     // No receipt yet: normal stage work proceeds.
@@ -273,10 +369,16 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     // Fresh READY receipt: the same write is refused with the gate redirect,
     // and the refusal is auditable.
     recordReview(p, "READY");
+    openGate(p);
     const blocked = runHook(p, writePayload(file));
     expect(blocked.code).toBe(2);
     expect(blocked.stderr).toContain("review-freeze");
-    expect(blocked.stderr).toContain("Present the gate instead");
+    expect(blocked.stderr).toContain(
+      "If this is a reviewer suggestion, quote it at the gate",
+    );
+    expect(blocked.stderr).toContain(
+      "tell me what should change and I'll record your Request Changes decision",
+    );
     expect(readAllAuditShards(p)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");
 
     // A recorded gate rejection resets the receipt floor: the freeze lifts
@@ -286,25 +388,43 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
 
     // The re-reviewed revision freezes again - same invariant, next attempt.
     recordReview(p, "READY");
+    const revise = spawnSync(
+      BUN,
+      [STATE_TOOL, "revise", "requirements-analysis", "--project-dir", p],
+      {
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        },
+      },
+    );
+    if ((revise.status ?? -1) !== 0) {
+      throw new Error(`revise failed: ${revise.stdout}${revise.stderr}`);
+    }
     expect(runHook(p, writePayload(file)).code).toBe(2);
   });
 
   test("advisory NOT-READY is terminal and freezes until the human gate", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "NOT-READY");
+    openGate(p);
     expect(runHook(p, writePayload(raArtifact(p))).code).toBe(2);
   });
 
   test("a non-produces write under a READY receipt is untouched", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "READY");
+    openGate(p);
     const diary = join(seededRecordDir(p), "inception", "requirements-analysis", "memory.md");
     expect(runHook(p, writePayload(diary)).code).toBe(0);
   });
 
   test("Edit and MultiEdit block like Write; Read never blocks", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "READY");
+    openGate(p);
     const file = raArtifact(p);
     for (const tool of ["Edit", "MultiEdit"]) {
       expect(
@@ -317,9 +437,10 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
   });
 
   test("shell redirections to produces[] block without false-positive read operands", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     const file = raArtifact(p);
     recordReview(p, "READY");
+    openGate(p);
     const rel = relative(p, file).replace(/\\/g, "/");
     for (const command of [
       `printf "change" >> ${JSON.stringify(file)}`,
@@ -371,8 +492,9 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     tempDirs.push(empty);
     expect(runHook(empty, writePayload("/x/requirements-analysis/requirements.md")).code).toBe(0);
 
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "READY");
+    openGate(p);
     const r = spawnSync(BUN, [HOOK], {
       input: "not json",
       env: { ...process.env, CLAUDE_PROJECT_DIR: p },
@@ -389,9 +511,15 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     // stages completed - a write to a completed reviewer-bearing stage's
     // produces path must pass even if a stale receipt existed. Use user-stories
     // marked [x] via approve after review to prove the filter end-to-end.
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "READY");
-    const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    openGate(p);
+    const env = {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    };
     const approve = spawnSync(
       BUN,
       [STATE_TOOL, "approve", "requirements-analysis", "--user-input", "Approve", "--project-dir", p],
@@ -514,12 +642,12 @@ describe("t264 (c) harness registration", () => {
       existsSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-review-freeze.kiro.hook")),
     ).toBe(false);
     const ideConductor = readFileSync(
-      join(REPO_ROOT, "harness", "kiro-ide", "agents", "aidlc.json"),
+      join(REPO_ROOT, "harness", "kiro-ide", "agents", "aidlc.md"),
       "utf-8",
     );
     expect(ideConductor).not.toContain("review-freeze");
     for (const name of readdirSync(join(REPO_ROOT, "harness", "kiro-ide", "agents"))) {
-      if (!name.endsWith("-agent.json")) continue;
+      if (!name.endsWith("-agent.md")) continue;
       expect(
         readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "agents", name), "utf-8"),
         name,

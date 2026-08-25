@@ -21,8 +21,8 @@
 //         classification,
 //       * <record>/ideation/ exists with a questions file carrying filled
 //         [Answer]: lines and at least one structured (heading-bearing) artifact,
-//       * MORE than 6 stages are marked complete `- [x]` (POC > bugfix; the .sh's
-//         test 10 — 3 init + Ideation stages),
+//       * MORE than 6 stages are marked complete `- [x]` (the POC milestone from
+//         the .sh's test 10 — 3 init + Ideation stages),
 //       * audit.md has substantial content,
 //   - RENDER (the tui-only value-add): the captured grid showed a gate menu
 //     (`❯` caret + the `Enter to select` / `Submit answers` footer) at least once —
@@ -194,8 +194,8 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         // scope word; send literally with no auto-Enter, then Enter as a named key
         // (the template's exact two-step, robust for slash commands).
         // Use EXPLICIT `--scope poc`, not bare freeform `poc`. The shipped
-        // settings.json pins AWS_AIDLC_DEFAULT_SCOPE=workshop, so bare `/aidlc poc`
-        // is a freeform-vs-env CONFLICT (poc vs workshop) → a scope disambiguation
+        // settings.json pins AWS_AIDLC_DEFAULT_SCOPE=classic, so bare `/aidlc poc`
+        // is a freeform-vs-env CONFLICT (poc vs classic) → a scope disambiguation
         // gate at workflow START that stalls the phase-wait below (the t50 finding,
         // 2026-06-06). `--scope poc` wins silently+gatelessly (SKILL.md:105 explicit
         // flag wins + :170a auto-confirm; proven live by t29's override case), so
@@ -225,8 +225,8 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
         // so we catch a gate menu (caret + footer) while the gates are up. Use the
-        // shared gridHasMenu() so the caret is matched platform-invariantly (`❯` on
-        // tmux, ASCII `>` on Windows ConPTY — the same detector the answer-gate uses).
+        // shared gridHasMenu(), which requires the exact `❯` caret in both
+        // reconstructed backends.
         pollTimer = setInterval(() => {
           const grid = drive(["capture", "--session", session]).stdout;
           if (gridHasMenu(grid)) {

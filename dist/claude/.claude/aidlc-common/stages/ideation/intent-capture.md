@@ -36,19 +36,14 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowledge from `.claude/knowledge/aidlc-product-agent/`.
-Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` for technical context perspective.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read user's project description from $ARGUMENTS or `<record>/audit/<host>-<clone>.md`
 - Check for existing `<record>/` artifacts from prior sessions
 - Load guardrails from
   `aidlc/spaces/<active-space>/memory/{org,team,project}.md`
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/ideation/intent-capture/intent-capture-questions.md`.
 
@@ -91,14 +86,14 @@ numbering so their source ids remain stable.
 
 Then follow the unified question flow from stage-protocol.md section 3: offer Guide Me / Edit File / Chat modes.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 After all answers collected:
 1. Confirm ALL [Answer]: tags are filled in
 2. Run ambiguity detection and contradiction analysis
 3. Create follow-up questions if needed
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Apply this grounding contract to both artifacts:
 
@@ -134,35 +129,40 @@ column. Never invent a stakeholder role, interest, authority, or communication
 requirement. For required but unresolved fields, write
 `Unknown (open question) [assumption]`; omit optional fields.
 
-### Step 6: Resolve Assumptions
+### Step 5: Resolve Assumptions
 
 If both `## Assumptions & Open Questions` sections contain `None.`, continue.
 Otherwise:
 
-1. Append or reset `## Assumption Confirmation` in
-   `intent-capture-questions.md`, listing every assumption and these options:
-   `A. Accept assumptions` and `B. Convert to follow-up questions`, followed
-   by a blank `[Answer]:`.
+1. Create `## Assumption Confirmation` in `intent-capture-questions.md` if it
+   is absent. Otherwise, reuse that single section, replacing its assumption
+   list and options and resetting `[Answer]:` to blank. List every assumption
+   and these options: `A. Accept assumptions` and
+   `B. Convert to follow-up questions`.
 2. Present those two options as a structured question, log it through the
    standard question decision/answer pair, END YOUR TURN, and wait.
 3. On `Accept assumptions`, fill the confirmation answer exactly as
    `[Answer]: A. Accept assumptions` and retain the `[assumption]` labels.
    Acceptance does not turn an assumption into fact.
 4. On `Convert to follow-up questions`, fill that answer, append consecutively
-   numbered `Q<n>` follow-ups, collect and confirm their answers, revise both
-   artifacts, reset `## Assumption Confirmation`, and repeat this step if any
-   assumptions remain.
+   numbered `Q<n>` follow-ups, collect and confirm their answers, and revise
+   both artifacts. Re-present the consolidated summary, reset the single
+   post-summary confirmation to a blank `[Answer]:`, and record a fresh standard
+   summary decision/answer receipt before continuing. Only after that new receipt
+   succeeds may you re-save the artifacts, rerun the reviewer, and continue to
+   completion. If assumptions remain, reuse and reset the single
+   `## Assumption Confirmation` section and repeat this step.
 
 Do not invoke the reviewer or proceed to completion while an assumption
 confirmation `[Answer]:` is blank.
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage intent-capture --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 8: Present Completion & Request Approval
+### Step 7: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :bulb:
 - Summary of intent statement and stakeholder map
@@ -186,9 +186,10 @@ The imported sensors check those outputs:
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -198,8 +199,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

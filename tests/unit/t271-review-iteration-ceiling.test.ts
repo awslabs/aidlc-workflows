@@ -22,17 +22,22 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createTestProject,
   seedAuditFile,
   seedBoltDagBatches,
+  seededAuditDir,
+  seededRecordDir,
   seedStateFile,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  boltSlugForUnit,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const LOG_TOOL = join(
   import.meta.dir,
@@ -57,7 +62,13 @@ function runReview(
     [LOG_TOOL, "review", ...args],
     {
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...extraEnv },
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        ...extraEnv,
+      },
     }
   );
   return {
@@ -93,13 +104,156 @@ function seedProject(scope: "bugfix" | "feature"): string {
       readFileSync(sf, "utf8").replace(
         "- **Scope**: bugfix",
         "- **Scope**: feature"
-      )
+      ).replace(
+        "- [S] units-generation — SKIP (bugfix scope)",
+        "- [ ] units-generation — EXECUTE",
+      ),
     );
+  }
+  seedBoltDagBatches(proj, [["unit-alpha"]]);
+  const stageArtifacts: Array<[string, string[]]> = [
+    [
+      join(seededRecordDir(proj), "inception", "requirements-analysis"),
+      ["requirements.md", "requirements-analysis-questions.md"],
+    ],
+    [
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "unit-alpha",
+        "functional-design",
+      ),
+      ["entities.md", "rules.md", "functional-spec.md", "traceability.json"],
+    ],
+    [
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "unit-alpha",
+        "code-generation",
+      ),
+      [
+        "code-generation-plan.md",
+        "unit-test-instructions.md",
+        "code-summary.md",
+        "traceability.json",
+      ],
+    ],
+  ];
+  for (const [dir, names] of stageArtifacts) {
+    mkdirSync(dir, { recursive: true });
+    for (const name of names) {
+      writeFileSync(join(dir, name), `# ${name}\n`, "utf-8");
+    }
   }
   return proj;
 }
 
+function writeSourceManifest(proj: string, unit: string): void {
+  const dir = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "code-generation",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "source-manifest.json"),
+    `${JSON.stringify(
+      { stage: "code-generation", unit, version: 1, writes: [] },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
+
+function writeReviewedArtifact(
+  proj: string,
+  stage: "requirements-analysis" | "code-generation",
+  content: string,
+  unit?: string,
+): string {
+  const dir =
+    stage === "requirements-analysis"
+      ? join(seededRecordDir(proj), "inception", stage)
+      : join(seededRecordDir(proj), "construction", unit ?? "unit-alpha", stage);
+  mkdirSync(dir, { recursive: true });
+  const path = join(
+    dir,
+    stage === "requirements-analysis"
+      ? "requirements.md"
+      : "code-generation-plan.md",
+  );
+  writeFileSync(path, content, "utf-8");
+  if (stage === "code-generation" && unit) {
+    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      `\`\`\`yaml\nunits:\n  - name: ${unit}\n    depends_on: []\n\`\`\`\n`,
+      "utf-8",
+    );
+    writeSourceManifest(proj, unit);
+  }
+  return path;
+}
+
 describe("t271 review iteration ceiling", () => {
+  test("autonomous and historical Bolt boundaries cannot authorize a ghost unit", () => {
+    for (const autonomy of [false, true]) {
+      const proj = seedProject("feature");
+      writeReviewedArtifact(proj, "code-generation", "plan\n", "unit-alpha");
+      if (autonomy) {
+        const state = seededStateFile(proj);
+        writeFileSync(
+          state,
+          `${readFileSync(state, "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
+        );
+      }
+      appendAuditEntry("BOLT_STARTED", {
+        "Bolt names": "ghost",
+        "Batch number": "1",
+        "Walking skeleton": "false",
+        "Bolt slug": "ghost",
+      }, proj);
+      const ghost = runReview(proj, [
+        "--stage", "code-generation",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--unit", "ghost",
+        "--iteration", "1",
+      ]);
+      expect(ghost.status).not.toBe(0);
+      expect(ghost.stderr).toContain("not present in the authoritative unit DAG");
+    }
+  });
+
+  test("a fresh STAGE_STARTED clears an earlier cross-shard boundary ambiguity", () => {
+    const proj = seedProject("feature");
+    const auditDir = seededAuditDir(proj);
+    mkdirSync(auditDir, { recursive: true });
+    const tieSecond = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    const block = (event: string, extra: string) =>
+      `# AI-DLC Audit Log\n\n## ${event}\n**Timestamp**: ${tieSecond}\n**Event**: ${event}\n${extra}\n---\n`;
+    writeFileSync(join(auditDir, "tie-a.md"), block("WORKFLOW_STARTED", "**Scope**: feature"));
+    writeFileSync(
+      join(auditDir, "tie-b.md"),
+      block("GATE_REJECTED", "**Stage**: requirements-analysis"),
+    );
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "requirements-analysis",
+      Agent: "aidlc-product-agent",
+    }, proj);
+    const review = runReview(proj, [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ]);
+    expect(review.status).toBe(0);
+  });
+
   test("advisory stage: iteration 1 passes, iteration 2 refused with terminal guidance", () => {
     const proj = seedProject("feature"); // requirements-analysis declares advisory
     const ok = runReview(proj, [
@@ -126,22 +280,168 @@ describe("t271 review iteration ceiling", () => {
     expect(rows.length).toBe(1);
   });
 
+  test("advisory stale receipt gets one recovery request at the next ordinal", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const base = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    expect(
+      runReview(proj, [...base, "--iteration", "1", "--verdict", "READY"]).status,
+    ).toBe(0);
+    writeReviewedArtifact(proj, "requirements-analysis", "changed requirements\n");
+
+    const retry = runReview(proj, [
+      ...base,
+      "--iteration", "2",
+      "--retry-pending",
+    ]);
+    expect(retry.status).not.toBe(0);
+    expect(retry.stderr).toContain("receipt was invalidated by a later artifact write");
+    expect(retry.stderr).toContain("--iteration 2");
+
+    const wrongOrdinal = runReview(proj, [...base, "--iteration", "1"]);
+    expect(wrongOrdinal.status).not.toBe(0);
+    expect(wrongOrdinal.stderr).toContain("expected 2");
+
+    const recovery = runReview(proj, [...base, "--iteration", "2"]);
+    expect(recovery.status).toBe(0);
+    expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
+    expect(readAllAuditShards(proj)).toContain("**Recovery**: stale-receipt");
+
+    const pendingRetry = runReview(proj, [
+      ...base,
+      "--iteration", "2",
+      "--retry-pending",
+    ]);
+    expect(pendingRetry.status).toBe(0);
+    expect(pendingRetry.stdout).toContain('"retry":"pending-request"');
+    expect(pendingRetry.stdout).not.toContain('"recovery"');
+
+    expect(
+      runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]).status,
+    ).toBe(0);
+    writeReviewedArtifact(proj, "requirements-analysis", "changed again\n");
+
+    const spent = runReview(proj, [...base, "--iteration", "3"]);
+    expect(spent.status).not.toBe(0);
+    expect(spent.stderr).toContain("one recovery review was already used");
+    expect(spent.stderr).toContain("human Request Changes decision");
+    expect(spent.stderr).toContain("human's behalf");
+  });
+
+  test("adversarial stale receipt gets one recovery request after the full budget", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(
+      proj,
+      "code-generation",
+      "reviewed implementation plan\n",
+      "unit-alpha",
+    );
+    const base = [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+    ];
+
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    expect(
+      runReview(
+        proj,
+        [...base, "--iteration", "1", "--verdict", "NOT-READY"],
+      ).status,
+    ).toBe(0);
+    expect(runReview(proj, [...base, "--iteration", "2"]).status).toBe(0);
+    expect(
+      runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]).status,
+    ).toBe(0);
+
+    writeReviewedArtifact(
+      proj,
+      "code-generation",
+      "changed implementation plan\n",
+      "unit-alpha",
+    );
+    const recovery = runReview(proj, [...base, "--iteration", "3"]);
+    expect(recovery.status).toBe(0);
+    expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
+  });
+
+  test("an early adversarial READY makes the next ordinal the recovery", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(
+      proj,
+      "code-generation",
+      "reviewed implementation plan\n",
+      "unit-alpha",
+    );
+    const base = [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+    ];
+
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    expect(
+      runReview(proj, [...base, "--iteration", "1", "--verdict", "READY"]).status,
+    ).toBe(0);
+    writeReviewedArtifact(
+      proj,
+      "code-generation",
+      "changed after early READY\n",
+      "unit-alpha",
+    );
+
+    const recovery = runReview(proj, [...base, "--iteration", "2"]);
+    expect(recovery.status).toBe(0);
+    expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
+    expect(readAllAuditShards(proj)).toContain("**Recovery**: stale-receipt");
+    expect(
+      runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]).status,
+    ).toBe(0);
+
+    writeReviewedArtifact(
+      proj,
+      "code-generation",
+      "changed after recovery\n",
+      "unit-alpha",
+    );
+    const retry = runReview(proj, [
+      ...base,
+      "--iteration", "3",
+      "--retry-pending",
+    ]);
+    expect(retry.status).not.toBe(0);
+    expect(retry.stderr).toContain(
+      "one recovery review was already used",
+    );
+    expect(retry.stderr).not.toContain("Start the one recovery pass");
+  });
+
   test("adversarial stage: budget is reviewer_max_iterations (2), iteration 3 refused", () => {
     const proj = seedProject("feature");
+    const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
     // code-generation declares adversarial, cap 2 — and feature scope has no cap.
     for (const n of ["1", "2"]) {
-      const ok = runReview(proj, [
+      const request = [
         "--stage", "code-generation",
         "--reviewer", "aidlc-architecture-reviewer-agent",
         "--iteration", n,
-      ]);
+      ];
+      const ok = runReview(proj, request, iterationOnly);
       expect(ok.status).toBe(0);
+      expect(
+        runReview(proj, [...request, "--verdict", "NOT-READY"], iterationOnly).status,
+      ).toBe(0);
     }
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--iteration", "3",
-    ]);
+    ], iterationOnly);
     expect(over.status).not.toBe(0);
     expect(over.stderr).toContain("exceeds");
     expect(over.stderr).toContain("review budget (2)");
@@ -181,6 +481,13 @@ describe("t271 review iteration ceiling", () => {
 
   test("inline per-unit reviews remain subject to scope caps", () => {
     const proj = seedProject("bugfix");
+    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: unit-alpha\n    depends_on: []\n```\n",
+      "utf-8",
+    );
     const ok = runReview(proj, [
       "--stage", "functional-design",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -206,6 +513,7 @@ describe("t271 review iteration ceiling", () => {
 
   test("a matching autonomous Bolt attempt uses the declared class", () => {
     const proj = seedProject("feature");
+    const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
     const sf = seededStateFile(proj);
     writeFileSync(
       sf,
@@ -221,21 +529,26 @@ describe("t271 review iteration ceiling", () => {
       "Walking skeleton": "false",
       "Bolt slug": "unit-alpha",
     }, proj);
+    writeSourceManifest(proj, "unit-alpha");
     for (const iteration of ["1", "2"]) {
-      const ok = runReview(proj, [
+      const request = [
         "--stage", "code-generation",
         "--reviewer", "aidlc-architecture-reviewer-agent",
         "--unit", "unit-alpha",
         "--iteration", iteration,
-      ]);
+      ];
+      const ok = runReview(proj, request, iterationOnly);
       expect(ok.status).toBe(0);
+      expect(
+        runReview(proj, [...request, "--verdict", "NOT-READY"], iterationOnly).status,
+      ).toBe(0);
     }
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--unit", "unit-alpha",
       "--iteration", "3",
-    ]);
+    ], iterationOnly);
     expect(over.status).not.toBe(0);
     expect(over.stderr).toContain("review budget (2)");
 
@@ -248,7 +561,7 @@ describe("t271 review iteration ceiling", () => {
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--unit", "unit-alpha",
       "--iteration", "1",
-    ]);
+    ], iterationOnly);
     expect(afterFailure.status).not.toBe(0);
     expect(afterFailure.stderr).toContain("review budget (0)");
   });
@@ -270,6 +583,7 @@ describe("t271 review iteration ceiling", () => {
       "Walking skeleton": "false",
       "Bolt slug": "unit-alpha",
     }, proj);
+    writeSourceManifest(proj, "unit-alpha");
 
     const graph = JSON.parse(readFileSync(STAGE_GRAPH, "utf-8")) as Array<Record<string, unknown>>;
     const codeGeneration = graph.find((stage) => stage.slug === "code-generation");
@@ -295,6 +609,65 @@ describe("t271 review iteration ceiling", () => {
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain("review budget (1)");
     expect(refused.stderr).toContain("single advisory pass");
+  });
+
+  test("an autonomous Bolt with spent recovery halts before claim or merge", () => {
+    const proj = seedProject("feature");
+    const sf = seededStateFile(proj);
+    writeFileSync(
+      sf,
+      readFileSync(sf, "utf8").replace(
+        "- **Test Strategy**: Minimal",
+        "- **Test Strategy**: Minimal\n- **Construction Autonomy Mode**: autonomous",
+      ),
+    );
+    seedBoltDagBatches(proj, [["unit-alpha"]]);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "unit-alpha",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": "unit-alpha",
+    }, proj);
+    writeReviewedArtifact(
+      proj,
+      "code-generation",
+      "reviewed implementation plan\n",
+      "unit-alpha",
+    );
+    const base = [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+    ];
+
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    expect(
+      runReview(proj, [...base, "--iteration", "1", "--verdict", "READY"]).status,
+    ).toBe(0);
+    writeReviewedArtifact(
+      proj,
+      "code-generation",
+      "changed before recovery\n",
+      "unit-alpha",
+    );
+    expect(runReview(proj, [...base, "--iteration", "2"]).status).toBe(0);
+    expect(
+      runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]).status,
+    ).toBe(0);
+    writeReviewedArtifact(
+      proj,
+      "code-generation",
+      "changed after recovery\n",
+      "unit-alpha",
+    );
+
+    const spent = runReview(proj, [...base, "--iteration", "3"]);
+    expect(spent.status).not.toBe(0);
+    expect(spent.stderr).toContain("Do not put autonomous Unit");
+    expect(spent.stderr).toContain("do not run finalize or merge");
+    expect(spent.stderr).toContain("aidlc-bolt.ts abort");
+    expect(spent.stderr).toContain("aidlc-swarm.ts prepare");
+    expect(spent.stderr).not.toContain("approval gate");
   });
 
   test("a failed dispatch can retry its unmatched request without consuming an iteration", () => {
@@ -378,21 +751,125 @@ describe("t271 review iteration ceiling", () => {
     }
   });
 
-  test("duplicate and out-of-order ordinals are refused from audit history", () => {
+  test("a normal request is refused while another iteration is unmatched", () => {
     const proj = seedProject("feature");
-    const request = (iteration: string) => runReview(proj, [
+    const args = (iteration: string) => [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--iteration", iteration,
-    ]);
-    expect(request("1").status).toBe(0);
-    const duplicate = request("1");
+    ];
+    expect(runReview(proj, args("1")).status).toBe(0);
+    const duplicate = runReview(proj, args("1"));
     expect(duplicate.status).not.toBe(0);
-    expect(duplicate.stderr).toContain("expected 2");
-    expect(request("2").status).toBe(0);
+    expect(duplicate.stderr).toContain("still unmatched");
+    const concurrentNext = runReview(proj, args("2"));
+    expect(concurrentNext.status).not.toBe(0);
+    expect(concurrentNext.stderr).toContain("still unmatched");
+
+    expect(
+      runReview(proj, [...args("1"), "--verdict", "NOT-READY"]).status,
+    ).toBe(0);
+    expect(runReview(proj, args("2")).status).toBe(0);
     const rows =
       readAllAuditShards(proj).match(/\*\*Event\*\*: REVIEW_REQUESTED/g) ?? [];
     expect(rows.length).toBe(2);
+  });
+
+  test("request fingerprints bind the verdict to the dispatched artifact bytes", () => {
+    const proj = seedProject("feature");
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "reviewed requirements\n",
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+
+    expect(runReview(proj, request).status).toBe(0);
+    expect(readAllAuditShards(proj)).toMatch(
+      /\*\*Event\*\*: REVIEW_REQUESTED[\s\S]*?\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
+    );
+
+    writeFileSync(artifact, "changed while reviewer was running\n", "utf-8");
+    const staleVerdict = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(staleVerdict.status).not.toBe(0);
+    expect(staleVerdict.stderr).toContain("changed after REVIEW_REQUESTED");
+    expect(readAllAuditShards(proj)).not.toContain("**Event**: REVIEW_COMPLETED");
+
+    expect(runReview(proj, [...request, "--retry-pending"]).status).toBe(0);
+    expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
+  });
+
+  test("--unit requires an authoritative DAG or a matching active Bolt", () => {
+    const noDag = createTestProject();
+    seedStateFile(noDag, "state-mid-inception.md");
+    seedAuditFile(noDag);
+    const base = [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--iteration", "1",
+    ];
+
+    const absent = runReview(noDag, [...base, "--unit", "ghost"]);
+    expect(absent.status).not.toBe(0);
+    expect(absent.stderr).toContain("no authoritative unit DAG exists");
+    expect(readAllAuditShards(noDag)).not.toContain("**Event**: REVIEW_REQUESTED");
+
+    const boltBacked = createTestProject();
+    seedStateFile(boltBacked, "state-mid-inception.md");
+    seedAuditFile(boltBacked);
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "code-generation",
+    }, boltBacked);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "2fa",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": boltSlugForUnit("2fa"),
+    }, boltBacked);
+    writeSourceManifest(boltBacked, "2fa");
+    const boltReview = runReview(boltBacked, [...base, "--unit", "2fa"]);
+    expect(boltReview.status, boltReview.stderr).toBe(0);
+
+    const mismatchedBolt = createTestProject();
+    seedStateFile(mismatchedBolt, "state-mid-inception.md");
+    seedAuditFile(mismatchedBolt);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "unit-alpha",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": "unit-alpha",
+    }, mismatchedBolt);
+    const mismatched = runReview(mismatchedBolt, [...base, "--unit", "ghost"]);
+    expect(mismatched.status).not.toBe(0);
+    expect(mismatched.stderr).toContain("no matching active Bolt attempt");
+
+    const closedBolt = createTestProject();
+    seedStateFile(closedBolt, "state-mid-inception.md");
+    seedAuditFile(closedBolt);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "unit-alpha",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": "unit-alpha",
+    }, closedBolt);
+    appendAuditEntry("BOLT_FAILED", {
+      "Bolt slug": "unit-alpha",
+      Reason: "review-failed",
+    }, closedBolt);
+    const closed = runReview(closedBolt, [...base, "--unit", "unit-alpha"]);
+    expect(closed.status).not.toBe(0);
+    expect(closed.stderr).toContain("no matching active Bolt attempt");
+
+    const proj = seedProject("feature");
+    const unknown = runReview(proj, [...base, "--unit", "ghost"]);
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.stderr).toContain("not present in the authoritative unit DAG");
+    writeSourceManifest(proj, "unit-alpha");
+    expect(runReview(proj, [...base, "--unit", "unit-alpha"]).status).toBe(0);
   });
 
   test("unknown stages and wrong reviewers are refused", () => {

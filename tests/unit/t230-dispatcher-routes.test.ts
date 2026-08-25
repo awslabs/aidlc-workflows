@@ -493,6 +493,29 @@ describe("t230 dispatcher global flag translation", () => {
     });
   });
 
+  test("places global --project-dir before the literal task delimiter", () => {
+    expect(
+      resolveAction(["--project-dir", "/tmp/example", "compose", "--", "--scope", "migration"]),
+    ).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: [
+        "next",
+        "compose",
+        "--project-dir",
+        "/tmp/example",
+        "--",
+        "--scope",
+        "migration",
+      ],
+    });
+    expect(resolveAction(["compose", "--", "--project-dir", "/tmp/literal"])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: ["next", "compose", "--", "--project-dir", "/tmp/literal"],
+    });
+  });
+
   test("carries --project-dir into routing-only actions", () => {
     const projectDir = "/tmp/routed-project";
     for (const action of [
@@ -556,6 +579,7 @@ describe("t230 dispatcher route completeness", () => {
       "aidlc-bolt.ts",
       "aidlc-graph.ts",
       "aidlc-jump.ts",
+      "aidlc-knowledge.ts",
       "aidlc-learnings.ts",
       "aidlc-log.ts",
       "aidlc-orchestrate.ts",

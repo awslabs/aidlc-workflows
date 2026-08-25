@@ -499,10 +499,13 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
   test("--no-llm closes every live-model environment gate", () => {
     const plant = join(TESTS_ROOT, "integration", "tZZ-no-llm-gates-t05.test.ts");
     const gates = [
+      "AIDLC_CLAUDE_SDK_LIVE",
       "AIDLC_TUI_LIVE",
       "AIDLC_KIRO_ACP_LIVE",
       "AIDLC_KIRO_TUI_LIVE",
       "AIDLC_CODEX_EXEC_LIVE",
+      "AIDLC_COPILOT_EXEC_LIVE",
+      "AIDLC_CURSOR_RUN_LIVE",
       "AIDLC_KIRO_IDE_LIVE",
       "AIDLC_OPENCODE_RUN_LIVE",
     ];

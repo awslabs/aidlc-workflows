@@ -42,16 +42,12 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `.aidlc/knowledge/aidlc-design-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read intent statement from `<record>/ideation/intent-capture/`
 - Read scope definition and intent backlog from `<record>/ideation/scope-definition/`
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/ideation/rough-mockups/rough-mockups-questions.md` with questions:
 - What are the primary user entry points and key screens/views?
@@ -64,11 +60,11 @@ Create `<record>/ideation/rough-mockups/rough-mockups-questions.md` with questio
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Run contradiction analysis between UX expectations and scope constraints.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 For UI initiatives: Create low-fidelity wireframes (ASCII art or structured descriptions), core user flow diagram, information architecture outline. Include a one-line accessibility note per screen: heading level (h1–h3), primary landmark regions (header/main/nav/footer), keyboard entry point.
 
@@ -76,13 +72,13 @@ For non-UI initiatives: Create system context diagram, key interaction flow sket
 
 All diagrams follow ASCII diagram standards from stage-protocol.md.
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .aidlc/tools/aidlc-orchestrate.ts report --stage rough-mockups --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :pencil2:
 Review path: `<record>/ideation/rough-mockups/`
@@ -99,9 +95,10 @@ The imported sensors check those outputs:
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -111,8 +108,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

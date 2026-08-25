@@ -11,6 +11,15 @@ runtime, and every distribution is generated from the same source.
 New here? The [README](../README.md) has the install Quick Start and the
 "pick your harness" table. This page is the map of the documentation itself.
 
+## Choose a workflow
+
+AI-DLC ships 11 workflow profiles for different kinds of work, including
+**Classic** for the established lifecycle, **Express** for the lightest
+requirements-to-code path, and focused profiles for features, enterprise work,
+MVPs, bugfixes, refactors, infrastructure, security patches, proofs of concept,
+and workshops. Start with [Workflow Profiles](guide/workflow-profiles.md) to
+compare them. Internally, the engine calls these profiles *scopes*.
+
 ## Three guides, one per reader
 
 Pick by what you're trying to change:

@@ -21,6 +21,7 @@ import emit from "./emit.ts";
 const manifest: HarnessManifest = {
   name: "codex",
   harnessDir: ".codex",
+  orchestratorSkillPath: ".agents/skills/aidlc/SKILL.md",
   tierFlavor: "codex",
 
   // Core projection: rules→aidlc-rules, NO session skills (emitted to

@@ -25,6 +25,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts bind-bash-session"
+          }
+        ],
+        "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "bun .codex/hooks/aidlc-codex-adapter.ts deliver-stage-rules"
           }
         ],
@@ -64,6 +73,15 @@
       }
     ],
     "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn"
+          }
+        ],
+        "matcher": "request_user_input"
+      },
       {
         "hooks": [
           {

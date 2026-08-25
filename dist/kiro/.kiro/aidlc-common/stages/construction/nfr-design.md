@@ -56,6 +56,7 @@ scopes:
   - feature
   - mvp
   - infra
+  - classic
   - workshop
 inputs: NFR requirements artifacts, functional design artifacts
 outputs: "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
@@ -76,26 +77,22 @@ This is a design stage — artifacts describe architectural patterns, strategies
 This stage supports two execution modes, controlled by the orchestrator:
 
 **QUESTION-ONLY mode** (invoked by orchestrator during a Bolt's question phase):
-Execute Steps 1–4 only (load personas, read artifacts, generate questions, collect answers).
+Execute Steps 1–3 only (read artifacts, generate questions, collect answers).
 Do NOT proceed to design or artifact generation. Return control to the orchestrator.
 
 **ARTIFACT-ONLY mode** (invoked by orchestrator during a Bolt's design phase):
-Skip Steps 1–4 (questions already collected and approved).
+Skip Steps 1–3 (questions already collected and approved).
 Read the answered questions file from the per-unit directory.
-Execute Steps 5–8 only (design solutions, generate artifacts, update state, completion).
+Execute Steps 4–7 only (design solutions, generate artifacts, update state, completion).
 
 **Full mode** (default — single-unit projects or direct stage invocation):
 Execute all steps sequentially as written.
 
-### Step 1: Load Personas
-
-Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md` and knowledge from `.kiro/knowledge/aidlc-architect-agent/`. Load aidlc-aws-platform-agent persona from `agents/aidlc-aws-platform-agent.md` and knowledge from `.kiro/knowledge/aidlc-aws-platform-agent/` for infrastructure and platform input. Apply aidlc-architect-agent as the primary perspective with aidlc-aws-platform-agent providing domain-specific input.
-
-### Step 2: Read Prior Artifacts
+### Step 1: Read Prior Artifacts
 
 Read NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`. Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — the integration mechanism and failure behaviour at each boundary drive the resilience and scalability patterns designed here. Read the domain-design component catalogue from `<record>/inception/domain-design/components.md` (if exists) for architectural context; when the scope skipped those design stages, derive the architectural context from the NFR requirements and, on brownfield, the code knowledge base — never invent the content of a missing artifact.
 
-### Step 3: Generate Design Questions
+### Step 2: Generate Design Questions
 
 Create a questions file at `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
@@ -107,7 +104,7 @@ Focus areas:
 - Observability approach (metrics and SLI/SLO targets, structured logging, tracing depth, alerting philosophy, dashboard needs)
 - Logical component boundaries (service isolation, failure domains, blast radius)
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file). After collecting answers, perform MANDATORY ambiguity analysis:
 - Identify vague answers ("mix of", "not sure", "depends", "probably")
@@ -116,7 +113,7 @@ Collect answers following stage-protocol.md §3 question flow (offer interaction
 
 If ANY ambiguity found: create follow-up questions and resolve before proceeding.
 
-### Step 5: Design NFR Solutions
+### Step 4: Design NFR Solutions
 
 Design concrete solutions for each NFR category:
 
@@ -126,7 +123,7 @@ Design concrete solutions for each NFR category:
 - **Reliability**: Circuit breakers, retry policies with backoff, health checks, graceful degradation, failover strategies, data replication
 - **Observability**: Metrics collection strategy, structured logging design, distributed tracing architecture, alerting rules, dashboard specifications, SLI/SLO tracking, correlation ID propagation
 
-### Step 6: Generate Artifacts
+### Step 5: Generate Artifacts
 
 Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 
@@ -153,13 +150,13 @@ concrete design solution:
 }
 ```
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .kiro/tools/aidlc-orchestrate.ts report --stage nfr-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 8: Completion
+### Step 7: Completion
 
 Present completion message and approval gate:
 
@@ -191,9 +188,10 @@ Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED`
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -203,8 +201,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

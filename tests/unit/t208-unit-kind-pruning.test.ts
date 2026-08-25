@@ -145,11 +145,19 @@ function runNext(proj: string): Directive {
  * var deleted), while the human-presence guard stays disabled so only the
  * artifact-guard behaviour is under test (mirrors t185's per-guard isolation).
  */
-function runReport(proj: string, args: string[], enforceGuard = false): Directive {
+function runReport(
+  proj: string,
+  args: string[],
+  enforceGuard = false,
+  skipReviewerGateGuard = false,
+): Directive {
   const env = envNoScope();
   if (enforceGuard) {
     delete env.AIDLC_SKIP_ARTIFACT_GUARD;
     env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+  }
+  if (skipReviewerGateGuard) {
+    env.AIDLC_SKIP_REVIEWER_GATE_GUARD = "1";
   }
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], { encoding: "utf-8", env });
   try {
@@ -183,6 +191,34 @@ function logReviewReady(
     const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
     if ((r.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    }
+  }
+}
+
+function logStageReviewReady(
+  proj: string,
+  stage = "functional-design",
+): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    stage,
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    proj,
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const result = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+    });
+    if ((result.status ?? -1) !== 0) {
+      throw new Error(
+        `stage review log failed: ${result.stdout ?? ""}${result.stderr ?? ""}`,
+      );
     }
   }
 }
@@ -308,7 +344,12 @@ describe("t208 engine unit-kind pruning", () => {
   test("5: an all-vacuous per-unit stage approves (guard's vacuous branch)", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "pack1", kind: "packaging" }, { name: "pack2", kind: "packaging" }]);
-    const d = runReport(proj, ["--stage", "functional-design", "--result", "approved"], true);
+    const d = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+      true,
+    );
     expect(d.kind).toBe("done");
   }, 30000);
 
@@ -340,6 +381,23 @@ describe("t208 engine unit-kind pruning", () => {
       true,
     );
     expect(d.kind).toBe("done");
+  }, 30000);
+
+  test("5c2: a stage-level receipt cannot satisfy per-unit reviews when a DAG exists", () => {
+    const proj = seedProject("functional-design");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    logStageReviewReady(proj);
+
+    const refused = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("2 of 2 applicable units");
+    expect(refused.message).toContain("Never reviewed: alpha, beta");
   }, 30000);
 
   test("5d: stale DAG healing keeps per-unit review enforcement complete", () => {
@@ -434,6 +492,28 @@ describe("t208 engine unit-kind pruning", () => {
       true,
     );
     expect(accepted.kind).toBe("done");
+  }, 30000);
+
+  test("5g: mixed stale and never-reviewed units get both remedies", () => {
+    const proj = seedProject("functional-design");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    logReviewReady(proj, "alpha");
+    logArtifactUpdated(proj, "alpha");
+
+    const refused = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("Invalidated receipts: alpha");
+    expect(refused.message).toContain("Never reviewed: beta");
+    expect(refused.message).toContain(
+      "For invalidated units with recovery available (alpha)",
+    );
+    expect(refused.message).toContain("For never-reviewed units (beta)");
   }, 30000);
 
   // 6: a stage with NO produces_kinds (code-generation) ignores kinds entirely -

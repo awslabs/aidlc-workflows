@@ -51,8 +51,10 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
   the cross-row promotion that makes this stage structurally distinct from every other stage.
 - Stage 2.7 produces `unit-of-work.md`, which defines the units that drive
   the phased construction flow in the Construction phase.
-- Stage 2.9 produces the execution plan that determines which Construction
-  stages run for each unit and in what order. It reads
+- Stage 2.9 produces the approved Bolt plan (economic sequence, multi-Unit
+  grouping, DoD, confidence hypothesis, ownership). That plan is planning
+  content; Construction's runtime batches come from
+  `unit-of-work-dependency.md` (2.7). Stage 2.9 reads
   `aidlc/spaces/<active-space>/memory/{org,team,project}.md` for the team's Way
   of Working, Walking Skeleton stance, and Deployment sections.
 - The phase boundary verification at Stage 2.9 validates Requirements to
@@ -70,7 +72,9 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
 | refactor         | 2.1 (always -- understand current code), 2.3 (minimal)         |
 | infra            | 2.2, 2.3 (infra requirements)                                  |
 | security-patch   | 2.1 (find vulnerability context), 2.3 (minimal)                 |
+| classic          | 2.1--2.9                                                       |
 | workshop         | 2.1--2.9                                                       |
+| express          | 2.1 (if brownfield), 2.3                                      |
 
 ---
 
@@ -261,7 +265,9 @@ Four lead artifacts plus three spoke contributions are written to
 
 - `team-practices.md` -- descriptive, team-voice prose. Five sections matching
   `team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
-  Deployment, Code Style.
+  Deployment, Code Style. Testing Posture carries structured
+  `Methodology: tdd|bdd|atdd|test-after|custom` and `Ordering: ...` bullets;
+  coverage/tooling/scope notes remain additional prose.
 - `discovered-rules.md` -- corrective, agent-facing. Two sections: Mandated
   (`ALWAYS …` rules) and Forbidden (`NEVER …` rules).
 - `evidence.md` -- per-agent finding summary; freshness trail for re-runs.
@@ -300,6 +306,8 @@ On affirmation, content is promoted to:
 5. **Lead Integration** -- Dispatch the pipeline-deploy lead again with the
    draft, all three contribution paths, and the interview answers. The lead
    alone integrates the final artifacts and emits `PRACTICES_DISCOVERED`.
+   Mixed cadences use `Methodology: custom` so Code Generation preserves the
+   explicit ordering rather than coercing the answer into TDD.
 6. **Open the Affirmation Gate** -- Call `aidlc-orchestrate.ts report --stage
    practices-discovery --result awaiting-approval` before asking. Present the
    drafts with exactly two options: **Approve** / **Request Changes**. A
@@ -336,6 +344,10 @@ gate open and the stage incomplete.
   `## Deployment`, `## Code Style`). The stage reads each section from
   `org.md` via `extractMarkdownSection` with the matching Title Case
   heading and section-replaces the same heading in `team.md`.
+- Code Generation's deterministic posture resolver reads the structured
+  Testing Posture fields independently from coverage, tooling, and scope notes.
+  A project-only coverage note therefore specializes the team section without
+  erasing its methodology.
 - On resume, keep the lead draft and every existing contribution file.
   Dispatch only missing spokes, then continue with the interview and lead
   integration. Do not repeat completed support work.
@@ -380,31 +392,27 @@ large scope with significant unknowns.
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-product-agent persona from
-   `agents/aidlc-product-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-product-agent/`.
-
-2. **Load Prior Context** -- If brownfield: read RE artifacts from
+1. **Load Prior Context** -- If brownfield: read RE artifacts from
    `aidlc/spaces/<active-space>/codekb/<repo>/`. Read user's project
    description from the intent's `audit/` shards.
 
-3. **Analyze User Request** -- Assess the request for:
+2. **Analyze User Request** -- Assess the request for:
    - **Clarity**: How well-defined is the request?
    - **Type**: New feature, enhancement, refactoring, bug fix, migration
    - **Scope**: Single component, multi-component, system-wide
    - **Complexity**: Simple, standard, complex
 
-4. **Determine Depth** -- Based on complexity assessment:
+3. **Determine Depth** -- Based on complexity assessment:
    - **Minimal**: Clear request, narrow scope, well-understood domain
    - **Standard**: Moderate scope, some unknowns, multiple stakeholders
    - **Comprehensive**: Large scope, significant unknowns, complex domain
 
-5. **Assess Current Requirements** -- Extract and organize what is already
+4. **Assess Current Requirements** -- Extract and organize what is already
    known from the user's input: explicit functional requirements, implied
    non-functional requirements, constraints and assumptions, business context
    and goals.
 
-6. **Completeness Analysis** -- Evaluate coverage across six dimensions:
+5. **Completeness Analysis** -- Evaluate coverage across six dimensions:
    1. Functional requirements -- core behaviors, features, use cases
    2. Non-functional requirements -- performance, security, scalability,
       reliability
@@ -417,7 +425,7 @@ large scope with significant unknowns.
 
    Identify gaps in each dimension.
 
-7. **Generate Clarifying Questions** -- PROACTIVE: always generate clarifying
+6. **Generate Clarifying Questions** -- PROACTIVE: always generate clarifying
    questions unless requirements are exceptionally clear and complete across
    all six dimensions. Create
    `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
@@ -427,7 +435,7 @@ large scope with significant unknowns.
 
    Offer the tri-mode question flow: Guide Me / Edit File / Chat.
 
-8. **Collect and Analyze Answers** -- Read the questions file, confirm all
+7. **Collect and Analyze Answers** -- Read the questions file, confirm all
    `[Answer]:` tags are filled. If any are blank, present unanswered questions
    via AskUserQuestion and write answers back. Do NOT proceed with partial
    answers. Run:
@@ -436,11 +444,11 @@ large scope with significant unknowns.
    - Contradiction check between answers
    - Missing detail identification
 
-9. **Follow-Up Questions** -- If ANY ambiguity, vagueness, or contradictions
+8. **Follow-Up Questions** -- If ANY ambiguity, vagueness, or contradictions
    found, create follow-up questions targeting the specific issues. Resolve
    all ambiguities before proceeding. "When in doubt, ask."
 
-10. **Generate Requirements** -- Create
+9. **Generate Requirements** -- Create
     `<record>/inception/requirements-analysis/requirements.md` containing:
     - Intent analysis -- what the user is trying to achieve (goals, not just
       features)
@@ -451,10 +459,10 @@ large scope with significant unknowns.
     - Out of scope -- explicitly excluded items
     - Open questions -- remaining uncertainties for later stages
 
-11. **Prepare Completion** -- Verify the requirements artifacts. Do not edit
+10. **Prepare Completion** -- Verify the requirements artifacts. Do not edit
     `<record>/aidlc-state.md`; the engine owns completion and routing.
 
-12. **Present Completion & Request Approval** -- Display completion message
+11. **Present Completion & Request Approval** -- Display completion message
     with :mag: emoji and review path. The approval gate has two variants:
 
     **If User Stories is set to SKIP in the execution state:** 3-option gate:
@@ -707,16 +715,12 @@ This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-design-agent persona from
-   `agents/aidlc-design-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-design-agent/`.
-
-2. **Load Prior Context** -- Read rough mockups from
+1. **Load Prior Context** -- Read rough mockups from
    `<record>/ideation/rough-mockups/` (if exists). Read user stories from
    `<record>/inception/user-stories/`. Read requirements from
    `<record>/inception/requirements-analysis/`.
 
-3. **Generate Clarifying Questions** -- Create
+2. **Generate Clarifying Questions** -- Create
    `<record>/inception/refined-mockups/refined-mockups-questions.md` with
    questions covering:
    - How each user story should be represented in the UI
@@ -730,18 +734,18 @@ This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
 
    Follows stage-protocol.md question flow.
 
-4. **Collect and Analyze Answers** -- Validate design decisions against user
+3. **Collect and Analyze Answers** -- Validate design decisions against user
    stories and requirements for consistency.
 
-5. **Generate Artifacts** -- Create mid-to-high fidelity mockups (per user
+4. **Generate Artifacts** -- Create mid-to-high fidelity mockups (per user
    story/screen), interaction specification document, design system mapping,
    responsive behavior specification, and accessibility compliance checklist.
    For non-UI initiatives, create API developer experience specification.
 
-6. **Prepare Completion** -- Verify the refined-mockup artifacts. Do not edit
+5. **Prepare Completion** -- Verify the refined-mockup artifacts. Do not edit
    state; report the gate outcome through `aidlc-orchestrate.ts`.
 
-7. **Present Completion & Request Approval** -- Display completion message
+6. **Present Completion & Request Approval** -- Display completion message
    with :art: emoji. Standard approval gate (Approve / Request Changes).
 
 ### Outputs
@@ -808,18 +812,12 @@ dependencies; the aidlc-design-agent contributes UI component structure.
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-architect-agent persona from
-   `agents/aidlc-architect-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-architect-agent/`. Load aidlc-aws-platform-agent persona
-   from `agents/aidlc-aws-platform-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-aws-platform-agent/` for AWS service mapping.
-
-2. **Load Prior Context** -- Read requirements, user stories (if produced),
+1. **Load Prior Context** -- Read requirements, user stories (if produced),
    and RE artifacts (if brownfield, especially architecture.md,
    component-inventory.md, dependencies.md). Scope context comes from
    `<record>/aidlc-state.md`.
 
-3. **Create Design Plan with Questions** -- Create
+2. **Create Design Plan with Questions** -- Create
    `<record>/inception/domain-design/domain-design-questions.md`
    with context-appropriate questions using `[Answer]:` tag format covering:
    - Component boundary decisions
@@ -831,20 +829,20 @@ dependencies; the aidlc-design-agent contributes UI component structure.
    - UI component structure (if user-facing, informed by UX designer
      perspective)
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md section 3 question flow. MANDATORY ambiguity analysis:
    scan for vague language, contradictions, missing details. Create follow-up
    questions if ANY ambiguity found. Resolve all ambiguities before proceeding.
 
-5. **Generate the Component Catalogue** -- Create the single consolidated
+4. **Generate the Component Catalogue** -- Create the single consolidated
    `components.md` (see Outputs below): a fenced `yaml` catalogue (source of
    truth) plus the derived human view (mermaid diagram + summary/ownership/
    rationale tables).
 
-6. **Prepare Completion** -- Verify the design artifacts. Do not edit state;
+5. **Prepare Completion** -- Verify the design artifacts. Do not edit state;
    report the gate outcome through `aidlc-orchestrate.ts`.
 
-7. **Present Completion & Request Approval** -- Display completion message
+6. **Present Completion & Request Approval** -- Display completion message
    with :building_construction: emoji, summary of design artifacts, key
    architectural decisions highlighted, and review path. 3-option approval
    gate: Approve / Request Changes / Add Units Generation (if it was skipped
@@ -943,20 +941,13 @@ actual unit artifacts.
 
 **PART 1: Planning**
 
-1. **Load Agent Personas** -- Load aidlc-architect-agent persona from
-   `agents/aidlc-architect-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-architect-agent/`. Load aidlc-delivery-agent persona
-   from `agents/aidlc-delivery-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-delivery-agent/` for feasibility validation and
-   prioritization.
-
-2. **Load Prior Context** -- Read all artifacts from
+1. **Load Prior Context** -- Read all artifacts from
    `<record>/inception/domain-design/` (the consolidated `components.md`
    component catalogue and the `decisions.md` ADR log). Read
    requirements. Read user stories (if produced). Scope context comes from
    `<record>/aidlc-state.md`.
 
-3. **Create Decomposition Plan with Questions** -- Create
+2. **Create Decomposition Plan with Questions** -- Create
    `<record>/inception/units-generation/units-generation-questions.md` with
    questions using `[Answer]:` tag format covering:
    - Unit boundary strategy (by service, by feature, by domain, by deployment
@@ -971,25 +962,25 @@ actual unit artifacts.
    risk-first, walking-skeleton-first). Those are economic-sequencing
    decisions that belong to Stage 2.9 Delivery Planning.
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md section 3 question flow. MANDATORY ambiguity analysis:
    scan for vague language, contradictions, missing details. Create follow-up
    questions if ANY ambiguity found. Resolve all ambiguities before proceeding.
 
-5. **Get Plan Approval** -- Present the decomposition plan to the user via
+4. **Get Plan Approval** -- Present the decomposition plan to the user via
    AskUserQuestion: summarize the approach (unit boundary strategy, estimated
    unit count, dependency structure). Options: Approve Plan / Revise Plan.
 
 **PART 2: Generation**
 
-6. **Execute Plan -- Generate Unit Artifacts** -- Based on the approved plan,
+5. **Execute Plan -- Generate Unit Artifacts** -- Based on the approved plan,
    generate the 4 output artifacts (see Outputs below).
 
-7. **Prepare Completion** -- Verify the unit artifacts and record the unit
+6. **Prepare Completion** -- Verify the unit artifacts and record the unit
    list for Construction. Do not edit state; report the gate outcome through
    `aidlc-orchestrate.ts`.
 
-8. **Present Completion & Request Approval** -- Display completion message
+7. **Present Completion & Request Approval** -- Display completion message
    with :wrench: emoji, summary of units defined, dependencies mapped, stories
    assigned, and review path. Standard 2-option approval gate: Approve
    (continue to Construction phase) / Request Changes.
@@ -1019,16 +1010,17 @@ Standard 2-option gate: **Approve** (continue to Construction phase) /
 ### Notes
 
 - **This stage's output drives Construction.** The `unit-of-work.md` file
-  defines the Units that the Construction phase iterates over in its per-Unit
-  loop. Each Unit goes through the applicable Construction stages (Functional
-  Design, NFR Requirements, NFR Design, Infrastructure Design, Code
-  Generation) before the next Unit begins.
+  defines the Units; `unit-of-work-dependency.md` is the DAG the Construction
+  engine walks. The default walk is stage-major: one in-scope Construction
+  stage runs for every Unit, then the next stage. Opt-in
+  `Construction Iteration: unit-major` is the walk that finishes one Unit's
+  per-unit stages before the next Unit begins.
 - **2.7 is ALWAYS when in scope.** In the compiled scope grid, 2.7 and 2.9 travel
   together (both EXECUTE or both SKIP per scope). There is no single-unit
   skip condition at this stage — single-Unit flows still produce a trivial
   DAG.
 - The two-part structure (plan then generate) allows the user to approve the
-  decomposition strategy before Units are defined. Step 5 has an intermediate
+  decomposition strategy before Units are defined. Step 4 has an intermediate
   approval gate (Approve Plan / Revise Plan) separate from the final
   completion gate.
 - The dependency DAG feeds 2.9's economic Bolt sequencing. 2.9 chooses a
@@ -1107,16 +1099,18 @@ construction stages read as the authoritative boundary reference.
 ### Purpose
 
 Delivery Planning is the capstone of the Inception phase. It plans the Bolt
-sequence — the order in which Units of Work produced by Stage 2.7 are
-executed through Construction. Where Stage 2.7 is analytical (the dependency
-DAG), Stage 2.9 is economic: it chooses a path through the DAG weighted by
-risk, value, team capacity, and learning.
+sequence — the economic order in which Units of Work produced by Stage 2.7
+should ship. Where Stage 2.7 is analytical (the dependency DAG the
+Construction engine actually walks), Stage 2.9 is economic: it chooses a
+path through the DAG weighted by risk, value, team capacity, and learning.
+The engine does not consume `bolt-plan.md` for Unit grouping or runtime
+order.
 
-Per the canonical Glossary in `stage-protocol.md`, a **Bolt** is
-"a deployable unit of work within Construction — one pass through stages
-3.1–3.5." A Bolt is one Construction pass over one or more Units of
-Work, distinct from an MMF or a sprint. (Stages 3.6 build-and-test and 3.7
-ci-pipeline run once at end across all Bolts, not per-Bolt.)
+Per the canonical Glossary in `stage-protocol.md`, a **Bolt** is the
+planned Construction delivery slice from this stage (2.9): one or more
+Units with a Definition of Done, a confidence hypothesis, and ownership.
+(Stages 3.6 build-and-test and 3.7 ci-pipeline run once at end across
+all Units, not per-Bolt.)
 
 Economic value cannot be derived from the DAG — AI agents can topologically
 sort, but they cannot decide which Bolt validates the market hypothesis
@@ -1147,16 +1141,11 @@ All Inception phase artifacts:
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-delivery-agent persona from
-   `agents/aidlc-delivery-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-delivery-agent/`. Load aidlc-architect-agent for build
-   order validation.
-
-2. **Load Prior Context** -- Read all Inception phase artifacts: requirements,
+1. **Load Prior Context** -- Read all Inception phase artifacts: requirements,
    user stories, domain design, units, the contract summary (if produced), and
    team formation (if exists).
 
-3. **Generate Clarifying Questions** -- Create
+2. **Generate Clarifying Questions** -- Create
    `<record>/inception/delivery-planning/delivery-planning-questions.md`
    with questions covering:
    - Sequencing heuristic: risk-first, value-first, walking-skeleton-first,
@@ -1174,12 +1163,12 @@ All Inception phase artifacts:
 
    Follows stage-protocol.md question flow.
 
-4. **Collect and Analyze Answers** -- Validate that the chosen Bolt
+3. **Collect and Analyze Answers** -- Validate that the chosen Bolt
    sequence respects 2.7's dependency DAG (with aidlc-architect-agent input).
    Flag any deviation from topological order so it can be justified in the
    rationale artifact.
 
-5. **Generate Artifacts** -- Create four artifacts in
+4. **Generate Artifacts** -- Create four artifacts in
    `<record>/inception/delivery-planning/`:
    - `bolt-plan.md` — the ordered sequence of Bolts; per-Bolt Units of
      Work, walking-skeleton marker, Definition of Done, confidence
@@ -1192,18 +1181,18 @@ All Inception phase artifacts:
    - `external-dependency-map.md` — gated items mapped to consuming Bolts
      (lightweight or empty when fully AI-contained).
 
-6. **Phase Boundary Verification** -- Run Inception-to-Construction
+5. **Phase Boundary Verification** -- Run Inception-to-Construction
    verification check:
    - Requirements to Stories to Architecture alignment
    - All stories trace to requirements
    - Architecture covers all stories
    - Write results to `<record>/verification/phase-check-inception.md`
 
-7. **Prepare Completion** -- Verify the delivery and boundary-verification
+6. **Prepare Completion** -- Verify the delivery and boundary-verification
    artifacts. Do not write the phase or stage state; the approval report owns
    the atomic Inception-to-Construction transition.
 
-8. **Present Completion & Request Approval** -- Display completion message
+7. **Present Completion & Request Approval** -- Display completion message
    with :calendar: emoji. Approval gate: Approve (proceed to Construction) /
    Request Changes. The user can override stage inclusion/exclusion at this
    gate.
@@ -1242,10 +1231,12 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
   Bolt order may deviate from topological order when risk-first or
   walking-skeleton-first arguments justify it — the deviation is captured
   in `risk-and-sequencing-rationale.md`.
-- **Bolt ≠ sprint ≠ MMF.** Per the canonical Glossary, a Bolt is one pass
-  through Construction stages 3.1–3.5 (3.6 Build and Test and 3.7 CI Pipeline
-  run once after all Bolts). Sequencing heuristics (walking skeleton, WSJF)
-  apply within Bolts; they do not redefine what a Bolt is.
+- **Bolt ≠ sprint ≠ MMF.** Per the canonical Glossary, a Bolt is the
+  planned Construction delivery slice from 2.9: one or more Units with a
+  Definition of Done, a confidence hypothesis, and ownership. Stages 3.6
+  (Build and Test) and 3.7 (CI Pipeline) run once after all Bolts.
+  Sequencing heuristics (walking skeleton, WSJF) apply to Bolt order;
+  they do not redefine what a Bolt is.
 - **Deliberate deviation from upstream.** The upstream reference calls this
   stage "Workflow Planning" and treats it as a pure stage selector. This
   implementation (renamed to "Delivery Planning") adds Bolt sequencing,
@@ -1256,7 +1247,7 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
   dependencies defined in the component catalogue (`components.md`) and the
   unit-of-work-dependency artifact.
 - Team allocation draws from the Team Formation artifacts (Stage 1.5) if
-  they exist; when 1.5 is SKIP (mvp, workshop), all Bolts are executed by
+  they exist; when 1.5 is SKIP (mvp, classic, workshop), all Bolts are executed by
   aidlc-developer-agent (AI).
 
 ---
@@ -1287,13 +1278,14 @@ Construction and Operation:
    (When applicable.)
 6. **Units of Work** (2.7) -- Unit definitions with boundaries and complexity
    estimates, unit dependency matrix with build order, story-to-unit mapping.
-   (When applicable.) This is the artifact that drives the Construction
-   phased construction flow.
+   (When applicable.) `unit-of-work-dependency.md` is the artifact the
+   Construction engine reads for Unit grouping and runtime batch order.
 7. **Contract Summary** (2.8) -- The pinned inter-unit and public/external API
    contracts (`contract-summary.md`). (When there is a contract to pin.)
 8. **Delivery Plan** (2.9) -- Bolt plan, build order, dependency matrix, team
-   allocation. This is the execution plan that governs Construction and
-   Operation.
+   allocation. Approved planning content (economic sequence, multi-Unit
+   grouping, DoD, confidence hypothesis, ownership) — not the runtime walk
+   source.
 9. **Phase Boundary Verification** (2.9) -- Inception-to-Construction
    traceability check written to
    `<record>/verification/phase-check-inception.md`.
@@ -1301,29 +1293,30 @@ Construction and Operation:
 ### Handoff to Construction
 
 Upon approval at Stage 2.9, the framework transitions to the Construction
-phase. Construction creates stage-level tasks based on the execution plan from
-Delivery Planning and executes a phased construction flow:
+phase. `bolt-plan.md` stays the approved planning artifact — economic
+sequence, multi-Unit Bolt grouping, Definition of Done, confidence
+hypothesis, and ownership. The engine does **not** consume it for Unit
+grouping or walk order. Runtime batches are computed from
+`unit-of-work-dependency.md` (2.7).
 
-Construction runs Bolt-by-Bolt per `bolt-plan.md`, with parallel batches
-allowed per the bolt plan. Each Bolt covers a coherent slice of one or
-more Units (per `unit-of-work.md` and `unit-of-work-dependency.md`):
+The shipped default walk is **stage-major**: one in-scope Construction
+stage runs for every Unit, then the next stage, with Code Generation last.
+The walking-skeleton gate is the first in-scope Construction EXECUTE stage.
+After that gate, the ladder prompt records `Construction Autonomy Mode`.
+Opt-in `Construction Iteration: unit-major` walks one Unit through every
+per-unit stage before the next Unit; it suppresses swarm and keeps the
+per-stage gate cascade.
 
-For each Bolt:
-1. **3.1 Functional Design** (conditional per execution plan)
-2. **3.2 NFR Requirements** (conditional per execution plan)
-3. **3.3 NFR Design** (conditional per execution plan)
-4. **3.4 Infrastructure Design** (conditional per execution plan)
-5. **3.5 Code Generation** (always, per unit within the Bolt)
+1. **3.1 Functional Design** (conditional per scope / execution plan) — every Unit
+2. **3.2 NFR Requirements** (conditional) — every Unit
+3. **3.3 NFR Design** (conditional) — every Unit
+4. **3.4 Infrastructure Design** (conditional) — every Unit
+5. **3.5 Code Generation** (always) — every Unit; under an autonomous swarm,
+   one stage gate after the final DAG batch
+6. **3.6 Build and Test** (always) — once at the end
+7. **3.7 CI Pipeline** (conditional) — once at the end
 
-After the final Bolt completes:
-6. **3.6 Build and Test** (always)
-7. **3.7 CI Pipeline** (conditional)
-
-Bolts can run in parallel batches as the dependency graph allows; the
-walking-skeleton Bolt always runs first as a single-Bolt batch to verify
-the end-to-end shape before parallel batches kick off. See
-`docs/guide/04-phases-and-stages.md:263-293` for the full Bolt-by-Bolt
-narrative.
+See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
 
 ### Cross-References
 
@@ -1336,8 +1329,8 @@ narrative.
   `stage-protocol-governance.md` §13.
 - **Ideation Phase**: `docs/reference/04-stages/ideation.md` -- Previous phase
   documentation
-- **Construction Phase**: Construction stages execute per the delivery plan
-  produced by Stage 2.9
+- **Construction Phase**: `docs/reference/04-stages/construction.md` — default
+  walk is stage-major; `bolt-plan.md` is planning, not the walk source
 - **Deliberate Deviations**: SKILL.md documents intentional differences from
   the upstream reference, including the RE scope/fingerprint rerun guard,
   aidlc-design-agent support additions, ADR artifacts, and the Delivery

@@ -88,8 +88,9 @@ or focused scan overwrites those nine files
 (`reverse-engineering-timestamp.md` records when the last scan ran and what
 it covered). Intents therefore read the newest scan of the repo, not the one
 taken when their own record dir was created. What the record dir does get is
-the stage's own `memory.md` diary — created on demand when the stage runs
-(see **Per-stage memory diary** below) — so an `inception/reverse-engineering/`
+the stage's own `memory.md` diary — created by the engine when it emits the
+run-stage directive (see **Per-stage memory diary** below) — so an
+`inception/reverse-engineering/`
 directory can appear there, holding the diary and nothing else. Codekb writes
 are audit-logged with a `codekb > <repo> > <name>` breadcrumb, so the
 per-intent trail still records what changed and when.
@@ -104,11 +105,11 @@ under an optional `aidlc-shared/` and per-agent subdirectories. See
 **Per-stage memory diary.** Each executed stage also keeps a committed
 `memory.md` alongside its artifacts (e.g.
 `<record>/inception/requirements-analysis/memory.md`). It is the
-stage's observation diary — auto-created from a template at stage start,
-maintained by the orchestrator during the stage, and read by the §13
-Learnings Ritual at the approval gate. It is never hand-edited. See
-[Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how
-the diary feeds the learning loop.
+stage's observation diary — created by the engine from a template when it emits
+the run-stage directive, maintained by the orchestrator during the stage, and
+read by the §13 Learnings Ritual at the approval gate. It is never hand-edited.
+See [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how the
+diary feeds the learning loop.
 
 **Code lives in sibling repos, not the record dir.** The `aidlc/` tree holds only
 method, state, audit, and artifacts — never application code. Generated code lands
@@ -203,7 +204,7 @@ The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (
 | 3.3 NFR Design | `security-design.md`, `performance-design.md` | Per plan, per unit (by kind) |
 | 3.3 NFR Design | `observability-design.md` | Per plan, service units only |
 | 3.4 Infrastructure Design | `infrastructure-specification.md`, `monitoring-design.md`, `cicd-pipeline.md` | Per plan, per unit (by kind) |
-| 3.5 Code Generation | `code-generation-plan.md`, `code-generation-questions.md`, `unit-test-instructions.md`, `code-summary.md` (code goes to workspace root) | Always, per unit |
+| 3.5 Code Generation | `code-generation-plan.md`, `code-generation-questions.md`, `unit-test-instructions.md`, `code-summary.md`, `traceability.json`, plus engine-required `source-manifest.json` (code goes to workspace root) | Always, per unit |
 | 3.6 Build and Test | `build-instructions.md`, `test-results.md` | Always, after all units |
 | 3.7 CI Pipeline | `ci-config.md`, `quality-gates.md` | Conditional, after all units |
 
@@ -249,7 +250,7 @@ cursors and machine-local derived state are ignored.
 | `audit/*.md` (per-clone shards) | `.aidlc-recovery.md` and other `intents/*/.aidlc-*` (transient breadcrumbs) |
 | All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
-| Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-conversation session→intent map) |
+| Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
 | Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-hooks-health/`, `.aidlc-sensors/` (heartbeats, advisory findings) |
 
 ---

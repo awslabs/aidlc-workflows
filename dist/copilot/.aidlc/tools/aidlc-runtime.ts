@@ -27,7 +27,6 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   errorMessage,
-  activeIntent,
   findAllEvents,
   getField,
   loadStageGraph,
@@ -37,10 +36,11 @@ import {
   parseMemoryHeadings,
   parseStateStageSuffixes,
   readAllAuditShards,
-  activeSpace,
+  resolveWorkflowSelection,
   readStateFile,
   relativeMemoryPath,
   relativeRecordDir,
+  resolveAuditWorktreePath,
   resolveProjectDir,
   runtimeGraphPath,
   stateFilePath,
@@ -480,7 +480,8 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       const wt = fieldFromBlock(ev.block, "Worktree path");
       if (!slug) continue;
       slugsInWindow.set(slug, {
-        worktree: wt ?? "",
+        worktree:
+          wt === null ? "" : resolveAuditWorktreePath(projectDir, wt),
         started_at: ev.timestamp,
       });
     }
@@ -646,7 +647,13 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       if (fieldFromBlock(ev.block, "Stage slug") !== slug) continue;
       if (outputUnderWorktree !== null) {
         const out = fieldFromBlock(ev.block, "Output path") ?? "";
-        if (!outputUnderWorktree(out)) continue;
+        if (
+          !outputUnderWorktree(
+            resolveAuditWorktreePath(projectDir, out),
+          )
+        ) {
+          continue;
+        }
       }
       const fireId = fieldFromBlock(ev.block, "Fire id");
       const sensorId = fieldFromBlock(ev.block, "Sensor ID");
@@ -1165,9 +1172,13 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
   // two cursors differ, the empty graph is written under the worktree-space path
   // but re-read under the main-space path → ENOENT, fragment-fork exits 1 despite
   // a successful write. One resolved space keeps both sides on the same segment.
-  const space = flags.space ?? activeSpace(projectDir);
+  const selection = resolveWorkflowSelection(projectDir, {
+    space: flags.space,
+    intent,
+  });
+  const space = selection.space;
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
-  const wtRecord = activeIntent(projectDir, space, intent) ?? undefined;
+  const wtRecord = selection.intent ?? undefined;
 
   const wtPath = worktreePath(projectDir, flags.slug);
   const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);

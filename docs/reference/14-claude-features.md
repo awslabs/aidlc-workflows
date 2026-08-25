@@ -21,11 +21,11 @@ harness parameter. Add a column when you port to a new harness.
 | AI-DLC Concept | Claude Code | Kiro CLI | Kiro IDE | Codex CLI | opencode | GitHub Copilot | Cursor |
 |----------------|-------------|----------|----------|-----------|----------|----------------|--------|
 | **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Command → skill (`/aidlc`; skills from `.aidlc/skills` via `skills.paths`) | Skills (`/aidlc`; `.github/skills/`) | Native skills (`/aidlc` plus `/aidlc-status`, `/aidlc-jump`, `/aidlc-scope`; `.cursor/skills/`) |
-| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Persona `.md`; delegation targets add IDE `tools:` grants | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` | `.github/agents/*.md` (custom agents) + persona `.md` | `.cursor/agents/*.md` (native subagents) |
+| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Conductor `agents/aidlc.md` + 14 persona `.md` files with IDE `tools:`/`permissions.rules` | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` | `.github/agents/*.md` (custom agents) + persona `.md` | `.cursor/agents/*.md` (native subagents) |
 | **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/aidlc-*.json` (v2, IDE >= 1.0) + `.kiro/hooks/aidlc-*.kiro.hook` (legacy, pre-1.0) | Hooks via `.codex/hooks.json` (one adapter) | Adapter plugin (`.opencode/plugin/`) | Hooks via `.github/hooks/aidlc.json` (one adapter) | Hooks via `.cursor/hooks.json` (one adapter) |
 | **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |
 | **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
-| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` frontmatter for delegates | `.codex/config.toml` (+ Starlark `rules/`) | `opencode.json` (project root) | `trustedFolders` (`~/.copilot/config.json`) + `--allow-tool` flags | `.cursor/cli.json` (permissions) + `.cursor/hooks.json` |
+| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` + `permissions.rules` frontmatter | `.codex/config.toml` (+ Starlark `rules/`) | `opencode.json` (project root) | `trustedFolders` (`~/.copilot/config.json`) + `--allow-tool` flags | `.cursor/cli.json` (permissions) + `.cursor/hooks.json` |
 
 The deterministic engine, state machine, audit log, stage graph, and swarm
 referee underneath are byte-identical across every harness — only the primitives
@@ -81,9 +81,10 @@ All framework hooks are registered project-wide in `settings.json` (the workflow
 
 ### Companion Files
 
-SKILL.md references two companion file sets in `.claude/skills/aidlc/`:
+SKILL.md references the shared protocol family and stage files:
 
-- **`stage-protocol.md`** -- Mandatory protocol for all 33 stages (approval gates, question formatting, audit logging rules, completion messages, phase-boundary verification).
+- **`aidlc-common/protocols/stage-protocol.md`** -- Mandatory static protocol for all 33 stages.
+- **Conditional protocol modules** -- reviewer, ensemble, Construction, swarm, recovery, and governance files loaded only when their trigger fires.
 - **Stage files** in `stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/` -- 33 individual stage definitions.
 
 ---
@@ -92,7 +93,7 @@ SKILL.md references two companion file sets in `.claude/skills/aidlc/`:
 
 ### Agent File Format
 
-This implementation renders AI-DLC's agent roles as flat `.md` files in `.claude/agents/` — 14 files: the 11 domain-expert personas, 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer. Each uses YAML frontmatter followed by a markdown body. The frontmatter controls Claude Code's behavior when the agent is activated; the body provides persona, responsibilities, stage ownership, collaboration patterns, knowledge loading order, and key principles.
+This implementation renders AI-DLC's agent roles as flat `.md` files in `.claude/agents/` — 14 files: the 11 domain-expert personas, 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer. Each uses YAML frontmatter followed by a markdown body. The frontmatter controls Claude Code's behavior when the agent is activated; the body provides persona, responsibilities, collaboration patterns, relevant memory focus, and key principles. The packager injects a compact mandatory delegated-knowledge preflight into the projected file.
 
 For full agent system documentation, see [Agent System](05-agent-system.md).
 
@@ -122,10 +123,10 @@ The authored dial on every agent is `tier:`; the packager projects it into the `
 | Tier | Agents | Claude Code projection | Rationale |
 |------|--------|------------------------|-----------|
 | `judgment` | architect, product, design, developer, quality, devsecops, compliance, aws-platform, composer (9) | `model: inherit`, no `effort:` line - the session's model and effort win | Multi-constraint reasoning whose decisions cascade downstream - architectural boundaries, intent interpretation, UX trade-offs, code synthesis, threat prioritisation, regulatory edge-cases, cloud architecture |
-| `balanced` | architecture-reviewer, product-lead (2) | `model: sonnet`, no `effort:` line | Review against an explicit checklist; the criteria encode the method, so a mid-size model at session effort suffices |
+| `balanced` | architecture-reviewer, product-lead (2) | `model: sonnet`, `effort: medium` | Review against an explicit checklist; the criteria encode the method, so a mid-size model at reduced effort suffices |
 | `templated` | delivery, pipeline-deploy, operations (3) | `model: sonnet`, `effort: medium` | Output is dominantly templated planning tables, CI/CD YAML, or observability/runbook scaffolding; methodology is encoded in the agent's knowledge files |
 
-An omitted `effort:` key inherits the session effort, and a pinned one overrides the session in both directions (a pin is a cap, not a floor) - absence is deliberate for the first two tiers. The full per-harness projection table (on Kiro, all tiers inherit the session model and effort) and the `tier_cap` override live in [Agent System](05-agent-system.md).
+An omitted `effort:` key inherits the session effort, and a pinned one overrides the session in both directions (a pin is a cap, not a floor) - absence is deliberate for `judgment`, the only tier that omits the key. The full per-harness projection table (on Kiro, all tiers inherit the session model and effort) and the `tier_cap` override live in [Agent System](05-agent-system.md).
 
 ---
 
@@ -147,19 +148,19 @@ aidlc/spaces/<active-space>/memory/
     └── operation.md
 ```
 
-Each file carries topical `##` headings (Way of Working, Testing Posture, Deployment, Code Style, Forbidden, Mandated, and so on). At workflow start the compile resolver walks the chain **org → team → project → phase → stage** and bakes the resolved rule set onto each stage's graph node. The model is **strict-additive**: every applicable rule from every layer appears in the agent's context simultaneously — a narrower layer never silently overrides a broader one. A rule that would *contradict* a broader-scope rule is rejected at the admission gate when it is written, not reconciled at runtime. The authoritative layout, scope derivation, and conflict semantics are in [Rule System](08-rule-system.md).
+Each file carries topical `##` headings (Way of Working, Testing Posture, Deployment, Code Style, Forbidden, Mandated, and so on). At workflow start the compile resolver walks the chain **org → team → project → phase → stage** and bakes the resolved rule set onto each stage's graph node. The model is **strict-additive**: every applicable rule from every layer appears in the agent's context simultaneously — a narrower layer never silently overrides a broader one. For kept learnings, the admission protocol asks the orchestrator to compare proposed text with broader policy through an LLM check before the deterministic writer runs. That check is an audit aid rather than a writer-enforced boundary; runtime does not reconcile conflicts. The authoritative layout, scope derivation, and conflict semantics are in [Rule System](08-rule-system.md).
 
 **Why the org/team files stay lean:** Claude Code loads the space memory files (via the `.claude/rules/aidlc.md` @-import stub) into each conversation, including non-AI-DLC ones. Keeping the shipped layers to concise, topical structure avoids polluting regular development sessions. Detailed methodology that the upstream specification places in rules instead lives in `.claude/knowledge/aidlc-shared/` or in SKILL.md and stage-protocol.md, loaded only when `/aidlc` is active.
 
 ### The Learning Loop
 
-The rule files are not static — the v0.5.0 learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM's only job is to write observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions). Everything else is a deterministic tool or a human decision:
+The rule files are not static — the v0.5.0 learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM writes observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions), and the orchestrator later performs the admission comparison. Candidate extraction and persistence are deterministic tools; selections and conflict disposition are human decisions:
 
 1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
 2. **Surface (tool).** At the approval gate, `aidlc-learnings.ts surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
-4. **Admission check (knowledge).** Each kept learning is checked against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
-5. **Persist (tool).** `aidlc-learnings.ts persist` writes each confirmed learning as a practice to `aidlc/spaces/<active-space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
+4. **Admission check (orchestrator LLM).** The orchestrator compares each kept learning against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
+5. **Persist (tool).** `aidlc-learnings.ts persist` accepts the resulting selections without reading `org.md`, writes each confirmed learning as a practice to `aidlc/spaces/<active-space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
 The user-facing walk-through (with a worked example) is in [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md); the harness-engineer authoring angle is in [Rules and the Learning Loop](../harness-engineering/05-rules-and-the-loop.md).
 
@@ -351,7 +352,7 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 | Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 4 stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent): isolated execution |
 | Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
 | Knowledge (Tier 2) | space-level `aidlc/knowledge/` (sibling of `intents/`) | Persona activation (steps 4-5) | Team-managed customization |
-| Stage protocol | `stage-protocol.md` | Every stage execution | Mandatory behavioral contract |
+| Stage protocol | `stage-protocol.md` + conditional modules | Static core every stage; modules on trigger | Mandatory behavioral contract |
 | Stage files | `stages/**/*.md` | Engine routing | 33 individual stage definitions |
 | State file | `aidlc-state.md` | Session start + throughout | Persistent workflow state |
 | Audit file | `audit.md` | Throughout execution | Append-only audit trail |

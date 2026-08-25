@@ -1,4 +1,4 @@
-// covers: function:validScopes, function:loadScopeMetadata, function:loadScopeMapping, function:scalarField, cli:aidlc-utility(detect-scope)
+// covers: scope:workshop, function:validScopes, function:loadScopeMetadata, function:loadScopeMapping, function:scalarField, cli:aidlc-utility(detect-scope)
 //
 // t125 — scope files: validScopes() + scope metadata derive from
 // .claude/scopes/aidlc-<name>.md presence (milestone 12). Migrated from
@@ -43,11 +43,11 @@
 //                                   emits SCOPE_DETECTED with **Detected scope**: <s>
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh test 1  (9 shipped scope files)                     -> "exactly 9 shipped aidlc-*.md scope files exist"
+//   .sh test 1  (shipped scope files)                       -> "exactly 10 shipped aidlc-*.md scope files exist"
 //   .sh test 2  (frontmatter name == filename stem)          -> "every shipped scope file's frontmatter name == its slug"
-//   .sh test 3  (validScopes() == 9 names, alphabetical)     -> "validScopes() == the 9 .md-derived names, alphabetical"
+//   .sh test 3  (validScopes names, alphabetical)            -> "validScopes() == the 10 .md-derived names, alphabetical"
 //   .sh test 4  (loadScopeMetadata bugfix depth/kw/desc)     -> "loadScopeMetadata reads bugfix depth/keywords/description from .md"
-//   .sh test 5  (workshop testStrategy override)             -> "loadScopeMetadata reads workshop's testStrategy override from .md"
+//   .sh test 5  (classic testStrategy inheritance)             -> "loadScopeMetadata reads classic without a testStrategy override from .md"
 //   .sh test 6  (loadScopeMapping poc derived fields)        -> "loadScopeMapping poc depth/keywords/description derive from .md"
 //   .sh test 7  (dropping a new .md makes it valid)          -> "dropping aidlc-dropscope.md makes 'dropscope' a valid scope (no code change)"
 //   .sh test 8  (isolated dir with one file -> one scope)    -> "isolated AIDLC_SCOPES_DIR with one file yields exactly that scope"
@@ -90,11 +90,13 @@ const UTIL = fileURLToPath(
   new URL("../../dist/claude/.claude/tools/aidlc-utility.ts", import.meta.url),
 );
 
-// The 9 scopes the framework ships, alphabetical — the .sh's hard-coded
+// The 11 scopes the framework ships, alphabetical — the .sh's hard-coded
 // expectation (t125:62). Each is a literal independent of source iteration.
 const SHIPPED_SCOPES = [
   "bugfix",
+  "classic",
   "enterprise",
+  "express",
   "feature",
   "infra",
   "mvp",
@@ -127,11 +129,11 @@ afterEach(() => {
 });
 
 describe("shipped scope files — frontmatter + derived metadata (in-process)", () => {
-  test("exactly 9 shipped aidlc-*.md scope files exist [.sh test 1]", () => {
+  test("exactly 11 shipped aidlc-*.md scope files exist [.sh test 1]", () => {
     const files = readdirSync(SCOPES_DIR).filter(
       (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
     );
-    expect(files.length).toBe(9);
+    expect(files.length).toBe(11);
   });
 
   test("every shipped scope file's frontmatter name == its slug [.sh test 2]", () => {
@@ -150,7 +152,7 @@ describe("shipped scope files — frontmatter + derived metadata (in-process)", 
     }
   });
 
-  test("validScopes() == the 9 .md-derived names, alphabetical [.sh test 3]", () => {
+  test("validScopes() == the 11 .md-derived names, alphabetical [.sh test 3]", () => {
     expect([...validScopes()]).toEqual(SHIPPED_SCOPES);
   });
 
@@ -161,8 +163,11 @@ describe("shipped scope files — frontmatter + derived metadata (in-process)", 
     expect(m.bugfix.description).toBe("Fix a specific bug");
   });
 
-  test("loadScopeMetadata reads workshop's testStrategy override from .md [.sh test 5]", () => {
-    // workshop is the only shipped scope carrying a testStrategy override.
+  test("loadScopeMetadata reads classic without a testStrategy override [.sh test 5]", () => {
+    expect(loadScopeMetadata().classic.testStrategy).toBeUndefined();
+  });
+
+  test("loadScopeMetadata preserves the Workshop Minimal test override", () => {
     expect(loadScopeMetadata().workshop.testStrategy).toBe("Minimal");
   });
 
@@ -228,7 +233,7 @@ describe("dropped-file scope dynamics (AIDLC_SCOPES_DIR seam)", () => {
     const scopes = [...validScopes()];
     // The drop made it valid with zero code change...
     expect(scopes).toContain("dropscope");
-    // ...alongside all 9 shipped scopes that were copied into the sandbox.
+    // ...alongside all 10 shipped scopes that were copied into the sandbox.
     for (const s of SHIPPED_SCOPES) expect(scopes).toContain(s);
   });
 
@@ -291,5 +296,54 @@ describe("dropped-file scope dynamics (AIDLC_SCOPES_DIR seam)", () => {
     // and stdout echoes the resolved scope.
     expect(audit).toContain("**Event**: SCOPE_DETECTED");
     expect(res.stdout).toContain('"scope":"dropscope"');
+  });
+
+  test("detect-scope --from-text resolves flow-style keywords from a dropped scope", () => {
+    const proj = setupIntegrationProject({ stripEnvScope: true });
+    projects.push(proj);
+    writeFileSync(
+      seededStateFile(proj),
+      "# AI-DLC State Tracking\n## Current Status\n- **Scope**: feature\n",
+      "utf-8",
+    );
+    const projScopes = join(proj, ".claude", "scopes");
+    writeFileSync(
+      join(projScopes, "aidlc-flowdropscope.md"),
+      `---
+name: flowdropscope
+depth: Minimal
+keywords: [dropkw, otherkw]
+description: Flow-style dropped scope for t125
+---
+
+# flowdropscope
+`,
+      "utf-8",
+    );
+
+    const res = spawnSync(
+      BUN,
+      [
+        UTIL,
+        "detect-scope",
+        "--from-text",
+        "--input",
+        "dropkw",
+        "--project-dir",
+        proj,
+      ],
+      {
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_SCOPES_DIR: projScopes },
+      },
+    );
+    expect(res.status).toBe(0);
+
+    const auditPath = seededAuditShard(proj);
+    expect(existsSync(auditPath)).toBe(true);
+    const audit = readFileSync(auditPath, "utf-8");
+    expect(/Detected scope.*: flowdropscope/.test(audit)).toBe(true);
+    expect(audit).toContain("**Event**: SCOPE_DETECTED");
+    expect(res.stdout).toContain('"scope":"flowdropscope"');
   });
 });

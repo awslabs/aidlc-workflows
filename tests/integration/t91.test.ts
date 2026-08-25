@@ -29,8 +29,9 @@
 //
 // FIXTURE DISCIPLINE — replicate the .sh's make_project (t91:36-47) EXACTLY:
 // a fresh temp project under aidlc-docs/ + a self-contained .claude/ skeleton
-// with the four tool files (aidlc-runtime.ts, aidlc-lib.ts, aidlc-audit.ts,
-// data/stage-graph.json) and the hook copied in, plus a minimal
+// with the five tool modules (aidlc-runtime.ts, aidlc-lib.ts,
+// aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-audit.ts),
+// data/stage-graph.json, and the hook copied in, plus a minimal
 // aidlc-state.md ("- **Scope**: feature"). The COPY (not symlink) matters:
 // the hook spawns `<projectDir>/.claude/tools/aidlc-runtime.ts`, whose
 // aidlc-lib.ts resolves stage-graph.json relative to its own import.meta.url
@@ -71,16 +72,24 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import {
+  createIntent,
+  setActiveIntentCursor,
+  writeSessionBinding,
+  writeSessionPidEntry,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -96,7 +105,7 @@ afterAll(() => {
 /**
  * make_project (t91:36-47): a fresh temp project with a self-contained
  * .claude/ skeleton so the hook + the compile it spawns resolve every path
- * via CLAUDE_PROJECT_DIR. Copies (NOT symlinks) the four tool files + the hook
+ * via CLAUDE_PROJECT_DIR. Copies (NOT symlinks) the five tool files + the hook
  * — aidlc-lib.ts resolves data/stage-graph.json relative to its own location,
  * so the data file must sit beside the copied lib. toPortablePath round-trips
  * the path on Windows.
@@ -113,6 +122,10 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-lib.ts"),
     join(proj, ".claude", "tools", "aidlc-lib.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-artifact-vocabulary.ts"),
+    join(proj, ".claude", "tools", "aidlc-artifact-vocabulary.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-runtime-paths.ts"),
@@ -376,6 +389,77 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
       payload("bun .claude/tools/aidlc-state.ts gate-start intent-capture"),
     );
     expect(existsSync(graphPath(p))).toBe(true);
+  }, 30000);
+
+  test("3b: divergent payload selects the payload workflow in the compile child", () => {
+    const p = makeProject();
+    const payloadIntent = createIntent(
+      p,
+      "payload-work",
+      "default",
+      "feature",
+    );
+    const ancestryIntent = createIntent(
+      p,
+      "ancestry-work",
+      "default",
+      "feature",
+    );
+    setActiveIntentCursor(p, DEFAULT_RECORD_DIR, "default");
+    writeSessionBinding(
+      p,
+      "payload-session",
+      "default",
+      payloadIntent.dirName,
+    );
+    writeSessionBinding(
+      p,
+      "ancestry-session",
+      "default",
+      ancestryIntent.dirName,
+    );
+    const payloadAuditDir = join(payloadIntent.recordDir, "audit");
+    mkdirSync(payloadAuditDir, { recursive: true });
+    writeFileSync(
+      join(payloadAuditDir, "fixture.md"),
+      AUDIT_GATE_APPROVED,
+      "utf-8",
+    );
+    const witnessPath = join(p, "runtime-child-env.json");
+    writeFileSync(
+      join(p, ".claude", "tools", "aidlc-runtime.ts"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        'import { resolveWorkflowSelection } from "./aidlc-lib.ts";',
+        "const selection = resolveWorkflowSelection(process.cwd());",
+        `writeFileSync(${JSON.stringify(witnessPath)}, JSON.stringify({`,
+        "  selectedIntent: selection.intent,",
+        "  selectedSession: selection.sessionId,",
+        '}), "utf-8");',
+      ].join("\n"),
+      "utf-8",
+    );
+    writeSessionPidEntry(p, process.pid, "ancestry-session");
+
+    const r = runHook(
+      p,
+      JSON.stringify({
+        session_id: "payload-session",
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            "bun .claude/tools/aidlc-state.ts approve --stage intent-capture",
+        },
+      }),
+    );
+
+    expect(r.status, r.out).toBe(0);
+    expect(
+      JSON.parse(readFileSync(witnessPath, "utf-8")),
+    ).toEqual({
+      selectedIntent: payloadIntent.dirName,
+      selectedSession: "payload-session",
+    });
   }, 30000);
 
   // --- Case 3: non-aidlc Bash (git status) -> no dispatch + no heartbeat ---

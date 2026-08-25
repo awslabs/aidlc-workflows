@@ -10,7 +10,7 @@ This schema is the contract between the tool (deterministic) and the LLM (prose 
 bun .claude/tools/aidlc-worktree.ts info --slug <kebab-slug>
 ```
 
-The slug is the kebab-case Bolt identifier threaded through every per-Bolt worktree command (`create`, `verify`, `merge`, `discard`). See `SKILL.md` per-Bolt loop "Slug derivation" paragraph for the `name → slug` transformation.
+The slug is the kebab-case Bolt identifier threaded through every worktree command for that Bolt (`create`, `verify`, `merge`, `discard`). See `SKILL.md` per-Bolt loop "Slug derivation" paragraph for the `name → slug` transformation.
 
 ## Exit codes
 
@@ -36,7 +36,7 @@ The exit-code contract mirrors `verify`'s semantics: non-zero is the halt signal
 Field semantics:
 
 - **`slug`** — echoes the input `--slug` flag verbatim. The slug is the bare kebab-case identifier (e.g. `onboarding-wizard`); the `bolt-` prefix on `path` and `branch_name` is added by `lib.ts:139` `worktreePath()` and the `aidlc-worktree create --slug <slug>` invocation. See SKILL.md per-Bolt loop "Slug derivation" paragraph for the `name → slug` transformation that produced the bare slug. The orchestrator uses this field to confirm correlation, not to pick a different one.
-- **`path`** — absolute filesystem path of the per-Bolt worktree at `<projectDir>/.aidlc/worktrees/bolt-<slug>`, parsed from the most-recent matching `WORKTREE_CREATED`'s `**Worktree path**:` field. The user `cd`s here to inspect a paused Bolt.
+- **`path`** — absolute filesystem path of the worktree hosting the Bolt at `<projectDir>/.aidlc/worktrees/bolt-<slug>`. New `WORKTREE_CREATED` rows store the `**Worktree path**:` project-relative; `info` resolves it against the project root. Legacy absolute rows remain accepted. The user `cd`s here to inspect a paused Bolt.
 - **`branch_name`** — git branch name on which the worktree sits at `bolt-<slug>`, parsed from `**Branch name**:`. Quoted from audit for source-of-truth consistency.
 - **`audit_timestamp`** — ISO 8601 timestamp of the matching `WORKTREE_CREATED` block. Useful for the orchestrator to reason about freshness; not currently surfaced in the AUQ prompt.
 - **`merge_held`** — boolean reflecting the `Merge-Held` field in the per-Bolt forked state at `<path>/aidlc-docs/aidlc-state.md` (`true` only if the file exists AND the field reads `true`; absence resolves to `false`). The orchestrator reads this on resume to decide whether dispatching `aidlc-bolt complete --merge --slug <slug>` is safe. The held state is set by `aidlc-bolt hold-merge --slug <slug>` before a multi-failure halt-and-ask sequence opens and cleared by `aidlc-bolt release-merge --slug <slug>` once all sibling AUQs resolve.
@@ -46,6 +46,17 @@ Field semantics:
 `info` returns the **most-recent** `WORKTREE_CREATED` for the slug — meaning the latest by audit-log position (end-to-start walk via `findLatestEvent`). When a slug has been created → discarded → re-created within the same workflow, the second create's path is what `info` returns. This matches the user's mental model: "the live worktree for slug X."
 
 The retry-then-fail scenario (code-gen fails, user picks Retry, code-gen fails again) does not create a new `WORKTREE_CREATED` — Retry re-runs the existing worktree per the SKILL.md per-Bolt loop. So `info`'s output is stable across retry attempts. Pinned by `tests/worktree/t11-halt-and-ask-retry-correlation.sh`.
+
+## Worktree metadata repository provenance
+
+New `.aidlc/worktree-meta.json` files store `gitCommonDirHash`, a 64-character
+SHA-256 hex digest of the canonical Git common-directory path. The raw machine
+path is not persisted. Merge validation hashes the selected checkout and
+worktree common directories and compares the digests.
+
+Migration remains compatible with older metadata carrying plaintext
+`gitCommonDir`: readers hash that stored value before comparison. New metadata
+must not write both fields.
 
 ## Stderr error messages
 

@@ -19,6 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -98,6 +99,21 @@ function stampedVersion(stdout: string): string {
 }
 
 describe("t238 build-binaries release builder", () => {
+  test("compiled detection covers Windows executables without changing Bun source mode", () => {
+    expect(isCompiledExecutable(
+      "file:///C:/workspace/core/tools/aidlc-runtime-paths.ts",
+      "C:\\Users\\Administrator\\.bun\\bin\\bun.exe",
+    )).toBe(false);
+    expect(isCompiledExecutable(
+      "file:///C:/workspace/dist/claude/.claude/tools/aidlc.ts",
+      "C:\\workspace\\build\\binaries\\native\\aidlc.exe",
+    )).toBe(true);
+    expect(isCompiledExecutable(
+      "file:///$bunfs\\root\\aidlc.ts",
+      "C:\\Users\\Administrator\\.bun\\bin\\bun.exe",
+    )).toBe(true);
+  });
+
   test("native build compiles, gates, and runs version plus a delegate from /tmp", () => {
     const result = runBuild();
     expect(result.error).toBeUndefined();
@@ -182,7 +198,7 @@ describe("t238 build-binaries release builder", () => {
     expect(delegateDoctorData.stdout).toMatch(/Schema validation: \d+\/\d+ stages validated/);
     expect(delegateDoctorData.stdout).not.toContain("Schema validation: 0/0");
     expect(`${delegateDoctorData.stdout ?? ""}${delegateDoctorData.stderr ?? ""}`).not.toMatch(
-      /Cannot find module|\/\$bunfs\/|ENOENT/,
+      /Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/,
     );
 
     const rerun = spawnSync(native.artifact, ["version"], {
@@ -196,6 +212,7 @@ describe("t238 build-binaries release builder", () => {
     const pluginSync = spawnSync(native.artifact, ["plugin", "sync"], {
       cwd: tmpdir(),
       encoding: "utf-8",
+      env: { ...process.env, PATH: "" },
       timeout: 30_000,
     });
     expect(pluginSync.status).toBe(0);
@@ -206,12 +223,13 @@ describe("t238 build-binaries release builder", () => {
     const doctor = spawnSync(native.artifact, ["doctor"], {
       cwd: tmpdir(),
       encoding: "utf-8",
+      env: { ...process.env, PATH: "" },
       timeout: 30_000,
     });
     expect(doctor.status === 0 || doctor.status === 1).toBe(true);
     expect(doctor.stdout ?? "").toContain("AI-DLC Health Check");
     expect(`${doctor.stdout ?? ""}${doctor.stderr ?? ""}`).not.toMatch(
-      /Cannot find module|\/\$bunfs\/|ENOENT/,
+      /Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/,
     );
 
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
@@ -272,7 +290,7 @@ describe("t238 build-binaries release builder", () => {
 
       const delegateDoctorData = gate(native, "delegate-doctor-data");
       expect(delegateDoctorData.ok).toBe(false);
-      expect(delegateDoctorData.actual).toBe("ENOENT");
+      expect(delegateDoctorData.actual).toBe("/$bunfs/");
       expect(result.stderr).toContain("delegate-doctor-data gate failed");
     } finally {
       rmSync(root, { recursive: true, force: true });

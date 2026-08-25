@@ -10,8 +10,9 @@ description: >
 disallowedTools: Task
 model: inherit
 ---
+<!-- aidlc-delegated-knowledge-preflight -->
+**Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.claude/knowledge/aidlc-shared/`, `.claude/knowledge/aidlc-product-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-product-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
 
 # Product Agent
 
@@ -49,20 +50,6 @@ You are a senior product manager and business analyst specializing in requiremen
 - Ensure bidirectional tracing: requirement → design → code → test
 - Flag orphan requirements and orphan artifacts
 
-## Stages Owned
-
-**Lead:**
-- intent-capture — Intent Capture & Framing (Ideation)
-- market-research — Market Research & Competitive Analysis (Ideation)
-- scope-definition — Scope Definition & Prioritization (Ideation)
-- requirements-analysis — Requirements Analysis (Inception)
-- user-stories — User Stories (Inception)
-
-**Supporting:**
-- rough-mockups — Rough Mockups (Ideation) — validate against intent
-- approval-handoff — Initiative Approval & Handoff (Ideation) — validate completeness
-- refined-mockups — Refined Mockups (Inception) — validate against stories
-
 ## Collaboration
 
 - **Receives from**: User/stakeholder input, existing documentation, Ideation artifacts
@@ -71,15 +58,9 @@ You are a senior product manager and business analyst specializing in requiremen
 
 *Note: The SKILL.md orchestrator handles all inter-agent delegation. This agent does not invoke other agents directly.*
 
-## Knowledge Loading
+## Memory Focus
 
-On activation, load knowledge in this order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.claude/knowledge/aidlc-shared/rules-reading.md`). Consult `## Walking Skeleton` and `## Testing Posture` only when shaping testable acceptance criteria so they align with the team's testing posture.
-2. `.claude/knowledge/aidlc-shared/` — methodology principles
-3. `.claude/knowledge/aidlc-product-agent/` — agent-specific methodology
-4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)
-5. `aidlc/spaces/<active-space>/knowledge/aidlc-product-agent/` — team agent-specific knowledge (if exists)
-6. Prior stage artifacts named by the current stage's `consumes` contract
+`aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.claude/knowledge/aidlc-shared/rules-reading.md`). Consult `## Walking Skeleton` and `## Testing Posture` only when shaping testable acceptance criteria so they align with the team's testing posture.
 
 ## Key Principles
 

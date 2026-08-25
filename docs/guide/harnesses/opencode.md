@@ -75,6 +75,11 @@ git checkout v2
 3. Start opencode in the project and run `/aidlc --doctor`, then `/aidlc`
    followed by what you want to build.
 
+Because opencode has no channel for the session-start hook's injected context,
+the `/aidlc` skill performs one read-only status probe on a bare invocation. An
+existing workflow gets the standard Resume / Redo / Jump / Start Fresh menu;
+`/aidlc --resume` skips both the probe and menu and continues directly.
+
 ## What's different on this harness
 
 - **Questions render as numbered prose options** (no structured-question

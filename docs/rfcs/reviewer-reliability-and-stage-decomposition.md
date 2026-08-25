@@ -64,8 +64,8 @@ stages (`functional-design`, `nfr-design`, `nfr-requirements`,
 `infrastructure-design`), and `code-generation`. Two reviewer personas ship:
 `aidlc-product-lead-agent` (product/requirements stages) and
 `aidlc-architecture-reviewer-agent` (design/technical stages). Both persona
-files carry `IMPORTANT: Do NOT use the Task tool` — a reviewer is a leaf; it
-must not spawn its own sub-agents.
+files declare `disallowedTools: Task` — a reviewer is a leaf and cannot spawn
+its own sub-agents.
 
 ### 2.2 Layer 2 — Compile (validation + bake onto the node)
 
@@ -423,7 +423,7 @@ riskiest code in the repo.
   `REVIEW_REQUESTED`, `REVIEW_COMPLETED` (the last two shared with Track 1).
 - **~a dozen tests** pinning the current single `run-stage` shape (t65/t66
   directive shape, t114 orchestrate-next, t118 gate-axis, t130/t127 runners,
-  the Bolt/swarm e2e suite).
+  the e2e suites for ordinary Bolts and autonomous swarms).
 - **Docs** — stage-protocol §12a/§3 rewrite, state-machine chapter, orchestrator
   reference, phases-and-stages guide.
 

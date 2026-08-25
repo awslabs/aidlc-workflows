@@ -14,7 +14,8 @@
 //   4. Decide outcome via the truth table below (no lock held).
 //   5. If FAILED: write detail file via `wx`-flag + rename (race-free).
 //   6. Acquire lock → emit terminal row → release.
-//   7. Exit 0. (Sensor failure ≠ CLI failure.)
+//   7. Print one compact JSON verdict line for deterministic callers.
+//   8. Exit 0. (Sensor failure ≠ CLI failure.)
 //
 // Truth-table branch ordering — locked, branch a precedes branch 0:
 //   a) signal === "SIGTERM" AND elapsed ≥ timeout - GRACE  → BUDGET_OVERRIDE
@@ -49,11 +50,15 @@ import {
 	artifactFilename,
 	codekbDir,
 	errorMessage,
+	getField,
 	isoTimestamp,
 	isPlainObject,
+	KNOWN_CODEKB_STAGES,
+	readStateFile,
 	recordDir,
 	resolveProjectDir,
 	sensorsDir,
+	usesStageLevelPerUnitArtifacts,
 	withAuditLock,
 } from "./aidlc-lib.ts";
 import {
@@ -99,6 +104,16 @@ interface FireContext {
 	scriptArgs: string[]; // CLI args appended to the script invocation
 	scriptAbsPath: string; // sibling-resolved absolute path
 	timeoutMs: number;
+}
+
+interface FireVerdict {
+	fire_id: string;
+	sensor_id: string;
+	stage: string;
+	output_path: string;
+	result: FireOutcome["kind"];
+	detail_path: string | null;
+	note?: string;
 }
 
 // --- Argv helpers ---
@@ -244,8 +259,9 @@ function handleDescribe(args: string[]): void {
 // producesDirsForStage / aidlc-orchestrate.ts's resolveArtifactPath seams:
 //   - codekb producers (reverse-engineering): glob every repo dir under the
 //     space-level codekb root.
-//   - per-unit Construction producers (for_each: unit-of-work): the unit is
-//     unknown here, so glob every <record>/construction/<unit>/<slug>/.
+//   - per-unit Construction producers (for_each: unit-of-work): use the
+//     stage-level directory when the effective plan skips Units Generation;
+//     otherwise glob every <record>/construction/<unit>/<slug>/.
 //   - everything else: <record>/<phase>/<slug>/<name>.md.
 //
 // Fail-open: when no intent record resolves (recordDir null — a bare test
@@ -253,10 +269,6 @@ function handleDescribe(args: string[]): void {
 // full list threads unchanged. An orphan consume (no producer anywhere in
 // the graph) also threads unchanged — that is a graph defect the doctor
 // surfaces; hiding it here would mask it.
-
-const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
-	"reverse-engineering",
-]);
 
 function artifactDirsForProducer(
 	pd: string,
@@ -279,6 +291,19 @@ function artifactDirsForProducer(
 	const rec = recordDir(pd);
 	if (rec === null) return [];
 	if (producer.for_each === "unit-of-work") {
+		try {
+			const stateContent = readStateFile(pd);
+			if (
+				usesStageLevelPerUnitArtifacts(
+					getField(stateContent, "Scope"),
+					stateContent,
+				)
+			) {
+				return [join(rec, producer.phase, producer.slug)];
+			}
+		} catch {
+			// Bare fixtures retain the existing directory-discovery fallback.
+		}
 		const ctorRoot = join(rec, "construction");
 		if (!existsSync(ctorRoot)) return [];
 		const dirs: string[] = [];
@@ -552,7 +577,24 @@ function handleFire(args: string[]): void {
 		emitTerminal(ctx, finalOutcome, projectDir);
 	});
 
-	// --- 9. Process exit 0 ---
+	// --- 9. Machine-readable verdict for gate-boundary enforcement ---
+	const verdict: FireVerdict = {
+		fire_id: fireId,
+		sensor_id: id,
+		stage: stageSlug,
+		output_path: relativizePath(outputPath, projectDir),
+		result: finalOutcome.kind,
+		detail_path:
+			finalOutcome.kind === "failed"
+				? relativizePath(detailPath, projectDir)
+				: null,
+		...(finalOutcome.kind === "passed" && finalOutcome.note
+			? { note: finalOutcome.note }
+			: {}),
+	};
+	process.stdout.write(`${JSON.stringify(verdict)}\n`);
+
+	// --- 10. Process exit 0 ---
 	process.exit(0);
 }
 

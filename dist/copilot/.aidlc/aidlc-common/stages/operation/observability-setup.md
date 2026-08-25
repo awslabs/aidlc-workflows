@@ -37,7 +37,9 @@ scopes:
   - enterprise
   - feature
   - infra
+  - classic
   - workshop
+  - express
 inputs: NFR design from nfr-design stage, infrastructure design from infrastructure-design stage, deployed application
 outputs: dashboards.md, alarms.md, slo-config.md, log-queries.md, tracing-config.md, anomaly-config.md, observability-setup-questions.md (under this stage's record dir, engine-resolved)
 ---
@@ -48,17 +50,21 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-operations-agent persona from `agents/aidlc-operations-agent.md` and knowledge from `.aidlc/knowledge/aidlc-operations-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read NFR design (observability strategy) from `<record>/construction/nfr-design/`
 - Read infrastructure design from `<record>/construction/infrastructure-design/`
 - Read deployment execution log from `<record>/operation/deployment-execution/`
 
-### Step 3: Generate Clarifying Questions
+`express` skips NFR Design and Infrastructure Design by design. When those
+artifacts are absent, derive the minimum observable surface from approved
+requirements, the deployed application's workspace configuration, Build and
+Test results, and the Deployment Execution evidence. Ask for any SLO, signal,
+retention, or escalation decision that cannot be observed from those sources;
+never invent a missing design artifact. If no deployed target exists, this
+CONDITIONAL stage reports skipped.
+
+### Step 2: Generate Clarifying Questions
 
 Create questions file covering:
 - What are the golden signals to track (latency, traffic, errors, saturation)?
@@ -69,17 +75,17 @@ Create questions file covering:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Generate Artifacts
+### Step 3: Generate Artifacts
 
 Create CloudWatch dashboard configurations, alarm definitions (with severity, SNS routing, escalation), SLO/SLI tracking configuration, CloudWatch Logs Insights saved queries, X-Ray tracing configuration, and anomaly detection configuration.
 
-### Step 5: Completion Handoff
+### Step 4: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .aidlc/tools/aidlc-orchestrate.ts report --stage observability-setup --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 6: Present Completion & Request Approval
+### Step 5: Present Completion & Request Approval
 
 Completion emoji: :eyes:
 Review path: `<record>/operation/observability-setup/`
@@ -96,9 +102,10 @@ The imported sensors check those outputs:
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -108,8 +115,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

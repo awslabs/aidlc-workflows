@@ -40,7 +40,7 @@ org → team → project → phase → stage
 
 The model is **strict-additive**. Every applicable rule appears in the agent's context — nothing is silently dropped or overridden at runtime. Org defaults, team practices, and project specialization concatenate. The matching phase rule attaches because the stage already declares its phase. (The fifth layer, per-stage rules, is reserved for a future release.)
 
-This is a deliberate change from earlier versions. There is no `overrides:` block and no `enforcement:` keyword anymore. All the applicable layers are present at once, and conflicts are caught when a rule is written, before it ever reaches runtime (see [Admission-time conflict checks](#admission-time-conflict-checks) below).
+This is a deliberate change from earlier versions. There is no `overrides:` block and no `enforcement:` keyword anymore. All the applicable layers are present at once, and the orchestrator is asked to check a kept learning for conflict at admission time rather than leaving the runtime resolver to reconcile it (see [Admission-time conflict checks](#admission-time-conflict-checks) below).
 
 The chain is resolved **once**, at workflow start, when the framework compiles your stage definitions, rules, and sensors into a single graph. Throughout the workflow the agent reads the resolved view; it never re-walks the chain mid-run. That compile boundary is the same one the planes model describes — see [Planes: how it fits together](#planes-how-it-fits-together) at the end of this chapter.
 
@@ -54,14 +54,14 @@ The loop has four user-visible moments: the agent keeps a diary while the stage 
 
 ### The memory.md diary
 
-While a stage runs, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` — under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. It is created automatically at stage start and maintained for you — never hand-edited. Entries land under four standard headings:
+While a stage runs, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` — under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. The engine creates it from the shipped template when it emits the run-stage directive, and the orchestrator maintains it for you — never hand-edited. Entries land under four standard headings:
 
 - **Interpretations** — choices the agent made where the stage prose was ambiguous
 - **Deviations** — places the agent intentionally departed from the stage prose, and why
 - **Tradeoffs** — alternatives considered and the reason for the pick
 - **Open questions** — anything to confirm before the next run, or context that's still uncertain
 
-Each entry carries a timestamp. The diary is the only job the language model has in this loop: write observations to `memory.md` during the stage. Everything after the stage finishes — counting the entries, surfacing them, routing them to the right file, writing them — is done by deterministic tooling or by your explicit choice at the gate.
+Each entry carries a timestamp. The language model writes observations to `memory.md` during the stage and, at admission time, the orchestrator performs the section-level conflict comparison described below. Deterministic tooling extracts the candidates and writes the selections you explicitly keep at the gate.
 
 ### The gate ritual
 
@@ -87,9 +87,9 @@ When a kept learning is a **sensor binding** rather than a rule (you want a new 
 
 ### Admission-time conflict checks
 
-Before a kept learning lands on disk, the framework runs a section-level check against `memory/org.md`. If your proposed entry contradicts an org rule under the same heading, the gate stops and quotes the conflicting org sentence inline. You then choose to revise the entry, skip it, or escalate to the org-rule owner. The conflicting rule never lands with the contradiction in it, so the runtime resolver stays simple — it only ever sees rules that already passed the conflict check.
+Before a kept learning lands on disk, the gate protocol asks the orchestrator to compare it with the matching section of `memory/org.md`. This is a section-level LLM check. If the proposed entry contradicts an org rule, the orchestrator quotes the conflicting sentence inline and asks you to revise the entry, skip it, or escalate to the org-rule owner. Only conflict-clear or user-escalated selections are then handed to the deterministic writer. `aidlc-learnings.ts persist` has no independent view of `org.md`, does not judge conflicts, and accepts the selections it is handed. The org-contradiction escalation is therefore an audit aid for keeping resolver inputs coherent, not an enforcement boundary.
 
-The same section-level check guards the practices-discovery affirmation gate. And when org policy changes *after* a team or project rule is already on disk, `/aidlc --doctor` surfaces the resulting drift on demand: it names the file, the section, and the conflicting org sentence so the team can act on it. The doctor check is advisory and never blocks. The two doctor advisory rows are described in [CLI Commands](12-cli-commands.md) and [Troubleshooting](15-troubleshooting.md).
+The practices-discovery affirmation gate does not run this org-conflict check. Its promotion is a deterministic section-replace legitimised by your affirmation. And when org policy changes *after* a team or project rule is already on disk, `/aidlc --doctor` surfaces the resulting drift on demand: it names the file, the section, and the conflicting org sentence so the team can act on it. The doctor check is advisory and never blocks. The two doctor advisory rows are described in [CLI Commands](12-cli-commands.md) and [Troubleshooting](15-troubleshooting.md).
 
 ### Applies next workflow, not mid-run
 
@@ -119,7 +119,7 @@ No rule is installed yet — this is just the agent's diary.
 
 **2. The gate surfaces it.** The stage finishes. Before the approval gate, the learning gate reads `memory.md` and shows the interpretation line as a candidate. It also asks "Anything to add for next time?" Sam ticks the transaction-terminology candidate (Interpretation → lands in `memory/project.md`) and adds a free-text note: "the agent kept defaulting to AWS account terminology — should always say 'ANZ customer' for the banking customer entity." Sam picks the Deviation heading for that addition, which routes it to the same `memory/project.md` file.
 
-**3. The conflict check runs.** The framework compares both entries against the org practices (`memory/org.md`). Neither "ANZ transaction" nor "ANZ customer" terminology is covered by an org rule, so both pass. A deterministic tool writes both lines into `memory/project.md` with provenance, and the audit log records a `RULE_LEARNED` event for each.
+**3. The conflict check runs.** The orchestrator compares both entries against the org practices (`memory/org.md`) as a section-level LLM check. Neither "ANZ transaction" nor "ANZ customer" terminology is covered by an org rule, so both pass. The deterministic tool then writes both lines into `memory/project.md` with provenance, and the audit log records a `RULE_LEARNED` event for each.
 
 **4. The current workflow continues unchanged.** The stage approves and the workflow advances to `user-stories`. The new lines are on disk but don't enter this workflow's compiled view — Sam already corrected the agent in-stage for this run.
 

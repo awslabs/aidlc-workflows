@@ -243,6 +243,12 @@ When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree crea
 }
 ```
 
+If a merge error carries `[merge-succeeded:<sha>]` and says the
+`SWARM_SOURCE_MERGED` post-result audit row failed, the Git merge already
+landed but no aggregate source authority exists. Preserve the worktree and do
+not retry the same merge command. Restart the stage attempt, or use
+`AIDLC_SKIP_SOURCE_FRESHNESS=1` only after explicit human approval.
+
 ### Merge response (conflict)
 
 ```json
@@ -255,7 +261,7 @@ When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree crea
 }
 ```
 
-The orchestrator's halt-and-ask quotes the `detail` field verbatim. See `aidlc-common/protocols/stage-protocol.md` § "Halt-and-ask on failure" and `skills/aidlc/SKILL.md` § "Halt-and-ask failure handling" for the full prompt shape and preservation invariant.
+The orchestrator's halt-and-ask quotes the `detail` field verbatim. See `aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure" and `skills/aidlc/SKILL.md` § "Halt-and-ask failure handling" for the full prompt shape and preservation invariant.
 
 ### Discard response
 

@@ -37,6 +37,7 @@ scopes:
   - enterprise
   - feature
   - mvp
+  - classic
   - workshop
 inputs: Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage
 outputs: mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md (under this stage's record dir, engine-resolved)
@@ -48,19 +49,15 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `.claude/knowledge/aidlc-design-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read rough mockups from `<record>/ideation/rough-mockups/` (if exists)
 - Read user stories from `<record>/inception/user-stories/`
 - Read requirements from `<record>/inception/requirements-analysis/`
 
-The workshop scope skips rough-mockups by design (no Ideation phase); when the wireframes and user-flow inputs are absent, design the refined mockups directly from the user stories and requirements — never invent the content of a missing artifact.
+The classic scope skips rough-mockups by design (no Ideation phase); when the wireframes and user-flow inputs are absent, design the refined mockups directly from the user stories and requirements — never invent the content of a missing artifact.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/inception/refined-mockups/refined-mockups-questions.md` with questions:
 - How should each user story be represented in the UI?
@@ -73,23 +70,23 @@ Create `<record>/inception/refined-mockups/refined-mockups-questions.md` with qu
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Validate design decisions against user stories and requirements for consistency.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create mid-to-high fidelity mockups (per user story/screen), interaction specification document (use `.claude/knowledge/aidlc-design-agent/component-spec-template.md` as the format for component-level specifications), design system mapping, responsive behavior specification, and accessibility compliance checklist.
 
 For non-UI: create API developer experience specification.
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage refined-mockups --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :art:
 Review path: `<record>/inception/refined-mockups/`
@@ -106,9 +103,10 @@ The imported sensors check those outputs:
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -118,8 +116,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

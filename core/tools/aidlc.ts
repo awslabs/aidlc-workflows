@@ -9,7 +9,11 @@ import {
   workspaceCommandUtilityArgv,
 } from "./aidlc-lib.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { packagedDistributionRoot, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
+import {
+  isCompiledExecutable,
+  packagedDistributionRoot,
+  runtimeHarnessDir,
+} from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
 type RouteKind =
@@ -56,6 +60,7 @@ export const TOOLS = {
   bolt: "aidlc-bolt.ts",
   graph: "aidlc-graph.ts",
   jump: "aidlc-jump.ts",
+  knowledge: "aidlc-knowledge.ts",
   learnings: "aidlc-learnings.ts",
   log: "aidlc-log.ts",
   orchestrate: "aidlc-orchestrate.ts",
@@ -361,6 +366,41 @@ export const ROUTES: readonly Route[] = [
       { command: "plugin sync", summary: "compose installed plugins" },
     ],
     all: ["select [names]", "sync", "list"],
+  },
+  {
+    // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
+    // verbs live in their own tool -- so there is no `targets` translation table
+    // to keep in step. Only the verbs the tool actually implements are listed:
+    // registering a verb the tool would reject turns a clean "unknown verb"
+    // error into a confusing one from a layer down.
+    id: "knowledge",
+    group: "knowledge",
+    // `noun-passthrough`, NOT `top-passthrough`: this route's group is
+    // "knowledge", and the two resolvers split on group. `resolveTop` only
+    // iterates `group === "top"` routes, so it never saw this one; `resolveNoun`
+    // did see it but handles only `noun-passthrough`/`noun-map`/`custom`/
+    // `routing-only`, so it fell through to "unknown verb". The result was that
+    // NO knowledge verb ran through the compiled dispatcher while the tool
+    // itself worked perfectly when invoked directly -- which is why the defect
+    // survived a review round in which it was reported, claimed fixed, and never
+    // executed. The dispatcher test below runs every verb rather than asserting
+    // this literal, because reading the route is exactly what missed it.
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"],
+    tool: TOOLS.knowledge,
+    // ONE line in the human help, which is capped at 20 lines: it is a summary
+    // for a person deciding what to type, not the surface. Every verb still
+    // appears in `help --all` via `all` below.
+    human: [
+      { command: "knowledge <verb>", summary: "index and read customer documents" },
+    ],
+    all: [
+      "onboard [path]", "sync", "list", "show <id>",
+      "associate <id> --intent [slug]", "dissociate <id> --intent [slug]",
+      "rebind <id> --to <path>",
+      "summarize <id> --text-file <path> --source-revision <sha256>",
+    ],
   },
   {
     id: "gen",
@@ -784,8 +824,14 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
 export function resolveAction(argv: string[]): Action {
   const clean: string[] = [];
   let projectDir: string | undefined;
+  let literalArgs = false;
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] !== "--project-dir") {
+    if (argv[i] === "--") {
+      literalArgs = true;
+      clean.push(argv[i]);
+      continue;
+    }
+    if (literalArgs || argv[i] !== "--project-dir") {
       clean.push(argv[i]);
       continue;
     }
@@ -806,7 +852,9 @@ export function resolveAction(argv: string[]): Action {
       ? projectDir
       : resolve(process.cwd(), projectDir);
     if (action.type === "delegate") {
-      action.args.push("--project-dir", absoluteProjectDir);
+      const delimiter = action.args.indexOf("--");
+      if (delimiter >= 0) action.args.splice(delimiter, 0, "--project-dir", absoluteProjectDir);
+      else action.args.push("--project-dir", absoluteProjectDir);
     } else if (action.type === "hook") {
       action.projectDir = absoluteProjectDir;
       action.path = resolveHookPath(`aidlc-${action.name}.ts`, undefined, absoluteProjectDir);
@@ -872,6 +920,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-graph.ts");
     case TOOLS.jump:
       return import("./aidlc-jump.ts");
+    case TOOLS.knowledge:
+      return import("./aidlc-knowledge.ts");
     case TOOLS.learnings:
       return import("./aidlc-learnings.ts");
     case TOOLS.log:
@@ -1022,7 +1072,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   const previousHarness = process.env.AIDLC_HARNESS_DIR;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
   process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
-  if (import.meta.url.includes("/$bunfs/")) {
+  if (isCompiledExecutable()) {
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
   try {
@@ -1039,7 +1089,9 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       action.target === "log-subagent" ||
       action.target === "rebuild-stage-graph" ||
       action.target === "session-start" ||
-      action.target === "continue-workflow"
+      action.target === "continue-workflow" ||
+      action.target === "verb-intercept" ||
+      action.target === "terminal-command-guard"
     ) {
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
@@ -1098,7 +1150,7 @@ async function runSensorScriptFile(
 }
 
 async function execute(action: Action): Promise<number> {
-  const isCompiled = import.meta.url.includes("/$bunfs/");
+  const isCompiled = isCompiledExecutable();
   if (action.type === "delegate") {
     // Tool modules are imported lazily in compiled mode to keep dev-mode startup
     // fast and to avoid loading every tool for help/version calls.
@@ -1140,7 +1192,7 @@ export async function main(argv: string[]): Promise<void> {
     await metrics.sendMetricFromStdin();
     return;
   }
-  if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
+  if (isCompiledExecutable() && !process.env.AIDLC_HARNESS_DIR) {
     // Compiled, no explicit harness: probe the project install (.claude /
     // .kiro / .codex by tools/data/harness.json) rather than assuming
     // .claude — module-relative derivation can't work from $bunfs, and every

@@ -75,6 +75,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -125,8 +126,13 @@ function runWorktree(proj: string, ...args: string[]): RunResult {
 }
 
 /** Run a git command in proj; ignore failure (the .sh wraps init in `|| true`). */
-function git(proj: string, ...args: string[]): void {
-  spawnSync("git", ["-C", proj, ...args], { encoding: "utf-8" });
+function git(proj: string, ...args: string[]): { status: number; stdout: string; stderr: string } {
+  const result = spawnSync("git", ["-C", proj, ...args], { encoding: "utf-8" });
+  return {
+    status: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
 }
 
 /** setup_lifecycle_project (.sh:35-41): create + seed Construction state + seed audit. */
@@ -228,7 +234,101 @@ function lastEventBlock(proj: string): string[] {
   return out;
 }
 
+function eventBlock(proj: string, type: string): string {
+  return readMainAudit(proj)
+    .split("\n---\n")
+    .filter((block) => block.includes(`**Event**: ${type}`))
+    .at(-1) ?? "";
+}
+
 describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-worktree-lifecycle.sh, plan 13)", () => {
+  describe("Base-commit attestation", () => {
+    const proj = setupLifecycleProject();
+    gitInitMain(proj);
+    const beforeWorktrees = git(proj, "worktree", "list", "--porcelain").stdout
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("worktree ")).length;
+    const created = runWorktree(proj, "create", "--slug", "attested", "--base", "main");
+    const afterWorktrees = git(proj, "worktree", "list", "--porcelain").stdout
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("worktree ")).length;
+    if (created.status !== 0) {
+      throw new Error(`worktree create failed: ${created.out}`);
+    }
+    const baseCommit = (JSON.parse(created.out.trim()) as { base_commit: string }).base_commit;
+    const started = runBolt(
+      proj,
+      "start",
+      "--name",
+      "Attested Bolt",
+      "--batch",
+      "1",
+      "--worktree",
+      "--slug",
+      "attested",
+    );
+
+    test("WORKTREE_CREATED and BOLT_STARTED carry the same immutable Base commit and raw listing", () => {
+      expect(created.status).toBe(0);
+      expect(afterWorktrees).toBe(beforeWorktrees + 1);
+      expect(started.status).toBe(0);
+      expect(eventBlock(proj, "WORKTREE_CREATED")).toContain(`**Base commit**: ${baseCommit}`);
+      expect(eventBlock(proj, "BOLT_STARTED")).toContain(`**Base commit**: ${baseCommit}`);
+      const meta = readFileSync(join(worktreeDir(proj, "attested"), ".aidlc", "worktree-meta.json"), "utf-8");
+      expect(meta).toContain(`"baseCommit": "${baseCommit}"`);
+      const baseListing = /"baseSourceListing": "(sha256:[0-9a-f]{64})"/.exec(meta)?.[1];
+      expect(baseListing).toBeDefined();
+      expect(eventBlock(proj, "WORKTREE_CREATED")).toContain(`**Base Source Listing**: ${baseListing}`);
+      expect(eventBlock(proj, "BOLT_STARTED")).toContain(`**Base Source Listing**: ${baseListing}`);
+      expect(existsSync(join(worktreeDir(proj, "attested"), ".aidlc", "base-source-listing.tsv"))).toBe(true);
+    });
+
+    test("missing metadata after a modern create fails closed before BOLT_STARTED", () => {
+      const missingProj = setupLifecycleProject();
+      gitInitMain(missingProj);
+      expect(runWorktree(missingProj, "create", "--slug", "missing", "--base", "main").status).toBe(0);
+      rmSync(join(worktreeDir(missingProj, "missing"), ".aidlc", "worktree-meta.json"));
+      const missingStart = runBolt(
+        missingProj, "start", "--name", "Missing", "--batch", "1", "--worktree", "--slug", "missing",
+      );
+      expect(missingStart.status).not.toBe(0);
+      expect(missingStart.out).toContain("modern WORKTREE_CREATED");
+      expect(eventBlock(missingProj, "BOLT_STARTED")).toBe("");
+    });
+
+    test("malformed present metadata fails closed before BOLT_STARTED", () => {
+      const corruptProj = setupLifecycleProject();
+      gitInitMain(corruptProj);
+      const corruptCreated = runWorktree(
+        corruptProj,
+        "create",
+        "--slug",
+        "corrupt",
+        "--base",
+        "main",
+      );
+      expect(corruptCreated.status).toBe(0);
+      writeFileSync(
+        join(worktreeDir(corruptProj, "corrupt"), ".aidlc", "worktree-meta.json"),
+        '{"version":1,"boltSlug":"wrong","baseBranch":"main","baseCommit":"bad","baseSourceListing":"bad"}\n',
+      );
+      const corruptStart = runBolt(
+        corruptProj,
+        "start",
+        "--name",
+        "Corrupt Bolt",
+        "--batch",
+        "1",
+        "--worktree",
+        "--slug",
+        "corrupt",
+      );
+      expect(corruptStart.status).not.toBe(0);
+      expect(corruptStart.out).toContain("invalid worktree metadata");
+      expect(eventBlock(corruptProj, "BOLT_STARTED")).toBe("");
+    });
+  });
+
   // ===========================================================================
   // Lifecycle 1 — complete-merge happy path. Drives T1-T6.
   // Pre-create the worktree dir (in production aidlc-worktree create does this;

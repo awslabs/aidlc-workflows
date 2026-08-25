@@ -30,6 +30,7 @@ scopes:
   - feature
   - mvp
   - infra
+  - classic
   - workshop
 inputs: Code generation output from code-generation stage, build/test results from build-and-test stage
 outputs: ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this stage's record dir, engine-resolved)
@@ -41,11 +42,7 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agent.md` and knowledge from `.cursor/knowledge/aidlc-pipeline-deploy-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read build/test results from `<record>/construction/build-and-test/` (if exists)
 - Read code summary from `<record>/construction/{unit-name}/code-generation/` (if exists)
@@ -54,7 +51,7 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 
 Incremental scopes (infra) skip code-generation and build-and-test by design; when those inputs are absent, base the pipeline stages on the workspace's existing build/test setup (detected from the repo itself) instead — never invent the content of a missing artifact.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/construction/ci-pipeline/ci-pipeline-questions.md` with questions:
 - What CI tool is in use (CodePipeline, CodeBuild, GitHub Actions, Jenkins)?
@@ -64,15 +61,15 @@ Create `<record>/construction/ci-pipeline/ci-pipeline-questions.md` with questio
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Validate CI choices against existing infrastructure and team capabilities.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create CI pipeline configuration (buildspec.yml, workflow YAML, or equivalent), quality gate definitions, and artifact repository configuration.
 
-### Step 6: Phase Boundary Verification
+### Step 5: Phase Boundary Verification
 
 Run Construction → Operation verification check:
 - Read
@@ -89,13 +86,13 @@ Run Construction → Operation verification check:
 If any traceability file is missing or any unresolved finding remains, stop
 the Construction → Operation transition and revisit the owning stage.
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .cursor/tools/aidlc-orchestrate.ts report --stage ci-pipeline --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 8: Present Completion & Request Approval
+### Step 7: Present Completion & Request Approval
 
 Completion emoji: :gear:
 Review path: `<record>/construction/ci-pipeline/`
@@ -116,9 +113,10 @@ Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED`
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -128,8 +126,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

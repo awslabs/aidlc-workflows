@@ -1,0 +1,33 @@
+name: Markdownlint
+
+on:
+  pull_request:
+    branches:
+      - v2
+  push:
+    branches:
+      - v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: markdownlint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  markdownlint:
+    name: Root documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # v22.0.0
+        with:
+          globs: |
+            AGENTS.md
+            CLAUDE.md
+            CODE_OF_CONDUCT.md
+            CONTRIBUTING.md
+            README.md

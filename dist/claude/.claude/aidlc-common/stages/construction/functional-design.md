@@ -49,6 +49,7 @@ scopes:
   - feature
   - mvp
   - refactor
+  - classic
   - workshop
 inputs: unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)
 outputs: "entities.md, rules.md, functional-spec.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all). entities.md and rules.md each carry a fenced ```yaml source-of-truth block; functional-spec.md is the source of truth for workflows and state machines and carries derived ER-diagram and rules-summary views."
@@ -69,28 +70,24 @@ This is a design stage — artifacts describe business logic, domain models, and
 This stage supports two execution modes, controlled by the orchestrator:
 
 **QUESTION-ONLY mode** (invoked by orchestrator during a Bolt's question phase):
-Execute Steps 1–4 only (load personas, read context, generate questions, collect answers).
+Execute Steps 1–3 only (read context, generate questions, collect answers).
 Do NOT proceed to artifact generation. Return control to the orchestrator.
 
 **ARTIFACT-ONLY mode** (invoked by orchestrator during a Bolt's design phase):
-Skip Steps 1–4 (questions already collected and approved).
+Skip Steps 1–3 (questions already collected and approved).
 Read the answered questions file from the per-unit directory.
-Execute Steps 5–7 only (generate artifacts, update state, completion).
+Execute Steps 4–6 only (generate artifacts, update state, completion).
 
 **Full mode** (default — single-unit projects or direct stage invocation):
 Execute all steps sequentially as written.
 
-### Step 1: Load Personas
-
-Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md` and knowledge from `.claude/knowledge/aidlc-architect-agent/`. Load aidlc-developer-agent persona from `agents/aidlc-developer-agent.md` and knowledge from `.claude/knowledge/aidlc-developer-agent/` for technical implementation input. Apply aidlc-architect-agent as the primary perspective with aidlc-developer-agent providing technical feasibility input.
-
-### Step 2: Read Unit Context
+### Step 1: Read Unit Context
 
 Read the unit definition from `<record>/inception/units-generation/unit-of-work.md` and assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists), the component catalogue from `<record>/inception/domain-design/components.md` (if it exists), and the contracts for this unit's boundaries from `<record>/inception/contract-design/contract-summary.md` (if it exists).
 
 Incremental scopes (refactor) deliberately skip units-generation and domain-design, so those inputs are absent by design there. When an input is absent, work from what the scope does provide — the requirements and, on a brownfield workspace, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints) — and treat the existing code structure as the de-facto domain design. Never invent the content of a missing artifact.
 
-### Step 3: Create Functional Design Plan
+### Step 2: Create Functional Design Plan
 
 Analyze the unit's scope and create a functional design questions file at `<record>/construction/{unit-name}/functional-design/functional-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
@@ -104,7 +101,7 @@ Focus areas:
 - Frontend Components (component hierarchy, props/state, interaction flows, form validation)
 - Business Scenarios (end-to-end user journeys, happy/unhappy paths, concurrency edge cases)
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file). After collecting answers, perform MANDATORY ambiguity analysis:
 - Identify vague answers ("mix of", "not sure", "depends", "probably")
@@ -113,7 +110,7 @@ Collect answers following stage-protocol.md §3 question flow (offer interaction
 
 If ANY ambiguity found: create follow-up questions and resolve before proceeding.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Generate the following in `<record>/construction/{unit-name}/functional-design/`. Technology-agnostic — implementable in any language. No code, no SQL, no framework references.
 
@@ -144,13 +141,13 @@ unexplained rule is mechanically derived as an orphan:
 }
 ```
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Completion
+### Step 6: Completion
 
 Present completion message and approval gate:
 
@@ -182,9 +179,10 @@ Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED`
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -194,8 +192,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

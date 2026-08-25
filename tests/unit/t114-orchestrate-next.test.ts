@@ -70,7 +70,7 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -80,6 +80,7 @@ import {
   FIXTURES_DIR,
   resetAidlcEnv,
   runOrchestrateNext,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -150,6 +151,30 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
     seedStateFile(proj, BROWNFIELD_INIT_DONE);
     expect(runNext(proj, []).out).toContain('"stage":"reverse-engineering"');
   });
+
+  test("untracked-only completions route normally without a per-turn advisory", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const statePath = seededStateFile(proj);
+    const state = readFileSync(statePath, "utf-8")
+      .replace("- [-] feasibility — EXECUTE", "- [x] feasibility — EXECUTE")
+      .replace("- [ ] scope-definition — EXECUTE", "- [-] scope-definition — EXECUTE")
+      .replace("- **Current Stage**: feasibility", "- **Current Stage**: scope-definition")
+      .replace("- **Next Stage**: scope-definition", "- **Next Stage**: team-formation");
+    writeFileSync(statePath, state, "utf-8");
+    const result = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env },
+    });
+    expect(result.status).toBe(0);
+    const directive = JSON.parse((result.stdout ?? "").trim()) as {
+      kind: string;
+      stage_validity?: unknown;
+    };
+    expect(directive.kind).toBe("load-steering");
+    expect(directive.stage_validity).toBeUndefined();
+  });
 });
 
 // ===========================================================================
@@ -181,7 +206,7 @@ describe("t114 scope precedence + validation", () => {
 
   test("7: env scope beats default (poc resolved, run-stage emitted)", () => {
     // Valid env scope (poc) resolves; --stage surfaces a run-stage directive.
-    // The default (feature) is never reached because env supplied a valid scope.
+    // The default (classic) is never reached because env supplied a valid scope.
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["--stage", "intent-capture"], {
       AWS_AIDLC_DEFAULT_SCOPE: "poc",
@@ -347,6 +372,64 @@ describe("t114 plugin terminal routing", () => {
     expect(missing).toContain("missing verb for noun 'plugin'");
     expect(unknown).toContain('"kind":"error"');
     expect(unknown).toContain("unknown verb 'remove' for noun 'plugin'");
+    expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
+  });
+});
+
+describe("t114 knowledge (DocumentKB) terminal routing", () => {
+  // The engine parser and the classifier are separate code paths whose comments
+  // require byte-for-byte agreement. These cases assert the ENGINE half: a
+  // knowledge verb must emit a terminal print directive naming
+  // aidlc-knowledge.ts, never a workflow directive and never an intent-birth ask.
+  test("every verb routes to aidlc-knowledge.ts and never enters the workflow funnel", () => {
+    for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"]) {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      const out = runNext(proj, ["knowledge", verb]).out;
+      expect(out, verb).toContain('"kind":"print"');
+      expect(out, verb).toContain(`aidlc-knowledge.ts ${verb}`);
+      expect(out, verb).not.toContain('"kind":"run-stage"');
+      expect(out, verb).not.toContain('"kind":"ask"');
+    }
+  });
+
+  test("a mid-workflow knowledge command does not advance the workflow", () => {
+    // The regression this guards: a terminal noun that reaches the funnel while
+    // a workflow is active reads as intent prose and can advance a stage.
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["knowledge", "list", "--json"]).out;
+    expect(out).toContain("aidlc-knowledge.ts list --json");
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("arguments survive the round trip, including a path with a space", () => {
+    proj = createOrchestrationTestProject();
+    expect(runNext(proj, ["knowledge", "onboard", "docs/policy.pdf"]).out)
+      .toContain("aidlc-knowledge.ts onboard docs/policy.pdf");
+    // shellArg quoting must keep a spaced path as ONE argument.
+    const spaced = runNext(proj, ["knowledge", "onboard", "my docs/policy.pdf"]).out;
+    expect(spaced).toContain("aidlc-knowledge.ts onboard");
+    expect(spaced).toMatch(/'my docs\/policy\.pdf'|"my docs\/policy\.pdf"/);
+  });
+
+  test("knowledge help routes terminally", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["knowledge", "help"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-knowledge.ts help");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("missing and unknown knowledge verbs are deterministic errors", () => {
+    proj = createOrchestrationTestProject();
+    const missing = runNext(proj, ["knowledge"]).out;
+    const unknown = runNext(proj, ["knowledge", "remove"]).out;
+    expect(missing).toContain('"kind":"error"');
+    expect(missing).toContain("missing verb for noun 'knowledge'");
+    expect(unknown).toContain('"kind":"error"');
+    expect(unknown).toContain("unknown verb 'remove' for noun 'knowledge'");
+    // Not an ask: `knowledge remove` must not offer to birth an intent.
     expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
   });
 });

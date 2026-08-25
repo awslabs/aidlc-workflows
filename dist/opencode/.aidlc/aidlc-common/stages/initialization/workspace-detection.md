@@ -20,7 +20,9 @@ scopes:
   - refactor
   - infra
   - security-patch
+  - classic
   - workshop
+  - express
 inputs: none (scans filesystem)
 outputs: workspace classification (greenfield/brownfield), technology stack detection
 ---
@@ -40,9 +42,9 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
 ### Step 2: Scan Workspace
 
-The scanner walks the project directory one level deep plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, `.cursor/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
+The scanner checks top-level files plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`, `.aidlc/`, `.cursor/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
 
-Nested-project fallback: when NO top-level signal fires (the layout that would otherwise classify greenfield), the scanner then descends one level into each arbitrarily-named top-level subdirectory (skipping the excluded directories above, hidden dirs, and symlinks) and re-applies the same signal set rooted at that subdirectory. If any subdirectory looks brownfield, the workspace is classified brownfield and that subdirectory's languages/frameworks/build system are merged into the result. This catches a project whose source lives one container down (e.g. `wordbook/`, `backend/`) instead of at the root. The fallback is depth-1 only and never runs when the root already has a source signal.
+Nested-project fallback: when NO top-level signal fires (the layout that would otherwise classify greenfield), the scanner performs a deterministic recursive walk of arbitrarily-named container directories, capped at three levels below the workspace root. At every level it skips the excluded directories above, sample/documentation directories, known source-directory names, hidden dirs, symlinks, and non-directories, then re-applies the same signal set at each visited directory (including that directory's own known-source-dir recursion). Every brownfield hit within the cap has its languages/frameworks/build system merged into the result and its slash-joined relative path recorded as the nested root; the walker does not descend below a hit. This catches layouts such as `services/api/src/main.py` while avoiding duplicate file counts. The fallback never runs when the root already has a source signal.
 
 Scan signals:
 - Directory structure (top-level and key subdirectories)
@@ -63,7 +65,7 @@ Scan signals:
 
 Classify based on the scanner's evidence:
 
-Signals are evaluated at the root first; if none fires, the nested-project fallback re-evaluates the same signals one level down (see Step 2).
+Signals are evaluated at the root first; if none fires, the nested-project fallback re-evaluates the same signals in candidate container directories up to three levels below the root (see Step 2).
 
 **Brownfield** — ANY of these indicators present:
 - Source code files exist (`.js`, `.ts`, `.jsx`, `.tsx`, `.py`, `.java`, `.go`, `.rs`, `.rb`, `.cs`, `.cpp`, `.c`, `.kt`, `.swift`, `.php`)
@@ -123,9 +125,10 @@ will populate `sensors_applicable` at the next compile.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why

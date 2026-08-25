@@ -8,7 +8,7 @@
 // failure is caught and logged to the hooks-health file instead of swallowed by
 // `2>/dev/null || true`.
 //
-// Runs on SessionStart (Claude/Codex/Cursor) or via the Kiro .kiro.hook. Harness-agnostic:
+// Runs on SessionStart (Claude/Codex/Cursor/Kiro IDE) or explicitly on Kiro CLI. Harness-agnostic:
 //   PLUGIN_ROOT   ← CLAUDE_PLUGIN_ROOT | PLUGIN_ROOT | AIDLC_PLUGIN_ROOT |
 //                   this file's parent plugin directory
 //   PROJECT_DIR   ← CLAUDE_PROJECT_DIR | AIDLC_PROJECT_DIR | PWD  (Codex unsets the first)
@@ -462,6 +462,10 @@ function walk(dir: string): string[] {
 type CopyContext = { file: string; rel: string; content: string };
 type CopyPrecheck = (ctx: CopyContext & { dest: string }) => boolean;
 type CopyTransform = (ctx: CopyContext) => string;
+type ExistingCopyAction = "compare" | "handled" | "written";
+type ExistingCopyHandler = (
+  ctx: CopyContext & { dest: string; installed: Buffer },
+) => ExistingCopyAction;
 
 function frontmatterName(content: string): string | null {
   return frontmatterScalar(content, "name");
@@ -593,6 +597,37 @@ function sensorManifestNamePrecheck(): CopyPrecheck {
   };
 }
 
+function doctorScriptOwnershipPrecheck(): CopyPrecheck {
+  const toolsRoot = join(PLUGIN_ROOT, "tools");
+  const targetRoot = join(HARNESS_DIR, "tools");
+  const foreignOwner = (relPosix: string): string | null => {
+    const match = basename(relPosix).match(/^(.+)-doctor\.ts$/);
+    return match && match[1] !== PLUGIN_NAME ? match[1] : null;
+  };
+  const drop = (relPosix: string, owner: string, landed: boolean): void => {
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" doctor script "${relPosix}" names foreign plugin "${owner}"; doctor scripts must be named "${PLUGIN_NAME}-doctor.ts" so disabled plugins cannot install checks for another identity${landed ? " (the file is already installed; remove it and re-run compose)" : " - not copied"}`,
+      "advisory",
+    );
+  };
+  // Older compose versions may already have landed the foreign file. Audit that
+  // state up front because copyTreeNoClobber skips prechecks for existing paths.
+  for (const file of walk(toolsRoot).filter((p) => p.endsWith("-doctor.ts"))) {
+    const relPosix = relative(toolsRoot, file).replace(/\\/g, "/");
+    const owner = foreignOwner(relPosix);
+    if (owner && existsSync(join(targetRoot, relPosix))) {
+      drop(relPosix, owner, true);
+    }
+  }
+  return ({ rel }) => {
+    const relPosix = rel.replace(/\\/g, "/");
+    const owner = foreignOwner(relPosix);
+    if (!owner) return true;
+    drop(relPosix, owner, false);
+    return false;
+  };
+}
+
 function projectOpencodeAgentMemory(raw: string): string {
   return raw
     .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
@@ -609,6 +644,89 @@ function projectCursorNativeAgent({ file, content }: CopyContext): string {
     .filter((line) => !/^(?:model|tier|effort|variant):/.test(line))
     .join("\n");
   return content.replace(m[0], () => `---\n${fm}\n---\n`);
+}
+
+function disallowedToolsValues(content: string): string[] {
+  return [
+    ...frontmatter(content).matchAll(/^disallowedTools:\s*(.*?)\s*$/gm),
+  ].map((match) => match[1].trim());
+}
+
+function projectKiroNativeAgent({ file, content }: CopyContext): string {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  if (!m) throw new Error(`${file}: plugin agent has no closed frontmatter block`);
+  const disallowed = disallowedToolsValues(content);
+  if (
+    disallowed.length > 1 ||
+    (disallowed.length === 1 && !/^Task$/i.test(disallowed[0]))
+  ) {
+    throw new Error(`${file}: Kiro cannot project this disallowedTools declaration`);
+  }
+  const fm = m[1]
+    .split(/\r?\n/)
+    .filter((line) => !/^disallowedTools:/.test(line))
+    .join("\n");
+  return content.replace(m[0], () => `---\n${fm}\n---\n`);
+}
+
+function kiroNativeAgentPrecheck(): CopyPrecheck {
+  return (ctx) => {
+    if (!ctx.content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" has no closed frontmatter block; not copied to Kiro's agent roster`,
+      );
+      return false;
+    }
+    const disallowed = disallowedToolsValues(ctx.content);
+    if (disallowed.length > 1) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" declares multiple disallowedTools lines; Kiro accepts at most one disallowedTools: Task line; not copied`,
+      );
+      return false;
+    }
+    if (disallowed.length === 1 && !/^Task$/i.test(disallowed[0])) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" cannot project disallowedTools "${disallowed[0]}" to Kiro; not copied`,
+      );
+      return false;
+    }
+    return true;
+  };
+}
+
+function migrateExistingKiroAgent(
+  ctx: CopyContext & { dest: string; installed: Buffer },
+): ExistingCopyAction {
+  if (!ctx.file.endsWith(".md")) return "compare";
+  const installed = ctx.installed.toString("utf-8");
+  // This migration is deliberately narrower than ordinary plugin upgrades:
+  // only an unchanged pre-projection copy owned by this plugin is rewritten.
+  // User edits, core files, and another plugin's files stay under no-clobber.
+  if (
+    installed !== ctx.content ||
+    frontmatterScalar(ctx.content, "plugin") !== PLUGIN_NAME ||
+    frontmatterScalar(installed, "plugin") !== PLUGIN_NAME
+  ) {
+    return "compare";
+  }
+  const disallowed = disallowedToolsValues(ctx.content);
+  if (disallowed.length === 0) return "compare";
+  if (disallowed.length > 1) {
+    const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed with multiple disallowedTools lines; fix the plugin source, remove "${installedRel}", and re-run compose`,
+    );
+    return "handled";
+  }
+  if (!/^Task$/i.test(disallowed[0])) {
+    const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed with unsupported disallowedTools "${disallowed[0]}"; fix the plugin source, remove "${installedRel}", and re-run compose`,
+    );
+    return "handled";
+  }
+  writeComposeFile(ctx.dest, projectKiroNativeAgent(ctx));
+  return "written";
 }
 
 function opencodeNativeAgentPrecheck(dst: string): CopyPrecheck {
@@ -822,9 +940,153 @@ function pluginShipsViableNativeAgent(agent: string): boolean {
   return !collidingFile || collidingFile === join(rosterDir, `${agent}.md`);
 }
 
-// Kiro, Codex, OpenCode, and Copilot cannot dispatch a Markdown-only persona
-// from the engine roster. Reject any dispatched stage whose lead, support, or
-// reviewer lacks the harness-native surface.
+function yamlIndent(line: string): number {
+  return line.match(/^\s*/)?.[0].length ?? 0;
+}
+
+function inlineYamlListHasValue(raw: string): boolean {
+  const value = raw.trim();
+  if (!value.startsWith("[") || !value.endsWith("]")) return false;
+  return value.slice(1, -1).split(",").some((item) => {
+    const parsed = yamlScalarValue(item);
+    return parsed !== null && parsed !== "null" && parsed !== "~";
+  });
+}
+
+function blockYamlListHasValue(
+  lines: string[],
+  start: number,
+  parentIndent: number,
+  end = lines.length,
+): boolean {
+  for (let i = start; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const indent = yamlIndent(line);
+    if (indent <= parentIndent) break;
+    const item = line.trimStart().match(/^-\s+(.+)$/)?.[1];
+    if (item && yamlScalarValue(item)) return true;
+  }
+  return false;
+}
+
+function validIdePermissionRule(
+  lines: string[],
+  start: number,
+  end: number,
+  itemIndent: number,
+): boolean {
+  let capability: string | null = null;
+  let effect: string | null = null;
+  let match = false;
+  let mappingIndent: number | null = null;
+  for (let i = start; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    let field = line.trimStart();
+    let indent = yamlIndent(line);
+    if (i === start) {
+      const item = field.match(/^-\s*(.*)$/);
+      if (!item) return false;
+      field = item[1];
+      if (!field) continue;
+      indent = itemIndent + 2;
+    } else if (indent <= itemIndent) {
+      return false;
+    }
+    if (mappingIndent === null) mappingIndent = indent;
+    if (indent < mappingIndent) return false;
+    if (indent > mappingIndent) continue;
+
+    const capabilityLine = field.match(/^capability:\s*(.*)$/);
+    if (capabilityLine) {
+      capability = yamlScalarValue(capabilityLine[1]);
+      continue;
+    }
+    const effectLine = field.match(/^effect:\s*(.*)$/);
+    if (effectLine) {
+      effect = yamlScalarValue(effectLine[1]);
+      continue;
+    }
+    const matchLine = field.match(/^match:\s*(.*)$/);
+    if (matchLine) {
+      match = matchLine[1].trim()
+        ? inlineYamlListHasValue(matchLine[1])
+        : blockYamlListHasValue(lines, i + 1, indent, end);
+    }
+  }
+  return Boolean(capability && (effect === "allow" || effect === "deny") && match);
+}
+
+// Kiro IDE dispatches Markdown agents only when their frontmatter carries a
+// non-empty tools grant and a permissions.rules list made entirely of
+// capability/effect/match entries. Fail closed on empty maps/lists and partial
+// entries: those files exist but do not grant a usable dispatch surface.
+function installedIdeAgentIsDispatchable(agentsDir: string, agent: string): boolean {
+  let content = "";
+  try {
+    content = readFileSync(join(agentsDir, `${agent}.md`), "utf-8");
+  } catch {
+    return false;
+  }
+  const fm = frontmatter(content);
+  if (!fm) return false;
+  const lines = fm.split(/\r?\n/);
+  const toolsIndex = lines.findIndex((line) => /^tools:\s*/.test(line));
+  if (toolsIndex < 0) return false;
+  const toolsValue = lines[toolsIndex].replace(/^tools:\s*/, "");
+  const toolsGranted = toolsValue.trim()
+    ? inlineYamlListHasValue(toolsValue)
+    : blockYamlListHasValue(lines, toolsIndex + 1, 0);
+  if (!toolsGranted) return false;
+
+  const permissionsIndex = lines.findIndex((line) => /^permissions:\s*/.test(line));
+  if (permissionsIndex < 0) return false;
+  if (lines[permissionsIndex].replace(/^permissions:\s*/, "").trim()) return false;
+  const permissionsEnd = lines.findIndex(
+    (line, index) => index > permissionsIndex && /^[A-Za-z_][\w.-]*\s*:/.test(line),
+  );
+  const blockEnd = permissionsEnd < 0 ? lines.length : permissionsEnd;
+  const rulesIndex = lines.findIndex(
+    (line, index) =>
+      index > permissionsIndex &&
+      index < blockEnd &&
+      /^\s+rules:\s*/.test(line),
+  );
+  if (rulesIndex < 0) return false;
+  const rulesValue = lines[rulesIndex].replace(/^\s+rules:\s*/, "");
+  if (rulesValue.trim()) return false;
+
+  const rulesIndent = yamlIndent(lines[rulesIndex]);
+  let itemIndent = -1;
+  const itemIndexes: number[] = [];
+  for (let i = rulesIndex + 1; i < blockEnd; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const indent = yamlIndent(line);
+    if (indent <= rulesIndent) return false;
+    if (line.trimStart().startsWith("-")) {
+      if (itemIndent < 0) itemIndent = indent;
+      if (indent === itemIndent) itemIndexes.push(i);
+    } else if (itemIndent < 0 || indent <= itemIndent) {
+      return false;
+    }
+  }
+  if (itemIndexes.length === 0) return false;
+  return itemIndexes.every((start, index) =>
+    validIdePermissionRule(
+      lines,
+      start,
+      itemIndexes[index + 1] ?? blockEnd,
+      itemIndent,
+    )
+  );
+}
+
+// Kiro CLI, Kiro IDE, Codex, OpenCode, and Copilot each require a native
+// dispatch surface. The two Kiro variants share .kiro but are distinguished by
+// the recorded harness name: CLI uses agent-v1 JSON + trustedAgents, while IDE
+// uses capability-bearing Markdown and never reads the CLI conductor JSON.
 async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | null> {
   if (
     HARNESS_LEAF !== ".kiro" &&
@@ -833,16 +1095,20 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   ) {
     return null;
   }
-  const surfaceExt = HARNESS_LEAF === ".kiro"
-    ? ".json"
-    : HARNESS_LEAF === ".codex"
-      ? ".toml"
-      : ".md";
+  const isKiroIde = HARNESS_NAME === "kiro-ide";
+  const isKiroCli = HARNESS_LEAF === ".kiro" && !isKiroIde;
+  const surfaceExt = isKiroIde
+    ? ".md"
+    : HARNESS_LEAF === ".kiro"
+      ? ".json"
+      : HARNESS_LEAF === ".codex"
+        ? ".toml"
+        : ".md";
   const surfaceDir = HARNESS_LEAF === ".aidlc"
     ? nativeAgentsDir()
     : join(HARNESS_DIR, "agents");
   const trustedAgents = new Set<string>();
-  if (HARNESS_LEAF === ".kiro") {
+  if (isKiroCli) {
     try {
       const conductor = JSON.parse(
         readFileSync(join(HARNESS_DIR, "agents", "aidlc.json"), "utf-8"),
@@ -868,13 +1134,15 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     const requirements: string[] = [];
     if (gap.missingSurface) {
       requirements.push(
-        HARNESS_LEAF === ".kiro"
-          ? `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`
-          : HARNESS_LEAF === ".codex"
-            ? `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`
-            : IS_COPILOT
-              ? `author .github/agents/${gap.agent}.md (a Copilot custom agent with closed frontmatter)`
-              : `author .opencode/agents/${gap.agent}.md (an OpenCode subagent with closed frontmatter)`,
+        isKiroIde
+          ? `author ${HARNESS_LEAF}/agents/${gap.agent}.md with a non-empty tools: grant and well-formed permissions.rules capability/effect/match entries`
+          : HARNESS_LEAF === ".kiro"
+            ? `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`
+            : HARNESS_LEAF === ".codex"
+              ? `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`
+              : IS_COPILOT
+                ? `author .github/agents/${gap.agent}.md (a Copilot custom agent with closed frontmatter)`
+                : `author .opencode/agents/${gap.agent}.md (an OpenCode subagent with closed frontmatter)`,
       );
     }
     if (gap.missingTrust) {
@@ -978,9 +1246,11 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
       if (!agent || gaps.has(agent)) continue;
       const gap = {
         agent,
-        missingSurface: !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
-          !(HARNESS_LEAF === ".aidlc" && pluginShipsViableNativeAgent(agent)),
-        missingTrust: HARNESS_LEAF === ".kiro" && !trustedAgents.has(agent),
+        missingSurface: isKiroIde
+          ? !installedIdeAgentIsDispatchable(surfaceDir, agent)
+          : !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
+            !(HARNESS_LEAF === ".aidlc" && pluginShipsViableNativeAgent(agent)),
+        missingTrust: isKiroCli && !trustedAgents.has(agent),
       };
       if (gap.missingSurface || gap.missingTrust) gaps.set(agent, gap);
     }
@@ -1095,6 +1365,7 @@ function copyTreeNoClobber(
   kind: string,
   precheck?: CopyPrecheck,
   transform?: CopyTransform,
+  existingHandler?: ExistingCopyHandler,
 ): boolean {
   if (!existsSync(src)) return false;
   let wrote = false;
@@ -1110,6 +1381,19 @@ function copyTreeNoClobber(
       // content collision, not an identical idempotent re-copy. The installed
       // copy was written transformed, so transform before comparing; a source
       // the transform rejects cannot equal any installed copy.
+      const installed = readFileSync(dest);
+      const existingAction = existingHandler?.({
+        file,
+        rel,
+        dest,
+        content: buf.toString("utf-8"),
+        installed,
+      }) ?? "compare";
+      if (existingAction === "written") {
+        wrote = true;
+        continue;
+      }
+      if (existingAction === "handled") continue;
       let current: Buffer | null = buf;
       if (transform) {
         try {
@@ -1118,7 +1402,7 @@ function copyTreeNoClobber(
           current = null;
         }
       }
-      if (current === null || !readFileSync(dest).equals(current)) {
+      if (current === null || !installed.equals(current)) {
         recordDrop(`${kind} "${rel}" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path`);
       }
       continue;
@@ -1401,13 +1685,17 @@ try {
       "agents",
       combinePrechecks(
         kiroAgentPrechecks?.agent,
+        HARNESS_LEAF === ".kiro" ? kiroNativeAgentPrecheck() : undefined,
         installedNameCollisionPrecheck(agentsDir, "agents"),
       ),
       HARNESS_LEAF === ".aidlc"
         ? ({ content }) => projectOpencodeAgentMemory(content)
         : HARNESS_LEAF === ".cursor"
           ? projectCursorNativeAgent
-          : undefined,
+          : HARNESS_LEAF === ".kiro"
+            ? projectKiroNativeAgent
+            : undefined,
+      HARNESS_LEAF === ".kiro" ? migrateExistingKiroAgent : undefined,
     ) || changed;
     if (IS_OPENCODE) {
       const rosterDir = nativeAgentsDir();
@@ -1431,7 +1719,7 @@ try {
   }
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "knowledge"), join(HARNESS_DIR, "knowledge"), "knowledge") || changed;
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors"), "sensor", sensorManifestNamePrecheck()) || changed;
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools"), "tool") || changed;
+  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools"), "tool", doctorScriptOwnershipPrecheck()) || changed;
 
   // 2. Merge contributions into stage SOURCE (structural + prose fragments).
   // Probe ONCE whether the installed engine accepts required_sections — writing

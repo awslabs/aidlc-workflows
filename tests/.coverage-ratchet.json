@@ -1,12 +1,12 @@
 {
   "note": "Committed baseline: covered-unit count per class. The --check ratchet fails CI if any class's covered count DROPS below these numbers without a reviewed deferred entry. Monotonic anti-regression: you can cover more, never silently less. Regenerate with: bun tests/gen-coverage-registry.ts",
   "coveredByClass": {
-    "function": 145,
-    "audit": 40,
-    "scope": 9,
+    "function": 209,
+    "audit": 46,
+    "scope": 11,
     "stage": 11,
-    "hook": 17,
-    "subcommand": 87,
+    "hook": 18,
+    "subcommand": 97,
     "render-surface": 7
   }
 }

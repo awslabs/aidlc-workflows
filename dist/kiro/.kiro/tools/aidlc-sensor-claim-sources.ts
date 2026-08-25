@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { errorMessage } from "./aidlc-lib.ts";
+import { errorMessage, visibleMarkdownLines } from "./aidlc-lib.ts";
 
 interface Flags {
 	stage?: string;
@@ -73,65 +73,6 @@ function parseFlags(argv: string[]): Flags {
 function fail(message: string): never {
 	process.stderr.write(`aidlc-sensor-claim-sources: ${message}\n`);
 	process.exit(1);
-}
-
-function visibleMarkdownLines(body: string): string[] {
-	const lines = body.replace(/^﻿/, "").replace(/\r\n/g, "\n").split("\n");
-	const visible: string[] = [];
-	let inComment = false;
-	let fence: { marker: "`" | "~"; length: number } | null = null;
-
-	for (const rawLine of lines) {
-		if (fence) {
-			const closing = /^ {0,3}([`~]+)[ \t]*$/.exec(rawLine);
-			if (
-				closing &&
-				closing[1][0] === fence.marker &&
-				closing[1].length >= fence.length
-			) {
-				fence = null;
-			}
-			visible.push("");
-			continue;
-		}
-
-		let line = "";
-		let cursor = 0;
-		while (cursor < rawLine.length) {
-			if (inComment) {
-				const end = rawLine.indexOf("-->", cursor);
-				if (end < 0) {
-					cursor = rawLine.length;
-					break;
-				}
-				inComment = false;
-				cursor = end + 3;
-				continue;
-			}
-
-			const start = rawLine.indexOf("<!--", cursor);
-			if (start < 0) {
-				line += rawLine.slice(cursor);
-				break;
-			}
-			line += rawLine.slice(cursor, start);
-			inComment = true;
-			cursor = start + 4;
-		}
-
-		const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-		if (opening) {
-			fence = {
-				marker: opening[1][0] as "`" | "~",
-				length: opening[1].length,
-			};
-			visible.push("");
-			continue;
-		}
-		visible.push(line);
-	}
-
-	return visible;
 }
 
 function h2Heading(line: string): string | null {
@@ -330,7 +271,10 @@ function memoryRuleMatches(
 		);
 		return false;
 	}
-	const sections = sectionsNamed(visibleMarkdownLines(memoryBody), heading);
+	const sections = sectionsNamed(
+		visibleMarkdownLines(memoryBody, { preserveIndentedCode: true }),
+		heading,
+	);
 	if (sections.length !== 1) {
 		findings.push(
 			`[${id}] memory source must contain exactly one ## ${heading} heading`,
@@ -386,7 +330,7 @@ function parseSourceUniverse(
 		};
 	}
 
-	const lines = visibleMarkdownLines(body);
+	const lines = visibleMarkdownLines(body, { preserveIndentedCode: true });
 	const labels = referenceLabels(body);
 	const authority = loadRecordAuthority(stageDir);
 	findings.push(...authority.findings);
@@ -531,7 +475,7 @@ function claimBlocks(
 	blocks: ClaimBlock[];
 	hasAssumptionsSection: boolean;
 } {
-	const lines = visibleMarkdownLines(body).map((line, index) =>
+	const lines = visibleMarkdownLines(body, { preserveIndentedCode: true }).map((line, index) =>
 		definitionLines.has(index) ? "" : line,
 	);
 	const tableHeaders = new Set<number>();
@@ -1180,7 +1124,7 @@ function normalizedReferenceLabel(label: string): string {
 }
 
 function referenceAnalysis(body: string): ReferenceAnalysis {
-	const visibleLines = visibleMarkdownLines(body);
+	const visibleLines = visibleMarkdownLines(body, { preserveIndentedCode: true });
 	const lines = documentContainerLines(visibleLines);
 	const labels = new Set<string>();
 	const definitionLines = new Set<number>();
@@ -1205,7 +1149,7 @@ function referenceLabels(body: string): Set<string> {
 
 function withoutReferenceDefinitions(text: string): string {
 	const analysis = referenceAnalysis(text);
-	return visibleMarkdownLines(text)
+	return visibleMarkdownLines(text, { preserveIndentedCode: true })
 		.map((line, index) => (analysis.definitionLines.has(index) ? "" : line))
 		.join("\n");
 }

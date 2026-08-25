@@ -52,7 +52,7 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 .claude/knowledge/
 ├── aidlc-shared/                       # Loaded by every agent
 │   ├── ai-dlc-principles.md        # Core methodology principles
-│   ├── audit-format.md             # 82-event audit taxonomy
+│   ├── audit-format.md             # 87-event audit taxonomy
 │   ├── brownfield.md               # Brownfield safeguards and reverse-engineering guidance
 │   ├── knowledge-readme-template.md # Optional README template a team can copy into Tier 2
 │   ├── state-template.md           # State file contract
@@ -86,6 +86,44 @@ aidlc/knowledge/                  # empty at bootstrap; create the subdirs you n
 │   └── company-testing-standards.md
 └── ...                        # add a directory per agent only if you have content for it
 ```
+
+## Document Knowledge (DocumentKB)
+
+Team knowledge files are curated reference material. DocumentKB is the companion
+catalog for documents the team already owns: policies, contracts, PDFs, Word
+files, Markdown, and plain text.
+
+The ownership split is deliberate:
+
+| Directory | Owner | Purpose |
+|---|---|---|
+| `aidlc/spaces/<space>/knowledge/documents/` | Your team | Original documents, organised and deleted by you |
+| `aidlc/spaces/<space>/knowledge/documentkb/` | AI-DLC | Derived index, metadata, and extracted text |
+
+Use `/aidlc knowledge onboard [path]` to add one document or sweep the folder.
+Use `sync` after files are added, edited, moved, or deleted; `list` shows every
+catalog row and state, and `show <id>` returns one citable record plus current
+extracted text when available. The `/aidlc-knowledge` skill guides the same
+workflow.
+
+A document can also carry a short **summary and tags**, so an agent can cite its
+gist without re-reading the whole file. The agent writes the summary itself and
+persists it with `summarize <id>`, bound to the revision it describes. After the
+original is edited, run `sync`; the summary then reports `invalidated` and is
+withheld rather than served stale — the same revision-binding rule the extracted
+text follows. Tags survive that invalidation; passing `--tags` replaces the set,
+omitting it leaves the existing tags alone. Because tags may be LLM-authored
+from customer content, `list` and `show` frame them as untrusted labels, never
+instructions.
+
+Recovery is intentionally limited. If only `documentkb/index.json` is lost,
+`sync` rebuilds it from the surviving per-document `metadata.json` records,
+including tombstones. Deleting the whole `documentkb/` tree also deletes those
+records, so document IDs, tombstones, and intent associations do not survive;
+surviving originals are indexed as new documents.
+
+See [CLI Commands](12-cli-commands.md) for every verb and flag, and
+[Skills and Runner Commands](17-skills.md) for the skill surface.
 
 ---
 
@@ -267,7 +305,7 @@ Both knowledge files and rules customize agent behavior, but they are not interc
 
 A useful rule of thumb: **if a human reviewer would reject a stage's output when the rule is violated, it belongs in the space memory layer (`aidlc/spaces/<active-space>/memory/`).** If they would use the rule as background context when reviewing, it is knowledge.
 
-Rules and knowledge sit on different planes, and that is why their loading behaves differently. Knowledge files are reference material that agents weigh during a stage. Rules resolve through a strict-additive chain — org, then team, then project, then phase, then stage — that the framework compiles ahead of the workflow; every applicable rule reaches the agent, and nothing is silently dropped. Conflicts between layers are caught at admission time, when a team or project rule is first written, rather than reconciled mid-stage.
+Rules and knowledge sit on different planes, and that is why their loading behaves differently. Knowledge files are reference material that agents weigh during a stage. Rules resolve through a strict-additive chain — org, then team, then project, then phase, then stage — that the framework compiles ahead of the workflow; every applicable rule reaches the agent, and nothing is silently dropped. For kept learnings, the gate protocol asks the orchestrator to check potential conflicts against org policy before the deterministic writer runs; the writer does not independently enforce that LLM check, and runtime does not reconcile conflicts mid-stage.
 
 For the full rule model — file locations, the five-layer chain, the learning loop, and admission-time conflict checks — see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md).
 
@@ -353,7 +391,11 @@ If you want to **constrain** how the agent applies a methodology principle, add 
 
 ### Don't edit agent files to inject team context
 
-`.claude/agents/*.md` defines the agent's persona, tool access, and knowledge-loading sequence. Editing them to add team knowledge is a common mistake — the changes are overwritten on framework upgrade. Always use `aidlc/knowledge/<agent>/` instead.
+`.claude/agents/*.md` defines the projected persona and tool access, and the
+packager adds its mandatory delegated knowledge preflight. Editing that
+generated file to add team knowledge is a common mistake — the changes are
+overwritten on framework upgrade. Always use `aidlc/knowledge/<agent>/`
+instead.
 
 ### Name the directories to match the agent slug
 

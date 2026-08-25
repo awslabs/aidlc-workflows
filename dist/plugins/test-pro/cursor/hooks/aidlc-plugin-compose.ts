@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
-// Cross-platform Cursor plugin compose launcher. Cursor hook commands are
-// command strings, so avoid `sh -c`: prefer an installed aidlc executable and
-// fall back to the sibling compose.ts with the Bun executable already running
-// this hook.
+// Cross-platform plugin compose launcher for hosts whose hook commands must
+// run on native Windows. Avoid `sh -c`: prefer an installed aidlc executable,
+// then fall back to the sibling compose.ts with this Bun executable.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -10,6 +9,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const harnessDir = process.argv[2] || ".cursor";
+const harnessName = process.argv[3] || process.env.AIDLC_HARNESS_NAME;
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rawInput = process.stdin.isTTY ? "" : await Bun.stdin.text();
 
@@ -64,6 +64,7 @@ if (projectRoot === null) process.exit(0);
 const env = {
   ...process.env,
   AIDLC_HARNESS_DIR: harnessDir,
+  ...(harnessName ? { AIDLC_HARNESS_NAME: harnessName } : {}),
   AIDLC_PLUGIN_ROOT: pluginRoot,
   AIDLC_PROJECT_DIR: projectRoot,
   CLAUDE_PROJECT_DIR: projectRoot,

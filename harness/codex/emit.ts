@@ -20,7 +20,10 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { dirname, join, posix, relative, win32 } from "node:path";
 import { stringify } from "smol-toml";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
-import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
+import {
+  absorbReviewerKnowledge,
+  injectDelegatedKnowledgePreflight,
+} from "../../scripts/agent-knowledge.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
@@ -32,6 +35,9 @@ import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "record-human-turn" },
+  // POSIX Codex commands receive the validated payload session directly, so
+  // sandboxed macOS does not depend on `ps` ancestry for workflow isolation.
+  { event: "PreToolUse", matcher: "Bash", target: "bind-bash-session" },
   { event: "PreToolUse", matcher: "spawn_agent", target: "deliver-stage-rules" },
   { event: "PreToolUse", target: "state-transition-guard" },
   // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;
@@ -45,6 +51,7 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   // No matcher: the plan-approval-guard target self-filters (spawn_agent
   // naming the developer agent; everything else exits 0 instantly).
   { event: "PreToolUse", target: "plan-approval-guard" },
+  { event: "PostToolUse", matcher: "request_user_input", target: "record-human-turn" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "sync-workflow-state" },
   { event: "PostToolUse", matcher: "Bash", target: "rebuild-stage-graph" },
@@ -114,6 +121,11 @@ sandbox_mode = "workspace-write"
 [sandbox_workspace_write]
 network_access = true
 # writable_roots = ["/absolute/path/to/main-repo/.git"]
+
+# Delegated roles are leaves. The conductor owns every spawn and agents cannot
+# recursively delegate.
+[agents]
+max_depth = 1
 
 # Gates (D-3 both-track): prose gates are the floor; these flags enable the
 # structured request_user_input tool (verified working at 0.137.0+; the
@@ -240,7 +252,7 @@ function emitTrustSeed(harnessDir: string): string {
 // session defaults (live-verified on codex-cli 0.139.0 and 0.142.5: a role
 // TOML without `model` spawns on the config.toml model + effort). judgment
 // omits both keys;
-// balanced pins a model but inherits effort; templated pins both.
+// balanced and templated both pin a model and medium effort.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
   // BOM tolerance, matching the packager's agent reader and the rule parser.
@@ -315,7 +327,11 @@ export default function emit(ctx: EmitContext): void {
     // Reviewer knowledge absorption (scripts/agent-knowledge.ts): the emit
     // plugin reads core/agents/*.md directly, so the packager's transform
     // never runs here - absorb into the body the same way it does.
-    const absorbedBody = absorbReviewerKnowledge(body, name, coreRoot);
+    const absorbedBody = injectDelegatedKnowledgePreflight(
+      absorbReviewerKnowledge(body, name, coreRoot),
+      name,
+      harnessDir,
+    );
     const description = (fm.description ?? "").replace(/\s+/g, " ").trim();
     // The authored source of truth is `tier:` on the core .md; the packager's
     // frontmatter transform doesn't run against emit.ts (Codex reads directly
@@ -327,7 +343,21 @@ export default function emit(ctx: EmitContext): void {
     const tier = fm.tier?.trim();
     if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
     const proj = projectTier(tier, "codex", tierCap); // throws on unknown tier
-    const instructions = rewriteProse(absorbedBody);
+    // The harness-neutral reviewer persona cites its own turn cap as "the
+    // `maxTurns: <n>` frontmatter above - keep the two numbers in sync". That
+    // citation assumes a YAML frontmatter block sits above the body - true on
+    // every other harness surface, but Codex TOML personas have no
+    // frontmatter at all (Codex agent discovery reads only the TOML; this
+    // `developer_instructions` string IS the whole persona) and no native
+    // per-agent cap key ships in the emitted TOML. Rewrite the citation for
+    // this surface instead of shipping a dangling pointer, mirroring the
+    // opencode emitter's own prose rename for its `steps:` key.
+    const instructions = rewriteProse(absorbedBody).replace(
+      /the `maxTurns: (\d+)` frontmatter above - keep the two numbers in sync/g,
+      "the core persona's `maxTurns: $1` cap - Codex TOML personas carry no " +
+        "frontmatter and no native per-agent cap key, so this number is " +
+        "prose-only here; update it by hand if the authored cap changes",
+    );
     const modelLines =
       (proj.model !== null ? `model = "${proj.model}"\n` : "") +
       (proj.effort !== null ? `model_reasoning_effort = "${proj.effort}"\n` : "");
@@ -416,8 +446,11 @@ export default function emit(ctx: EmitContext): void {
     emissions.push({ path: join(dir, "SKILL.md"), content: () => rewriteProse(gen.renderRunner(scope, scopes[scope].description)) });
     emissions.push({ path: join(dir, "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
   }
-  // (d) session skills — byte-copy + prose rewrite from core/skills/
-  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+  // (d) standalone core skills — byte-copy + prose rewrite from core/skills/.
+  // Codex alone does NOT enumerate core/skills/, so this list is the only thing
+  // that ships them here: a skill missing from it silently reaches every OTHER
+  // harness and not this one.
+  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {

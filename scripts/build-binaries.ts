@@ -797,6 +797,22 @@ function swarmReentryGate(artifact: string): GateResult {
       ["intent", "create", "--scope", "poc", "--label", "swarm-gate", "--project-dir", projectArg],
       { cwd: invocationCwd, env, timeoutMs: 30_000 },
     );
+    // `swarm prepare` now accepts authority only for Units in the current DAG.
+    // Seed the minimal one-unit DAG in this binary self-reentry fixture rather
+    // than relying on an arbitrary --units slug to create review authority.
+    const intentsRoot = join(project, "aidlc", "spaces", "default", "intents");
+    const cursor = ["active-intent", ".active-intent"]
+      .map((name) => join(intentsRoot, name))
+      .find((path) => existsSync(path));
+    if (!cursor) throw new Error(`swarm reentry intent cursor missing under ${intentsRoot}`);
+    const activeIntent = readFileSync(cursor, "utf-8").trim();
+    const dagDir = join(intentsRoot, activeIntent, "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: swarm-unit\n    depends_on: []\n```\n",
+      "utf-8",
+    );
     const result = run(
       artifact,
       [
@@ -841,7 +857,11 @@ function swarmReentryGate(artifact: string): GateResult {
 }
 
 function delegatePluginSyncGate(artifact: string): GateResult {
-  const result = run(artifact, ["plugin", "sync"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const result = run(artifact, ["plugin", "sync"], {
+    cwd: tmpdir(),
+    env: pathlessEnv(),
+    timeoutMs: 30_000,
+  });
   const output = `${result.stdout}\n${result.stderr}`;
   const moduleError = /Cannot find module|\/\$bunfs\//.test(output);
   const actual = result.stdout.trim();
@@ -1377,9 +1397,14 @@ function routedProjectDirGate(artifact: string): GateResult {
 }
 
 function delegateDoctorDataGate(artifact: string): GateResult {
-  const result = run(artifact, ["doctor"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const result = run(artifact, ["doctor"], {
+    cwd: tmpdir(),
+    env: pathlessEnv(),
+    timeoutMs: 30_000,
+  });
   const output = `${result.stdout}\n${result.stderr}`;
-  const crashSignature = output.match(/Cannot find module|\/\$bunfs\/|ENOENT/)?.[0] ?? "";
+  const crashSignature =
+    output.match(/Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/)?.[0] ?? "";
   const reportEmitted = result.stdout.includes("AI-DLC Health Check");
   const schemaCount = /Schema validation: (\d+)\/(\d+) stages validated/.exec(result.stdout);
   const meaningfulSchemaCount =
@@ -1593,7 +1618,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(harnessProbeGate(
       actual.artifact,
       "kiro",
-      "agents/aidlc.json present (hook + permission wiring)",
+      "agents/aidlc.{json,md} present (conductor wiring)",
     ));
     result.gates.push(harnessProbeGate(
       actual.artifact,

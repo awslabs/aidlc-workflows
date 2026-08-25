@@ -83,21 +83,27 @@ simultaneously. That changes how you author — you state a rule positively at t
 scope where it should apply, and you trust it to stack with the layers above it
 rather than reaching for a switch to suppress them.
 
-### Conflicts are rejected when you write, not resolved at runtime
+### Conflicts are checked before learning writes, not resolved at runtime
 
 Because nothing overrides at runtime, a rule that *contradicts* a broader-scope
-rule would be a problem the resolver could not untangle. The framework forecloses
-that by checking at **write time**, not run time. When a team-scope rule is being
-added under a given `## Heading`, an admission gate compares the proposed text
-against `org.md`'s same heading; if it finds a contradiction, the gate stops
-the write and offers three choices — **revise**, **skip**, or **escalate** to the
-org-rule owner. Project-tier writes check against org only, since team-versus-
-project differences are legitimate project specialization, not a policy violation.
+rule would be a problem the resolver could not untangle. The learning-loop
+protocol addresses that by asking the orchestrator to run a
+section-level LLM check before a selection reaches the deterministic writer.
+When a team- or project-scope learning is being added under a given `## Heading`,
+the orchestrator compares the proposed text against `org.md`'s same heading. If
+it finds a contradiction, it surfaces the org sentence and offers three choices
+— **revise**, **skip**, or **escalate** to the org-rule owner. Only
+conflict-clear or user-escalated selections proceed. Project-tier writes check
+against org only, since team-versus-project differences are legitimate project
+specialization, not a policy violation.
 
-This check runs at the two admission gates the framework owns — the
-practices-discovery affirmation gate and the learning gate (below) — so by the
-time a rule reaches the resolver, it has already passed conflict-check. Two
-read-only `/aidlc --doctor` rows surface state after the fact: a **rule-drift**
+The deterministic `aidlc-learnings.ts persist` writer does not read `org.md` or
+independently enforce this comparison; it accepts the selections it receives.
+The check is an audit aid, not an enforcement boundary. Practices-discovery is
+the other admission gate, but it does not run the org-conflict check: its
+promotion is a deterministic section-replace legitimised by user affirmation.
+Two read-only `/aidlc --doctor` rows surface state after the fact: a
+**rule-drift**
 row flags headings where team or project content overlaps a populated org heading
 (a candidate contradiction for a human to verify), and a **paired-coverage** row
 reports how many rules name a sensor that actually resolves. Both are advisory and
@@ -121,10 +127,10 @@ harness-engineer view is what the loop produces and where it lands:
    session running the active stage) keeps an observation
    log at `<record>/<phase>/<stage>/memory.md` (under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), with entries under four
    headings — Interpretations, Deviations, Tradeoffs, Open questions. It is
-   auto-created and maintained for you; never hand-edit it. Writing the diary is
-   the *only* job the language model has in this loop — everything after the stage
-   (counting, surfacing, routing, writing) is deterministic tooling or your
-   explicit pick at the gate.
+   auto-created and maintained for you; never hand-edit it. The language model
+   writes the diary, and the orchestrator later performs the admission comparison.
+   Candidate extraction and final writes are deterministic tooling; selections
+   and conflict disposition are your explicit choices at the gate.
 2. **The gate surfaces candidates.** Before the approval gate the learning gate
    reads `memory.md` and shows each non-blank diary line verbatim as a candidate,
    plus a free-text "anything to add for next time?" channel where you type an

@@ -29,10 +29,11 @@ existing agent knows* through team knowledge rather than editing the file (see
 move: a new file, owned by you, that survives upgrades.
 
 The frontmatter is the part the framework parses. The body is prose the agent
-reads about itself when it activates — its responsibilities, the stages it
-owns, how it loads knowledge, its working principles. Only the frontmatter is
-machine-read; the body is for the agent's own framing, and you write it to
-match the structure of the shipped files.
+reads about itself when it activates — its responsibilities, collaboration,
+memory focus, and working principles. Only the frontmatter is machine-read;
+the body is for the agent's own framing, and you write it to match the
+structure of the shipped files. The packager adds the mandatory delegated
+knowledge preflight to every harness projection.
 
 Here is the frontmatter from a real agent, authored at
 `core/agents/aidlc-architect-agent.md`:
@@ -82,7 +83,10 @@ delegated workers; the conductor (the live `/aidlc` session) performs the `Task`
 call when the engine's `run-stage` directive carries `mode: subagent`. Allowing
 `Task` would let an agent spawn its own subagents, cascading delegation chains
 the framework is built to prevent. Every shipped agent disallows `Task`, and so
-must yours.
+must yours. The Kiro projections remove this Claude-only frontmatter key and
+enforce the same no-nested-delegation boundary through Kiro's native agent tool
+configuration; any other `disallowedTools` value fails packaging or is
+drop-logged during plugin compose.
 
 **`tier` names the kind of work; the packager projects it into per-harness
 model/effort keys.** You never author raw `model:` or `effort:` in core agent
@@ -95,9 +99,11 @@ never silently downgraded. Pick `balanced` for reviewer-shaped personas that
 judge novel input against explicit criteria. Pick `templated` only when the
 output is dominantly pattern-following and the methodology is already encoded
 in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
-runbook scaffolding -- templated is the one tier that steps effort down (on
-Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit
-the session model and effort, so the tier changes nothing there). When
+runbook scaffolding. `balanced` and `templated` both step effort down to
+`medium` (on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all
+tiers inherit the session model and effort, so the tier changes nothing there),
+and they currently project identically -- only `judgment` inherits the session
+effort. When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently
 under-reasons. See [Agent System](../reference/05-agent-system.md) for the
@@ -154,8 +160,16 @@ Mirroring the reference recipe, here is the workflow end to end.
    required frontmatter: `name`, `display_name`, `examples`, `description`,
    `disallowedTools` (including `Task`), `tier`. An optional `tools:`
    allowlist narrows the persona; omit it to inherit the full session toolset.
+   An optional `maxTurns: <n>` caps the agent's turn budget - binding on
+   Claude Code, projected to opencode's native `steps:` key, and inert
+   (persona-prose-only) on Codex CLI, Cursor, GitHub Copilot, and both Kiro
+   surfaces, which expose no per-agent cap key (the Codex TOML emit rewrites
+   the persona's frontmatter citation, and the kiro agent JSONs never receive
+   the key - their schema fail-closes on unknown fields); the two review-only
+   agents ship it today (see the reviewer personas' `## Turn Budget` section
+   for the pairing convention).
    Write the body to match the shipped files' structure (Core Responsibilities,
-   Stages Owned, Collaboration, Knowledge Loading, Key Principles).
+   Collaboration, optional Memory Focus, Key Principles).
 2. **Add knowledge files** under `core/knowledge/aidlc-<slug>-agent/` for the
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /

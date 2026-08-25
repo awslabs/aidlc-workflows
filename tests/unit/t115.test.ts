@@ -75,12 +75,15 @@
 // cleaned in afterAll. Nothing is written under tests/fixtures/**.
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   auditLockDir,
   readAllAuditShards,
+  reviewArtifactFingerprint,
+  resolveStage,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -140,16 +143,29 @@ function orchestrateNext(p: string): CliResult {
 }
 
 /** Spawn `bun aidlc-state.ts <args...> --project-dir <p>`. Mirrors `bun "$STATE_TOOL" ...`. */
-function state(args: string[], p: string): CliResult {
+function state(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [STATE_TOOL, ...args, "--project-dir", p], {
     encoding: "utf-8",
     env: {
       ...process.env,
       AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      ...extraEnv,
     },
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
+}
+
+function openGateWithoutReview(p: string): CliResult {
+  return state(
+    ["gate-start", "requirements-analysis"],
+    p,
+    { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+  );
 }
 
 // P9 per-intent layout: state lives in the active intent's record (seedStateFile
@@ -347,6 +363,95 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     expect(auditBlocksFor(p, "STAGE_SKIPPED")[0]).toContain(
       "**Reason**: No feasibility decision is needed",
     );
+  }, 30000);
+
+  test("routed skip into code-generation stamps a source baseline backed by its snapshot", () => {
+    const p = projWithState("state-jumped.md");
+    const state = readFileSync(statePath(p), "utf-8")
+      .replace("- [S] infrastructure-design — EXECUTE", "- [-] infrastructure-design — EXECUTE")
+      .replace("- [-] code-generation — EXECUTE", "- [ ] code-generation — EXECUTE")
+      .replace("- **In Progress**: code-generation", "- **In Progress**: infrastructure-design")
+      .replace("- **Current Stage**: code-generation", "- **Current Stage**: infrastructure-design")
+      .replace("- **Next Stage**: build-and-test", "- **Next Stage**: code-generation")
+      .replace("- **Next Action**: Execute code-generation", "- **Next Action**: Execute infrastructure-design");
+    writeFileSync(statePath(p), state, "utf-8");
+
+    const git = (args: string[]): void => {
+      const result = spawnSync("git", ["-C", p, ...args], { encoding: "utf-8" });
+      expect(result.status, `${result.stdout ?? ""}${result.stderr ?? ""}`).toBe(0);
+    };
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@test"]);
+    git(["config", "user.name", "t"]);
+    writeFileSync(join(p, "app.ts"), "export const baseline = true;\n", "utf-8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "baseline"]);
+
+    const report = orchestrate([
+      "report",
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      "No infrastructure changes",
+    ], p);
+    expect(report.status, report.out).toBe(0);
+
+    const started = auditBlocksFor(p, "STAGE_STARTED").find((block) =>
+      block.includes("**Stage**: code-generation")
+    );
+    expect(started).toBeDefined();
+    const fingerprint = started?.match(/^\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})$/m)?.[1];
+    expect(fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const hash = fingerprint?.slice("sha256:".length) as string;
+    const snapshot = join(
+      seededRecordDir(p),
+      ".aidlc-source-review",
+      "code-generation",
+      `baseline-${hash.slice(0, 12)}.tsv`,
+    );
+    expect(existsSync(snapshot)).toBe(true);
+    expect(createHash("sha256").update(readFileSync(snapshot)).digest("hex")).toBe(hash);
+  }, 30000);
+
+  test("routed skip into code-generation records an empty modern baseline before Git exists", () => {
+    const p = projWithState("state-jumped.md");
+    const content = readFileSync(statePath(p), "utf-8")
+      .replace("- [S] infrastructure-design — EXECUTE", "- [-] infrastructure-design — EXECUTE")
+      .replace("- [-] code-generation — EXECUTE", "- [ ] code-generation — EXECUTE")
+      .replace("- **In Progress**: code-generation", "- **In Progress**: infrastructure-design")
+      .replace("- **Current Stage**: code-generation", "- **Current Stage**: infrastructure-design")
+      .replace("- **Next Stage**: build-and-test", "- **Next Stage**: code-generation")
+      .replace("- **Next Action**: Execute code-generation", "- **Next Action**: Execute infrastructure-design");
+    writeFileSync(statePath(p), content, "utf-8");
+
+    const report = orchestrate([
+      "report",
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      "No infrastructure changes",
+    ], p);
+    expect(report.status, report.out).toBe(0);
+
+    const started = auditBlocksFor(p, "STAGE_STARTED").find((block) =>
+      block.includes("**Stage**: code-generation")
+    );
+    const fingerprint = started?.match(
+      /^\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})$/m,
+    )?.[1];
+    expect(fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const hash = fingerprint?.slice("sha256:".length) as string;
+    const snapshot = join(
+      seededRecordDir(p),
+      ".aidlc-source-review",
+      "code-generation",
+      `baseline-${hash.slice(0, 12)}.tsv`,
+    );
+    expect(readFileSync(snapshot, "utf-8")).toBe("");
   }, 30000);
 
   test("revising stage can be skipped through the same routed outcome", () => {
@@ -1018,7 +1123,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     const p = projWithState("state-mid-inception.md");
     // Open the gate so approve's state precondition passes; the reviewer
     // precondition is the thing under test.
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
@@ -1032,8 +1137,6 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
   test("R2: a recorded READY review unblocks the approve", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
     const rev = completeReview(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"],
       p,
@@ -1042,6 +1145,10 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(auditBlocksFor(p, "REVIEW_COMPLETED")[0]).toMatch(
       /\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
     );
+    expect(auditBlocksFor(p, "REVIEW_REQUESTED")[0]).toMatch(
+      /\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
+    );
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
@@ -1053,12 +1160,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
   test("R3: a NOT-READY verdict still satisfies the precondition (soft on verdict)", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
     completeReview(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "NOT-READY"],
       p,
     );
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve despite findings"],
@@ -1070,12 +1176,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
   test("R3b: an unpaired REVIEW_COMPLETED is not a terminal receipt", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
     log(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "NOT-READY"],
       p,
     );
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
@@ -1088,13 +1193,12 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
   test("R4: a review recorded for a DIFFERENT stage does not unblock this one", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
     // Review recorded for the wrong slug — must not satisfy requirements-analysis.
     completeReview(
       ["review", "--stage", "user-stories", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"],
       p,
     );
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
@@ -1106,14 +1210,13 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
   test("R5: REVIEW_REQUESTED alone (no verdict) does NOT satisfy the precondition", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
     // Dispatch row only — no terminal verdict yet.
     const req = log(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"],
       p,
     );
     expect(req.stdout).toContain('"emitted":"REVIEW_REQUESTED"');
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
@@ -1131,7 +1234,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
   // state approve committed with GATE_APPROVED=1, REVIEW_COMPLETED=0).
   test("R6: a DIRECT aidlc-state.ts approve is also refused without a review (not just report)", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
@@ -1144,15 +1247,21 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
   // re-approve. The GATE_REJECTED floors the read past the old review.
   test("R7: a review before a GATE_REJECTED does not satisfy the re-approve", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     completeReview(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"],
       p,
     );
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     // The human requests changes: reject records GATE_REJECTED and sets the
     // stage revising ([R]). `revise` re-enters the gate ([R] → [?]).
     expect(state(["reject", "requirements-analysis", "--feedback", "revise it"], p).status).toBe(0);
-    expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
+    expect(
+      state(
+        ["revise", "requirements-analysis"],
+        p,
+        { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+      ).status,
+    ).toBe(0);
 
     // Re-approve with no fresh review → refused (the pre-reject review is stale).
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
@@ -1175,13 +1284,13 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
   // matches Reviewer as well as Stage.
   test("R8: a review recorded with the wrong reviewer name does not satisfy", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     const wrong = log(
       ["review", "--stage", "requirements-analysis", "--reviewer", "not-the-real-reviewer", "--iteration", "1", "--verdict", "READY"],
       p,
     );
     expect(wrong.status).not.toBe(0);
     expect(wrong.out).toContain("does not match the declared reviewer");
+    expect(openGateWithoutReview(p).status).toBe(0);
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("declares a reviewer");
@@ -1223,7 +1332,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       `${readFileSync(statePath(p), "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
       "utf-8",
     );
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = state(["approve", "requirements-analysis"], p);
     expect(r.status).not.toBe(0);
@@ -1233,7 +1342,6 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
   test("R11: an isolated --single review receipt cannot satisfy the main workflow", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     expect(completeReview([
       "review",
       "--single",
@@ -1246,6 +1354,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       "--verdict",
       "READY",
     ], p).status).toBe(0);
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     expect(
       auditBlocksFor(p, "REVIEW_COMPLETED")[0],
@@ -1259,7 +1368,6 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
   test("R12: a declared artifact create or update after review requires a fresh review", () => {
     for (const event of ["ARTIFACT_CREATED", "ARTIFACT_UPDATED"]) {
       const p = projWithState("state-mid-inception.md");
-      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
       expect(completeReview([
         "review",
         "--stage",
@@ -1271,6 +1379,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         "--verdict",
         "READY",
       ], p).status).toBe(0);
+      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
       expect(appendAudit(event, {
         Tool: event === "ARTIFACT_CREATED" ? "Write" : "Edit",
         File: join(
@@ -1284,11 +1393,12 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
-      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(refused.out).toContain(
+        "terminal review receipt from aidlc-product-lead-agent was invalidated",
+      );
       expect(countEvent(p, "GATE_APPROVED")).toBe(0);
 
       expect(state(["reject", "requirements-analysis", "--feedback", "review changed artifact"], p).status).toBe(0);
-      expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
       expect(completeReview([
         "review",
         "--stage",
@@ -1300,13 +1410,13 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         "--verdict",
         "READY",
       ], p).status).toBe(0);
+      expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
       expect(state(["approve", "requirements-analysis"], p).status).toBe(0);
     }
   }, 30000);
 
   test("R13: an unrelated artifact update does not invalidate the review", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     expect(completeReview([
       "review",
       "--stage",
@@ -1318,6 +1428,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       "--verdict",
       "READY",
     ], p).status).toBe(0);
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     expect(appendAudit("ARTIFACT_UPDATED", {
       Tool: "Edit",
       File: join(seededRecordDir(p), "inception", "user-stories", "stories.md"),
@@ -1331,7 +1442,6 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
   test("R14: malformed REVIEW_COMPLETED verdicts do not satisfy the precondition", () => {
     for (const verdict of [undefined, "MAYBE"]) {
       const p = projWithState("state-mid-inception.md");
-      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
       const fields: Record<string, string> = {
         Stage: "requirements-analysis",
         Reviewer: "aidlc-product-lead-agent",
@@ -1344,6 +1454,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       }, p).status).toBe(0);
       if (verdict !== undefined) fields.Verdict = verdict;
       expect(appendAudit("REVIEW_COMPLETED", fields, p).status).toBe(0);
+      expect(openGateWithoutReview(p).status).toBe(0);
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
@@ -1355,7 +1466,6 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
   test("R15: an unaudited artifact create or update invalidates the receipt", () => {
     for (const existedAtReview of [false, true]) {
       const p = projWithState("state-mid-inception.md");
-      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
       const artifact = join(
         seededRecordDir(p),
         "inception",
@@ -1377,15 +1487,17 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         "--verdict",
         "READY",
       ], p).status).toBe(0);
+      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
 
       writeFileSync(artifact, "changed outside Write/Edit hooks\n", "utf-8");
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
-      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(refused.out).toContain(
+        "terminal review receipt from aidlc-product-lead-agent was invalidated",
+      );
 
       expect(state(["reject", "requirements-analysis", "--feedback", "artifact changed"], p).status).toBe(0);
-      expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
       expect(completeReview([
         "review",
         "--stage",
@@ -1397,6 +1509,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         "--verdict",
         "READY",
       ], p).status).toBe(0);
+      expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
       expect(state(["approve", "requirements-analysis"], p).status).toBe(0);
     }
   }, 30000);
@@ -1450,5 +1563,91 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     const result = state(["finalize", "code-generation"], p);
     expect(result.status).not.toBe(0);
     expect(result.out).toContain("declares a reviewer");
+  }, 30000);
+
+  test("R19: a legacy unit-scoped receipt cannot satisfy the no-DAG stage fallback", () => {
+    const p = projWithState("state-construction-with-worktree.md");
+    const stage = resolveStage("code-generation");
+    if (!stage) throw new Error("code-generation missing from stage graph");
+    const fingerprint = reviewArtifactFingerprint(p, stage, "ghost");
+    if (!fingerprint) throw new Error("could not fingerprint forged unit receipt");
+    const identity = {
+      Stage: "code-generation",
+      Reviewer: "aidlc-architecture-reviewer-agent",
+      Unit: "ghost",
+      Iteration: "1",
+      "Artifact Fingerprint": fingerprint,
+    };
+    appendAuditEntry("REVIEW_REQUESTED", identity, p);
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      { ...identity, Verdict: "READY" },
+      p,
+    );
+
+    const refused = state(
+      ["gate-start", "code-generation"],
+      p,
+      {
+        AIDLC_SKIP_ARTIFACT_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      },
+    );
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("no fresh REVIEW_COMPLETED");
+    expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(0);
+  }, 30000);
+
+  test("R20: a zero-Unit stage-level artifact mutation invalidates the pending review", () => {
+    const p = projWithState("state-construction-with-worktree.md");
+    replaceStateText(
+      p,
+      "### CONSTRUCTION PHASE",
+      "### INCEPTION PHASE\n- [S] units-generation — SKIP\n\n### CONSTRUCTION PHASE",
+    );
+    seedBoltDagBatches(p, [["stale-unit"]]);
+    const outputDir = join(
+      seededRecordDir(p),
+      "construction",
+      "code-generation",
+    );
+    mkdirSync(outputDir, { recursive: true });
+    const summary = join(outputDir, "code-summary.md");
+    writeFileSync(summary, "# Reviewed code summary\n", "utf-8");
+
+    const request = log(
+      [
+        "review",
+        "--stage",
+        "code-generation",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+      ],
+      p,
+    );
+    expect(request.status, request.out).toBe(0);
+
+    writeFileSync(summary, "# Changed after dispatch\n", "utf-8");
+    const verdict = log(
+      [
+        "review",
+        "--stage",
+        "code-generation",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+        "--verdict",
+        "READY",
+      ],
+      p,
+    );
+    expect(verdict.status).not.toBe(0);
+    expect(verdict.out).toContain(
+      "declared artifacts changed after REVIEW_REQUESTED",
+    );
+    expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
   }, 30000);
 });

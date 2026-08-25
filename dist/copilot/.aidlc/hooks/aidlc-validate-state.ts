@@ -14,14 +14,16 @@ import {
   errorMessage,
   getField,
   hooksHealthDir,
+  invalidateActiveDirectiveContext,
   isoTimestamp,
   recordHookDrop,
   recoveryFilePath,
   resolveProjectDirFromHook,
   stateFilePath,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 
-export async function run(_input: string): Promise<number> {
+export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 const stateFile = stateFilePath(projectDir);
 
@@ -33,6 +35,15 @@ writeFileSync(join(healthDir, "validate-state.last"), isoTimestamp(), "utf-8");
 if (!existsSync(stateFile)) return 0;
 
 const content = readFileSync(stateFile, "utf-8");
+try {
+  const payload = JSON.parse(input) as { session_id?: unknown; sessionId?: unknown };
+  const rawSessionId = typeof payload.session_id === "string" ? payload.session_id :
+    typeof payload.sessionId === "string" ? payload.sessionId : undefined;
+  const sessionId = validSessionId(rawSessionId) ?? "";
+  invalidateActiveDirectiveContext(projectDir, content, sessionId);
+} catch {
+  // Missing/malformed or foreign compaction is coordination-neutral.
+}
 
 // Validate state file has required sections
 const missing: string[] = [];

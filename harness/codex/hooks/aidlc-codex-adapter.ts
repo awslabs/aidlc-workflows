@@ -32,6 +32,9 @@
 //   - session-start: the core hook prints
 //     {"additionalContext": "..."}; Codex expects the hookSpecificOutput
 //     wrapper (verified live, findings E1) — the shim re-wraps.
+//   - bind-bash-session: POSIX Bash input is rewritten through
+//     hookSpecificOutput.updatedInput so every command inherits the validated
+//     payload session without process inspection.
 //   - continue-workflow: {"decision":"block","reason"} passes through VERBATIM — the
 //     contract is identical on Codex (stop_hook_active included).
 //   - everything else: advisory; stdout ignored, exit 0.
@@ -41,7 +44,8 @@
 // where <target> ∈ session-start | audit-and-sensors | sync-workflow-state |
 //                  rebuild-stage-graph | validate-state | log-subagent | continue-workflow |
 //                  record-human-turn | state-transition-guard | reviewer-scope |
-//                  review-freeze | deliver-stage-rules | plan-approval-guard
+//                  review-freeze | deliver-stage-rules | plan-approval-guard |
+//                  bind-bash-session
 
 import { createHash } from "node:crypto";
 import {
@@ -57,7 +61,12 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-import { sessionsDir, stateFilePath } from "../tools/aidlc-lib.ts";
+import {
+  isNonAnswer,
+  sessionsDir,
+  stateFilePath,
+  validSessionId,
+} from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -96,6 +105,57 @@ function spawnAgentPrompt(input: CodexSpawnAgentInput): string {
   return parts.join("\n");
 }
 
+function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
+  const offered = new Map<string, Set<string>>();
+  if (toolInput === null || typeof toolInput !== "object") return offered;
+  const questions = (toolInput as Record<string, unknown>).questions;
+  if (!Array.isArray(questions)) return offered;
+  for (const question of questions) {
+    if (question === null || typeof question !== "object") continue;
+    const record = question as Record<string, unknown>;
+    if (typeof record.id !== "string" || !Array.isArray(record.options)) continue;
+    const labels = new Set<string>();
+    for (const option of record.options) {
+      if (typeof option === "string") labels.add(option.trim());
+      else if (option !== null && typeof option === "object") {
+        const candidate = option as Record<string, unknown>;
+        for (const key of ["label", "value", "text"] as const) {
+          if (typeof candidate[key] === "string") labels.add(candidate[key].trim());
+        }
+      }
+    }
+    offered.set(record.id, labels);
+  }
+  return offered;
+}
+
+export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): boolean {
+  if (typeof toolResponse !== "string") return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(toolResponse);
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const response = parsed as Record<string, unknown>;
+  if (Object.keys(response).length !== 1 || !("answers" in response)) return false;
+  const answers = response.answers;
+  if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return false;
+  const selections = Object.entries(answers as Record<string, unknown>);
+  if (selections.length === 0) return false;
+  const offered = offeredOptionLabels(toolInput);
+  return selections.every(([questionId, selection]) => {
+    if (selection === null || typeof selection !== "object" || Array.isArray(selection)) return false;
+    const record = selection as Record<string, unknown>;
+    if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
+    return record.answers.length > 0 && record.answers.every((answer) => {
+      if (typeof answer !== "string" || answer.trim().length === 0) return false;
+      return !isNonAnswer(answer) || offered.get(questionId)?.has(answer.trim()) === true;
+    });
+  });
+}
+
 export async function run(
   target: string,
   input: string,
@@ -117,6 +177,11 @@ const projectDirRaw =
 const projectDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
+const payloadSessionId = validSessionId(codex.session_id);
+if (payloadSessionId) {
+  process.env.AIDLC_SESSION_OVERRIDE = payloadSessionId;
+  process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+}
 const projectEnv = {
   ...process.env,
   AIDLC_PROJECT_DIR: projectDir,
@@ -274,6 +339,15 @@ function wrapContext(coreStdout: string, eventName: string): string {
   return coreStdout;
 }
 
+function wrapUpdatedInput(updatedInput: Record<string, unknown>): string {
+  return `${JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      updatedInput,
+    },
+  })}\n`;
+}
+
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
 
 const heartbeatFile = join(sessionsDir(projectDir), "codex-session.json");
@@ -330,6 +404,32 @@ function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "E
 // --- Targets ------------------------------------------------------------------
 
 switch (target) {
+  case "bind-bash-session": {
+    const command =
+      typeof codex.tool_input?.command === "string"
+        ? codex.tool_input.command
+        : "";
+    if (
+      process.platform === "win32" ||
+      codex.tool_name !== "Bash" ||
+      !payloadSessionId ||
+      !command
+    ) {
+      persistResponse("", 0);
+      return 0;
+    }
+    const prefix =
+      `export AIDLC_SESSION_OVERRIDE='${payloadSessionId}' ` +
+      "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; ";
+    const wrapped = wrapUpdatedInput({
+      ...codex.tool_input,
+      command: command.startsWith(prefix) ? command : `${prefix}${command}`,
+    });
+    persistResponse(wrapped, 0);
+    process.stdout.write(wrapped);
+    return 0;
+  }
+
   case "session-start": {
     reconcilePriorSession();
     // Forward session_id so the core hook's per-session→intent stamp (on
@@ -587,6 +687,13 @@ switch (target) {
   }
 
   case "record-human-turn": {
+    if (
+      codex.tool_name === "request_user_input" &&
+      !hasExplicitHumanSelection(codex.tool_response, codex.tool_input)
+    ) {
+      persistResponse("", 0);
+      return 0;
+    }
     // UserPromptSubmit: a real human acted this turn — record a HUMAN_TURN event
     // in the active intent's audit shard (human-presence gate). Gated on workflow
     // state existing (same self-gate as the core record-human-turn hook) so a prompt in a

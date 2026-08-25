@@ -376,6 +376,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
   test("re-points explicit inline and native agent memory references with the config", () => {
     const root = setup();
     const agents: string[] = [];
+    const shippedAgents = new Map<string, string>();
     for (const base of [".aidlc", ".opencode"]) {
       const dir = join(root, base, "agents");
       mkdirSync(dir, { recursive: true });
@@ -385,6 +386,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
         agent,
       );
       agents.push(agent);
+      shippedAgents.set(agent, readFileSync(agent, "utf-8"));
       const pluginAgent = join(dir, "test-pro-metrics-agent.md");
       writeFileSync(
         pluginAgent,
@@ -392,6 +394,11 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
         "utf-8",
       );
       agents.push(pluginAgent);
+    }
+
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+    for (const [agent, before] of shippedAgents) {
+      expect(readFileSync(agent, "utf-8")).toBe(before);
     }
 
     const written = repointHarnessIncludes(root, "teamB");
@@ -429,13 +436,16 @@ describe("t-active-space-includes: Copilot AGENTS.md and persona rosters", () =>
     seedSpaces(root);
     cpSync(distSurface("copilot", "AGENTS.md"), join(root, "AGENTS.md"));
 
+    const shippedAgents = new Map<string, string>();
     for (const base of [".aidlc", ".github"]) {
       const dir = join(root, base, "agents");
       mkdirSync(dir, { recursive: true });
+      const agent = join(dir, "aidlc-architect-agent.md");
       cpSync(
         distSurface("copilot", base, "agents", "aidlc-architect-agent.md"),
-        join(dir, "aidlc-architect-agent.md"),
+        agent,
       );
+      shippedAgents.set(agent, readFileSync(agent, "utf-8"));
       writeFileSync(
         join(dir, "test-pro-metrics-agent.md"),
         "---\nname: test-pro-metrics-agent\nplugin: test-pro\n---\nRead aidlc/spaces/default/memory/org.md\n",
@@ -448,6 +458,11 @@ describe("t-active-space-includes: Copilot AGENTS.md and persona rosters", () =>
       "---\nname: release-manager\n---\nRead aidlc/spaces/default/memory/org.md\n",
       "utf-8",
     );
+
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+    for (const [agent, before] of shippedAgents) {
+      expect(readFileSync(agent, "utf-8")).toBe(before);
+    }
 
     const written = repointHarnessIncludes(root, "teamB");
     expect(written).toEqual([

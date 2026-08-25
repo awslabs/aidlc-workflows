@@ -22,7 +22,9 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "none (first stage after session start)",
     "outputs": "the per-intent record tree (one dir per in-scope phase + verification dir) and the space-level knowledge/ dir",
@@ -67,7 +69,9 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "none (scans filesystem)",
     "outputs": "workspace classification (greenfield/brownfield), technology stack detection",
@@ -112,7 +116,9 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "workspace classification from workspace-detection, scope from orchestrator",
     "outputs": "<record>/aidlc-state.md (full populated version, engine-resolved)",
@@ -190,16 +196,25 @@
       {
         "id": "claim-sources",
         "path": ".claude/sensors/aidlc-claim-sources.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-provenance",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -262,11 +277,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -346,11 +367,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -424,11 +451,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -499,11 +532,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -580,11 +619,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -684,11 +729,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -732,7 +783,9 @@
       "bugfix",
       "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "<record>/aidlc-state.md",
     "outputs": "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)",
@@ -758,11 +811,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -832,6 +891,7 @@
       "feature",
       "mvp",
       "infra",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -859,11 +919,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -928,7 +994,9 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "reviewer": "aidlc-product-lead-agent",
     "reviewer_max_iterations": 2,
@@ -958,11 +1026,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -1019,6 +1093,7 @@
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-product-lead-agent",
@@ -1049,16 +1124,25 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "traceability",
         "path": ".claude/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
         "matches": "**/traceability.json"
       }
     ]
@@ -1115,6 +1199,7 @@
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-product-lead-agent",
@@ -1145,11 +1230,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -1209,6 +1300,7 @@
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -1239,16 +1331,25 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "traceability",
         "path": ".claude/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
         "matches": "**/traceability.json"
       }
     ]
@@ -1301,6 +1402,7 @@
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -1331,16 +1433,25 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "traceability",
         "path": ".claude/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
         "matches": "**/traceability.json"
       }
     ]
@@ -1389,6 +1500,7 @@
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -1419,11 +1531,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -1496,6 +1614,7 @@
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -1523,11 +1642,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -1618,6 +1743,7 @@
       "feature",
       "mvp",
       "refactor",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -1648,26 +1774,41 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".claude/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".claude/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
       },
       {
         "id": "traceability",
         "path": ".claude/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
         "matches": "**/traceability.json"
       }
     ]
@@ -1751,6 +1892,7 @@
       "mvp",
       "infra",
       "security-patch",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -1781,26 +1923,41 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".claude/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".claude/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
       },
       {
         "id": "traceability",
         "path": ".claude/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
         "matches": "**/traceability.json"
       }
     ]
@@ -1897,6 +2054,7 @@
       "feature",
       "mvp",
       "infra",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -1927,26 +2085,41 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".claude/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".claude/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
       },
       {
         "id": "traceability",
         "path": ".claude/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
         "matches": "**/traceability.json"
       }
     ]
@@ -2049,6 +2222,7 @@
       "feature",
       "mvp",
       "infra",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -2079,26 +2253,41 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".claude/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".claude/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
       },
       {
         "id": "traceability",
         "path": ".claude/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
         "matches": "**/traceability.json"
       }
     ]
@@ -2180,7 +2369,9 @@
       "bugfix",
       "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -2209,21 +2400,33 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".claude/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".claude/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
       },
       {
         "id": "traceability",
         "path": ".claude/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
         "matches": "**/traceability.json"
       }
     ]
@@ -2279,7 +2482,9 @@
       "bugfix",
       "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "ALL code generation outputs across all units",
     "outputs": "build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)",
@@ -2305,16 +2510,25 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "type-check",
         "path": ".claude/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
       }
     ]
@@ -2362,6 +2576,7 @@
       "feature",
       "mvp",
       "infra",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2389,21 +2604,33 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".claude/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".claude/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
       }
     ]
@@ -2454,8 +2681,12 @@
       "enterprise",
       "feature",
       "infra",
+      "bugfix",
+      "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "summary_confirmation": "required",
     "inputs": "CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage",
@@ -2482,11 +2713,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2531,6 +2768,7 @@
       "enterprise",
       "feature",
       "infra",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2558,11 +2796,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2615,8 +2859,12 @@
       "enterprise",
       "feature",
       "infra",
+      "bugfix",
+      "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "summary_confirmation": "required",
     "inputs": "CD pipeline config from deployment-pipeline stage, provisioned environments from environment-provisioning stage, built artifacts from Construction",
@@ -2643,11 +2891,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2706,7 +2960,9 @@
       "enterprise",
       "feature",
       "infra",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "summary_confirmation": "required",
     "inputs": "NFR design from nfr-design stage, infrastructure design from infrastructure-design stage, deployed application",
@@ -2733,11 +2989,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2790,6 +3052,7 @@
     "scopes": [
       "enterprise",
       "feature",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2817,11 +3080,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2876,6 +3145,7 @@
     "scopes": [
       "enterprise",
       "feature",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2903,11 +3173,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2970,6 +3246,7 @@
     "scopes": [
       "enterprise",
       "feature",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2997,11 +3274,17 @@
       {
         "id": "required-sections",
         "path": ".claude/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".claude/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]

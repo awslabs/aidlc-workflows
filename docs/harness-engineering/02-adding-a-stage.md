@@ -111,6 +111,10 @@ wiring, and they must agree with each other:
 - **`produces`** lists the forward edges. When a downstream stage asks "who
   produces artifact Z?", the graph answers via `producersOf()` — so the stage
   that declares `produces: [Z]` is the one that gets wired in upstream of it.
+  Every consumed artifact must resolve to exactly one producer across
+  `produces` and `optional_produces`; `aidlc-graph compile` rejects duplicates
+  and names both producer files. Reusing an artifact name is valid only when no
+  stage consumes it.
 
 Get these three consistent and the compiler places the stage automatically;
 you never edit `stage-graph.json` by hand to position it. The nuances of

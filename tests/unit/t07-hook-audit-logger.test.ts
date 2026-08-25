@@ -68,7 +68,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { docsRoot } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -199,6 +199,25 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     expect(readShards(auditDir)).toContain("ARTIFACT_CREATED");
   });
 
+  test("logs a project-relative record artifact path with a normalized redacted File field", () => {
+    const { auditDir, recordRoot } = seedIntentShard(proj);
+    const absoluteFile = join(
+      recordRoot,
+      "inception",
+      "requirements-analysis",
+      "relative-requirements.md",
+    );
+    mkdirSync(dirname(absoluteFile), { recursive: true });
+    writeFileSync(absoluteFile, "# Requirements\n", "utf-8");
+
+    fire(writeJson(relative(proj, absoluteFile)), proj);
+
+    const audit = readShards(auditDir);
+    const projectRelativeFile = relative(proj, absoluteFile).replace(/\\/g, "/");
+    expect(audit).toMatch(/\*\*Event\*\*: ARTIFACT_(CREATED|UPDATED)/);
+    expect(audit).toContain(`**File**: <project-dir>/${projectRelativeFile}`);
+  });
+
   test("extracts the ideation breadcrumb [.sh test 4]", () => {
     const { auditDir, recordRoot } = seedIntentShard(proj);
     fire(writeJson(join(recordRoot, "ideation", "intent-capture", "intent.md")), proj);
@@ -258,6 +277,10 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-lib.ts"),
       join(proj, ".claude", "tools", "aidlc-lib.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-artifact-vocabulary.ts"),
+      join(proj, ".claude", "tools", "aidlc-artifact-vocabulary.ts"),
     );
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-runtime-paths.ts"),

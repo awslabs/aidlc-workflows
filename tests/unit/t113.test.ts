@@ -196,12 +196,54 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(runStage()).valid).toBe(true);
   });
 
+  test("run-stage accepts validated protocol module hints", () => {
+    expect(
+      errs({
+        ...runStage(),
+        protocol_modules: ["reviewer", "ensemble", "construction"],
+      }),
+    ).toBe("VALID");
+  });
+
+  test("run-stage accepts only literal true for the settled-swarm marker", () => {
+    expect(
+      errs({
+        ...runStage(),
+        protocol_modules: ["construction", "swarm"],
+        swarm_settled: true,
+      }),
+    ).toBe("VALID");
+    expect(errs({ ...runStage(), swarm_settled: false })).toContain(
+      "run-stage: swarm_settled must be true when present",
+    );
+  });
+
+  test("run-stage rejects unknown protocol module hints", () => {
+    expect(
+      errs({
+        ...runStage(),
+        protocol_modules: ["reviewer", "unknown"],
+      }),
+    ).toContain(
+      "run-stage: protocol_modules[1] must be one of reviewer | ensemble | construction | swarm",
+    );
+  });
+
   test("dispatch-subagent well-formed -> VALID", () => {
     expect(validateDirective(dispatchSubagent()).valid).toBe(true);
   });
 
   test("invoke-swarm well-formed -> VALID", () => {
     expect(validateDirective(invokeSwarm()).valid).toBe(true);
+  });
+
+  test("invoke-swarm accepts construction/swarm protocol module hints", () => {
+    expect(
+      errs({
+        ...invokeSwarm(),
+        protocol_modules: ["reviewer", "construction", "swarm"],
+      }),
+    ).toBe("VALID");
   });
 
   // M1: the optional `repo` field (single-recorded-repo case) — the engine
@@ -460,6 +502,14 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     retry.entries[0].review_state =
       "retry-required" as typeof retry.entries[0]["review_state"];
     expect(errs({ ...runStage(), wave: retry })).toBe("VALID");
+
+    for (const state of ["recovery-required", "escalation-required"] as const) {
+      const recovery = structuredClone(wave());
+      recovery.entries[0].build_required = false;
+      recovery.entries[0].review_state =
+        state as typeof recovery.entries[0]["review_state"];
+      expect(errs({ ...runStage(), wave: recovery })).toBe("VALID");
+    }
   });
 
   test("invoke-swarm review_class validates the advisory/adversarial enum", () => {
@@ -670,6 +720,52 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(errs({ ...runStage(), next_stage: 42 })).toContain(
       "run-stage: next_stage must be string or null, got number",
     );
+  });
+
+  test("stage_validity is a valid universal advisory field", () => {
+    const stageValidity = {
+      state: "drifted",
+      directly_stale: ["requirements-analysis"],
+      needs_revalidation: ["code-generation"],
+      untracked: [],
+      earliest_affected_stage: "requirements-analysis",
+      warning: "Routing is continuing in advisory mode.",
+    };
+    for (const directive of [
+      loadSteering(),
+      runStage(),
+      dispatchSubagent(),
+      invokeSwarm(),
+      presentGate(),
+      ask(),
+      print(),
+      error(),
+      done(),
+      parked(),
+    ]) {
+      expect(validateDirective({ ...directive, stage_validity: stageValidity }).valid)
+        .toBe(true);
+    }
+  });
+
+  test("stage_validity rejects malformed machine fields", () => {
+    const e = errs({
+      ...runStage(),
+      stage_validity: {
+        state: "blocking",
+        directly_stale: "requirements-analysis",
+        needs_revalidation: [],
+        untracked: [],
+        earliest_affected_stage: 42,
+        warning: false,
+        extra: true,
+      },
+    });
+    expect(e).toContain("stage_validity unknown key: extra");
+    expect(e).toContain("stage_validity.state must be drifted");
+    expect(e).toContain("stage_validity.directly_stale must be string array");
+    expect(e).toContain("stage_validity.earliest_affected_stage must be string or null");
+    expect(e).toContain("stage_validity.warning must be string");
   });
 
   // ============================================================

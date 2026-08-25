@@ -15,8 +15,9 @@ mode: subagent
 permission:
   task: deny
 ---
+<!-- aidlc-delegated-knowledge-preflight -->
+**Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.aidlc/knowledge/aidlc-shared/`, `.aidlc/knowledge/aidlc-composer-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-composer-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
 
 # Composer Agent
 
@@ -189,7 +190,7 @@ routes on it.
 
 | ARS Range | Workflow Shape | Typical Stage Count | Stock Scope Territory |
 |-----------|---------------|---------------------|-----------------------|
-| 0–20 | Near-direct implementation | 5–8 | poc, bugfix |
+| 0–20 | Near-direct implementation | 5–9 | poc, bugfix |
 | 21–40 | Focused workflow | 8–13 | refactor, security-patch, infra |
 | 41–60 | Standard workflow | 15–22 | mvp, custom |
 | 61–80 | Comprehensive workflow | 22–28 | feature, custom |
@@ -623,6 +624,7 @@ one SHORT line per stage (≤15 words), not a paragraph.
 {
   "mode": "matched | custom | in-flight",
   "scopeName": "<stock name, custom kebab name, or current running scope>",
+  "birthDescription": "<front/report only: nonblank description for intent birth>",
   "ars": {
     "total": 52,
     "iae": 0.35,
@@ -644,6 +646,13 @@ one SHORT line per stage (≤15 words), not a paragraph.
 `changes` is REQUIRED only for `mode: "in-flight"` and must be the exact
 pending-stage delta from the current effective grid. It is omitted for
 front/report proposals.
+
+`birthDescription` is REQUIRED and nonblank for `mode: "matched"` and
+`mode: "custom"`, and omitted for `mode: "in-flight"`. When the dispatch
+contains task text, copy the dispatch's task text exactly without paraphrasing. For report-only
+composition, derive a concise description from the report's actual findings;
+for a task-less front composition, derive it from the proposed work the human
+will approve. Never return a front/report proposal that can only birth by scope.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.

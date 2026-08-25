@@ -28,6 +28,7 @@ scopes:
   - enterprise
   - feature
   - infra
+  - classic
   - workshop
 inputs: Infrastructure design from infrastructure-design stage, CD pipeline config from deployment-pipeline stage
 outputs: environment-inventory.md, validation-report.md, environment-provisioning-questions.md (under this stage's record dir, engine-resolved)
@@ -39,16 +40,12 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-aws-platform-agent persona from `agents/aidlc-aws-platform-agent.md` and knowledge from `{{HARNESS_DIR}}/knowledge/aidlc-aws-platform-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read infrastructure design from `<record>/construction/infrastructure-design/`
 - Read security requirements from `<record>/construction/nfr-requirements/`
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create questions file covering:
 - Are all environments provisioned per Infra Design?
@@ -58,21 +55,21 @@ Create questions file covering:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Provision and Validate
+### Step 3: Provision and Validate
 
 Provision target AWS environments using IaC from Construction. Validate infrastructure configuration. The orchestrator will invoke aidlc-devsecops-agent for security posture validation.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create provisioned environment inventory, infrastructure validation report, secrets & parameter store audit, stack deployment logs, and environment health check results.
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage environment-provisioning --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :cloud:
 Review path: `<record>/operation/environment-provisioning/`
@@ -89,9 +86,10 @@ The imported sensors check those outputs:
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -101,8 +99,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

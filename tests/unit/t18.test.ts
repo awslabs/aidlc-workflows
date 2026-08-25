@@ -299,4 +299,54 @@ describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
       expect(body.includes("## Custom Event")).toBe(true);
     });
   });
+
+  test("append-raw redacts project-prefixed paths in headings and bodies", () => {
+    withProject((proj) => {
+      const r = Bun.spawnSync({
+        cmd: [
+          "bun",
+          TOOL,
+          "append-raw",
+          `Note ${proj}`,
+          `**Details**: ${proj}/private.txt`,
+          "--project-dir",
+          proj,
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(r.exitCode).toBe(0);
+      const body = readAllAuditShards(proj);
+      expect(body).not.toContain(proj);
+      expect(body).toContain("## Note <project-dir>");
+      expect(body).toContain(
+        "**Details**: <project-dir>/private.txt",
+      );
+    });
+  });
+
+  test("append-raw does not redact a string-prefixed sibling path", () => {
+    withProject((proj) => {
+      const sibling = `${proj}-backup`;
+      const r = Bun.spawnSync({
+        cmd: [
+          "bun",
+          TOOL,
+          "append-raw",
+          "Boundary note",
+          `**Details**: ${proj}/private.txt and ${sibling}/copy.txt`,
+          "--project-dir",
+          proj,
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(r.exitCode).toBe(0);
+      const body = readAllAuditShards(proj);
+      expect(body).toContain(
+        `**Details**: <project-dir>/private.txt and ${sibling}/copy.txt`,
+      );
+      expect(body).not.toContain("<project-dir>-backup");
+    });
+  });
 });

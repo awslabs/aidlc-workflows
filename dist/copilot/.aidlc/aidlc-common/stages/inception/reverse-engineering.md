@@ -31,7 +31,9 @@ scopes:
   - bugfix
   - refactor
   - security-patch
+  - classic
   - workshop
+  - express
 inputs: <record>/aidlc-state.md
 outputs: "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)"
 ---
@@ -40,12 +42,14 @@ outputs: "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-over
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
 
-This stage runs `mode: pipeline` (stage-protocol.md §5): a two-link chain in
+This stage runs `mode: pipeline` (stage-protocol-ensemble.md §5): a two-link chain in
 which each link advances the work product directly. The developer lead (link
 1) scans and returns structured results; the architect (link 2, the final
 link) synthesizes those results and writes the 9 artifacts. The final link
-leaving the `produces[]` artifacts complete is the pipeline contract working
-as designed — no contribution files on pipeline stages.
+leaving the `produces[]` artifacts complete plus both tool-owned link receipts
+is the pipeline contract — no contribution files on pipeline stages. On resume,
+read `directive.pipeline.completed` and dispatch only the first missing link;
+multi-repo entries are qualified as `<repo>:<agent>`.
 
 ## Steps
 
@@ -79,6 +83,10 @@ from the intent's registry row before making any reuse or scan decision:
 
 In the steps below, `<repo>` is the repository whose decision or scan is being
 processed.
+
+For each repo selected for scanning, Steps 2-3 are one independent receipt
+chain. Add `--repo <repo>` to both receipt commands when the intent registers
+multiple repos; omit it for a single/unrecorded repo.
 
 #### Rerun guard: check each existing store before scanning
 
@@ -135,6 +143,17 @@ still need scanning. On a scan choice, also record its breadth; that choice
 sets the developer brief, and Step 3's scope block records what the scan
 actually covered.
 
+On an ordinary workflow run, immediately after each human reuse decision,
+record that repo's current-attempt exemption:
+
+```
+bun .aidlc/tools/aidlc-state.ts reuse-artifact reverse-engineering --decision keep --artifacts "<codekb-path output>" --repo <repo>
+```
+
+Use one row per reused registered repo. For an unrecorded single-repo workspace,
+omit `--repo`; for an isolated run, do not mint this main-workflow reuse row.
+The all-reuse routing below is unchanged.
+
 Only after every repository decision has been resolved:
 
 - If every repo is reused on an ordinary workflow run, report the stage as
@@ -146,6 +165,7 @@ Only after every repository decision has been resolved:
   single `report --single --stage "reverse-engineering" --result completed`.
 - If any repo needs scanning, do not report a skip. Proceed to Steps 2-3 for
   only the full/focused scan repos; leave each reused repo's store unchanged.
+  On an isolated run, add `--single` to every link receipt command below.
 
 ### Step 2: Developer Code Scan
 
@@ -173,6 +193,13 @@ whole codebase) for:
 Developer returns structured scan results following the Developer Code Scan
 Template in
 `.aidlc/knowledge/aidlc-developer-agent/re-artifacts.md`.
+
+After the developer return has been read and preserved for the next link, mint
+link 1 before dispatching the architect:
+
+```
+bun .aidlc/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent [--repo <repo>] [--single]
+```
 
 ### Step 3: Architect Synthesis
 
@@ -231,6 +258,15 @@ space-level store shared across every intent in the space. Never substitute
 the intent slug, the record dir, or a hand-composed path for what the tool
 prints.
 
+After the architect return has been read and all 9 artifacts for that repo are
+present, mint the final-link receipt:
+
+```
+bun .aidlc/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-architect-agent [--repo <repo>] [--single]
+```
+
+Do not report completion until every selected repo's chain has both receipts.
+
 ### Step 4: Completion Handoff
 
 After every selected repo scan has completed, hand completion to
@@ -272,9 +308,10 @@ The imported sensors check those outputs:
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -284,8 +321,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

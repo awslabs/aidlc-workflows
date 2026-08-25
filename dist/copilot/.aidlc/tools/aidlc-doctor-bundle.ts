@@ -40,7 +40,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readSync,
   readdirSync,
   realpathSync,
@@ -53,9 +52,9 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, join, sep } from "node:path";
 import {
+  activeSpace,
   auditBlockField,
   auditShardDir,
-  docsRoot,
   harnessDir,
   hooksHealthDir,
   isoTimestamp,
@@ -64,6 +63,7 @@ import {
   parseCheckboxes,
   planFilePath,
   readAllAuditShards,
+  readRegularFileNoFollowOrThrow,
   recordDir,
   recoveryFilePath,
   relativeRecordDir,
@@ -106,13 +106,15 @@ export interface DoctorFinding {
   safeToAutomate: boolean;
 }
 
-// The legacy pass/label/fix row handleDoctor builds today. Kept as the live
-// render's shape; adaptLegacyResult() lifts one into a DoctorFinding so the
-// bundle and the live report share findings without rewriting every check.
+// The legacy pass/label/fix row handleDoctor builds today. Optional id/severity
+// let newer checks preserve structured identity without rewriting older rows.
+// adaptLegacyResult() lifts either shape into a DoctorFinding.
 export interface LegacyDoctorResult {
   pass: boolean;
   label: string;
   fix?: string;
+  id?: string;
+  severity?: Severity;
 }
 
 // Derive a stable, slug-shaped finding id from a legacy label. The label's
@@ -127,21 +129,21 @@ export function findingIdFromLabel(label: string): string {
   return slug.length > 0 ? slug : "check";
 }
 
-// Lift a legacy {pass,label,fix} row into the shared model. A failed row is an
-// error; a passing row with an advisory "(advisory)" tag is a warning; every
-// other passing row is info. A recovery-bypass remedy (names an
-// AIDLC_DISABLE_* env or "archive your workspace") is never safe to automate.
+// Lift a live row into the shared model. Explicit id/severity win; legacy rows
+// derive them from pass/label. A recovery-bypass remedy (names an AIDLC_DISABLE_*
+// env or "archive your workspace") is never safe to automate.
 export function adaptLegacyResult(r: LegacyDoctorResult): DoctorFinding {
   const advisory = /\(advisory\)/i.test(r.label);
-  const severity: Severity = !r.pass ? "error" : advisory ? "warning" : "info";
+  const severity: Severity =
+    r.severity ?? (!r.pass ? "error" : advisory ? "warning" : "info");
   const remedy = r.fix ?? "";
   return {
-    id: findingIdFromLabel(r.label),
+    id: r.id ?? findingIdFromLabel(r.label),
     severity,
     summary: r.label,
     evidence: {},
     remedy,
-    safeToAutomate: severity === "info" ? true : !isRecoveryBypass(remedy),
+    safeToAutomate: !isRecoveryBypass(remedy),
   };
 }
 
@@ -214,6 +216,16 @@ const SECRET_PATTERNS: Array<{ rule: string; re: RegExp; replace: string }> = [
   },
   { rule: "long-hex-or-b64", re: /\b[A-Fa-f0-9]{40,}\b/g, replace: "<redacted-hex>" },
 ];
+
+export function redactSecretPatterns(value: string): string {
+  let out = value;
+  for (const { re, replace } of SECRET_PATTERNS) {
+    re.lastIndex = 0;
+    out = out.replace(re, replace);
+    re.lastIndex = 0;
+  }
+  return out;
+}
 
 // Redact one string: home dir → ~, project root → <project>, seeded ids → their
 // hashes, then the secret scan. Order matters — path normalization first so a
@@ -888,11 +900,28 @@ const AUDIT_EVENT_ALLOWLIST = new Set([
   "SCOPE_DETECTED",
   "SCOPE_CHANGED",
   "RECOMPOSED",
+  "DOCUMENT_INDEXED",
+  "DOCUMENT_UPDATED",
+  "DOCUMENT_REMOVED",
 ]);
 
 // Audit block fields kept per event (structural only — no Details/Request/
 // Reason free text, which can carry paths or decisions).
-const AUDIT_FIELD_ALLOWLIST = ["Event", "Timestamp", "Stage", "Slug", "Phase"];
+// Document identity and digest fields are safe structural evidence. `Source`
+// and `Last Path` are deliberately excluded: they carry customer-chosen
+// filenames, while the diagnostic bundle is redacted by design.
+const AUDIT_FIELD_ALLOWLIST = [
+  "Event",
+  "Timestamp",
+  "Stage",
+  "Slug",
+  "Phase",
+  "Space",
+  "Document",
+  "Change",
+  "Digest",
+  "Last Digest",
+];
 
 export interface NormalizedEvidence {
   state: Record<string, string>;
@@ -1464,8 +1493,8 @@ function readMarkers(projectDir: string): NormalizedEvidence["markers"] {
     }
   }
   const stopDir = stopHookDir(projectDir);
-  const turnCounterPath = join(docsRoot(projectDir), ".aidlc-turn-counter");
-  const latchPath = join(docsRoot(projectDir), ".aidlc-readonly-latch");
+  const turnCounterPath = join(projectDir, "aidlc", ".aidlc-turn-counter");
+  const latchPath = join(projectDir, "aidlc", ".aidlc-readonly-latch");
   return {
     planExists,
     planParseable,
@@ -1528,8 +1557,11 @@ function withinProjectRoot(path: string): boolean {
 function safeRead(path: string): string {
   try {
     if (lstatSync(path).isSymbolicLink()) return "";
-    if (!withinProjectRoot(path)) return "";
-    return readFileSync(path, "utf-8");
+    const real = realpathSync(path);
+    if (!withinProjectRoot(real)) return "";
+    const content = readRegularFileNoFollowOrThrow(real, "doctor input").toString("utf-8");
+    if (!withinProjectRoot(real)) return "";
+    return content;
   } catch {
     return "";
   }
@@ -1551,8 +1583,10 @@ function isSymlink(path: string): boolean {
   }
 }
 
-// Read the audit trail, refusing symlinked shard files. readAllAuditShards uses
-// readFileSync and would follow a symlinked shard, so we gate on the shard dir:
+// Read the audit trail, refusing symlinked intent-shard files. The shared audit
+// reader also validates every space/intent directory component and opens each
+// shard no-follow. Doctor explicitly selects the active space so its export also
+// includes the space-level DocumentKB provenance shard.
 // if ANY entry under it is a symlink, we refuse the whole trail rather than
 // leak a redirected file's normalized fields into the report. Audit content is
 // otherwise only surfaced through the allowlisted extractAuditEvents.
@@ -1571,7 +1605,7 @@ function readAuditSafely(projectDir: string): string {
       return "";
     }
   }
-  return readAllAuditShards(projectDir);
+  return readAllAuditShards(projectDir, undefined, activeSpace(projectDir));
 }
 
 function tryChmod(path: string, mode: number): void {

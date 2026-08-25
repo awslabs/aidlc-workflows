@@ -18,6 +18,7 @@ import {
   recordHookDrop,
   resolveProjectDirFromHook,
   stateFilePath,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
@@ -35,7 +36,9 @@ if (!process.stdin.isTTY) {
       const raw: unknown = JSON.parse(input);
       if (isClaudeCodeHookInput(raw)) {
         if (raw.reason) reason = String(raw.reason);
-        if (typeof raw.session_id === "string") sessionId = raw.session_id;
+        if (typeof raw.session_id === "string") {
+          sessionId = validSessionId(raw.session_id) ?? "";
+        }
       }
     }
   } catch {

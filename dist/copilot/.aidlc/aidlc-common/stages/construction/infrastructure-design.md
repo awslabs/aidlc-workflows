@@ -55,6 +55,7 @@ scopes:
   - feature
   - mvp
   - infra
+  - classic
   - workshop
 inputs: NFR design artifacts, domain design components.md, functional design
 outputs: "infrastructure-specification.md (deployment + services + shared, tabular), monitoring-design.md (tabular), cicd-pipeline.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (a spec unit owes none)"
@@ -75,22 +76,18 @@ This is a design stage — artifacts describe what infrastructure is needed and 
 This stage supports two execution modes, controlled by the orchestrator:
 
 **QUESTION-ONLY mode** (invoked by orchestrator during a Bolt's question phase):
-Execute Steps 1–4 only (load personas, read artifacts, generate questions, collect answers).
+Execute Steps 1–3 only (read artifacts, generate questions, collect answers).
 Do NOT proceed to design or artifact generation. Return control to the orchestrator.
 
 **ARTIFACT-ONLY mode** (invoked by orchestrator during a Bolt's design phase):
-Skip Steps 1–4 (questions already collected and approved).
+Skip Steps 1–3 (questions already collected and approved).
 Read the answered questions file from the per-unit directory.
-Execute Steps 5–8 only (design infrastructure, generate artifacts, update state, completion).
+Execute Steps 4–7 only (design infrastructure, generate artifacts, update state, completion).
 
 **Full mode** (default — single-unit projects or direct stage invocation):
 Execute all steps sequentially as written.
 
-### Step 1: Load Personas
-
-Load aidlc-aws-platform-agent (lead) persona from `agents/aidlc-aws-platform-agent.md` and knowledge from `.aidlc/knowledge/aidlc-aws-platform-agent/`. Load aidlc-devsecops-agent persona from `agents/aidlc-devsecops-agent.md` and knowledge from `.aidlc/knowledge/aidlc-devsecops-agent/` for infrastructure security. Load aidlc-compliance-agent persona from `agents/aidlc-compliance-agent.md` and knowledge from `.aidlc/knowledge/aidlc-compliance-agent/` for data residency and regulatory compliance validation. Apply aidlc-aws-platform-agent as the primary perspective with aidlc-devsecops-agent ensuring infrastructure security and aidlc-compliance-agent ensuring regulatory alignment.
-
-### Step 2: Read Prior Artifacts
+### Step 1: Read Prior Artifacts
 
 Read all prior design artifacts for context:
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
@@ -101,7 +98,7 @@ Read all prior design artifacts for context:
 
 Incremental scopes (infra) skip the domain-design and functional-design chain by design. When those inputs are absent, derive the component topology from the NFR requirements and, on brownfield, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` — never invent the content of a missing artifact.
 
-### Step 3: Generate Infrastructure Questions
+### Step 2: Generate Infrastructure Questions
 
 Create a questions file at `<record>/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
@@ -113,7 +110,7 @@ Focus areas:
 - Secrets management (vault, environment variables, rotation policy)
 - Scaling policy (auto-scaling triggers, capacity limits, cost constraints)
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file). After collecting answers, perform MANDATORY ambiguity analysis:
 - Identify vague answers ("cloud-based", "auto-scale", "standard monitoring")
@@ -122,7 +119,7 @@ Collect answers following stage-protocol.md §3 question flow (offer interaction
 
 If ANY ambiguity found: create follow-up questions and resolve before proceeding.
 
-### Step 5: Design Infrastructure
+### Step 4: Design Infrastructure
 
 Design infrastructure across four areas:
 
@@ -131,7 +128,7 @@ Design infrastructure across four areas:
 - **Monitoring & Observability**: Metrics collection, log aggregation, distributed tracing, alerting rules, dashboards, SLI/SLO tracking
 - **CI/CD Pipeline**: Build stages, test stages, deployment stages, environment promotion, rollback strategy, feature flags, artifact management
 
-### Step 6: Generate Artifacts
+### Step 5: Generate Artifacts
 
 Generate the following in `<record>/construction/{unit-name}/infrastructure-design/`. Keep the content **tabular** — the deployment, services, and shared sections are tables, and monitoring is tabular wherever it can be. Prose is for rationale only, not for data a table can hold.
 
@@ -172,13 +169,13 @@ it to the concrete resource or configuration:
 }
 ```
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .aidlc/tools/aidlc-orchestrate.ts report --stage infrastructure-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 8: Completion
+### Step 7: Completion
 
 Present completion message and approval gate:
 
@@ -210,9 +207,10 @@ Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED`
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -222,8 +220,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

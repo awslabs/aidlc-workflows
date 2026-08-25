@@ -7,10 +7,11 @@ tested software. It covers seven stages (3.1 through 3.7) that span functional
 design, non-functional requirements and design, infrastructure design, code
 generation, build/test verification, and CI pipeline configuration.
 
-Construction is the fourth of five phases in the AI-DLC methodology. It is
-driven by the **execution plan** produced during Delivery Planning (Stage 2.9).
-The plan determines which stages execute, which are skipped, and in what order
-units are built.
+Construction is the fourth of five phases in the AI-DLC methodology. The
+compiled scope grid determines which stages execute and which are skipped.
+Runtime Unit batches come from `unit-of-work-dependency.md` (stage 2.7).
+Delivery Planning (Stage 2.9) produces the approved Bolt plan — planning
+content, not the walk source.
 
 All stages follow `stage-protocol.md` for approval gates, question format,
 completion messages, and state tracking.
@@ -29,32 +30,41 @@ completion messages, and state tracking.
 
 ---
 
-## Bolt-by-Bolt Construction
+## Construction walk
 
-Construction executes **Bolt by Bolt**, driven by `bolt-plan.md` (Bolt
-sequence + walking-skeleton marker) from stage 2.9 and the dependency DAG
-from stage 2.7. A [Bolt](../../guide/glossary.md) is one pass through stages
-3.1–3.5 for a Unit or small group of dependency-linked Units. Stages 3.6
-(Build and Test) and 3.7 (CI Pipeline) run **once** at the end across all
-Bolts.
+A [Bolt](../../guide/glossary.md) is the planned Construction delivery
+slice from Delivery Planning (2.9): one or more Units with a Definition
+of Done, a confidence hypothesis, and ownership. Construction's
+**default walk is stage-major**: one stage runs for every Unit, then the
+next stage, with code-generation last. That walk does not yet treat the
+2.9 plan as a runtime boundary. The opt-in
+`Construction Iteration: unit-major` walk (one Unit through every
+per-unit stage, then the next Unit) is closer to a per-Unit Bolt.
+
+`BOLT_STARTED` / `BOLT_COMPLETED` are emitted on the swarm / worktree
+path; a default gated run does not record them. Runtime batches are
+recomputed from `unit-of-work-dependency.md` (stage 2.7).
+`bolt-plan.md` from stage 2.9 is the planning artifact (sequence,
+per-Bolt DoD, walking-skeleton marker). Walking-skeleton stance
+resolves `org.md` → `team.md` → `project.md` (most-specific non-empty
+statement wins); the bolt-plan marker is advisory against that resolved
+stance (`PRACTICES_OVERRIDE` / `bolt-plan-marker-conflict`). Under the
+default walk, the walking-skeleton gate is the first in-scope
+Construction EXECUTE stage.
+Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** at the
+end across all Units.
 
 ```
-Bolt 1 (walking skeleton) — always gated:
-  Questions (3.1–3.4 across the Bolt's Units in QUESTION-ONLY mode)
-  → Answers gate (Bolt-level)
-  Design artifacts (3.1–3.4 in ARTIFACT-ONLY mode)
-  Code generation (3.5 per Unit via Task delegation)
+Default walk (stage-major):
+  First in-scope Construction EXECUTE stage for every Unit
   → Walking-skeleton gate
-  → Ladder prompt (fires once): "autonomous" or "gated"
-  → Write Construction Autonomy Mode to state
+  → Ladder prompt (fires once): "Continue autonomously" or "Gate every Bolt"
+  Then the next stage for every Unit, code-generation last
 
-Bolt 2..N — autonomy mode governs the gate:
-  (Parallel-eligible Bolts run as a batch; single batch-level gate covers
-   every Bolt in it.)
-  Questions → Answers gate (Bolt-level) → Design → Code-gen → Bolt/batch
-  gate (skipped if autonomous). Failure always halts and asks.
+Opt-in (`Construction Iteration: unit-major`):
+  Each Unit through every per-unit stage, then the next Unit
 
-After all Bolts:
+After all Units:
   3.6 Build and Test (runs once across the full codebase)
   3.7 CI Pipeline    (runs once, conditional)
 ```
@@ -62,9 +72,11 @@ After all Bolts:
 Each design stage file (3.1–3.4) supports QUESTION-ONLY and ARTIFACT-ONLY
 execution modes — see the individual stage files for details. Code Generation's
 Step 3 **Plan Approval always hard-stops before generation**, including during
-Bolt execution. Only its Step 7 per-Unit completion approval gate is
-**suppressed by the engine** during normal Bolt execution; a single Bolt-level
-(or batch-level) completion gate replaces it. The per-Unit completion gate
+Construction. Only its Step 7 per-Unit completion approval gate is
+**suppressed by the engine** during normal Construction; a single stage-level
+completion gate replaces it after the last Unit settles. Under an autonomous
+swarm that gate fires only after the final DAG batch has converged
+(intermediate batches merge without a gate). The per-Unit completion gate
 remains for direct-invocation use (e.g., `/aidlc --stage code-generation`).
 
 **Construction iteration order (opt-in).** By default the engine iterates the
@@ -79,7 +91,8 @@ that Unit's four design documents (3.1 through 3.4) and then generates its code
 Unit's design, not after every Unit's. Code Generation's per-Unit Plan Approval
 (Step 3) still hard-stops before generation, and the autonomous Construction
 swarm never fires while the knob is set (the walk owns the build, serially in
-Bolt build order; parallel batch swarms are stage-major territory). The
+Bolt build order; parallel batches under autonomous swarm mode are stage-major
+territory). The
 per-stage approval gates are unchanged in count and machinery; under unit-major
 they fire late, in stage order, once the whole (stage by Unit) grid — Code
 Generation included — is covered, one human approval per stage.
@@ -108,21 +121,23 @@ current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch
 primitive process the entries serially. See
-`stage-protocol.md` §3 "Per-unit batch waves" for the full contract.
+`stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
 
-**Parallel batches.** When two or more Bolts share dependency-satisfaction
+**Parallel batches.** When two or more Units share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
 Generation stages concurrently by issuing N `Task` calls in a single
-assistant message. One batch-level gate covers them all. Audit events
-(`BOLT_STARTED`, `BOLT_COMPLETED`) carry a `Batch=N` field so siblings are
-recoverable from the log.
+assistant message. Under an autonomous swarm the engine converges every
+DAG batch and then presents **one** Code Generation stage gate —
+intermediate batches merge without a gate. Audit events (`BOLT_STARTED`,
+`BOLT_COMPLETED`) are per Unit/worktree on the swarm path; `SWARM_COMPLETED`
+closes the batch. A default gated run does not record `BOLT_*`.
 
-**Failure handling.** A Bolt failure always halts Construction regardless
-of autonomy mode. Options are retry (re-run just the failed Bolt), skip
-(mark `[S]` and continue — dependent Bolts may also fail), or abort.
+**Failure handling.** A Code Generation failure always halts Construction
+regardless of autonomy mode. Options are retry (re-run just the failed
+Unit), skip (mark `[S]` and continue — dependents may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol.md` §1 "Construction Bolt gates" and
-SKILL.md §CONSTRUCTION Flow for the canonical specification.
+artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates"
+for the canonical specification.
 
 ---
 
@@ -172,14 +187,10 @@ feasibility input.
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-architect-agent (lead) persona and knowledge.
-   Load aidlc-developer-agent persona and knowledge for technical implementation
-   input. Apply aidlc-architect-agent as the primary perspective.
-
-2. **Read Unit Context** -- Read the unit definition, assigned stories,
+1. **Read Unit Context** -- Read the unit definition, assigned stories,
    requirements, and domain design artifacts.
 
-3. **Create Functional Design Plan** -- Analyze the unit's scope and create a
+2. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
    `<record>/construction/{unit-name}/functional-design/functional-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
@@ -194,7 +205,7 @@ feasibility input.
    - Business scenarios (end-to-end user journeys, happy/unhappy paths,
      concurrency edge cases)
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow (offer interaction mode choice, collect
    answers, write back to file). Perform MANDATORY ambiguity analysis:
    - Identify vague answers ("mix of", "not sure", "depends", "probably")
@@ -203,7 +214,7 @@ feasibility input.
    - If ANY ambiguity found: create follow-up questions and resolve before
      proceeding
 
-5. **Generate Artifacts** -- Generate the following in
+4. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/functional-design/`:
    - **functional-spec.md**: Detailed algorithms, workflows, data
      transformations, processing sequences, and decision trees for the unit's
@@ -216,10 +227,10 @@ feasibility input.
      frontend/UI): Component hierarchy, props/state design, interaction flows,
      form validation rules, API integration points
 
-6. **Prepare Completion** -- Verify the unit's Functional Design artifacts.
+5. **Prepare Completion** -- Verify the unit's Functional Design artifacts.
    Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
-7. **Completion** -- Present completion message and approval gate.
+6. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -280,15 +291,10 @@ providing testability and measurability input.
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-architect-agent (lead) persona and knowledge.
-   Load aidlc-devsecops-agent (security requirements), aidlc-compliance-agent
-   (regulatory requirements), and aidlc-quality-agent (testability) personas and
-   knowledge for support input.
-
-2. **Read Prior Artifacts** -- Read functional design artifacts (if they
+1. **Read Prior Artifacts** -- Read functional design artifacts (if they
    exist), requirements, and reverse engineering artifacts.
 
-3. **Assess NFR Categories** -- Analyze the unit across NFR categories:
+2. **Assess NFR Categories** -- Analyze the unit across NFR categories:
    - **Performance**: Response times, throughput, latency targets, resource
      utilization
    - **Security**: Authentication, authorization, data protection, compliance
@@ -298,12 +304,12 @@ providing testability and measurability input.
      data durability
    - **Observability**: Monitoring, logging, alerting, tracing requirements
 
-4. **Generate Questions** -- Create a questions file at
+3. **Generate Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/nfr-requirements/nfr-requirements-questions.md`
    for unclear NFR areas using `[Answer]:` tags. Focus on quantifiable targets
    and specific constraints.
 
-5. **Collect and Analyze Answers** -- Collect answers following
+4. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
    - Identify vague answers ("fast enough", "highly available", "secure")
    - Check for contradictions between NFR targets
@@ -311,7 +317,7 @@ providing testability and measurability input.
    - If ANY ambiguity found: create follow-up questions and resolve before
      proceeding
 
-6. **Generate Artifacts** -- Generate the following in
+5. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/nfr-requirements/`:
    - **performance-requirements.md**: Response time targets, throughput
      requirements, latency budgets, resource constraints, benchmarks
@@ -328,10 +334,10 @@ providing testability and measurability input.
      languages, frameworks, databases, infrastructure tools, and justification
      for each choice
 
-7. **Prepare Completion** -- Verify the unit's NFR Requirements artifacts.
+6. **Prepare Completion** -- Verify the unit's NFR Requirements artifacts.
    Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
-8. **Completion** -- Present completion message and approval gate.
+7. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -393,14 +399,10 @@ infrastructure and platform input.
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-architect-agent (lead) persona and knowledge.
-   Load aidlc-aws-platform-agent persona and knowledge for infrastructure and
-   platform input.
-
-2. **Read Prior Artifacts** -- Read NFR requirements, functional design
+1. **Read Prior Artifacts** -- Read NFR requirements, functional design
    artifacts (if they exist), and domain design for architectural context.
 
-3. **Generate Design Questions** -- Create a questions file at
+2. **Generate Design Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Resilience patterns (circuit breakers, bulkheads, fallback strategies)
@@ -414,7 +416,7 @@ infrastructure and platform input.
    - Logical component boundaries (service isolation, failure domains, blast
      radius)
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
    - Identify vague answers ("mix of", "not sure", "depends", "probably")
    - Check for contradictions between answers
@@ -422,7 +424,7 @@ infrastructure and platform input.
    - If ANY ambiguity found: create follow-up questions and resolve before
      proceeding
 
-5. **Design NFR Solutions** -- Design concrete solutions for each NFR
+4. **Design NFR Solutions** -- Design concrete solutions for each NFR
    category:
    - **Performance**: Caching strategies, query optimization, connection
      pooling, async processing, CDN usage, lazy loading, pagination
@@ -437,7 +439,7 @@ infrastructure and platform input.
      distributed tracing architecture, alerting rules, dashboard specifications,
      SLI/SLO tracking, correlation ID propagation
 
-6. **Generate Artifacts** -- Generate the following in
+5. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/nfr-design/`:
    - **performance-design.md**: Caching architecture, optimization strategies,
      resource pooling, async patterns, performance budgets
@@ -458,10 +460,10 @@ infrastructure and platform input.
      decisions with Infrastructure Design by providing a component-level view
      of where NFR patterns apply.
 
-7. **Prepare Completion** -- Verify the unit's NFR Design artifacts. Do not
+6. **Prepare Completion** -- Verify the unit's NFR Design artifacts. Do not
    edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
-8. **Completion** -- Present completion message and approval gate.
+7. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -524,14 +526,10 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-aws-platform-agent (lead) persona and knowledge.
-   Load aidlc-devsecops-agent (infrastructure security) and aidlc-compliance-agent
-   (data residency, regulatory constraints) personas and knowledge for support input.
-
-2. **Read Prior Artifacts** -- Read all prior design artifacts for context:
+1. **Read Prior Artifacts** -- Read all prior design artifacts for context:
    NFR design, functional design, domain design, NFR requirements.
 
-3. **Generate Infrastructure Questions** -- Create a questions file at
+2. **Generate Infrastructure Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Deployment strategy (containerized, serverless, hybrid, multi-region)
@@ -541,7 +539,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
    - Secrets management (vault, environment variables, rotation policy)
    - Scaling policy (auto-scaling triggers, capacity limits, cost constraints)
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
    - Identify vague answers ("cloud-based", "auto-scale", "standard
      monitoring")
@@ -550,7 +548,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
    - If ANY ambiguity found: create follow-up questions and resolve before
      proceeding
 
-5. **Design Infrastructure** -- Design infrastructure across four areas:
+4. **Design Infrastructure** -- Design infrastructure across four areas:
    - **Deployment Architecture**: Compute model (containers, serverless, VMs),
      networking topology, storage strategy, environment layout
      (dev/staging/prod)
@@ -563,7 +561,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      environment promotion, rollback strategy, feature flags, artifact
      management
 
-6. **Generate Artifacts** -- Generate the following in
+5. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/infrastructure-design/`. Keep the content
    **tabular** (deployment, services, shared, and monitoring are tables):
    - **infrastructure-specification.md**: the core infra design — a
@@ -580,11 +578,11 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      automation integration, deployment strategy (blue-green, canary, rolling),
      rollback procedures, environment promotion, secrets management in CI/CD
 
-7. **Prepare Completion** -- Verify the unit's Infrastructure Design
+6. **Prepare Completion** -- Verify the unit's Infrastructure Design
    artifacts. Do not edit state; report the gate outcome through
    `aidlc-orchestrate.ts`.
 
-8. **Completion** -- Present completion message and approval gate.
+7. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -626,7 +624,7 @@ present only when multiple units share resources.
 | support_agents    | (none -- focused implementation)                                                                  |
 | mode              | subagent (Task tool subagent_type: aidlc-developer-agent)                                               |
 | Inputs            | ALL prior design artifacts for this unit                                                          |
-| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md |
+| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json, plus engine-required companion source-manifest.json |
 
 ### Purpose
 
@@ -641,6 +639,13 @@ the execution plan. Code is written to the workspace root, never to
 - Brownfield: modify files in-place. NEVER create duplicates like
   `ClassName_modified.java`
 - Add `data-testid` attributes to interactive UI elements for test automation
+- Before review, write the engine-required companion `source-manifest.json`
+  listing every application-source path this unit created, modified, or deleted,
+  including files written by shell commands, scaffolding, or generators
+- Measurable quality targets from NFR Requirements, NFR Design, and the Testing
+  Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
+  disable a defined target, including threshold settings in test or build
+  configuration, to make a step pass; surface the gap instead.
 
 ### Inputs
 
@@ -672,28 +677,34 @@ This stage has a **two-part structure**: planning followed by generation.
    with checkboxes for each implementation step. Include story-to-code-step
    traceability -- map each plan step back to the user story it implements.
 
-   **Recommended plan structure** (adapt if architecture warrants different
-   ordering):
+   Run `aidlc-testing-posture.ts render` and paste its complete
+   `## Testing Contract` JSON block into the plan. The resolver reads
+   org/team/project Testing Posture sections additively: a project coverage or
+   integration note remains applicable but does not erase a team methodology;
+   a contradictory narrower methodology is rejected.
 
-   ```
-   Step 1:  Project structure setup (directories, config files, package.json/Cargo.toml/etc.)
-   Step 2:  Data models / database schema / migrations
-   Step 3:  Business logic layer (core domain logic, services)
-   Step 4:  Business logic tests (unit tests for Step 3)
-   Step 5:  API / endpoint layer (routes, controllers, handlers)
-   Step 6:  API tests (unit + integration tests for Step 5)
-   Step 7:  Repository / data access layer (queries, ORM config)
-   Step 8:  Frontend components (if applicable -- UI components, pages, state)
-   Step 9:  Frontend tests (component tests, interaction tests)
-   Step 10: Configuration and environment setup (.env templates, build config)
-   Step 11: Test configuration (vitest.config, jest.config, or equivalent)
-   Step 12: Documentation (inline docs, API docs, README updates)
-   ```
+   The contract supplies a methodology-specific plan profile:
 
-   This layer-by-layer approach ensures dependencies are built before
-   dependents (data models before business logic, business logic before API).
-   Deviate when the architecture requires it (e.g., event-driven systems,
-   microservices with independent stacks).
+   - **TDD** -- Red/Green/Refactor for every applicable testable layer: data,
+     repository, business logic, API, and frontend.
+   - **BDD** -- executable behavior scenarios before an observable feature
+     slice, followed by cross-layer implementation, green scenarios, and
+     refactoring. It is not converted to layer-local TDD.
+   - **ATDD** -- executable acceptance tests before the complete cross-layer
+     feature implementation, followed by acceptance-green and refactoring.
+   - **Custom/mixed** -- the exact affirmed ordering is preserved, including
+     combinations such as scenario-first BDD with lower-level unit tests after
+     implementation.
+   - **Test-after** -- implementation then tests for every applicable testable
+     layer.
+
+   Greenfield plans bootstrap a minimal runnable test command before the first
+   Red/scenario/acceptance step; brownfield plans verify the existing command
+   first. The selected Test Strategy supplies volume/types and the scope adds
+   its floor (coverage/CI, targeted regression, or no additional floor);
+   neither obligation replaces the other. Under Minimal, a bug/security
+   targeted regression may add one integration/E2E test when that is the
+   narrowest level that reproduces the defect.
 
    **Test files are MANDATORY in the plan.** The plan MUST include steps for:
    - Unit test files (one per component/module with key behavior coverage)
@@ -714,29 +725,32 @@ This stage has a **two-part structure**: planning followed by generation.
    - **Standard**: 5-8 tests per component, with key behavior coverage
    - **Comprehensive**: 10-15 tests per component, with thorough coverage
 
-   Include test framework setup and configuration, how to run this unit's
-   tests, expected coverage targets, mocking/stubbing guidance, and test data
-   management. Every run command MUST be scoped to this unit using exact test
-   file paths or an exact unit filter. A bare project-wide command such as
-   `npm test` is not acceptable because Build and Test executes every unit's
-   commands.
+   Include test framework setup and configuration, the exact runnable command
+   available before the first test-first cycle, expected coverage targets,
+   mocking/stubbing guidance, and test data management. Every run command MUST
+   be scoped to this unit using exact test file paths or an exact unit filter.
+   A bare project-wide command such as `npm test` is not acceptable because
+   Build and Test executes every unit's commands.
 
    Present the unit test instruction summary together with the plan summary.
 
 3. **Plan Approval** -- Request approval for both
-   `code-generation-plan.md` and `unit-test-instructions.md`. First create or
-   reset
+   `code-generation-plan.md`, its Testing Contract, and
+   `unit-test-instructions.md`. On a revision, reset the prior `[Answer]:` to
+   blank first. Run `aidlc-testing-posture.ts fingerprint --unit <unit>` after
+   both files are final, then create or reset
    `<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
-   with a **Plan Approval** question and blank `[Answer]:`, then render it as a
-   structured question and stop the turn:
+   with that `[Approval Fingerprint]`, a **Plan Approval** question, and blank
+   `[Answer]:`; render it as a structured question and stop the turn:
    - "Approve Plan" -- proceed to code generation
    - "Request Changes" -- revise the plan
 
    Fill the tag only after the human responds. A request for changes is
-   recorded, both files are revised as needed, and the Plan Approval tag is
-   reset to blank before re-prompting. Any post-approval change to
-   `unit-test-instructions.md` reopens Plan Approval the same way a plan
-   change does. A forwarding-loop continuation is never approval.
+   recorded, both files are revised as needed, the contract/fingerprint are
+   regenerated, and the Plan Approval tag is reset before re-prompting. A
+   post-approval plan/instruction change or Testing Posture/scope/strategy/type
+   change invalidates the fingerprint and reopens approval. A forwarding-loop
+   continuation is never approval.
 
 #### PART 2 -- Generation (Steps 4-7)
 
@@ -752,6 +766,9 @@ This stage has a **two-part structure**: planning followed by generation.
      `AIDLC-UNIT: <directive.unit>` (or the current unit name for a
      single-iteration directive without `unit`). Contextual dependencies do
      not receive additional markers.
+   - As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the
+     approved plan. The dispatch guard rejects missing, different, or stale
+     hashes.
    - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
      from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
      since subagents cannot access conversation history)
@@ -765,19 +782,44 @@ This stage has a **two-part structure**: planning followed by generation.
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
      as completed
+   - The approved Testing Contract is authoritative. The subagent does not
+     independently re-resolve memory; it executes the approved TDD, BDD, ATDD,
+     test-after, or custom/mixed profile exactly.
+   - Measurable quality targets from NFR Requirements, NFR Design, and the
+     Testing Contract coverage floor are inputs, not suggestions. The subagent
+     must NEVER relax, lower, or disable a defined target, including threshold
+     settings in test or build configuration, to make a step pass; it must
+     surface the gap instead.
 
    **Context budget:** Pass only the current unit's design artifacts, not all
    units. Summarize inception artifacts with file paths rather than embedding
    full content. The subagent generates all code, test files, and
    configuration artifacts in the workspace.
 
-5. **Generate Code Summary** -- After subagent completes, create
+5. **Generate Code Summary and Source Manifest** -- After the subagent
+   completes, create
    `<record>/construction/{unit-name}/code-generation/code-summary.md`
    documenting:
    - Files created/modified
    - Key implementation decisions
    - Test coverage summary
    - Any deviations from the plan
+
+   Also create
+   `<record>/construction/{unit-name}/code-generation/source-manifest.json`.
+   This is a strict version-1 JSON companion file, not a declared `produces[]`
+   artifact. It records `stage: "code-generation"`, the exact unit name, and a
+   `writes` array containing every application-source path the unit created,
+   modified, or deleted, including shell-, scaffolding-, and generator-written
+   files. Paths are POSIX-relative and use no globs or `..`; a trailing `/`
+   claims a generated directory tree. In a main-workspace multi-repo run every
+   entry names its recorded `repo`; inside the worktree hosting the Bolt, paths are relative
+   to that selected repo and omit `repo`.
+
+   The engine validates this schema and refuses to record a terminal per-unit
+   review without it. Its bytes and claims join the `Unit Source Fingerprint`;
+   changed stage-source paths outside all fresh reviewed manifests block
+   completion.
 
 6. **Prepare Completion** -- Verify the unit's code and summary artifacts.
    Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
@@ -792,6 +834,8 @@ This stage has a **two-part structure**: planning followed by generation.
 | code-generation-questions.md | Persisted Plan Approval question and explicit human answer       |
 | unit-test-instructions.md | Per-unit setup, scoped run commands, coverage, mocks, and test data |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
+| traceability.json         | Structured coverage of assigned upstream IDs by code/test targets   |
+| source-manifest.json      | Engine-required strict companion attribution index; deliberately not in `produces[]` |
 | (application code)        | All source code, tests, and config written to workspace root        |
 
 ### Approval Gate
@@ -816,6 +860,11 @@ Strictly 2-option: Approve / Request Changes.
 - **Mandatory test file inclusion**: Test files MUST be part of the code
   generation plan. Stage 3.6 (Build and Test) verifies and extends tests but
   does not create them from scratch.
+- **Source-manifest enforcement**: `source-manifest.json` is engine-validated,
+  not a Markdown `required-sections` target. Its strict schema and
+  `Unit Source Fingerprint` bind every exact/directory source claim; the engine
+  refuses the terminal review when it is absent or invalid and refuses stage
+  completion for changed source outside the fresh reviewed claims union.
 - **Unit-scoped execution**: Each per-unit test instruction file uses exact
   test paths or an exact unit filter so the cross-unit execution stage does
   not rerun the project-wide suite for every unit.
@@ -854,20 +903,21 @@ with the aidlc-devsecops-agent providing security testing expertise.
   `<record>/construction/*/code-generation/code-summary.md`
 - Per-unit test instructions from
   `<record>/construction/*/code-generation/unit-test-instructions.md`
-- NFR requirements across units (if they exist) for performance and security
-  testing needs
+- Every applicable artifact under each unit's `nfr-requirements/` and
+  `nfr-design/` directory
+- Every approved `## Testing Contract` in the stage-level or per-unit
+  `code-generation-plan.md`
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-quality-agent (lead) persona and knowledge. Load
-   aidlc-devsecops-agent persona and knowledge for security testing input.
+1. **Analyze Testing Requirements** -- Read code generation summaries and
+   per-unit test instructions across all units. Build a source-complete
+   inventory of every measurable target from NFR Requirements, NFR Design, and
+   every approved Testing Contract. For each target, record a stable ID, source
+   path/section, expected value, the check that produces its actual value, and
+   any later validation stage that owns it. Catalog all required test types.
 
-2. **Analyze Testing Requirements** -- Read code generation summaries and
-   per-unit test instructions across all units. Review NFR requirements (if
-   they exist) to identify performance and security testing needs. Catalog
-   all test types required.
-
-3. **Generate Build Instructions** -- Create
+2. **Generate Build Instructions** -- Create
    `<record>/construction/build-and-test/build-instructions.md`:
    - Dependency installation steps
    - Environment setup (env vars, config files, local services)
@@ -875,7 +925,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
    - Build verification steps
    - Troubleshooting common build issues
 
-4-8. **Generate Additional Test Instructions** -- Consult the active test
+3-7. **Generate Additional Test Instructions** -- Consult the active test
    strategy and generate the matching cross-unit instruction files:
    - **Minimal**: Generate no additional files. Unit tests are covered
      per-unit by Code Generation.
@@ -891,15 +941,19 @@ with the aidlc-devsecops-agent providing security testing expertise.
    Each file includes framework setup, run commands and filters, coverage
    targets, and test data or environment setup.
 
-9. **Generate Build and Test Summary** -- Create
+8. **Generate Build and Test Summary** -- Create
    `<record>/construction/build-and-test/build-and-test-summary.md`:
    - Overall build status and prerequisites
    - Test type inventory (which test types were generated)
    - Coverage expectations per unit
+   - A Target Verification Matrix with Target ID, Source, Expected, Actual,
+     Evidence, Owning Stage, and Verdict
+   - Applicable targets begin `Pending`; `N/A` is valid only when the
+     source-complete inventory found no applicable measurable target
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 
-10. **Execute Build and Tests** -- Attempt to execute the build and test
+9. **Execute Build and Tests** -- Attempt to execute the build and test
     commands documented in the instruction files **via Bash**:
 
     a. **Build**: Run the build commands from build-instructions.md via Bash.
@@ -911,29 +965,100 @@ with the aidlc-devsecops-agent providing security testing expertise.
        never once per unit. Report per-unit pass/fail without double counting.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
-    d. **Report results**: Create or update
-       `<record>/construction/build-and-test/test-results.md` with:
+    d. **Other applicable checks**: Run every applicable command from
+       performance, security, contract, E2E, accessibility, and other generated
+       instruction files. Defer only a check that requires a deployed or
+       production-like environment and has a named owning validation stage in
+       the current execution plan. Record that stage and its expected evidence
+       path; the target remains `Unverified` and cannot make this stage
+       successful. Without a scheduled owning stage, it is simply
+       `Unverified`.
+    e. **Finalize and report results**: Create or update
+       `<record>/construction/build-and-test/test-results.md` and
+       `build-and-test-summary.md` on every exit path with:
        - Build status (success/failure + output)
        - Test results (total, passed, failed, skipped)
        - Failure details (test name, assertion, stack trace)
        - Coverage report (if test framework supports it)
+       - The finalized Target Verification Matrix. Every applicable target has
+         an actual value, evidence, owning stage, and final `Met`, `Not Met`, or
+         `Unverified` verdict. No `Pending` verdict remains after Step 9.
+       - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires
+         a loop-back): one `### Loop-back N -- <ISO timestamp>` entry per
+         attempt (Diagnosis / Root-cause stage / Planned fix / Estimated impact).
+         Append-only; survives re-runs (Modify, never Redo, on loop-back
+         re-entry).
 
-    **Failure diagnosis loop (2 attempts):** On failure, if build or tests
-    fail, attempt to diagnose and fix the issue:
-    - Read the error output
-    - Identify the failing code
-    - Apply the fix
-    - Re-run the failing step
-    - If unable to fix after 2 attempts, log the failure in test-results.md
-      and present the issue to the user at the approval gate
+    **Failure-escalation ladder:** The stage has failed when a build or test
+    command fails or an applicable target is `Not Met` or `Unverified`. Finalize
+    the matrix and summary before entering the same ladder for every failure
+    kind. Lowering, relaxing, or disabling a target is never an acceptable fix.
 
-    **On success:** Update the Build and Test Summary with actual results (not
-    just instructions).
+    1. **In-stage fix (max 2 attempts)** -- for root causes inside this
+       stage's own remit (test config, build scripts, environment setup, or an
+       executable target check): read the evidence, identify the failing
+       configuration or scaffolding, apply the fix, re-run the failing step,
+       and refresh the target matrix.
+    2. **Classify and estimate impact** -- when in-stage attempts are exhausted or the
+       diagnosis points upstream: decide whether the root cause lies in
+       generated source or test code -- regardless of defect size -- or a
+       code-generation approach choice (library/version, container image,
+       instance type, algorithm, flag); find a fix in a swappable dimension
+       and ESTIMATE ITS IMPACT (effort, financial cost, risk). Never declare a
+       feasible path out of scope on an impact-unestimated effort assumption.
+    3. **Autonomous bounded loop-back** -- if `Construction Autonomy Mode:
+       autonomous`, an impact-estimated fix exists, and fewer than 3 entries exist under
+       `## Loop-Back Log`: record the diagnosis + impact-estimated fix, jump
+       back to code-generation via the engine, and replay forward through its
+       settlement-aware route per the construction protocol module
+       (`aidlc-common/protocols/stage-protocol-construction.md`),
+       "Build-and-Test failure loop-back". The failed run's gate is not
+       presented; its learnings ritual defers to the eventual passing run.
+    4. **Halt-and-ask** -- gated/unset mode, bound exhausted, or no
+       identifiable fix: log the failure and present the halt-and-ask
+       question from the construction protocol module
+       (`aidlc-common/protocols/stage-protocol-construction.md`) -- the
+       impact-estimated 3-option variant (Retry with fix [estimated impact] /
+       Accept failure / Abort) when a candidate fix exists, or the no-fix
+       2-option variant (Accept failure / Abort) when rung 2 found none.
 
-11. **Prepare Completion** -- Verify the build/test evidence. Do not edit
+    **Loop-back replay routing:** If Code Generation never used unit lifecycle
+    receipts, preserved artifacts can take the all-covered `gate: true` fast
+    path; apply the planned fix and deterministic Modify/Keep decisions before
+    that gate. Once any lifecycle row exists, receipt mode is sticky and the
+    jump re-emits per-Unit work: re-mint `unit start` / `unit complete`, apply
+    Modify to targeted Units and Keep to the rest, and run the declared reviewer
+    per Unit. Both paths MUST record a fresh current-attempt
+    `REVIEW_COMPLETED` for every applicable Unit before the settle/approval
+    gate because `STAGE_JUMPED` invalidates all earlier reviews. Under
+    unit-major the autonomous swarm never fires; the replay follows the serial
+    per-Unit walk and still needs no extra human turn.
+
+    The replay repairs the already-approved Code Generation plan. Preserve its
+    Plan Approval `[Answer]:`, record the delta in the Loop-Back Log, and treat
+    gated "Retry with fix" as the human's re-approval of the revised approach.
+
+    **Swarm cheap path:** A jump creates a new exact stage-attempt `Run floor`
+    boundary token, so stale convergence rows cannot count. Discard stale
+    worktrees/branches and run a fresh `prepare`; they cannot be adopted into
+    the new attempt because `finalize` requires its current prepare stamp. Run
+    `check` first. A green Unit can skip a builder turn, but it still needs a
+    terminal current-attempt reviewer receipt in the fresh worktree before it
+    enters `finalize --claimed`; `finalize` verifies that receipt's current
+    artifact fingerprint as well as the attempt stamp.
+
+    Single-stage runs (`--single`) stop at rung 2 -- there is no
+    main-workflow position to move; the impact-estimated options are logged and
+    presented in that run's isolated-run summary.
+
+    **On success:** A successful readiness result requires every command to
+    pass and every applicable target to be `Met`, or the single explanatory
+    `N/A` row when no target applies.
+
+10. **Prepare Completion** -- Verify the build/test evidence. Do not edit
     stage or phase state; the reported gate outcome owns the transition.
 
-12. **Completion** -- Present completion message and approval gate.
+11. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -959,10 +1084,19 @@ Strictly 2-option: Approve / Request Changes.
   instructions -- it actually runs the build and test commands via Bash and
   captures real results. This is one of the few stages that executes
   real commands against the codebase.
-- **Failure diagnosis loop**: The stage attempts to automatically diagnose and
-  fix failures, with a maximum of 2 attempts. If the fix fails after 2
-  attempts, the failure is logged and surfaced to the user at the approval
-  gate.
+- **Quality target evidence**: The source-complete matrix is finalized on every
+  exit path. Deployed-environment checks may name a later owning stage, but
+  remain `Unverified`; `Not Met` and `Unverified` both enter the failure ladder.
+- **Failure-escalation ladder**: In-stage fixes are bounded at 2 attempts;
+  when the root cause lies upstream in generated code or a code-generation
+  approach choice, the stage classifies and estimates the impact of a fix, then either runs
+  the bounded autonomous loop-back to code-generation (max 3, counted by the
+  append-only `## Loop-Back Log` in test-results.md) or presents the impact-estimated
+  halt-and-ask question. See the construction protocol module
+  (`aidlc-common/protocols/stage-protocol-construction.md`),
+  "Build-and-Test failure loop-back". Re-entry is settlement-aware, preserves
+  the approved plan, and cannot reach its gate until every applicable Code
+  Generation Unit has a fresh current-attempt review.
 - **Conditional test types**: Performance tests, security tests, contract
   tests, E2E tests, and accessibility tests are only generated when relevant
   conditions are met (NFR requirements exist, microservice architecture,
@@ -1008,13 +1142,10 @@ leads with no support agents.
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-pipeline-deploy-agent persona and
-   knowledge.
-
-2. **Load Prior Context** -- Read build/test results, infrastructure design
+1. **Load Prior Context** -- Read build/test results, infrastructure design
    (if exists), and workspace profile for existing CI configuration.
 
-3. **Generate Clarifying Questions** -- Create
+2. **Generate Clarifying Questions** -- Create
    `<record>/construction/ci-pipeline/ci-pipeline-questions.md` with
    questions:
    - What CI tool is in use (CodePipeline, CodeBuild, GitHub Actions,
@@ -1025,24 +1156,24 @@ leads with no support agents.
 
    Follow stage-protocol.md question flow.
 
-4. **Collect and Analyze Answers** -- Validate CI choices against existing
+3. **Collect and Analyze Answers** -- Validate CI choices against existing
    infrastructure and team capabilities.
 
-5. **Generate Artifacts** -- Create CI pipeline configuration (buildspec.yml,
+4. **Generate Artifacts** -- Create CI pipeline configuration (buildspec.yml,
    workflow YAML, or equivalent), quality gate definitions, and artifact
    repository configuration.
 
-6. **Phase Boundary Verification** -- Run Construction-to-Operation
+5. **Phase Boundary Verification** -- Run Construction-to-Operation
    verification check:
    - Architecture-to-code-to-tests alignment
    - All code traces to design
    - Test coverage against acceptance criteria
    - Write results to `<record>/verification/phase-check-construction.md`
 
-7. **Prepare Completion** -- Verify the CI and boundary artifacts. Do not
+6. **Prepare Completion** -- Verify the CI and boundary artifacts. Do not
    edit stage or phase state; the reported gate outcome owns the transition.
 
-8. **Completion** -- Present completion message and approval gate.
+7. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -1095,7 +1226,9 @@ through a phased construction flow:
 **Key characteristics:**
 - Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 ALWAYS execute; 3.7 is CONDITIONAL
 - All conditional stages follow the execution plan from Delivery Planning
-- Per-unit loop ensures one unit completes fully before the next begins
+- Default walk is stage-major (a stage for every Unit, then the next stage);
+  the opt-in `unit-major` walk runs one Unit through every per-unit stage
+  before the next Unit begins
 - NFR artifacts use expanded granularity (6 files for requirements, 6 for
   design) compared to the upstream reference
 - Infrastructure Design is expanded to 5 artifacts with dedicated monitoring

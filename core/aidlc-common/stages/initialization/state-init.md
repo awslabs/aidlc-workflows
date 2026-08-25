@@ -20,7 +20,9 @@ scopes:
   - refactor
   - infra
   - security-patch
+  - classic
   - workshop
+  - express
 inputs: workspace classification from workspace-detection, scope from orchestrator
 outputs: <record>/aidlc-state.md (full populated version, engine-resolved)
 ---
@@ -102,9 +104,10 @@ fields) would land as its own manifest, imported here via `sensors:`.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why

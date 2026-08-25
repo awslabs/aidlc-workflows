@@ -22,23 +22,23 @@ adds:
     - "API Positive and Negative"
     - "Requirement Traceability"
 fragments:
-  - anchor: after-step:9
+  - anchor: after-step:8
     order: 100
-  - anchor: after-step:9
+  - anchor: after-step:8
     order: 110
-  - anchor: after-step:9
+  - anchor: after-step:8
     order: 120
-  - anchor: after-step:10
+  - anchor: after-step:9
     order: 130
-  - anchor: after-step:10
+  - anchor: after-step:9
     order: 140
   - anchor: in:Sensors
     order: 150
 ---
 
-## fragment: after-step:9
+## fragment: after-step:8
 
-### Step 9a (test-pro): Branch + coverage enrichment
+### Step 8a (test-pro): Branch + coverage enrichment
 
 Enable BRANCH coverage in the test runner (not just line coverage). Raise
 per-component coverage targets to the `## Coverage Targets` declared in
@@ -46,27 +46,27 @@ per-component coverage targets to the `## Coverage Targets` declared in
 `test-pro-branch-coverage-instructions.md` with a `## Branch Coverage` section
 covering every decision point (if/else, switch, ternary, short-circuit).
 
-## fragment: after-step:9
+## fragment: after-step:8
 
-### Step 9b (test-pro): Edge & boundary tests
+### Step 8b (test-pro): Edge & boundary tests
 
 For each input domain, generate edge tests: off-by-one, ±min and ±max,
 empty/null/zero, overflow, and just-inside/just-outside boundaries. Write
 `test-pro-edge-case-instructions.md` with a `## Edge Cases` section enumerating
 the boundary tests per component.
 
-## fragment: after-step:9
+## fragment: after-step:8
 
-### Step 9c (test-pro): API positive + negative
+### Step 8c (test-pro): API positive + negative
 
 If the unit exposes an API, generate BOTH positive (happy-path 2xx) and negative
 tests (4xx/5xx, malformed payload, auth failure, rate-limit, schema violation)
 for each endpoint/contract. Write `test-pro-api-contract-instructions.md` with a
 `## API Positive and Negative` section.
 
-## fragment: after-step:10
+## fragment: after-step:9
 
-### Step 10a (test-pro): Regression suite + requirement traceability
+### Step 9a (test-pro): Regression suite + requirement traceability
 
 Assemble the union of unit, functional, integration, edge, and API tests into a
 named regression suite manifest (`test-pro-regression-suite.md`). Build a
@@ -76,9 +76,9 @@ test ids, under a `## Requirement Traceability` table:
 `| requirement-id | test-ids | status |`. Any requirement with no covering test
 is a gap to flag.
 
-## fragment: after-step:10
+## fragment: after-step:9
 
-### Step 10b (test-pro): Emit machine-readable results
+### Step 9b (test-pro): Emit machine-readable results
 
 After executing the build and tests, emit two machine-readable JSON files the
 advisory test-pro sensors read. These are sensor SIDE-INPUTS, not stage

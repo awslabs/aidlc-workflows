@@ -4,7 +4,7 @@
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
 on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot: 14 agents
-(11 domain experts, 2 reviewers, and the composer), 33 stages, 9 scopes, a set
+(11 domain experts, 2 reviewers, and the composer), 33 stages, 11 scopes, a set
 of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
 a domain the framework doesn't cover, tighten a scope, teach the framework a
@@ -63,11 +63,11 @@ inputs that steer it.
 Everything else a harness engineer configures hangs off these two:
 
 - **Scopes** decide *which* stages run for a given kind of work (a bugfix runs
-  7 of 33 stages; an enterprise feature runs all of them).
+  9 of 33 stages; an enterprise feature runs all of them).
 - **Rules** are standing decisions that travel into every workflow — your
   team's "always do it this way."
-- **Sensors** are deterministic checks bound to stages — an advisory second
-  opinion that fires on every file write.
+- **Sensors** are deterministic checks bound to stages — they run on matching
+  writes or at the approval gate, where a binding may be advisory or blocking.
 - **Knowledge** is the domain context agents load before they work.
 
 ---
@@ -101,10 +101,13 @@ author in `core/`.
 ## Naming rules and where they are enforced
 
 Stage filename stems must equal frontmatter `slug`; `aidlc-graph compile` rejects
-stem mismatches and duplicate stage slugs as hard errors. Sensor filename/id
-checks are compile-time hard errors. Scope and agent duplicate declared names are
-loader errors that name both files; scope/agent filename-to-name drift is reported
-by `/aidlc --doctor` as an advisory so authors can rename the file or fix `name`.
+stem mismatches, duplicate stage slugs, and multiple producers for any consumed
+artifact as hard errors. The duplicate-producer error names the producing stage
+files and one consumer; shared artifact names remain valid when no stage consumes
+them. Sensor filename/id checks are compile-time hard errors. Scope and agent
+duplicate declared names are loader errors that name both files; scope/agent
+filename-to-name drift is reported by `/aidlc --doctor` as an advisory so authors
+can rename the file or fix `name`.
 
 ---
 
@@ -182,14 +185,16 @@ Read it in order the first time:
    context.
 8. **[Construction and the Swarm](08-construction-and-swarm.md)** — set the
    team's Construction autonomy posture in the rule layer, and shape what the
-   per-Unit Bolt swarm can run in parallel through `units-generation`.
+   per-Unit Bolts in an autonomous swarm can run in parallel through
+   `units-generation`.
 9. **[Porting to a New Harness](09-porting-to-a-new-harness.md)** — add another
    CLI harness with one `harness/<name>/` directory and a manifest row, no
    `core/` edits: the manifest contract, the hook adapter, and `emit.ts`.
 10. **[Authoring a Plugin](10-authoring-a-plugin.md)** — package a reusable,
     optional **AIDLC plugin** in `plugins/<name>/`: new stages/agents/scopes/
-    sensors + additive contributions to existing core stages, emitted as a real
-    host plugin per harness. Design in the Developer Reference's single chapter
+    sensors/doctor checks + additive contributions to existing core stages,
+    emitted as a real host plugin per harness. Design in the Developer
+    Reference's single chapter
     ([18 mechanism](../reference/18-plugin-mechanism.md)).
 
 ## Next

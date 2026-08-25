@@ -55,7 +55,7 @@ const TASK =
 
 const STOCK_SCOPES = new Set([
   "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
-  "security-patch", "workshop",
+  "security-patch", "classic", "workshop", "express",
 ]);
 
 function skipReason(): string | null {
@@ -86,7 +86,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
       try {
         const scopesDir = join(root, ".kiro", "scopes");
         const gridPath = join(root, ".kiro", "tools", "data", "scope-grid.json");
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(9);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
 
         // --- turn 1: compose -> proposal -> gate (turn ends at the ask) -----
         const r1 = await driveKiroAcp({
@@ -97,7 +97,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           keepAlive: true,
         });
         // No write and no birth before approval (P0's no-write contract).
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(9);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
 
         // --- turn 2: approve -> composer writes -> same-turn birth ----------
         const r2 = await driveKiroAcp({
@@ -120,9 +120,9 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(10);
+        expect(scopeFiles.length).toBe(12);
         const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<string, unknown>;
-        expect(Object.keys(grid).length).toBe(10);
+        expect(Object.keys(grid).length).toBe(12);
         const composed = Object.keys(grid).find((k) => !STOCK_SCOPES.has(k));
         expect(composed).toBeDefined();
 

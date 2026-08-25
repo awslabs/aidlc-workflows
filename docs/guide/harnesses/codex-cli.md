@@ -90,6 +90,10 @@ git checkout v2
    do not append a second copy because duplicate TOML tables invalidate the
    entire config.
 
+   Re-run this trust command whenever an AI-DLC upgrade changes `.codex/hooks.json`,
+   including upgrades that add a new matcher. Replace the old tables before
+   opening a fresh Codex session; otherwise Codex silently skips the new hook.
+
 4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), merge
    the shipped `.codex/config.toml` into your `~/.codex/config.toml` (or keep
    it project-level — trusted projects read it). Verify with:
@@ -122,7 +126,8 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   `config.toml` (linked worktrees resolve into `<main>/.git/worktrees/*`,
   so it must be the main repo's `.git`).
 - **Swarm floor = `codex exec` workers** — one headless worker per
-  Construction unit in its Bolt worktree (always `< /dev/null`), with the
+  emitted Construction Unit in the isolated worktree for that Unit's Bolt
+  (always `< /dev/null`), with the
   same deterministic referee. `AIDLC_USE_SWARM=1` has no Workflow tool here
   and loud-degrades (`SWARM_DEGRADED` is audited).
 - **Session lifecycle**: Codex has no SessionEnd event; an unclosed session

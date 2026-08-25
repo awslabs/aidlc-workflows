@@ -51,6 +51,13 @@ import { augmentDispatchRules } from "../../dist/claude/.claude/hooks/aidlc-deli
 const BUN = process.execPath;
 const UTILITY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const AUTHORED_ORG_MD = join(REPO_ROOT, "core", "memory", "org.md");
+const AUTHORED_STAGE_PROTOCOL = join(
+  REPO_ROOT,
+  "core",
+  "aidlc-common",
+  "protocols",
+  "stage-protocol.md",
+);
 
 /** The four rules' stable lead-ins. Deliberately the bold label only: the bodies
  *  are prose a maintainer may reword, but a MISSING or RENAMED rule is a
@@ -241,6 +248,51 @@ describe("t266 conversation-language rule layer", () => {
     }
   });
 
+  test("b: what-to-localize covers conversational output and structured-question prose", () => {
+    const entries = sectionEntries(readFileSync(AUTHORED_ORG_MD, "utf-8"), "Mandated");
+    const rule = entries.find((entry) =>
+      entry.startsWith("**Conversation language — what to localize**"),
+    );
+    expect(rule, "the what-to-localize rule exists").toBeDefined();
+    for (const required of [
+      "agent's own human-facing conversational output",
+      "orchestrator and delegated agents alike",
+      "conversational chat messages",
+      "status updates",
+      "progress reports",
+      "transitional narration between tool calls",
+      "`prompt`",
+      "`header`",
+      "`options[].description`",
+      "free-text follow-ups",
+      "`options[].label` literals the protocol spells verbatim are preserved tokens",
+    ]) {
+      expect(rule!.includes(required), `what-to-localize rule names: ${required}`).toBe(true);
+    }
+  });
+
+  test("b: structured questions localize prose while preserving verbatim labels", () => {
+    const body = readFileSync(AUTHORED_STAGE_PROTOCOL, "utf-8");
+    const start = body.indexOf("### Structured questions (harness-neutral contract)");
+    const end = body.indexOf("\n### ", start + 4);
+    expect(start, "the structured-questions section exists").toBeGreaterThan(-1);
+    const section = body.slice(start, end === -1 ? body.length : end);
+
+    expect(section).toContain("The `prompt`, `header`, and `options[].description` fields");
+    expect(section).toContain("plus any free-text follow-up");
+    expect(section).toContain("render them in the\nresolved conversation language");
+    expect(section).toContain("An `options[].label` literal that this\nprotocol spells verbatim");
+    for (const label of [
+      "`Approve`",
+      "`Request Changes`",
+      "`Accept as-is`",
+      "`X. Other (please specify)`",
+    ]) {
+      expect(section, `structured-question contract preserves ${label}`).toContain(label);
+    }
+    expect(section).toContain("is a preserved token and\nstays English");
+  });
+
   // === (c) DELEGATED EXECUTION =============================================
   test("c: a delegated dispatch is rewritten to carry all four rules", () => {
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t266-"));
@@ -274,11 +326,12 @@ describe("t266 conversation-language rule layer", () => {
   // === (c2) HARNESS DELIVERY ===============================================
   // (c) proves the hook rewrite path, but only through the CLAUDE copy of the
   // hook. Claude, Codex, and opencode all use that path; Kiro CLI has no
-  // input-rewrite channel and Kiro IDE cannot expose tool arguments at all, so
-  // both rely on PRELOAD instead. Two ways this could silently regress while
-  // (c) stays green: a harness ships a stale or diverged hook, or a Kiro
-  // manifest stops projecting the memory glob. Check the delivered artifact
-  // itself in both cases rather than its mere presence.
+  // input-rewrite channel, and Kiro IDE does not register this hook because
+  // tool-argument delivery is not uniform across supported generations, so both
+  // rely on PRELOAD instead. Two ways this could silently regress while (c)
+  // stays green: a harness ships a stale or diverged hook, or a Kiro manifest
+  // stops projecting the memory glob. Check the delivered artifact itself in
+  // both cases rather than its mere presence.
   test("c2: every harness ships a surface that delivers active memory to delegated agents", () => {
     // The glob Kiro agent configs must preload. Exact string, not a substring:
     // `r.includes("memory")` would accept `file://docs/memory-notes.md` and any

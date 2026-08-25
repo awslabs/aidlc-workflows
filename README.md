@@ -11,7 +11,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.6.5-blue)
+![version](https://img.shields.io/badge/version-2.6.89-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -37,14 +37,14 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 - **[5 phases, 33 stages](docs/guide/04-phases-and-stages.md)** — Initialization, Ideation, Inception, Construction, Operation
 - **[14-agent roster](docs/guide/06-agents.md)** — 11 domain experts, 2 quality-gate reviewers, and the adaptive-workflows composer
-- **[9 adaptive scopes](docs/guide/05-scopes-and-depth.md)** (enterprise through workshop) with auto-detection from freeform intent, plus an **[adaptive composer](docs/guide/05-scopes-and-depth.md#the-adaptive-composer)** (`/aidlc compose`) that proposes a tailored stage plan from your task, a scan report, or the running workflow
+- **[11 adaptive scopes](docs/guide/05-scopes-and-depth.md)** (enterprise through express, with the v1-style classic default — `AWS_AIDLC_DEFAULT_SCOPE` overrides it — the full-lifecycle feature scope, and workshop retained for facilitated sessions) plus an **[adaptive composer](docs/guide/05-scopes-and-depth.md#the-adaptive-composer)** (`/aidlc compose`) that proposes a tailored stage plan from your task, a scan report, or the running workflow
 - **[3 depth levels](docs/guide/05-scopes-and-depth.md#the-3-depth-levels)** (Minimal/Standard/Comprehensive) — control artifact detail per stage
 - **[3 test strategy levels](docs/guide/05-scopes-and-depth.md#the-3-test-strategy-levels)** (Minimal/Standard/Comprehensive) — independent of depth for flexible test coverage
 - **[CLI utilities](docs/guide/12-cli-commands.md)** — jump to any stage or phase, check status, change scope/depth/test strategy mid-workflow
 - **[Approval gates at every stage](docs/guide/07-interaction-modes.md)** — you stay in control of all decisions
 - **[Two-tier knowledge system](docs/guide/08-knowledge.md)** — methodology knowledge ships with the framework; team knowledge is user-managed
 - **[Rules and a learning loop](docs/guide/09-rules-and-the-learning-loop.md)** — human corrections become persistent behavioral rules
-- **[82-event audit trail](docs/guide/10-state-and-audit.md)** - structured logging for enterprise traceability
+- **[87-event audit trail](docs/guide/10-state-and-audit.md)** - structured logging for enterprise traceability
 - **[Session resume](docs/guide/11-session-management.md)** — continue from checkpoint, redo, jump to stage, or start fresh
 
 ## Methodology and implementation
@@ -135,7 +135,7 @@ cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have 
 
 The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
 
-Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill (the bundled `.kiro/settings/cli.json` is a Kiro CLI-only compatibility surface — the IDE ignores it and does not select a default agent from it). The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
+Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill, and `.kiro/agents/aidlc.md` exposes the conductor in the IDE agent selector. Agents are Markdown-only in this distribution; Kiro CLI's agent-v1 JSON files and `settings/cli.json` do not ship. The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
 
 > [!NOTE]
 > AI-DLC on Kiro works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.
@@ -362,7 +362,7 @@ Three zones: what AI-DLC **is**, how each harness **speaks**, and what users **c
 aidlc-claude/
 │  ─────────── HAND-AUTHORED SOURCE — edit here ───────────
 ├── core/                       # ONE harness-neutral source of truth
-│   ├── tools/                  #   25 aidlc-*.ts engine tools (+ data/scaffold/ templates)
+│   ├── tools/                  #   43 aidlc-*.ts engine tools (+ data/scaffold/ templates)
 │   ├── aidlc-common/           #   stage protocol + 33 stage files + conductor
 │   ├── agents/                 #   14 agents: 11 domain + 2 reviewers + composer
 │   ├── knowledge/ memory/ scopes/ sensors/ hooks/
@@ -372,7 +372,7 @@ aidlc-claude/
 │
 ├── harness/                    # thin per-harness authored surfaces — small, divergent by design
 │   ├── claude/                 #   manifest.ts · orchestrator skill · settings.json · onboarding fills
-│   ├── kiro-ide/               #   manifest.ts · orchestrator · agent JSONs · v2 .json + legacy .kiro.hook files · settings · onboarding fills
+│   ├── kiro-ide/               #   manifest.ts · orchestrator · conductor Markdown · v2 .json + legacy .kiro.hook files · onboarding fills
 │   ├── kiro/                   #   manifest.ts · orchestrator · agent JSONs · settings · onboarding fills (CLI — agent-JSON hooks)
 │   ├── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
 │   ├── cursor/                 #   manifest.ts · orchestrator · hooks adapter · installer · rules · onboarding fills

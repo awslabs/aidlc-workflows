@@ -230,12 +230,12 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // --- submit the bugfix workflow command --------------------------------
         // Use the EXPLICIT `--scope bugfix` flag, not the bare freeform `bugfix`
         // keyword. The shipped distributable settings.json pins
-        // AWS_AIDLC_DEFAULT_SCOPE=workshop, so a bare freeform `/aidlc bugfix ...`
+        // AWS_AIDLC_DEFAULT_SCOPE=classic, so a bare freeform `/aidlc bugfix ...`
         // is a freeform-vs-env CONFLICT: SKILL.md step 0 (:105) only skips env
         // substitution when `$ARGUMENTS` already contains the literal `--scope`
         // token, so the bare keyword triggers a 3-way scope disambiguation gate at
-        // workflow START (bugfix vs the workshop env-default vs keyword-autodetect's
-        // feature) — verified live 2026-06-06: the run stalled on that gate before
+        // workflow START (bugfix vs the classic env-default vs keyword-autodetect's
+        // bugfix) — verified live 2026-06-06 (then feature): the run stalled on that gate before
         // any phase, failing the phase-wait below. (That conflict is t29 case 3's
         // job, not t50's.) The explicit `--scope bugfix` flag WINS silently and
         // gatelessly (SKILL.md:105 "explicit CLI flag wins" + :170a auto-confirm;
@@ -261,9 +261,8 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // gates are up. Do not require the phase to paint before answer-gate starts:
         // current live runs can spend >120s bootstrapping init while the statusline
         // still shows `[AIDLC] ready`; the on-disk Completed terminator below is the
-        // deterministic start/progress proof. Use the shared gridHasMenu() so the
-        // caret is matched platform-invariantly (`❯` on tmux, ASCII `>` on Windows
-        // ConPTY — the same detector the answer-gate uses).
+        // deterministic start/progress proof. Use the shared gridHasMenu(), which
+        // requires the exact `❯` caret in both reconstructed backends.
         pollTimer = setInterval(() => {
           const grid = drive(["capture", "--session", session]).stdout;
           if (gridHasMenu(grid)) {

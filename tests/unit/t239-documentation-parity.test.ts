@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import codexOnboardingFills from "../../harness/codex/onboarding.fills.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
+import { type Tier, TIER_PROJECTIONS, TIERS } from "../../core/tools/aidlc-tiers.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const at = (...parts: string[]): string => join(ROOT, ...parts);
@@ -50,6 +51,17 @@ function agentTokens(text: string): string[] {
 function documentedDistNames(text: string): string[] {
   return [...new Set([...text.matchAll(/dist\/([a-z][a-z-]+)\//g)].map((match) => match[1]))]
     .sort();
+}
+
+function markdownCells(line: string): string[] {
+  return line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function frontmatterScalar(text: string, field: string): string | null {
+  const frontmatter = /^---\n([\s\S]*?)\n---/.exec(text)?.[1];
+  if (frontmatter === undefined) return null;
+  const match = new RegExp(`^${field}:\\s*(\\S.*?)\\s*$`, "m").exec(frontmatter);
+  return match?.[1] ?? null;
 }
 
 function eventCountClaimPattern(value: number): RegExp {
@@ -103,6 +115,13 @@ const agentNames = readdirSync(at("core", "agents"))
   .filter((name) => /^aidlc-.+-agent\.md$/.test(name))
   .map((name) => basename(name, ".md"))
   .sort();
+const scopeNames = readdirSync(at("core", "scopes"))
+  .filter((name) => /^aidlc-.+\.md$/.test(name))
+  .map((name) => name.replace(/^aidlc-/, "").replace(/\.md$/, ""))
+  .sort();
+const scopeGrid = JSON.parse(
+  read("dist", "claude", ".claude", "tools", "data", "scope-grid.json"),
+) as Record<string, { stages: Record<string, string> }>;
 const reviewerNames = [
   ...new Set(
     filesBelow(at("core", "aidlc-common", "stages"), ".md").flatMap((file) =>
@@ -127,7 +146,7 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(82);
+    expect(eventTypes.length).toBe(87);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -139,6 +158,19 @@ describe("documentation parity derives current behavior from authored implementa
       ...new Set([...guideTaxonomy.matchAll(/`([A-Z][A-Z0-9_]*)`/g)].map((match) => match[1])),
     ].sort();
     expect(guideEvents).toEqual(eventTypes);
+
+    // The taxonomy's CATEGORY count is a second claim in the same prose, and the
+    // event-count regex above does not match a "N categories" phrasing — so it
+    // could drift while every other pin stayed green. Derive it three ways and
+    // require agreement: the prose number, the number of table rows, and the sum
+    // of the per-row counts (which must total the event count).
+    const guideCategoryRows = [
+      ...guideTaxonomy.matchAll(/^\| \*\*[^*]+\*\* \| +(\d+) \|/gm),
+    ].map((match) => Number(match[1]));
+    const guideCategoryClaim = guideTaxonomy.match(/organized into (\d+) categories/);
+    expect(guideCategoryClaim, "the taxonomy must state its category count").not.toBeNull();
+    expect(Number(guideCategoryClaim?.[1])).toBe(guideCategoryRows.length);
+    expect(guideCategoryRows.reduce((sum, n) => sum + n, 0)).toBe(eventTypes.length);
 
     for (const path of [
       ["README.md"],
@@ -222,6 +254,12 @@ describe("documentation parity derives current behavior from authored implementa
 
   test("Kiro IDE documentation names only IDE-native enforcement and configuration surfaces", () => {
     const skill = read("harness", "kiro-ide", "skills", "aidlc", "SKILL.md");
+    const reviewerProtocol = read(
+      "core",
+      "aidlc-common",
+      "protocols",
+      "stage-protocol-reviewer.md",
+    );
     const questionRendering = read(
       "harness",
       "kiro-ide",
@@ -233,7 +271,10 @@ describe("documentation parity derives current behavior from authored implementa
 
     expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.kiro.hook"))).toBe(false);
     expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.json"))).toBe(false);
-    expect(skill).toContain("read-scope bound is prose-only on this harness");
+    expect(skill).toContain("stage-protocol-reviewer.md");
+    expect(reviewerProtocol).toContain(
+      "On a harness without reviewer-scope enforcement (Kiro IDE today)",
+    );
     expect(skill).not.toContain(".aidlc-reviewer-dispatch.json");
     expect(skill).not.toContain("kiro-cli");
     expect(questionRendering).toContain("Kiro IDE has no structured-question tool");
@@ -254,11 +295,11 @@ describe("documentation parity derives current behavior from authored implementa
       return row[3];
     };
 
-    expect(ideCell("Agent personas")).toContain("`tools:` grants");
+    expect(ideCell("Agent personas")).toContain("`tools:`/`permissions.rules`");
     expect(ideCell("Agent personas")).not.toContain("agent configs");
     expect(ideCell("Standing rules")).toContain("always-included steering");
     expect(ideCell("Standing rules")).not.toContain("`rules_in_context`");
-    expect(ideCell("Permissions / config")).toContain("`tools:` frontmatter");
+    expect(ideCell("Permissions / config")).toContain("`permissions.rules`");
     expect(ideCell("Permissions / config")).not.toContain("settings/cli.json");
 
     const steering = read(
@@ -398,6 +439,61 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
+  test("workflow profiles enumerate every shipped core scope", () => {
+    const profiles = read("docs", "guide", "workflow-profiles.md");
+    const documented = [...profiles.matchAll(/^## `([a-z][a-z-]+)`$/gm)]
+      .map((match) => match[1])
+      .sort();
+    expect(documented).toEqual(scopeNames);
+
+    const cliGuide = read("docs", "guide", "12-cli-commands.md");
+    for (const scope of scopeNames) {
+      expect(profiles).toContain(`/aidlc ${scope}`);
+      expect(cliGuide).toContain(`/aidlc ${scope}`);
+    }
+
+    const quickChooser = sliceBetween(
+      profiles,
+      "## Quick chooser",
+      "Stage counts describe the static route.",
+    );
+    const rows = quickChooser
+      .split("\n")
+      .filter((line) => /^\| \*\*/.test(line))
+      .map((line) => {
+        const cells = markdownCells(line);
+        expect(cells.length, line).toBe(6);
+        const command = cells[5].match(/^`\/aidlc ([a-z][a-z-]+)`$/);
+        expect(command, `invalid quick-chooser command: ${cells[5]}`).not.toBeNull();
+        return {
+          scope: command![1],
+          stages: cells[2],
+          depth: cells[3],
+          testStrategy: cells[4],
+        };
+      });
+    expect(rows).toHaveLength(scopeNames.length);
+    expect([...new Set(rows.map((row) => row.scope))].sort()).toEqual(scopeNames);
+
+    for (const row of rows) {
+      const stages = scopeGrid[row.scope]?.stages;
+      expect(stages, `missing compiled grid entry for ${row.scope}`).toBeDefined();
+      const total = Object.keys(stages).length;
+      const executed = Object.values(stages).filter((value) => value === "EXECUTE").length;
+      expect(row.stages, `${row.scope} stage count`).toBe(`${executed} / ${total}`);
+
+      const scopeFile = read("core", "scopes", `aidlc-${row.scope}.md`);
+      const depth = frontmatterScalar(scopeFile, "depth");
+      if (depth === null) {
+        throw new Error(`missing depth in core/scopes/aidlc-${row.scope}.md`);
+      }
+      expect(row.depth, `${row.scope} depth`).toBe(depth);
+      expect(row.testStrategy, `${row.scope} test strategy`).toBe(
+        frontmatterScalar(scopeFile, "testStrategy") ?? depth,
+      );
+    }
+  });
+
   test("workspace CLI docs follow the implemented router and keep utility-only verbs direct-only", () => {
     const lib = read("core", "tools", "aidlc-lib.ts");
     const workspaceBlock = sliceBetween(
@@ -447,5 +543,222 @@ describe("documentation parity derives current behavior from authored implementa
     expect(pkg.repository.url).toBe("https://github.com/awslabs/aidlc-workflows");
     expect(pkg.repository.directory).toBeUndefined();
     expect(read("bun.lock")).toContain(`"name": "${pkg.name}"`);
+  });
+
+  test("documented model-pinning tier projections match TIER_PROJECTIONS", () => {
+    // The authored table is the single source of truth; every prose copy of it
+    // is derived here rather than trusted. The cell convention is shared by
+    // both surfaces: `model: <m>` then either a pinned effort or the explicit
+    // statement that the key is absent.
+    const claudeCell = (tier: Tier): string => {
+      const { model, effort } = TIER_PROJECTIONS[tier].claude;
+      return effort === null
+        ? `\`model: ${model}\`, no \`effort:\` line`
+        : `\`model: ${model}\`, \`effort: ${effort}\``;
+    };
+    const codexCell = (tier: Tier): string => {
+      const { model, effort } = TIER_PROJECTIONS[tier].codex;
+      return model === null && effort === null
+        ? "no `model`/`model_reasoning_effort` keys"
+        : `\`model = "${model}"\`, \`model_reasoning_effort = "${effort}"\``;
+    };
+    const opencodeCell = (tier: Tier): string => {
+      const { model, variant } = TIER_PROJECTIONS[tier].opencode;
+      return model === null && variant === null
+        ? "no `model:`/`variant:` keys"
+        : `\`model: ${model}\`, \`variant: ${variant}\``;
+    };
+
+    const agentSystemTable = sliceBetween(
+      read("docs", "reference", "05-agent-system.md"),
+      "| Tier | Claude Code (.md frontmatter) |",
+      "Key facts behind the table:",
+    );
+    const claudeSurfaces: [string, string][] = [
+      [
+        "docs/reference/05-agent-system.md",
+        agentSystemTable,
+      ],
+      [
+        "docs/reference/14-claude-features.md",
+        sliceBetween(
+          read("docs", "reference", "14-claude-features.md"),
+          "| Tier | Agents | Claude Code projection | Rationale |",
+          "An omitted `effort:` key",
+        ),
+      ],
+    ];
+
+    for (const tier of TIERS) {
+      for (const [label, table] of claudeSurfaces) {
+        const row = table.split("\n").find((line) => line.startsWith(`| \`${tier}\``));
+        expect(row, `${label} must carry a row for the ${tier} tier`).toBeDefined();
+        expect(
+          normalized(row as string),
+          `${label} must state the shipped Claude projection for ${tier}`,
+        ).toContain(normalized(claudeCell(tier)));
+      }
+
+      const agentSystemRow = agentSystemTable
+        .split("\n")
+        .find((line) => line.startsWith(`| \`${tier}\``));
+      expect(agentSystemRow, `agent-system must carry a row for the ${tier} tier`).toBeDefined();
+      const cells = markdownCells(agentSystemRow as string);
+      expect(
+        normalized(cells[2]),
+        `agent-system must state the shipped Codex projection for ${tier}`,
+      ).toContain(normalized(codexCell(tier)));
+      expect(
+        normalized(cells[5]),
+        `agent-system must state the shipped opencode projection for ${tier}`,
+      ).toContain(normalized(opencodeCell(tier)));
+    }
+
+    // Effort-stepping claims. `judgment` is the only tier that inherits the
+    // session effort; any doc calling a single tier the only downgrade is wrong
+    // the moment a second tier pins one.
+    const pinned = TIERS.filter((tier) => TIER_PROJECTIONS[tier].claude.effort !== null);
+    expect(pinned.length, "expected at least one tier to pin a Claude effort").toBeGreaterThan(0);
+    if (pinned.length > 1) {
+      const narrativePaths = [
+        ["core", "tools", "aidlc-tiers.ts"],
+        ["docs", "guide", "13-customization.md"],
+        ["docs", "harness-engineering", "03-adding-an-agent.md"],
+        ["docs", "reference", "05-agent-system.md"],
+        ["docs", "reference", "14-claude-features.md"],
+        ["docs", "reference", "agents", "README.md"],
+        ["harness", "codex", "emit.ts"],
+        ["scripts", "package.ts"],
+        ["tests", "unit", "t216-agent-tier-projection.test.ts"],
+      ];
+      for (const path of narrativePaths) {
+        const text = normalized(read(...path));
+        for (const claim of [
+          "a mid-size model, session effort",
+          "only for templated work",
+          "the one deliberate downgrade",
+          "the one tier that steps effort down",
+          "absence is the contract for judgment and balanced",
+          "absence is deliberate for the first two tiers",
+          "templated agents additionally reduce effort",
+          "balanced -> `model: sonnet` with no effort pin",
+          "mid-size model at session effort suffices",
+          "balanced pins a model but inherits effort",
+          "inherit contract for judgment/balanced agents",
+          "effort: is pinned for templated agents and ABSENT everywhere else",
+        ]) {
+          expect(
+            text,
+            `${path.join("/")} must not claim a single stepped-down tier while ${codeList([...pinned])} all pin an effort`,
+          ).not.toContain(claim);
+        }
+      }
+    }
+
+    // Two tier names that project identically must say so, or a reader infers
+    // two rungs where the shipped projection has one.
+    const sortDeep = (value: unknown): unknown =>
+      value && typeof value === "object"
+        ? Object.fromEntries(
+            Object.keys(value as object)
+              .sort()
+              .map((key) => [key, sortDeep((value as Record<string, unknown>)[key])]),
+          )
+        : value;
+    const identical =
+      JSON.stringify(sortDeep(TIER_PROJECTIONS.balanced)) ===
+      JSON.stringify(sortDeep(TIER_PROJECTIONS.templated));
+    const agentSystem = normalized(read("docs", "reference", "05-agent-system.md"));
+    const equivalenceNote = "`balanced` and `templated` currently project IDENTICALLY in every harness";
+    if (identical) {
+      expect(
+        agentSystem,
+        "balanced and templated project identically, so the reference must say so",
+      ).toContain(normalized(equivalenceNote));
+    } else {
+      expect(
+        agentSystem,
+        "balanced and templated no longer project identically, so the equivalence note must go",
+      ).not.toContain(normalized(equivalenceNote));
+    }
+  });
+
+  test("documented agent stage-involvement matrix matches stage frontmatter", () => {
+    const lead = new Map<string, number>();
+    const support = new Map<string, number>();
+    const bump = (map: Map<string, number>, key: string): void => {
+      map.set(key, (map.get(key) ?? 0) + 1);
+    };
+
+    for (const path of filesBelow(at("core", "aidlc-common", "stages"), ".md")) {
+      const frontmatter = sliceBetween(readFileSync(path, "utf8"), "---", "\n---");
+      const leadAgent = frontmatter.match(/^lead_agent:\s*(\S+)$/m)?.[1];
+      if (leadAgent?.startsWith("aidlc-")) bump(lead, leadAgent);
+      const block = frontmatter.match(/^support_agents:\s*\n((?:[ \t]*-[ \t]*\S+[ \t]*\n?)+)/m)?.[1];
+      for (const entry of block?.split("\n") ?? []) {
+        const agent = entry.replace(/^[ \t]*-[ \t]*/, "").trim();
+        if (agent.startsWith("aidlc-")) bump(support, agent);
+      }
+    }
+    expect(lead.size, "expected lead_agent frontmatter on the stage set").toBeGreaterThan(0);
+
+    const matrixPaths = [
+      ["docs", "reference", "05-agent-system.md"],
+      ["docs", "reference", "agents", "README.md"],
+    ];
+    const matrices = matrixPaths.map((path) => {
+      const matrix = sliceBetween(
+        read(...path),
+        "| Agent | Bash Expected Use | WebSearch Expected Use | Tier | Lead Stages | Support Stages |",
+        "**Observations:**",
+      );
+      const rows = matrix
+        .split("\n")
+        .map((line) => line.split("|").map((cell) => cell.trim()))
+        .filter((cells) => cells[1]?.startsWith("aidlc-"));
+      expect(rows.length, `${path.join("/")} must have one row per domain-expert agent`).toBe(11);
+      return { path, rows };
+    });
+
+    for (const { path, rows } of matrices) {
+      for (const cells of rows) {
+        const agent = cells[1];
+        const expectedLead = lead.get(agent) ?? 0;
+        const expectedSupport = support.get(agent) ?? 0;
+        expect(
+          [Number(cells[5]), Number(cells[6]), Number(cells[7])],
+          `${path.join("/")} ${agent} matrix row`,
+        ).toEqual([expectedLead, expectedSupport, expectedLead + expectedSupport]);
+      }
+    }
+
+    // The "broadest involvement" observation is a claim about the same numbers,
+    // and it drifted independently of the table it summarises.
+    const totals = matrices[0].rows.map((cells) => ({
+      agent: cells[1],
+      total: Number(cells[7]),
+    }));
+    const broadestTotal = Math.max(...totals.map((row) => row.total));
+    const broadest = totals.filter((row) => row.total === broadestTotal);
+    for (const path of matrixPaths) {
+      const observations = sliceBetween(read(...path), "**Observations:**", "\n---");
+      expect(
+        broadest.some((row) =>
+          normalized(observations).includes(
+            `${row.agent} has the broadest stage involvement (${row.total} stages`,
+          ),
+        ),
+        `${path.join("/")} must name a broadest agent with ${broadestTotal} stages`,
+      ).toBe(true);
+    }
+    const agentGuide = normalized(read("docs", "guide", "06-agents.md"));
+    expect(
+      broadest.some(
+        (row) =>
+          agentGuide.includes(row.agent) &&
+          agentGuide.includes(`(${row.total} stages across 3 phases)`),
+      ),
+      `the guide must name a broadest agent with ${broadestTotal} stages`,
+    ).toBe(true);
   });
 });

@@ -29,11 +29,11 @@
 // between cases. Cleanup runs in afterEach. NOTHING is written under tests/fixtures/**.
 //
 // HARDENING ADDITIONS (beyond .sh parity, in the reject/revise describe):
-// reject self-heals a skipped gate — on a [-] stage it backfills the missing
-// STAGE_AWAITING_APPROVAL (tagged `Recovered: true`) ahead of GATE_REJECTED +
-// STAGE_REVISING; the organic [?] path emits no backfill; revise's re-entry
-// gate row is never tagged; a terminal-state slug still rejects. Test 51 now
-// uses a [ ] pending slug (reject accepts [?] AND [-]).
+// reject accepts a direct Active → Revising transition when gate-start was
+// skipped, without fabricating STAGE_AWAITING_APPROVAL; the organic [?] path
+// retains its one real gate row, revise's re-entry gate row is never tagged,
+// and a terminal-state slug still rejects. Test 51 now uses a [ ] pending slug
+// (reject accepts [?] AND [-]).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -68,6 +68,7 @@ const TOOLS_DIR = join(
 );
 const TOOL = join(TOOLS_DIR, "aidlc-state.ts");
 const UTILITY = join(TOOLS_DIR, "aidlc-utility.ts");
+const LOG = join(TOOLS_DIR, "aidlc-log.ts");
 
 interface RunResult {
   rc: number;
@@ -111,6 +112,30 @@ function runInit(proj: string, scope: string): RunResult {
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   return { rc: res.status ?? -1, stdout, stderr, combined: `${stdout}${stderr}` };
+}
+
+function recordRequirementsReview(proj: string): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    proj,
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const res = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+      cwd: proj,
+    });
+    if ((res.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${res.stdout}${res.stderr}`);
+    }
+  }
 }
 
 // P4: intent-create (which runInit triggers) writes state into the born intent's
@@ -543,8 +568,8 @@ describe("t17 advance validation", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     runState(proj, ["set", "Scope=bugfix"]);
-    // bugfix's last in-scope stage is build-and-test.
-    const r = runState(proj, ["advance", "build-and-test"]);
+    // bugfix's last in-scope stage is deployment-execution.
+    const r = runState(proj, ["advance", "deployment-execution"]);
     expect(r.rc).toBe(1);
     expect(r.combined).toContain("complete-workflow");
   });
@@ -607,6 +632,7 @@ describe("t17 resume", () => {
   test("39: resume reports awaiting-approval gate_state", () => {
     proj = createTestProject();
     runInit(proj, "bugfix");
+    recordRequirementsReview(proj);
     runState(proj, ["gate-start", "requirements-analysis"]);
     expect(runState(proj, ["resume"]).combined).toContain('"gate_state":"awaiting-approval"');
   });
@@ -862,12 +888,10 @@ describe("t17 reject/revise", () => {
     expect(runState(proj, ["get", "Revision Count"]).combined.trim()).toBe("3");
   });
 
-  // gate-start is OPTIONAL before the human prompt (stage-protocol Part 0
-  // step 1), so a rejection can arrive while the stage is still [-]. reject
-  // self-heals: it backfills the missing STAGE_AWAITING_APPROVAL (tagged
-  // Recovered=true) ahead of GATE_REJECTED + STAGE_REVISING — mirroring the
-  // approve-side backfill report performs.
-  test("reject on [-] (gate-start skipped) self-heals: [R], count 1, backfilled gate row first", () => {
+  // gate-start is optional before the human prompt, so a rejection can arrive
+  // while the stage is still [-]. The rejection is valid, but no approval gate
+  // was proven open, so the audit records only rejection + revising.
+  test("reject on [-] records direct Active -> Revising without a fake gate row", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     seedAuditFile(proj);
@@ -878,18 +902,10 @@ describe("t17 reject/revise", () => {
     expect(runState(proj, ["get", "Revision Count"]).combined.trim()).toBe("1");
 
     const audit = readAudit(proj);
-    // The backfilled gate row carries the Recovered tag.
-    const gateBlock = audit
-      .split("\n---\n")
-      .find((b) => b.includes("**Event**: STAGE_AWAITING_APPROVAL"));
-    expect(gateBlock).toBeDefined();
-    expect(gateBlock).toContain("**Recovered**: true");
-    // Audit order: STAGE_AWAITING_APPROVAL -> GATE_REJECTED -> STAGE_REVISING.
-    const gateIdx = audit.indexOf("**Event**: STAGE_AWAITING_APPROVAL");
+    expect(countEvent(audit, "STAGE_AWAITING_APPROVAL")).toBe(0);
     const rejectedIdx = audit.indexOf("**Event**: GATE_REJECTED");
     const revisingIdx = audit.indexOf("**Event**: STAGE_REVISING");
-    expect(gateIdx).toBeGreaterThan(-1);
-    expect(rejectedIdx).toBeGreaterThan(gateIdx);
+    expect(rejectedIdx).toBeGreaterThan(-1);
     expect(revisingIdx).toBeGreaterThan(rejectedIdx);
   });
 
@@ -980,7 +996,7 @@ describe("t17 skip", () => {
 });
 
 // ===========================================================================
-// reuse-artifact — Tests 61-63
+// reuse-artifact — Tests 61-64
 // ===========================================================================
 
 describe("t17 reuse-artifact", () => {
@@ -1022,6 +1038,23 @@ describe("t17 reuse-artifact", () => {
         .rc,
     ).toBe(1);
   });
+
+  test("64: reuse-artifact records optional Repo", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedAuditFile(proj);
+    runState(proj, [
+      "reuse-artifact",
+      "reverse-engineering",
+      "--decision",
+      "keep",
+      "--artifacts",
+      "aidlc/spaces/default/codekb/repo-a/",
+      "--repo",
+      "repo-a",
+    ]);
+    expect(readAudit(proj)).toContain("**Repo**: repo-a");
+  });
 });
 
 // ===========================================================================
@@ -1034,6 +1067,7 @@ describe("t17 cross-phase advance idempotency", () => {
     runInit(proj, "bugfix");
     // After init, Current Stage is requirements-analysis. Walk it, then replay
     // advance and assert no double PHASE_COMPLETED / PHASE_VERIFIED / PHASE_STARTED.
+    recordRequirementsReview(proj);
     runState(proj, ["gate-start", "requirements-analysis"]);
     runState(proj, ["approve", "requirements-analysis"]);
     runState(proj, ["advance", "requirements-analysis"]);
@@ -1082,6 +1116,21 @@ describe("t17 park/unpark", () => {
     expect(s).not.toContain("- **Parked**:");
     expect(s).not.toContain("- **Parked At Stage**:");
     expect(countEvent(readAudit(proj), "WORKFLOW_UNPARKED")).toBe(1);
+  });
+
+  test("park + unpark keep the file-wide **Timestamp** count equal to the block count", () => {
+    // Regression for issue #715. Both emitters used to pass a `Timestamp`
+    // field that renderAuditBlock re-rendered, so each park/unpark block
+    // carried TWO **Timestamp**: lines. A reader that zips **Timestamp**
+    // occurrences against **Event** occurrences then desynchronises for the
+    // rest of the file, misattributing every later event's time.
+    runState(proj, ["park"]);
+    runState(proj, ["unpark"]);
+    const audit = readAudit(proj);
+    const blocks = (audit.match(/^## /gm) ?? []).length;
+    expect(blocks).toBeGreaterThan(0);
+    expect(audit.split("**Timestamp**:").length - 1).toBe(blocks);
+    expect(audit.split("**Event**:").length - 1).toBe(blocks);
   });
 
   test("unpark is idempotent (no-op + was_parked:false when not parked)", () => {

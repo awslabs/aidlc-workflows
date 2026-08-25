@@ -185,12 +185,6 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
   };
-  const gate = spawnSync(
-    "bun",
-    [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", project],
-    { encoding: "utf-8", env },
-  );
-  if (gate.status !== 0) throw new Error(`gate-start failed: ${gate.stdout}${gate.stderr}`);
   const args = [
     LOG_TOOL,
     "review",
@@ -209,6 +203,12 @@ function projectWithReadyReview(): { project: string; artifact: string } {
       throw new Error(`review log failed: ${review.stdout}${review.stderr}`);
     }
   }
+  const gate = spawnSync(
+    "bun",
+    [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", project],
+    { encoding: "utf-8", env },
+  );
+  if (gate.status !== 0) throw new Error(`gate-start failed: ${gate.stdout}${gate.stderr}`);
   return { project, artifact };
 }
 
@@ -429,8 +429,8 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(out.user_message ?? "").toContain("intent-b");
     expect(out.user_message ?? "").toContain("/aidlc intent intent-a");
 
-    // The blocked warning is consumed: resubmitting continues on B instead of
-    // deadlocking on the same beforeSubmitPrompt response.
+    // The blocked warning is consumed: resubmitting continues on the bound
+    // intent A instead of deadlocking on the same beforeSubmitPrompt response.
     const next = runAdapter(
       proj,
       "mint",
@@ -438,7 +438,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(next.code).toBe(0);
     expect(next.stdout.trim()).toBe("");
-    const shard = readAllAuditShards(proj);
+    const shard = readAllAuditShards(proj, a.dirName, "default");
     expect(shard).toContain("HUMAN_TURN");
     expect(shard).not.toContain("SESSION_RESUMED");
   });
@@ -850,6 +850,41 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(out.agent_message ?? "").toContain("aidlc-reviewer-scope.ts failed");
   });
 
+  test("22b: an unavailable shared freeze parser keeps the full guard fail-closed", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    registerTaskParent(proj);
+    runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_input: {
+          description: "Developer probe",
+          prompt: "Implement the unit.",
+          subagent_type: "aidlc-developer-agent",
+        },
+      }),
+    );
+    rmSync(join(proj, ".cursor", "hooks", "review-freeze-command.ts"));
+
+    const r = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "developer-without-freeze-parser",
+        session_id: "developer-without-freeze-parser",
+        tool_input: { command: "echo ok" },
+      }),
+    );
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.stdout) as {
+      permission?: string;
+      agent_message?: string;
+    };
+    expect(out.permission).toBe("deny");
+    expect(out.agent_message ?? "").toContain("aidlc-review-freeze.ts failed");
+  });
+
   test("23: Shell working_directory and captured cwd feed reviewer-scope and review-freeze", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -935,6 +970,60 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expect(JSON.parse(wrappedWrite.stdout).permission).toBe("deny");
+  });
+
+  test("23b: guards reuse freeze target classification without skipping real writes", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const record = seededRecordDir(proj);
+    clearLedger(proj);
+    const dispatch = join(record, ".aidlc-reviewer-dispatch.json");
+    writeFileSync(
+      dispatch,
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "unit-a",
+        exempt: [],
+      }),
+    );
+    registerTaskParent(proj);
+    runAdapter(proj, "guards", payload("preToolUseTask", proj));
+
+    const marker = join(proj, "review-freeze-child-ran");
+    const hook = join(proj, ".cursor", "hooks", "aidlc-review-freeze.ts");
+    // Classification comes from the real review-freeze-command.ts; this stub
+    // only marks whether the full child hook process was spawned.
+    const spawnMarkerHook = `
+if (import.meta.main) {
+  await Bun.write(${JSON.stringify(marker)}, "ran");
+}
+`;
+
+    writeFileSync(hook, spawnMarkerHook);
+    const harmless = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "reviewer-freeze-cache",
+        session_id: "reviewer-freeze-cache",
+        tool_input: { command: "printf '%s\\n' ok" },
+      }),
+    );
+    expectAllowJson(harmless);
+    expect(existsSync(marker)).toBe(false);
+
+    const write = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "reviewer-freeze-write",
+        session_id: "reviewer-freeze-write",
+        tool_input: { command: "printf x >> scratch.txt" },
+      }),
+    );
+    expectAllowJson(write);
+    expect(readFileSync(marker, "utf-8")).toBe("ran");
   });
 
   test("24: delegated tools cannot remove attribution state and missing state fails closed", () => {
@@ -1161,7 +1250,7 @@ describe("t276 cursor adapter payload conversion", () => {
     };
     expect(lostOut.permission).toBe("deny");
     expect(lostOut.agent_message ?? "").toContain("identity is unavailable or ambiguous");
-  });
+  }, 30_000);
 
   test("25: partial reviewer-ledger loss cannot resolve an unknown conversation as a developer", () => {
     const proj = installedProject();

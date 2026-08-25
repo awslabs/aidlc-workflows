@@ -12,7 +12,7 @@ Two complete walkthroughs showing AI-DLC in action: a bugfix and a feature. Each
 
 ## Bugfix Walkthrough
 
-This example fixes a null pointer exception in a user profile API. The **bugfix** scope runs 7 stages (3 Initialization + 4 domain) at Minimal depth.
+This example fixes a null pointer exception in a user profile API. The **bugfix** scope runs 9 stages (3 Initialization + 6 domain) at Minimal depth.
 
 ### Invocation
 
@@ -39,6 +39,8 @@ You respond:
 | 2.3 | Requirements Analysis | Inception | aidlc-product-agent | inline |
 | 3.5 | Code Generation | Construction | aidlc-developer-agent | subagent |
 | 3.6 | Build and Test | Construction | aidlc-quality-agent | inline |
+| 4.1 | Deployment Pipeline | Operation | aidlc-pipeline-deploy-agent | inline |
+| 4.3 | Deployment Execution | Operation | aidlc-pipeline-deploy-agent + aidlc-developer-agent | inline |
 
 ### Initialization (stages 0.1-0.3) — auto-proceed
 
@@ -48,7 +50,7 @@ The 3 Initialization stages run as a single deterministic tool call (`aidlc-util
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
 - **0.3 State Init** — Initializes `aidlc-state.md` with scope `bugfix`, depth `Minimal`, and the domain stages marked for execution
 
-> Progress: 3/7 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
+> Progress: 3/9 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
 
 ### Stage 2.1 — Reverse Engineering
 
@@ -138,7 +140,18 @@ mvn verify               # Integration tests pass
 
 Results captured in `<record>/construction/build-and-test/test-results.md`: 89 tests passed, 0 failures, coverage increased from 62% to 64%.
 
-**Approval gate:** You select **Approve**. Workflow complete.
+**Approval gate:** You select **Approve**.
+
+### Stages 4.1 and 4.3 — Deploy
+
+Deployment Pipeline inspects the existing delivery configuration and records
+the deployment strategy, CD configuration, and rollback runbook. Environment
+Provisioning remains skipped because this bugfix uses the existing target
+environment.
+
+After approval, Deployment Execution deploys the tested artifact through that
+pipeline, runs smoke tests and health checks, and records the deployment log.
+You approve the final gate and the workflow completes.
 
 ### End state
 
@@ -147,7 +160,7 @@ aidlc/spaces/default/
   codekb/
     user-service/             # 9 space-level RE artifacts
   intents/260624-null-display-fix/
-    aidlc-state.md            # All 7 stages marked [x]
+    aidlc-state.md            # All 9 stages marked [x]
     audit/                    # Full decision trail (per-clone shards)
     inception/
       requirements-analysis/ # requirements.md + questions
@@ -155,6 +168,9 @@ aidlc/spaces/default/
       bugfix-null-display-name/
         code-generation/     # plan + summary
       build-and-test/        # instructions + test results
+    operation/
+      deployment-pipeline/   # CD config + strategy + rollback runbook
+      deployment-execution/  # deployment log + smoke tests + health checks
 ```
 
 Application code in workspace root:
@@ -294,62 +310,58 @@ Because the system splits into three integrating units, Contract Design formalis
 
 **Stage 2.9 — Delivery Planning** (aidlc-delivery-agent)
 
-Bolt sequence: Bolt 1 ships notification-core (walking skeleton — proves the event-handler pipeline end-to-end). Bolt 2 ships notification-preferences and notification-email in parallel. Per-Bolt DoDs captured in `bolt-plan.md`; WSJF-style rationale in `risk-and-sequencing-rationale.md`; external SES/SQS dependencies mapped in `external-dependency-map.md`. Phase boundary verification confirms requirements-to-architecture alignment.
+Planning only: Bolt 1 would ship notification-core (walking skeleton — proves the event-handler pipeline end-to-end). Bolt 2 would ship notification-preferences and notification-email together. Per-Bolt DoDs land in `bolt-plan.md`; WSJF-style rationale in `risk-and-sequencing-rationale.md`; external SES/SQS dependencies mapped in `external-dependency-map.md`. The Construction engine does not consume this plan for walk order — runtime batches still come from the 2.7 DAG. Phase boundary verification confirms requirements-to-architecture alignment.
 
 > Progress: 19/33 overall | INCEPTION complete. Verification Gate passed.
 
 ### Construction Phase (stages 3.1-3.7)
 
-Construction runs **Bolt by Bolt** per the 2.9 plan. The first Bolt is the walking skeleton; the ladder prompt after it decides autonomy for the rest. Bolts with shared dependencies run in parallel.
+Construction's **default walk is stage-major**. The 2.9 Bolt plan stays on disk as planning; the engine walks Units from `unit-of-work-dependency.md`. The first in-scope Construction EXECUTE stage (here 3.1) is the walking-skeleton gate; the ladder after it decides remaining *stage* gates.
 
-**Bolt 1: notification-core** — walking skeleton (always gated)
+**3.1 Functional Design** — every Unit (walking-skeleton gate)
 
-This Bolt is the end-to-end slice that proves the event-handler pipeline works: a notification event arrives on the internal handler, lands in storage, and surfaces on the in-app delivery endpoint. The conductor opens it with a single round of questions across 3.1–3.4 for notification-core, then generates all design artifacts, then delegates code generation to a aidlc-developer-agent subagent.
+The conductor runs functional design for notification-core, then notification-preferences, then notification-email (or a wave for the last two once core is settled). You approve one stage-level gate covering all three Units — Code Generation has not run.
 
-- **3.1 Functional Design** — Domain entities (Notification, NotificationEvent), business rules (deduplication, rate limiting)
-- **3.5 Code Generation** — Event handler, notification repository, in-app delivery endpoint. 3 source files, 4 test files.
+- **notification-core** — Domain entities (Notification, NotificationEvent), business rules (deduplication, rate limiting)
+- **notification-preferences** — Preference entity, default values, channel toggles
+- **notification-email** — delivery-addressing rules that the later email unit will implement
 
-Walking-skeleton gate — you review the code summary for Bolt 1 and approve.
-
-Immediately after approval, the **ladder prompt** fires:
+Immediately after that first Construction gate, the **ladder prompt** fires:
 
 ```
 The walking skeleton shipped. How should the remaining Bolts run?
   ▸ Continue autonomously
-    Run remaining Bolts without gates. Failures still halt and ask.
+    Skip remaining Construction stage gates. Failures still halt and ask.
   ▸ Gate every Bolt
-    Present an approval gate after each Bolt (or parallel batch).
+    Present an approval gate after each remaining Construction stage.
 ```
 
-You've seen the shape work, so you pick **Continue autonomously**. The conductor records `Construction Autonomy Mode: autonomous` in `aidlc-state.md` and emits `AUTONOMY_MODE_SET`.
+You've seen the opening design shape, so you pick **Continue autonomously**. The conductor records `Construction Autonomy Mode: autonomous` in `aidlc-state.md` and emits `AUTONOMY_MODE_SET`. Remaining design stages (3.2–3.4 as in scope) run for every Unit without a gate.
 
-**Bolt 2: notification-preferences + notification-email** — parallel batch
+**3.5 Code Generation** — every Unit; preferences + email may batch
 
-Both depend only on notification-core and don't depend on each other, so 2.9's plan schedules them in a single batch. The conductor collects questions and generates design artifacts per Bolt, then dispatches **both code-generation stages concurrently** by issuing two `Task` calls in a single turn.
+notification-core generates first (it unblocks the others): event handler, notification repository, in-app delivery endpoint. 3 source files, 4 test files. Then notification-preferences and notification-email share a dependency-satisfied batch, so the conductor dispatches **both code-generation Units concurrently** by issuing two `Task` calls in a single turn.
 
-- **notification-preferences — 3.1 Functional Design** — Preference entity, default values, channel toggles
-- **notification-preferences — 3.5 Code Generation** — CRUD API endpoints, preference repository, validation. 2 source files, 3 test files.
-- **notification-email — 3.2 NFR Requirements** — Email delivery reliability (retry with exponential backoff), digest scheduling accuracy
-- **notification-email — 3.4 Infrastructure Design** — SQS queue, SES integration, CloudWatch alarm for dead-letter queue
-- **notification-email — 3.5 Code Generation** — Email renderer, SQS consumer, digest cron job. 4 source files, 5 test files.
+- **notification-preferences** — CRUD API endpoints, preference repository, validation. 2 source files, 3 test files.
+- **notification-email** — Email renderer, SQS consumer, digest cron job. 4 source files, 5 test files. (3.2/3.4 artifacts for this Unit already exist from the earlier stage-major pass.)
 
-Both subagent Tasks return in the next turn. Because you chose autonomous, no batch gate — Construction proceeds straight to 3.6.
+Both subagent Tasks return in the next turn. Under the swarm the engine presents **one** Code Generation stage gate after this final batch — not a gate per intermediate batch. Because you chose autonomous, that remaining stage gate is skipped and Construction proceeds to 3.6.
 
 **What a failure would look like.** Suppose `notification-email`'s Code Generation had returned with a broken SES mock. The conductor would wait for `notification-preferences` to finish, preserve its artifacts on disk, and present:
 
 ```
-Bolt notification-preferences succeeded. Bolt notification-email failed during code generation:
+Unit notification-preferences succeeded. Unit notification-email failed during code generation:
   "SES client mock could not be constructed — check test config."
 
 Options:
   ▸ Retry         Re-run notification-email from code generation.
-  ▸ Skip          Mark notification-email skipped and continue. Dependent Bolts may also fail.
+  ▸ Skip          Mark notification-email skipped and continue. Dependents may also fail.
   ▸ Abort         Stop Construction. Resume via /aidlc --stage code-generation.
 ```
 
 You'd pick **Retry**, fix the mock setup, and only notification-email re-runs. Preferences is already `[x]` complete.
 
-**Stage 3.6 — Build and Test** (aidlc-quality-agent, runs once after all Bolts)
+**Stage 3.6 — Build and Test** (aidlc-quality-agent, runs once after all Units)
 
 Generates build instructions, runs the full test suite across all 3 Units: 47 tests pass, 0 failures, 78% coverage.
 
@@ -375,13 +387,13 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 
 | Aspect | Bugfix | Feature |
 |--------|--------|---------|
-| Stages executed | 7 | 33 |
+| Stages executed | 9 | 33 |
 | Depth | Minimal | Standard |
-| Phases | Initialization + Inception + Construction | All 5 |
+| Phases | Initialization + Inception + Construction + Operation | All 5 |
 | Units of work | 1 | 3 |
-| Bolt-by-Bolt Construction | No (bugfix runs a single Bolt) | Yes — 2 Bolts (walking skeleton + 1 parallel batch) |
+| Construction walk | Stage-major; one Unit | Stage-major across 3 Units (2.9 still plans 2 Bolts) |
 | Conditional stages | Most skipped | Most executed |
-| Approval gates | 4 | Walking skeleton + ladder prompt; remaining Bolts per autonomy mode |
+| Approval gates | 4 | First Construction EXECUTE stage + ladder; remaining stage gates per autonomy mode |
 
 ---
 

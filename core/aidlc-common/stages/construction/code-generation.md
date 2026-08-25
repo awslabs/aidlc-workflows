@@ -53,7 +53,9 @@ scopes:
   - bugfix
   - refactor
   - security-patch
+  - classic
   - workshop
+  - express
 inputs: ALL prior design artifacts for this unit
 outputs: application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)
 ---
@@ -69,6 +71,11 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 - Application code goes to workspace root, NEVER to the record dir
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
+- Before review, write `source-manifest.json` listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files
+- Measurable quality targets from NFR Requirements, NFR Design, and the Testing
+  Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
+  disable a defined target, including threshold settings in test or build
+  configuration, to make a step pass; surface the gap instead.
 
 ### Step 1: Read All Unit Artifacts
 
@@ -83,7 +90,18 @@ Read all design artifacts for the current unit:
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
 
-Incremental scopes (bugfix, poc, refactor, security-patch) skip units-generation and domain-design by design; when those inputs are absent, scope the work from the requirements and, on brownfield, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` — never invent the content of a missing artifact.
+Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
+`express` scope skip Units Generation by design. When those inputs are absent,
+scope the work from Requirements Analysis and the workspace; on brownfield, also
+use the reverse-engineered code knowledge base at
+`aidlc/spaces/<active-space>/codekb/<repo>/`. Never invent the content of a
+missing artifact.
+
+For a zero-Unit directive (`directive.unit` absent and no Unit DAG), run exactly
+one implementation iteration and write this stage's artifacts under
+`<record>/construction/code-generation/` with no synthetic Unit segment. This is
+ordinary stage work: no Bolt, walking-skeleton, ladder, per-Unit receipt, or
+swarm ceremony applies.
 
 ### Step 2: PART 1 — Planning
 
@@ -101,9 +119,16 @@ Plan should cover (as applicable to the unit):
 - [ ] Deployment artifacts (Dockerfiles, IaC)
 
 **Test files are MANDATORY in the plan.** Consult the active test strategy (stage-protocol.md §8 "Test Strategy") to determine test scope and volume:
-- **Minimal strategy**: Unit test files only, requirement-driven (1 test per requirement, happy-path floor per component)
+- **Minimal strategy**: Requirement-driven tests (1 per requirement, happy-path unit floor per component); unit tests are the default, but a `bugfix` / `security-patch` targeted regression uses the narrowest level that reproduces the defect
 - **Standard strategy**: Unit test files per component (5-8 tests each) + integration test stubs for key boundaries
 - **Comprehensive strategy**: Unit + integration + E2E test files per component (10-15 tests each)
+
+Apply the active scope's floor additively:
+- `mvp`, `enterprise`, `feature`, `infra`: the selected strategy plus 80% line coverage and CI execution before merge.
+- `bugfix`, `security-patch`: the selected strategy plus a targeted regression for the bug/vulnerability at the narrowest level that reproduces it, even when that adds one integration/E2E test beyond Minimal's unit-test default; the existing suite remains green.
+- `poc`, `refactor`, `workshop`: the selected strategy still applies; the scope adds no extra new-test floor, and the existing suite remains green.
+
+The selected strategy and scope floor are both obligations. Neither replaces the other.
 
 The plan MUST include steps for:
 - [ ] Test files appropriate to the active test strategy
@@ -111,26 +136,24 @@ The plan MUST include steps for:
 
 If the plan presented to the user omits test file steps, add them before presenting. Tests are not deferred to Build and Test — that stage verifies and extends, not creates from scratch.
 
-Number each plan step sequentially (Step 1, Step 2, etc.) for clear execution ordering and traceability.
+**Test ordering follows one deterministic Testing Contract.** Run:
 
-**Recommended plan structure** (adapt if architecture warrants a different ordering):
-
-```
-Step 1: Project structure setup (directories, config files, package.json/Cargo.toml/etc.)
-Step 2: Data models / database schema / migrations
-Step 3: Business logic layer (core domain logic, services)
-Step 4: Business logic tests (unit tests for Step 3)
-Step 5: API / endpoint layer (routes, controllers, handlers)
-Step 6: API tests (unit + integration tests for Step 5)
-Step 7: Repository / data access layer (queries, ORM config)
-Step 8: Frontend components (if applicable — UI components, pages, state)
-Step 9: Frontend tests (component tests, interaction tests)
-Step 10: Configuration and environment setup (.env templates, build config)
-Step 11: Test configuration (vitest.config, jest.config, or equivalent)
-Step 12: Documentation (inline docs, API docs, README updates)
+```bash
+bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts render
 ```
 
-This layer-by-layer approach ensures dependencies are built before dependents (data models before business logic, business logic before API). Deviate when the architecture requires it (e.g., event-driven systems, microservices with independent stacks).
+Paste the command's complete `## Testing Contract` JSON block into `code-generation-plan.md` unchanged. The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
+
+Use the contract's `plan_profile.steps` as the required ordering baseline, adapting names and omitting genuinely inapplicable layers without changing the methodology:
+- **TDD**: for every applicable testable layer — data-model/database behavior, repository/data access, business logic, API/endpoint, and frontend behavior — plan Red (failing tests), Green (minimal implementation), then Refactor while green.
+- **BDD**: define executable behavior/scenario examples before each observable feature slice, implement that slice across every required layer, run scenarios green, then refactor. Do not turn BDD into layer-local TDD.
+- **ATDD**: write executable acceptance tests before the complete cross-layer feature implementation, implement against that acceptance contract, run acceptance green, then refactor. Do not split acceptance intent into unrelated per-layer Red steps.
+- **Custom/mixed**: preserve the contract's exact `ordering` text, such as scenario-first BDD with lower-level unit tests after implementation. Never coerce a mixed posture into TDD.
+- **Test-after**: for every applicable testable layer, implement the layer and then write/run that layer's tests.
+
+The contract always puts test-runner readiness before the first executable test step. On greenfield work, bootstrap the minimal runner/configuration and dependency needed to execute the exact unit-scoped command before the first TDD Red, BDD scenario, or ATDD acceptance step. On brownfield work, verify that command before the first test-first step. Record the exact command in `unit-test-instructions.md`; a Red/Green step is invalid if no runnable command exists.
+
+Number each plan step sequentially (Step 1, Step 2, etc.) for clear execution ordering and traceability. Preserve dependency ordering inside the selected methodology, and deviate only when the architecture requires it (for example, event-driven systems or independently deployable services).
 
 Also create
 `<record>/construction/{unit-name}/code-generation/unit-test-instructions.md`
@@ -142,9 +165,13 @@ before Plan Approval. Consult the active test strategy (stage-protocol.md §8
 - **Standard strategy**: 5-8 tests per component, with key behavior coverage
 - **Comprehensive strategy**: 10-15 tests per component, with thorough coverage
 
+Scope floors remain additive here: a Minimal `bugfix` / `security-patch` still
+includes its targeted regression at the narrowest level that reproduces the
+defect.
+
 Include:
 - Test framework setup and configuration
-- How to run THIS UNIT's tests
+- How to run THIS UNIT's tests, including the exact command that is runnable before the first test-first cycle
 - Expected coverage targets
 - Mocking/stubbing guidance
 - Test data management
@@ -162,8 +189,18 @@ to the user.
 Before presenting the approval, create or update
 `<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
 with a **Plan Approval** question that covers both
-`code-generation-plan.md` and `unit-test-instructions.md`, both options below,
-and a blank `[Answer]:` tag:
+`code-generation-plan.md`, its embedded Testing Contract, and
+`unit-test-instructions.md`. For a revision, reset the existing Plan Approval
+`[Answer]:` to blank before regenerating anything. After both files are final,
+run:
+
+```bash
+bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts fingerprint --unit "<unit-name>"
+```
+
+Write the returned hash into the Plan Approval section as
+`[Approval Fingerprint]: sha256:<hash>`, followed by both options below and a
+blank `[Answer]:` tag:
 
 - "Approve Plan" — proceed to code generation
 - "Request Changes" — revise the plan
@@ -171,12 +208,22 @@ and a blank `[Answer]:` tag:
 Then present that question as a structured question and STOP the turn. Fill the
 `[Answer]:` tag only after the human explicitly responds. On "Request Changes",
 record that answer, revise the plan and unit test instructions as needed, reset
-the Plan Approval `[Answer]:` to blank, and present the question again. Any
-post-approval change to `unit-test-instructions.md` reopens Plan Approval:
-reset the `[Answer]:` to blank and re-ask before generation. Do not begin Step
-4, dispatch the developer agent, or infer approval from a forwarding-loop
-continuation. Only an explicit "Approve Plan" response authorizes generation
-from the approved versions of both files.
+the Plan Approval `[Answer]:` to blank, regenerate the Testing Contract and
+fingerprint, and present the question again. Any post-approval change to the
+plan, unit test instructions, `## Testing Posture` memory, scope, test strategy,
+or project type invalidates the fingerprint and reopens Plan Approval. Do not
+begin Step 4, dispatch the developer agent, or infer approval from a
+forwarding-loop continuation. Only an explicit "Approve Plan" response
+authorizes generation from the exact fingerprinted files and contract.
+
+> **Build-and-Test loop-back exception:** The loop-back in the construction
+> protocol module (`aidlc-common/protocols/stage-protocol-construction.md`)
+> repairs the already-approved plan. Do not blank the Plan Approval `[Answer]:`
+> when applying that revision; record the plan delta in the Loop-Back Log
+> instead. In gated mode, the human's "Retry with fix" answer is the re-approval
+> of the revised approach and is recorded through `--user-input` on the replayed
+> approval report. The plan-approval guard's evidence survives the jump because
+> the non-empty plan and approved questions file are preserved.
 
 ### Step 4: PART 2 — Generation
 
@@ -192,12 +239,25 @@ Include in the delegation prompt:
   the current unit name when the single-iteration directive has no `unit`
   field). This marker identifies the one unit whose approved plan authorizes
   the dispatch; do not repeat it for contextual dependencies.
+- As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` copied from
+  the approved plan's Testing Contract. The plan-approval guard rejects a
+  missing, different, or stale hash.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
 - A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
 - The approved code-generation-plan.md (full content)
 - The approved unit-test-instructions.md (full content)
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as completed
+- The instruction that the approved Testing Contract embedded in the plan is
+  authoritative for Part 2. The subagent must not independently re-resolve or
+  reinterpret memory. TDD records each Red command's failing output before
+  Green; BDD and ATDD follow their scenario/acceptance-first cross-layer
+  profiles; custom/mixed follows the exact approved ordering.
+- The instruction that measurable quality targets from NFR Requirements, NFR
+  Design, and the Testing Contract coverage floor are inputs, not suggestions.
+  The subagent must NEVER relax, lower, or disable a defined target, including
+  threshold settings in test or build configuration, to make a step pass; it
+  must surface the gap instead.
 
 The subagent generates all code, test files, and configuration artifacts in the workspace.
 
@@ -208,6 +268,30 @@ After subagent completes, create `<record>/construction/{unit-name}/code-generat
 - Key implementation decisions
 - Test coverage summary
 - Any deviations from the plan
+
+Create `<record>/construction/{unit-name}/code-generation/source-manifest.json`
+with this strict schema:
+
+```json
+{
+  "stage": "code-generation",
+  "unit": "u1-auth",
+  "version": 1,
+  "writes": [
+    { "path": "src/auth/login.ts" },
+    { "path": "src/auth/generated/" },
+    { "repo": "repo-a", "path": "src/api/routes.ts" }
+  ]
+}
+```
+
+List every application-source path this unit created, modified, or deleted,
+including files written by shell commands, scaffolding, or generators. Use a
+trailing `/` directory claim for generated trees. In the main workspace,
+multi-repo entries name their recorded `repo`; inside the worktree hosting the Bolt, paths are
+relative to its single selected repo and MUST omit `repo`. The engine refuses
+to record the unit review without this manifest, and unclaimed changed paths
+block stage completion.
 
 Create
 `<record>/construction/{unit-name}/code-generation/traceability.json`.
@@ -250,7 +334,7 @@ Summary of code produced (files, tests, key decisions), then:
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
-> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including Bolt execution: generation must never begin before the human chooses "Approve Plan". Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Bolt execution. A single Bolt-level gate (or batch-level gate for parallel Bolt batches) covers completion for all Units in the Bolt. The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation across the batch.
+> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including during Construction, except for the explicit Build-and-Test loop-back replay carve-out above: generation must never begin before the human chooses "Approve Plan", and the carve-out reuses that preserved approval rather than inferring a new one. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. On the default stage-major walk a single stage-level gate covers every Unit after the last Unit settles. Under an autonomous swarm the engine presents that Code Generation stage gate only after the final DAG batch has converged (intermediate batches merge without a gate). The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation.
 
 ## Sensors
 
@@ -261,7 +345,10 @@ the record dir); the planning, plan-approval, and summary artefacts
 `unit-test-instructions.md`, `code-summary.md`) live under
 `<record>/construction/{unit-name}/code-generation/`.
 
-The imported sensors check the code outputs and per-unit markdown artefacts:
+The imported sensors check the code outputs and per-unit markdown artefacts.
+`source-manifest.json` is engine-validated against its strict schema and source
+binding; like `traceability.json`, it is not subject to the markdown
+`required-sections` floor:
 
 - **`required-sections`** verifies each markdown artefact has the generic
   document-shape floor (at least 2 H2 headings), including the per-unit unit
@@ -284,9 +371,10 @@ structured `traceability.json` file, which the `traceability` sensor owns.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -296,8 +384,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in

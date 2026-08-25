@@ -64,7 +64,6 @@ resetAidlcEnv();
 
 const BUN = process.execPath; // the bun running this test
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
-const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -80,6 +79,9 @@ interface Directive {
   reviewer?: string;
   review_class?: string;
   reviewer_max_iterations?: number;
+  protocol_modules?: string[];
+  swarm_settled?: boolean;
+  continue_token?: string;
   message?: string;
   [k: string]: unknown;
 }
@@ -249,7 +251,24 @@ function runNext(
   return r.directive as Directive;
 }
 
-function runReport(proj: string): Directive {
+function runRawDirective(proj: string, args: string[]): Directive {
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  const r = spawnSync(
+    BUN,
+    [ORCH, ...args, "--project-dir", proj],
+    { encoding: "utf-8", env },
+  );
+  if ((r.status ?? -1) !== 0) {
+    throw new Error(`raw directive failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+  return JSON.parse((r.stdout ?? "").trim()) as Directive;
+}
+
+function runReport(
+  proj: string,
+  extraEnv: Record<string, string> = {},
+): Directive {
   const r = spawnSync(BUN, [
     ORCH,
     "report",
@@ -259,36 +278,13 @@ function runReport(proj: string): Directive {
     "approved",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8", env: process.env });
+  ], { encoding: "utf-8", env: { ...process.env, ...extraEnv } });
   try {
     return JSON.parse((r.stdout ?? "").trim()) as Directive;
   } catch {
     throw new Error(
       `runReport did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
     );
-  }
-}
-
-function logReviewReady(proj: string, unit: string): void {
-  const args = [
-    LOG,
-    "review",
-    "--stage",
-    "code-generation",
-    "--reviewer",
-    "aidlc-architecture-reviewer-agent",
-    "--unit",
-    unit,
-    "--iteration",
-    "1",
-    "--project-dir",
-    proj,
-  ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-    }
   }
 }
 
@@ -349,6 +345,37 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.kind).not.toBe("invoke-swarm");
     expect(d.unit).toBe("api"); // the last unit in topological order
     expect(d.gate).toBe(true);
+    expect(d.swarm_settled).toBe(true);
+    expect(d.protocol_modules).toEqual(["construction", "swarm"]);
+    expect(d.reviewer).toBeUndefined();
+    expect(d.review_class).toBeUndefined();
+    expect(d.reviewer_max_iterations).toBeUndefined();
+  }, 30000);
+
+  test("3b: settled shape survives the load-steering continue round trip", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    seedConverged(proj, ["auth", "api"]);
+
+    let directive = runRawDirective(proj, ["next"]);
+    expect(directive.kind).toBe("load-steering");
+    let continueCalls = 0;
+    while (directive.kind === "load-steering") {
+      expect(directive.continue_token).toBeString();
+      directive = runRawDirective(proj, [
+        "continue",
+        directive.continue_token ?? "",
+      ]);
+      continueCalls++;
+    }
+
+    expect(continueCalls).toBeGreaterThan(0);
+    expect(directive.kind).toBe("run-stage");
+    expect(directive.reviewer).toBeUndefined();
+    expect(directive.review_class).toBeUndefined();
+    expect(directive.reviewer_max_iterations).toBeUndefined();
+    expect(directive.protocol_modules).toEqual(["construction", "swarm"]);
+    expect(directive.swarm_settled).toBe(true);
   }, 30000);
 
   // 4: a batch with a PARTIAL pass -> the engine re-fans only that batch's
@@ -363,18 +390,18 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.units).toEqual(["b"]);
   }, 30000);
 
-  test("4b: autonomous settle requires one architecture review per converged unit", () => {
+  test("4b: settled autonomous swarm trusts finalize-time per-unit reviews", () => {
     const proj = seedProject();
     seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth", "api"]);
 
-    const refused = runReport(proj);
-    expect(refused.kind).toBe("error");
-    expect(refused.message).toContain("declares a reviewer");
-
-    logReviewReady(proj, "auth");
-    logReviewReady(proj, "api");
-    const accepted = runReport(proj);
+    // SWARM_UNIT_CONVERGED is the finalize referee's protected receipt. Finalize
+    // already required each Bolt's configured review, unit source binding, and
+    // footprint before emitting it, so the main-checkout settle gate must not
+    // demand duplicate review rows.
+    const accepted = runReport(proj, {
+      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+    });
     expect(accepted.kind).toBe("done");
   }, 30000);
 });

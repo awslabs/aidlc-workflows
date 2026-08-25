@@ -103,6 +103,43 @@ git checkout v2
   `runTerminalCommand`, `createFile`, `editFiles`, and `readFile`,
   but the IDE side has not yet been verified live — treat IDE enforcement
   as best-effort until it has.
+- **Command tracking is exact and best-effort.** AI-DLC tracks simple direct
+  orchestrator, source-dispatcher, and real compiled `next`, `continue`,
+  `report`, and `park` commands. One trailing `2>&1` is supported. Inspection
+  commands are not classified from `aidlc` substrings; ambiguous wrappers and
+  commands whose arguments contain active shell expansion (`$VAR`, globs,
+  brace expansion, or a leading `~`) run unchanged and untracked, because the hook cannot hash the
+  argv the shell will eventually produce. Direct-looking compounds are refused. An
+  explicit `--project-dir` outside the current physical project is refused
+  before current-project coordination is written.
+- **The engine owns continuation replay on every harness.** Copilot uses the
+  same record-local, atomic single-use cursor as Claude, Codex, Cursor, Kiro,
+  Kiro IDE, and opencode. Native token validation runs first; the engine then
+  compares the complete token SHA-256 and publishes the exact successor before
+  stdout under the active-directive lock. Copilot's session ownership and
+  delivery evidence enrich that marker but do not own replay. Missing,
+  malformed, v1, and pre-shared markers recover once inside the same
+  transaction; a fresh `next` resets the cursor. See the shared cursor contract
+  in the Developer Reference for crash, migration, rollback, and filesystem
+  limits.
+- **Stop preserves the current delivered Copilot directive.** An exact host
+  `tool_use_id`, or the adapter ID carried through rewritten engine input and
+  returned by PostToolUse, can settle delivery for session-scoped Stop and
+  Resume behavior. If exact correlation is unavailable, execution is allowed
+  untracked and Post does not guess. A fresh simple `next` restores tracked
+  delivery; correlation loss does not create a permanent deny. Once a claim is
+  attempted, project, state, or session ownership rejection is an explicit deny:
+  another session cannot execute the owner's current token as untracked work.
+- **Legacy Resume and conversation waits are session-scoped.** Stop allows a
+  genuine conversational response to end cleanly. A Resume marker written by a
+  pre-2.6.19 installation remains owner-scoped; explicit `next --resume`
+  supersedes it and continues directly. Prompt text and rules content are not
+  persisted in the coordination marker.
+- **Host evidence is intentionally bounded.** Rewriting and carried-ID echo
+  were live-verified on Copilot CLI 1.0.79 on macOS in noninteractive mode.
+  VS Code's `tool_use_id`, `updatedInput`, and `tool_response` path is covered
+  from its documented Preview contract but is not live-verified here. Copilot
+  cloud agent is outside this release's supported AI-DLC surface.
 - **Hook wiring is matcher-free by design**: VS Code parses but IGNORES hook
   matchers, so every adapter target self-filters on `tool_name` instead — a
   matcher would silently broaden on the IDE.
@@ -110,7 +147,7 @@ git checkout v2
   carry no per-call agent field; the adapter brackets delegations via
   SubagentStart/SubagentStop (including VS Code's `agent_type`/`agent_id`
   fields) and forwards the identity when exactly one subagent is active.
-  Ambiguous overlap fails open for that call (the §12a prose bound still
+  Ambiguous overlap fails open for that call (the reviewer-module prose bound still
   governs).
 - **Personas carry no `model:` pin.** The two surfaces disagree on model
   value syntax (the CLI forwards frontmatter strings verbatim to the BYOK

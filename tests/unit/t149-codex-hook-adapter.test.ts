@@ -1,7 +1,7 @@
 // t149-codex-hook-adapter: the Codex stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-write-audit-log.ts, hook:aidlc-plan-approval-guard
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-write-audit-log.ts, hook:aidlc-plan-approval-guard, function:hasExplicitHumanSelection
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/codex-hook-payloads/
 // (field-verbatim captures off Codex CLI 0.137.0 — the spike corpus at
@@ -47,9 +47,11 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createIntent,
+  humanActedSinceGate,
   sessionsDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
+  writeSessionBinding,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -71,7 +73,7 @@ const FIXTURES = JSON.parse(
 // and the audit trail via auditFilePath() — under the active intent's record. So
 // the scratch project seeds the per-intent shell + the state fixture into the
 // default record (so the cursor resolves) + the resolved audit SHARD (pinned
-// clone-id so the log-subagent shard gate passes and reads are deterministic).
+// clone-id so audit reads are deterministic).
 // The Codex adapter's session heartbeat lives with the core session stamps at
 // aidlc/.aidlc-sessions/, independent of the active-intent cursor. That lets a
 // new session reconcile its predecessor after a second intent became active.
@@ -253,7 +255,182 @@ function runAdapter(
   };
 }
 
+function structuredSelectionPayload(
+  dir: string,
+  toolResponse: unknown,
+  turn = "structured-turn",
+): Record<string, unknown> {
+  return {
+    hook_event_name: "PostToolUse",
+    session_id: "codex-structured-session",
+    turn_id: turn,
+    cwd: dir,
+    tool_name: "request_user_input",
+    tool_input: {
+      questions: [{ id: "decision", question: "Approve?", options: ["Approve", "Reject"] }],
+    },
+    tool_response: toolResponse,
+    tool_use_id: `request-${turn}`,
+  };
+}
+
+function humanTurnCount(dir: string): number {
+  return readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+}
+
+describe("t149 Codex structured request_user_input presence", () => {
+  test("an explicit nested selection mints exactly one HUMAN_TURN across duplicate delivery", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = structuredSelectionPayload(dir, JSON.stringify({
+        answers: { decision: { answers: ["Approve"] } },
+      }));
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      expect(humanActedSinceGate(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("substantive Codex answer arrays mint, including opaque question IDs and cancellation words in prose", () => {
+    for (const [index, answer] of ["Approve", "cancel the standing order via cron"].entries()) {
+      const dir = scratchProject(true);
+      try {
+        const payload = structuredSelectionPayload(
+          dir,
+          JSON.stringify({
+            answers: { [index === 0 ? "error" : "decision"]: { answers: [answer] } },
+          }),
+          `direct-${index}`,
+        );
+        expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+        expect(humanTurnCount(dir)).toBe(1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("an explicit Abort option is human judgment, not cancellation boilerplate", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = structuredSelectionPayload(
+        dir,
+        JSON.stringify({ answers: { decision: { answers: ["Abort"] } } }),
+        "explicit-abort",
+      );
+      const question = ((payload.tool_input as { questions: Array<{ options: string[] }> }).questions[0]);
+      question.options.push("Abort");
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("empty, cancelled, timed-out, auto-resolved, error, and malformed responses do not mint", () => {
+    const responses: unknown[] = [
+      "{}",
+      JSON.stringify({ status: "completed", answer: "Cancelled" }),
+      JSON.stringify({ status: "cancelled", answer: "Approve" }),
+      JSON.stringify({ answers: { decision: { answers: ["Approve"] } }, timedOut: true }),
+      JSON.stringify({ answers: { decision: { answers: ["Approve"] } }, auto_resolved: true }),
+      JSON.stringify({ answers: { decision: { answers: ["Approve"] } }, error: "transport failed" }),
+      JSON.stringify({ answers: {} }),
+      JSON.stringify({ answers: { decision: { answers: [] } } }),
+      JSON.stringify({ answers: { decision: { answers: ["   "] } } }),
+      JSON.stringify({ answers: { decision: { answers: ["Approve", "Dismissed"] } } }),
+      JSON.stringify({ answers: { decision: { answers: ["Abort"] } } }),
+      JSON.stringify({ answer: "Approve" }),
+      JSON.stringify({ selection: "Approve" }),
+      "{malformed-json",
+      { answers: { decision: { answers: ["Approve"] } } },
+      null,
+    ];
+    const dir = scratchProject(true);
+    try {
+      for (const [index, response] of responses.entries()) {
+        const payload = structuredSelectionPayload(dir, response, `rejected-${index}`);
+        expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      }
+      expect(humanTurnCount(dir)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("a valid selection outside an active workflow is a no-op", () => {
+    const dir = scratchProject(false);
+    try {
+      const payload = structuredSelectionPayload(dir, JSON.stringify({
+        answers: { decision: { answers: ["Approve"] } },
+      }));
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
+  test("0: Bash commands inherit the validated payload session", () => {
+    const dir = scratchProject(true);
+    try {
+      writeSessionBinding(
+        dir,
+        "codex-command-session",
+        DEFAULT_SPACE,
+        DEFAULT_RECORD_DIR,
+      );
+      const other = createIntent(dir, "cursor-other", DEFAULT_SPACE, "feature");
+      writeFileSync(
+        join(intentsDirOf(dir, DEFAULT_SPACE), other.dirName, "aidlc-state.md"),
+        readFileSync(seededStateFile(dir), "utf-8"),
+      );
+      setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
+      const command = "bun .codex/tools/aidlc-orchestrate.ts next";
+      const r = runAdapter(dir, "bind-bash-session", {
+        hook_event_name: "PreToolUse",
+        session_id: "codex-command-session",
+        cwd: dir,
+        tool_name: "Bash",
+        tool_input: { command },
+      });
+      expect(r.code, r.stderr).toBe(0);
+      const output = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: {
+          hookEventName?: string;
+          updatedInput?: { command?: string };
+        };
+      };
+      expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
+        "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
+          "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
+          command,
+      );
+
+      const humanTurn = runAdapter(dir, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "codex-command-session",
+        turn_id: "bound-human-turn",
+        cwd: dir,
+      });
+      expect(humanTurn.code, humanTurn.stderr).toBe(0);
+      expect(readRecordAudit(dir, DEFAULT_RECORD_DIR)).toContain(
+        "**Event**: HUMAN_TURN",
+      );
+      expect(readRecordAudit(dir, other.dirName)).not.toContain(
+        "**Event**: HUMAN_TURN",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1: stop blocks with a reason while the workflow has pending work (verbatim contract)", () => {
     const dir = scratchProject(true);
     try {
@@ -701,7 +878,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(ctx).toContain("$aidlc intent intent-a");
       expect(ctx).not.toContain("/aidlc intent intent-a");
       expect(ctx).not.toContain("&&");
-      expect(readFileSync(stampPath, "utf-8").trim()).toBe(b.uuid);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

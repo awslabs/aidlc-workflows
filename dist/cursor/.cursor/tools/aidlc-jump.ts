@@ -23,6 +23,7 @@ import {
   setField,
   setPhaseProgress,
   stageIndex,
+  sourceBaselineAuditFields,
   writeStateFile,
 } from "./aidlc-lib.js";
 
@@ -53,7 +54,7 @@ function emitAudit(
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
-  const rawArgs = argv;
+  const rawArgs = [...argv];
 
   // Extract --project-dir
   const filteredArgs: string[] = [];
@@ -413,6 +414,14 @@ function handleExecute(args: string[]): void {
   }
   content = setField(content, "Last Completed Stage", lastCompleted);
 
+  // One content-addressed snapshot is shared by both rows in the jump
+  // transition. The companion STAGE_STARTED repeats the SAME authority rather
+  // than creating a competing snapshot or clearing the jump boundary.
+  const jumpSourceBaseline = sourceBaselineAuditFields(
+    pd,
+    "code-generation",
+  );
+
   // Atomic audit emissions (audit-first — throws before writeStateFile if any fail)
   try {
     // Per-stage STAGE_SKIPPED for every skipped stage (one event per [S] transition)
@@ -420,6 +429,7 @@ function handleExecute(args: string[]): void {
       emitAudit(pd, "STAGE_SKIPPED", {
         Stage: skippedSlug,
         Reason: `Skipped by jump to ${targetSlug} (${direction})`,
+        "Skip Kind": "jump",
       });
     }
 
@@ -441,13 +451,15 @@ function handleExecute(args: string[]): void {
       });
     }
 
-    // The canonical STAGE_JUMPED event for the target itself
+    // The jump boundary owns the baseline. Its companion STAGE_STARTED repeats
+    // this exact field so stage-major consumers see one stable transition.
     emitAudit(pd, "STAGE_JUMPED", {
       Direction: direction.toUpperCase(),
       Source: currentSlug,
       Target: targetSlug,
       Scope: scope,
       Details: `${direction.toUpperCase()} jump from ${currentSlug} to ${targetSlug} (${targetStage.number}). Scope: ${scope}.`,
+      ...jumpSourceBaseline,
     });
 
     // Target enters Active state — emit STAGE_STARTED so audit reflects the
@@ -455,6 +467,7 @@ function handleExecute(args: string[]): void {
     emitAudit(pd, "STAGE_STARTED", {
       Stage: targetSlug,
       Agent: targetStage.lead_agent,
+      ...jumpSourceBaseline,
     });
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);

@@ -57,7 +57,7 @@ for the release matrix. The script writes each executable under
 target's `runtime/<harness>/` directory, and writes `build-results.json` at
 `build/binaries/`. The native gates run sensors, graph compilation, validation,
 generated-surface checks, plugin selection/composition, orchestration,
-Bolt/Swarm composition, packaged-runtime immutability, hooks, statusline,
+ordinary Bolt and autonomous swarm composition, packaged-runtime immutability, hooks, statusline,
 adapters, and explicit project routing without a `bun` executable on `PATH`.
 The staged `runtime/<harness>/` trees are read-only fallbacks; mutating commands
 must target an installed project harness. Any failed gate fails the build.
@@ -130,12 +130,12 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 1. **Create `core/scopes/aidlc-hotfix.md`** — the scope's identity. Frontmatter:
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
-   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference.
+   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference.
    - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
-   - `testStrategy` (optional): override test strategy independent of depth (e.g. `Minimal` for workshop). Defaults to matching depth.
+   - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
-   - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`feature`/`poc`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
+   - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 
@@ -261,7 +261,7 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 - **Stage-graph participation**. Stage frontmatter references agents by slug in its `lead_agent` / `support_agents` fields, and `aidlc-graph.ts compile` carries those into `stage-graph.json`. Adding a new agent without naming it in any stage's frontmatter means the agent exists but never runs. Stage-graph schema validation (`core/tools/aidlc-stage-schema.ts`) is wired in: `aidlc-graph.ts compile` validates every stage's frontmatter (and `compile --check` is the CI drift guard), and `/aidlc --doctor` re-runs the same `validateStageFrontmatter` plus a "Graph references" check that every `lead_agent` / `support_agents` slug resolves.
 - **Knowledge file existence**. `examples` is a list of suggested filenames documented in the agent→examples table — they're not created or validated. Users place the actual content in `aidlc/knowledge/<agent>/` (the space-level knowledge dir).
 - **Doc tables listing agents**. The Phase Participation matrix at `docs/reference/05-agent-system.md:119-131` and the agent→examples table at `core/knowledge/aidlc-shared/knowledge-readme-template.md:16-29` are maintained by hand. Update them in the same PR that adds the agent (see Documentation Policy below).
-- **`.claude/agents/<new-agent>.md` body content**. Only the frontmatter is parsed. The body prose (Core Responsibilities, Knowledge Loading sequence, etc.) is read by the agent itself when activated — write it to match the existing agent files' structure.
+- **`.claude/agents/<new-agent>.md` body content**. Only the frontmatter is parsed. The body prose (Core Responsibilities, Collaboration, optional Memory Focus, Key Principles) is read by the agent itself when activated — write it to match the existing agent files' structure.
 
 ## Documentation Policy
 

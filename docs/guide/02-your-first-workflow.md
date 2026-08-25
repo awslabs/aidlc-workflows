@@ -1,6 +1,6 @@
 # Your First Workflow
 
-This chapter walks through a complete AI-DLC workflow run, explaining what you see at each step and what decisions you make. The example uses a `feature`-scoped workflow to build a REST API.
+This chapter walks through a complete AI-DLC workflow run, explaining what you see at each step and what decisions you make. The example uses a `feature`-scoped workflow to build a REST API. For a customer-oriented comparison of Classic, Express, Feature, and the other choices, see [Workflow Profiles](workflow-profiles.md).
 
 > **Note**: The transcripts in this chapter show **Claude Code**. On Kiro CLI,
 > Kiro IDE, Codex CLI, and opencode the workflow - stages, agents, gates,
@@ -43,13 +43,14 @@ The three initialization stages run deterministically inside `aidlc-utility inte
 
 ### Stage 0.1: Workspace Scaffold
 
-The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation and Operation, so those folders never appear:
+The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation but retains its deployment stages, so `ideation/` is absent while `operation/` appears:
 
 ```
 Intent created, record dir at aidlc/spaces/default/intents/<YYMMDD>-<label>/
   initialization/
   inception/
   construction/
+  operation/
   verification/
 Space-level dirs ensured:
   aidlc/spaces/default/knowledge/    (team knowledge, empty; you add files)
@@ -162,13 +163,14 @@ Remaining Inception stages (Requirements Analysis through Delivery Planning) run
 
 ## Construction Phase
 
-Construction builds the solution **Bolt by Bolt**. A [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Each Bolt ships a reviewable slice; the 2.9 plan decides the sequence and marks the first Bolt as the **walking skeleton** — the smallest end-to-end slice that proves the architecture.
+Construction builds the solution in reviewable slices. A [Bolt](glossary.md) is the planned Construction delivery slice from Delivery Planning (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The **default walk is stage-major** (one stage for every Unit, then the next stage) and does not yet treat that plan as a runtime boundary. The **walking skeleton** is the planned first Bolt; under the default walk that gate is the first in-scope Construction EXECUTE stage.
 
 ```
-─── Construction: Bolt 1 — notification-core (walking skeleton) ───────────
+Starting the first Bolt now: one build pass over the code, tests and
+checks for a piece of the work. First step is Functional Design.
 ```
 
-The walking skeleton is **always gated** — you review its design artifacts and generated code before any other Bolt runs. Immediately after approval, the **ladder prompt** fires exactly once:
+The walking skeleton is **always gated** — you review that first Construction stage before the rest of Construction runs. Immediately after approval, the **ladder prompt** fires exactly once:
 
 ```
 The walking skeleton shipped. How should the remaining Bolts run?
@@ -176,17 +178,17 @@ The walking skeleton shipped. How should the remaining Bolts run?
   ▸ Gate every Bolt
 ```
 
-Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs every remaining Bolt in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit inside the Bolt; the per-Unit gate in that stage file is suppressed — a single Bolt-level (or batch-level) gate replaces it.
+Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs the remaining Construction *stage* gates in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit; the per-Unit completion gate in that stage file is suppressed — a single stage-level gate replaces it after the last Unit settles (under swarm, after the final DAG batch).
 
-Bolts whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
+Units whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
 
-After all Bolts complete, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
+After every Unit's per-unit stages settle, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
 
 ---
 
 ## Operation Phase
 
-Operation deploys and monitors the solution. All 7 stages are conditional — smaller scopes like `poc` and `bugfix` may skip this entire phase.
+Operation deploys and monitors the solution. All 7 stages are conditional — smaller scopes like `mvp` and `poc` may skip this entire phase.
 
 After the final stage (4.7 Feedback & Optimization), the workflow is complete.
 

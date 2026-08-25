@@ -42,6 +42,7 @@ scopes:
   - enterprise
   - feature
   - mvp
+  - classic
   - workshop
 inputs: All Inception artifacts (requirements, stories, mockups, architecture, units)
 outputs: bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)
@@ -53,12 +54,7 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-delivery-agent persona from `agents/aidlc-delivery-agent.md` and knowledge from `.aidlc/knowledge/aidlc-delivery-agent/`.
-Load aidlc-architect-agent for build order validation.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 Read all Inception phase artifacts:
 - Requirements from `<record>/inception/requirements-analysis/`
@@ -79,12 +75,12 @@ Use these affirmed practices when populating `bolt-plan.md`. If no narrower
 statement exists (including when practices-discovery was skipped), use the
 active space's `memory/org.md` defaults.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); this stage (2.9) chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
 
 **Definitions for this stage:**
-- **Bolt** — per `stage-protocol.md` Glossary: "a deployable unit of work within Construction — one pass through stages 3.1–3.7." A Bolt wraps one or more Units of Work and runs once through the Construction stages.
+- **Bolt** — per `stage-protocol.md` Glossary: the planned Construction delivery slice from this stage (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The engine does not consume `bolt-plan.md` for Unit grouping or walk order; runtime batches come from `unit-of-work-dependency.md`. A **Batch** is the group of Units that build concurrently (runtime; from that 2.7 artifact).
 
 These definitions are for YOU. They are not written to be read out, and the user
 has not seen them. Every one of them names something that is about to appear in
@@ -116,7 +112,7 @@ Per-Bolt questions (the aidlc-delivery-agent loops these during artifact generat
 - Is this Bolt the thin end-to-end slice (the walking skeleton)? If yes, which parts of the architecture does it prove out?
 - What has to be true for this Bolt to count as done?
 - What will shipping this Bolt tell us that we do not know yet?
-- Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, workshop — default to aidlc-developer-agent for all Bolts.)
+- Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, classic — default to aidlc-developer-agent for all Bolts.)
 
 NOTE: Bolt sequencing is economic, not topological. Bolt order may deviate from 2.7's topological order when a risk-first or walking-skeleton-first argument justifies it. The deviation must be captured in `risk-and-sequencing-rationale.md`.
 
@@ -124,11 +120,11 @@ NOTE: This stage plans the Bolt sequence. It does NOT decide which AIDLC stages 
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Validate the chosen Bolt sequence respects 2.7's dependency DAG (with aidlc-architect-agent input). Flag any deviation from topological order so it can be justified in the rationale artifact.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create four artifacts in `<record>/inception/delivery-planning/`. These are
 documents the user opens and reads at the gate, so the same rule the questions
@@ -140,11 +136,11 @@ initials all qualify. Gloss and move on; do not restructure the artifact around
 the explanation.
 
 - `bolt-plan.md` — the ordered sequence of Bolts. Each Bolt entry: included Unit(s) of Work, walking-skeleton marker if applicable, Definition of Done for that Bolt, confidence hypothesis ("what will shipping this Bolt prove?"), expected demo.
-- `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, workshop), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
+- `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, classic), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
 - `risk-and-sequencing-rationale.md` — the why behind the Bolt ordering: WSJF-style scoring, risk-first argument, walking-skeleton-first argument, or value-first argument. References the heuristic used (Cohn, Reinertsen CD3, or SAFe WSJF).
 - `external-dependency-map.md` — gated items (external APIs, data availability windows, approval lead times, external-team hand-offs) mapped to the Bolts that consume them. Lightweight or empty when fully AI-contained.
 
-### Step 6: Phase Boundary Verification
+### Step 5: Phase Boundary Verification
 
 Run the Inception → Construction completeness audit. Read every
 `traceability.json` produced by the Inception stages that executed:
@@ -161,7 +157,7 @@ targets, or missing upstream IDs. Consolidate the tables into
 the top. If any finding remains, stop the transition and revisit the owning
 stage before Construction begins.
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .aidlc/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
@@ -185,7 +181,7 @@ code-generation serially, in Bolt build order), so opt in when the plan
 justifies per-unit coherence and early working code over parallel batch
 builds.
 
-### Step 8: Present Completion & Request Approval
+### Step 7: Present Completion & Request Approval
 
 Completion emoji: :calendar:
 Review path: `<record>/inception/delivery-planning/`
@@ -202,9 +198,10 @@ The imported sensors check those outputs:
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
@@ -214,8 +211,10 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
+Before the approval gate, run the `stage-protocol.md` §13
+`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
+model, reads memory.md and returns the candidates for the structured question.
+For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
 - Prescriptive rule → a practice line under the routed heading in
