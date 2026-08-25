@@ -1062,20 +1062,37 @@ describe("Kiro numbered-prose answer classification", () => {
 describe("Kiro non-matching checkpoint protocol", () => {
   test("shared protocol acknowledges the reply, restates choices, and records nothing", () => {
     expect(KIRO_PROTOCOL).toContain("### Non-matching checkpoint replies");
-    expect(KIRO_PROTOCOL).toContain("acknowledge the received reply");
-    expect(KIRO_PROTOCOL).toContain("state that it did not match an offered choice");
-    expect(KIRO_PROTOCOL).toContain("same structured question with every valid choice");
-    expect(KIRO_PROTOCOL).toContain("do not call `aidlc-orchestrate.ts report`");
-    expect(KIRO_PROTOCOL).toContain("do not treat the checkpoint as resolved");
+    expect(KIRO_PROTOCOL).toContain(
+      "A harness-supplied\n**Other** escape is an offered UI choice",
+    );
+    expect(KIRO_PROTOCOL).toContain("Discuss what they\nwant instead");
+    expect(KIRO_PROTOCOL).toMatch(/acknowledge the received\s+reply/);
+    expect(KIRO_PROTOCOL).toMatch(
+      /state that it did not match an\s+offered choice/,
+    );
+    expect(KIRO_PROTOCOL).toMatch(
+      /same structured question with every valid\s+choice/,
+    );
+    expect(KIRO_PROTOCOL).toMatch(
+      /do not call\s+`aidlc-orchestrate\.ts report`/,
+    );
+    expect(KIRO_PROTOCOL).toMatch(
+      /do not treat the checkpoint as resolved/,
+    );
     expect(KIRO_PROTOCOL).toContain("original held gate");
   });
 
   test("runner repeats the rule for both summary confirmation and approval", () => {
     expect(KIRO_SKILL).toContain(
-      "If the reply matches neither **Looks correct** nor **Request changes**",
+      "If the reply matches none of the three visible choices",
     );
     expect(KIRO_SKILL).toContain(
-      "If the reply matches none of them, do not report it",
+      "If the reply matches none of the visible choices",
+    );
+    expect(KIRO_SKILL.match(/If the reply is \*\*Other\*\*/g)).toHaveLength(2);
+    expect(KIRO_SKILL).toContain("re-present all three visible choices");
+    expect(KIRO_SKILL).toContain(
+      "every offered semantic choice plus the final numbered Other",
     );
     expect(KIRO_SKILL.match(/say it did not match an offered choice/g)).toHaveLength(2);
   });

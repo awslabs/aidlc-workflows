@@ -188,13 +188,20 @@ CONSTRUCTION and OPERATION stages: Strictly 2-option only (Approve / Request Cha
 ### Non-matching checkpoint replies
 
 For an approval gate or the consolidated-summary confirmation, compare the
-human's reply only with the choices currently offered. If it matches none of
-them, do not call `aidlc-orchestrate.ts report` or `aidlc-log.ts answer`, do not
-write it to an `[Answer]:` tag, and do not treat the checkpoint as resolved.
-In the same turn, acknowledge the received reply (quote it briefly, truncating
-long text), state that it did not match an offered choice, and re-present the
-same structured question with every valid choice. Then end the turn and wait.
-Never silently repeat a checkpoint prompt after an unmatched reply.
+human's reply only with the choices currently offered. A harness-supplied
+**Other** escape is an offered UI choice but is not a persisted summary answer
+or lifecycle decision. If the human selects Other, do not call
+`aidlc-orchestrate.ts report` or `aidlc-log.ts answer`, do not write it to an
+`[Answer]:` tag, and do not treat the checkpoint as resolved. Discuss what they
+want instead, then re-present the same structured question with every offered
+choice, end the turn, and wait for a final semantic choice.
+
+If the reply matches neither a semantic choice nor the Other escape, keep the
+same no-write/no-report boundary. In the same turn, acknowledge the received
+reply (quote it briefly, truncating long text), state that it did not match an
+offered choice, and re-present the same structured question with every valid
+choice. Then end the turn and wait. Never silently repeat a checkpoint prompt
+after an unmatched reply.
 The deterministic report/state guards enforce the same boundary. Forward the
 exact selected label in `--user-input`; never substitute a paraphrase or
 feedback prose. A refusal instructs you to re-render the original held gate
@@ -361,6 +368,11 @@ options:
     description: Discuss freely — I'll extract decisions from our conversation
 ```
 
+On a numbered-prose harness, this interaction-mode question has four visible
+numbered lines: `1. Guide me`, `2. I'll edit the file`, `3. Chat`, and the final
+`4. Other`. Mentioning Other in a nearby tip or sentence does not satisfy the
+structured-question contract.
+
 Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Question interaction log format.
 
 **Step 3a: If "Guide me" (interactive mode):**
@@ -417,9 +429,10 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
   --details "<exact choice>"` using the same `--unit` / `--single` identity.
   The tool refuses a self-selected answer, a response without a matching prompt
   record and later human turn, or a questions file whose stored choice differs.
-  A reply other than **Looks correct** or **Request changes** follows the
-  non-matching checkpoint rule in §1: acknowledge it, restate both choices, and
-  leave the tag and receipt untouched.
+  An explicit **Other** selection follows the §1 Other-escape rule: discuss it,
+  re-present the confirmation, and leave the tag and receipt untouched. Any
+  reply that matches neither **Looks correct**, **Request changes**, nor Other
+  follows the non-matching checkpoint rule in §1.
 
   If the choice is **Request changes**, append a sibling
   `## Requested Changes Feedback` question with a blank `[Answer]:`, ask the

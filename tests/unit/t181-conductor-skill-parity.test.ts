@@ -498,6 +498,45 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("every conductor distinguishes its rendered escape from an unmatched reply", () => {
+    const missing: string[] = [];
+    for (const harness of HARNESS_MATRIX) {
+      const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (harness.name === "codex") {
+        const token =
+          "native **None of the above** escape (including its notes-field text) or the numbered-prose **Other** escape";
+        if ((body.match(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length < 2) {
+          missing.push(`${rel}  missing native/prose Codex escape branches`);
+        }
+        if (!body.includes("active track supplies exactly one escape")) {
+          missing.push(`${rel}  missing Codex de-duplication rule`);
+        }
+      } else if ((body.match(/If the reply is \*\*Other\*\*/g) ?? []).length < 2) {
+        missing.push(`${rel}  missing summary/approval Other branches`);
+      }
+      if (!body.includes("semantic choice")) {
+        missing.push(`${rel}  missing semantic-choice distinction`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("Codex conductor names both renderer-defined escape response shapes", () => {
+    const skill = readFileSync(
+      join(REPO_ROOT, "harness/codex/skills/aidlc/SKILL.md"),
+      "utf-8",
+    );
+    const annex = readFileSync(
+      join(REPO_ROOT, "harness/codex/skills/aidlc/question-rendering.md"),
+      "utf-8",
+    );
+    expect(annex).toContain('"None of the above" escape with a notes field');
+    expect(skill).toContain("native **None of the above** escape");
+    expect(skill).toContain("numbered-prose **Other** escape");
+    expect(skill).toContain("active track supplies exactly one escape");
+  });
+
   test("every question renderer pins the mandatory summary checkpoint", () => {
     const missing: string[] = [];
     for (const rel of harnessQuestionAnnexes()) {

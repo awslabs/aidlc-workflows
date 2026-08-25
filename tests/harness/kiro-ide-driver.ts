@@ -110,6 +110,105 @@ export interface KiroIdeChatPreparation {
   surface: KiroIdeChatSurfaceState;
 }
 
+export interface KiroIdeNumberedListSnapshot {
+  targetType: string;
+  targetUrl: string;
+  context: ExecContext;
+  href: string;
+  listStyleType: string;
+  start: number;
+  items: Array<{
+    ordinal: number;
+    text: string;
+    display: string;
+    listStyleType: string;
+    visibility: string;
+    opacity: string;
+    markerContent: string;
+    markerColor: string;
+    markerFontSize: string;
+    markerOpacity: string;
+  }>;
+}
+
+function normalizedOptionText(value: string): string {
+  return value.replaceAll(/[‘’]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Find a fully rendered numbered list whose items match every expected label
+ * in order. A streaming prefix is intentionally not a match. */
+export function findCompleteNumberedListByLabels(
+  lists: KiroIdeNumberedListSnapshot[],
+  labels: string[],
+): KiroIdeNumberedListSnapshot | null {
+  const expected = labels.map(normalizedOptionText);
+  return (
+    lists.find(
+      (list) =>
+        list.items.length === expected.length &&
+        list.items.every((item, index) =>
+          normalizedOptionText(item.text).startsWith(expected[index]),
+        ),
+    ) ?? null
+  );
+}
+
+function positiveCssNumber(value: string): boolean {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+function transparentCssColor(value: string): boolean {
+  const color = value.replace(/\s+/g, "").toLowerCase();
+  return (
+    color === "transparent" ||
+    /,\s*0(?:\.0+)?\)$/.test(color) ||
+    /\/\s*0(?:\.0+)?\)$/.test(color)
+  );
+}
+
+function markerContentMatchesOrdinal(
+  item: KiroIdeNumberedListSnapshot["items"][number],
+): boolean {
+  const markerContent = item.markerContent.trim();
+  if (markerContent.toLowerCase() === "normal") {
+    return item.listStyleType === "decimal";
+  }
+  const first = markerContent[0];
+  const last = markerContent.at(-1);
+  const unquoted =
+    markerContent.length >= 2 &&
+    (first === '"' || first === "'") &&
+    last === first
+      ? markerContent.slice(1, -1)
+      : markerContent;
+  const visibleText = unquoted.replace(/\s+/g, " ").trim();
+  return new RegExp(`^${item.ordinal}(?:[.)])?$`).test(visibleText);
+}
+
+/** Prove each option has a visible marker that renders its actual ordinal. */
+export function numberedListMarkersAreVisible(
+  list: KiroIdeNumberedListSnapshot,
+): boolean {
+  if (list.listStyleType === "none" || list.items.length === 0) return false;
+  return list.items.every((item) => {
+    const markerContent = item.markerContent.trim().toLowerCase();
+    return (
+      item.display === "list-item" &&
+      item.listStyleType !== "none" &&
+      item.visibility === "visible" &&
+      positiveCssNumber(item.opacity) &&
+      markerContent !== "" &&
+      markerContent !== "none" &&
+      markerContent !== '""' &&
+      markerContentMatchesOrdinal(item) &&
+      !transparentCssColor(item.markerColor) &&
+      positiveCssNumber(item.markerFontSize) &&
+      positiveCssNumber(item.markerOpacity)
+    );
+  });
+}
+
 /** One CDP connection to a single page/iframe target. JSON-RPC over a Bun-native
  *  WebSocket. Accumulates Runtime.executionContextCreated events so nested webview
  *  frames are reachable by contextId (the only way to reach the doubly-nested chat
@@ -923,6 +1022,89 @@ export async function snapshotChatDom(port: number): Promise<KiroIdeDomSnapshot[
               targetUrl: tgt.url ?? "",
               context,
               ...view,
+            });
+          }
+        } catch {
+          /* context gone */
+        }
+      }
+    } catch {
+      /* target gone */
+    } finally {
+      t.close();
+    }
+  }
+  return snapshots;
+}
+
+const SNAPSHOT_NUMBERED_LISTS_EXPR = `(() => {
+  const norm = (s) => String(s||"").replace(/\\s+/g," ").trim();
+  const visible = (e) => {
+    const r = e.getBoundingClientRect && e.getBoundingClientRect();
+    return !r || (r.width > 0 && r.height > 0);
+  };
+  return [...document.querySelectorAll("ol")]
+    .filter(visible)
+    .map((list) => {
+      const children = [...list.children].filter((e) => e.tagName === "LI" && visible(e));
+      const reversed = list.hasAttribute("reversed");
+      const parsedStart = Number.parseInt(list.getAttribute("start") || "", 10);
+      const defaultStart = reversed ? children.length : 1;
+      let next = Number.isFinite(parsedStart) ? parsedStart : defaultStart;
+      const items = children.map((item) => {
+        const itemStyle = getComputedStyle(item);
+        const markerStyle = getComputedStyle(item, "::marker");
+        const parsedValue = Number.parseInt(item.getAttribute("value") || "", 10);
+        const ordinal = Number.isFinite(parsedValue) ? parsedValue : next;
+        next = ordinal + (reversed ? -1 : 1);
+        return {
+          ordinal,
+          text: norm(item.innerText || item.textContent).slice(0, 1000),
+          display: String(itemStyle.display || ""),
+          listStyleType: String(itemStyle.listStyleType || ""),
+          visibility: String(itemStyle.visibility || ""),
+          opacity: String(itemStyle.opacity || ""),
+          markerContent: String(markerStyle.content || ""),
+          markerColor: String(markerStyle.color || ""),
+          markerFontSize: String(markerStyle.fontSize || ""),
+          markerOpacity: String(markerStyle.opacity || "")
+        };
+      });
+      return {
+        href: String(location.href),
+        listStyleType: String(getComputedStyle(list).listStyleType || ""),
+        start: Number.isFinite(parsedStart) ? parsedStart : defaultStart,
+        items
+      };
+    })
+    .filter((list) => list.items.length > 0);
+})()`;
+
+/** Capture visible ordered-list structure from every live page/iframe context.
+ * Plain innerText omits CSS list markers in Kiro's chat webview, so live visual
+ * assertions inspect the rendered OL/LI ordinals and list style directly. */
+export async function snapshotNumberedLists(
+  port: number,
+): Promise<KiroIdeNumberedListSnapshot[]> {
+  const snapshots: KiroIdeNumberedListSnapshot[] = [];
+  const targets = await listTargets(port);
+  for (const tgt of targets) {
+    if (!tgt.webSocketDebuggerUrl || (tgt.type !== "page" && tgt.type !== "iframe")) continue;
+    const t = new CdpTarget(tgt.webSocketDebuggerUrl);
+    try {
+      await t.connect();
+      const contexts = await t.enableContexts(600);
+      for (const context of contexts) {
+        try {
+          const lists = await t.evaluateInContext<
+            Array<Omit<KiroIdeNumberedListSnapshot, "targetType" | "targetUrl" | "context">>
+          >(context.id, SNAPSHOT_NUMBERED_LISTS_EXPR);
+          for (const list of lists) {
+            snapshots.push({
+              targetType: tgt.type,
+              targetUrl: tgt.url ?? "",
+              context,
+              ...list,
             });
           }
         } catch {

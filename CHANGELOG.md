@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.106] - 2026-08-26
+
+Kiro CLI and Kiro IDE numbered-prose questions now visibly expose one final Other choice, including the interaction-mode prompt that previously listed only options 1-3 and mentioned Other separately. **Upgrade:** refresh your `dist/kiro/` or `dist/kiro-ide/` shell so the corrected question-rendering annex is installed.
+
+* The interaction-mode contract includes a canonical four-option rendering with `4. Other`, so Guide me / I'll edit the file / Chat never leave the escape path unnumbered.
+* File-backed `X. Other (please specify)` choices map to the final visible number without adding a duplicate; consolidated-summary files remain unlettered and omit a file-level Other row while chat still synthesizes one final numbered escape.
+
 ## [2.6.105] - 2026-08-26
 
 Plugin authors can now create, validate, build, and compose-test an authored plugin repository offline with shipped standalone tools, without a framework checkout or mutations to the install under test. **Upgrade:** refresh your `dist/<harness>/` shell to install the authoring tools, bundled hook templates, and harness target data.
@@ -31,7 +38,6 @@ Kind-vacuous Construction units no longer deadlock summary-confirmation routing 
 
 * Unit-major iteration now advances past kind-vacuous units to the next applicable stage and unit instead of emitting `Refusing to complete`.
 * Stage-major per-unit approval now presents the normal gate when all units are kind-vacuous, without requiring nonexistent questions or summary confirmation.
-
 ## [2.6.102] - 2026-08-26
 
 Rule files can now carry validated lifecycle metadata, and doctor separates stale team/project overlaps from live contradiction-review candidates without changing runtime rule delivery. **Upgrade:** refresh your `dist/<harness>/` shell; add lifecycle fields only where you want file-level drift triage.
@@ -193,7 +199,6 @@ Summary-confirmation artifact-write receipts now remain valid when the same work
 `/aidlc --doctor` now catches hooks that Claude Code has globally disabled. Previously an install with `"disableAllHooks": true` could pass every check yet block at runtime because doctor verified that hook files were present and wired, but not that Claude Code would run them. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the new check.
 
 * Claude Code doctor output adds a **Hooks enabled** row that fails when the resolved `disableAllHooks` value is `true` in enterprise managed, project local, project, or user settings. The check follows Claude Code's layer precedence, names the controlling layer, and explains how to restore AI-DLC's hook-driven workflow engine.
-
 ## [2.6.81] - 2026-08-25
 
 Agent and stage prompts now omit duplicated ownership and persona-loading prose while every delegated agent retains a mandatory shared and agent-specific knowledge preflight in its generated harness surface. **Upgrade:** re-copy your `dist/<harness>/` shell; active workflow state and project artifacts need no migration.
