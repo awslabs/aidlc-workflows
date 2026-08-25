@@ -14,9 +14,9 @@
 //   guard-tool-call deny → a guard block (core exit 2 + stderr) converts to the
 //                    {"hookSpecificOutput":{"permissionDecision":"deny"}}
 //                    stdout JSON with exit 0 — Copilot's only deny channel.
-//   guard-tool-call picker → native question pickers deny only while workflow
-//                    state exists; non-AIDLC projects and foreign tools remain
-//                    silent.
+//   guard-tool-call picker → native question pickers deny only while the
+//                    session-selected workflow is Running; absent, terminal,
+//                    unusable, and foreign-tool cases remain silent.
 //   guard-tool-call remap → Copilot's `path` file-tool key reaches the core hooks
 //                    as `file_path` (the shim re-keys).
 //   post-tool      → a Write into the record lands ARTIFACT_CREATED in the
@@ -455,7 +455,36 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(r.stdout).toBe("");
   });
 
-  test("4d: unrelated foreign tool stays silent with active workflow state", () => {
+  test("4d: native question picker fails open for a completed workflow", () => {
+    const dir = scratchProject(true);
+    writeFileSync(
+      seededStateFile(dir),
+      readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-completed.md"), "utf-8"),
+    );
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "ask_user",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("4e: native question picker fails open for unusable workflow state", () => {
+    const dir = scratchProject(true);
+    writeFileSync(seededStateFile(dir), "- **Status**:\n", "utf-8");
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "ask_user",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("4f: unrelated foreign tool stays silent with active workflow state", () => {
     const dir = scratchProject(true);
     const r = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",

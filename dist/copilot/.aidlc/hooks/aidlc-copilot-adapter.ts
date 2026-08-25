@@ -71,9 +71,11 @@ import {
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
   recordCopilotHumanSequence,
+  resolveWorkflowSelection,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
   stateFilePath,
+  stateFilePathForSelection,
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -283,6 +285,22 @@ export async function run(
         permissionDecisionReason: reason.trim() || "Blocked by an AIDLC guard hook.",
       },
     })}\n`;
+  }
+
+  function selectedWorkflowIsRunning(): boolean {
+    try {
+      const selection = resolveWorkflowSelection(
+        projectDir,
+        sessionId ? { sessionId } : {},
+      );
+      const stateContent = readFileSync(
+        stateFilePathForSelection(projectDir, selection),
+        "utf-8",
+      );
+      return stateContent.match(/^- \*\*Status\*\*:\s*(\S+)\s*$/m)?.[1] === "Running";
+    } catch {
+      return false;
+    }
   }
 
   type ParsedOrchestration =
@@ -923,7 +941,7 @@ export async function run(
       // directly, so no adapter-specific reshaping is needed.
       if (
         NATIVE_QUESTION_PICKERS.has(rawToolName) &&
-        existsSync(stateFilePath(projectDir))
+        selectedWorkflowIsRunning()
       ) {
         process.stdout.write(denyJson(
           "Render this AI-DLC question as numbered prose in chat per question-rendering.md, then end the turn and wait for the user's next chat message. Native picker answers do not fire UserPromptSubmit, so they cannot record the trusted HUMAN_TURN required for answer and approval logging.",

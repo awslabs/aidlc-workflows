@@ -89,9 +89,10 @@ git checkout v2
 - **Questions render as numbered prose options.** Although both surfaces expose
   native picker tools, picker answers return as tool results and do not fire
   the trusted `UserPromptSubmit` event required by the human-presence guard.
-  During an active workflow, the matcher-free PreToolUse guard denies those
-  picker calls and directs the model to render numbered prose and end the turn;
-  without workflow state it leaves native pickers untouched.
+  While the session-selected workflow has valid `Status: Running` state, the
+  matcher-free PreToolUse guard denies those picker calls and directs the model
+  to render numbered prose and end the turn; without a running workflow,
+  including completed or unusable state, it leaves native pickers untouched.
   The human's next chat message does; the questions FILE with `[Answer]:` tags
   stays the source of truth.
 - **Hooks enforce natively.** The adapter

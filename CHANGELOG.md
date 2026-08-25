@@ -3,9 +3,9 @@ All notable changes to this project will be documented in this file.
 
 ## [2.6.91] - 2026-08-25
 
-Copilot no longer asks an AI-DLC workflow question twice when the model attempts to use a native question picker. Active workflows now refuse picker calls and direct the model to render numbered prose in chat, preserving the trusted human-turn check. **Upgrade:** refresh your `dist/copilot/` shell; in-flight workflows need no migration.
+Copilot no longer asks an AI-DLC workflow question twice when the model attempts to use a native question picker. Running workflows now refuse picker calls and direct the model to render numbered prose in chat, preserving the trusted human-turn check. **Upgrade:** refresh your `dist/copilot/` shell; in-flight workflows need no migration.
 
-* The Copilot PreToolUse adapter denies native picker execution IDs such as `ask_user` and `vscode/askQuestions` only while workflow state exists; non-AI-DLC projects and unrelated tools remain untouched.
+* The Copilot PreToolUse adapter denies native picker execution IDs such as `ask_user` and `vscode/askQuestions` only when the session-selected workflow has valid `Status: Running` state; projects with no workflow, completed workflows, and unusable state fail open.
 * Picker tool results still never count as `HUMAN_TURN`; the user's next chat message records the trusted turn used by answer and approval logging.
 
 ## [2.6.90] - 2026-08-25

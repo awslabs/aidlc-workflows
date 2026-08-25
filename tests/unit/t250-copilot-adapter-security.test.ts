@@ -109,6 +109,20 @@ const LIB_TOOL_STUB = `import { join } from "node:path";
 export function stateFilePath(projectDir: string): string {
   return join(projectDir, ".aidlc-state-absent.json");
 }
+export function resolveWorkflowSelection(
+  _projectDir: string,
+  options: { sessionId?: string } = {},
+): { space: string; intent: null; sessionId: string | null; binding: null } {
+  return {
+    space: "default",
+    intent: null,
+    sessionId: options.sessionId ?? null,
+    binding: null,
+  };
+}
+export function stateFilePathForSelection(projectDir: string): string {
+  return stateFilePath(projectDir);
+}
 export function claimCopilotCommand(): { allowed: true; attemptId: string } {
   return { allowed: true, attemptId: "00000000-0000-4000-8000-000000000001" };
 }
