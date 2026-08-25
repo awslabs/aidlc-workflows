@@ -1865,15 +1865,42 @@ export function parseReScope(body: string): ReScopeParse {
 // rebases/squashes/amends that vaporise a recorded commit hash cannot break
 // the comparison, and reverting an edit restores the original fingerprint.
 // Ignored files stay excluded (git add semantics). Callers may exclude generated
-// paths that live inside an analyzed root, such as the codekb being fingerprinted.
+// paths that live inside an analyzed root, such as the codekb being fingerprinted;
+// exclusions outside every analyzed root are omitted before invoking git.
 // Returns null when repoDir is not a git work tree, git is unavailable, or any
-// pathspec is invalid/unmatched (callers report UNVERIFIED, never a false verdict).
+// pathspec is invalid/unmatched or stages zero paths (callers report UNVERIFIED,
+// never a false verdict or the empty-tree fingerprint).
 export function codekbScopeFingerprint(
   repoDir: string,
   paths: string[],
   excludedPaths: string[] = [],
 ): string | null {
   if (paths.length === 0) return null;
+  const normalizePath = (path: string): string => {
+    let normalized = path.replaceAll("\\", "/");
+    normalized = normalized.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+    return normalized === "." ? "" : normalized;
+  };
+  const normalizedExclusions = excludedPaths.map(normalizePath);
+  const survivingPaths = paths
+    .map((original) => ({ original, normalized: normalizePath(original) }))
+    .filter(
+      ({ normalized: positive }) =>
+        !normalizedExclusions.some(
+          (exclusion) =>
+            exclusion === positive || positive.startsWith(`${exclusion}/`),
+        ),
+    );
+  if (survivingPaths.length === 0) return null;
+  const exclusions = normalizedExclusions
+    .filter((exclusion) =>
+      survivingPaths.some(
+        ({ normalized: positive }) =>
+          positive === "" || exclusion.startsWith(`${positive}/`),
+      ),
+    )
+    .map((exclusion) => `:(exclude,literal)${exclusion}`);
+
   const inTree = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
     cwd: repoDir,
     encoding: "utf-8",
@@ -1882,16 +1909,22 @@ export function codekbScopeFingerprint(
   const indexFile = join(tmpdir(), `.aidlc-scope-index-${randomUUID()}`);
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   try {
-    const exclusions = excludedPaths
-      .map((p) => p.replaceAll("\\", "/").replace(/^\.?\//, "").replace(/\/+$/, ""))
-      .filter((p) => p !== "")
-      .map((p) => `:(exclude,literal)${p}`);
-    const add = spawnSync("git", ["add", "-A", "--", ...paths, ...exclusions], {
+    const add = spawnSync(
+      "git",
+      ["add", "-A", "--", ...survivingPaths.map(({ original }) => original), ...exclusions],
+      {
+        cwd: repoDir,
+        env,
+        encoding: "utf-8",
+      },
+    );
+    if (add.status !== 0) return null;
+    const staged = spawnSync("git", ["ls-files", "-z"], {
       cwd: repoDir,
       env,
       encoding: "utf-8",
     });
-    if (add.status !== 0) return null;
+    if (staged.status !== 0 || staged.stdout.length === 0) return null;
     const wt = spawnSync("git", ["write-tree"], { cwd: repoDir, env, encoding: "utf-8" });
     if (wt.status !== 0) return null;
     const hash = wt.stdout.trim();
