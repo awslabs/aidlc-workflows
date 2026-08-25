@@ -9,7 +9,7 @@ replacing those machine-local fields with stable metadata.
 ## Environment
 
 - Source baseline: `v2@6a70d02b6`
-- Host: native Windows on `aidlc-dev-2`
+- Host: native Windows test host
 - Kiro IDE: `1.0.242`
 - Kiro CLI: `kiro-cli-chat 2.15.2`
 - Commands: `/aidlc --status`, `/aidlc --doctor`
