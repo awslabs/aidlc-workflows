@@ -5555,9 +5555,14 @@ export function checkSummaryConfirmationEvidence(
   return { ok: true, required: true };
 }
 
-// Read a `**Field**: value` line from one audit block (tolerates an optional
-// leading `- ` so it serves both audit blocks and the state file). Mirrors the
-// per-tool private auditField readers; shared here for humanActedSinceGate.
+// Read the FIRST `**Field**: value` line from one audit block (tolerates an
+// optional leading `- ` so it serves both audit blocks and the state file).
+// IMPORTANT: a duplicated field still returns only its first value. Do not
+// build authenticate-then-re-read flows on this helper: a verifier and consumer
+// can otherwise disagree about which occurrence, and therefore which bytes,
+// they mean. Callers that require uniqueness must reject duplicates separately.
+// Mirrors the per-tool private auditField readers; shared here for
+// humanActedSinceGate.
 export function auditBlockField(block: string, fieldName: string): string | null {
   const prefix = `**${fieldName}**:`;
   for (const raw of block.split("\n")) {
