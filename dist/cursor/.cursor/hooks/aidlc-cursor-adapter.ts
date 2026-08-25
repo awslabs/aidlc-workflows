@@ -272,7 +272,11 @@ export async function run(
     }
   }
 
+  let activeReviewerDispatchCache: string | null | undefined;
   function activeReviewerDispatch(): string | null {
+    if (activeReviewerDispatchCache !== undefined) {
+      return activeReviewerDispatchCache;
+    }
     try {
       const spacePointer = join(projectDir, "aidlc", "active-space");
       const rawSpace = existsSync(spacePointer)
@@ -285,11 +289,14 @@ export async function run(
       if (!activeIntent || activeIntent.includes("/") || activeIntent.includes("\\")) return null;
       const dispatch = join(intentsDir, activeIntent, ".aidlc-reviewer-dispatch.json");
       const stat = statSync(dispatch);
-      if (!stat.isFile() || Date.now() - stat.mtimeMs > REVIEWER_DISPATCH_TTL_MS) return null;
-      return dispatch;
+      activeReviewerDispatchCache =
+        stat.isFile() && Date.now() - stat.mtimeMs <= REVIEWER_DISPATCH_TTL_MS
+          ? dispatch
+          : null;
     } catch {
-      return null;
+      activeReviewerDispatchCache = null;
     }
+    return activeReviewerDispatchCache;
   }
 
   function recordSpawn(subagentType: string): void {
@@ -414,15 +421,21 @@ export async function run(
     return attributedAgent;
   }
 
+  let effectiveCwdCache: string | undefined;
   function effectiveCwd(): string {
+    if (effectiveCwdCache !== undefined) return effectiveCwdCache;
     const nested =
       cursor.tool_input?.working_directory ??
       cursor.tool_input?.cwd;
     for (const candidate of [nested, cursor.cwd]) {
       if (typeof candidate !== "string" || candidate.length === 0) continue;
-      return isAbsolute(candidate) ? candidate : resolve(projectDir, candidate);
+      effectiveCwdCache = isAbsolute(candidate)
+        ? candidate
+        : resolve(projectDir, candidate);
+      return effectiveCwdCache;
     }
-    return projectDir;
+    effectiveCwdCache = projectDir;
+    return effectiveCwdCache;
   }
 
   function claudeShaped(eventName: string, nameOverride?: string): string {
@@ -474,17 +487,47 @@ export async function run(
     return words;
   }
 
-  interface ReviewFreezeShellModule {
-    shellWriteTargets?: (command: string, cwd?: string) => string[];
-    shellCommandInvocations?: (command: string) => Array<{ name: string; args: string[] }>;
+  interface ReviewFreezeCommandModule {
+    shellCommandInvocations?: (
+      command: string,
+    ) => Array<{ name: string; args: string[] }>;
+    writeTargets?: (
+      toolName: string,
+      toolInput: Record<string, unknown> | undefined,
+      cwd?: string,
+    ) => string[];
   }
 
-  let reviewFreezeShellModule: Promise<ReviewFreezeShellModule> | null = null;
-  function loadReviewFreezeShellModule(): Promise<ReviewFreezeShellModule> {
-    reviewFreezeShellModule ??= import(
-      join(HOOKS_DIR, "aidlc-review-freeze.ts")
-    ) as Promise<ReviewFreezeShellModule>;
-    return reviewFreezeShellModule;
+  let reviewFreezeCommandModule: Promise<ReviewFreezeCommandModule> | null =
+    null;
+  function loadReviewFreezeCommandModule(): Promise<ReviewFreezeCommandModule> {
+    reviewFreezeCommandModule ??= import(
+      join(HOOKS_DIR, "review-freeze-command.ts")
+    ) as Promise<ReviewFreezeCommandModule>;
+    return reviewFreezeCommandModule;
+  }
+
+  let reviewFreezeTargetsCache: string[] | null | undefined;
+  async function reviewFreezeTargets(): Promise<string[] | null> {
+    if (reviewFreezeTargetsCache !== undefined) {
+      return reviewFreezeTargetsCache;
+    }
+    try {
+      const module = await loadReviewFreezeCommandModule();
+      reviewFreezeTargetsCache =
+        typeof module.writeTargets === "function"
+          ? module.writeTargets(
+              reviewerToolName,
+              cursor.tool_input,
+              effectiveCwd(),
+            )
+          : null;
+    } catch {
+      // Null means classification was unavailable, never "no write targets";
+      // the guard chain below must keep the full review-freeze hook fail-closed.
+      reviewFreezeTargetsCache = null;
+    }
+    return reviewFreezeTargetsCache;
   }
 
   function protectedReviewerPaths(): string[] {
@@ -620,7 +663,7 @@ export async function run(
     const interpreter =
       /^(?:ba|da|fi|k|z)?sh$|^(?:bun|bunx|deno|node|nodejs|npm|npx|pnpm|yarn|corepack|tsx|ts-node|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|lua|luajit|raku|julia|java|js|qjs|osascript|powershell|pwsh)$/i;
     try {
-      const module = await loadReviewFreezeShellModule();
+      const module = await loadReviewFreezeCommandModule();
       if (typeof module.shellCommandInvocations !== "function") return true;
       return module.shellCommandInvocations(command).some(
         (invocation) =>
@@ -651,17 +694,18 @@ export async function run(
     const cwd = effectiveCwd();
     const command = toolInput.command;
     if (toolName === "Bash" && typeof command === "string") {
-      try {
-        const module = await loadReviewFreezeShellModule();
-        const concrete = module.shellWriteTargets?.(command, cwd) ?? [];
-        if (concrete.some((path) => overlapsProtectedPath(path, protectedPaths))) return true;
-      } catch {
-        // The registered review-freeze guard will fail closed if its module is unavailable.
-      }
       if (
         shellWords(command).some((word) =>
           globPrefixTouchesProtected(word, cwd, protectedPaths) ||
           concreteWordTouchesProtected(word, cwd, protectedPaths)
+        )
+      ) {
+        return true;
+      }
+      const concrete = await reviewFreezeTargets();
+      if (
+        concrete?.some((path) =>
+          overlapsProtectedPath(path, protectedPaths)
         )
       ) {
         return true;
@@ -829,14 +873,6 @@ export async function run(
         return 0;
       }
       const agent = attributed();
-      if (agent && await touchesProtectedReviewerState()) {
-        process.stdout.write(`${JSON.stringify({
-          permission: "deny",
-          agent_message:
-            "AIDLC delegated agents cannot read, modify, or remove reviewer attribution state.",
-        })}\n`);
-        return 0;
-      }
       const command = cursor.tool_input?.command;
       if (
         agent &&
@@ -852,6 +888,14 @@ export async function run(
             "expansion, or dynamic command evaluation while reviewer attribution is active " +
             "because those paths can bypass attribution-state protection. " +
             "Use Cursor's native read/search tools and have the parent conversation run executable probes.",
+        })}\n`);
+        return 0;
+      }
+      if (agent && await touchesProtectedReviewerState()) {
+        process.stdout.write(`${JSON.stringify({
+          permission: "deny",
+          agent_message:
+            "AIDLC delegated agents cannot read, modify, or remove reviewer attribution state.",
         })}\n`);
         return 0;
       }
@@ -873,11 +917,23 @@ export async function run(
           file: "aidlc-reviewer-scope.ts",
           input: claudeShaped("PreToolUse", reviewerToolName),
         },
-        {
+      ];
+      // An attributed Bash call was already classified by the exact exported
+      // review-freeze target parser while checking protected attribution
+      // paths. Reuse that result: an empty target set is the hook's first allow
+      // condition, so spawning a second Bun process can add no decision value.
+      // Undefined/null are not classifications and always retain the guard.
+      if (
+        toolName !== "Bash" ||
+        reviewFreezeTargetsCache === undefined ||
+        reviewFreezeTargetsCache === null ||
+        reviewFreezeTargetsCache.length > 0
+      ) {
+        guards.push({
           file: "aidlc-review-freeze.ts",
           input: claudeShaped("PreToolUse", reviewerToolName),
-        },
-      ];
+        });
+      }
       for (const guard of guards) {
         if (blockedByGuard(guard.file, guard.input)) return 0;
       }

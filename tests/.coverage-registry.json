@@ -20,22 +20,22 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 641,
+    "total": 645,
     "enumeratedByClass": {
-      "function": 378,
+      "function": 381,
       "audit": 87,
       "scope": 11,
       "stage": 33,
-      "hook": 17,
+      "hook": 18,
       "subcommand": 108,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 194,
-      "audit": 45,
+      "function": 197,
+      "audit": 46,
       "scope": 11,
       "stage": 11,
-      "hook": 17,
+      "hook": 18,
       "subcommand": 96,
       "render-surface": 7
     }
@@ -106,8 +106,13 @@
       "unitClass": "audit",
       "unitId": "BOLT_STARTED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -430,6 +435,10 @@
         },
         {
           "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t323-review-verdict-closure.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1390,6 +1399,10 @@
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1817,6 +1830,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:effectivePlanAction",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-stage-validity-propagation.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:emitError",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2076,6 +2101,14 @@
         },
         {
           "file": "tests/unit/t291-review-receipt-recovery.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t322-fix-round-hardening.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3465,6 +3498,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recoveryGuidance",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:redactProjectDirPrefix",
       "minMechanism": "none",
       "coveredBy": [
@@ -4512,6 +4557,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:usesStageLevelPerUnitArtifacts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-stage-validity-propagation.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:uuidv7",
       "minMechanism": "none",
       "coveredBy": [
@@ -5023,6 +5080,14 @@
         {
           "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5222,6 +5287,18 @@
         },
         {
           "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "review-freeze-command",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6492,6 +6569,22 @@
         },
         {
           "file": "tests/unit/t291-review-receipt-recovery.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t323-review-verdict-closure.test.ts",
           "mechanism": "cli"
         }
       ],

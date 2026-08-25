@@ -7,7 +7,7 @@
 // active workflow in this cwd) to preserve the existing "only log when
 // relevant" behaviour.
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   auditFilePath,
@@ -54,7 +54,9 @@ try {
 }
 
 const tool = parsed.tool_name ?? "";
-const file: string = parsed.tool_input?.file_path ?? "";
+const rawFile: string = parsed.tool_input?.file_path ?? "";
+if (!rawFile) return 0;
+const file = isAbsolute(rawFile) ? rawFile : join(projectDir, rawFile);
 const auditFileValue = file.replace(/\\/g, "/");
 const fileNorm = auditFileValue; // forward-slash form for all path matching below
 

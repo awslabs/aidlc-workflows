@@ -772,7 +772,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       const basis = JSON.parse(
         basisLine?.slice("**Validation Basis**: ".length) ?? "{}",
       ) as { schema?: number };
-      expect(basis.schema).toBe(2);
+      expect(basis.schema).toBe(3);
       const reviewBlock = green.audit
         .split(/\n---\n/)
         .find((block) =>

@@ -944,6 +944,12 @@ function handlePrepare(rest: string[]): void {
   if (units.length === 0) {
     fail("--units resolved to an empty list");
   }
+  if (flags["degraded-from"]) {
+    const requested = flags["degraded-from"] as DriverName;
+    if (!DRIVER_VALUES.includes(requested)) {
+      fail(`--degraded-from must be one of: ${DRIVER_VALUES.join(", ")}`);
+    }
+  }
   const state = readStateFile(projectDir);
   const stage = (getField(state, "Current Stage") ?? "")
     .trim()
@@ -1022,11 +1028,11 @@ function handlePrepare(rest: string[]): void {
   // one. The driver-selection read (AIDLC_USE_SWARM) is conductor-side; the tool
   // only learns a degrade happened via this flag.
   if (flags["degraded-from"]) {
-    const requested = flags["degraded-from"] as DriverName;
-    if (!DRIVER_VALUES.includes(requested)) {
-      fail(`--degraded-from must be one of: ${DRIVER_VALUES.join(", ")}`);
-    }
-    emitSwarmDegraded(projectDir, flags.batch, requested);
+    emitSwarmDegraded(
+      projectDir,
+      flags.batch,
+      flags["degraded-from"] as DriverName,
+    );
   }
 
   const prepared: {

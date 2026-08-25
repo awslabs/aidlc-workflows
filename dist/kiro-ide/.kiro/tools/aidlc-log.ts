@@ -14,6 +14,7 @@ import {
   activeSpace,
   auditBlockField,
   boltSlugForUnit,
+  checkSummaryConfirmationEvidence,
   emitError,
   errorMessage,
   formatReceivedReply,
@@ -36,6 +37,7 @@ import {
   readUnitSourceManifest,
   recordDir,
   relativeRecordDir,
+  recoveryGuidance,
   resolveBoltDag,
   reviewArtifactFingerprint,
   resolveProjectDir,
@@ -963,6 +965,7 @@ function reviewBudgetMessage(stage: string, ordinal: number, budget: number): st
 
 function reviewRecoverySpentMessage(
   stage: string,
+  guidance: string | null,
   autonomousBolt?: {
     unit: string;
     slug: string | null;
@@ -970,10 +973,8 @@ function reviewRecoverySpentMessage(
   },
 ): string {
   const prefix =
-    `Refusing REVIEW_REQUESTED for "${stage}": the one stale-receipt recovery ` +
-    "review pass was already spent, and its receipt was invalidated again by " +
-    "another later write to a declared produces[] artifact. Stop editing " +
-    "produces[] artifacts after a review receipt. ";
+    `Cannot start another review for "${stage}": the one recovery review was ` +
+    "already used, and this stage's output document changed again afterward. ";
   if (autonomousBolt) {
     const slug = autonomousBolt.slug ?? autonomousBolt.unit;
     const batch = autonomousBolt.batch
@@ -987,17 +988,40 @@ function reviewRecoverySpentMessage(
       `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
       `--reason "stale review recovery exhausted" --discard\`, then rerun the ` +
       `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
-      `${batch} with the original base/repo arguments. The fresh BOLT_STARTED ` +
-      "boundary resets review accounting without claiming convergence. Do not " +
-      "record GATE_REJECTED on the human's behalf."
+      `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
+      "restores one review allowance without claiming convergence. Do not " +
+      "record a Request Changes decision on the human's behalf."
     );
   }
   return (
     prefix +
-    "Present this refusal to the human at the approval gate. Only a human " +
-    "Request Changes decision (GATE_REJECTED) resets the review attempt; do not " +
+    (guidance ?? "") +
+    " Only a human Request Changes decision resets the review attempt; do not " +
     "record that rejection on the human's behalf."
   );
+}
+
+function reviewRecoveryGuidance(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+): string {
+  try {
+    return recoveryGuidance(projectDir, stateContent, stage);
+  } catch {
+    return (
+      `Restart this stage cleanly with /aidlc --stage ${stage}, then confirm ` +
+      "its summary and review the finished output again."
+    );
+  }
+}
+
+function reviewSummaryEvidenceMessage(stage: string, message: string): string {
+  const cause = message.replace(
+    /^Refusing to (?:complete|continue) "[^"]+"(?: for unit "[^"]+")?:\s*/,
+    "",
+  );
+  return `Cannot start review for "${stage}": ${cause}`;
 }
 
 function reviewRecoveryAlreadyRequestedMessage(stage: string, iteration: number): string {
@@ -1040,7 +1064,10 @@ function handleReview(args: string[]): void {
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   const retryPending = flags["retry-pending"] === "true";
 
-  const loadContext = (scanReceipts: boolean) => {
+  const loadContext = (
+    scanReceipts: boolean,
+    enforceAdmissibility = true,
+  ) => {
     const state = readStateFile(pd, intent, space);
     const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
     if (!node?.reviewer) {
@@ -1065,8 +1092,10 @@ function handleReview(args: string[]): void {
       flags.unit,
       fields.Workflow,
     );
-    if (flags.unit) {
-      const resolution = resolveBoltDag(pd, intent, space);
+    const unitResolution =
+      node.for_each === "unit-of-work" ? resolveBoltDag(pd, intent, space) : null;
+    if (enforceAdmissibility && flags.unit) {
+      const resolution = unitResolution ?? resolveBoltDag(pd, intent, space);
       if (resolution.state === "malformed") {
         refuseReview(
           `Cannot record review for "${flags.stage}" unit "${flags.unit}": the authoritative ` +
@@ -1137,7 +1166,23 @@ function handleReview(args: string[]): void {
       !scanReceipts || reviewClass === null
         ? null
         : freshReviewReceipts(pd, state, node, { reviewClass });
-    return { state, node, attempt, budget, receipts, autonomousCandidate };
+    const requireRequiredArtifacts =
+      process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1" &&
+      !(
+        unitResolution !== null &&
+        unitResolution.state !== "ok" &&
+        flags.unit === undefined
+      );
+    return {
+      state,
+      node,
+      attempt,
+      budget,
+      receipts,
+      autonomousCandidate,
+      requireRequiredArtifacts,
+      unitResolution,
+    };
   };
 
   const stampRequestedSourceBinding = (
@@ -1192,12 +1237,28 @@ function handleReview(args: string[]): void {
     try {
       withAuditLock(pd, () => {
         const {
+          state,
           node,
           attempt,
           budget,
           receipts,
           autonomousCandidate,
-        } = loadContext(true);
+          requireRequiredArtifacts,
+          unitResolution,
+        } = loadContext(true, !retryPending);
+        const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
+          stateContent: state,
+          unit: flags.unit,
+          workflow: fields.Workflow,
+        });
+        if (!summaryEvidence.ok) {
+          refuseReview(
+            reviewSummaryEvidenceMessage(
+              flags.stage,
+              summaryEvidence.message,
+            ),
+          );
+        }
         const expected = attempt.requestCount + 1;
         const sameSourceRecoveryScope =
           receipts?.newestSourceUnit === (flags.unit ?? null);
@@ -1224,6 +1285,9 @@ function handleReview(args: string[]): void {
                 refuseReview(
                   reviewRecoverySpentMessage(
                     flags.stage,
+                    autonomousCandidate && attempt.boltStarted
+                      ? null
+                      : reviewRecoveryGuidance(pd, state, flags.stage),
                     autonomousCandidate && attempt.boltStarted && flags.unit
                       ? {
                           unit: flags.unit,
@@ -1258,11 +1322,15 @@ function handleReview(args: string[]): void {
             );
           }
           fields.Retry = "pending-request";
-          const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+          const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+            requireRequiredArtifacts,
+            boltDag: unitResolution ?? undefined,
+          });
           if (fingerprint === null) {
             refuseReview(
-              `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
-                "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
+              `Cannot start review for "${flags.stage}": a required output ` +
+                "document is missing or unreadable. Create every required output " +
+                "document for this stage, then retry the review.",
             );
           }
           fields["Artifact Fingerprint"] = fingerprint;
@@ -1280,6 +1348,9 @@ function handleReview(args: string[]): void {
           refuseReview(
             reviewRecoverySpentMessage(
               flags.stage,
+              autonomousCandidate && attempt.boltStarted
+                ? null
+                : reviewRecoveryGuidance(pd, state, flags.stage),
               autonomousCandidate && attempt.boltStarted && flags.unit
                 ? {
                     unit: flags.unit,
@@ -1322,11 +1393,15 @@ function handleReview(args: string[]): void {
           fields.Recovery = "stale-receipt";
           recovery = "stale-receipt";
         }
-        const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+        const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+          requireRequiredArtifacts,
+          boltDag: unitResolution ?? undefined,
+        });
         if (fingerprint === null) {
           refuseReview(
-            `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
-              "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
+            `Cannot start review for "${flags.stage}": a required output document ` +
+              "is missing or unreadable. Create every required output document " +
+              "for this stage, then retry the review.",
           );
         }
         fields["Artifact Fingerprint"] = fingerprint;
@@ -1364,7 +1439,12 @@ function handleReview(args: string[]): void {
 
   try {
     withAuditLock(pd, () => {
-      const { node, attempt } = loadContext(false);
+      const {
+        node,
+        attempt,
+        requireRequiredArtifacts,
+        unitResolution,
+      } = loadContext(false, false);
       if (!attempt.pendingIterations.has(iteration)) {
         refuseReview(
           `Refusing REVIEW_COMPLETED for "${flags.stage}": no unmatched ` +
@@ -1383,10 +1463,15 @@ function handleReview(args: string[]): void {
             "iteration with --retry-pending before recording the verdict.",
         );
       }
-      const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+      const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+        requireRequiredArtifacts,
+        boltDag: unitResolution ?? undefined,
+      });
       if (fingerprint === null) {
         refuseReview(
-          `Cannot record review for "${flags.stage}": the declared artifact set could not be fingerprinted. Resolve the active intent and readable artifact paths, then record the verdict again.`,
+          `Cannot finish review for "${flags.stage}": a required output document ` +
+            "is missing or unreadable. Restore every required output document " +
+            "to the reviewed state, then record the result again.",
         );
       }
       if (fingerprint !== requestedFingerprint) {

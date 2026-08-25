@@ -987,6 +987,25 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(parsed.reason).toContain("keep following each load-steering step");
     expect(parsed.reason).toContain("Do not summarise or narrate these rule chunks");
+
+    // Transport order keeps the opaque token ahead of truncatable bulk content.
+    const reasonText = parsed.reason ?? "";
+    const tokenAt = reasonText.indexOf('continue "steering-token-495"');
+    const payloadAt = reasonText.indexOf('"path":"aidlc/spaces/default/memory/org.md"');
+    expect(tokenAt).toBeGreaterThanOrEqual(0);
+    expect(payloadAt).toBeGreaterThanOrEqual(0);
+    expect(tokenAt).toBeLessThan(payloadAt);
+
+    // Execution order remains apply-current-chunk, then advance the cursor.
+    const holdCommandAt = reasonText.indexOf(
+      "Preserve this step-two continuation command, but do not run it yet",
+    );
+    const firstApplyAt = reasonText.indexOf("First, apply every path/text entry");
+    const secondRunAt = reasonText.indexOf("Second, run the preserved command");
+    expect(holdCommandAt).toBeGreaterThanOrEqual(0);
+    expect(firstApplyAt).toBeGreaterThan(holdCommandAt);
+    expect(secondRunAt).toBeGreaterThan(firstApplyAt);
+    expect(reasonText).not.toContain("as you go");
   }, 30000);
 
   // =========================================================================

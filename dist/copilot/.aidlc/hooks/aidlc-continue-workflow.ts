@@ -1050,13 +1050,18 @@ function continuationReason(
   }
   if (kind === "load-steering" && continueToken) {
     const exactContent = JSON.stringify(rulesContent ?? []);
+    // Print order and execution order intentionally differ. The opaque token
+    // must precede the large payload so host truncation cannot discard it, but
+    // the conductor must still apply this chunk before advancing the cursor.
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
-      "Apply every path/text entry in this exact `rules_content` payload before continuing:\n\n" +
-      `${exactContent}\n\nThen run ` +
+      "Preserve this step-two continuation command, but do not run it yet: " +
       `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
-      "and keep following each load-steering step it returns until it answers `run-stage`. " +
-      "Do not summarise or narrate these rule chunks to the user."
+      "First, apply every path/text entry in the exact `rules_content` payload below. " +
+      "Second, run the preserved command and keep following each load-steering step it " +
+      "returns, applying its rule chunk before every continuation, until it answers " +
+      "`run-stage`. Do not summarise or narrate these " +
+      `rule chunks to the user.\n\n${exactContent}`
     );
   }
   return (

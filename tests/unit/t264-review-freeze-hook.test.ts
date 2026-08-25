@@ -1,4 +1,4 @@
-// covers: hook:aidlc-review-freeze, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED
+// covers: hook:aidlc-review-freeze, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED
 //
 // t264 - the deterministic PreToolUse enforcement of the §12a terminal-receipt
 // ordering (the receipt-invalidation loop's hook half; the prose half is
@@ -27,11 +27,19 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import {
   blockReason,
   judgeFreeze,
+  REVIEW_FREEZE_FALLBACK_GUIDANCE,
+  reviewFreezeRecoveryGuidance,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -83,19 +91,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
     const v = judgeFreeze(RA, raFile, NONE, ready);
     expect(v.block).toBe(true);
     expect(v.stage).toBe("requirements-analysis");
-    // The reason redirects to the gate, not to a retry of the same write.
-    expect(blockReason(v)).toContain("Present the gate instead");
-    expect(blockReason(v)).toContain("terminal receipt ends artifact work");
-    expect(blockReason(v)).toContain(
-      'report --stage "requirements-analysis" --result rejected',
-    );
+    expect(blockReason(v)).toContain("latest review is final");
+    expect(blockReason(v)).toContain("quote it at the gate");
     expect(blockReason(v)).toContain("Request Changes");
-    expect(blockReason(v)).toContain(
-      '--user-input "Request Changes" --reason "<requested changes>"',
-    );
-    expect(blockReason(v)).toContain("wait for a fresh human turn");
-    expect(blockReason(v)).toContain("still in-progress");
-    expect(blockReason(v)).toContain("backfills the missing gate row");
   });
 
   test("blocks under a terminal NOT-READY receipt", () => {
@@ -126,6 +124,64 @@ describe("t264 (a) judgeFreeze decision table", () => {
     const u3 = "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
     const receipts = { stageVerdict: "NOT-READY", unitVerdicts: new Map([["U03", "NOT-READY"]]) };
     expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
+  });
+
+  test("only a validated pending recovery request suspends its exact scope", () => {
+    const raFile =
+      "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.md";
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        stagePending: { recovery: true, suspensionActive: true },
+      }).block,
+    ).toBe(false);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stagePending: { recovery: true, suspensionActive: true },
+      }).block,
+    ).toBe(true);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        stagePending: { recovery: false, suspensionActive: false },
+      }).block,
+    ).toBe(true);
+
+    const u3 =
+      "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
+    const u4 =
+      "/p/aidlc/spaces/default/intents/i1/construction/U04/nfr-requirements/nfr-requirements.md";
+    const receipts = {
+      stageVerdict: null,
+      unitVerdicts: new Map([
+        ["U03", "READY"],
+        ["U04", "READY"],
+      ]),
+      unitStale: new Set(["U03"]),
+      unitPending: new Map([
+        ["U03", { recovery: true, suspensionActive: true }],
+      ]),
+    };
+    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(false);
+    expect(judgeFreeze(NFR, u4, NONE, receipts).block).toBe(true);
+  });
+
+  test("guidance failures fall back without changing the freeze decision", () => {
+    const guidance = reviewFreezeRecoveryGuidance(
+      "/p",
+      "- [-] requirements-analysis — EXECUTE",
+      "requirements-analysis",
+      () => {
+        throw new Error("injected helper failure");
+      },
+    );
+    expect(guidance).toBe(REVIEW_FREEZE_FALLBACK_GUIDANCE);
+    expect(blockReason(judgeFreeze(RA, raFile, NONE, ready), guidance)).toContain(
+      REVIEW_FREEZE_FALLBACK_GUIDANCE,
+    );
   });
 
   test("writeTargets: file tools and mutation-capable Bash contribute paths", () => {
@@ -211,11 +267,26 @@ function projBeforeGate(): string {
   tempDirs.push(p);
   seedAidlcMemory(p);
   seedStateFile(p, join(FIXTURES_DIR, "state-mid-inception.md"));
+  const dir = join(
+    seededRecordDir(p),
+    "inception",
+    "requirements-analysis",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "requirements.md"), "# Requirements\n");
+  writeFileSync(
+    join(dir, "requirements-analysis-questions.md"),
+    "# Requirements Questions\n",
+  );
   return p;
 }
 
 function openGate(p: string): void {
-  const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+  const env = {
+    ...process.env,
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  };
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", p],
@@ -238,7 +309,13 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     p,
   ];
   for (const suffix of [[], ["--verdict", verdict]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const r = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      },
+    });
     if ((r.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${r.stdout}${r.stderr}`);
     }
@@ -246,7 +323,12 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
 }
 
 function reject(p: string): void {
-  const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+  const env = {
+    ...process.env,
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  };
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "reject", "requirements-analysis", "--feedback", "change it", "--project-dir", p],
@@ -291,7 +373,12 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     const blocked = runHook(p, writePayload(file));
     expect(blocked.code).toBe(2);
     expect(blocked.stderr).toContain("review-freeze");
-    expect(blocked.stderr).toContain("Present the gate instead");
+    expect(blocked.stderr).toContain(
+      "If this is a reviewer suggestion, quote it at the gate",
+    );
+    expect(blocked.stderr).toContain(
+      "tell me what should change and I'll record your Request Changes decision",
+    );
     expect(readAllAuditShards(p)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");
 
     // A recorded gate rejection resets the receipt floor: the freeze lifts
@@ -306,7 +393,11 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       [STATE_TOOL, "revise", "requirements-analysis", "--project-dir", p],
       {
         encoding: "utf-8",
-        env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
+        env: {
+          ...process.env,
+          AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        },
       },
     );
     if ((revise.status ?? -1) !== 0) {
@@ -423,7 +514,12 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
     openGate(p);
-    const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    const env = {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    };
     const approve = spawnSync(
       BUN,
       [STATE_TOOL, "approve", "requirements-analysis", "--user-input", "Approve", "--project-dir", p],

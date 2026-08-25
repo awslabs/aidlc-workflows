@@ -74,6 +74,7 @@ import {
   readAuditShardEvents,
   readStateFile,
   recordDir,
+  recoveryGuidance,
   relativeMemoryPath,
   relativeRecordDir,
   removeField,
@@ -97,6 +98,7 @@ import {
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
+  usesStageLevelPerUnitArtifacts,
   validateUnitName,
   validScopes,
   withAuditLock,
@@ -932,6 +934,13 @@ function handleUnit(args: string[]): void {
   // `unit start` calls could both pass the single-active-unit check.
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
+    const scope = getField(content, "Scope");
+    if (usesStageLevelPerUnitArtifacts(scope, content)) {
+      error(
+        `Refusing unit ${action} for "${unit}": the effective workflow plan skips ` +
+          "Units Generation, so this stage runs once at stage level.",
+      );
+    }
 
     // Only an engine-eligible autonomous swarm owns SWARM_UNIT_* bookkeeping.
     // The autonomy grant persists across backward jumps, where inline per-unit
@@ -1453,6 +1462,7 @@ function autonomousSwarmOwnsStage(
   }
   const scope = getField(stateContent, "Scope");
   if (!scope) return true;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
   return first === null || first.slug !== stage.slug;
 }
@@ -1630,13 +1640,9 @@ function producesDirsForStage(
   if (rec === null) return [];
   const perUnit = stage.for_each === "unit-of-work";
   if (perUnit) {
-    const resolution = resolveBoltDag(pd);
     const stateContent = readStateFile(pd);
     const scope = getField(stateContent, "Scope");
-    const unitProducerAction =
-      parseStateStageSuffixes(stateContent).get("units-generation") ??
-      (scope ? loadScopeMapping()[scope]?.stages["units-generation"] : undefined);
-    if (resolution.state === "none" && unitProducerAction !== "EXECUTE") {
+    if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
       return [join(rec, "construction", stage.slug)];
     }
     const ctorRoot = join(rec, "construction");
@@ -1669,17 +1675,21 @@ function producesArtifactsExist(
   const produces = stage.produces ?? [];
   if (produces.length === 0) return true; // nothing declared -> nothing to verify
   if (stage.for_each === "unit-of-work" && stage.produces_kinds !== undefined) {
-    const resolution = resolveBoltDag(pd);
-    if (resolution.state === "ok" && resolution.unitKinds !== null) {
-      const allVacuous = resolution.units.every(
-        (u) =>
-          filterProducesByKind(
-            stage.produces_kinds,
-            produces,
-            resolution.unitKinds?.get(u) ?? null,
-          ).length === 0,
-      );
-      if (allVacuous) return true;
+    const stateContent = readStateFile(pd);
+    const scope = getField(stateContent, "Scope");
+    if (!usesStageLevelPerUnitArtifacts(scope, stateContent)) {
+      const resolution = resolveBoltDag(pd);
+      if (resolution.state === "ok" && resolution.unitKinds !== null) {
+        const allVacuous = resolution.units.every(
+          (u) =>
+            filterProducesByKind(
+              stage.produces_kinds,
+              produces,
+              resolution.unitKinds?.get(u) ?? null,
+            ).length === 0,
+        );
+        if (allVacuous) return true;
+      }
     }
   }
   const dirs = producesDirsForStage(pd, stage);
@@ -2504,7 +2514,23 @@ function verifyReviewerPrecondition(
   // WORKFLOW_STARTED/STAGE_JUMPED floor, the unit-major STAGE_STARTED skip,
   // and per-unit write invalidation are all documented there.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
-  const perUnit = stage.for_each === "unit-of-work";
+  const perUnit =
+    stage.for_each === "unit-of-work" &&
+    !usesStageLevelPerUnitArtifacts(getField(content, "Scope"), content);
+  const pendingRecoveryUnits = Array.from(receipts.unitPending)
+    .filter(([, pending]) => pending.recovery)
+    .map(([unit]) => unit);
+  if (receipts.stagePending?.recovery || pendingRecoveryUnits.length > 0) {
+    const scope =
+      pendingRecoveryUnits.length > 0
+        ? ` for Unit${pendingRecoveryUnits.length === 1 ? "" : "s"} ${pendingRecoveryUnits.join(", ")}`
+        : "";
+    error(
+      `${reviewerPreconditionPrefix(stage.slug, action)}: the recovery review${scope} ` +
+        "is still in progress. Finish that review and record its result before " +
+        "presenting the gate or completing the stage.",
+    );
+  }
 
   // Source-state equality composes with v2's bounded stale-receipt recovery.
   // The workspace-global newest-receipt reconciliation remains the outer
@@ -2512,12 +2538,14 @@ function verifyReviewerPrecondition(
   // binding and applies newest-fresh-claimant shielding per path.
   const sourceFreshnessOff =
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
-  const settledSwarm = settledSwarmForArtifactGuardOrError(
-    pd,
-    stage,
-    content,
-    action,
-  );
+  const settledSwarm =
+    perUnit &&
+    settledSwarmForArtifactGuardOrError(
+      pd,
+      stage,
+      content,
+      action,
+    );
   // A tightly bounded reconciliation handles the one intentional exception to
   // the global outer boundary: after an unclaimed addition is reverted, the
   // current baseline delta can be fully covered by fresh modern unit bindings
@@ -2582,6 +2610,8 @@ function verifyReviewerPrecondition(
     !baselineReversionReconciled;
   if (staleSource) {
     staleSourcePreconditionError(
+      pd,
+      content,
       stage.slug,
       reviewer,
       receipts.sourceStaleProgress?.recoverySpent === true,
@@ -2605,6 +2635,8 @@ function verifyReviewerPrecondition(
     if (!sawStageReview) {
       if (receipts.stageStale) {
         staleReviewPreconditionError(
+          pd,
+          content,
           stage.slug,
           reviewer,
           receipts.stageStaleProgress?.recoverySpent === true,
@@ -2673,12 +2705,13 @@ function verifyReviewerPrecondition(
           ? `For autonomous units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
             `do not put them in --claimed or finalize/merge them. Halt and ask the ` +
             `human whether to restart each Bolt; on approval abort/discard the old ` +
-            `Bolt and rerun the current swarm prepare step so a fresh BOLT_STARTED ` +
-            `boundary resets review accounting.`
+            `Bolt and rerun the current swarm prepare step so the fresh Bolt ` +
+            `attempt restores one review allowance.`
           : `For units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
-            `present the situation to the human at the approval gate. Only a human ` +
-            `Request Changes decision resets the review attempt; do not record it ` +
-            `on the human's behalf.`,
+            `the one recovery review was already used and their output changed ` +
+            `again. ${recoveryGuidance(pd, content, stage.slug)} Only a human ` +
+            `Request Changes decision resets the review attempt; do not record ` +
+            `that rejection on the human's behalf.`,
       );
     }
     if (neverReviewed.length > 0) {
@@ -2739,16 +2772,19 @@ function verifyReviewerPrecondition(
 }
 
 function staleSourcePreconditionError(
+  pd: string,
+  content: string,
   slug: string,
   reviewer: string,
   recoverySpent: boolean,
 ): never {
   if (recoverySpent) {
     error(
-      `Refusing to complete "${slug}": the workspace source no longer matches ` +
-        `the stale-receipt recovery review (source-fingerprint mismatch). ` +
-        `Present this at the approval gate. Only a human Request Changes decision ` +
-        `resets the review attempt; do not record it on the human's behalf.`,
+      `Refusing to complete "${slug}": the workspace source changed again after ` +
+        `the one recovery review by ${reviewer} (source-fingerprint mismatch). ` +
+        `${recoveryGuidance(pd, content, slug)} ` +
+        "Only a human Request Changes decision resets the review attempt; do not " +
+        "record that rejection on the human's behalf.",
     );
   }
   error(
@@ -2792,6 +2828,8 @@ function verifyPipelineLinkPrecondition(
 }
 
 function staleReviewPreconditionError(
+  pd: string,
+  content: string,
   slug: string,
   reviewer: string,
   recoverySpent: boolean,
@@ -2799,11 +2837,11 @@ function staleReviewPreconditionError(
 ): never {
   if (recoverySpent) {
     error(
-      `${reviewerPreconditionPrefix(slug, action)}: its stale-receipt recovery review from ` +
-        `${reviewer} was invalidated by another later write to a declared ` +
-        `produces[] artifact. Present the situation to the human at the approval ` +
-        `gate. Only a human Request Changes decision resets the review attempt; ` +
-        `do not record it on the human's behalf.`
+      `${reviewerPreconditionPrefix(slug, action)}: this stage's output document ` +
+        `changed again after the one recovery review by ${reviewer}. ` +
+        recoveryGuidance(pd, content, slug) +
+        " Only a human Request Changes decision resets the review attempt; do not " +
+        "record that rejection on the human's behalf."
     );
   }
   error(

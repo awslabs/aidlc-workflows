@@ -164,7 +164,9 @@ codekb directory. `workspace_requires: true` also requires source-work evidence
 outside `aidlc/` and the harness dir. A failure writes nothing. Optional outputs
 do not participate. For `produces_kinds`, units whose kind prunes the required
 set to zero owe no artifact; any applicable unit remains strict. Bypass with
-`AIDLC_SKIP_ARTIFACT_GUARD=1`.
+`AIDLC_SKIP_ARTIFACT_GUARD=1`. The same switch also bypasses the review logger's
+required-output existence check; without it, a stage-level review of a
+per-Unit stage requires every authoritative Unit's applicable required outputs.
 
 **Reviewer gate guard (issue #551).** A reviewer-bearing stage cannot enter
 `AwaitingApproval` through `gate-start` or `revise` until its configured
@@ -349,7 +351,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `DECISION_RECORDED` | `tools/aidlc-log.ts` | Fires before a non-gate `AskUserQuestion` so options are captured |
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v1`, which preserves the canonical order of the preamble and all visible Q<n> and feedback sections, including follow-up questions after an assumption decision. Exactly one post-summary `Assumption Confirmation` section and its contents are excluded; a same-named pre-summary section remains hashed. Any other visible Markdown or raw-HTML heading after the summary fails closed. Stage-specific pre-summary headings remain valid. Unscoped receipts retain legacy whole-file verification and need reconfirmation after an allowed append. Reserved from public audit append. |
-| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a, records the artifact fingerprint sent for review, and rejects a second normal request while one is unmatched. `--unit` must name a member of the authoritative DAG; a legacy no-DAG swarm may instead prove the exact Unit through a matching, still-open tool-owned Bolt attempt. `--retry-pending` re-dispatches the exact unmatched ordinal. |
+| `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a, records the artifact fingerprint sent for review, and rejects a second normal request while one is unmatched. A new `--unit` request must name a member of the authoritative DAG; a legacy no-DAG swarm may instead prove the exact Unit through a matching, still-open tool-owned Bolt attempt. `--retry-pending` re-dispatches the exact accepted unmatched ordinal without reapplying new-request Unit membership admission. |
 | `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration `REVIEW_REQUESTED` whose request fingerprint still equals both the verdict fingerprint and the current declared output paths and bytes; a write during review requires re-dispatch before a verdict can be recorded. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations` (earlier rows expose repair/retry progress to a wave). A terminal receipt invalidated by a later declared-output or source write gets one distinct recovery request at the next ordinal; either recovery verdict is terminal, and a second invalidation requires human reset. `workspace_requires` stages also record `Source Fingerprint` (a git-native source hash, or `unbindable`); modern unbindable receipts fail closed, while fieldless pre-#629 rows retain migration behavior. Per-unit `workspace_requires` receipts additionally require `source-manifest.json` and record `Unit Source Fingerprint`, or an explicit source-binding bypass. Gate-opening transitions (`gate-start` and `revise`) and all completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching terminal receipt from the current workflow attempt; per-unit stages require one receipt per applicable unit, while only a Unit-less receipt can satisfy a no-DAG stage-level fallback. Autonomous swarm finalization additionally requires each configured unit's paired terminal receipt after its Bolt started, current artifact and source bindings, and every applicable required artifact to exist as a file in the worktree hosting that Bolt; absent optional outputs remain valid fingerprint entries. |
 | `PIPELINE_LINK_COMPLETED` | `tools/aidlc-log.ts` | Fires after one declared pipeline link returns. Carries `Stage`, `Link`, and `Position k/N`; multi-repo chains also carry `Repo`, and isolated runs carry `Workflow=single-stage:<slug>`. The tool refuses undeclared, duplicate, or out-of-order links within that receipt scope. Main-workflow gate-start, approval, advance, finalize, and workflow completion ignore isolated rows and require every scanned-repo current-attempt link receipt. |
 
@@ -608,7 +610,7 @@ A completed checkbox records execution history. It does not prove that the
 result still matches the runtime artifact instances captured at completion.
 Execution state and result validity are therefore separate concepts.
 
-Each main-workflow `STAGE_COMPLETED` event may carry a schema-2 `Validation
+Each main-workflow `STAGE_COMPLETED` event may carry a schema-3 `Validation
 Basis`. Runtime resolution remains concrete and instance-aware: the active Bolt
 DAG expands per-unit artifacts, `produces_kinds` filters unit kinds, and the
 artifact-vocabulary filename mapping resolves collision-safe names such as
@@ -631,6 +633,11 @@ which bytes the stage read while executing. "Observed dependency" means an
 input recorded in the completion receipt; changes before capture become the
 baseline, while later changes can be detected.
 
+Schema-2 and earlier receipts remain untracked until normal re-completion.
+Schema 2 cannot distinguish its former zero-instance resolution from the
+stage-level zero-Unit resolution, so treating it as advisory avoids reporting
+unchanged in-flight workflows as stale after an upgrade.
+
 `requires_stage` is not treated as an invalidation edge because the current v2
 schema uses it for both semantic dependency and ordering. An explicit edge kind
 would be required before it can safely participate in validity propagation.
@@ -652,9 +659,11 @@ may contain a new boundary from a forced re-init in those releases; completions
 before that boundary read as untracked and fail open until their stages
 complete again.
 
-Known limitation: artifact resolution is scope-blind. The express scope runs
-Code Generation and Build and Test with stage-level artifact paths and no Unit
-DAG, so the resolver's per-unit expansion finds zero instances for those
-outputs and they are not fingerprinted; changes to them are currently not
-detected (fail-open, never a false drift). A scope-aware resolution contract is
-follow-up work.
+Artifact resolution follows the approved workflow plan for per-Unit stages.
+When Units Generation is skipped, including express and recomposed zero-Unit
+plans, validity resolves one stage-level artifact instance under
+`<record>/construction/<stage>/` and does not inspect a Bolt DAG or stale
+per-Unit directories. When Units Generation executes, normal Bolt DAG expansion
+and the legacy no-DAG directory fallback remain unchanged. Missing or ambiguous
+plan state makes receipt capture or inspection unavailable with a non-blocking
+warning rather than reporting false drift.

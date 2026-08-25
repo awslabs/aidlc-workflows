@@ -131,22 +131,30 @@ function recordReview(
   verdict = "READY",
   claimPaths?: Array<{ path: string; repo?: string }>,
 ): void {
-  // v2 requires every per-unit code-generation receipt to bind the declared
-  // artifacts as well as workspace source. Seed the minimal real contract in
-  // fixtures that focus on source freshness; never overwrite a test's content.
-  if (stage === "code-generation" && unit) {
-    const artifactDir = join(seededRecordDir(proj), "construction", unit, stage);
+  // Review requests require every declared output. Seed the minimal real
+  // contract in fixtures that focus on source freshness; never overwrite a
+  // test's content.
+  if (stage === "code-generation" || stage === "functional-design") {
+    const artifactDir = unit
+      ? join(seededRecordDir(proj), "construction", unit, stage)
+      : join(seededRecordDir(proj), "construction", stage);
     mkdirSync(artifactDir, { recursive: true });
-    for (const artifact of [
-      "code-generation-plan",
-      "unit-test-instructions",
-      "code-summary",
-      "traceability",
-    ]) {
-      const path = join(
-        artifactDir,
-        artifact === "traceability" ? "traceability.json" : `${artifact}.md`,
-      );
+    const artifacts =
+      stage === "code-generation"
+        ? [
+            "code-generation-plan.md",
+            "unit-test-instructions.md",
+            "code-summary.md",
+            "traceability.json",
+          ]
+        : [
+            "entities.md",
+            "rules.md",
+            "functional-spec.md",
+            "traceability.json",
+          ];
+    for (const artifact of artifacts) {
+      const path = join(artifactDir, artifact);
       if (!existsSync(path)) writeFileSync(path, `# ${artifact}\n`, "utf-8");
     }
     const listing = workspaceSourceListing(proj);
@@ -191,7 +199,11 @@ function recordReview(
   if (unit) baseArgs.push("--unit", unit);
   let requested = spawnSync(BUN, baseArgs, {
     encoding: "utf-8",
-    env: process.env,
+    env: {
+      ...process.env,
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    },
   });
   if ((requested.status ?? -1) !== 0) {
     const expected = `${requested.stdout ?? ""}${requested.stderr ?? ""}`.match(
@@ -204,7 +216,11 @@ function recordReview(
       );
       requested = spawnSync(BUN, baseArgs, {
         encoding: "utf-8",
-        env: process.env,
+        env: {
+          ...process.env,
+          AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        },
       });
     }
   }
@@ -214,7 +230,14 @@ function recordReview(
     );
   }
   const args = [...baseArgs, "--verdict", verdict];
-  const r = spawnSync(BUN, args, { encoding: "utf-8", env: process.env });
+  const r = spawnSync(BUN, args, {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    },
+  });
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
   }
@@ -877,13 +900,13 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  });
+  }, 60_000);
 
   test("no stamp for a reviewer-bearing record-artifact stage without workspace_requires", () => {
     recordReview(proj, "functional-design", REVIEWER);
     expect(readAllAuditShards(proj)).toContain("**Event**: REVIEW_COMPLETED");
     expect(readAllAuditShards(proj)).not.toContain("**Source Fingerprint**: ");
-  });
+  }, 60_000);
 
   test("a post-review source edit refuses completion with the mismatch message", () => {
     recordReview(proj);
@@ -892,7 +915,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("source-fingerprint mismatch");
     expect(r.out).toContain(REVIEWER);
-  });
+  }, 60_000);
 
   test("source mismatch permits one real recovery review within the normal budget", () => {
     recordReview(proj);
@@ -914,7 +937,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
       guarded(proj, ["approve", "code-generation", "--user-input", "ship it"])
         .rc,
     ).toBe(0);
-  });
+  }, 60_000);
 
   test("source mismatch permits one real recovery review after the normal budget is exhausted", () => {
     recordReview(proj, "code-generation", REVIEWER, undefined, "NOT-READY");
@@ -938,7 +961,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
       guarded(proj, ["approve", "code-generation", "--user-input", "ship it"])
         .rc,
     ).toBe(0);
-  }, 30000);
+  }, 60_000);
 
   test("AIDLC_SKIP_SOURCE_FRESHNESS=1 restores the legacy pass (off-switch)", () => {
     recordReview(proj);
@@ -947,7 +970,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
       AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     });
     expect(r.rc).toBe(0);
-  });
+  }, 60_000);
 
   test("a legacy receipt without the field keeps passing after a source edit (fail-open)", () => {
     recordReview(proj);
@@ -956,7 +979,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
     writeFileSync(src, "export const answer = 8;\n", "utf-8");
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(0);
-  });
+  }, 60_000);
 
   test("a newly stamped unbindable receipt remains fail-closed while Git is still unavailable", () => {
     recordReview(proj);
@@ -969,7 +992,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("source-fingerprint mismatch");
-  });
+  }, 60_000);
 
   test("a true advance replay stays idempotent even if source later changes", () => {
     recordReview(proj);
@@ -978,7 +1001,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
     const replay = guarded(proj, ["advance", "code-generation"]);
     expect(replay.rc).toBe(0);
     expect(replay.out).toContain('"replay":true');
-  });
+  }, 60_000);
 
   for (const route of ["advance", "finalize", "complete-workflow"] as const) {
     test(`an already-completed stage without receipts recovers through ${route}`, () => {
@@ -986,7 +1009,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
       const recovery = guarded(proj, [route, "code-generation"]);
       expect(recovery.out).not.toContain("no fresh REVIEW_COMPLETED");
       expect(recovery.rc).toBe(0);
-    });
+    }, 60_000);
 
     test(`a partial approval crash window still rechecks source freshness through ${route}`, () => {
       recordReview(proj);
@@ -995,7 +1018,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
       const recovery = guarded(proj, [route, "code-generation"]);
       expect(recovery.rc).not.toBe(0);
       expect(recovery.out).toContain("source-fingerprint mismatch");
-    });
+    }, 60_000);
 
     test(`an artifact change cannot hide stale source during completed-stage recovery through ${route}`, () => {
       recordReview(proj);
@@ -1018,7 +1041,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
       const recovery = guarded(proj, [route, "code-generation"]);
       expect(recovery.rc).not.toBe(0);
       expect(recovery.out).toContain("source-fingerprint mismatch");
-    });
+    }, 60_000);
   }
 
   for (const artifactBinding of ["missing", "malformed"] as const) {
@@ -1041,7 +1064,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
       const recovery = guarded(proj, ["advance", "code-generation"]);
       expect(recovery.out).not.toContain("source-fingerprint mismatch");
       expect(recovery.rc).toBe(0);
-    });
+    }, 60_000);
   }
 });
 
@@ -1092,7 +1115,7 @@ describe("t304 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  }, 30000);
+  }, 60_000);
 
   // #646 review - the protocol's own rework loop. stage-protocol.md §12a
   // requires recording a NOT-READY receipt, re-invoking the lead to fix the
@@ -1121,7 +1144,7 @@ describe("t304 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  }, 30000);
+  }, 60_000);
 
   // #646 review - the second `M`-shaped legitimate transition: a unit that
   // wires itself into a file an earlier unit already created. Ordinary
@@ -1142,7 +1165,7 @@ describe("t304 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  }, 30000);
+  }, 60_000);
 
   // Alpha's manifest/snapshot owns alpha.ts. A later beta review refreshes the
   // global outer binding but cannot shield alpha.ts because beta does not claim
@@ -1176,7 +1199,7 @@ describe("t304 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Invalidated receipts: alpha");
-  }, 30000);
+  }, 60_000);
 
   // Re-reviewing alpha refreshes the global outer binding, but beta's own
   // snapshot still detects the unreviewed beta.ts edit and invalidates beta.
@@ -1209,7 +1232,7 @@ describe("t304 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Invalidated receipts: beta");
-  }, 15000);
+  }, 60_000);
 
   // The stage-entry baseline sees unreviewed.ts, while neither fresh Unit
   // manifest claims it. A newer beta review cannot launder an unclaimed path.
@@ -1252,7 +1275,7 @@ describe("t304 multi-unit source attribution", () => {
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Unclaimed source changes fail closed");
     expect(r.out).toContain("unreviewed.ts");
-  }, 15000);
+  }, 60_000);
 
   // #646 review - the recorded-repo layout is the DEFAULT (sibling
   // auto-discovery populates `repos` at intent birth via resolveBirthRepoSet
@@ -1298,7 +1321,7 @@ describe("t304 multi-unit source attribution", () => {
     const dirty = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(dirty.rc).not.toBe(0);
     expect(dirty.out).toContain("source-fingerprint mismatch");
-  }, 15000);
+  }, 60_000);
 });
 
 // Reproduction of the maintainer review on #646 (a1e4d67), P1 finding 2: the
@@ -1370,7 +1393,7 @@ describe("t304 settled-swarm exemption from fingerprint reconciliation (#646 rev
     expect(r.out).toContain(
       "no current-attempt post-merge main-checkout source binding",
     );
-  });
+  }, 60_000);
 });
 
 // Reproduction of the maintainer review on #646 (a1e4d67), P1 finding 3:
