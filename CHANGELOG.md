@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.82] - 2026-08-25
+
+`/aidlc --doctor` now catches hooks that Claude Code has globally disabled. Previously an install with `"disableAllHooks": true` could pass every check yet block at runtime because doctor verified that hook files were present and wired, but not that Claude Code would run them. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the new check.
+
+* Claude Code doctor output adds a **Hooks enabled** row that fails when the resolved `disableAllHooks` value is `true` in enterprise managed, project local, project, or user settings. The check follows Claude Code's layer precedence, names the controlling layer, and explains how to restore AI-DLC's hook-driven workflow engine.
+
 ## [2.6.81] - 2026-08-25
 
 Agent and stage prompts now omit duplicated ownership and persona-loading prose while every delegated agent retains a mandatory shared and agent-specific knowledge preflight in its generated harness surface. **Upgrade:** re-copy your `dist/<harness>/` shell; active workflow state and project artifacts need no migration.

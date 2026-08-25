@@ -11,7 +11,8 @@
 
 import { describe, expect, test, afterEach } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -47,30 +48,46 @@ function managedPath(proj: string): string {
   return join(proj, ".claude", "managed-settings.json");
 }
 
-// Run doctor hermetically: HOME pinned to the project pins the user-settings
-// layer (~/.claude/settings.json) under the project, and
-// AIDLC_MANAGED_SETTINGS_PATH pins the enterprise managed layer to a file we
-// control (absent by default) instead of the developer's/CI host's real
-// /etc/claude-code/ or Program Files managed-settings.json.
-function runDoctor(proj: string): { status: number; out: string } {
+function createUserHome(): string {
+  const home = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-user-home-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  created.push(home);
+  return home;
+}
+
+function writeUserSettings(home: string, settings: Record<string, unknown>): void {
+  writeFileSync(
+    join(home, ".claude", "settings.json"),
+    JSON.stringify(settings, null, 2),
+    "utf-8",
+  );
+}
+
+// Keep HOME distinct from the project so the user and project layers cannot
+// collapse onto the same settings.json. The managed layer is also pinned to a
+// fixture path rather than the host's real enterprise policy.
+function runDoctor(
+  proj: string,
+  userHome = join(proj, ".test-user-home"),
+): { status: number; out: string } {
   const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
     encoding: "utf-8",
     env: {
       ...process.env,
-      HOME: proj,
-      USERPROFILE: proj,
+      HOME: userHome,
+      USERPROFILE: userHome,
       AIDLC_MANAGED_SETTINGS_PATH: managedPath(proj),
     },
   });
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-describe("t304 doctor disableAllHooks gate", () => {
+describe("t324 doctor disableAllHooks gate", () => {
   test("a clean install passes the Hooks-enabled row", () => {
     const proj = setupIntegrationProject();
     created.push(proj);
     const { out } = runDoctor(proj);
-    expect(out).toMatch(/Hooks enabled \(no disableAllHooks:true in any inspected settings file\)/);
+    expect(out).toMatch(/Hooks enabled \(resolved disableAllHooks is not true\)/);
     expect(out).not.toMatch(/Hooks DISABLED/);
   });
 
@@ -116,6 +133,28 @@ describe("t304 doctor disableAllHooks gate", () => {
     expect(out).not.toMatch(/Hooks DISABLED/);
   });
 
+  test("disableAllHooks:true in user settings fails and names the user layer", () => {
+    const proj = setupIntegrationProject();
+    created.push(proj);
+    const home = createUserHome();
+    writeUserSettings(home, { disableAllHooks: true });
+    const { status, out } = runDoctor(proj, home);
+    expect(out).toMatch(/Hooks DISABLED/);
+    expect(out).toMatch(/~\/\.claude\/settings\.json/);
+    expect(status).not.toBe(0);
+  });
+
+  test("project settings:false SUPPRESSES lower-precedence user settings:true", () => {
+    const proj = setupIntegrationProject();
+    created.push(proj);
+    const home = createUserHome();
+    writeUserSettings(home, { disableAllHooks: true });
+    patchProjectSettings(proj, { disableAllHooks: false });
+    const { out } = runDoctor(proj, home);
+    expect(out).toMatch(/Hooks enabled/);
+    expect(out).not.toMatch(/Hooks DISABLED/);
+  });
+
   // Managed-settings is the realistic IT-policy vector for issue #802 (reported
   // on Windows). The managed layer is read from the injectable seam, so this
   // covers the managed channel on any host platform.
@@ -150,7 +189,7 @@ describe("t304 doctor disableAllHooks gate", () => {
 // (code.claude.com/docs/en/settings): Windows moved to %ProgramFiles%\ClaudeCode\
 // (legacy %PROGRAMDATA% unsupported since v2.1.75), macOS uses
 // /Library/Application Support/ClaudeCode/, Linux and WSL use /etc/claude-code/.
-describe("t304 resolveManagedSettingsCandidates (per-platform paths)", () => {
+describe("t324 resolveManagedSettingsCandidates (per-platform paths)", () => {
   test("Windows probes Program Files first, then legacy ProgramData", () => {
     const paths = resolveManagedSettingsCandidates("win32", {
       ProgramFiles: "C:\\Program Files",

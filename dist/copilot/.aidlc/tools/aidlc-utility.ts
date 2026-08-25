@@ -1993,8 +1993,9 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     // We inspect only the on-disk managed-settings FILE. Claude Code can also
     // receive managed policy through channels we cannot read from here (MDM,
     // Windows registry, a remote/server-managed source, a `managed-settings.d/`
-    // fragment dir) — so a pass means "no disableAllHooks:true in any settings
-    // file we could inspect", not a guarantee the whole enterprise layer is clean.
+    // fragment dir) — so a pass means the resolved value is not true in the
+    // settings files we could inspect, not a guarantee the whole enterprise
+    // layer is clean.
     //
     // Managed-settings file location is platform-specific (resolved by the pure,
     // per-platform-tested resolveManagedSettingsCandidates below).
@@ -2029,7 +2030,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       pass: hooksDisabledBy === null,
       label:
         hooksDisabledBy === null
-          ? "Hooks enabled (no disableAllHooks:true in any inspected settings file)"
+          ? "Hooks enabled (resolved disableAllHooks is not true)"
           : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
       fix:
         hooksDisabledBy === null

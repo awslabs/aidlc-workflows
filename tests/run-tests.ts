@@ -640,9 +640,15 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   // protected safe.directory entries needed by mounted/foreign-owned CI
   // workspaces, but excludes developer settings and explicitly disables commit
   // and tag signing. Fixtures pass their own identity per commit.
+  //
+  // Isolate Claude Code's enterprise managed settings too. Doctor subprocesses
+  // inherit this absent, runner-owned path, so a policy on the developer or CI
+  // host cannot change unrelated test results. Focused managed-policy tests
+  // override the path with their own fixture.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_TEST_NAME: base,
+    AIDLC_MANAGED_SETTINGS_PATH: join(logDir, ".aidlc-managed-settings-absent.json"),
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
     AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",

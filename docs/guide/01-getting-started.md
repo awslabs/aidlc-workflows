@@ -325,8 +325,8 @@ Run the health check to confirm everything is in place:
 ✓ aidlc-session-start.ts present
 ✓ aidlc-session-end.ts present
 ✓ aidlc-statusline.ts present
+✓ Hooks enabled (resolved disableAllHooks is not true)
 ✓ settings.json present
-✓ Hooks enabled (no disableAllHooks:true in any inspected settings file)
 ✓ AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
 ✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
 ✓ Hook heartbeats: not yet fired (first workflow stage will populate)
