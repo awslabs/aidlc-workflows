@@ -356,9 +356,12 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   "Select 'Other' on any question to discuss it before answering."
 - After each batch, IMMEDIATELY write answers to the questions file
 - Log each batch with fresh ISO timestamp
-- Present a consolidated answer summary, then a structured confirmation with
-  **Looks correct** and **Request changes** options. Do not ask for confirmation
-  as bare prose. Before presenting it, append or reset a dedicated
+- Present a consolidated answer summary, then print
+  `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
+  the structured **Looks correct** / **Request changes** confirmation. The
+  deterministic brief names the stage, questions file, generated artifacts,
+  why the decision is required now, and the exact effect of both choices. Do
+  not ask for confirmation as bare prose. Before presenting it, append or reset a dedicated
   **Consolidated Summary Confirmation** entry in the stage questions file with
   both options and a blank `[Answer]:`. Record the prompt with
   `aidlc-log.ts decision --checkpoint summary-confirmation --questions-file
@@ -1001,8 +1004,11 @@ omits the reviewer block entirely and the stage runs reviewless.
    suspension if the stale condition remains. Restoring source mid-recovery
    closes the write window immediately: record the completed verdict against
    the restored state, or obtain Request Changes before editing again. After
-   the request succeeds, the conductor deletes any existing `## Review` section
-   on the primary artifact, then delegates to the agent named in
+   the request succeeds, the conductor first runs
+   `aidlc-review-brief.ts context --stage <slug>` (plus `--unit` where
+   applicable) and retains its hydrated findings as the prior-review context.
+   It then deletes any existing `## Review` section on the primary artifact and
+   delegates to the agent named in
    `directive.reviewer`. Review history lives in the audit ledger, so a leftover
    section cannot be mistaken for a fresh verdict. The gate and completion
    remain blocked while the request is unmatched. After the reviewer replaces
@@ -1031,9 +1037,13 @@ omits the reviewer block entirely and the stage runs reviewless.
    review). Codex TOML personas, Cursor, Copilot, and Kiro CLI/IDE expose no
    per-agent cap key, so there the budget is persona prose only (the personas'
    `## Turn Budget` section plans for the worst-case cutoff on every harness).
-3. **Verdict.** On `advisory`, both verdicts are terminal in normal flow: the workflow proceeds
-   to the learnings ritual and the gate, where the findings are quoted verbatim
-   for the human to triage (`reviewer_max_iterations` is 1, engine-enforced).
+3. **Verdict and decision brief.** On `advisory`, both verdicts are terminal in
+   normal flow: the workflow proceeds to the learnings ritual and the gate.
+   Before that gate, `aidlc-review-brief.ts review --stage <slug> --why
+   <first|revision|stale>` renders the exact stage, ordinary-language outcome,
+   review artifact(s), hydrated findings, decision effects, and concrete
+   upstream/downstream invalidation paths (`reviewer_max_iterations` is 1,
+   engine-enforced).
    On `adversarial`: READY → proceed to the learnings ritual then the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer
@@ -1071,6 +1081,14 @@ omits the reviewer block entirely and the stage runs reviewless.
    changes, Request Changes can be recorded while the stage is active or
    awaiting approval; `[R]` restarts through `/aidlc --stage <slug>`, and `[x]`
    requires restoring the reviewed source state or jumping back to redo it.
+
+Human finding dispositions never rewrite the terminally reviewed artifact.
+`GATE_APPROVED` atomically records `Accepted risk` for each current New or
+Unresolved finding. A Request Changes report records `Rejected: <reason>` only
+for explicit
+`--reject-finding <review-artifact>#R-NN=<exact human reason>` values; generic
+revision feedback leaves findings unresolved. The renderer folds these
+content-addressed audit records into later gates and re-review dispatches.
 
 The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
 request whose `--iteration` exceeds the stage's effective budget, so

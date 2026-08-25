@@ -6287,22 +6287,23 @@ export interface FreshReviewReceipts {
   unitPending: Map<string, PendingReviewProgress>;
 }
 
-interface ReviewFingerprintStage {
+export interface ReviewFingerprintStage {
   slug: string;
   phase: string;
   for_each?: string;
+  reviewer?: string;
   produces?: string[];
   optional_produces?: string[];
   produces_kinds?: Record<string, string[]>;
 }
 
-interface ReviewArtifactEntry {
+export interface ReviewArtifactEntry {
   logicalPath: string;
   path: string | null;
   required: boolean;
 }
 
-function reviewArtifactEntries(
+export function reviewArtifactEntries(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,

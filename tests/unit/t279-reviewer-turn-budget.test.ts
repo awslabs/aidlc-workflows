@@ -202,7 +202,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("reviewer module §12a step 1 records the request before deleting an existing ## Review section (core + dist/claude)", () => {
+  test("reviewer module §12a step 1 records the request, hydrates prior findings, then deletes an existing ## Review section (core + dist/claude)", () => {
     // The stale-READY hole: a stage passes review READY; the human rejects at
     // the gate; the builder revises a produces[] artifact; the re-review is
     // itself cut off before writing - and the artifact still carries the
@@ -224,8 +224,22 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain(
         "validated pending recovery request suspends the",
       );
-      expect(labelled).toContain("DELETE that section");
-      expect(labelled).toMatch(/review history lives in the audit ledger/i);
+      const request = labelled.indexOf(
+        "before changing an existing `## Review` section, record the request",
+      );
+      const hydrate = labelled.indexOf(
+        "aidlc-review-brief.ts context",
+        request,
+      );
+      const deletion = labelled.indexOf(
+        "DELETE the existing `## Review` section",
+        hydrate,
+      );
+      expect(request).toBeGreaterThan(-1);
+      expect(hydrate).toBeGreaterThan(request);
+      expect(deletion).toBeGreaterThan(hydrate);
+      expect(labelled).toContain("durable human dispositions from the audit ledger");
+      expect(labelled).toMatch(/receipt history remains in the audit ledger/i);
       // The Part 0 revision-path paragraph names step 1's delete rule as what
       // protects it.
       expect(labelled).toContain("request-first delete rule removes the stale");
@@ -256,20 +270,23 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       // The incomplete-attempt path: retry the SAME unmatched request once,
       // consuming no iteration (the advisory budget is one pass - counting a
       // cut-off attempt would exhaust it without any review happening).
+      expect(labelled).toContain("**On an incomplete attempt:**");
       expect(labelled).toMatch(
-        /On an incomplete attempt:[\s\S]*?Count reviewer dispatches, not fingerprint rebind rows/,
+        /Count reviewer dispatches, not fingerprint\s+rebind rows/,
       );
-      expect(labelled).toContain(
-        "A prior fingerprint rebind does not consume this re-dispatch allowance",
+      expect(labelled).toMatch(
+        /A prior fingerprint rebind does not consume this\s+re-dispatch allowance/,
       );
       expect(labelled).toMatch(
         /neither use consumes a review iteration/,
       );
-      expect(labelled).toMatch(/re-dispatch it exactly once/);
+      expect(labelled).toMatch(/re-dispatch it\s+exactly once/);
       // The second incomplete attempt records the terminal receipt with the
       // named finding and routes per review class.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
-      expect(labelled).toMatch(/record the terminal receipt with `--verdict NOT-READY`/);
+      expect(labelled).toMatch(
+        /record\s+the\s+terminal receipt with `--verdict NOT-READY`/,
+      );
       expect(labelled).toMatch(/on `advisory` it is terminal/);
       expect(labelled).toMatch(/skip the lead re-invoke/);
       expect(labelled).toMatch(/never presented on \(or deadlocked by\)/);
@@ -279,7 +296,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       // silently dropped once in a rebase (PR #613 round 2, P1) and nothing
       // pinned it; now something does.
       expect(labelled).toMatch(
-        /record\s+the terminal receipt with the same `aidlc-log\.ts review` command plus\s+`--verdict <READY\|NOT-READY>`/,
+        /record\s+the\s+terminal receipt with the same `aidlc-log\.ts review` command plus\s+`--verdict <READY\|NOT-READY>`/,
       );
       // Step 1's dispatch-failure contract now names the incomplete attempt
       // as a retry-pending cause too.
@@ -324,8 +341,12 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
         "utf-8",
       );
       const labelled = `harness ${harness.name} module\n${module}`;
-      // Request-first, then delete, on every dispatch.
-      expect(labelled).toContain("DELETE that section");
+      // Request-first, hydrate dispositions, then delete, on every dispatch.
+      expect(labelled).toContain("DELETE the existing `## Review` section");
+      expect(labelled).toContain("aidlc-review-brief.ts context");
+      expect(labelled).toContain(
+        "durable human dispositions from the audit ledger",
+      );
       expect(labelled).toContain(
         "before changing an existing `## Review` section",
       );
@@ -340,7 +361,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
       expect(labelled).toMatch(/no\s+current `## Review` section/);
       expect(labelled).toContain("`--retry-pending`");
-      expect(labelled).toContain("re-dispatch it exactly once");
+      expect(labelled).toMatch(/re-dispatch it\s+exactly once/);
       expect(labelled).toMatch(
         /\*\*fingerprint rebind\*\*, not a\s+reviewer re-dispatch/,
       );

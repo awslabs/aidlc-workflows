@@ -1,179 +1,455 @@
-// covers: file:aidlc-common/protocols/stage-protocol-reviewer.md, file:aidlc-common/protocols/stage-protocol.md, file:knowledge/aidlc-product-lead-agent/reviewing.md, file:knowledge/aidlc-architecture-reviewer-agent/reviewing.md
+// covers: function:reviewArtifactEntries, tool:aidlc-review-brief, audit:GATE_APPROVED,
+// audit:GATE_REJECTED, audit:STAGE_JUMPED
 
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { join, relative } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  findStageBySlug,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  hydrateReviewArtifactContexts,
+  parseReviewArtifact,
+  readReviewArtifactContexts,
+  readReviewFindingDispositions,
+  rejectedFindingDispositionField,
+  renderFindingsContext,
+  renderReviewBrief,
+  renderSummaryConfirmationBrief,
+  REVIEW_FINDING_DISPOSITIONS_FIELD,
+} from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createTestProject,
+  seedAidlcMemory,
+  seedBoltDag,
+  seededRecordDir,
+  seedStateFile,
+} from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
-const REVIEWERS = [
-  "aidlc-product-lead-agent",
-  "aidlc-architecture-reviewer-agent",
-] as const;
-const FINDINGS_HEADER =
-  "| ID | Severity | Location | Finding | Required action | Status |";
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
+const REVIEW_BRIEF = join(AIDLC_SRC, "tools", "aidlc-review-brief.ts");
+const tempDirs: string[] = [];
+const TEST_ENV = {
+  ...process.env,
+  AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+  AIDLC_SKIP_ARTIFACT_GUARD: "1",
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+  AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  AIDLC_SKIP_REVISION_BACKSTOP: "1",
+};
 
-function read(path: string): string {
-  return readFileSync(path, "utf-8");
+afterEach(() => {
+  while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
+});
+
+function run(tool: string, args: string[], proj: string) {
+  const result = Bun.spawnSync({
+    cmd: [process.execPath, tool, ...args, "--project-dir", proj],
+    env: TEST_ENV,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = result.stdout.toString();
+  const stderr = result.stderr.toString();
+  return {
+    status: result.exitCode,
+    stdout,
+    stderr,
+    out: `${stdout}${stderr}`,
+  };
 }
 
-function reviewerExecutionSurface(
-  harness: (typeof HARNESS_MATRIX)[number],
-  reviewer: (typeof REVIEWERS)[number],
+function reviewMarkdown(
+  verdict: "READY" | "NOT-READY",
+  rows: string[],
+  iteration = 1,
 ): string {
-  if (harness.name === "codex") {
-    return join(harness.engineRoot, "agents", `${reviewer}.toml`);
-  }
-  if (harness.name === "opencode") {
-    return join(harness.distRoot, ".opencode", "agents", `${reviewer}.md`);
-  }
-  return join(harness.engineRoot, "agents", `${reviewer}.md`);
+  return [
+    "# Requirements",
+    "",
+    "## Review",
+    "",
+    `**Verdict:** ${verdict}`,
+    "**Reviewer:** aidlc-product-lead-agent",
+    "**Date:** 2026-08-25T12:00:00Z",
+    `**Iteration:** ${iteration}`,
+    "",
+    "### Findings",
+    "",
+    "| ID | Severity | Location | Finding | Required action | Status |",
+    "|---|---|---|---|---|---|",
+    ...rows,
+    "",
+    "### Summary",
+    "",
+    "Deterministic fixture.",
+    "",
+  ].join("\n");
 }
 
-describe("t304 reviewer-backed human gates carry an actionable Review brief", () => {
-  const protocolPaths = [
-    join(
-      REPO_ROOT,
-      "core",
-      "aidlc-common",
-      "protocols",
-      "stage-protocol-reviewer.md",
-    ),
-    ...HARNESS_MATRIX.map((harness) =>
-      join(
-        harness.engineRoot,
-        "aidlc-common",
-        "protocols",
-        "stage-protocol-reviewer.md",
-      )
-    ),
+function requirementProject(
+  rows: string[],
+  verdict: "READY" | "NOT-READY" = "READY",
+) {
+  const proj = createTestProject();
+  tempDirs.push(proj);
+  seedAidlcMemory(proj);
+  seedStateFile(proj, "state-mid-inception.md");
+  const dir = join(
+    seededRecordDir(proj),
+    "inception",
+    "requirements-analysis",
+  );
+  mkdirSync(dir, { recursive: true });
+  const artifact = join(dir, "requirements.md");
+  const questions = join(dir, "requirements-analysis-questions.md");
+  writeFileSync(artifact, reviewMarkdown(verdict, rows), "utf-8");
+  writeFileSync(questions, "# Questions\n", "utf-8");
+  return {
+    proj,
+    artifact,
+    relativeArtifact: relative(proj, artifact).replaceAll("\\", "/"),
+    questions,
+  };
+}
+
+function recordReviewAndOpenGate(proj: string): void {
+  const base = [
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
   ];
+  expect(run(LOG, base, proj).status).toBe(0);
+  expect(run(LOG, [...base, "--verdict", "READY"], proj).status).toBe(0);
+  expect(
+    run(STATE, ["gate-start", "requirements-analysis"], proj).status,
+  ).toBe(0);
+}
 
-  test("the contract is present in core and all seven dist projections", () => {
-    expect(HARNESS_MATRIX).toHaveLength(7);
-    for (const path of protocolPaths) {
-      const body = read(path);
-      for (const marker of [
-        "Review brief (required at every reviewer-backed human gate)",
-        "`**Stage:** [stage display name]`",
-        "`**Review outcome:** [plain-language outcome]`",
-        "never print the raw `READY` or `NOT-READY` token in user-facing prose",
-        "`**Why now:**`",
-        "workspace-relative artifact path plus section or element",
-        "`**Approve** - continue with the open findings accepted.`",
-        "`**Request Changes** - return to the listed artifacts",
-      ]) {
-        expect(body, `${path} missing ${marker}`).toContain(marker);
-      }
+const ROW_NEW =
+  "| R-01 | Minor | aidlc/spaces/default/intents/fixture/inception/requirements-analysis/requirements.md > FR-1 | Deadline is missing | Add a delivery date | New |";
+const ROW_UNRESOLVED =
+  "| R-01 | Minor | aidlc/spaces/default/intents/fixture/inception/requirements-analysis/requirements.md > FR-1 | Deadline is still missing | Add a delivery date | Unresolved |";
+const ROW_RESOLVED =
+  "| R-01 | Minor | aidlc/spaces/default/intents/fixture/inception/requirements-analysis/requirements.md > FR-1 | Deadline was missing | No further action | Resolved |";
+const ROW_NEW_SECOND =
+  "| R-02 | Major | aidlc/spaces/default/intents/fixture/inception/requirements-analysis/requirements-analysis-questions.md > Q4 | Owner is unclear | Name the accountable owner | New |";
+
+describe("t304 executable review brief scenarios", () => {
+  test("READY and NOT-READY render the exact first-review outcome without exposing raw verdict tokens", () => {
+    for (const verdict of ["READY", "NOT-READY"] as const) {
+      const { proj } = requirementProject(
+        verdict === "READY" ? [] : [ROW_NEW],
+        verdict,
+      );
+      const stage = findStageBySlug("requirements-analysis")!;
+      const rendered = renderReviewBrief(proj, stage, "first");
+      expect(rendered).toContain("**Why now:** First review completed.");
+      expect(rendered).toContain(
+        verdict === "READY"
+          ? "**Review outcome:** No blocking concerns were found."
+          : "**Review outcome:** Concerns remain for your decision.",
+      );
+      expect(rendered).not.toContain(`**Review outcome:** ${verdict}`);
+      if (verdict === "NOT-READY") expect(rendered).toContain("R-01");
     }
   });
 
-  test("every terminal reviewer path points to the shared Review brief", () => {
-    const body = read(protocolPaths[0]);
-    for (const marker of [
-      "On an incomplete attempt:",
-      "On an `advisory` review, both verdicts are terminal here.",
-      "Any human gate after that recovery verdict uses the required Review brief",
-      "present the approval gate using the required Review brief above",
-      "Proceed to the approval gate using the required Review brief above",
-      "re-presented gate using the required Review brief",
-    ]) {
-      expect(body).toContain(marker);
+  test("re-review preserves resolved, unresolved, and new stable IDs across multiple referenced artifacts", () => {
+    const first = parseReviewArtifact(
+      reviewMarkdown("NOT-READY", [ROW_NEW, ROW_NEW_SECOND]),
+      "aidlc/requirements.md",
+    )!;
+    const second = parseReviewArtifact(
+      reviewMarkdown("NOT-READY", [ROW_RESOLVED, ROW_NEW_SECOND], 2),
+      "aidlc/requirements.md",
+    )!;
+    expect(first.findings.map((finding) => finding.id)).toEqual([
+      "R-01",
+      "R-02",
+    ]);
+    expect(second.findings.map((finding) => finding.id)).toEqual([
+      "R-01",
+      "R-02",
+    ]);
+    expect(second.findings[0].status).toBe("Resolved");
+    expect(renderFindingsContext([second])).toContain(
+      "requirements-analysis-questions.md > Q4",
+    );
+  });
+
+  test("Approve records Accepted risk atomically and future context hydrates it", () => {
+    const { proj } = requirementProject([ROW_NEW]);
+    recordReviewAndOpenGate(proj);
+    const approved = run(
+      ORCHESTRATE,
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "approved",
+        "--user-input",
+        "Approve",
+      ],
+      proj,
+    );
+    expect(approved.status, approved.out).toBe(0);
+
+    const dispositions = [
+      ...readReviewFindingDispositions(proj, "requirements-analysis").values(),
+    ];
+    expect(dispositions).toHaveLength(1);
+    expect(dispositions[0].status).toBe("Accepted risk");
+    expect(readAllAuditShards(proj)).toContain(
+      `**${REVIEW_FINDING_DISPOSITIONS_FIELD}**:`,
+    );
+
+    const stage = findStageBySlug("requirements-analysis")!;
+    const hydrated = hydrateReviewArtifactContexts(
+      readReviewArtifactContexts(proj, stage),
+      readReviewFindingDispositions(proj, stage.slug),
+    );
+    expect(hydrated[0].findings[0].status).toBe("Accepted risk");
+  });
+
+  test("Request Changes records only explicitly rejected findings with the exact reason", () => {
+    const { proj, relativeArtifact } = requirementProject([ROW_NEW]);
+    recordReviewAndOpenGate(proj);
+    const rejected = run(
+      ORCHESTRATE,
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes",
+        "--reason",
+        "R-01 does not apply to this internal milestone",
+        "--reject-finding",
+        `${relativeArtifact}#R-01=Internal milestones intentionally have no public date`,
+      ],
+      proj,
+    );
+    expect(rejected.status, rejected.out).toBe(0);
+    const dispositions = [
+      ...readReviewFindingDispositions(proj, "requirements-analysis").values(),
+    ];
+    expect(dispositions).toHaveLength(1);
+    expect(dispositions[0].status).toBe(
+      "Rejected: Internal milestones intentionally have no public date",
+    );
+  });
+
+  test("generic Request Changes leaves findings unresolved", () => {
+    const { proj } = requirementProject([ROW_UNRESOLVED]);
+    recordReviewAndOpenGate(proj);
+    expect(
+      run(
+        STATE,
+        [
+          "reject",
+          "requirements-analysis",
+          "--user-input",
+          "Request Changes",
+          "--feedback",
+          "Add the missing date",
+        ],
+        proj,
+      ).status,
+    ).toBe(0);
+    expect(
+      readReviewFindingDispositions(proj, "requirements-analysis").size,
+    ).toBe(0);
+  });
+
+  test("stale artifact brief names a changed secondary output and the primary review requiring re-check", () => {
+    const { proj, questions, relativeArtifact } = requirementProject([ROW_NEW]);
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+        Iteration: "1",
+        Verdict: "READY",
+        "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+      },
+      proj,
+    );
+    appendAuditEntry(
+      "ARTIFACT_UPDATED",
+      {
+        File: questions,
+        Tool: "Edit",
+      },
+      proj,
+    );
+    const stage = findStageBySlug("requirements-analysis")!;
+    const brief = renderReviewBrief(proj, stage, "stale");
+    const relativeQuestions = relative(proj, questions).replaceAll("\\", "/");
+    expect(brief).toContain(`**Changed upstream:** \`${relativeQuestions}\``);
+    expect(brief).toContain(
+      `**Downstream reviews requiring re-check:** \`${relativeArtifact}#Review\``,
+    );
+  });
+
+  test("reviewer-free stages cannot record finding dispositions", () => {
+    const { proj } = requirementProject([]);
+    const stage = findStageBySlug("workspace-scaffold")!;
+    expect(() =>
+      rejectedFindingDispositionField(
+        proj,
+        stage,
+        ["aidlc/workspace.md#R-01=Not applicable"],
+      )
+    ).toThrow("the stage has no reviewer");
+  });
+
+  test("backward jump records concrete upstream, downstream artifact, and review paths", () => {
+    const { proj, relativeArtifact } = requirementProject([ROW_NEW]);
+    seedStateFile(proj, "state-construction.md");
+    seedBoltDag(proj, ["widget-checkout"]);
+    const functionalDir = join(
+      seededRecordDir(proj),
+      "construction",
+      "widget-checkout",
+      "functional-design",
+    );
+    mkdirSync(functionalDir, { recursive: true });
+    for (const name of ["entities.md", "rules.md", "traceability.json"]) {
+      writeFileSync(join(functionalDir, name), `# ${name}\n`, "utf-8");
+    }
+    const functional = join(functionalDir, "functional-spec.md");
+    writeFileSync(functional, reviewMarkdown("READY", []), "utf-8");
+    const jumped = run(
+      JUMP,
+      [
+        "execute",
+        "--target",
+        "requirements-analysis",
+        "--direction",
+        "backward",
+        "--scope",
+        "feature",
+      ],
+      proj,
+    );
+    expect(jumped.status, jumped.out).toBe(0);
+
+    const stage = findStageBySlug("requirements-analysis")!;
+    const brief = renderReviewBrief(proj, stage, "stale");
+    const functionalRelative = relative(proj, functional).replaceAll("\\", "/");
+    expect(brief).toContain(`\`${relativeArtifact}\``);
+    expect(brief).toContain(`\`${functionalRelative}\``);
+    expect(brief).toContain(`\`${functionalRelative}#Review\``);
+  });
+
+  test("Guide Me, self-edit, and Chat use the same exact pre-generation decision brief", () => {
+    const { proj, questions } = requirementProject([]);
+    const stage = findStageBySlug("requirements-analysis")!;
+    const expected = renderSummaryConfirmationBrief(
+      proj,
+      stage,
+      questions,
+    );
+    for (const mode of ["Guide Me", "I'll edit the file", "Chat"]) {
+      const rendered = renderSummaryConfirmationBrief(
+        proj,
+        stage,
+        questions,
+      );
+      expect(rendered, mode).toBe(expected);
+      expect(rendered).toContain("**Stage:** Requirements Analysis");
+      expect(rendered).toContain("**Confirming:** Consolidated answers in");
+      expect(rendered).toContain(
+        "**Why now:** All stage questions are answered",
+      );
+      expect(rendered).toContain(
+        "**Looks correct** - record this confirmation and generate",
+      );
+      expect(rendered).toContain(
+        "**Request changes** - leave the artifacts ungenerated",
+      );
     }
   });
 
-  test("Part 3 orders the Review brief before the approval question", () => {
-    const paths = [
+  test("the shipped CLI renders the same summary brief", () => {
+    const { proj, questions } = requirementProject([]);
+    const result = run(
+      REVIEW_BRIEF,
+      [
+        "summary",
+        "--stage",
+        "requirements-analysis",
+        "--questions-file",
+        questions,
+      ],
+      proj,
+    );
+    expect(result.status, result.out).toBe(0);
+    expect(result.stdout).toContain("**Stage:** Requirements Analysis");
+    expect(result.stdout).toContain("**Decision options:**");
+  });
+});
+
+describe("t304 protocol and harness projections use the deterministic renderer", () => {
+  test("all harnesses ship the review brief tool", () => {
+    for (const harness of HARNESS_MATRIX) {
+      expect(
+        existsSync(
+          join(harness.engineRoot, "tools", "aidlc-review-brief.ts"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  test("authored protocols invoke summary, context, and review modes", () => {
+    const stageProtocol = readFileSync(
       join(
-        REPO_ROOT,
+        import.meta.dir,
+        "..",
+        "..",
         "core",
         "aidlc-common",
         "protocols",
         "stage-protocol.md",
       ),
-      ...HARNESS_MATRIX.map((harness) =>
-        join(
-          harness.engineRoot,
-          "aidlc-common",
-          "protocols",
-          "stage-protocol.md",
-        )
-      ),
-    ];
-    for (const path of paths) {
-      const body = read(path);
-      expect(body).toContain(
-        "present the Review brief required by\n`stage-protocol-reviewer.md` §12a before the artifact path and approval\nquestion",
-      );
-    }
-  });
-});
-
-describe("t304 finding identity and disposition survive re-review", () => {
-  test("prior findings are extracted before deletion and passed to the reviewer", () => {
-    const body = read(
+      "utf-8",
+    );
+    const reviewerProtocol = readFileSync(
       join(
-        REPO_ROOT,
+        import.meta.dir,
+        "..",
+        "..",
         "core",
         "aidlc-common",
         "protocols",
         "stage-protocol-reviewer.md",
       ),
+      "utf-8",
     );
-    const extract = body.indexOf(
-      "extract the complete prior `### Findings` table BEFORE deleting the section",
-    );
-    const deletion = body.indexOf(
-      "DELETE the existing `## Review` section",
-      extract,
-    );
-    expect(extract).toBeGreaterThan(-1);
-    expect(deletion).toBeGreaterThan(extract);
-    expect(body).toContain("`Prior findings (carry IDs forward):`");
-    expect(body).toContain(
-      "preserve those IDs and update their statuses rather than replacing or renumbering",
-    );
-  });
-
-  for (const reviewer of REVIEWERS) {
-    test(`${reviewer} authors stable IDs, exact locations, actions, and statuses`, () => {
-      const knowledgePath = join(
-        REPO_ROOT,
-        "core",
-        "knowledge",
-        reviewer,
-        "reviewing.md",
-      );
-      const body = read(knowledgePath);
-      expect(body).toContain(FINDINGS_HEADER);
-      expect(body).toContain("`R-01`, `R-02`, ...");
-      expect(body).toContain(
-        "`Location` MUST be a workspace-relative artifact path followed",
-      );
-      expect(body).toContain(
-        "`Required action` MUST state the concrete work",
-      );
-      expect(body).toContain("`Prior findings (carry IDs forward)`");
-      expect(body).toContain(
-        "`Unresolved`, `Resolved`, `Rejected: <reason>`, or `Accepted risk`",
-      );
-      expect(body).toContain("next unused `R-NN` ID");
-      expect(body).toContain("aidlc/spaces/<space>/intents/");
-    });
-  }
-
-  test("all seven reviewer execution surfaces absorb the new findings contract", () => {
-    expect(HARNESS_MATRIX).toHaveLength(7);
-    for (const harness of HARNESS_MATRIX) {
-      for (const reviewer of REVIEWERS) {
-        const body = read(reviewerExecutionSurface(harness, reviewer));
-        expect(body).toContain(FINDINGS_HEADER);
-        expect(body).toContain("`Prior findings (carry IDs forward)`");
-        expect(body).toContain("never renumber, reuse, or drop an ID");
-        expect(body).toContain(
-          "`Unresolved`, `Resolved`, `Rejected: <reason>`, or `Accepted risk`",
-        );
-      }
-    }
+    expect(stageProtocol).toContain("aidlc-review-brief.ts summary");
+    expect(reviewerProtocol).toContain("aidlc-review-brief.ts context");
+    expect(reviewerProtocol).toContain("aidlc-review-brief.ts review");
+    expect(reviewerProtocol).toContain("--reject-finding");
   });
 });

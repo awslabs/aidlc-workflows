@@ -5083,6 +5083,7 @@ interface ReportFlags {
   result?: string;
   userInput?: string;
   reason?: string;
+  rejectFindings?: string[];
   skeletonStance?: string; // the classify round-trip's classified stance
   single?: boolean; // --single: commit a synthetic-id STAGE_STARTED/COMPLETED pair, never the main pointer
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
@@ -5107,6 +5108,10 @@ function parseReportFlags(args: string[]): ReportFlags {
       i++;
     } else if (a === "--reason" && i + 1 < args.length) {
       flags.reason = args[i + 1];
+      i++;
+    } else if (a === "--reject-finding" && i + 1 < args.length) {
+      flags.rejectFindings ??= [];
+      flags.rejectFindings.push(args[i + 1]);
       i++;
     } else if (a === "--skeleton-stance" && i + 1 < args.length) {
       flags.skeletonStance = args[i + 1];
@@ -6078,6 +6083,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       subArgs = ["reject", slug, "--feedback", feedback];
       if (flags.userInput) subArgs.push("--user-input", flags.userInput);
+      for (const finding of flags.rejectFindings ?? []) {
+        subArgs.push("--reject-finding", finding);
+      }
     } else {
       if (stageCheckbox.state !== "revising") {
         emit(errorDirective(

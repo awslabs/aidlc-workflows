@@ -105,6 +105,8 @@ For the `Date` field, obtain a real UTC timestamp by running `date -u +"%Y-%m-%d
 ### On Subsequent Iterations
 
 When the dispatch brief includes `Prior findings (carry IDs forward)`:
+- Treat that table as authoritative for prior human dispositions; it is
+  rendered from the audit ledger without rewriting the reviewed artifact.
 - Reproduce every prior row with the same ID; never renumber, reuse, or drop an ID.
 - Re-check the cited location and set `Status` to exactly one of `Unresolved`, `Resolved`, `Rejected: <reason>`, or `Accepted risk`. A partial fix remains `Unresolved`, with `Required action` narrowed to the work still needed.
 - Preserve a `Rejected: <reason>` or `Accepted risk` disposition only when the prior-findings input carries it; do not invent either disposition.

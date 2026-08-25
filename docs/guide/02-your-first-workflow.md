@@ -142,8 +142,11 @@ After the agent completes its work, you see a completion summary and an approval
 The stable finding ID lets later checks show whether the same concern was
 resolved, remains open, or was accepted as a risk. Choose **Approve** to
 continue with any open findings accepted, or **Request Changes** to return to
-the listed artifacts. See [Interaction Modes](07-interaction-modes.md) for
-details on the revision process.
+the listed artifacts. An approval records `Accepted risk` outside the reviewed
+artifact, so a later re-check preserves that decision. When rejecting a finding
+as inapplicable, give its ID and reason; ordinary revision feedback leaves it
+open. See [Interaction Modes](07-interaction-modes.md) for details on the
+revision process.
 
 After approval, a progress line appears:
 

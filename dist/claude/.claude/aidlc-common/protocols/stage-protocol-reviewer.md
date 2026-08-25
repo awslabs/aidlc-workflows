@@ -48,14 +48,18 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    `## Review` section (from a prior iteration, or predating a Part 0 revision),
    handle it in this order:
    1. On a re-dispatch (adversarial iteration greater than 1, a Part 0 revision
-      re-review, or stale-receipt recovery), extract the complete prior
-      `### Findings` table before deleting the section. Retain it as
-      `Prior findings (carry IDs forward)` for the dispatch brief.
+      re-review, or stale-receipt recovery), run
+      `bun .claude/tools/aidlc-review-brief.ts context --stage "<directive.stage>"`;
+      add `--unit "<directive.unit>"` on a per-unit review. Retain the complete
+      stdout as `Prior findings (carry IDs forward)` for the dispatch brief.
+      The tool overlays durable human dispositions from the audit ledger, so
+      `Accepted risk` and `Rejected: <reason>` survive without editing the
+      receipt-frozen artifact.
    2. DELETE the existing `## Review` section. This makes step 3's
       missing-section check mean the same thing on every path: a fresh review
       that is cut off before writing leaves no old verdict to misread as
       covering new work. Receipt history remains in the audit ledger; the
-      extracted table carries finding identity and disposition into the next
+      rendered context carries finding identity and disposition into the next
       review.
 
    Then delegate to the reviewer agent named in `directive.reviewer`. The
@@ -73,7 +77,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    - The stage definition file path (`directive.stage_file`)
    - The Q&A file path (e.g., `<record>/<phase>/<stage>/<stage>-questions.md`)
    - All artifact file paths produced by the stage (the `produces` artifacts)
-   - On every re-dispatch named above, `Prior findings (carry IDs forward):` followed by the extracted findings table verbatim. The reviewer MUST preserve those IDs and update their statuses rather than replacing or renumbering the prior list.
+   - On every re-dispatch named above, `Prior findings (carry IDs forward):` followed by the review-context tool output verbatim. The reviewer MUST preserve those IDs and update their statuses rather than replacing or renumbering the prior list.
    - The resolved paths in `directive.consumes` — all upstream artifacts the stage declares — paths only, per the context-budget rule. This applies to **every** reviewer-bearing stage, not only per-unit ones:
      - For a **per-unit** stage (`directive.unit` present) these include the shared inception contracts that pin cross-unit boundaries (`components.md`, `contract-summary.md`, `unit-of-work.md`).
      - For a **workflow-level** stage with no `directive.unit` (e.g. `contract-design`), these are the upstream artifacts that justify the produced output — the unit DAG (`unit-of-work.md`, `unit-of-work-dependency.md`), the component catalogue (`components.md`), and `requirements.md` — so the reviewer can verify the contracts against the boundaries, entities, and NFRs they formalise rather than reviewing the summary in isolation.
@@ -181,16 +185,34 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    interactive stage, present the recovery-spent refusal to the human; only
    Request Changes (`GATE_REJECTED`) resets the attempt.
 
-   **Review brief (required at every reviewer-backed human gate).** Before the structured approval question, present one compact brief in this exact order:
-   1. `**Stage:** [stage display name]`
-   2. `**Review outcome:** [plain-language outcome]`. State the result in ordinary words, such as "No blocking concerns were found" or "Concerns remain for your decision"; never print the raw `READY` or `NOT-READY` token in user-facing prose.
-   3. Exactly one `**Why now:**` line selected by the path: `First review completed.`, `Revision re-checked.`, or `Re-check after the artifact changed.`
-   4. The complete findings table quoted verbatim from the current artifact's `## Review` section. It MUST expose, at minimum, each stable finding ID, workspace-relative artifact path plus section or element, required action in plain language, and status. For the terminal incomplete-attempt fallback, where no valid table exists, render the single recorded finding in the same columns instead of inventing a reviewer result.
-   5. `**Decision options:**`, followed in the §1 option order by:
-      - `**Approve** - continue with the open findings accepted.`
-      - `**Request Changes** - return to the listed artifacts so the required actions can be addressed.`
+   **Review brief (required at every reviewer-backed human gate).** Before the
+   structured approval question, run
+   `bun .claude/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --why <first|revision|stale>`;
+   add `--unit "<directive.unit>"` when presenting a per-unit gate. Select
+   `first` after the initial review, `revision` after a requested revision, and
+   `stale` after artifact/source invalidation or a backward jump. Print stdout
+   verbatim. It deterministically renders the stage, plain-language outcome,
+   path-specific reason, every review artifact and hydrated findings table, and
+   the two decision effects without exposing the raw verdict token. On the
+   terminal incomplete-attempt fallback, add
+   `--fallback-finding "review did not complete within its turn budget"` so the
+   same table shape names the recorded finding.
 
-   This brief is the opening of the reviewer-backed gate presentation; the `**Review:**` artifact-path line and structured approval question follow it. Do not replace the brief with a finding count, a generic request to review, or an internal verdict token.
+   This tool output is the opening of the reviewer-backed gate presentation;
+   the `**Review:**` artifact-path line and structured approval question follow
+   it. Do not replace it with a finding count, a generic request to review, or
+   an internal verdict token.
+
+   Gate dispositions are receipt-safe audit data, never artifact edits:
+   - **Approve** automatically maps every current `New` or `Unresolved` finding
+     to `Accepted risk` on the tool-owned `GATE_APPROVED` row.
+   - **Request Changes** leaves open findings unresolved. When the human
+     explicitly rejects a finding as inapplicable, append
+     `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` to the
+     ordinary rejected report command for each rejected finding. Never infer a
+     rejection from generic revision feedback. The state tool validates the
+     artifact, ID, current status, and nonblank reason before recording
+     `Rejected: <reason>` on `GATE_REJECTED`.
 
    **On an `advisory` review, both verdicts are terminal here.** Do not
    re-invoke the lead or the reviewer during normal flow; proceed to section

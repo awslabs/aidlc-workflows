@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.101] - 2026-08-26
+
+Human review checkpoints now show deterministic decision context before both summary confirmation and final approval, preserve accepted or rejected finding dispositions without modifying receipt-frozen artifacts, and name the concrete downstream work invalidated by a backward jump. **Upgrade:** refresh your `dist/<harness>/` shell so the new review-brief tool, gate audit fields, and protocol guidance are installed.
+
+* `aidlc-review-brief.ts summary|review|context` renders the stage, exact files, reason for the checkpoint, decision effects, hydrated finding statuses, and stale artifact/review paths across every harness.
+* Approving a reviewer-backed gate records current open findings as `Accepted risk`; Request Changes can record an explicit `Rejected: <reason>` with `--reject-finding "<review-artifact>#R-NN=<reason>"`, while ordinary revision feedback leaves findings unresolved.
+* Backward `aidlc-jump.ts execute` rows now bind changed upstream artifacts separately from invalidated downstream artifacts and reviews, and executable acceptance scenarios cover READY, NOT-READY, re-review, multi-artifact, stale-review, rollback, and all three summary-confirmation modes.
+
 ## [2.6.100] - 2026-08-26
 
 Knowledge index recovery now selects duplicate records against the live managed source even when the project path traverses a symlink, and refuses present sources that cannot be safely read. **Upgrade:** refresh your `dist/<harness>/` shell to receive the corrected recovery behavior.

@@ -21,6 +21,11 @@ import {
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  acceptedRiskDispositionField,
+  rejectedFindingDispositionField,
+  REVIEW_FINDING_DISPOSITIONS_FIELD,
+} from "./aidlc-review-brief.ts";
+import {
   activeUnitCheckpoint,
   appendSlug,
   appendUnderHeading,
@@ -3807,6 +3812,7 @@ function handleApprove(args: string[]): void {
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyPipelineLinkPrecondition(pd, stage);
   verifyReviewerPrecondition(pd, content, stage);
+  const reviewFindingDispositions = acceptedRiskDispositionField(pd, stage);
 
   // Scope is required for next-stage derivation. Validate it before persisting
   // approval: a post-write routing failure would otherwise leave `[x]` as a
@@ -3844,6 +3850,10 @@ function handleApprove(args: string[]): void {
   try {
     const gateFields: Record<string, string> = { Stage: slug };
     if (approvalInput) gateFields["User Input"] = approvalInput;
+    if (reviewFindingDispositions) {
+      gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
+        reviewFindingDispositions;
+    }
     emitAudit(pd, "GATE_APPROVED", gateFields);
 
     emitAudit(pd, "STAGE_COMPLETED", {
@@ -3896,6 +3906,25 @@ function getFlagValue(args: string[], flag: string): string | undefined {
   return val;
 }
 
+function getFlagValues(args: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== flag) continue;
+    if (i + 1 >= args.length) {
+      error(`${flag} expects a value, got end of arguments.`);
+    }
+    const value = args[i + 1];
+    if (value.startsWith("--")) {
+      error(
+        `${flag} expects a value, got another flag: "${value}". Did you forget the value?`,
+      );
+    }
+    values.push(value);
+    i++;
+  }
+  return values;
+}
+
 // Flag parser for approve — handles --user-input (value).
 function parseApproveFlags(args: string[]): { userInput?: string } {
   return {
@@ -3903,7 +3932,9 @@ function parseApproveFlags(args: string[]): { userInput?: string } {
   };
 }
 
-// reject <slug> [--user-input <exact-choice>] [--feedback <text>] — transition
+// reject <slug> [--user-input <exact-choice>] [--feedback <text>]
+//   [--reject-finding <review-artifact>#R-NN=<human reason>]...
+// — transition
 // [?] or [-] → [R], emit GATE_REJECTED + STAGE_REVISING, and increment Revision
 // Count. The direct Active → Revising path deliberately does not fabricate a
 // recovered approval gate: a persisted rejection is valid when gate-start was
@@ -3913,7 +3944,8 @@ function handleReject(args: string[]): void {
   if (args.length < 1) {
     error(
       'Usage: aidlc-state.ts reject <slug> [--user-input "Request Changes"] ' +
-        "[--feedback <text>]",
+        "[--feedback <text>] " +
+        "[--reject-finding <review-artifact>#R-NN=<human reason>]...",
     );
   }
   const slug = args[0];
@@ -3921,6 +3953,10 @@ function handleReject(args: string[]): void {
   const feedback =
     (getFlagValue(args.slice(1), "--feedback") ??
       getFlagValue(args.slice(1), "--reason"))?.trim();
+  const rejectedFindings = getFlagValues(
+    args.slice(1),
+    "--reject-finding",
+  );
 
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: validate→increment Revision Count→emit-audit→write
@@ -4009,6 +4045,11 @@ function handleReject(args: string[]): void {
         "say so at the gate and let the human choose - do not record their rejection for them.",
     );
   }
+  const reviewFindingDispositions = rejectedFindingDispositionField(
+    pd,
+    stage,
+    rejectedFindings,
+  );
 
   // Increment Revision Count. Guard against non-numeric values (missing field,
   // manual edits, legacy state files) by coercing non-integers to 0.
@@ -4027,6 +4068,10 @@ function handleReject(args: string[]): void {
       Feedback: feedback,
       ...priorAcceptedSourceFields(pd, stage),
     };
+    if (reviewFindingDispositions) {
+      rejFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
+        reviewFindingDispositions;
+    }
     emitAudit(pd, "GATE_REJECTED", rejFields);
     emitAudit(pd, "STAGE_REVISING", {
       Stage: slug,

@@ -196,6 +196,10 @@
         {
           "file": "tests/e2e/t126-emitter-pairing-cofire.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -207,6 +211,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t136.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -619,6 +627,10 @@
         },
         {
           "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4006,6 +4018,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewArtifactEntries",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

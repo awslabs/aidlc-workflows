@@ -710,9 +710,18 @@ Deterministic handlers avoid LLM overhead for operations that are pure computati
 
 ## Sensor, Learning, and Runtime Tools
 
-Four further `aidlc-*.ts` tools back the data plane. Each is deterministic:
+Six further `aidlc-*.ts` tools back the data plane. Each is deterministic:
 the hooks/stages invoke them automatically, and they are also human-callable
 for debugging.
+
+### `aidlc-review-brief.ts` — Decision-context renderer
+
+`summary` renders the pre-generation confirmation context from the stage graph
+and questions-file path. `review` renders a reviewer-backed gate with hydrated
+finding dispositions and optional stale-path detail. `context` emits only the
+hydrated findings tables for a re-review dispatch. The tool is read-only:
+accepted and rejected dispositions are stored atomically on
+`GATE_APPROVED`/`GATE_REJECTED`, and reviewed artifacts remain receipt-frozen.
 
 ### `aidlc-testing-posture.ts` — Code Generation Testing Contract
 

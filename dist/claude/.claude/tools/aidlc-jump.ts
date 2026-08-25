@@ -1,9 +1,12 @@
+import { existsSync, readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   type CheckboxState,
   countCheckboxes,
   emitError,
   errorMessage,
+  extractMarkdownSection,
   findStageBySlug,
   firstInScopeStageOfPhase,
   getField,
@@ -16,6 +19,7 @@ import {
   parseCheckboxes,
   parseStateStageSuffixes,
   readStateFile,
+  reviewArtifactEntries,
   resolveProjectDir,
   resolveStage,
   type StageEntry,
@@ -24,6 +28,7 @@ import {
   setPhaseProgress,
   stageIndex,
   sourceBaselineAuditFields,
+  toPosix,
   writeStateFile,
 } from "./aidlc-lib.js";
 
@@ -47,6 +52,38 @@ function emitAudit(
   fields: Record<string, string>
 ): void {
   appendAuditEntry(eventType, fields, pd);
+}
+
+function stageArtifactPaths(pd: string, stage: StageEntry): string[] {
+  const entries = reviewArtifactEntries(pd, stage) ?? [];
+  return [...new Set(entries.map((entry) =>
+    entry.path === null
+      ? entry.logicalPath
+      : toPosix(relative(pd, entry.path))
+  ))].sort();
+}
+
+function existingStageArtifactPaths(pd: string, stage: StageEntry): string[] {
+  return stageArtifactPaths(pd, stage).filter((path) =>
+    existsSync(resolveProjectPath(pd, path))
+  );
+}
+
+function resolveProjectPath(pd: string, path: string): string {
+  return resolve(pd, path);
+}
+
+function stageReviewPaths(pd: string, stage: StageEntry): string[] {
+  return existingStageArtifactPaths(pd, stage).filter((path) => {
+    try {
+      return extractMarkdownSection(
+        readFileSync(resolveProjectPath(pd, path), "utf-8"),
+        "## Review",
+      ).length > 0;
+    } catch {
+      return false;
+    }
+  }).map((path) => `${path}#Review`);
 }
 
 // --- CLI entry point ---
@@ -421,6 +458,24 @@ function handleExecute(args: string[]): void {
     pd,
     "code-generation",
   );
+  const changedUpstreamArtifacts =
+    direction === "backward" ? stageArtifactPaths(pd, targetStage) : [];
+  const downstreamStages = direction === "backward"
+    ? stagesReset
+      .filter((slug) => slug !== targetSlug)
+      .map((slug) => findStageBySlug(slug))
+      .filter((stage): stage is StageEntry => stage !== undefined)
+    : [];
+  const invalidatedDownstreamArtifacts = [
+    ...new Set(
+      downstreamStages.flatMap((stage) =>
+        existingStageArtifactPaths(pd, stage)
+      ),
+    ),
+  ].sort();
+  const invalidatedDownstreamReviews = [
+    ...new Set(downstreamStages.flatMap((stage) => stageReviewPaths(pd, stage))),
+  ].sort();
 
   // Atomic audit emissions (audit-first — throws before writeStateFile if any fail)
   try {
@@ -459,6 +514,16 @@ function handleExecute(args: string[]): void {
       Target: targetSlug,
       Scope: scope,
       Details: `${direction.toUpperCase()} jump from ${currentSlug} to ${targetSlug} (${targetStage.number}). Scope: ${scope}.`,
+      ...(direction === "backward"
+        ? {
+            "Changed Upstream Artifacts":
+              JSON.stringify(changedUpstreamArtifacts),
+            "Invalidated Downstream Artifacts":
+              JSON.stringify(invalidatedDownstreamArtifacts),
+            "Invalidated Downstream Reviews":
+              JSON.stringify(invalidatedDownstreamReviews),
+          }
+        : {}),
       ...jumpSourceBaseline,
     });
 
