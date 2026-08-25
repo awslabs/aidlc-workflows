@@ -31,6 +31,8 @@ scopes:
   - enterprise
   - feature
   - infra
+  - bugfix
+  - refactor
   - security-patch
   - classic
   - workshop
@@ -45,26 +47,22 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agent.md` and knowledge from `.cursor/knowledge/aidlc-pipeline-deploy-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read CI pipeline config from `<record>/construction/ci-pipeline/` (if exists)
 - Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
 - Read NFR design (deployment-related NFRs) from `<record>/construction/nfr-design/` (if exists)
 
-Incremental scopes (security-patch) and `express` skip CI Pipeline and
-Infrastructure Design by design. On brownfield, inspect the workspace's
-existing pipeline and infrastructure configuration plus the code knowledge
-base. On Express greenfield, use the approved requirements, Build and Test
-results, and deployment artifacts generated in the workspace (for example a
-Dockerfile, service manifest, or IaC); if no deployable target exists, this
-CONDITIONAL stage reports skipped. Design only against evidence that exists -
-never invent a missing CI or infrastructure artifact.
+Incremental scopes (`bugfix`, `refactor`, and `security-patch`) and `express`
+skip CI Pipeline and Infrastructure Design by design. On brownfield, inspect
+the workspace's existing pipeline and infrastructure configuration plus the
+code knowledge base. On Express greenfield, use the approved requirements,
+Build and Test results, and deployment artifacts generated in the workspace
+(for example a Dockerfile, service manifest, or IaC); if no deployable target
+exists, this CONDITIONAL stage reports skipped. Design only against evidence
+that exists - never invent a missing CI or infrastructure artifact.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create questions file covering:
 - What deployment strategy (blue/green, canary, rolling)?
@@ -75,17 +73,17 @@ Create questions file covering:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Generate Artifacts
+### Step 3: Generate Artifacts
 
 Create CD pipeline configuration, deployment strategy document, rollback runbook, feature flag configuration, and environment promotion matrix.
 
-### Step 5: Completion Handoff
+### Step 4: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .cursor/tools/aidlc-orchestrate.ts report --stage deployment-pipeline --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 6: Present Completion & Request Approval
+### Step 5: Present Completion & Request Approval
 
 Completion emoji: :rocket:
 Review path: `<record>/operation/deployment-pipeline/`

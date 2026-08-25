@@ -70,7 +70,7 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -80,6 +80,7 @@ import {
   FIXTURES_DIR,
   resetAidlcEnv,
   runOrchestrateNext,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -149,6 +150,30 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, BROWNFIELD_INIT_DONE);
     expect(runNext(proj, []).out).toContain('"stage":"reverse-engineering"');
+  });
+
+  test("untracked-only completions route normally without a per-turn advisory", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const statePath = seededStateFile(proj);
+    const state = readFileSync(statePath, "utf-8")
+      .replace("- [-] feasibility — EXECUTE", "- [x] feasibility — EXECUTE")
+      .replace("- [ ] scope-definition — EXECUTE", "- [-] scope-definition — EXECUTE")
+      .replace("- **Current Stage**: feasibility", "- **Current Stage**: scope-definition")
+      .replace("- **Next Stage**: scope-definition", "- **Next Stage**: team-formation");
+    writeFileSync(statePath, state, "utf-8");
+    const result = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env },
+    });
+    expect(result.status).toBe(0);
+    const directive = JSON.parse((result.stdout ?? "").trim()) as {
+      kind: string;
+      stage_validity?: unknown;
+    };
+    expect(directive.kind).toBe("load-steering");
+    expect(directive.stage_validity).toBeUndefined();
   });
 });
 

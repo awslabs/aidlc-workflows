@@ -50,19 +50,14 @@ This stage runs once per workflow (not per unit) — it maps the whole set of bo
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` and knowledge from `.codex/knowledge/aidlc-architect-agent/`.
-Load aidlc-aws-platform-agent persona from `agents/aidlc-aws-platform-agent.md` and knowledge from `.codex/knowledge/aidlc-aws-platform-agent/` for integration-mechanism awareness (sync REST vs. async messaging vs. shared store).
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read `<record>/inception/units-generation/unit-of-work.md` (unit definitions and kinds)
 - Read `<record>/inception/units-generation/unit-of-work-dependency.md` (the dependency DAG — every edge is a candidate contract)
 - Read `<record>/inception/domain-design/components.md` (if produced) — the entity shapes inform payload design
 - Read `<record>/inception/requirements-analysis/requirements.md` (if produced) — NFRs shape SLAs and error budgets
 
-### Step 3: Create Contract Plan with Questions
+### Step 2: Create Contract Plan with Questions
 
 Create `<record>/inception/contract-design/contract-design-questions.md` with context-appropriate questions using [Answer]: tag format:
 - Public/external API surface (which units expose an API consumed outside the system, and its shape) — the single-unit trigger for this stage
@@ -71,14 +66,14 @@ Create `<record>/inception/contract-design/contract-design-questions.md` with co
 - Versioning and breaking-change policy
 - Error, timeout, and retry behaviour at each boundary
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file).
 - MANDATORY ambiguity analysis: scan for vague language, contradictions, missing details
 - Create follow-up questions if ANY ambiguity found
 - Resolve all ambiguities before proceeding
 
-### Step 5: Generate the Contract Summary
+### Step 4: Generate the Contract Summary
 
 Create `<record>/inception/contract-design/contract-summary.md`. This single artifact carries both the human-readable overview and the contract specs themselves.
 
@@ -100,13 +95,13 @@ For an external boundary, name the outside consumer (e.g. `External: partner API
 **Open questions** — a table of unresolved contract points and which unit each blocks:
 `| Contract | Question | Blocks |`
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage contract-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :handshake:
 - Summary of contracts defined (count, mechanisms, ownership)

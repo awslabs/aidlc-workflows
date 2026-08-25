@@ -1,12 +1,20 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
+import {
+  artifactFilename,
+  KNOWN_CODEKB_STAGES,
+} from "./aidlc-artifact-vocabulary.ts";
+export {
+  artifactFilename,
+  KNOWN_CODEKB_STAGES,
+} from "./aidlc-artifact-vocabulary.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
@@ -63,6 +71,16 @@ export interface StageEntry {
   // approve/advance: a code-generation stage that wrote only its markdown
   // produces[] docs but no actual code must not pass (issue #366).
   workspace_requires?: boolean;
+  // Compile-resolved sensor bindings. Runtime dispatchers consume the detailed
+  // graph shape; user-facing directives intentionally project only sensor ids.
+  sensors_applicable?: Array<{
+    id: string;
+    path: string;
+    fire_on: "write" | "gate";
+    default_severity: "advisory" | "blocking";
+    category?: string;
+    matches?: string;
+  }>;
 }
 
 // The per-unit marker carried by the Construction stages that run once per
@@ -1322,7 +1340,7 @@ export function intentsDir(projectDir: string, space?: string): string {
 // engine's per-agent METHODOLOGY knowledge at <harness>/knowledge/ (shipped,
 // untouched). Created lazily by ensure-exists, never by SEED.
 export function knowledgeDir(projectDir: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return join(workspaceRoot(projectDir), "spaces", sp, "knowledge");
 }
 
@@ -1398,15 +1416,27 @@ export function activeIntent(
 // The absolute RECORD directory for an intent:
 // `aidlc/spaces/<space>/intents/<slug>-<id8>/`. Returns null when no intent
 // resolves, signalling the bare-space-root resolution in the path helpers.
+function resolveRecordDir(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): { dir: string | null; space: string } {
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  return {
+    dir:
+      selection.intent === null
+        ? null
+        : join(intentsDir(projectDir, selection.space), selection.intent),
+    space: selection.space,
+  };
+}
+
 export function recordDir(
   projectDir: string,
   intent?: string,
   space?: string,
 ): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  const slug = activeIntent(projectDir, sp, intent);
-  if (slug === null) return null;
-  return join(intentsDir(projectDir, sp), slug);
+  return resolveRecordDir(projectDir, intent, space).dir;
 }
 
 // Relative record-dir prefix for the engine's agent-consumed artifact/diary
@@ -1422,8 +1452,9 @@ export function relativeRecordDir(
   intent?: string,
   space?: string,
 ): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  const slug = activeIntent(projectDir, sp, intent);
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const sp = selection.space;
+  const slug = selection.intent;
   if (slug === null) return null;
   return `aidlc/spaces/${sp}/intents/${slug}`;
 }
@@ -1434,7 +1465,7 @@ export function relativeRecordDir(
 // by repo and shared across every intent in the space, so it must NOT carry the
 // intents/<slug> tail. Mirrors knowledgeDir's space-aware shape.
 export function codekbDir(projectDir: string, repo: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return join(workspaceRoot(projectDir), "spaces", sp, "codekb", repo);
 }
 
@@ -1443,7 +1474,7 @@ export function codekbDir(projectDir: string, repo: string, space?: string): str
 // can read the active-space cursor — NOT relativeSpaceRecordPrefix, which is
 // pinned to the default space).
 export function relativeCodekbDir(projectDir: string, repo: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
@@ -1453,8 +1484,17 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
-export function codekbRepoName(projectDir: string, space?: string): string {
-  const repos = intentRepos(projectDir, undefined, space);
+export function codekbRepoName(
+  projectDir: string,
+  space?: string,
+  intent?: string,
+): string {
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const repos = intentRepos(
+    projectDir,
+    selection.intent ?? undefined,
+    selection.space,
+  );
   return repos.length === 1 ? repos[0] : basename(projectDir);
 }
 
@@ -1959,8 +1999,8 @@ export interface SpaceInfo {
 // active per the active-space cursor. "default" is always reported even when no
 // spaces dir exists yet (the resolver treats it as always-valid — activeSpace()
 // returns it), so the listing never claims zero spaces on a fresh shell.
-export function listSpaces(projectDir: string): SpaceInfo[] {
-  const active = activeSpace(projectDir);
+export function listSpaces(projectDir: string, activeOverride?: string): SpaceInfo[] {
+  const active = activeOverride ?? activeSpace(projectDir);
   const names = new Set<string>([DEFAULT_SPACE]);
   try {
     for (const name of readdirSync(spacesRoot(projectDir))) {
@@ -1988,12 +2028,19 @@ export interface IntentInfo {
 // suffix so a registry row resolves to its record dir even when the slug was
 // later renamed. A record dir with no registry row (a hand-created or migrated
 // orphan) is appended so the listing never hides an on-disk intent.
-export function listIntents(projectDir: string, space?: string): IntentInfo[] {
+export function listIntents(
+  projectDir: string,
+  space?: string,
+  activeIntentOverride?: string | null,
+): IntentInfo[] {
   const sp = space ?? activeSpace(projectDir);
   const registry = readIntentRegistry(projectDir, sp);
   const dirs = listIntentDirs(projectDir, sp);
   // activeIntent() returns the record DIR NAME of the active intent (or null).
-  const activeDir = activeIntent(projectDir, sp);
+  const activeDir =
+    activeIntentOverride === undefined
+      ? activeIntent(projectDir, sp)
+      : activeIntentOverride;
   const claimedDirs = new Set<string>();
   const infos: IntentInfo[] = registry.map((entry) => {
     // Match the row to its record dir via the shared join rule (stored dirName,
@@ -2094,13 +2141,499 @@ export function sessionsDir(projectDir: string): string {
   return join(workspaceRoot(projectDir), SESSIONS_DIR);
 }
 
-// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
-// session id is normalised to the slug shape so a host-supplied id can never
-// escape the sessions dir (path traversal / separators); an empty id yields "".
+// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. Session
+// ids must already match the canonical safe shape; normalization-changing
+// values are rejected so distinct raw identities cannot alias one record.
+function safeSessionId(sessionId: string): string {
+  const safe = sessionId
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 180);
+  if (!safe || safe === "." || safe === "..") return "";
+  return safe;
+}
+
+export function validSessionId(sessionId: string | undefined): string | null {
+  const raw = sessionId ?? "";
+  return raw && safeSessionId(raw) === raw ? raw : null;
+}
+
+export class SessionResolutionConflictError extends Error {
+  constructor(
+    readonly overrideSessionId: string,
+    readonly ancestrySessionId: string,
+  ) {
+    super(
+      `Session override "${overrideSessionId}" conflicts with the owning conversation ` +
+        `"${ancestrySessionId}". Work from the owning conversation, or rebind this ` +
+        "session with the intent/space switch verbs.",
+    );
+    this.name = "SessionResolutionConflictError";
+  }
+}
+
 function sessionRecordPath(projectDir: string, sessionId: string): string {
-  const safe = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!safe) return "";
-  return join(sessionsDir(projectDir), safe);
+  const valid = validSessionId(sessionId);
+  if (!valid) return "";
+  return join(sessionsDir(projectDir), valid);
+}
+
+export interface SessionBinding {
+  space: string;
+  intent: string | null;
+  boundAt: string;
+}
+
+function sessionBindingPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.binding.json` : "";
+}
+
+function safeIntentRecordName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
+}
+
+// Read a session's pinned workflow selection. Malformed, unsafe, or stale
+// records degrade to no binding so cursor behavior remains the fallback.
+export function readSessionBinding(projectDir: string, sessionId: string): SessionBinding | null {
+  const path = sessionBindingPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<SessionBinding>;
+    if (
+      typeof candidate.space !== "string" ||
+      !SPACE_NAME_REGEX.test(candidate.space) ||
+      (candidate.intent !== null &&
+        (typeof candidate.intent !== "string" || !safeIntentRecordName(candidate.intent))) ||
+      typeof candidate.boundAt !== "string" ||
+      candidate.boundAt.length === 0
+    ) {
+      return null;
+    }
+    if (
+      candidate.intent !== null &&
+      !existsSync(join(intentsDir(projectDir, candidate.space), candidate.intent, "aidlc-state.md"))
+    ) {
+      return null;
+    }
+    return candidate as SessionBinding;
+  } catch {
+    return null;
+  }
+}
+
+// Pin a session to one space and optional intent record. This is machine-local
+// runtime state, so any write failure silently falls back to shared cursors.
+export function writeSessionBinding(
+  projectDir: string,
+  sessionId: string,
+  space: string,
+  intent: string | null,
+): void {
+  const path = sessionBindingPath(projectDir, sessionId);
+  if (
+    !path ||
+    !SPACE_NAME_REGEX.test(space) ||
+    (intent !== null && !safeIntentRecordName(intent))
+  ) {
+    return;
+  }
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    const binding: SessionBinding = { space, intent, boundAt: isoTimestamp() };
+    writeFileSync(path, `${JSON.stringify(binding)}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+function sessionRebindOfferPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.rebind-offer` : "";
+}
+
+export function readSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+): string | null {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    return readFileSync(path, "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+  signature: string,
+): void {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path || !signature) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${signature}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function clearSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+): void {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent runtime receipt */
+  }
+}
+
+interface SessionPidEntry {
+  sessionId: string;
+  startTime: string | null;
+}
+
+interface ProcessIdentity {
+  ppid: number;
+  startTime: string | null;
+}
+
+const SESSION_ANCESTRY_BUDGET_MS = 50;
+const SESSION_ANCESTRY_MAX_DEPTH = 64;
+const SESSION_ANCESTRY_CACHE_MS = 1000;
+const sessionAncestryCache = new Map<
+  string,
+  { sessionId: string | null; expiresAt: number }
+>();
+
+function sessionProcessPlatform(): NodeJS.Platform {
+  const testPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+  if (
+    testPlatform === "linux" ||
+    testPlatform === "darwin" ||
+    testPlatform === "win32"
+  ) {
+    return testPlatform;
+  }
+  return process.platform;
+}
+
+export function sessionPidMapDir(projectDir: string): string {
+  return join(sessionsDir(projectDir), "pids");
+}
+
+function sessionPidEntryPath(projectDir: string, pid: number): string {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return "";
+  return join(sessionPidMapDir(projectDir), String(pid));
+}
+
+function linuxProcessIdentity(pid: number): ProcessIdentity | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const close = raw.lastIndexOf(")");
+    if (close < 0) return null;
+    const fields = raw.slice(close + 1).trim().split(/\s+/);
+    const ppid = Number.parseInt(fields[1] ?? "", 10);
+    const startTime = fields[19] ?? "";
+    if (!Number.isSafeInteger(ppid) || ppid < 0 || startTime.length === 0) return null;
+    return { ppid, startTime };
+  } catch {
+    return null;
+  }
+}
+
+function macProcessIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+  if (process.env.AIDLC_TEST_PS_DENIED === "1") return null;
+  const timeout = Math.max(1, deadlineMs - Date.now());
+  if (timeout <= 1) return null;
+  try {
+    const result = spawnSync("ps", ["-o", "ppid=,lstart=", "-p", String(pid)], {
+      encoding: "utf-8",
+      timeout,
+    });
+    if (result.status !== 0) return null;
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(result.stdout ?? "");
+    if (!match) return null;
+    const ppid = Number.parseInt(match[1], 10);
+    return Number.isSafeInteger(ppid) ? { ppid, startTime: match[2] } : null;
+  } catch {
+    return null;
+  }
+}
+
+function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
+  const platform = sessionProcessPlatform();
+  if (platform === "linux") return linuxProcessIdentity(pid);
+  if (platform === "darwin") return macProcessIdentity(pid, deadlineMs);
+  // Windows process ancestry is optional in this increment. Returning null
+  // preserves cursor behavior without paying for a PowerShell process.
+  return null;
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry | null {
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<SessionPidEntry>;
+    if (
+      typeof candidate.sessionId !== "string" ||
+      validSessionId(candidate.sessionId) === null ||
+      (candidate.startTime !== null && typeof candidate.startTime !== "string")
+    ) {
+      return null;
+    }
+    return candidate as SessionPidEntry;
+  } catch {
+    return null;
+  }
+}
+
+// Write one PID ownership record. Exported for deterministic ancestry tests;
+// production callers normally use writeSessionPidAncestry().
+export function writeSessionPidEntry(
+  projectDir: string,
+  pid: number,
+  sessionId: string,
+  deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+): void {
+  sessionAncestryCache.delete(projectDir);
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (
+    Date.now() >= deadlineMs ||
+    !path ||
+    validSessionId(sessionId) === null ||
+    !processIsAlive(pid)
+  ) {
+    return;
+  }
+  const identity = processIdentity(pid, deadlineMs);
+  try {
+    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
+    const entry: SessionPidEntry = {
+      sessionId,
+      startTime: identity?.startTime ?? null,
+    };
+    writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (Date.now() >= deadlineMs || !/^\d+$/.test(name)) continue;
+    const pid = Number.parseInt(name, 10);
+    const entry = readSessionPidEntry(projectDir, pid);
+    const identity = processIdentity(pid, deadlineMs);
+    const stale =
+      !entry ||
+      !processIsAlive(pid) ||
+      (entry.startTime !== null &&
+        (identity?.startTime === null ||
+          identity?.startTime === undefined ||
+          identity.startTime !== entry.startTime));
+    if (!stale) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+}
+
+// Map the harness process and each ancestor to the current session. The hook
+// process itself is intentionally excluded because later tool subprocesses are
+// siblings, not descendants, of that short-lived hook.
+export function writeSessionPidAncestry(projectDir: string, sessionId: string): void {
+  sessionAncestryCache.delete(projectDir);
+  if (validSessionId(sessionId) === null || sessionProcessPlatform() === "win32") return;
+  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  gcSessionPidEntries(projectDir, deadline);
+  const seen = new Set<number>();
+  let pid = process.ppid;
+  for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
+    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) break;
+    seen.add(pid);
+    const identity = processIdentity(pid, deadline);
+    if (!identity) break;
+    writeSessionPidEntry(projectDir, pid, sessionId, deadline);
+    pid = identity.ppid;
+  }
+}
+
+// Resolve the nearest mapped ancestor of the calling process. Every failure is
+// a silent miss so tools retain cursor behavior when process metadata is absent.
+export function resolveSessionIdFromAncestry(projectDir: string): string | null {
+  const cached = sessionAncestryCache.get(projectDir);
+  if (cached && cached.expiresAt > Date.now()) return cached.sessionId;
+  const resolved = resolveSessionIdFromAncestryUncached(projectDir);
+  if (resolved === null) {
+    sessionAncestryCache.set(projectDir, {
+      sessionId: null,
+      expiresAt: Date.now() + SESSION_ANCESTRY_CACHE_MS,
+    });
+  } else {
+    sessionAncestryCache.delete(projectDir);
+  }
+  return resolved;
+}
+
+// Build a hook-spawned child's environment from authoritative payload identity.
+// A valid divergent payload carries a private source marker so the selection
+// chokepoint can let payload identity win without weakening bare env refusal.
+export function hookChildEnv(
+  projectDir: string,
+  payloadSessionId: string | undefined,
+  extra: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    ...extra,
+  };
+  const payloadSession = validSessionId(payloadSessionId);
+  if (!payloadSession) return env;
+  env.AIDLC_SESSION_OVERRIDE = payloadSession;
+  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+  if (ancestrySession !== null && ancestrySession !== payloadSession) {
+    env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+  } else {
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  }
+  return env;
+}
+
+function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
+  if (sessionProcessPlatform() === "win32") return null;
+  if (!existsSync(sessionPidMapDir(projectDir))) return null;
+  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const seen = new Set<number>();
+  let pid = process.ppid;
+  for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
+    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) return null;
+    seen.add(pid);
+    const identity = processIdentity(pid, deadline);
+    if (!identity || !processIsAlive(pid)) return null;
+    const entry = readSessionPidEntry(projectDir, pid);
+    if (
+      entry &&
+      (entry.startTime === null || entry.startTime === identity.startTime)
+    ) {
+      return entry.sessionId;
+    }
+    pid = identity.ppid;
+  }
+  return null;
+}
+
+export interface WorkflowSelection {
+  space: string;
+  intent: string | null;
+  sessionId: string | null;
+  binding: SessionBinding | null;
+}
+
+export interface WorkflowSelectionOptions {
+  space?: string;
+  intent?: string;
+  sessionId?: string;
+}
+
+// Resolve one stable workflow target for an operation. Explicit selectors win,
+// then the session binding, then the legacy cursor and lone-intent rules.
+export function resolveWorkflowSelection(
+  projectDir: string,
+  options: WorkflowSelectionOptions = {},
+): WorkflowSelection {
+  const explicitSession = validSessionId(options.sessionId);
+  let sessionId: string | null;
+  if (explicitSession) {
+    sessionId = explicitSession;
+  } else {
+    const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
+    // This refusal is a footgun guard against stale exported overrides, not a
+    // security boundary. The SOURCE marker is an internal hookChildEnv contract.
+    // Deliberately setting both variables is an intentional same-user act
+    // equivalent to a sanctioned session switch; no privilege boundary exists
+    // between callers that could authenticate it.
+    const payloadOverride =
+      envSession !== null &&
+      process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
+    const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+    if (
+      envSession &&
+      ancestrySession &&
+      envSession !== ancestrySession &&
+      !payloadOverride
+    ) {
+      throw new SessionResolutionConflictError(envSession, ancestrySession);
+    }
+    sessionId = envSession ?? ancestrySession;
+  }
+  const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+  const space = options.space ?? binding?.space ?? activeSpace(projectDir);
+  let intent: string | null;
+  if (options.intent !== undefined) {
+    intent = options.intent;
+  } else if (binding && binding.space === space) {
+    intent = binding.intent;
+  } else {
+    intent = activeIntent(projectDir, space);
+  }
+  return { space, intent, sessionId, binding };
+}
+
+export function stateFilePathForSelection(
+  projectDir: string,
+  selection: WorkflowSelection,
+): string {
+  const root =
+    selection.intent === null
+      ? intentsDir(projectDir, selection.space)
+      : join(intentsDir(projectDir, selection.space), selection.intent);
+  return join(root, "aidlc-state.md");
+}
+
+export function relativeRecordDirForSelection(selection: WorkflowSelection): string | null {
+  if (selection.intent === null) return null;
+  return `aidlc/spaces/${selection.space}/intents/${selection.intent}`;
+}
+
+export function intentUuidForSelection(
+  projectDir: string,
+  selection: WorkflowSelection,
+): string | null {
+  if (selection.intent === null) return null;
+  return (
+    listIntents(projectDir, selection.space).find(
+      (entry) => entry.dirName === selection.intent,
+    )?.uuid ?? null
+  );
 }
 
 // Read the intent UUID this conversation last stamped, or null. Best-effort.
@@ -2255,7 +2788,7 @@ export function readCurrentSessionId(projectDir: string): string | null {
 // Record the most-recently-active session id. Best-effort; no-op on a blank id
 // (a TTY/empty hook invocation has no session to record).
 export function writeCurrentSessionId(projectDir: string, sessionId: string): void {
-  if (!sessionId) return;
+  if (validSessionId(sessionId) === null) return;
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
     writeFileSync(currentSessionPath(projectDir), `${sessionId}\n`, "utf-8");
@@ -2322,6 +2855,7 @@ export function createIntent(
   space: string,
   scope?: string,
   repos?: string[],
+  sessionId?: string,
 ): BornIntent {
   const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
@@ -2361,6 +2895,12 @@ export function createIntent(
     space,
   );
   setActiveIntentCursor(projectDir, dirName, space);
+  const creatingSession =
+    validSessionId(sessionId) ??
+    resolveSessionIdFromAncestry(projectDir);
+  if (creatingSession) {
+    writeSessionBinding(projectDir, creatingSession, space, dirName);
+  }
   return { uuid, slug, dirName, recordDir: recordPath, space };
 }
 
@@ -2543,9 +3083,14 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
 // SOURCE (flatStateSource/flatMigrationSource above).
 
 export function stateFilePath(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return join(spaceRecordRoot(projectDir, space), "aidlc-state.md");
-  return join(dir, "aidlc-state.md");
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  if (resolved.dir === null) {
+    return join(
+      spaceRecordRoot(projectDir, resolved.space),
+      "aidlc-state.md",
+    );
+  }
+  return join(resolved.dir, "aidlc-state.md");
 }
 
 // The engine's final validated run-stage is the active execution cursor. Most
@@ -2631,8 +3176,12 @@ function resolveActiveDirectiveTarget(
   space?: string,
 ): ActiveDirectiveTarget {
   const canonicalProjectDir = realpathSync(resolvePath(projectDir));
-  const resolvedSpace = space ?? activeSpace(canonicalProjectDir);
-  const recordDirName = activeIntent(canonicalProjectDir, resolvedSpace, intent);
+  const selection = resolveWorkflowSelection(canonicalProjectDir, {
+    space,
+    intent,
+  });
+  const resolvedSpace = selection.space;
+  const recordDirName = selection.intent;
   const recordsRoot = intentsDir(canonicalProjectDir, resolvedSpace);
   const root = recordDirName === null
     ? spaceRecordRoot(canonicalProjectDir, resolvedSpace)
@@ -3595,9 +4144,15 @@ export function updateCopilotStopCount(
 // timestamp — see auditShards()/readAllAuditShards(). With no intent resolved the
 // shard lands under the bare space record root (no flat audit.md any more).
 export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return join(spaceRecordRoot(projectDir, space), "audit", auditShardName(projectDir));
-  return join(dir, "audit", auditShardName(projectDir));
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  if (resolved.dir === null) {
+    return join(
+      spaceRecordRoot(projectDir, resolved.space),
+      "audit",
+      auditShardName(projectDir),
+    );
+  }
+  return join(resolved.dir, "audit", auditShardName(projectDir));
 }
 
 // The clone-id token file: `aidlc/.aidlc-clone-id`. Workspace-level,
@@ -3689,6 +4244,13 @@ function cloneId(projectDir: string): string {
 // there is no per-stage scoping. AUTONOMY_MODE_SET only counts when its Mode is
 // autonomous because that grant consumes the human turn that unlocks downstream
 // presence carve-outs.
+export const BLOCKING_SENSOR_OVERRIDE_CHOICE = "Override blocking sensors";
+export const BLOCKING_SENSOR_OVERRIDE_DECISION = "Blocking gate sensor failure";
+export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
+  "Fix findings",
+  BLOCKING_SENSOR_OVERRIDE_CHOICE,
+] as const;
+
 const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
@@ -3959,6 +4521,431 @@ export function humanActedSinceLastAnswer(projectDir: string): boolean {
 // this event, so the conductor cannot mint it through `aidlc-audit append`.
 export const SUMMARY_CONFIRMATION_CHECKPOINT =
   "Consolidated Summary Confirmation";
+export const SUMMARY_CONFIRMATION_HASH_SCOPE = "confirmed-content-v1";
+
+// Keep an opaque marker where an HTML comment was removed. It preserves the
+// required whitespace boundary in `##<!-- comment --> Heading` while allowing
+// comments inside a valid heading title.
+const INVISIBLE_COMMENT_MARKER = "\u0000";
+const INVISIBLE_LINE_MARKER = "\u0001";
+const RAW_INVISIBLE_COMMENT_MARKER_ESCAPE = "\u0002";
+
+function stripInvisibleCommentMarkers(line: string): string {
+  return line.replaceAll(INVISIBLE_COMMENT_MARKER, "");
+}
+
+function restoreVisibleMarkdownMarkers(line: string): string {
+  if (line.startsWith(INVISIBLE_LINE_MARKER)) return "";
+  return line
+    .replaceAll(INVISIBLE_COMMENT_MARKER, "")
+    .replaceAll(INVISIBLE_LINE_MARKER, "")
+    .replaceAll(RAW_INVISIBLE_COMMENT_MARKER_ESCAPE, INVISIBLE_COMMENT_MARKER);
+}
+
+function isEscapedAt(line: string, offset: number): boolean {
+  let escapes = 0;
+  for (let cursor = offset - 1; cursor >= 0 && line[cursor] === "\\"; cursor--) {
+    escapes++;
+  }
+  return escapes % 2 === 1;
+}
+
+type MarkdownContainerSegment =
+  | { type: "blockquote" }
+  | { type: "list"; indent: number };
+
+function markdownIndentWidth(value: string): number {
+  let width = 0;
+  for (const character of value) {
+    width = character === "\t" ? width + (4 - width % 4) : width + 1;
+  }
+  return width;
+}
+
+function markdownContainerLine(line: string): {
+  content: string;
+  segments: MarkdownContainerSegment[];
+} {
+  let candidate = line;
+  const segments: MarkdownContainerSegment[] = [];
+  while (true) {
+    const before = candidate;
+    const blockquote = /^ {0,3}>[ \t]?/.exec(candidate);
+    if (blockquote) {
+      candidate = candidate.slice(blockquote[0].length);
+      segments.push({ type: "blockquote" });
+      continue;
+    }
+    const list = /^( {0,3})(?:[*+-]|\d{1,9}[.)])([ \t]+)/.exec(candidate);
+    if (list) {
+      candidate = candidate.slice(list[0].length);
+      segments.push({
+        type: "list",
+        indent: markdownIndentWidth(list[0]),
+      });
+      continue;
+    }
+    if (candidate === before) break;
+  }
+  return { content: candidate, segments };
+}
+
+function stripMarkdownContainerPrefix(line: string): string {
+  return markdownContainerLine(line).content;
+}
+
+function markdownContainerContinuation(
+  line: string,
+  segments: MarkdownContainerSegment[],
+): string | null {
+  let candidate = line;
+  for (const segment of segments) {
+    if (segment.type === "blockquote") {
+      const blockquote = /^ {0,3}>[ \t]?/.exec(candidate);
+      if (!blockquote) return null;
+      candidate = candidate.slice(blockquote[0].length);
+      continue;
+    }
+
+    let offset = 0;
+    let width = 0;
+    while (offset < candidate.length && width < segment.indent) {
+      const character = candidate[offset];
+      if (character !== " " && character !== "\t") return null;
+      width = character === "\t" ? width + (4 - width % 4) : width + 1;
+      offset++;
+    }
+    if (width < segment.indent) return null;
+    candidate = candidate.slice(offset);
+  }
+  return candidate;
+}
+
+function isMarkdownBlockBoundary(line: string): boolean {
+  return /^ {0,3}(?:#{1,6}(?:[ \t]|$)|[`~]{3,}|(?:=+|-+)[ \t]*$|(?:(?:\*|_|-)[ \t]*){3,}$)/.test(
+    line,
+  );
+}
+
+interface RawHtmlBlockStart {
+  end: RegExp;
+}
+
+function rawHtmlBlockStart(line: string): RawHtmlBlockStart | null {
+  const literal = /^ {0,3}<(script|pre|style|textarea)(?:[ \t>]|$)/i.exec(line);
+  if (literal) {
+    return {
+      end: new RegExp(`</${escapeRegex(literal[1])}>`, "i"),
+    };
+  }
+  return null;
+}
+
+function stripInlineCodeSpans(line: string): string {
+  const visible: string[] = [];
+  let cursor = 0;
+  while (cursor < line.length) {
+    const start = line.indexOf("`", cursor);
+    if (start < 0) {
+      visible.push(line.slice(cursor));
+      break;
+    }
+    visible.push(line.slice(cursor, start));
+    const end = inlineCodeSpanEnd(line, start);
+    if (end === null) {
+      // An unclosed inline-code span consumes the rest of this line. Do not
+      // inspect its literal HTML-looking text as a raw tag.
+      break;
+    }
+    cursor = end;
+  }
+  return visible.join("");
+}
+
+function inlineCodeSpanEnd(line: string, start: number): number | null {
+  let length = 1;
+  while (line[start + length] === "`") length++;
+  let cursor = start + length;
+  while (cursor < line.length) {
+    const candidate = line.indexOf("`", cursor);
+    if (candidate < 0) return null;
+    let candidateLength = 1;
+    while (line[candidate + candidateLength] === "`") candidateLength++;
+    if (candidateLength === length) return candidate + candidateLength;
+    cursor = candidate + candidateLength;
+  }
+  return null;
+}
+
+interface VisibleMarkdownHeading {
+  title: string;
+  level: number;
+  style: "atx" | "setext" | "html";
+  nested: boolean;
+}
+
+function visibleAtxHeading(line: string): VisibleMarkdownHeading | null {
+  const atx = /^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$/.exec(line);
+  return atx
+    ? {
+        title: stripInvisibleCommentMarkers(atx[2])
+          .replace(/[ \t]+#+[ \t]*$/, "")
+        .trim(),
+        level: atx[1].length,
+        style: "atx",
+        nested: false,
+      }
+    : null;
+}
+
+function visibleSetextHeading(
+  lines: string[],
+  line: number,
+): VisibleMarkdownHeading | null {
+  const underline = /^ {0,3}(=+|-+)[ \t]*$/.exec(
+    stripMarkdownContainerPrefix(lines[line]),
+  );
+  if (line === 0 || !underline) return null;
+  const previous = lines[line - 1];
+  const visiblePrevious = stripMarkdownContainerPrefix(
+    stripInvisibleCommentMarkers(previous),
+  );
+  if (
+    visiblePrevious.trim() === "" ||
+    visibleAtxHeading(visiblePrevious) !== null
+  ) {
+    return null;
+  }
+  return {
+    title: visiblePrevious.trim(),
+    level: underline[1][0] === "=" ? 1 : 2,
+    style: "setext",
+    nested:
+      stripMarkdownContainerPrefix(lines[line]) !== lines[line] ||
+      stripMarkdownContainerPrefix(previous) !== previous,
+  };
+}
+
+function isMarkdownAngleLinkDestination(line: string, tagOffset: number): boolean {
+  const before = line.slice(0, tagOffset);
+  const destination = before.lastIndexOf("](");
+  if (destination < 0 || !/^[ \t]*$/.test(before.slice(destination + 2))) {
+    return false;
+  }
+  if (isEscapedAt(before, destination)) return false;
+  const label = before.lastIndexOf("[", destination);
+  if (label < 0) return false;
+  if (isEscapedAt(before, label)) return false;
+  const closing = line.indexOf(">", tagOffset + 1);
+  return (
+    closing >= 0 &&
+    /^[ \t]*\)/.test(line.slice(closing + 1))
+  );
+}
+
+function visibleHtmlHeading(line: string): VisibleMarkdownHeading | null {
+  const htmlLine = stripMarkdownContainerPrefix(stripInvisibleCommentMarkers(line));
+  // A four-space or tab indentation starts a Markdown code block, so its
+  // HTML-looking contents are literal rather than visible headings.
+  if (/^(?: {4}|\t)/.test(htmlLine)) return null;
+  const codeFreeLine = stripInlineCodeSpans(htmlLine);
+  for (let cursor = 0; cursor < codeFreeLine.length; cursor++) {
+    if (codeFreeLine[cursor] !== "<") continue;
+    if (isMarkdownAngleLinkDestination(codeFreeLine, cursor)) continue;
+    if (isEscapedAt(codeFreeLine, cursor)) continue;
+    const tagStart = cursor + 1;
+    const match = /^h([1-6])\b/i.exec(codeFreeLine.slice(tagStart));
+    if (match) {
+      return {
+        title: `<h${match[1]}>`,
+        level: Number(match[1]),
+        style: "html",
+        nested: !/^\s*<h[1-6]\b/i.test(codeFreeLine),
+      };
+    }
+    // Skip the rest of a non-heading HTML tag, respecting quoted attributes,
+    // so `<h2>` in `data-example="<h2>"` is not mistaken for a heading.
+    let inQuote: '"' | "'" | null = null;
+    for (let end = tagStart; end < codeFreeLine.length; end++) {
+      const character = codeFreeLine[end];
+      if (inQuote !== null) {
+        if (character === inQuote) inQuote = null;
+      } else if (character === "'" || character === '"') {
+        inQuote = character;
+      } else if (character === ">") {
+        cursor = end;
+        break;
+      }
+    }
+  }
+  return null;
+}
+
+function visibleH2Title(line: string): string | null {
+  const heading = visibleAtxHeading(line);
+  return heading?.level === 2 ? heading.title : null;
+}
+
+function visibleQuestionId(title: string): string | null {
+  const match = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/.exec(title);
+  return match ? `Q${match[1]}` : null;
+}
+
+function visibleHeading(
+  lines: string[],
+  line: number,
+): VisibleMarkdownHeading | null {
+  const candidate = stripMarkdownContainerPrefix(lines[line]);
+  const nested = candidate !== lines[line];
+  const atx = visibleAtxHeading(candidate);
+  if (atx) return { ...atx, nested };
+  const setext = visibleSetextHeading(lines, line);
+  if (setext) return setext;
+  const html = visibleHtmlHeading(candidate);
+  return html ? { ...html, nested: nested || html.nested } : null;
+}
+
+// Hash the normalized semantic questions content the human confirmed. The
+// shared protocol does not impose names on pre-checkpoint sections, while
+// follow-up Q<n> sections after an assumption decision remain hashable.
+export function summaryConfirmationContentHash(content: string): string {
+  const normalized = content.replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  const visibleLines = visibleMarkdownLines(normalized, {
+    preserveCommentBoundaries: true,
+  });
+  let sawSummary = false;
+  let postSummaryAssumptionSeen = false;
+  let openExcludedAssumption: number | null = null;
+  const excludedRanges: Array<[number, number]> = [];
+  const questionIds = new Set<string>();
+
+  const closeExcludedAssumption = (line: number): void => {
+    if (openExcludedAssumption !== null) {
+      excludedRanges.push([openExcludedAssumption, line]);
+      openExcludedAssumption = null;
+    }
+  };
+
+  for (let line = 0; line < visibleLines.length; line++) {
+    const heading = visibleHeading(visibleLines, line);
+    if (heading === null) continue;
+    const { title } = heading;
+    const atxH2 =
+      heading.style === "atx" && heading.level === 2 && !heading.nested;
+
+    if (title === SUMMARY_CONFIRMATION_CHECKPOINT && atxH2) {
+      if (sawSummary) {
+        throw new Error(
+          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}"`,
+        );
+      }
+      sawSummary = true;
+      continue;
+    }
+
+    if (!sawSummary) {
+      if (atxH2) {
+        const questionId = visibleQuestionId(title);
+        if (questionId !== null) {
+          if (questionIds.has(questionId)) {
+            throw new Error(`duplicate H2 section "${questionId}"`);
+          }
+          questionIds.add(questionId);
+        }
+      }
+      continue;
+    }
+
+    if (title === "Assumption Confirmation" && atxH2 && sawSummary) {
+      if (postSummaryAssumptionSeen) {
+        throw new Error('duplicate H2 section "Assumption Confirmation"');
+      }
+      postSummaryAssumptionSeen = true;
+      openExcludedAssumption = line;
+      continue;
+    }
+
+    const questionId = atxH2 ? visibleQuestionId(title) : null;
+    if (
+      atxH2 &&
+      (title === "Requested Changes Feedback" || questionId !== null)
+    ) {
+      if (questionId !== null) {
+        if (questionIds.has(questionId)) {
+          throw new Error(`duplicate H2 section "${questionId}"`);
+        }
+        questionIds.add(questionId);
+      }
+      // Follow-up questions may be added after an assumption decision. They
+      // are included in a later receipt's digest; only the assumption section
+      // itself remains outside the scope.
+      closeExcludedAssumption(line);
+      continue;
+    }
+
+    if (sawSummary) {
+      const boundary = !postSummaryAssumptionSeen
+        ? 'after the consolidated summary; only Q<n>, "Requested Changes Feedback", or one "Assumption Confirmation" section may follow'
+        : 'after "Assumption Confirmation"; only Q<n> or "Requested Changes Feedback" sections may follow';
+      const headingKind = heading.style === "html"
+        ? `HTML H${heading.level}`
+        : heading.style === "setext"
+          ? `Setext H${heading.level}`
+          : `H${heading.level}`;
+      throw new Error(
+        `unsupported ${headingKind} heading "${title}" ` +
+          boundary,
+      );
+    }
+  }
+
+  if (!sawSummary) {
+    throw new Error(
+      `missing required H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}"`,
+    );
+  }
+
+  closeExcludedAssumption(lines.length);
+  const excluded = new Set<number>();
+  for (const [start, end] of excludedRanges) {
+    for (let line = start; line < end; line++) excluded.add(line);
+  }
+  const confirmedContent = lines
+    .filter((_, line) => !excluded.has(line))
+    .join("\n")
+    .trimEnd();
+  return createHash("sha256")
+    .update(confirmedContent, "utf-8")
+    .digest("hex");
+}
+
+// Read the persisted choice through the same visibility model as the hash
+// contract. The generic section extractor intentionally retains comments for
+// other callers, so it cannot safely validate this checkpoint.
+export function summaryConfirmationAnswer(content: string): string | null {
+  const visibleLines = visibleMarkdownLines(content, {
+    preserveCommentBoundaries: true,
+  });
+  let inSummary = false;
+  const answers: string[] = [];
+
+  for (const line of visibleLines) {
+    const heading = visibleH2Title(line);
+    if (heading !== null) {
+      if (inSummary) break;
+      if (heading === SUMMARY_CONFIRMATION_CHECKPOINT) inSummary = true;
+      continue;
+    }
+    if (!inSummary) continue;
+    const answer = /^\[Answer\]:[ \t]*(.*)$/.exec(
+      stripInvisibleCommentMarkers(line),
+    );
+    if (answer) answers.push(answer[1].trim());
+  }
+
+  return inSummary && answers.length === 1 ? answers[0] : null;
+}
 
 export function summaryConfirmationGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD === "1";
@@ -4043,20 +5030,11 @@ function summaryQuestionFiles(
 }
 
 function summaryAnswerFromFile(path: string): string | null {
-  let body: string;
   try {
-    body = readFileSync(path, "utf-8");
+    return summaryConfirmationAnswer(readFileSync(path, "utf-8"));
   } catch {
     return null;
   }
-  const section = extractMarkdownSection(
-    body,
-    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
-  );
-  if (!section) return null;
-  const answers = [...section.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
-  if (answers.length !== 1) return null;
-  return answers[0][1].trim();
 }
 
 function summaryArtifactPaths(
@@ -4122,6 +5100,13 @@ export function checkSummaryConfirmationEvidence(
   if (
     declared &&
     isPerUnitStage(stage) &&
+    !(
+      options.stateContent !== undefined &&
+      usesStageLevelPerUnitArtifacts(
+        getField(options.stateContent ?? "", "Scope"),
+        options.stateContent,
+      )
+    ) &&
     options.workflow === undefined &&
     options.unit === undefined
   ) {
@@ -4165,16 +5150,6 @@ export function checkSummaryConfirmationEvidence(
     }
   }
 
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) {
-    return {
-      ok: false,
-      message:
-        `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
-        "summary confirmation receipt is recorded.",
-    };
-  }
-
   const relevant = new Set([
     "WORKFLOW_STARTED",
     "STAGE_STARTED",
@@ -4184,64 +5159,130 @@ export function checkSummaryConfirmationEvidence(
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
   ]);
-  const events = audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position) => ({
-      block,
-      position,
-      event: auditBlockField(block, "Event") ?? "",
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-    }))
-    .filter((entry) => relevant.has(entry.event))
-    .sort((a, b) =>
-      a.timestamp !== b.timestamp
-        ? (a.timestamp < b.timestamp ? -1 : 1)
-        : a.position - b.position
+  const events = readAuditShardEvents(projectDir)
+    .filter((entry) => relevant.has(entry.event));
+  if (events.length === 0) {
+    return {
+      ok: false,
+      message:
+        `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
+        "summary confirmation receipt is recorded.",
+    };
+  }
+
+  const latestFrontier = (candidates: AuditShardEvent[]): AuditShardEvent[] => {
+    const byShard = new Map<string, AuditShardEvent>();
+    for (const entry of candidates) {
+      const previous = byShard.get(entry.shard);
+      if (!previous || entry.pos > previous.pos) byShard.set(entry.shard, entry);
+    }
+    const latestTimestamp = [...byShard.values()].reduce(
+      (latest, entry) =>
+        entry.timestamp > latest ? entry.timestamp : latest,
+      "",
     );
+    return [...byShard.values()].filter(
+      (entry) => entry.timestamp === latestTimestamp,
+    );
+  };
+  const latestEvent = (
+    candidates: AuditShardEvent[],
+  ): { event: AuditShardEvent | null; ambiguousTimestamp?: string } => {
+    const latest = latestFrontier(candidates);
+    if (latest.length > 1) {
+      return { event: null, ambiguousTimestamp: latest[0].timestamp };
+    }
+    return { event: latest[0] ?? null };
+  };
+  const orderingFailure = (
+    evidence: string,
+    timestamp: string,
+    reconfirm = true,
+  ): SummaryConfirmationEvidence => ({
+    ok: false,
+    message:
+      `Refusing to complete "${stage.slug}": ${evidence} share audit Timestamp ` +
+      `"${timestamp}" across different shards, so their causal order cannot be ` +
+      "proven. " +
+      (reconfirm
+        ? `Repeat the ${options.workflow === undefined ? "summary" : "isolated summary"} ` +
+          "confirmation after that second, then regenerate or re-save each artifact " +
+          "so the audit records a strictly later write."
+        : "Regenerate or re-save the artifact after that second so the audit " +
+          "records a strictly later write."),
+  });
 
   const workflow = options.workflow;
   const unitMajor =
     isPerUnitStage(stage) &&
     getField(options.stateContent ?? "", "Construction Iteration")?.trim() ===
       "unit-major";
-  let floor = -1;
-  for (let i = 0; i < events.length; i++) {
-    const entry = events[i];
+  const floorCandidates = events.filter((entry) => {
     const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (workflow !== undefined) {
-      if (
+      return (
         entry.event === "STAGE_COMPLETED" &&
         eventWorkflow === workflow &&
         auditBlockField(entry.block, "Stage") === stage.slug
-      ) {
-        floor = i;
-      }
-      continue;
+      );
     }
-    if (eventWorkflow?.startsWith("single-stage:")) continue;
+    if (eventWorkflow?.startsWith("single-stage:")) return false;
     if (
       entry.event === "WORKFLOW_STARTED" ||
       entry.event === "STAGE_JUMPED"
     ) {
-      floor = i;
-      continue;
+      return true;
     }
-    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
-    if (entry.event === "STAGE_STARTED" && !unitMajor) {
-      floor = i;
-    }
-  }
+    return (
+      auditBlockField(entry.block, "Stage") === stage.slug &&
+      entry.event === "STAGE_STARTED" &&
+      !unitMajor
+    );
+  });
+  const floors = latestFrontier(floorCandidates);
+  const afterFloor = (entry: AuditShardEvent): true | false | null => {
+    if (floors.length === 0) return true;
+    const relations = floors.map((floor): true | false | null => {
+      if (entry.shard === floor.shard) return entry.pos > floor.pos;
+      if (entry.timestamp !== floor.timestamp) {
+        return entry.timestamp > floor.timestamp;
+      }
+      return null;
+    });
+    if (relations.every((relation) => relation === true)) return true;
+    if (relations.some((relation) => relation === false)) return false;
+    return null;
+  };
 
   if (workflow !== undefined && isPerUnitStage(stage)) {
-    let receiptFile: string | null = null;
-    for (let i = floor + 1; i < events.length; i++) {
-      const entry = events[i];
-      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
-      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
-      if (auditBlockField(entry.block, "Workflow") !== workflow) continue;
-      receiptFile = auditBlockField(entry.block, "Questions File");
+    const candidates = events.filter((entry) =>
+      entry.event === "SUMMARY_CONFIRMATION_RECORDED" &&
+      auditBlockField(entry.block, "Stage") === stage.slug &&
+      auditBlockField(entry.block, "Workflow") === workflow
+    );
+    const ordered = candidates.filter((entry) => afterFloor(entry) === true);
+    const receiptSelection = latestEvent(ordered);
+    if (receiptSelection.ambiguousTimestamp !== undefined) {
+      return orderingFailure(
+        "isolated summary receipts",
+        receiptSelection.ambiguousTimestamp,
+      );
     }
+    const unordered = candidates.filter((entry) => afterFloor(entry) === null);
+    if (
+      unordered.some((entry) =>
+        receiptSelection.event === null ||
+        entry.timestamp >= receiptSelection.event.timestamp
+      )
+    ) {
+      return orderingFailure(
+        "the isolated-run boundary and summary receipt",
+        floors[0]?.timestamp ?? unordered[0].timestamp,
+      );
+    }
+    const receiptFile = receiptSelection.event === null
+      ? null
+      : auditBlockField(receiptSelection.event.block, "Questions File");
     if (receiptFile !== null) {
       const matched = questions.find(
         (question) =>
@@ -4265,33 +5306,52 @@ export function checkSummaryConfirmationEvidence(
       };
     }
 
-    let receipt: (typeof events)[number] | null = null;
     const questionRelative = toPosix(relative(projectDir, question.path));
-    for (let i = floor + 1; i < events.length; i++) {
-      const entry = events[i];
-      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
-      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    const receiptCandidates = events.filter((entry) => {
+      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
+      if (auditBlockField(entry.block, "Stage") !== stage.slug) return false;
       if (
         auditBlockField(entry.block, "Checkpoint") !==
           SUMMARY_CONFIRMATION_CHECKPOINT
       ) {
-        continue;
+        return false;
       }
       const eventWorkflow = auditBlockField(entry.block, "Workflow");
       if (workflow !== undefined) {
-        if (eventWorkflow !== workflow) continue;
+        if (eventWorkflow !== workflow) return false;
       } else if (eventWorkflow?.startsWith("single-stage:")) {
-        continue;
+        return false;
       }
-      const eventUnit = auditBlockField(entry.block, "Unit");
-      if ((eventUnit ?? null) !== question.unit) continue;
-      if (
-        auditBlockField(entry.block, "Questions File") !== questionRelative
-      ) {
-        continue;
+      if ((auditBlockField(entry.block, "Unit") ?? null) !== question.unit) {
+        return false;
       }
-      receipt = entry;
+      return auditBlockField(entry.block, "Questions File") === questionRelative;
+    });
+    const orderedReceipts = receiptCandidates.filter(
+      (entry) => afterFloor(entry) === true,
+    );
+    const receiptSelection = latestEvent(orderedReceipts);
+    if (receiptSelection.ambiguousTimestamp !== undefined) {
+      return orderingFailure(
+        "matching summary receipts",
+        receiptSelection.ambiguousTimestamp,
+      );
     }
+    const unorderedReceipts = receiptCandidates.filter(
+      (entry) => afterFloor(entry) === null,
+    );
+    if (
+      unorderedReceipts.some((entry) =>
+        receiptSelection.event === null ||
+        entry.timestamp >= receiptSelection.event.timestamp
+      )
+    ) {
+      return orderingFailure(
+        "the current-attempt boundary and matching summary receipt",
+        floors[0]?.timestamp ?? unorderedReceipts[0].timestamp,
+      );
+    }
+    const receipt = receiptSelection.event;
     if (
       receipt === null ||
       auditBlockField(receipt.block, "Details") !== "Looks correct"
@@ -4309,52 +5369,191 @@ export function checkSummaryConfirmationEvidence(
       };
     }
 
+    const hashScope = auditBlockField(receipt.block, "Hash Scope");
+    const recovery = workflow === undefined
+      ? (
+        "First repair the questions file: reset the existing consolidated-summary " +
+        "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
+        "post-summary section named by the validation error. Only then re-present the " +
+        "consolidated summary and record a fresh confirmation with " +
+        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
+        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
+        "--questions-file \"<path>\" --decision \"Does this all look correct?\"`; " +
+        "end the turn, wait for the human's response, update the recorded answer, then run " +
+        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
+        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
+        "--questions-file \"<path>\" --details \"Looks correct\"`. Re-save each generated " +
+        "artifact, rerun the section-12a reviewer when this stage declares one, then retry " +
+        "the stage completion command. If a completion gate is already open or a terminal " +
+        "section-12a receipt freezes artifact writes, instead present Request Changes and " +
+        "end the turn. After a fresh human turn choosing it, run " +
+        `\`aidlc-orchestrate.ts report --stage "${stage.slug}" --result rejected ` +
+        "--user-input \"Request Changes\" --reason \"<requested changes>\"`; then revise and re-confirm the summary, " +
+        "re-save the artifacts, rerun the reviewer, and report `--result revised`."
+      )
+      : (
+        "First repair the questions file: reset the existing consolidated-summary " +
+        "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
+        "post-summary section named by the validation error. Only then re-present the " +
+        "consolidated summary in the isolated run and record a fresh confirmation with " +
+        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
+        "--questions-file \"<path>\" --single --decision \"Does this all look correct?\"`; " +
+        "end the turn, wait for the human's response, update the recorded answer, then run " +
+        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
+        "--questions-file \"<path>\" --single --details \"Looks correct\"`. Regenerate or " +
+        "re-save each generated artifact, rerun the section-12a reviewer when this stage " +
+        "declares one, then run `aidlc-orchestrate.ts report --single " +
+        `--stage "${stage.slug}" --result completed\`.`
+      );
+    if (
+      hashScope !== null &&
+      hashScope !== SUMMARY_CONFIRMATION_HASH_SCOPE
+    ) {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
+          `Hash Scope "${hashScope}". ${recovery}`,
+      };
+    }
+    const legacyRecovery =
+      hashScope === null
+        ? "This is a legacy unscoped receipt, so it still verifies the whole " +
+          "questions file; an allowed post-confirmation append therefore requires " +
+          "reconfirmation to create a new scoped receipt. "
+        : "";
+    const recoveryMessage = legacyRecovery + recovery;
+    // A receipt verifies the questions file under the scope IT recorded:
+    // unscoped legacy receipts cover the whole file, scoped ones cover the
+    // confirmed content. Resolve per receipt so a duplicate-confirmation check
+    // never compares one receipt's digest against another's scope. Returns
+    // null for an unreadable file or an unknown scope, which fails closed at
+    // every call site.
+    const scopeHashes = new Map<string, string | null>();
+    const questionHashForScope = (scope: string | null): string | null => {
+      const key = scope ?? "";
+      const cached = scopeHashes.get(key);
+      if (cached !== undefined) return cached;
+      let value: string | null = null;
+      try {
+        if (scope === null) {
+          value = createHash("sha256")
+            .update(readFileSync(question.path))
+            .digest("hex");
+        } else if (scope === SUMMARY_CONFIRMATION_HASH_SCOPE) {
+          value = summaryConfirmationContentHash(
+            readFileSync(question.path, "utf-8"),
+          );
+        }
+      } catch {
+        value = null;
+      }
+      scopeHashes.set(key, value);
+      return value;
+    };
     let currentHash: string;
     try {
-      currentHash = createHash("sha256")
-        .update(readFileSync(question.path))
-        .digest("hex");
-    } catch {
-      currentHash = "";
+      currentHash = hashScope === null
+        ? createHash("sha256").update(readFileSync(question.path)).digest("hex")
+        : summaryConfirmationContentHash(
+          readFileSync(question.path, "utf-8"),
+        );
+    } catch (e) {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": ${question.path} cannot be ` +
+          `validated against its summary confirmation: ${errorMessage(e)}. ${recoveryMessage}`,
+      };
     }
     if (
-      !currentHash ||
       auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
     ) {
       return {
         ok: false,
         message:
           `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
-          "the human confirmed its summary. Reset the confirmation, present the " +
-          "updated summary, and record a new response.",
+          `the human confirmed its summary. ${recoveryMessage}`,
       };
     }
 
-    const receiptIndex = events.indexOf(receipt);
     for (const artifact of summaryArtifactPaths(stage, question)) {
       const artifactAbs = resolvePath(artifact);
-      let lastWrite = -1;
-      for (let i = floor + 1; i < events.length; i++) {
-        const entry = events[i];
+      const artifactSuffix = "/" + toPosix(relative(projectDir, artifactAbs));
+      const writes = events.filter((entry) => {
         if (
           entry.event !== "ARTIFACT_CREATED" &&
           entry.event !== "ARTIFACT_UPDATED"
         ) {
-          continue;
+          return false;
         }
         const file = auditBlockField(entry.block, "File");
-        if (!file) continue;
-        const resolved = resolvePath(projectDir, file);
-        if (resolved === artifactAbs) lastWrite = i;
-      }
-      if (lastWrite <= receiptIndex) {
+        if (file === null) return false;
+        const norm = file.replace(/\\/g, "/");
+        return (
+          resolveAuditProjectPath(projectDir, file) === artifactAbs ||
+          // #863: preserve writes across workspace moves. The leading slash
+          // and full space/intent/phase/stage tail prevent partial matches.
+          norm.endsWith(artifactSuffix)
+        );
+      });
+      const strictlyAfter = (
+        later: AuditShardEvent,
+        earlier: AuditShardEvent,
+      ): boolean => {
+        if (later.shard === earlier.shard) return later.pos > earlier.pos;
+        if (later.timestamp !== earlier.timestamp) {
+          return later.timestamp > earlier.timestamp;
+        }
+        return false;
+      };
+      const writeAfterReceipt = writes.some((entry) =>
+        strictlyAfter(entry, receipt)
+      );
+      // Re-confirming the SAME answers does not revoke the authorization an
+      // earlier identical confirmation already exercised. A re-record made
+      // only to repair the prompt/turn handshake would otherwise demand that
+      // an already-reviewed document be written again, which the review freeze
+      // forbids - the deadlock this guard is not allowed to create. The
+      // candidate must sit in this attempt window, precede both the selected
+      // receipt and a real write, carry the positive choice, and cover the
+      // answers as they are NOW under its own Hash Scope.
+      const earlierIdenticalConfirmationAuthorizesWrite = !writeAfterReceipt &&
+        orderedReceipts.some((candidate) => {
+          if (candidate === receipt) return false;
+          if (!strictlyAfter(receipt, candidate)) return false;
+          if (auditBlockField(candidate.block, "Details") !== "Looks correct") {
+            return false;
+          }
+          const candidateHash = questionHashForScope(
+            auditBlockField(candidate.block, "Hash Scope"),
+          );
+          if (
+            candidateHash === null ||
+            auditBlockField(candidate.block, "Questions SHA-256") !==
+              candidateHash
+          ) {
+            return false;
+          }
+          return writes.some((entry) => strictlyAfter(entry, candidate));
+        });
+      if (!writeAfterReceipt && !earlierIdenticalConfirmationAuthorizesWrite) {
+        const unorderedWrite = writes.find((entry) =>
+          entry.timestamp === receipt.timestamp && entry.shard !== receipt.shard
+        );
+        if (unorderedWrite !== undefined) {
+          return orderingFailure(
+            "the summary receipt and artifact write",
+            receipt.timestamp,
+            false,
+          );
+        }
         return {
           ok: false,
           message:
-            `Refusing to complete "${stage.slug}": artifact ${artifact} has no ` +
-            "recorded native-tool write after the human's consolidated summary " +
-            "confirmation. Regenerate or re-save it after confirmation, then " +
-            "report completion again.",
+            `Refusing to continue "${stage.slug}": this stage's output document ` +
+            `${artifact} was not saved after the confirmed answers. Save the ` +
+            "document after confirmation, then continue.",
         };
       }
     }
@@ -4363,9 +5562,14 @@ export function checkSummaryConfirmationEvidence(
   return { ok: true, required: true };
 }
 
-// Read a `**Field**: value` line from one audit block (tolerates an optional
-// leading `- ` so it serves both audit blocks and the state file). Mirrors the
-// per-tool private auditField readers; shared here for humanActedSinceGate.
+// Read the FIRST `**Field**: value` line from one audit block (tolerates an
+// optional leading `- ` so it serves both audit blocks and the state file).
+// IMPORTANT: a duplicated field still returns only its first value. Do not
+// build authenticate-then-re-read flows on this helper: a verifier and consumer
+// can otherwise disagree about which occurrence, and therefore which bytes,
+// they mean. Callers that require uniqueness must reject duplicates separately.
+// Mirrors the per-tool private auditField readers; shared here for
+// humanActedSinceGate.
 export function auditBlockField(block: string, fieldName: string): string | null {
   const prefix = `**${fieldName}**:`;
   for (const raw of block.split("\n")) {
@@ -4472,27 +5676,36 @@ export function auditShardDir(projectDir: string, intent?: string, space?: strin
 // first shipped without the fallback; base v2 always read the space shard in
 // that state).
 // Readers merge-sort parsed events by **Timestamp**.
-export function auditShards(projectDir: string, intent?: string, space?: string): string[] {
+export function auditShards(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+  unreadableLocations?: string[],
+): string[] {
   const dirs: string[] = [];
   if (intent === undefined && space !== undefined) {
     dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
   }
-  const intentDir = auditShardDir(projectDir, intent, space);
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  const intentDir =
+    resolved.dir === null ? null : join(resolved.dir, "audit");
   if (intentDir !== null && !dirs.includes(intentDir)) dirs.push(intentDir);
   if (intentDir === null && dirs.length === 0) {
-    dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
+    dirs.push(join(spaceRecordRoot(projectDir, resolved.space), "audit"));
   }
   const paths: string[] = [];
   for (const shardDir of dirs) {
     try {
       assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, shardDir));
     } catch {
+      unreadableLocations?.push(shardDir);
       continue;
     }
     let entries: string[];
     try {
       entries = readdirSync(shardDir);
     } catch {
+      if (existsSync(shardDir)) unreadableLocations?.push(shardDir);
       continue;
     }
     for (const file of entries.sort()) {
@@ -4546,9 +5759,15 @@ export function readAuditShardEvents(
   projectDir: string,
   intent?: string,
   space?: string,
+  unreadableShards?: string[],
 ): AuditShardEvent[] {
   const rows: AuditShardEvent[] = [];
-  const shards = auditShards(projectDir, intent, space);
+  const shards = auditShards(
+    projectDir,
+    intent,
+    space,
+    unreadableShards,
+  );
   for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
     let content: string;
     try {
@@ -4561,6 +5780,7 @@ export function readAuditShardEvents(
         relative(projectDir, shards[shardIndex]),
       );
     } catch {
+      unreadableShards?.push(shards[shardIndex]);
       continue; // vanished or refused shard; growth during read is tolerated
     }
     const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
@@ -4585,6 +5805,32 @@ export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
 }
 
+export function resolveAuditProjectPath(
+  projectDir: string,
+  recordedPath: string,
+): string {
+  if (recordedPath === "<project-dir>") return resolvePath(projectDir);
+  if (
+    recordedPath.startsWith("<project-dir>/") ||
+    recordedPath.startsWith("<project-dir>\\")
+  ) {
+    return resolvePath(
+      projectDir,
+      recordedPath.slice("<project-dir>".length + 1),
+    );
+  }
+  return isAbsolute(recordedPath)
+    ? recordedPath
+    : resolvePath(projectDir, recordedPath);
+}
+
+export function resolveAuditWorktreePath(
+  projectDir: string,
+  recordedPath: string,
+): string {
+  return resolveAuditProjectPath(projectDir, recordedPath);
+}
+
 // --- Fresh review receipts (the §12a completion precondition's scan) -----------
 //
 // ONE implementation, TWO consumers with opposite polarities:
@@ -4596,21 +5842,6 @@ export function worktreePath(projectDir: string, boltSlug: string): string {
 //     re-open the completion refusal - the receipt-invalidation loop).
 // Sharing the scan is load-bearing: if the two ever diverged, the hook could
 // block writes the engine would accept, or miss writes the engine will refuse.
-
-// The codekb stages - their produces live in the space-level codekb dir, keyed
-// by repo, NOT under a per-intent record dir. reverse-engineering is the sole
-// member; a future codekb stage joins this set (aidlc-orchestrate.ts and
-// aidlc-sensor.ts keep local mirrors - not exported from here historically).
-export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
-  "reverse-engineering",
-]);
-
-// Artifact vocabulary names normally map to Markdown files. Traceability is
-// the structured-data exception: stages still declare the bare vocabulary
-// name while every engine surface resolves it to the JSON sensor input.
-export function artifactFilename(name: string): string {
-  return name === "traceability" ? "traceability.json" : `${name}.md`;
-}
 
 // True when a written File path (from an ARTIFACT_CREATED/ARTIFACT_UPDATED audit
 // row, or a PreToolUse file_path) is one of the stage's declared produces[]
@@ -4724,12 +5955,20 @@ export function terminalReviewVerdict(
 export interface PendingReviewProgress {
   state: "outstanding" | "retry-required" | "repair-required";
   iteration: number;
+  recovery: boolean;
+  suspensionActive: boolean;
 }
 
 export interface StaleReviewProgress {
   nextIteration: number;
   recoverySpent: boolean;
 }
+
+export type SourceBaselineResult =
+  | { state: "legacy" }
+  | { state: "unbindable" }
+  | { state: "invalid" }
+  | { state: "ready"; listing: WorkspaceSourceListing };
 
 export interface FreshReviewReceipts {
   /** Verdict of the last fresh terminal receipt without a Unit field, or null
@@ -4758,6 +5997,12 @@ export interface FreshReviewReceipts {
   sourceRecoverySpent: boolean;
   /** Units whose terminal receipt was invalidated in the current attempt. */
   unitStale: Set<string>;
+  /** Validated modern claim model for every unit whose receipt remains fresh. */
+  freshUnitClaims: Map<string, SourceClaimModel>;
+  /** Effective stage-entry source baseline for unclaimed-path verification. */
+  sourceBaseline: SourceBaselineResult;
+  /** Current source listing from the guard's single workspace walk, when needed. */
+  currentSourceListing: WorkspaceSourceListing | null;
   /** Next request ordinal and recovery availability for a stale stage receipt. */
   stageStaleProgress: StaleReviewProgress | null;
   /** Next request ordinal and recovery availability for stale unit receipts. */
@@ -4787,7 +6032,10 @@ function reviewArtifactEntries(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
-  boltDag?: BoltDagResolution,
+  options: {
+    boltDag?: BoltDagResolution;
+    stateContent?: string | null;
+  } = {},
 ): ReviewArtifactEntry[] | null {
   const artifactsForKind = (kind: string | null) => [
     ...filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind).map(
@@ -4839,9 +6087,32 @@ function reviewArtifactEntries(
     }));
   }
 
+  let stateContent = options.stateContent;
+  if (stateContent === undefined) {
+    try {
+      stateContent = readStateFile(projectDir);
+    } catch {
+      stateContent = null;
+    }
+  }
+  if (
+    unit === undefined &&
+    stateContent !== null &&
+    usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    )
+  ) {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      required: artifact.required,
+    }));
+  }
+
   let units: string[];
   let unitKinds = new Map<string, string>();
-  const resolution = boltDag ?? resolveBoltDag(projectDir);
+  const resolution = options.boltDag ?? resolveBoltDag(projectDir);
   if (unit) {
     units = [unit];
     if (resolution.state === "ok" && resolution.unitKinds !== null) {
@@ -4850,6 +6121,17 @@ function reviewArtifactEntries(
   } else if (resolution.state === "ok") {
     units = resolution.units;
     unitKinds = resolution.unitKinds ?? new Map();
+  } else if (resolution.state === "none") {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `construction/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(
+        record,
+        "construction",
+        stage.slug,
+        artifactFilename(artifact.name),
+      ),
+      required: artifact.required,
+    }));
   } else {
     const construction = join(record, "construction");
     units = existsSync(construction)
@@ -4891,11 +6173,15 @@ export function reviewArtifactFingerprint(
   options: {
     requireRequiredArtifacts?: boolean;
     boltDag?: BoltDagResolution;
+    stateContent?: string | null;
   } = {},
 ): string | null {
   let entries: ReviewArtifactEntry[] | null;
   try {
-    entries = reviewArtifactEntries(projectDir, stage, unit, options.boltDag);
+    entries = reviewArtifactEntries(projectDir, stage, unit, {
+      boltDag: options.boltDag,
+      stateContent: options.stateContent,
+    });
   } catch {
     return null;
   }
@@ -4942,6 +6228,158 @@ export function reviewArtifactFingerprint(
 // over precise. Unit-major construction may author a later stage's per-unit
 // artifacts before that stage's STAGE_STARTED row exists, so its floor
 // ignores STAGE_STARTED; stage-major and non-per-unit flows floor on it.
+function hasDurableSourceBindingEvidence(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): boolean {
+  const record = recordDir(projectDir, intent, space);
+  if (record !== null) {
+    const snapshots = join(record, ".aidlc-source-review");
+    const hasSnapshot = (dir: string): boolean => {
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return false;
+      }
+      return entries.some((entry) =>
+        entry.isFile() && entry.name.endsWith(".tsv")
+          ? true
+          : entry.isDirectory() && hasSnapshot(join(dir, entry.name))
+      );
+    };
+    if (hasSnapshot(snapshots)) return true;
+    const construction = join(record, "construction");
+    let units: string[] = [];
+    try {
+      units = readdirSync(construction);
+    } catch {
+      // No construction artifacts.
+    }
+    if (
+      units.some((unit) =>
+        existsSync(
+          join(
+            construction,
+            unit,
+            "code-generation",
+            "source-manifest.json",
+          ),
+        )
+      )
+    ) {
+      return true;
+    }
+  }
+
+  const expectedIntent = relativeRecordDir(projectDir, intent, space);
+  if (expectedIntent === null) return false;
+  const candidates = [
+    join(projectDir, ".aidlc", "worktree-meta.json"),
+  ];
+  const worktrees = join(projectDir, ".aidlc", "worktrees");
+  try {
+    for (const entry of readdirSync(worktrees, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        candidates.push(
+          join(worktrees, entry.name, ".aidlc", "worktree-meta.json"),
+        );
+      }
+    }
+  } catch {
+    // No worktree metadata.
+  }
+  return candidates.some((path) => {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+        intentRecord?: unknown;
+      };
+      return parsed.intentRecord === expectedIntent;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function hasModernSourceBindingEvidence(
+  projectDir: string,
+  rows: ReadonlyArray<{ event: string; block: string }>,
+  intent?: string,
+  space?: string,
+): boolean {
+  if (rows.some((row) => {
+    if (auditBlockField(row.block, "Source Baseline") !== null) return true;
+    if (
+      row.event === "REVIEW_COMPLETED" &&
+      auditBlockField(row.block, "Unit") !== null &&
+      (auditBlockField(row.block, "Unit Source Fingerprint") !== null ||
+        auditBlockField(row.block, "Unit Source Binding Bypass") !== null)
+    ) {
+      return true;
+    }
+    if (
+      (row.event === "WORKTREE_CREATED" || row.event === "BOLT_STARTED") &&
+      (auditBlockField(row.block, "Base commit") !== null ||
+        auditBlockField(row.block, "Base Source Listing") !== null)
+    ) {
+      return true;
+    }
+    if (
+      row.event === "SWARM_UNIT_CONVERGED" &&
+      (auditBlockField(row.block, "Source Commit") !== null ||
+        auditBlockField(row.block, "Source Freshness Bypass") !== null)
+    ) {
+      return true;
+    }
+    return row.event === "SWARM_SOURCE_MERGED";
+  })) return true;
+  return hasDurableSourceBindingEvidence(projectDir, intent, space);
+}
+
+function sourceBaselineBoundaryValue(
+  event: Pick<AuditShardEvent, "event" | "block">,
+  stageSlug: string,
+  unitMajor: boolean,
+): string | null | undefined {
+  if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) {
+    return undefined;
+  }
+  const qualifies =
+    event.event === "WORKFLOW_STARTED" ||
+    event.event === "STAGE_JUMPED" ||
+    (
+    event.event === "STAGE_STARTED" &&
+    !unitMajor &&
+    auditBlockField(event.block, "Stage") === stageSlug
+  );
+  return qualifies
+    ? auditBlockField(event.block, "Source Baseline")
+    : undefined;
+}
+
+function auditEventIsCrossShardTied<
+  T extends Pick<AuditShardEvent, "timestamp" | "shard">,
+>(
+  events: ReadonlyArray<T>,
+  index: number,
+  boundaryValue?: (event: T) => string | null | undefined,
+): boolean {
+  const event = events[index];
+  const eventValue = boundaryValue?.(event);
+  return events.some(
+    (candidate, otherIndex) =>
+      otherIndex !== index &&
+      candidate.timestamp === event.timestamp &&
+      candidate.shard !== event.shard &&
+      (boundaryValue === undefined ||
+        (
+          boundaryValue(candidate) !== undefined &&
+          boundaryValue(candidate) !== eventValue
+        )),
+  );
+}
+
 export function freshReviewReceipts(
   projectDir: string,
   stateContent: string,
@@ -4972,6 +6410,9 @@ export function freshReviewReceipts(
     sourceStaleProgress: null,
     sourceRecoverySpent: false,
     unitStale: new Set(),
+    freshUnitClaims: new Map(),
+    sourceBaseline: { state: "legacy" },
+    currentSourceListing: null,
     stageStaleProgress: null,
     unitStaleProgress: new Map(),
     stageIteration: null,
@@ -4985,44 +6426,113 @@ export function freshReviewReceipts(
   if (reviewClass === "none") return empty;
   const maxIterations =
     reviewClass === "advisory" ? 1 : stage.reviewer_max_iterations ?? 2;
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return empty;
-
   const RELEVANT = new Set([
     "WORKFLOW_STARTED",
     "STAGE_STARTED",
     "STAGE_JUMPED",
     "GATE_REJECTED",
+    "SESSION_STARTED",
+    "SESSION_RESUMED",
+    "BOLT_STARTED",
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const events: { pos: number; ts: string; event: string; block: string }[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const ev = auditBlockField(blocks[i], "Event");
-    if (!ev || !RELEVANT.has(ev)) continue;
-    events.push({ pos: i, ts: auditBlockField(blocks[i], "Timestamp") ?? "", event: ev, block: blocks[i] });
+  const allEvents = readAuditShardEvents(projectDir);
+  const modernSourceBindingEvidence =
+    hasModernSourceBindingEvidence(projectDir, allEvents);
+  const events = allEvents
+    .filter((row) => RELEVANT.has(row.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      // Same-shard ties have real append order. Cross-shard ties remain
+      // adjacent but causally unordered; authority-sensitive consumers below
+      // fail closed instead of trusting shard filename order.
+      if (a.shard === b.shard) return a.pos - b.pos;
+      return a.shardIndex - b.shardIndex;
+    });
+  if (events.length === 0) {
+    if (stage.workspace_requires === true && modernSourceBindingEvidence) {
+      empty.sourceBaseline = { state: "invalid" };
+    }
+    return empty;
   }
-  events.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+  const eventIsCrossShardTied = (index: number): boolean => {
+    return auditEventIsCrossShardTied(events, index);
+  };
+  const requestTieIsSessionBoundaryOnly = (index: number): boolean => {
+    const event = events[index];
+    let sawSessionBoundary = false;
+    for (let other = 0; other < events.length; other++) {
+      if (
+        other === index ||
+        events[other].timestamp !== event.timestamp ||
+        events[other].shard === event.shard
+      ) {
+        continue;
+      }
+      if (
+        events[other].event !== "SESSION_STARTED" &&
+        events[other].event !== "SESSION_RESUMED"
+      ) {
+        return false;
+      }
+      sawSessionBoundary = true;
+    }
+    return sawSessionBoundary;
+  };
 
-  const perUnit = stage.for_each === "unit-of-work";
+  const perUnit =
+    stage.for_each === "unit-of-work" &&
+    !usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    );
   const unitMajor =
     perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const dag = perUnit ? options.boltDag ?? resolveBoltDag(projectDir) : null;
+  const applicableUnits: Set<string> | null = dag?.state === "ok" ? new Set() : null;
+  if (dag?.state === "ok" && applicableUnits !== null) {
+    for (const unit of dag.units) {
+      if (
+        filterProducesByKind(
+          stage.produces_kinds,
+          stage.produces ?? [],
+          dag.unitKinds?.get(unit) ?? null,
+        ).length > 0
+      ) applicableUnits.add(unit);
+    }
+  }
 
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
-    if (e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED") {
-      floorIdx = i;
-      continue;
+    let boundary = e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED";
+    if (!boundary && auditBlockField(e.block, "Stage") === stage.slug) {
+      boundary = e.event === "GATE_REJECTED" || (
+        e.event === "STAGE_STARTED" &&
+        !unitMajor &&
+        !auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")
+      );
     }
-    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
-    if (e.event === "STAGE_STARTED" && !unitMajor) {
-      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
-      floorIdx = i;
-    } else if (e.event === "GATE_REJECTED") {
+    if (!boundary) continue;
+    const tiedCrossShard = events.some(
+      (candidate, index) =>
+        index !== i &&
+        candidate.timestamp === e.timestamp &&
+        candidate.shard !== e.shard,
+    );
+    // A boundary involved in a cross-shard same-second tie floors the entire
+    // timestamp group. No receipt or artifact row in that unordered group may
+    // survive based on shard filename order. A later unambiguous boundary
+    // restores ordinary accounting.
+    if (tiedCrossShard) {
+      let end = i;
+      while (end + 1 < events.length && events[end + 1].timestamp === e.timestamp) end++;
+      floorIdx = end;
+      i = end;
+    } else {
       floorIdx = i;
     }
   }
@@ -5045,6 +6555,21 @@ export function freshReviewReceipts(
       iteration: number;
       recovery: boolean;
       fingerprint: string | null;
+      timestamp: string;
+      shard: string;
+      suspensionActive: boolean;
+    }
+  >();
+  const modernUnitReceipts = new Map<
+    string,
+    {
+      fingerprint: string | null;
+      bypass: boolean;
+      order: number;
+      timestamp: string;
+      shard: string;
+      iteration: number;
+      recovery: boolean;
     }
   >();
   let stageVerdict: ReviewVerdict | null = null;
@@ -5057,8 +6582,66 @@ export function freshReviewReceipts(
   let stageIteration: number | null = null;
   let stageReceiptRecovery = false;
   let stagePending: PendingReviewProgress | null = null;
+  const resetUnitReviewState = (unit: string): void => {
+    for (const [key, request] of pendingRequests) {
+      if (request.unit === unit) pendingRequests.delete(key);
+    }
+    unitVerdicts.delete(unit);
+    unitStale.delete(unit);
+    unitStaleProgress.delete(unit);
+    unitIterations.delete(unit);
+    unitReceiptRecovery.delete(unit);
+    unitPending.delete(unit);
+    if (newestSourceUnit === unit) {
+      newestSourceFingerprint = null;
+      newestSourceUnit = null;
+      newestSourceProgress = null;
+      sourceRecoverySpent = false;
+    }
+  };
+  let groupTimestamp: string | null = null;
+  let deferredSessionBoundary = false;
+  const deferredBoltUnits = new Set<string>();
+  const applyDeferredBoundaries = (): void => {
+    if (deferredSessionBoundary) {
+      for (const request of pendingRequests.values()) {
+        request.suspensionActive = false;
+      }
+    }
+    for (const unit of deferredBoltUnits) resetUnitReviewState(unit);
+    deferredSessionBoundary = false;
+    deferredBoltUnits.clear();
+  };
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
+    if (groupTimestamp !== null && e.timestamp !== groupTimestamp) {
+      applyDeferredBoundaries();
+    }
+    groupTimestamp = e.timestamp;
+    if (e.event === "SESSION_STARTED" || e.event === "SESSION_RESUMED") {
+      if (eventIsCrossShardTied(i)) {
+        deferredSessionBoundary = true;
+        continue;
+      }
+      for (const request of pendingRequests.values()) {
+        request.suspensionActive = false;
+      }
+      continue;
+    }
+    if (e.event === "BOLT_STARTED" && perUnit) {
+      const units = (auditBlockField(e.block, "Bolt names") ?? "")
+        .split(",")
+        .map((unit) => unit.trim())
+        .filter((unit) => unit.length > 0);
+      if (eventIsCrossShardTied(i)) {
+        for (const unit of units) deferredBoltUnits.add(unit);
+        continue;
+      }
+      for (const unit of units) {
+        resetUnitReviewState(unit);
+      }
+      continue;
+    }
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
       const file = auditBlockField(e.block, "File");
       if (!file) continue;
@@ -5075,39 +6658,29 @@ export function freshReviewReceipts(
         stageVerdict = null;
         stageIteration = null;
         stageReceiptRecovery = false;
+      } else if (targetUnit === null) {
+        for (const unit of unitVerdicts.keys()) {
+          unitStale.add(unit);
+          unitStaleProgress.set(unit, {
+            nextIteration: (unitIterations.get(unit) ?? 0) + 1,
+            recoverySpent: unitReceiptRecovery.get(unit) ?? false,
+          });
+        }
+        unitVerdicts.clear();
+        unitIterations.clear();
+        unitReceiptRecovery.clear();
+        modernUnitReceipts.clear();
       } else {
-        if (stageVerdict !== null) {
-          stageStale = true;
-          stageStaleProgress = {
-            nextIteration: (stageIteration ?? 0) + 1,
-            recoverySpent: stageReceiptRecovery,
-          };
+        if (unitVerdicts.delete(targetUnit)) {
+          unitStale.add(targetUnit);
+          unitStaleProgress.set(targetUnit, {
+            nextIteration: (unitIterations.get(targetUnit) ?? 0) + 1,
+            recoverySpent: unitReceiptRecovery.get(targetUnit) ?? false,
+          });
         }
-        stageVerdict = null;
-        stageIteration = null;
-        stageReceiptRecovery = false;
-        if (targetUnit === null) {
-          for (const unit of unitVerdicts.keys()) {
-            unitStale.add(unit);
-            unitStaleProgress.set(unit, {
-              nextIteration: (unitIterations.get(unit) ?? 0) + 1,
-              recoverySpent: unitReceiptRecovery.get(unit) ?? false,
-            });
-          }
-          unitVerdicts.clear();
-          unitIterations.clear();
-          unitReceiptRecovery.clear();
-        } else {
-          if (unitVerdicts.delete(targetUnit)) {
-            unitStale.add(targetUnit);
-            unitStaleProgress.set(targetUnit, {
-              nextIteration: (unitIterations.get(targetUnit) ?? 0) + 1,
-              recoverySpent: unitReceiptRecovery.get(targetUnit) ?? false,
-            });
-          }
-          unitIterations.delete(targetUnit);
-          unitReceiptRecovery.delete(targetUnit);
-        }
+        unitIterations.delete(targetUnit);
+        unitReceiptRecovery.delete(targetUnit);
+        modernUnitReceipts.delete(targetUnit);
       }
       continue;
     }
@@ -5124,8 +6697,17 @@ export function freshReviewReceipts(
     if (!iterationField || !/^[1-9][0-9]*$/.test(iterationField)) continue;
     const iteration = Number(iterationField);
     const unit = auditBlockField(e.block, "Unit") || undefined;
+    if (
+      perUnit &&
+      applicableUnits !== null &&
+      (unit === undefined || !applicableUnits.has(unit))
+    ) continue;
     const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
+      const tiedAcrossShards = eventIsCrossShardTied(i);
+      const sessionBoundaryOnlyTie =
+        tiedAcrossShards && requestTieIsSessionBoundaryOnly(i);
+      if (tiedAcrossShards && !sessionBoundaryOnlyTie) continue;
       const previous = pendingRequests.get(requestKey);
       const recovery =
         previous?.recovery === true ||
@@ -5136,13 +6718,29 @@ export function freshReviewReceipts(
         iteration,
         recovery,
         fingerprint: auditBlockField(e.block, "Artifact Fingerprint"),
+        timestamp: e.timestamp,
+        shard: e.shard,
+        suspensionActive:
+          recovery &&
+          !sessionBoundaryOnlyTie &&
+          /^sha256:[0-9a-f]{64}$/.test(
+            auditBlockField(e.block, "Artifact Fingerprint") ?? "",
+          ),
       });
       continue;
     }
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    if (eventIsCrossShardTied(i)) {
+      pendingRequests.delete(requestKey);
+      continue;
+    }
     const request = pendingRequests.get(requestKey);
-    if (!request || !pendingRequests.delete(requestKey)) continue;
+    if (
+      !request ||
+      (request.timestamp === e.timestamp && request.shard !== e.shard) ||
+      !pendingRequests.delete(requestKey)
+    ) continue;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
     const requestedFingerprint = request.fingerprint;
     const artifactFingerprintUsable =
@@ -5155,7 +6753,10 @@ export function freshReviewReceipts(
       projectDir,
       stage,
       unit,
-      { boltDag: options.boltDag },
+      {
+        boltDag: options.boltDag,
+        stateContent,
+      },
     );
     const fingerprintUsable =
       artifactFingerprintUsable && currentFingerprint !== null;
@@ -5175,7 +6776,7 @@ export function freshReviewReceipts(
       // A below-cap NOT-READY is repair progress, not a freshness boundary;
       // otherwise the expected repair edit would consume recovery prematurely.
       const sourceFingerprint = auditBlockField(e.block, "Source Fingerprint");
-      if (sourceFingerprint) {
+      if (sourceFingerprint && !eventIsCrossShardTied(i)) {
         newestSourceFingerprint = sourceFingerprint;
         newestSourceUnit = unit ?? null;
         newestSourceProgress = {
@@ -5187,8 +6788,18 @@ export function freshReviewReceipts(
     if (terminalVerdict === null) {
       if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
       const pending: PendingReviewProgress = fingerprintMatches
-        ? { state: "repair-required", iteration }
-        : { state: "outstanding", iteration: iteration + 1 };
+        ? {
+            state: "repair-required",
+            iteration,
+            recovery: request.recovery,
+            suspensionActive: false,
+          }
+        : {
+            state: "outstanding",
+            iteration: iteration + 1,
+            recovery: request.recovery,
+            suspensionActive: false,
+          };
       if (unit) {
         unitVerdicts.delete(unit);
         unitIterations.delete(unit);
@@ -5225,6 +6836,15 @@ export function freshReviewReceipts(
       unitIterations.set(unit, iteration);
       unitReceiptRecovery.set(unit, request.recovery);
       unitPending.delete(unit);
+      modernUnitReceipts.set(unit, {
+        fingerprint: auditBlockField(e.block, "Unit Source Fingerprint"),
+        bypass: auditBlockField(e.block, "Unit Source Binding Bypass") === "true",
+        order: i,
+        timestamp: e.timestamp,
+        shard: e.shard,
+        iteration,
+        recovery: request.recovery,
+      });
     } else {
       stageVerdict = terminalVerdict;
       stageIteration = iteration;
@@ -5234,32 +6854,223 @@ export function freshReviewReceipts(
       stageStaleProgress = null;
     }
   }
+  applyDeferredBoundaries();
 
   for (const request of pendingRequests.values()) {
     const pending: PendingReviewProgress = {
       state: "retry-required",
       iteration: request.iteration,
+      recovery: request.recovery,
+      suspensionActive: request.suspensionActive,
     };
     if (request.unit) {
-      unitVerdicts.delete(request.unit);
+      if (!request.recovery) unitVerdicts.delete(request.unit);
       unitIterations.delete(request.unit);
       unitPending.set(request.unit, pending);
     } else {
-      stageVerdict = null;
+      if (!request.recovery) stageVerdict = null;
       stageIteration = null;
       stagePending = pending;
     }
   }
 
-  const currentSourceFingerprint =
-    stage.workspace_requires === true && newestSourceFingerprint !== null
-      ? workspaceSourceFingerprint(projectDir)
-      : null;
+  const sourceFreshnessApplies =
+    stage.workspace_requires === true &&
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1";
+  const needsCurrentSource =
+    stage.workspace_requires === true &&
+    (newestSourceFingerprint !== null || modernUnitReceipts.size > 0);
+  // One shared temp-index pass supplies BOTH global reconciliation and every
+  // per-unit comparison. Never recompute inside the unit loop.
+  const currentSourceState = needsCurrentSource
+    ? workspaceSourceState(projectDir)
+    : null;
+  const currentSourceFingerprint = currentSourceState?.fingerprint ?? null;
+  const currentSourceListing = currentSourceState?.listing ?? null;
   const sourceStale =
     newestSourceFingerprint !== null &&
     (newestSourceFingerprint === UNBINDABLE_FINGERPRINT ||
       currentSourceFingerprint === null ||
       currentSourceFingerprint !== newestSourceFingerprint);
+
+  const freshUnitClaims = new Map<string, SourceClaimModel>();
+  if (sourceFreshnessApplies && currentSourceListing !== null) {
+    const newerFreshClaims: SourceClaimModel[] = [];
+    const receiptsNewestFirst = [...modernUnitReceipts.entries()]
+      .filter(([unit]) => unitVerdicts.has(unit))
+      .sort((a, b) => b[1].order - a[1].order);
+    const ambiguousReceiptTimes = new Set(
+      receiptsNewestFirst
+        .filter(([, receipt], index, all) =>
+          all.some(
+            ([, other], otherIndex) =>
+              otherIndex !== index &&
+              other.timestamp === receipt.timestamp &&
+              other.shard !== receipt.shard,
+          ),
+        )
+        .map(([, receipt]) => receipt.timestamp),
+    );
+    for (const [unit, receipt] of receiptsNewestFirst) {
+      // Shielding needs a real newest claimant. Equal-second receipts from
+      // different shards are causally unordered, so invalidate that tied set
+      // rather than let shard filename order choose authority.
+      if (ambiguousReceiptTimes.has(receipt.timestamp)) {
+        unitVerdicts.delete(unit);
+        unitStale.add(unit);
+        unitStaleProgress.set(unit, {
+          nextIteration: receipt.iteration + 1,
+          recoverySpent: receipt.recovery,
+        });
+        continue;
+      }
+      // No modern binding marker at all is migration evidence: keep the #629
+      // global policy for this unit and do not invent claims from current bytes.
+      if (receipt.fingerprint === null && !receipt.bypass) continue;
+      let stale = receipt.bypass;
+      let claimModel: SourceClaimModel | null = null;
+      let reviewedListing: WorkspaceSourceListing | null = null;
+      if (!stale && receipt.fingerprint === UNBINDABLE_FINGERPRINT) stale = true;
+      if (!stale && receipt.fingerprint !== null) {
+        const snapshot = readUnitSourceSnapshot(
+          projectDir,
+          stage.slug,
+          unit,
+          receipt.fingerprint,
+        );
+        const manifest = readUnitSourceManifest(projectDir, stage.slug, unit);
+        if (snapshot === null || !manifest.ok || snapshot.manifestSha256 !== manifest.rawBytesSha256) {
+          stale = true;
+        } else {
+          claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
+          reviewedListing = snapshot.listing;
+          for (const [pathKey, reviewedOid] of reviewedListing) {
+            if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
+            if (
+              !sourceListingEntriesEqual(
+                currentSourceListing.get(pathKey),
+                reviewedOid,
+              )
+            ) {
+              stale = true;
+              break;
+            }
+          }
+          if (!stale) {
+            // Both exact and directory claims bind future additions. An exact
+            // claim that was absent at review cannot launder a later-created
+            // path; over-claiming therefore invalidates more receipts, never
+            // fewer. A newer validated claimant may still shield the path.
+            for (const [pathKey] of currentSourceListing) {
+              const newlyPresentExact = manifest.claims.has(pathKey) && !reviewedListing.has(pathKey);
+              const newlyPresentUnderPrefix =
+                manifest.prefixes.some((prefix) => pathKey.startsWith(prefix)) &&
+                !reviewedListing.has(pathKey);
+              if (!newlyPresentExact && !newlyPresentUnderPrefix) continue;
+              if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
+              stale = true;
+              break;
+            }
+          }
+        }
+      }
+      if (stale) {
+        unitVerdicts.delete(unit);
+        unitStale.add(unit);
+        unitStaleProgress.set(unit, {
+          nextIteration: receipt.iteration + 1,
+          recoverySpent: receipt.recovery,
+        });
+        continue;
+      }
+      if (claimModel !== null) {
+        freshUnitClaims.set(unit, claimModel);
+        newerFreshClaims.push(claimModel);
+      }
+    }
+  } else if (sourceFreshnessApplies && modernUnitReceipts.size > 0) {
+    for (const [unit, receipt] of modernUnitReceipts) {
+      if (!unitVerdicts.has(unit)) continue;
+      if (receipt.fingerprint === null && !receipt.bypass) continue;
+      unitVerdicts.delete(unit);
+      unitStale.add(unit);
+      unitStaleProgress.set(unit, {
+        nextIteration: receipt.iteration + 1,
+        recoverySpent: receipt.recovery,
+      });
+    }
+  }
+
+  // Anchor the unclaimed-path baseline to the stage's real entry. Unit-major
+  // NEVER trusts STAGE_STARTED because shell/generator source writes can precede
+  // that row without ARTIFACT_* evidence. GATE_REJECTED resets review accounting
+  // but never re-anchors cumulative manifests: doing so would grandfather any
+  // unclaimed source present when the human requested changes. Synthetic
+  // single-stage rows cannot affect the floor.
+  let sourceBaseline: SourceBaselineResult = { state: "legacy" };
+  if (stage.workspace_requires === true) {
+    let boundary = -1;
+    for (let i = 0; i < events.length; i++) {
+      if (auditBlockField(events[i].block, "Workflow")?.startsWith("single-stage:")) continue;
+      if (
+        events[i].event === "WORKFLOW_STARTED" ||
+        events[i].event === "STAGE_JUMPED"
+      ) {
+        boundary = i;
+      }
+    }
+    let firstWork = events.length;
+    for (let i = Math.max(boundary, 0); i < events.length; i++) {
+      const event = events[i];
+      if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) continue;
+      if (auditBlockField(event.block, "Stage") !== stage.slug) continue;
+      if (event.event === "REVIEW_REQUESTED") {
+        firstWork = i;
+        break;
+      }
+      if (event.event === "ARTIFACT_CREATED" || event.event === "ARTIFACT_UPDATED") {
+        const file = auditBlockField(event.block, "File");
+        if (file && producesArtifactUnit(stage, file, recordedRepos) !== undefined) {
+          firstWork = i;
+          break;
+        }
+      }
+    }
+    let baselineField: string | null = null;
+    for (let i = Math.max(boundary, 0); i < firstWork; i++) {
+      const event = events[i];
+      const field = sourceBaselineBoundaryValue(
+        event,
+        stage.slug,
+        unitMajor,
+      );
+      if (field === undefined) continue;
+      if (
+        field !== null &&
+        auditEventIsCrossShardTied(
+          events,
+          i,
+          (candidate) =>
+            sourceBaselineBoundaryValue(
+              candidate,
+              stage.slug,
+              unitMajor,
+            ),
+        )
+      ) {
+        baselineField = UNBINDABLE_FINGERPRINT;
+      } else {
+        baselineField = field;
+      }
+    }
+    if (baselineField === UNBINDABLE_FINGERPRINT) sourceBaseline = { state: "unbindable" };
+    else if (baselineField !== null) {
+      const listing = readBaselineSourceSnapshot(projectDir, stage.slug, baselineField);
+      sourceBaseline = listing === null ? { state: "invalid" } : { state: "ready", listing };
+    } else if (modernSourceBindingEvidence) {
+      sourceBaseline = { state: "invalid" };
+    }
+  }
 
   return {
     stageVerdict,
@@ -5278,6 +7089,9 @@ export function freshReviewReceipts(
       : null,
     sourceRecoverySpent,
     unitStale,
+    freshUnitClaims,
+    sourceBaseline,
+    currentSourceListing: sourceFreshnessApplies ? currentSourceListing : null,
     stageStaleProgress,
     unitStaleProgress,
     stageIteration,
@@ -5340,9 +7154,11 @@ export function repoDir(projectDir: string, repoName: string): string {
 //
 // Multi-repo: the intent's recorded repo set (intentRepos), each resolved via
 // repoDir(); no recorded repos = the legacy single-repo default (projectDir).
-// Returns null when ANY target dir is not a usable git checkout. New receipts
-// record that explicitly as `unbindable` and completion fails closed; only a
-// legacy receipt with no fingerprint field keeps the migration fail-open.
+// An unchanged no-Git greenfield whose only paths are the excluded AIDLC shell
+// binds to the canonical empty listing. Returns null when any application path
+// exists without Git, or when any recorded repo is not a usable checkout. New
+// receipts record null explicitly as `unbindable` and completion fails closed;
+// only a legacy receipt with no fingerprint field keeps the migration fail-open.
 
 // The record tree and the CLI/IDE workspace shell are anchored at the top level
 // of the dir that CARRIES the shell: the workspace roof, or a Bolt worktree
@@ -5385,6 +7201,85 @@ const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
 const AIDLC_SENSOR_CACHE_GLOBS = [
   ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
 ];
+
+interface WorkspaceSourceExclusionContext {
+  carriesWorkspaceShell: boolean;
+  exactPaths: string[];
+}
+
+function worktreeSourceExclusionContext(
+  projectDir: string,
+): WorkspaceSourceExclusionContext | null {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) {
+    return { carriesWorkspaceShell: true, exactPaths: [] };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(metaPath, "utf-8"));
+  } catch {
+    return null;
+  }
+  if (
+    !isPlainObject(parsed) ||
+    !("repoSelector" in parsed) ||
+    (
+      parsed.repoSelector !== null &&
+      (typeof parsed.repoSelector !== "string" ||
+        parsed.repoSelector.length === 0)
+    )
+  ) {
+    return null;
+  }
+  if (parsed.repoSelector === null) {
+    return { carriesWorkspaceShell: true, exactPaths: [] };
+  }
+  const exactPaths = [
+    ".aidlc/worktree-meta.json",
+    ".aidlc/base-source-listing.tsv",
+    "aidlc/.aidlc-clone-id",
+  ];
+  if ("intentRecord" in parsed) {
+    if (
+      typeof parsed.intentRecord !== "string" ||
+      !/^aidlc\/spaces\/[^/]+\/intents\/[^/]+$/.test(parsed.intentRecord)
+    ) {
+      return null;
+    }
+    exactPaths.push(`${parsed.intentRecord}/`);
+  }
+  return { carriesWorkspaceShell: false, exactPaths };
+}
+
+function sourceGitExclusionPathspecs(
+  carriesWorkspaceShell: boolean,
+  repoDir?: string,
+): string[] {
+  let exactPaths: string[] = [];
+  if (!carriesWorkspaceShell && repoDir !== undefined) {
+    const context = worktreeSourceExclusionContext(repoDir);
+    if (context !== null && !context.carriesWorkspaceShell) {
+      exactPaths = context.exactPaths;
+    }
+  }
+  return [
+    ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
+    ...exactPaths.map((path) => `:(top)${path}`),
+    ...AIDLC_SENSOR_CACHE_GLOBS,
+  ];
+}
+
+export function workspaceSourceExclusionPathspecs(
+  projectDir: string,
+): string[] | null {
+  const context = worktreeSourceExclusionContext(projectDir);
+  return context === null
+    ? null
+    : sourceGitExclusionPathspecs(
+        context.carriesWorkspaceShell,
+        projectDir,
+      );
+}
 
 // Git runs a configured `clean` filter as content enters the index, so the tree
 // written below hashes the FILTERED bytes - not the bytes sitting in the
@@ -5541,9 +7436,173 @@ export function filteredRawIndexEntries(
   return cleanFilteredRawLines(repoDir, env, paths)?.entries ?? null;
 }
 
+function sourceListingEntry(mode: string, oid: string): string | null {
+  if (!/^\d{6}$/.test(mode) || !/^[0-9a-f]{40,64}$/.test(oid)) return null;
+  return `${mode} ${oid}`;
+}
+
+function replaceSourceListingEntryOid(entry: string | undefined, oid: string): string | null {
+  const parsed = entry ? /^(\d{6}) [0-9a-f]{40,64}$/.exec(entry) : null;
+  return parsed === null ? null : sourceListingEntry(parsed[1], oid);
+}
+
+/**
+ * Reconstruct the exact checked-out source listing for an immutable commit
+ * without registering a Git worktree or touching the caller's index/worktree.
+ * A temporary index is seeded from the commit and checkout-index populates an
+ * ordinary directory, so clean/process/ident raw-byte folding sees the same
+ * files and repository-local configuration as a real worktree checkout.
+ * `carriesWorkspaceShell` is required for the same reason as gitTreeSourceState:
+ * sibling repositories keep top-level aidlc/ and .aidlc/ as application source.
+ */
+export function gitCommitSourceListing(
+  repoDir: string,
+  commit: string,
+  carriesWorkspaceShell: boolean,
+): WorkspaceSourceListing | null {
+  if (!isGitRepoDir(repoDir) || !/^[0-9a-f]{40,64}$/.test(commit)) return null;
+  const root = join(tmpdir(), `aidlc-commit-listing-${process.pid}-${randomUUID().slice(0, 8)}`);
+  const indexFile = join(root, "index");
+  const checkoutDir = join(root, "checkout");
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    mkdirSync(checkoutDir, { recursive: true });
+    const readTree = spawnSync("git", ["-C", repoDir, "read-tree", commit], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    if (readTree.status !== 0) return null;
+    const checkout = spawnSync(
+      "git",
+      ["-C", repoDir, "checkout-index", "-a", "-f", `--prefix=${checkoutDir}${sep}`],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (checkout.status !== 0) return null;
+
+    const shellPatterns =
+      sourceGitExclusionPathspecs(carriesWorkspaceShell, repoDir);
+    const excluded = spawnSync(
+      "git",
+      [
+        "-C",
+        repoDir,
+        "rm",
+        "-r",
+        "-q",
+        "-f",
+        "--cached",
+        "--ignore-unmatch",
+        "--",
+        ...shellPatterns,
+      ],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (excluded.status !== 0) return null;
+
+    const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    if (listed.status !== 0) return null;
+    const listing: WorkspaceSourceListing = new Map();
+    const regularPaths: string[] = [];
+    for (const record of listed.stdout.split("\0")) {
+      if (!record) continue;
+      const tab = record.indexOf("\t");
+      if (tab === -1) return null;
+      const match = /^(\d{6}) ([0-9a-f]{40,64}) \d+$/.exec(record.slice(0, tab));
+      const path = record.slice(tab + 1);
+      if (match === null || !path) return null;
+      const entry = sourceListingEntry(match[1], match[2]);
+      if (entry === null) return null;
+      listing.set(`\0${path}`, entry);
+      if (match[1] === "100644" || match[1] === "100755") regularPaths.push(path);
+    }
+
+    // Query attributes/config through the owning repository while pointing Git
+    // at the ordinary reconstructed checkout. The worktree bytes hashed here
+    // therefore match a real checkout without registering one.
+    const gitDir = spawnSync("git", ["-C", repoDir, "rev-parse", "--absolute-git-dir"], {
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    if (gitDir.status !== 0 || !gitDir.stdout.trim()) return null;
+    const checkoutEnv = {
+      ...env,
+      GIT_DIR: gitDir.stdout.trim(),
+      GIT_WORK_TREE: checkoutDir,
+    };
+    const raw = cleanFilteredRawLines(checkoutDir, checkoutEnv, regularPaths);
+    if (raw === null) return null;
+    for (const entry of raw.entries) {
+      const key = `\0${entry.path}`;
+      const replacement = replaceSourceListingEntryOid(listing.get(key), entry.sha);
+      if (replacement === null) return null;
+      listing.set(key, replacement);
+    }
+    return listing;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+export type WorkspaceSourceListing = Map<string, string>;
+
+/**
+ * New listings bind mode/type plus OID. Three-column snapshots from the
+ * immediately preceding format carry only an OID; they migrate by content
+ * equality while every newly written snapshot remains mode-aware.
+ */
+export function sourceListingEntriesEqual(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  const leftModern = /^\d{6} ([0-9a-f]{40,64})$/.exec(left);
+  const rightModern = /^\d{6} ([0-9a-f]{40,64})$/.exec(right);
+  if (leftModern !== null && rightModern !== null) return false;
+  const leftOid = leftModern?.[1] ?? (/^[0-9a-f]{40,64}$/.test(left) ? left : null);
+  const rightOid =
+    rightModern?.[1] ?? (/^[0-9a-f]{40,64}$/.test(right) ? right : null);
+  return leftOid !== null && leftOid === rightOid;
+}
+
+export interface WorkspaceSourceState {
+  fingerprint: string;
+  listing: WorkspaceSourceListing;
+}
+
+function emptyNoGitWorkspaceSourceState(
+  projectDir: string,
+): WorkspaceSourceState | null {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(projectDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    const path = `${entry.name}${entry.isDirectory() ? "/" : ""}`;
+    if (!sourcePathIsExcluded(path, true)) return null;
+  }
+  const serialized = serializeSourceListing(new Map());
+  return {
+    fingerprint: sourceListingSha256(serialized),
+    listing: new Map(),
+  };
+}
+
+interface GitTreeSourceState extends WorkspaceSourceState {}
+
 // `carriesWorkspaceShell` is REQUIRED, never defaulted: a new call site must
 // decide, so the shell exclusion cannot leak into a derived dir by omission.
-function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): string | null {
+// The fingerprint and per-path listing deliberately come from this SAME temp
+// index pass. A caller that needs both must use workspaceSourceState(), rather
+// than independently invoking the compatibility fingerprint/listing wrappers.
+function gitTreeSourceState(repoDir: string, carriesWorkspaceShell: boolean): GitTreeSourceState | null {
   if (!isGitRepoDir(repoDir)) return null;
   const idx = join(
     tmpdir(),
@@ -5556,100 +7615,113 @@ function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): st
     spawnSync("git", ["-C", repoDir, "read-tree", "HEAD"], { env, encoding: "utf-8" });
     const add = spawnSync("git", ["-C", repoDir, "add", "-A"], { env, encoding: "utf-8" });
     if (add.status !== 0) return null;
-    // Drop the aidlc workspace family from the fingerprint, at ANY depth: the
-    // record tree is COMMITTED by design and mutates on every engine action
-    // (the very REVIEW_COMPLETED append this fingerprint is stamped into,
-    // gate rows, state updates), so including it would make every receipt
-    // stale by the time the completion guard recomputes. Record-artifact
-    // freshness is already covered by the audit-event invalidation; this
-    // fingerprint is the APPLICATION SOURCE binding. --ignore-unmatch keeps
-    // this a no-op when nothing matches (sibling repos with no aidlc tree).
-    const excluded = [
-      ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
-      ...AIDLC_SENSOR_CACHE_GLOBS,
-    ];
+    // Drop the aidlc workspace family from the fingerprint and listing. The
+    // root shell names apply only where the workspace shell lives; the sensor
+    // cache glob remains depth-tolerant exactly as documented above.
+    const excluded = sourceGitExclusionPathspecs(
+      carriesWorkspaceShell,
+      repoDir,
+    );
     if (excluded.length > 0) {
-      spawnSync(
+      const removed = spawnSync(
         "git",
-        ["-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...excluded],
+        [
+          "-C",
+          repoDir,
+          "rm",
+          "-r",
+          "-q",
+          "-f",
+          "--cached",
+          "--ignore-unmatch",
+          "--",
+          ...excluded,
+        ],
         { env, encoding: "utf-8" },
       );
+      if (removed.status !== 0) return null;
     }
     const wt = spawnSync("git", ["-C", repoDir, "write-tree"], { env, encoding: "utf-8" });
     if (wt.status !== 0) return null;
-    const sha = wt.stdout.trim();
-    if (sha.length === 0) return null;
+    const treeSha = wt.stdout.trim();
+    if (treeSha.length === 0) return null;
 
-    // A submodule is recorded in the tree above as a gitlink (its checked-out
-    // commit sha), so editing its tracked source WITHOUT committing inside the
-    // submodule leaves the gitlink - and therefore `sha` above - unchanged,
-    // shipping a reviewed-then-edited submodule as if nothing had changed.
-    // Fold each INITIALIZED submodule's own fingerprint (recursive - a
-    // submodule can itself nest submodules) into the parent's. An
-    // uninitialized submodule has no materialized content in the workspace,
-    // so it contributes nothing to bind. Gitlinks are read straight off the
-    // temp index (mode 160000 in `ls-files -s`) rather than via `git submodule
-    // status`, which spawns the submodule subsystem and measured 1s+ per call
-    // on Windows - a cost this fingerprint (recomputed on every completion
-    // route) cannot afford.
-    //
-    // `-z` is required, not cosmetic (#646 review): without
-    // it, git's default `core.quotePath` wraps a path containing a non-ASCII
-    // byte or other "unusual" character in double quotes and C-escapes it
-    // (e.g. `"vendor/caf\303\251"` for `vendor/café`) - parsed as a literal
-    // string, that quoted-and-escaped text never resolves to the real
-    // on-disk path, so `isGitRepoDir` silently reports "not a submodule" and
-    // the fingerprint drops it entirely (a reviewed-then-edited submodule at
-    // such a path would ship unreviewed). `-z` disables quoting and
-    // NUL-terminates each record instead of newline-terminating it, so the
-    // path bytes come back exactly as they are on disk.
-    // A large index overruns the default buffer: the call then fails with
-    // ENOBUFS, and every submodule and clean-filtered path drops out of the
-    // fingerprint while the bare tree sha is still returned as if the repo had
-    // neither (#646 review - reproduced at 8,000 tracked paths / 1.68 MB of
-    // listing). Sized well past any index this is expected to meet.
-    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 });
-    // Fail closed. A listing that could not be read is not evidence that the
-    // repository has no submodules and no filtered paths, and the caller reads
-    // null as "cannot bind this workspace" rather than as a clean tree.
+    // One NUL-terminated index enumeration supplies all three consumers:
+    // ordinary per-path oids, initialized-submodule recursion, and the clean-
+    // filter raw-byte scan. Keeping this walk shared preserves Git path bytes
+    // (including tabs/newlines/non-ASCII) and avoids a second index traversal.
+    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
     if (lsFiles.status !== 0) return null;
-    const subLines: string[] = [];
-    // The same listing feeds the clean-filter scan below, so binding raw bytes
-    // costs no extra walk of the index.
+
+    const listing: WorkspaceSourceListing = new Map();
+    const submodules: string[] = [];
     const blobPaths: string[] = [];
     for (const record of lsFiles.stdout.split("\0")) {
+      if (record.length === 0) continue;
       const tabIdx = record.indexOf("\t");
-      if (tabIdx === -1) continue;
+      if (tabIdx === -1) return null;
+      const metadata = record.slice(0, tabIdx);
       const entryPath = record.slice(tabIdx + 1);
-      if (!entryPath) continue;
-      if (!record.startsWith("160000 ")) {
-        // Attribute filters apply to regular blobs, not mode-120000 symlinks.
-        // Hashing a symlink path with `hash-object --no-filters` follows its
-        // destination, making external target bytes part of the fingerprint.
-        if (/^100(?:644|755) /.test(record)) blobPaths.push(entryPath);
-        continue;
+      const parsed = /^(\d{6}) ([0-9a-f]{40,64}) (\d+)$/.exec(metadata);
+      if (parsed === null || entryPath.length === 0) return null;
+      const mode = parsed[1];
+      const oid = parsed[2];
+      const entry = sourceListingEntry(mode, oid);
+      if (entry === null) return null;
+      listing.set(entryPath, entry);
+      if (mode === "160000") {
+        submodules.push(entryPath);
+      } else if (mode === "100644" || mode === "100755") {
+        // Attribute filters apply only to regular blobs, never symlinks/gitlinks.
+        blobPaths.push(entryPath);
       }
-      const subDir = join(repoDir, entryPath);
-      if (!isGitRepoDir(subDir)) continue;
-      // A submodule's own `aidlc/` is the submodule's application source.
-      const subFp = gitTreeFingerprint(subDir, false);
-      if (subFp === null) return null;
-      subLines.push(`${entryPath}=${subFp}`);
     }
+
+    const subLines: string[] = [];
+    for (const entryPath of submodules) {
+      const subDir = join(repoDir, entryPath);
+      // An uninitialized submodule has no materialized source beyond its gitlink.
+      if (!isGitRepoDir(subDir)) continue;
+      // A submodule's own `aidlc/` is application source, not the parent shell.
+      const subState = gitTreeSourceState(subDir, false);
+      if (subState === null) return null;
+      subLines.push(`${entryPath}=${subState.fingerprint}`);
+      for (const [path, oid] of subState.listing) {
+        listing.set(`${entryPath}/${path}`, oid);
+      }
+    }
+
     const raw = cleanFilteredRawLines(repoDir, env, blobPaths);
     if (raw === null) return null;
+    // A lossy clean/process/ident transform must not hide the worktree bytes.
+    // Replace the indexed oid for each affected path with its raw no-filter oid
+    // while retaining the index mode/type in the canonical listing.
+    for (const entry of raw.entries) {
+      const replacement = replaceSourceListingEntryOid(
+        listing.get(entry.path),
+        entry.sha,
+      );
+      if (replacement === null) return null;
+      listing.set(entry.path, replacement);
+    }
+
     const rawLines = raw.lines;
-    // A repo with neither submodules nor clean-filtered paths keeps returning
-    // the bare tree sha, so the common workspace's fingerprint is unchanged by
-    // this and receipts stamped before it stay comparable.
-    if (subLines.length === 0 && rawLines.length === 0) return sha;
-    subLines.sort();
-    rawLines.sort();
-    // `raw:` prefixes the filtered-content rows so they cannot be confused with
-    // a submodule row whose path and sha happen to line up.
-    return createHash("sha256")
-      .update([sha, ...subLines, ...rawLines].join("\n"))
-      .digest("hex");
+    let fingerprint = treeSha;
+    // Preserve the pre-listing fingerprint VALUE byte-for-byte: the common case
+    // remains the bare tree oid; only initialized submodules/raw-filter paths
+    // fold into the existing sha256 composite, with the same sorted line form.
+    if (subLines.length > 0 || rawLines.length > 0) {
+      subLines.sort();
+      rawLines.sort();
+      fingerprint = createHash("sha256")
+        .update([treeSha, ...subLines, ...rawLines].join("\n"))
+        .digest("hex");
+    }
+    return { fingerprint, listing };
   } finally {
     rmSync(idx, { force: true });
   }
@@ -5660,20 +7732,1102 @@ function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): st
 // pre-#629 receipt that carries no field at all (#646 review).
 export const UNBINDABLE_FINGERPRINT = "unbindable";
 
-export function workspaceSourceFingerprint(projectDir: string): string | null {
-  const repos = intentRepos(projectDir);
-  // No recorded repos: projectDir IS the checkout (legacy single-repo, or a Bolt
-  // worktree - see aidlc-swarm.ts finalize) and carries the shell at its top.
-  if (repos.length === 0) return gitTreeFingerprint(projectDir, true);
+// Compute the opaque #629 source fingerprint and the #662 canonical per-path
+// listing in one temporary-index pass per repo. Keys are `<repo>\0<path>`;
+// single-repo/Bolt worktrees use an empty repo component.
+export function workspaceSourceState(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): WorkspaceSourceState | null {
+  const repos = intentRepos(projectDir, intent, space);
+  if (repos.length === 0) {
+    if (!isGitRepoDir(projectDir)) {
+      return emptyNoGitWorkspaceSourceState(projectDir);
+    }
+    const context = worktreeSourceExclusionContext(projectDir);
+    if (context === null) return null;
+    const state = gitTreeSourceState(
+      projectDir,
+      context.carriesWorkspaceShell,
+    );
+    if (state === null) return null;
+    return {
+      fingerprint: state.fingerprint,
+      listing: new Map([...state.listing].map(([path, oid]) => [`\0${path}`, oid])),
+    };
+  }
+
   const lines: string[] = [];
+  const listing: WorkspaceSourceListing = new Map();
   for (const name of [...repos].sort()) {
     // A sibling repo is a child of the roof; the shell is its SIBLING, never
     // nested inside it, so nothing there belongs to the framework.
-    const sha = gitTreeFingerprint(repoDir(projectDir, name), false);
-    if (sha === null) return null;
-    lines.push(`${name}=${sha}`);
+    const state = gitTreeSourceState(repoDir(projectDir, name), false);
+    if (state === null) return null;
+    lines.push(`${name}=${state.fingerprint}`);
+    for (const [path, oid] of state.listing) listing.set(`${name}\0${path}`, oid);
   }
-  return createHash("sha256").update(lines.join("\n")).digest("hex");
+  return {
+    fingerprint: createHash("sha256").update(lines.join("\n")).digest("hex"),
+    listing,
+  };
+}
+
+export function workspaceSourceFingerprint(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string | null {
+  return workspaceSourceState(projectDir, intent, space)?.fingerprint ?? null;
+}
+
+export function workspaceSourceListing(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): WorkspaceSourceListing | null {
+  return workspaceSourceState(projectDir, intent, space)?.listing ?? null;
+}
+
+export interface UnitSourceManifestWrite {
+  path: string;
+  repo?: string;
+}
+
+export interface UnitSourceManifest {
+  stage: string;
+  unit: string;
+  version: 1;
+  writes: UnitSourceManifestWrite[];
+}
+
+export interface SourceClaimModel {
+  claims: Set<string>;
+  prefixes: string[];
+}
+
+export type ReadUnitSourceManifestResult =
+  | {
+      ok: true;
+      manifest: UnitSourceManifest;
+      claims: Set<string>;
+      prefixes: string[];
+      rawBytesSha256: string;
+    }
+  | { ok: false; reason: string };
+
+function sourceListingFieldEncode(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\t", "\\t")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r");
+}
+
+function sourceListingFieldDecode(value: string): string | null {
+  let decoded = "";
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] !== "\\") {
+      decoded += value[i];
+      continue;
+    }
+    i++;
+    if (i >= value.length) return null;
+    if (value[i] === "\\") decoded += "\\";
+    else if (value[i] === "t") decoded += "\t";
+    else if (value[i] === "n") decoded += "\n";
+    else if (value[i] === "r") decoded += "\r";
+    else return null;
+  }
+  return decoded;
+}
+
+function splitSourcePathKey(key: string): { repo: string; path: string } | null {
+  const separator = key.indexOf("\0");
+  if (separator === -1 || key.indexOf("\0", separator + 1) !== -1) return null;
+  const repo = key.slice(0, separator);
+  const path = key.slice(separator + 1);
+  if (path.length === 0 || (repo.length > 0 && !isValidRepoName(repo))) return null;
+  return { repo, path };
+}
+
+/** Canonical key shared by listings and manifest claims: `<repo>\0<path>`. */
+export function sourcePathKey(repo: string, path: string): string {
+  if (repo.includes("\0") || path.includes("\0")) {
+    throw new Error("Source path keys cannot contain NUL bytes");
+  }
+  return `${repo}\0${path}`;
+}
+
+/**
+ * Stable snapshot representation. Ordinary paths remain readable TSV; the four
+ * characters that can make a TSV row ambiguous are backslash-escaped so Git
+ * paths containing tabs/newlines still round-trip without weakening the NUL-
+ * safe index enumeration that produced them.
+ */
+export function serializeSourceListing(listing: ReadonlyMap<string, string>): string {
+  const rows: Array<{ key: string; line: string }> = [];
+  for (const [key, entry] of listing) {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) throw new Error("Invalid canonical source-listing path key");
+    const modern = /^(\d{6}) ([0-9a-f]{40,64})$/.exec(entry);
+    const legacy = /^[0-9a-f]{40,64}$/.test(entry);
+    if (modern === null && !legacy) {
+      throw new Error(`Invalid source-listing entry for ${JSON.stringify(parsed.path)}`);
+    }
+    const suffix = modern === null ? entry : `${modern[1]}\t${modern[2]}`;
+    rows.push({
+      key,
+      line: `${sourceListingFieldEncode(parsed.repo)}\t${sourceListingFieldEncode(parsed.path)}\t${suffix}`,
+    });
+  }
+  rows.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return rows.length === 0 ? "" : `${rows.map((row) => row.line).join("\n")}\n`;
+}
+
+export function parseSourceListing(serialized: string): WorkspaceSourceListing | null {
+  if (serialized === "") return new Map();
+  if (!serialized.endsWith("\n")) return null;
+  const listing: WorkspaceSourceListing = new Map();
+  for (const line of serialized.slice(0, -1).split("\n")) {
+    const fields = line.split("\t");
+    if (fields.length !== 3 && fields.length !== 4) return null;
+    const repo = sourceListingFieldDecode(fields[0]);
+    const path = sourceListingFieldDecode(fields[1]);
+    const mode = fields.length === 4 ? fields[2] : null;
+    const oid = fields.at(-1) ?? "";
+    if (
+      repo === null ||
+      path === null ||
+      path.length === 0 ||
+      (repo.length > 0 && !isValidRepoName(repo)) ||
+      (mode !== null && !/^\d{6}$/.test(mode)) ||
+      !/^[0-9a-f]{40,64}$/.test(oid)
+    ) return null;
+    const key = sourcePathKey(repo, path);
+    if (listing.has(key)) return null;
+    listing.set(key, mode === null ? oid : `${mode} ${oid}`);
+  }
+  return listing;
+}
+
+export function sourceListingSha256(serialized: string): string {
+  return createHash("sha256").update(serialized, "utf-8").digest("hex");
+}
+
+function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
+  if (path.length === 0) return { reason: "writes[].path must be non-empty" };
+  if (path.includes("\0")) return { reason: "writes[].path cannot contain a NUL byte" };
+  if (path.includes("\\")) return { reason: "writes[].path must use POSIX '/' separators, not backslashes" };
+  if (path.startsWith("/") || /^[A-Za-z]:\//.test(path)) {
+    return { reason: "writes[].path must be relative, not absolute" };
+  }
+  if (/[*?[\]{}]/.test(path)) return { reason: "writes[].path cannot contain glob syntax" };
+  const inputSegments = path.split("/");
+  if (inputSegments.includes("..")) return { reason: "writes[].path cannot contain '..' segments" };
+  const prefix = path.endsWith("/");
+  const segments = inputSegments.filter((segment) => segment !== "" && segment !== ".");
+  if (segments.length === 0) return { reason: "writes[].path must name a path below the repository root" };
+  return { path: `${segments.join("/")}${prefix ? "/" : ""}`, prefix };
+}
+
+function sourcePathIsExcluded(
+  path: string,
+  carriesWorkspaceShell: boolean,
+  projectDir?: string,
+): boolean {
+  const withoutTrailingSlash = path.replace(/\/+$/, "");
+  if (
+    carriesWorkspaceShell &&
+    (path === "aidlc/" || path === ".aidlc/" || path.startsWith("aidlc/") || path.startsWith(".aidlc/"))
+  ) return true;
+
+  if (!carriesWorkspaceShell && projectDir !== undefined) {
+    const context = worktreeSourceExclusionContext(projectDir);
+    if (
+      context !== null &&
+      !context.carriesWorkspaceShell &&
+      context.exactPaths.some((excluded) => {
+        const normalized = excluded.replace(/\/+$/, "");
+        return withoutTrailingSlash === normalized ||
+          (excluded.endsWith("/") &&
+            withoutTrailingSlash.startsWith(`${normalized}/`));
+      })
+    ) {
+      return true;
+    }
+  }
+
+  const segments = withoutTrailingSlash.split("/");
+  for (let i = 0; i + 4 < segments.length; i++) {
+    if (segments[i] !== "aidlc" || segments[i + 1] !== "spaces" || segments[i + 3] !== "intents") continue;
+    if (segments[i + 2].length === 0) continue;
+    if (segments.slice(i + 4).includes(".aidlc-sensors")) return true;
+  }
+  return false;
+}
+
+export function workspaceSourcePathIsExcluded(
+  projectDir: string,
+  path: string,
+): boolean | null {
+  const context = worktreeSourceExclusionContext(projectDir);
+  if (context === null) return null;
+  return sourcePathIsExcluded(
+    path,
+    context.carriesWorkspaceShell,
+    projectDir,
+  );
+}
+
+export interface ReadUnitSourceManifestOptions {
+  /** Bolt worktrees fingerprint exactly one selected repo even if their forked
+   * record still names the parent multi-repo intent. */
+  worktreeRelative?: boolean;
+}
+
+interface GitPathModeIndex {
+  env: NodeJS.ProcessEnv;
+  indexFile: string;
+}
+
+type GitPathModeIndexCache = Map<string, GitPathModeIndex | null>;
+
+function currentGitPathMode(
+  sourceRepoDir: string,
+  literalPath: string,
+  indexes: GitPathModeIndexCache,
+): { ok: boolean; mode: string | null } {
+  let repoKey: string;
+  try {
+    repoKey = realpathSync(sourceRepoDir);
+  } catch {
+    repoKey = resolvePath(sourceRepoDir);
+  }
+  if (!indexes.has(repoKey)) {
+    const indexFile = join(
+      tmpdir(),
+      `aidlc-claim-mode-${process.pid}-${randomUUID().slice(0, 8)}`,
+    );
+    const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+    const seeded = spawnSync("git", ["-C", sourceRepoDir, "read-tree", "HEAD"], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    if (seeded.status !== 0) {
+      const empty = spawnSync(
+        "git",
+        ["-C", sourceRepoDir, "read-tree", "--empty"],
+        { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      );
+      if (empty.status !== 0) {
+        rmSync(indexFile, { force: true });
+        indexes.set(repoKey, null);
+      } else {
+        indexes.set(repoKey, { env, indexFile });
+      }
+    } else {
+      indexes.set(repoKey, { env, indexFile });
+    }
+  }
+  const index = indexes.get(repoKey);
+  if (index === null || index === undefined) {
+    return { ok: false, mode: null };
+  }
+  // The cache accumulates prior single-path additions, but each probe stages
+  // and reads only its exact literal path. An earlier path cannot create or
+  // change that exact index entry; ordinary directories still have no exact
+  // entry, while embedded repositories remain mode 160000.
+  const added = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "add", "--", `./${literalPath}`],
+    {
+      env: index.env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (added.status !== 0) return { ok: false, mode: null };
+  const listed = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "ls-files", "-s", "-z", "--", `./${literalPath}`],
+    {
+      env: index.env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (listed.status !== 0) return { ok: false, mode: null };
+  for (const record of listed.stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab === -1 || record.slice(tab + 1) !== literalPath) continue;
+    const mode = /^(\d{6}) /.exec(record.slice(0, tab))?.[1] ?? null;
+    return { ok: mode !== null, mode };
+  }
+  return { ok: true, mode: null };
+}
+
+function symlinkedParentComponent(
+  sourceRepoDir: string,
+  literalPath: string,
+): string | null {
+  const segments = literalPath.split("/");
+  let current = sourceRepoDir;
+  for (let index = 0; index < segments.length - 1; index++) {
+    current = join(current, segments[index]);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        return segments.slice(0, index + 1).join("/");
+      }
+      if (!stat.isDirectory()) return null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function ignoredSourceClaimReason(
+  sourceRepoDir: string,
+  path: string,
+  prefix: boolean,
+  pathModeIndexes: GitPathModeIndexCache,
+): string | null {
+  if (!isGitRepoDir(sourceRepoDir)) return null;
+  const literalPath = path.replace(/\/+$/, "");
+  const literalPathspec = `./${literalPath}`;
+  const symlinkedParent = symlinkedParentComponent(
+    sourceRepoDir,
+    literalPath,
+  );
+  if (symlinkedParent !== null) {
+    return `${JSON.stringify(path)} traverses symlinked directory ${JSON.stringify(symlinkedParent)}. Source claims bind link text, not target bytes; claim the real target path instead, or restructure the link.`;
+  }
+
+  let currentExists = false;
+  let currentIsDirectory = false;
+  try {
+    const current = lstatSync(join(sourceRepoDir, literalPath));
+    currentExists = true;
+    currentIsDirectory = current.isDirectory();
+  } catch {
+    // An absent exact path is valid and becomes stale if it appears later.
+  }
+
+  let headTracked = false;
+  const head = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (head.status === 0 && head.stdout.trim()) {
+    const listed = spawnSync(
+      "git",
+      [
+        "-C",
+        sourceRepoDir,
+        "ls-tree",
+        "-z",
+        "--full-tree",
+        head.stdout.trim(),
+        "--",
+        literalPathspec,
+      ],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (listed.status !== 0) {
+      return `Git could not verify HEAD membership for ${JSON.stringify(path)}`;
+    }
+    const entry = listed.stdout.split("\0").find(Boolean);
+    if (entry) {
+      const headIsDirectory = /^040000 /.test(entry);
+      if (!prefix && !currentExists && headIsDirectory) {
+        return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+      }
+      headTracked = !headIsDirectory;
+    }
+  }
+
+  const ignored = spawnSync(
+    "git",
+    [
+      "-C",
+      sourceRepoDir,
+      "check-ignore",
+      "-q",
+      "--no-index",
+      "--",
+      literalPathspec,
+    ],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (ignored.status === 0) {
+    if (!prefix && headTracked && !currentIsDirectory) return null;
+    return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
+  }
+  if (ignored.status !== 1) {
+    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
+  }
+  if (!prefix && currentIsDirectory) {
+    const currentMode = currentGitPathMode(
+      sourceRepoDir,
+      literalPath,
+      pathModeIndexes,
+    );
+    if (!currentMode.ok) {
+      return `Git could not verify the current path type for ${JSON.stringify(path)}`;
+    }
+    if (currentMode.mode !== "160000") {
+      return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+    }
+  }
+  if (!prefix) return null;
+
+  const indexFile = join(
+    tmpdir(),
+    `aidlc-ignored-claims-${process.pid}-${randomUUID().slice(0, 8)}`,
+  );
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    const seeded = spawnSync(
+      "git",
+      [
+        "-C",
+        sourceRepoDir,
+        "read-tree",
+        ...(head.status === 0 && head.stdout.trim()
+          ? [head.stdout.trim()]
+          : ["--empty"]),
+      ],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (seeded.status !== 0) {
+      return `Git could not seed ignore verification for ${JSON.stringify(path)}`;
+    }
+    const ignoredDescendants = spawnSync(
+      "git",
+      [
+        "-C",
+        sourceRepoDir,
+        "ls-files",
+        "-z",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--",
+        literalPathspec,
+      ],
+      {
+        env,
+        encoding: "utf-8",
+        maxBuffer: 512 * 1024 * 1024,
+      },
+    );
+    if (ignoredDescendants.status !== 0) {
+      return `Git could not enumerate ignored source below ${JSON.stringify(path)}`;
+    }
+    const firstIgnored = ignoredDescendants.stdout.split("\0").find(Boolean);
+    return firstIgnored
+      ? `${JSON.stringify(path)} contains ignored application source ${JSON.stringify(firstIgnored)}`
+      : null;
+  } finally {
+    rmSync(indexFile, { force: true });
+  }
+}
+
+function manifestClaimSymlinkPaths(
+  sourceRepoDir: string,
+  literalPath: string,
+  prefix: boolean,
+): string[] | null {
+  const root = join(sourceRepoDir, literalPath);
+  try {
+    const rootStat = lstatSync(root);
+    if (rootStat.isSymbolicLink()) return [literalPath];
+    if (!prefix) return [];
+    if (!rootStat.isDirectory()) return [];
+  } catch {
+    return [];
+  }
+  const links: string[] = [];
+  const walk = (dir: string): boolean => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(path);
+      } catch {
+        return false;
+      }
+      if (stat.isSymbolicLink()) {
+        links.push(relative(sourceRepoDir, path).replaceAll("\\", "/"));
+      } else if (stat.isDirectory() && !walk(path)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  return walk(root) ? links.sort() : null;
+}
+
+function symlinkClaimTargetReason(
+  sourceRepoDir: string,
+  claimPath: string,
+  prefix: boolean,
+  carriesWorkspaceShell: boolean,
+  pathModeIndexes: GitPathModeIndexCache,
+): string | null {
+  const links = manifestClaimSymlinkPaths(
+    sourceRepoDir,
+    claimPath.replace(/\/+$/, ""),
+    prefix,
+  );
+  if (links === null) {
+    return `could not enumerate symlinks below ${JSON.stringify(claimPath)}`;
+  }
+  let repoRoot: string;
+  try {
+    repoRoot = realpathSync(sourceRepoDir);
+  } catch (error) {
+    return `cannot resolve repository root (${errorMessage(error)})`;
+  }
+  const remedy =
+    "Source claims bind link text, not target bytes; claim the target path instead, or restructure the link.";
+  for (const link of links) {
+    let current = join(sourceRepoDir, link);
+    const visited = new Set<string>();
+    let targetDisplay = "";
+    for (let hop = 0; hop < 40; hop++) {
+      const key = resolvePath(current);
+      if (visited.has(key)) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose target contains a cycle. ${remedy}`;
+      }
+      visited.add(key);
+      let target: string;
+      try {
+        target = readlinkSync(current);
+      } catch (error) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose target cannot be read (${errorMessage(error)}). ${remedy}`;
+      }
+      let currentDir: string;
+      try {
+        currentDir = realpathSync(dirname(current));
+      } catch (error) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose containing directory cannot be resolved (${errorMessage(error)}). ${remedy}`;
+      }
+      const currentDirRelative = relative(repoRoot, currentDir);
+      if (
+        currentDirRelative === ".." ||
+        currentDirRelative.startsWith(`..${sep}`) ||
+        isAbsolute(currentDirRelative)
+      ) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved hop ${JSON.stringify(join(currentDir, basename(current)))} is outside the repository. ${remedy}`;
+      }
+      const next = isAbsolute(target)
+        ? resolvePath(target)
+        : resolvePath(currentDir, target);
+      targetDisplay = relative(repoRoot, next).replaceAll("\\", "/") || ".";
+      const hopRelative = relative(repoRoot, next);
+      if (
+        hopRelative === ".." ||
+        hopRelative.startsWith(`..${sep}`) ||
+        isAbsolute(hopRelative)
+      ) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(next)} is outside the repository. ${remedy}`;
+      }
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(next);
+      } catch {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(targetDisplay)} does not exist. ${remedy}`;
+      }
+      if (stat.isSymbolicLink()) {
+        current = next;
+        continue;
+      }
+      let resolved: string;
+      try {
+        resolved = realpathSync(next);
+      } catch {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(targetDisplay)} does not exist. ${remedy}`;
+      }
+      const resolvedRelative = relative(repoRoot, resolved);
+      if (
+        resolvedRelative === ".." ||
+        resolvedRelative.startsWith(`..${sep}`) ||
+        isAbsolute(resolvedRelative)
+      ) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(resolved)} is outside the repository. ${remedy}`;
+      }
+      const repoRelative = resolvedRelative.replaceAll("\\", "/");
+      if (
+        sourcePathIsExcluded(
+          repoRelative,
+          carriesWorkspaceShell,
+          sourceRepoDir,
+        )
+      ) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(repoRelative)} is excluded from source evidence. ${remedy}`;
+      }
+      const ignored = ignoredSourceClaimReason(
+        sourceRepoDir,
+        repoRelative,
+        false,
+        pathModeIndexes,
+      );
+      if (ignored !== null) {
+        const targetReason = prefix && stat.isDirectory()
+          ? `${JSON.stringify(repoRelative)} is a directory and cannot be bound through a symlinked directory claim`
+          : ignored;
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target is not bindable: ${targetReason}. ${remedy}`;
+      }
+      targetDisplay = "";
+      break;
+    }
+    if (targetDisplay !== "") {
+      return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose target exceeds 40 symlink hops. ${remedy}`;
+    }
+  }
+  return null;
+}
+
+/** Strictly read and validate a unit's engine-required source-manifest.json. */
+export function readUnitSourceManifest(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  options: ReadUnitSourceManifestOptions = {},
+): ReadUnitSourceManifestResult {
+  if (!/^[a-z][a-z0-9-]*$/.test(stageSlug)) return { ok: false, reason: `invalid stage slug ${JSON.stringify(stageSlug)}` };
+  const unitError = validateUnitName(unit);
+  if (unitError !== null) return { ok: false, reason: unitError };
+  const record = recordDir(projectDir);
+  if (record === null) return { ok: false, reason: "no active intent record resolves" };
+  const manifestPath = join(record, "construction", unit, stageSlug, "source-manifest.json");
+
+  let rawBytes: Buffer;
+  let value: unknown;
+  try {
+    rawBytes = readFileSync(manifestPath);
+  } catch (error) {
+    return { ok: false, reason: `cannot read source-manifest.json (${errorMessage(error)})` };
+  }
+  try {
+    value = JSON.parse(rawBytes.toString("utf-8")) as unknown;
+  } catch (error) {
+    return { ok: false, reason: `source-manifest.json is not valid JSON (${errorMessage(error)})` };
+  }
+  if (!isPlainObject(value)) return { ok: false, reason: "source-manifest.json must contain a JSON object" };
+
+  const allowedTopLevel = new Set(["stage", "unit", "version", "writes"]);
+  const unknownTopLevel = Object.keys(value).filter((key) => !allowedTopLevel.has(key));
+  if (unknownTopLevel.length > 0) {
+    return { ok: false, reason: `source-manifest.json has unknown field(s): ${unknownTopLevel.sort().join(", ")}` };
+  }
+  if (value.stage !== stageSlug) return { ok: false, reason: `stage must equal ${JSON.stringify(stageSlug)}` };
+  if (value.unit !== unit) return { ok: false, reason: `unit must equal ${JSON.stringify(unit)}` };
+  if (value.version !== 1) return { ok: false, reason: "version must equal 1" };
+  if (!Array.isArray(value.writes)) return { ok: false, reason: "writes must be an array" };
+
+  const worktreeContext =
+    options.worktreeRelative ||
+      existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))
+      ? worktreeSourceExclusionContext(projectDir)
+      : null;
+  if (
+    (
+      options.worktreeRelative ||
+      existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))
+    ) &&
+    worktreeContext === null
+  ) {
+    return {
+      ok: false,
+      reason: "worktree metadata is missing or malformed",
+    };
+  }
+  const worktreeRelative = worktreeContext !== null;
+  const recordedRepos = worktreeRelative ? [] : intentRepos(projectDir);
+  const recordedRepoSet = new Set(recordedRepos);
+  const carriesWorkspaceShell =
+    worktreeContext?.carriesWorkspaceShell ?? recordedRepos.length === 0;
+  const claims = new Set<string>();
+  const prefixes: string[] = [];
+  const seen = new Set<string>();
+  const writes: UnitSourceManifestWrite[] = [];
+  const pathModeIndexes: GitPathModeIndexCache = new Map();
+
+  try {
+  for (let index = 0; index < value.writes.length; index++) {
+    const write = value.writes[index];
+    if (!isPlainObject(write)) return { ok: false, reason: `writes[${index}] must be an object` };
+    const allowedWriteFields = new Set(["repo", "path"]);
+    const unknownWriteFields = Object.keys(write).filter((key) => !allowedWriteFields.has(key));
+    if (unknownWriteFields.length > 0) {
+      return { ok: false, reason: `writes[${index}] has unknown field(s): ${unknownWriteFields.sort().join(", ")}` };
+    }
+    if (typeof write.path !== "string") return { ok: false, reason: `writes[${index}].path must be a string` };
+    if ("repo" in write && typeof write.repo !== "string") {
+      return { ok: false, reason: `writes[${index}].repo must be a string when present` };
+    }
+
+    const declaredRepo = typeof write.repo === "string" ? write.repo : undefined;
+    let canonicalRepo = declaredRepo;
+    if (canonicalRepo !== undefined) {
+      if (!isValidRepoName(canonicalRepo)) return { ok: false, reason: `writes[${index}].repo is not a valid recorded-repo name` };
+      if (!recordedRepoSet.has(canonicalRepo)) return { ok: false, reason: `writes[${index}].repo ${JSON.stringify(canonicalRepo)} is not recorded for this intent` };
+    } else if (recordedRepos.length > 1) {
+      return { ok: false, reason: `writes[${index}].repo is required for a multi-repo intent` };
+    } else if (recordedRepos.length === 1) {
+      canonicalRepo = recordedRepos[0];
+    }
+
+    const normalized = normalizeManifestSourcePath(write.path);
+    if ("reason" in normalized) return { ok: false, reason: `writes[${index}].path: ${normalized.reason}` };
+    if (
+      sourcePathIsExcluded(
+        normalized.path,
+        carriesWorkspaceShell,
+        worktreeRelative ? projectDir : undefined,
+      )
+    ) {
+      return { ok: false, reason: `writes[${index}].path is inside the framework record/shell exclusions` };
+    }
+    const sourceRepoDir =
+      worktreeRelative
+        ? projectDir
+        : canonicalRepo === undefined
+          ? projectDir
+          : repoDir(projectDir, canonicalRepo);
+    const ignoredReason = ignoredSourceClaimReason(
+      sourceRepoDir,
+      normalized.path,
+      normalized.prefix,
+      pathModeIndexes,
+    );
+    if (ignoredReason !== null) {
+      return { ok: false, reason: `writes[${index}].path: ${ignoredReason}` };
+    }
+    const symlinkReason = symlinkClaimTargetReason(
+      sourceRepoDir,
+      normalized.path,
+      normalized.prefix,
+      carriesWorkspaceShell,
+      pathModeIndexes,
+    );
+    if (symlinkReason !== null) {
+      return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };
+    }
+    const key = sourcePathKey(canonicalRepo ?? "", normalized.path);
+    if (seen.has(key)) return { ok: false, reason: `writes[${index}] duplicates a normalized source claim` };
+    seen.add(key);
+    if (normalized.prefix) prefixes.push(key);
+    else claims.add(key);
+    writes.push({ ...(declaredRepo === undefined ? {} : { repo: declaredRepo }), path: normalized.path });
+  }
+
+  prefixes.sort();
+  return {
+    ok: true,
+    manifest: { stage: stageSlug, unit, version: 1, writes },
+    claims,
+    prefixes,
+    rawBytesSha256: createHash("sha256").update(rawBytes).digest("hex"),
+  };
+  } finally {
+    for (const index of pathModeIndexes.values()) {
+      if (index !== null) rmSync(index.indexFile, { force: true });
+    }
+  }
+}
+
+/** True when a canonical path is claimed exactly or by a directory prefix. */
+export function sourceClaimCovers(pathKey: string, claimModel: SourceClaimModel): boolean {
+  if (claimModel.claims.has(pathKey)) return true;
+  return claimModel.prefixes.some((prefix) => pathKey.startsWith(prefix));
+}
+
+/** Expand exact/directory claims against one current source listing. */
+export function restrictSourceListing(
+  listing: ReadonlyMap<string, string>,
+  claimModel: SourceClaimModel,
+): WorkspaceSourceListing {
+  const restricted: WorkspaceSourceListing = new Map();
+  for (const [key, oid] of listing) {
+    if (sourceClaimCovers(key, claimModel)) restricted.set(key, oid);
+  }
+  return restricted;
+}
+
+function serializeUnitSourceListing(
+  listing: ReadonlyMap<string, string>,
+  claimModel: SourceClaimModel,
+  manifestSha256: string,
+): string {
+  if (!/^[0-9a-f]{64}$/.test(manifestSha256)) throw new Error("Invalid source-manifest sha256");
+  return `manifest\t${manifestSha256}\t-\n${serializeSourceListing(restrictSourceListing(listing, claimModel))}`;
+}
+
+/** Audit-field value binding manifest bytes plus every currently claimed path. */
+export function unitSourceFingerprint(
+  listing: ReadonlyMap<string, string>,
+  claimModel: SourceClaimModel,
+  manifestSha256: string,
+): string {
+  return `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
+}
+
+function validSourceSnapshotFingerprint(fingerprint: string): string | null {
+  const matched = /^sha256:([0-9a-f]{64})$/.exec(fingerprint);
+  return matched?.[1] ?? null;
+}
+
+function sourceSnapshotDir(
+  projectDir: string,
+  stageSlug: string,
+  intent?: string,
+  space?: string,
+): string | null {
+  if (!/^[a-z][a-z0-9-]*$/.test(stageSlug)) return null;
+  const record = recordDir(projectDir, intent, space);
+  return record === null ? null : join(record, ".aidlc-source-review", stageSlug);
+}
+
+function writeSourceSnapshot(path: string, serialized: string): string {
+  const hash = sourceListingSha256(serialized);
+  mkdirSync(dirname(path), { recursive: true });
+  if (existsSync(path)) {
+    const existing = readFileSync(path);
+    if (existing.equals(Buffer.from(serialized, "utf-8"))) return `sha256:${hash}`;
+    // A different payload at the same 12-hex address is either corruption or
+    // a prefix collision. Never destroy evidence already referenced by audit.
+    throw new Error(`Source snapshot address collision or corruption at ${path}`);
+  }
+  writeFileAtomic(path, serialized);
+  return `sha256:${hash}`;
+}
+
+/** Write a content-addressed stage-entry baseline listing snapshot. */
+export function writeBaselineSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  listing: ReadonlyMap<string, string>,
+  intent?: string,
+  space?: string,
+): string {
+  const dir = sourceSnapshotDir(projectDir, stageSlug, intent, space);
+  if (dir === null) throw new Error("Cannot write source baseline without a valid active record and stage slug");
+  const serialized = serializeSourceListing(listing);
+  const hash = sourceListingSha256(serialized);
+  return writeSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), serialized);
+}
+
+/** Build the modern source-baseline audit field for any workflow/stage boundary. */
+export function sourceBaselineAuditFields(
+  projectDir: string,
+  stageSlug: string,
+  intent?: string,
+  space?: string,
+): Record<string, string> {
+  const repos = intentRepos(projectDir, intent, space);
+  const hasGitCheckout =
+    repos.length === 0
+      ? isGitRepoDir(projectDir)
+      : repos.some((name) => isGitRepoDir(repoDir(projectDir, name)));
+  const sourceState = workspaceSourceState(projectDir, intent, space);
+  if (sourceState === null) {
+    if (hasGitCheckout) {
+      return { "Source Baseline": UNBINDABLE_FINGERPRINT };
+    }
+    return {
+      "Source Baseline": writeBaselineSourceSnapshot(
+        projectDir,
+        stageSlug,
+        new Map(),
+        intent,
+        space,
+      ),
+    };
+  }
+  return {
+    "Source Baseline": writeBaselineSourceSnapshot(
+      projectDir,
+      stageSlug,
+      sourceState.listing,
+      intent,
+      space,
+    ),
+  };
+}
+
+/** Write a content-addressed unit listing snapshot including its manifest header. */
+export function writeUnitSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  listing: ReadonlyMap<string, string>,
+  claimModel: SourceClaimModel,
+  manifestSha256: string,
+): string {
+  const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const unitError = validateUnitName(unit);
+  if (dir === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
+  const serialized = serializeUnitSourceListing(listing, claimModel, manifestSha256);
+  const hash = sourceListingSha256(serialized);
+  return writeSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
+}
+
+function readSourceSnapshot(path: string, fingerprint: string): string | null {
+  const expected = validSourceSnapshotFingerprint(fingerprint);
+  if (expected === null) return null;
+  try {
+    const bytes = readFileSync(path);
+    if (createHash("sha256").update(bytes).digest("hex") !== expected) return null;
+    return bytes.toString("utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/** Read a baseline only after exact verification against the full audit hash. */
+export function readBaselineSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  fingerprint: string,
+  intent?: string,
+  space?: string,
+): WorkspaceSourceListing | null {
+  const dir = sourceSnapshotDir(projectDir, stageSlug, intent, space);
+  const hash = validSourceSnapshotFingerprint(fingerprint);
+  if (dir === null || hash === null) return null;
+  const serialized = readSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), fingerprint);
+  return serialized === null ? null : parseSourceListing(serialized);
+}
+
+export function currentStageSourceBaseline(
+  projectDir: string,
+  stageSlug: string,
+  unitMajor: boolean,
+  intent?: string,
+  space?: string,
+): SourceBaselineResult {
+  const allEvents = readAuditShardEvents(projectDir, intent, space);
+  const modernSourceBindingEvidence =
+    hasModernSourceBindingEvidence(projectDir, allEvents, intent, space);
+  const events = allEvents
+    .filter((row) =>
+      row.event === "WORKFLOW_STARTED" ||
+      row.event === "STAGE_STARTED" ||
+      row.event === "STAGE_JUMPED" ||
+      row.event === "ARTIFACT_CREATED" ||
+      row.event === "ARTIFACT_UPDATED" ||
+      row.event === "REVIEW_REQUESTED"
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  let boundary = -1;
+  for (let index = 0; index < events.length; index++) {
+    if (
+      events[index].event === "WORKFLOW_STARTED" ||
+      events[index].event === "STAGE_JUMPED"
+    ) {
+      boundary = index;
+    }
+  }
+  let firstWork = events.length;
+  for (let index = Math.max(boundary, 0); index < events.length; index++) {
+    const event = events[index];
+    if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) {
+      continue;
+    }
+    if (auditBlockField(event.block, "Stage") !== stageSlug) continue;
+    if (
+      event.event === "REVIEW_REQUESTED" ||
+      event.event === "ARTIFACT_CREATED" ||
+      event.event === "ARTIFACT_UPDATED"
+    ) {
+      firstWork = index;
+      break;
+    }
+  }
+  let field: string | null = null;
+  for (let index = Math.max(boundary, 0); index < firstWork; index++) {
+    const event = events[index];
+    const candidate = sourceBaselineBoundaryValue(
+      event,
+      stageSlug,
+      unitMajor,
+    );
+    if (candidate === undefined) continue;
+    if (
+      candidate !== null &&
+      auditEventIsCrossShardTied(
+        events,
+        index,
+        (other) =>
+          sourceBaselineBoundaryValue(
+            other,
+            stageSlug,
+            unitMajor,
+          ),
+      )
+    ) {
+      field = UNBINDABLE_FINGERPRINT;
+    } else {
+      field = candidate;
+    }
+  }
+  if (field === null) {
+    return modernSourceBindingEvidence
+      ? { state: "invalid" }
+      : { state: "legacy" };
+  }
+  if (field === UNBINDABLE_FINGERPRINT) return { state: "unbindable" };
+  const listing = readBaselineSourceSnapshot(
+    projectDir,
+    stageSlug,
+    field,
+    intent,
+    space,
+  );
+  return listing === null ? { state: "invalid" } : { state: "ready", listing };
+}
+
+export interface UnitSourceSnapshot {
+  listing: WorkspaceSourceListing;
+  manifestSha256: string;
+}
+
+/** Read a unit snapshot only after full-hash verification and strict parsing. */
+export function readUnitSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  fingerprint: string,
+): UnitSourceSnapshot | null {
+  const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const hash = validSourceSnapshotFingerprint(fingerprint);
+  if (dir === null || hash === null || validateUnitName(unit) !== null) return null;
+  const serialized = readSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), fingerprint);
+  if (serialized === null) return null;
+  const newline = serialized.indexOf("\n");
+  if (newline === -1) return null;
+  const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
+  if (header === null) return null;
+  const listing = parseSourceListing(serialized.slice(newline + 1));
+  return listing === null ? null : { listing, manifestSha256: header[1] };
 }
 
 
@@ -5755,8 +8909,13 @@ export function intentRepos(
   intentDirName?: string | null,
   space?: string,
 ): string[] {
-  const sp = space ?? activeSpace(projectDir);
-  const dirName = intentDirName ?? activeIntent(projectDir, sp);
+  if (intentDirName === null) return [];
+  const selection = resolveWorkflowSelection(projectDir, {
+    space,
+    intent: intentDirName,
+  });
+  const sp = selection.space;
+  const dirName = selection.intent;
   if (!dirName) return [];
   for (const entry of readIntentRegistry(projectDir, sp)) {
     if (!recordDirMatches(entry, dirName)) continue;
@@ -5844,8 +9003,8 @@ export function resolveConstructionRepo(
 // lockstep. Stays total (never throws) so the hooks that call the family at
 // module top on a pre-birth shell don't crash.
 export function docsRoot(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  return dir ?? spaceRecordRoot(projectDir, space);
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  return resolved.dir ?? spaceRecordRoot(projectDir, resolved.space);
 }
 
 // The bare record-tree root (doctor's existence check, the init scaffolder's
@@ -6494,6 +9653,7 @@ export function isAutonomousSwarmStage(
   if (!isAutonomousMode(stateContent)) return false;
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
   if (first !== null && first.slug === stage.slug) return false;
   const resolution = resolveBoltDag(projectDir);
@@ -6673,6 +9833,61 @@ export function parseCheckboxes(content: string): CheckboxLine[] {
     match = regex.exec(content);
   }
   return results;
+}
+
+export function recoveryGuidance(
+  _projectDir: string,
+  stateContent: string,
+  stageSlug: string,
+): string {
+  const stage = parseCheckboxes(stateContent).find(
+    (entry) => entry.slug === stageSlug,
+  );
+  if (stage?.suffix.startsWith("SKIP")) {
+    return (
+      "This stage is excluded from the current plan; change to a scope that " +
+      `includes it with /aidlc --scope <scope>, then restart ${stageSlug}.`
+    );
+  }
+  if (!stage || stage.state === "pending") {
+    return (
+      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
+      "answers survive, and the stage will ask for confirmation again."
+    );
+  }
+  if (stage.state === "skipped") {
+    return (
+      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
+      "answers survive, and the stage will ask for confirmation again."
+    );
+  }
+  if (
+    stage.state === "in-progress" ||
+    stage.state === "awaiting-approval"
+  ) {
+    return (
+      "To change this document, tell me what should change and I'll record your " +
+      "Request Changes decision (this works before the gate opens); that unlocks " +
+      "the file for revision and a fresh review."
+    );
+  }
+  if (stage.state === "revising") {
+    return (
+      "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
+      `/aidlc --stage ${stageSlug} (your recorded answers survive; you will ` +
+      "re-confirm the summary once)."
+    );
+  }
+  if (stage.state === "completed") {
+    return (
+      "This stage is already approved; restore the reviewed source state, or " +
+      `jump back with /aidlc --stage ${stageSlug} to redo it.`
+    );
+  }
+  return (
+    `Restart this stage with /aidlc --stage ${stageSlug}; the recorded answers ` +
+    "survive, and the stage will ask for confirmation again."
+  );
 }
 
 export function setCheckbox(
@@ -8090,6 +11305,8 @@ export function latestMainWorkflowStageRunFloorForProject(
   projectDir: string,
   slug: string,
   unitMajor = false,
+  intent?: string,
+  space?: string,
 ): string {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -8097,7 +11314,7 @@ export function latestMainWorkflowStageRunFloorForProject(
     "STAGE_JUMPED",
     "GATE_REJECTED",
   ]);
-  const rows = readAuditShardEvents(projectDir)
+  const rows = readAuditShardEvents(projectDir, intent, space)
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
       const stage = auditBlockField(row.block, "Stage");
@@ -8176,6 +11393,374 @@ export function swarmConvergedUnits(
     if (unit) converged.add(unit);
   }
   return converged;
+}
+
+export type SwarmAttemptObligations =
+  | { state: "none" }
+  | { state: "invalid"; reason: string }
+  | { state: "ready"; units: Set<string> };
+
+export function currentSwarmAttemptObligations(
+  projectDir: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): SwarmAttemptObligations {
+  const floor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    slug,
+    false,
+    intent,
+    space,
+  );
+  const rows = readAuditShardEvents(projectDir, intent, space);
+  const modernCurrentAttempt = rows.some(
+    (row) =>
+      auditBlockField(row.block, "Stage") === slug &&
+      auditBlockField(row.block, "Run floor") === floor &&
+      ((row.event === "SWARM_UNIT_CONVERGED" &&
+        (auditBlockField(row.block, "Source Commit") !== null ||
+          auditBlockField(row.block, "Source Freshness Bypass") !== null)) ||
+        row.event === "SWARM_SOURCE_MERGED"),
+  );
+  const missingObligations = (): SwarmAttemptObligations =>
+    modernCurrentAttempt
+      ? {
+          state: "invalid",
+          reason:
+            "modern current-attempt swarm evidence exists without SWARM_STARTED Unit obligations",
+        }
+      : { state: "none" };
+  const starts = rows.filter(
+    (row) =>
+      row.event === "SWARM_STARTED" &&
+      auditBlockField(row.block, "Stage") === slug &&
+      auditBlockField(row.block, "Run floor") === floor,
+  );
+  if (starts.length === 0) {
+    return missingObligations();
+  }
+
+  const obligationFields = starts.map((row) =>
+    auditBlockField(row.block, "Unit obligations")
+  );
+  const fieldBearing = obligationFields.filter(
+    (field): field is string => field !== null,
+  );
+  if (fieldBearing.length === 0) return missingObligations();
+  if (fieldBearing.length !== starts.length) {
+    return {
+      state: "invalid",
+      reason:
+        "current-attempt SWARM_STARTED mixes fieldless and field-bearing Unit obligations",
+    };
+  }
+
+  let canonical: string | null = null;
+  let units: Set<string> | null = null;
+  for (const raw of fieldBearing) {
+    const parsed = raw
+      .split(",")
+      .map((unit) => unit.trim())
+      .filter(Boolean);
+    if (
+      parsed.length === 0 ||
+      parsed.some((unit) => validateUnitName(unit) !== null) ||
+      new Set(parsed).size !== parsed.length
+    ) {
+      return {
+        state: "invalid",
+        reason: "current-attempt SWARM_STARTED has malformed Unit obligations",
+      };
+    }
+    const nextCanonical = [...parsed].sort().join("\0");
+    if (canonical !== null && canonical !== nextCanonical) {
+      return {
+        state: "invalid",
+        reason:
+          "current-attempt SWARM_STARTED rows disagree on Unit obligations",
+      };
+    }
+    canonical = nextCanonical;
+    units = new Set(parsed);
+  }
+  return units === null ? { state: "none" } : { state: "ready", units };
+}
+
+export type SwarmSourceMergeChain =
+  | { state: "none" }
+  | { state: "invalid"; reason: string }
+  | {
+      state: "ready";
+      fingerprint: string;
+      units: Set<string>;
+    };
+
+export type SwarmSourceOpeningFingerprint =
+  | { state: "invalid"; reason: string }
+  | {
+      state: "ready";
+      fingerprint: string;
+      source: "stage-baseline" | "prior-accepted";
+      listing?: WorkspaceSourceListing;
+    };
+
+/**
+ * Resolve the trusted predecessor for the current attempt's first aggregate
+ * source merge. A rejection may carry only the final validated aggregate from
+ * the prior attempt; it never replaces the stage-entry completion baseline.
+ */
+export function currentSwarmSourceOpeningFingerprint(
+  projectDir: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): SwarmSourceOpeningFingerprint {
+  const floor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    slug,
+    false,
+    intent,
+    space,
+  );
+  if (floor.startsWith("AMBIGUOUS:")) {
+    return {
+      state: "invalid",
+      reason: "current stage attempt boundary is cross-shard ambiguous",
+    };
+  }
+  const rejected = /^GATE_REJECTED:(.+)#([1-9][0-9]*)$/.exec(floor);
+  if (rejected !== null) {
+    const ordinal = Number(rejected[2]);
+    const rows = readAuditShardEvents(projectDir, intent, space)
+      .filter(
+        (row) =>
+          row.event === "GATE_REJECTED" &&
+          auditBlockField(row.block, "Stage") === slug,
+      )
+      .sort((a, b) => {
+        if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+        if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+        return a.pos - b.pos;
+      });
+    const row = rows[ordinal - 1];
+    if (!row || row.timestamp !== rejected[1]) {
+      return {
+        state: "invalid",
+        reason: "current rejection boundary cannot be correlated to its audit row",
+      };
+    }
+    const prior = auditBlockField(
+      row.block,
+      "Prior Accepted Source Fingerprint",
+    );
+    if (prior !== null) {
+      if (!/^[0-9a-f]{40,64}$/.test(prior)) {
+        return {
+          state: "invalid",
+          reason: "current rejection carries malformed prior accepted source authority",
+        };
+      }
+      return {
+        state: "ready",
+        fingerprint: prior,
+        source: "prior-accepted",
+      };
+    }
+  }
+
+  let stateContent: string;
+  try {
+    stateContent = readStateFile(projectDir, intent, space);
+  } catch {
+    return {
+      state: "invalid",
+      reason: "current state is unavailable for the opening aggregate link",
+    };
+  }
+  const baseline = currentStageSourceBaseline(
+    projectDir,
+    slug,
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major",
+    intent,
+    space,
+  );
+  if (baseline.state !== "ready") {
+    return {
+      state: "invalid",
+      reason: "current source baseline is unavailable for the opening aggregate link",
+    };
+  }
+  return {
+    state: "ready",
+    fingerprint: sourceListingSha256(serializeSourceListing(baseline.listing)),
+    source: "stage-baseline",
+    listing: baseline.listing,
+  };
+}
+
+/**
+ * Validate the current attempt's post-source-merge aggregate chain. Each row
+ * links the main checkout state before one immutable reviewed-source merge to
+ * the state after it. Cross-shard same-second rows are causally unordered and
+ * therefore cannot form an authority chain.
+ */
+export function currentSwarmSourceMergeChain(
+  projectDir: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): SwarmSourceMergeChain {
+  const floor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    slug,
+    false,
+    intent,
+    space,
+  );
+  const allRows = readAuditShardEvents(projectDir, intent, space);
+  const rows = allRows
+    .filter(
+      (row) =>
+        row.event === "SWARM_SOURCE_MERGED" &&
+        auditBlockField(row.block, "Stage") === slug &&
+        auditBlockField(row.block, "Run floor") === floor,
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  if (rows.length === 0) return { state: "none" };
+
+  const units = new Set<string>();
+  let priorFingerprint: string | null = null;
+  let openingPrevious: string | null = null;
+  for (let start = 0; start < rows.length;) {
+    let end = start + 1;
+    while (end < rows.length && rows[end].timestamp === rows[start].timestamp) end++;
+    const tied = rows.slice(start, end);
+    if (new Set(tied.map((row) => row.shard)).size > 1) {
+      return {
+        state: "invalid",
+        reason: `same-second cross-shard SWARM_SOURCE_MERGED rows are causally ambiguous at ${rows[start].timestamp}`,
+      };
+    }
+    for (const row of tied) {
+      const unit = auditBlockField(row.block, "Unit name");
+      const batch = auditBlockField(row.block, "Batch number");
+      const previous = auditBlockField(row.block, "Previous Source Fingerprint");
+      const fingerprint = auditBlockField(row.block, "Source Fingerprint");
+      const sourceCommit = auditBlockField(row.block, "Source Commit");
+      const mergeCommit = auditBlockField(row.block, "Merge commit");
+      if (
+        !unit ||
+        !batch ||
+        !/^[1-9][0-9]*$/.test(batch) ||
+        !previous ||
+        !/^[0-9a-f]{40,64}$/.test(previous) ||
+        !fingerprint ||
+        !/^[0-9a-f]{40,64}$/.test(fingerprint) ||
+        !sourceCommit ||
+        !/^[0-9a-f]{40,64}$/.test(sourceCommit) ||
+        !mergeCommit ||
+        !/^[0-9a-f]{40,64}$/.test(mergeCommit)
+      ) {
+        return {
+          state: "invalid",
+          reason: `malformed SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit ?? "")}`,
+        };
+      }
+      if (units.has(unit)) {
+        return {
+          state: "invalid",
+          reason: `duplicate SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)}`,
+        };
+      }
+      if (priorFingerprint !== null && previous !== priorFingerprint) {
+        return {
+          state: "invalid",
+          reason: `broken SWARM_SOURCE_MERGED aggregate link before unit ${JSON.stringify(unit)}`,
+        };
+      }
+      if (openingPrevious === null) openingPrevious = previous;
+      const convergenceRows = allRows
+        .filter(
+          (candidate) =>
+            candidate.event === "SWARM_UNIT_CONVERGED" &&
+            auditBlockField(candidate.block, "Unit name") === unit &&
+            auditBlockField(candidate.block, "Stage") === slug &&
+            auditBlockField(candidate.block, "Run floor") === floor,
+        )
+        .sort((a, b) => {
+          if (a.timestamp !== b.timestamp) {
+            return a.timestamp < b.timestamp ? -1 : 1;
+          }
+          if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+          return a.pos - b.pos;
+        });
+      const latestConvergenceTimestamp =
+        convergenceRows.at(-1)?.timestamp ?? null;
+      const latestConvergences =
+        latestConvergenceTimestamp === null
+          ? []
+          : convergenceRows.filter(
+              (candidate) =>
+                candidate.timestamp === latestConvergenceTimestamp,
+            );
+      if (
+        latestConvergences.length === 0 ||
+        (new Set(latestConvergences.map((candidate) => candidate.shard)).size >
+          1 &&
+          new Set(
+            latestConvergences.map((candidate) =>
+              [
+                auditBlockField(candidate.block, "Batch number") ?? "",
+                auditBlockField(candidate.block, "Source Commit") ?? "",
+              ].join("\0")
+            ),
+          ).size !== 1)
+      ) {
+        return {
+          state: "invalid",
+          reason: `missing or ambiguous current convergence authority for unit ${JSON.stringify(unit)}`,
+        };
+      }
+      const latestConvergence =
+        latestConvergences[latestConvergences.length - 1];
+      if (
+        auditBlockField(latestConvergence.block, "Batch number") !== batch ||
+        auditBlockField(latestConvergence.block, "Source Commit") !==
+          sourceCommit
+      ) {
+        return {
+          state: "invalid",
+          reason: `SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)} does not match its latest convergence`,
+        };
+      }
+      units.add(unit);
+      priorFingerprint = fingerprint;
+    }
+    start = end;
+  }
+  const opening = currentSwarmSourceOpeningFingerprint(
+    projectDir,
+    slug,
+    intent,
+    space,
+  );
+  if (opening.state === "invalid") {
+    return opening;
+  }
+  if (openingPrevious !== opening.fingerprint) {
+    return {
+      state: "invalid",
+      reason: `opening SWARM_SOURCE_MERGED link does not match the current ${opening.source === "prior-accepted" ? "prior accepted aggregate" : "stage baseline"}`,
+    };
+  }
+  return priorFingerprint === null
+    ? { state: "none" }
+    : { state: "ready", fingerprint: priorFingerprint, units };
 }
 
 // The set of units the CURRENT attempt of an INLINE per-unit stage has
@@ -8963,7 +12548,9 @@ export function loadAgents(): AgentMetadata[] {
     const dir = agentsDir();
     const slugToFile = new Map<string, string>();
     const agents: AgentMetadata[] = [];
-    const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith(".md") && f !== "aidlc.md")
+      .sort();
     for (const f of files) {
       const filePath = join(dir, f);
       const agent = parseAgentFrontmatter(filePath);
@@ -9727,10 +13314,32 @@ export function nextInScopeStage(
   return null;
 }
 
-// Parse the "- [x] slug — EXECUTE" / "— SKIP" suffix from Stage Progress. The
-// suffix is set by `aidlc-utility init` per scope + Greenfield/Brownfield
-// overrides, then preserved across stage transitions — it represents the
-// plan, not the current run-state (checkbox letters are separate).
+// Resolve one stage's action in the approved workflow plan. State suffixes
+// include recomposition and project-type overrides, so they take precedence
+// over the stock scope grid.
+export function effectivePlanAction(
+  slug: string,
+  scope: string | null | undefined,
+  stateContent: string | null,
+): "EXECUTE" | "SKIP" | undefined {
+  const stateAction = stateContent
+    ? parseStateStageSuffixes(stateContent).get(slug)
+    : undefined;
+  if (stateAction !== undefined) return stateAction;
+  return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
+}
+
+// A per-unit stage uses one stage-level artifact set when the approved plan
+// excludes the Unit DAG producer.
+export function usesStageLevelPerUnitArtifacts(
+  scope: string | null | undefined,
+  stateContent: string | null,
+): boolean {
+  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
+}
+
+// Parse each stage's EXECUTE or SKIP suffix from Stage Progress. The suffix is
+// the approved plan action, independent of the checkbox run state.
 export function parseStateStageSuffixes(
   content: string
 ): Map<string, "EXECUTE" | "SKIP"> {
@@ -9805,7 +13414,8 @@ export interface ScopeCostSummary {
   skip: number;          // total - execute
   gates: number;         // EXECUTE stages outside initialization; mirrors
                          // computeGate() in aidlc-orchestrate.ts - change together
-  perUnitStages: number; // EXECUTE stages that repeat per Unit of Work
+  perUnitStages: number; // EXECUTE stages that repeat per Unit of Work when
+                         // units-generation EXECUTEs; otherwise they run once
 }
 
 // Cost of an arbitrary EXECUTE/SKIP grid (the composer-proposal shape). Indexes
@@ -9821,6 +13431,7 @@ export function gridCostSummary(
   const byslug = new Map<string, StageEntry>();
   for (const s of loadStageGraph()) byslug.set(s.slug, s);
   const total = Object.keys(stages).length;
+  const hasUnitDag = stages["units-generation"] === "EXECUTE";
   let execute = 0;
   let gates = 0;
   let perUnitStages = 0;
@@ -9830,7 +13441,9 @@ export function gridCostSummary(
     const node = byslug.get(slug);
     if (!node) continue;
     if (node.phase !== "initialization") gates++;
-    if (isPerUnitStage(node)) perUnitStages++;
+    // Without units-generation there is no Unit DAG, so per-unit stages
+    // degrade to one stage-level pass (aidlc-orchestrate.ts).
+    if (hasUnitDag && isPerUnitStage(node)) perUnitStages++;
   }
   return { total, execute, skip: total - execute, gates, perUnitStages };
 }
@@ -9946,6 +13559,44 @@ import type {
   appendAuditEntryUnlocked as AppendAuditEntryUnlocked,
 } from "./aidlc-audit.ts";
 
+export function redactProjectDirPrefix(
+  value: string,
+  projectDir: string,
+): string {
+  const variants = new Set<string>([resolvePath(projectDir)]);
+  try {
+    variants.add(realpathSync(projectDir));
+  } catch {
+    // The caller still gets lexical-prefix redaction when the root vanished.
+  }
+  for (const variant of [...variants]) {
+    variants.add(variant.replaceAll("\\", "/"));
+    variants.add(variant.replaceAll("/", "\\"));
+  }
+  let redacted = value;
+  for (const variant of [...variants].sort((a, b) => b.length - a.length)) {
+    let offset = 0;
+    while (offset < redacted.length) {
+      const index = redacted.indexOf(variant, offset);
+      if (index === -1) break;
+      const next = redacted[index + variant.length];
+      if (
+        next !== undefined &&
+        next !== "/" &&
+        next !== "\\" &&
+        !/\s/.test(next)
+      ) {
+        offset = index + variant.length;
+        continue;
+      }
+      redacted =
+        `${redacted.slice(0, index)}<project-dir>${redacted.slice(index + variant.length)}`;
+      offset = index + "<project-dir>".length;
+    }
+  }
+  return redacted;
+}
+
 // Failures are swallowed — we're already exiting, the caller gets the JSON
 // error on stderr regardless.
 export function emitError(
@@ -9956,6 +13607,8 @@ export function emitError(
   intent?: string,
   space?: string
 ): never {
+  const auditCommand = redactProjectDirPrefix(command, projectDir);
+  const auditMessage = redactProjectDirPrefix(msg, projectDir);
   if (!_errorEmitInProgress) {
     _errorEmitInProgress = true;
     try {
@@ -9988,14 +13641,14 @@ export function emitError(
         if (holdsAuditLock(projectDir, intent, space)) {
           audit.appendAuditEntryUnlocked("ERROR_LOGGED", {
             Tool: tool,
-            Command: command,
-            Error: msg,
+            Command: auditCommand,
+            Error: auditMessage,
           }, projectDir, intent, space);
         } else {
           audit.appendAuditEntry("ERROR_LOGGED", {
             Tool: tool,
-            Command: command,
-            Error: msg,
+            Command: auditCommand,
+            Error: auditMessage,
           }, projectDir, intent, space);
         }
       }
@@ -10112,11 +13765,9 @@ export function extractMarkdownSection(content: string, heading: string): string
   return stripped.slice(bodyStart, bodyEnd);
 }
 
-// Replace the contents of fenced code blocks (```...```) with blank lines of
-// the same count, preserving line numbers and byte offsets up to a few chars
-// per line. Headings inside fenced code blocks are no longer matched by
-// regex scans against the returned string. Used by extractMarkdownSection to
-// keep teaching-example `## Heading` lines from masquerading as real headings.
+// Replace fenced-code contents with blank lines while preserving all other
+// text. This is the long-standing extraction contract: HTML comments remain
+// part of the returned section for callers that inspect them directly.
 function stripFencedCodeBlocks(content: string): string {
   const lines = content.split("\n");
   let inFence = false;
@@ -10129,6 +13780,383 @@ function stripFencedCodeBlocks(content: string): string {
     if (inFence) lines[i] = "";
   }
   return lines.join("\n");
+}
+
+function multilineInlineCodeSpanEnd(
+  lines: string[],
+  startLine: number,
+  start: number,
+): { line: number; offset: number } | null {
+  let length = 1;
+  while (lines[startLine][start + length] === "`") length++;
+  const sameLine = inlineCodeSpanEnd(lines[startLine], start);
+  if (sameLine !== null) return { line: startLine, offset: sameLine };
+
+  // Inline parsing cannot carry through a blank or a new heading-like block.
+  // Stopping conservatively also prevents an unmatched delimiter from hiding a
+  // later question heading while still supporting ordinary soft line breaks.
+  const startCandidate = stripMarkdownContainerPrefix(lines[startLine]);
+  if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(startCandidate)) return null;
+  for (let line = startLine + 1; line < lines.length; line++) {
+    const candidate = stripMarkdownContainerPrefix(lines[line]);
+    if (
+      candidate.trim() === "" ||
+      isMarkdownBlockBoundary(candidate) ||
+      rawHtmlBlockStart(candidate) !== null
+    ) {
+      return null;
+    }
+    let cursor = 0;
+    while (cursor < lines[line].length) {
+      const tick = lines[line].indexOf("`", cursor);
+      if (tick < 0) break;
+      let candidateLength = 1;
+      while (lines[line][tick + candidateLength] === "`") candidateLength++;
+      if (candidateLength === length) {
+        return { line, offset: tick + candidateLength };
+      }
+      cursor = tick + candidateLength;
+    }
+  }
+  return null;
+}
+
+// Replace invisible Markdown (HTML comments, code spans, and block code) with
+// blank lines while preserving line positions. Literal contexts are resolved
+// before comment state so a `<!--` example cannot hide later visible headings.
+export function visibleMarkdownLines(
+  content: string,
+  options: {
+    preserveIndentedCode?: boolean;
+    preserveCommentBoundaries?: boolean;
+  } = {},
+): string[] {
+  const lines = content
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    // NUL is the internal marker used below for removed comments. Escape a
+    // literal NUL first so hostile input cannot manufacture a reserved heading.
+    .map((line) =>
+      line.replaceAll(
+        INVISIBLE_COMMENT_MARKER,
+        RAW_INVISIBLE_COMMENT_MARKER_ESCAPE,
+      ),
+    );
+  const visible: string[] = [];
+  let inComment = false;
+  let commentContainer: MarkdownContainerSegment[] = [];
+  let fence: {
+    marker: "`" | "~";
+    length: number;
+    container: MarkdownContainerSegment[];
+  } | null = null;
+  let codeSpanEnd: { line: number; offset: number } | null = null;
+  let rawHtmlBlock: {
+    end: RegExp;
+    container: MarkdownContainerSegment[];
+  } | null = null;
+  let htmlTagOpen = false;
+  let htmlAttributeQuote: '"' | "'" | null = null;
+  let activeContainer: {
+    segments: MarkdownContainerSegment[];
+    hadBlank: boolean;
+  } | null = null;
+
+  for (let lineNumber = 0; lineNumber < lines.length; lineNumber++) {
+    const rawLine = lines[lineNumber];
+    const explicitContainerLine = markdownContainerLine(rawLine);
+    let containerLine = explicitContainerLine;
+    if (activeContainer !== null) {
+      const blank = rawLine.trim() === "";
+      const continuation = blank
+        ? ""
+        : markdownContainerContinuation(rawLine, activeContainer.segments);
+      const hasBlockquote = activeContainer.segments.some(
+        (segment) => segment.type === "blockquote",
+      );
+      const lazyBlockStart = hasBlockquote &&
+        /^(?: {0,3})(?:[`~]{3,}|<!--)/.test(rawLine);
+      if (blank) {
+        containerLine = { content: "", segments: activeContainer.segments };
+        activeContainer = {
+          segments: activeContainer.segments,
+          hadBlank: true,
+        };
+      } else if (continuation !== null) {
+        const nested = markdownContainerLine(continuation);
+        containerLine = {
+          content: nested.content,
+          segments: [...activeContainer.segments, ...nested.segments],
+        };
+        activeContainer = { segments: containerLine.segments, hadBlank: false };
+      } else if (
+        explicitContainerLine.segments.some(
+          (segment) => segment.type === "list" || segment.type === "blockquote",
+        )
+      ) {
+        containerLine = explicitContainerLine;
+        activeContainer = null;
+      } else if (
+        lazyBlockStart ||
+        (!activeContainer.hadBlank && !isMarkdownBlockBoundary(rawLine))
+      ) {
+        // A paragraph may continue lazily after a list or blockquote marker.
+        // Keep the container alive so a later indented fence/comment cannot
+        // be reinterpreted as a top-level excluded span.
+        containerLine = {
+          content: rawLine,
+          segments: activeContainer.segments,
+        };
+        activeContainer = {
+          segments: activeContainer.segments,
+          hadBlank: false,
+        };
+      } else {
+        activeContainer = null;
+      }
+    }
+    if (
+      containerLine.segments.some(
+        (segment) => segment.type === "list" || segment.type === "blockquote",
+      )
+    ) {
+      activeContainer = {
+        segments: containerLine.segments,
+        hadBlank: rawLine.trim() === "",
+      };
+    }
+    if (rawHtmlBlock) {
+      const continuation = rawHtmlBlock.container.length === 0
+        ? rawLine
+        : rawLine.trim() === ""
+          ? ""
+          : markdownContainerContinuation(rawLine, rawHtmlBlock.container);
+      if (continuation === null) {
+        rawHtmlBlock = null;
+      } else {
+        if (rawHtmlBlock.end.test(continuation)) {
+          rawHtmlBlock = null;
+        }
+        visible.push("");
+        continue;
+      }
+    }
+
+    if (fence) {
+      const continuation = fence.container.length === 0
+        ? rawLine
+        : rawLine.trim() === ""
+          ? ""
+          : markdownContainerContinuation(rawLine, fence.container);
+      if (continuation === null) {
+        // CommonMark ends a fenced block when the list item or blockquote that
+        // owns it ends. Reprocess this line outside the old container so a
+        // following top-level heading cannot be hidden by an unclosed fence.
+        fence = null;
+      }
+      if (fence === null) {
+        // Fall through and parse the boundary line normally.
+      } else {
+        // A list item can indent its fenced-code continuation by the marker's
+        // full content offset (more than three columns). Accepting broader
+        // closing indentation here is conservative: if a renderer treats an
+        // over-indented marker as literal code, exposing the following lines can
+        // only fail closed on a visible heading; leaving a real close hidden
+        // would let an appended heading remain inside the excluded span.
+        const closing = /^[ \t]*([`~]+)[ \t]*$/.exec(continuation ?? "");
+        const closingMarker = closing?.[1];
+        if (closingMarker === undefined) {
+          visible.push("");
+          continue;
+        }
+        if (
+          closingMarker.split("").every((marker) => marker === fence!.marker) &&
+          closingMarker.length >= fence.length
+        ) {
+          fence = null;
+        }
+        visible.push("");
+        continue;
+      }
+    }
+
+    if (
+      inComment &&
+      commentContainer.length > 0 &&
+      rawLine.trim() !== "" &&
+      markdownContainerContinuation(rawLine, commentContainer) === null
+    ) {
+      // HTML comment blocks are scoped to their Markdown container just like
+      // fenced blocks. A line outside that container is visible again.
+      inComment = false;
+      commentContainer = [];
+    }
+
+    if (htmlTagOpen) {
+      const candidate = stripMarkdownContainerPrefix(rawLine);
+      if (
+        candidate.trim() === "" ||
+        /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$|<h[1-6]\b)/i.test(
+          candidate,
+        ) ||
+        (htmlAttributeQuote === null && /^\[Answer\]:/.test(candidate))
+      ) {
+        // A malformed, unclosed tag must not mask a later block heading. A
+        // renderer that keeps this inside the attribute only gets a fail-closed
+        // rejection; a real closing tag is still tracked normally below.
+        htmlTagOpen = false;
+        htmlAttributeQuote = null;
+      }
+    }
+    const continuedHtmlTag = htmlTagOpen;
+    let line = continuedHtmlTag ? INVISIBLE_LINE_MARKER : "";
+    let cursor = 0;
+    let continuedCodeSpan = false;
+    if (codeSpanEnd !== null) {
+      if (lineNumber < codeSpanEnd.line) {
+        visible.push("");
+        continue;
+      }
+      cursor = codeSpanEnd.offset;
+      codeSpanEnd = null;
+      continuedCodeSpan = true;
+      // This line is still paragraph continuation even after the delimiter.
+      // Keep it ineligible for block-heading recognition.
+      line = INVISIBLE_LINE_MARKER;
+    }
+
+    const rawOpening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(
+      containerLine.content,
+    );
+    if (
+      !inComment &&
+      !continuedCodeSpan &&
+      !htmlTagOpen &&
+      rawOpening &&
+      (rawOpening[1][0] === "~" || !rawOpening[2].includes("`"))
+    ) {
+      fence = {
+        marker: rawOpening[1][0] as "`" | "~",
+        length: rawOpening[1].length,
+        container: containerLine.segments,
+      };
+      visible.push("");
+      continue;
+    }
+
+    if (
+      !options.preserveIndentedCode &&
+      !inComment &&
+      !continuedCodeSpan &&
+      !htmlTagOpen &&
+      /^(?: {4}|\t)/.test(stripMarkdownContainerPrefix(rawLine))
+    ) {
+      visible.push("");
+      continue;
+    }
+
+    const rawHtmlOpening = !inComment &&
+        !continuedCodeSpan &&
+        !htmlTagOpen
+      ? rawHtmlBlockStart(containerLine.content)
+      : null;
+    if (rawHtmlOpening !== null) {
+      rawHtmlBlock = {
+        ...rawHtmlOpening,
+        container: containerLine.segments,
+      };
+      if (rawHtmlOpening.end.test(containerLine.content)) {
+        rawHtmlBlock = null;
+      }
+      visible.push("");
+      continue;
+    }
+
+    while (cursor < rawLine.length) {
+      if (inComment) {
+        const end = rawLine.indexOf("-->", cursor);
+        if (end < 0) {
+          cursor = rawLine.length;
+          break;
+        }
+        inComment = false;
+        commentContainer = [];
+        line += INVISIBLE_COMMENT_MARKER;
+        cursor = end + 3;
+        continue;
+      }
+
+      if (
+        rawLine[cursor] === "`" &&
+        !htmlTagOpen &&
+        !isEscapedAt(rawLine, cursor)
+      ) {
+        const end = multilineInlineCodeSpanEnd(lines, lineNumber, cursor);
+        if (end === null) {
+          line += rawLine.slice(cursor);
+          break;
+        }
+        if (end.line === lineNumber) {
+          line += rawLine.slice(cursor, end.offset);
+          cursor = end.offset;
+          continue;
+        }
+        line += INVISIBLE_LINE_MARKER;
+        codeSpanEnd = end;
+        cursor = rawLine.length;
+        continue;
+      }
+
+      if (rawLine.startsWith("<!--", cursor)) {
+        const candidate = containerLine.content;
+        const blockStart = /^ {0,3}<!--/.exec(candidate);
+        const candidateOffset = rawLine.length - candidate.length;
+        const atBlockStart = blockStart !== null &&
+          candidateOffset + blockStart[0].length - 4 === cursor;
+        const closesOnLine = rawLine.indexOf("-->", cursor + 4) >= 0;
+        if (
+          isEscapedAt(rawLine, cursor) ||
+          (!closesOnLine && (!atBlockStart || htmlTagOpen))
+        ) {
+          line += "<!--";
+          cursor += 4;
+          continue;
+        }
+        line += INVISIBLE_COMMENT_MARKER;
+        inComment = true;
+        commentContainer = containerLine.segments;
+        cursor += 4;
+        continue;
+      }
+
+      const character = rawLine[cursor];
+      line += character;
+      if (htmlTagOpen) {
+        if (htmlAttributeQuote !== null) {
+          if (character === htmlAttributeQuote) htmlAttributeQuote = null;
+        } else if (character === '"' || character === "'") {
+          htmlAttributeQuote = character;
+        } else if (character === ">") {
+          htmlTagOpen = false;
+        }
+      } else if (
+        character === "<" &&
+        /[A-Za-z!/]/.test(rawLine[cursor + 1] ?? "")
+      ) {
+        htmlTagOpen = true;
+      }
+      cursor++;
+    }
+
+    visible.push(
+      options.preserveCommentBoundaries
+        ? line
+        : restoreVisibleMarkdownMarkers(line),
+    );
+  }
+
+  return visible;
 }
 
 export function appendUnderHeading(

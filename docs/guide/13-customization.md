@@ -6,8 +6,9 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 > configuration, stage depth, knowledge, and rules — apply on every harness. The
 > mechanism-level config in this chapter (`settings.json` / `settings.local.json`,
 > the statusline command, `$CLAUDE_PROJECT_DIR`, tool-permission blocks) is
-> **Claude Code-specific**. Kiro configures the equivalents in
-> `.kiro/settings/cli.json` + its agent config, Codex in `.codex/config.toml`
+> **Claude Code-specific**. Kiro CLI configures the equivalents in
+> `.kiro/settings/cli.json` + its agent config; Kiro IDE uses agent Markdown
+> `tools:` and `permissions.rules`. Codex uses `.codex/config.toml`
 > + Starlark rules, Cursor in `.cursor/hooks.json` + `.cursor/cli.json`
 > (permissions only), opencode in the project-root `opencode.json`, and Copilot
 > in `.github/hooks/aidlc.json` (hook wiring) + `~/.copilot/config.json`
@@ -39,7 +40,7 @@ This file is listed in `.gitignore` so your personal changes are never committed
 
 ## Agent Models and Effort (Tiers)
 
-Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, balanced agents pin a mid-size model (on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit the session model), and templated agents additionally reduce effort on those same model-pinning harnesses. See [Agent System](../reference/05-agent-system.md) for the full projection table.
+Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, while balanced and templated agents both pin a mid-size model at `medium` effort on Claude Code, Codex, and opencode. Those two tiers currently project identically but remain distinct so either can be retuned independently. On Kiro, Cursor, and Copilot all tiers inherit the session model. See [Agent System](../reference/05-agent-system.md) for the full projection table.
 
 To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter. On Kiro the surface depends on the harness: on Kiro CLI add a `"model"` field to the agent's `.kiro/agents/aidlc-*-agent.json`, and on Kiro IDE set a `model:` line in the agent's `.kiro/agents/aidlc-*-agent.md` frontmatter (the agent JSON files are CLI-only — the IDE reads the `.md` frontmatter when spawning). In both cases use a model ID enabled on your install; Kiro agents ship without a model pin so they inherit the session model by default. The edit survives until you re-copy the `dist/<harness>/` shell. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
@@ -187,7 +188,7 @@ The scoped `Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)` entry sits ahead of
 ### How permissions work
 
 - **Project-wide ceiling**: The `settings.json` allow list is the maximum set of tools available
-- **Agents inherit the full session toolset** by default; the only shipped restriction is `disallowedTools: Task`, which blocks nested subagent spawning
+- **Claude Code agents inherit the full session toolset** by default; `disallowedTools: Task` blocks nested subagent spawning on this harness
 - **Optional per-agent narrowing**: An agent can be narrowed by adding a `tools:` allowlist to its frontmatter — omit it to inherit everything. Listing `tools:` drops inherited MCP tools unless the fully-qualified `mcp__<server>__<tool>` ids are also listed
 
 ### Expanding permissions

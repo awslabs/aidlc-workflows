@@ -52,7 +52,11 @@ import { basename, dirname, isAbsolute, join, posix, relative, sep } from "node:
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
-import { absorbReviewerKnowledge, agentNameFromPath } from "./agent-knowledge.ts";
+import {
+  absorbReviewerKnowledge,
+  agentNameFromPath,
+  injectDelegatedKnowledgePreflight,
+} from "./agent-knowledge.ts";
 import { renderOnboarding } from "./onboarding.ts";
 import {
   type Harness,
@@ -169,9 +173,9 @@ function agentTierFromMd(s: string, srcPath: string): string {
 // surface there). Called AFTER the token substitution + rules-rename pass.
 // A missing tier: on an agent file fails the build (agentTierFromMd). A null
 // projected model/effort means the harness-native key is OMITTED: the
-// harness's own session/config default applies (the inherit contract for
-// judgment/balanced agents). When every key is omitted the `tier:` line is
-// dropped without a replacement.
+// harness's own session/config default applies for that harness/tier
+// combination. When every key is omitted the `tier:` line is dropped without
+// a replacement.
 function projectTierFrontmatter(
   s: string,
   srcPath: string,
@@ -186,6 +190,18 @@ function projectTierFrontmatter(
   const m = s.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!m) throw new Error(`${srcPath}: agent .md has no closed frontmatter block.`);
   const fm = m[1];
+  const disallowedMatches = [
+    ...fm.matchAll(/^disallowedTools:\s*(.*?)\s*$/gm),
+  ];
+  if (
+    harness === "kiro" &&
+    (disallowedMatches.length !== 1 ||
+      !/^task$/i.test(disallowedMatches[0][1].trim()))
+  ) {
+    throw new Error(
+      `${srcPath}: kiro projection requires exactly one disallowedTools: Task line.`,
+    );
+  }
   const proj = projectTier(tier, harness, TIER_CAP); // throws on unknown tier
   const lines: string[] = [];
   if (proj.model !== null) lines.push(`model: ${proj.model}`);
@@ -199,7 +215,10 @@ function projectTierFrontmatter(
   // sits - first, last, or mid-frontmatter.
   const newFm = fm
     .split(/\r?\n/)
-    .flatMap((line) => (/^tier:/.test(line) ? lines : [line]))
+    .flatMap((line) => {
+      if (harness === "kiro" && /^disallowedTools:/.test(line)) return [];
+      return /^tier:/.test(line) ? lines : [line];
+    })
     .join("\n");
   // Function replacement: a literal `$&`/`$'` in frontmatter must not be
   // interpreted as a replacement pattern.
@@ -276,7 +295,10 @@ function transform(
     // token substitution below covers the absorbed prose like any core .md.
     let s = content.toString("utf-8");
     const agentName = agentNameFromPath(srcPath);
-    if (agentName) s = absorbReviewerKnowledge(s, agentName, CORE_ROOT);
+    if (agentName) {
+      s = absorbReviewerKnowledge(s, agentName, CORE_ROOT);
+      s = injectDelegatedKnowledgePreflight(s, agentName, harnessDir);
+    }
     s = substituteToken(s, harnessDir);
     s = applyRulesRename(s, harnessDir, rulesRename);
     if (harness) s = projectTierFrontmatter(s, srcPath, harness);
@@ -314,13 +336,21 @@ function applyFrontmatterAdditions(
     );
   }
   const fm = m[1];
+  const added = new Set<string>();
   for (const line of lines) {
+    if (/^\s/.test(line)) continue;
     const key = line.split(":")[0]?.trim();
     if (!key || !/^[A-Za-z_][\w-]*$/.test(key)) {
       throw new Error(
         `frontmatterAdditions: line "${line}" for ${file} does not start with a YAML key.`,
       );
     }
+    if (added.has(key)) {
+      throw new Error(
+        `frontmatterAdditions: ${file} declares "${key}:" more than once in additions.`,
+      );
+    }
+    added.add(key);
     if (new RegExp(`^${key}:`, "m").test(fm)) {
       throw new Error(
         `frontmatterAdditions: ${file} already declares "${key}:" in core - ` +
@@ -578,7 +608,6 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
         `${fmMissed.join(", ")} - fix the path(s) in the manifest.`,
     );
   }
-
   // 2. Copy authored harness surfaces (token substitution on .md). projectRoot
   //    files land beside the harness dir (e.g. dist/kiro/AGENTS.md), the rest
   //    inside <harnessDir>/. On the kiro harnesses two authored JSON surfaces
@@ -1132,6 +1161,11 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
           basename(file, ".md"),
           CORE_ROOT,
           pluginSrc,
+        );
+        projected = injectDelegatedKnowledgePreflight(
+          projected,
+          basename(file, ".md"),
+          harnessLeaf,
         );
         if (kind === "cursor") projected = projectCursorPluginAgent(projected, file);
         content = Buffer.from(projected, "utf-8");

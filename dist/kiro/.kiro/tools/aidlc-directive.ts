@@ -183,6 +183,7 @@ export interface RunStageDirective {
   // bundle. On dispatched topologies the conductor passes the already-loaded
   // rule text to every agent brief.
   rules_in_context: string[];
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   stage_file: string;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
@@ -245,11 +246,12 @@ export interface RunStageDirective {
   wave?: RunStageWave;
   // consumes_absent: REQUIRED declared inputs whose resolved file does NOT
   // exist on disk at emit time, each annotated with why. `expected: true` =
-  // the producing stage is not on the active scope's path (the scope
-  // deliberately skipped it — absence is by design; substitute available
-  // context, do not invent the artifact). `expected: false` = a producer IS
-  // on the path but the file is still missing (runtime-skipped conditional
-  // producer, or a real gap worth surfacing per stage-protocol-recovery).
+  // the producing stage is not on the active scope's path or every on-path
+  // producer has audit provenance for a conditional runtime skip (absence is
+  // by design; substitute available context, do not invent the artifact).
+  // `expected: false` = an on-path producer was not skipped but the file is
+  // still missing, including a stage marked [S] by a forward jump, so this is
+  // a real gap worth surfacing per stage-protocol-recovery.
   // Optional (`required: false`) consumes never appear here — missing means
   // dropped, not flagged. Omitted entirely when nothing qualifies, and on
   // the ctx-less emit path (no projectDir to check against). Paths with an
@@ -277,6 +279,7 @@ export interface DispatchSubagentDirective {
   consumes: string[];
   produces: string[];
   rules_in_context: string[];
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   stage_file: string;
   worker: string;
@@ -395,8 +398,17 @@ export interface ParkedDirective {
   stage: string;
 }
 
+export interface StageValidityAdvisory {
+  state: "drifted" | "untracked" | "unavailable";
+  directly_stale: string[];
+  needs_revalidation: string[];
+  untracked: string[];
+  earliest_affected_stage: string | null;
+  warning: string;
+}
+
 // The Directive union — the engine emits exactly one of these per `next`.
-export type Directive =
+type DirectivePayload =
   | LoadSteeringDirective
   | RunStageDirective
   | DispatchSubagentDirective
@@ -407,6 +419,11 @@ export type Directive =
   | ErrorDirective
   | DoneDirective
   | ParkedDirective;
+
+/** `stage_validity` is universal and advisory; `kind` still owns routing. */
+export type Directive = DirectivePayload & {
+  stage_validity?: StageValidityAdvisory;
+};
 
 export type ValidationResult =
   | { valid: true; data: Directive }
@@ -523,11 +540,12 @@ const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
 // absent, on any kind. Folding it here also means a future emission point can
 // attach a line without touching this file.
 const NARRATION_FIELD = "narration" as const;
+const STAGE_VALIDITY_FIELD = "stage_validity" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the
 // record of what is kind-SPECIFIC and this one helper adds what is universal.
 function withNarration(fields: readonly string[]): readonly string[] {
-  return [...fields, NARRATION_FIELD];
+  return [...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD];
 }
 
 const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> = {
@@ -589,6 +607,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   // case and never an error; present-but-not-a-string is, because the conductor
   // would otherwise be handed a non-sentence to speak.
   checkOptionalString(o, NARRATION_FIELD, kind, errors);
+  checkOptionalStageValidity(o, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
@@ -759,6 +778,58 @@ function describe(v: unknown): string {
   if (v === null) return "null";
   if (Array.isArray(v)) return "array";
   return typeof v;
+}
+
+function checkOptionalStageValidity(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(STAGE_VALIDITY_FIELD in o)) return;
+  const raw = o[STAGE_VALIDITY_FIELD];
+  if (!isPlainObject(raw)) {
+    errors.push(`${kind}: ${STAGE_VALIDITY_FIELD} must be object, got ${describe(raw)}`);
+    return;
+  }
+  const allowed = new Set([
+    "state",
+    "directly_stale",
+    "needs_revalidation",
+    "untracked",
+    "earliest_affected_stage",
+    "warning",
+  ]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      errors.push(`${kind}: ${STAGE_VALIDITY_FIELD} unknown key: ${key}`);
+    }
+  }
+  if (!(["drifted", "untracked", "unavailable"] as unknown[]).includes(raw.state)) {
+    errors.push(
+      `${kind}: ${STAGE_VALIDITY_FIELD}.state must be drifted, untracked, or unavailable`,
+    );
+  }
+  for (const field of [
+    "directly_stale",
+    "needs_revalidation",
+    "untracked",
+  ] as const) {
+    const value = raw[field];
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+      errors.push(`${kind}: ${STAGE_VALIDITY_FIELD}.${field} must be string array`);
+    }
+  }
+  if (
+    raw.earliest_affected_stage !== null &&
+    typeof raw.earliest_affected_stage !== "string"
+  ) {
+    errors.push(
+      `${kind}: ${STAGE_VALIDITY_FIELD}.earliest_affected_stage must be string or null`,
+    );
+  }
+  if (typeof raw.warning !== "string") {
+    errors.push(`${kind}: ${STAGE_VALIDITY_FIELD}.warning must be string`);
+  }
 }
 
 function checkString(

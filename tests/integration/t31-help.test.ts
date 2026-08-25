@@ -48,7 +48,7 @@
 //   .sh:40  "--doctor"          -> "lists --doctor utility"
 //   .sh:41  "--help"            -> "lists --help utility"
 //   .sh:47  "All 33 stages"     -> "enterprise/feature shows 'All 33 stages'"
-//   .sh:48  "7 of 33 stages"    -> "bugfix shows compiled '7 of 33 stages'"
+//   .sh:48  "9 of 33 stages"    -> "bugfix shows compiled '9 of 33 stages'"
 //   .sh:49  "(default)"         -> "classic row shows '(default)' marker"
 //   .sh:52  "--force"           -> "lists --force flag"
 //   .sh:55  "--stage"           -> "lists --stage utility"
@@ -171,10 +171,10 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
     expect(HELP.stdout).toContain("All 33 stages");
   });
 
-  test("bugfix shows compiled '7 of 33 stages' count", () => {
-    // execute !== total -> "<execute> of <total> stages"; bugfix tallies 7
-    // EXECUTE of 33 (was the stale "~8 stages" pre-milestone-10).
-    expect(HELP.stdout).toContain("7 of 33 stages");
+  test("bugfix shows compiled '9 of 33 stages' count", () => {
+    // execute !== total -> "<execute> of <total> stages"; bugfix tallies 9
+    // EXECUTE of 33.
+    expect(HELP.stdout).toContain("9 of 33 stages");
   });
 
   test("classic row shows '(default)' marker", () => {

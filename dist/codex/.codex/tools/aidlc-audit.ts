@@ -23,6 +23,7 @@ import {
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
   parseFieldArgs,
+  redactProjectDirPrefix,
   relativeRecordDir,
   readRegularFileNoFollowOrThrow,
   releaseAuditLock,
@@ -182,6 +183,7 @@ const VALID_EVENT_TYPES = new Set([
   // from `prepare`). See CHANGELOG + audit-format.md.
   "SWARM_STARTED",
   "SWARM_UNIT_CONVERGED",
+  "SWARM_SOURCE_MERGED",
   "SWARM_UNIT_FAILED",
   "SWARM_BATON_RETURNED",
   "SWARM_COMPLETED",
@@ -272,6 +274,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SENSOR_PROPOSED: "Sensor Proposed",
   SWARM_STARTED: "Swarm Started",
   SWARM_UNIT_CONVERGED: "Swarm Unit Converged",
+  SWARM_SOURCE_MERGED: "Swarm Source Merged",
   SWARM_UNIT_FAILED: "Swarm Unit Failed",
   SWARM_BATON_RETURNED: "Swarm Baton Returned",
   SWARM_COMPLETED: "Swarm Completed",
@@ -335,7 +338,8 @@ export interface AuditEntryInput {
 }
 
 // Authority-bearing events: rows the engine's guards read as authorization
-// evidence — human presence (humanActedSinceGate), gate resolutions, interview
+// evidence — completed-stage receipts (validity routing), human presence
+// (humanActedSinceGate), gate resolutions, interview
 // answers (one-answer-per-human-turn), reviewer receipts
 // (verifyReviewerPrecondition), swarm attempt/convergence (the finalize and
 // artifact-guard boundaries), and the autonomy grant. Each has exactly one owning emitter that
@@ -346,6 +350,7 @@ export interface AuditEntryInput {
 // the owning emitters set AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 (the same escape
 // idiom as AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS in aidlc-state.ts).
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
+  "STAGE_COMPLETED",
   "HUMAN_TURN",
   "GATE_APPROVED",
   "GATE_REJECTED",
@@ -356,6 +361,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "ARTIFACT_REUSED",
   "SWARM_STARTED",
   "SWARM_UNIT_CONVERGED",
+  "SWARM_SOURCE_MERGED",
   "AUTONOMY_MODE_SET",
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
@@ -415,6 +421,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_DEGRADED",
   "SWARM_BATON_RETURNED",
   "SWARM_UNIT_CONVERGED",
+  "SWARM_SOURCE_MERGED",
   "SWARM_UNIT_FAILED",
   "BOLT_STARTED",
   "BOLT_COMPLETED",
@@ -485,6 +492,7 @@ function validateAuditEntry(entry: AuditEntryInput): void {
 function renderAuditBlock(
   entry: AuditEntryInput,
   timestamp: string,
+  projectDir: string,
 ): string {
   const heading = EVENT_HEADINGS[entry.eventType] || entry.eventType;
   let block = `\n## ${heading}\n`;
@@ -496,7 +504,10 @@ function renderAuditBlock(
     if (EMITTER_OWNED_FIELD_KEYS.has(key)) continue;
     // Escape every JavaScript line terminator in values so a malicious or
     // malformed input cannot forge a second audit field or event line.
-    const safeValue = String(value).replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");
+    const safeValue = redactProjectDirPrefix(
+      String(value),
+      projectDir,
+    ).replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");
     block += `**${key}**: ${safeValue}\n`;
   }
   return `${block}\n---\n`;
@@ -570,7 +581,7 @@ export function appendAuditEntryUnlocked(
   appendAuditBlockAtPath(
     projectDir,
     auditFilePath(projectDir, intent, space),
-    renderAuditBlock(entry, ts),
+    renderAuditBlock(entry, ts, projectDir),
   );
 
   tapAuditMetric(eventType, fields, projectDir);
@@ -757,7 +768,11 @@ export function appendAuditEntryAtPathUnlocked(
   const entry = { eventType, fields };
   validateAuditEntry(entry);
   const ts = isoTimestamp();
-  appendAuditBlockAtPath(projectDir, shardPath, renderAuditBlock(entry, ts));
+  appendAuditBlockAtPath(
+    projectDir,
+    shardPath,
+    renderAuditBlock(entry, ts, projectDir),
+  );
   tapAuditMetric(eventType, fields, projectDir);
   return { appended: true, event: eventType, timestamp: ts };
 }
@@ -784,7 +799,9 @@ export function appendAuditEntries(
   try {
     const timestamps = entries.map(() => isoTimestamp());
     const payload = entries
-      .map((entry, index) => renderAuditBlock(entry, timestamps[index]))
+      .map((entry, index) =>
+        renderAuditBlock(entry, timestamps[index], projectDir)
+      )
       .join("");
     appendAuditBlockAtPath(projectDir, auditFilePath(projectDir, intent, space), payload);
     for (const entry of entries) {
@@ -851,8 +868,9 @@ function handleAppendBatch(rawEntries: string, projectDir: string): void {
   });
   // Same ownership floor as `append`: a batch must not smuggle an
   // authority-bearing receipt among diagnostic rows. The engine's own batch
-  // caller (handleSingleReport's synthetic STAGE_STARTED/STAGE_COMPLETED pair)
-  // emits no protected types, so the single-stage path is unaffected.
+  // callers must not smuggle a protected receipt among diagnostic rows. The
+  // synthetic single-stage owner uses appendAuditEntries directly instead of
+  // crossing this public CLI boundary.
   for (const entry of entries) {
     if (CLI_PROTECTED_EVENT_TYPES.has(entry.eventType) && !directAuditEventsAllowed()) {
       refuseProtectedEvent(entry.eventType);
@@ -877,7 +895,11 @@ function handleAppendRaw(
   // reader, timestamp and all. Refuse taxonomy names outright (canonical events
   // go through `append`, which validates ownership); non-taxonomy Event lines
   // (custom diagnostics) stay allowed — no query resolves them to authority.
-  const expandedBody = body.replace(/\\n/g, "\n");
+  const expandedBody = redactProjectDirPrefix(
+    body.replace(/\\n/g, "\n"),
+    projectDir,
+  );
+  const safeHeading = redactProjectDirPrefix(heading, projectDir);
   for (const raw of expandedBody.split(/\r\n?|\n|\u2028|\u2029/)) {
     const line = raw.startsWith("- ") ? raw.slice(2) : raw;
     if (!line.startsWith("**Event**:")) continue;
@@ -899,7 +921,7 @@ function handleAppendRaw(
 
   try {
     // Interpret literal \n sequences in the body as actual newlines
-    let block = `\n## ${heading}\n`;
+    let block = `\n## ${safeHeading}\n`;
     block += `**Timestamp**: ${ts}\n`;
     block += `${expandedBody}\n`;
     block += `\n---\n`;
@@ -1202,7 +1224,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
       appendAuditBlockAtPath(
         projectDir,
         mainAuditPath,
-        renderAuditBlock(forkEntry, auditTs),
+        renderAuditBlock(forkEntry, auditTs, projectDir),
         {
           ...before.identity,
           prefixLength: boundary,
@@ -1463,7 +1485,7 @@ function handleAuditMerge(args: string[], projectDir: string): void {
       appendAuditBlockAtPath(
         projectDir,
         mainAuditPath,
-        delta + renderAuditBlock(mergedEntry, mergedTimestamp),
+        delta + renderAuditBlock(mergedEntry, mergedTimestamp, projectDir),
         {
           ...mainSnapshot.identity,
           prefixLength: boundary,

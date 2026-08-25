@@ -50,11 +50,7 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-operations-agent persona from `agents/aidlc-operations-agent.md` and knowledge from `.aidlc/knowledge/aidlc-operations-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read NFR design (observability strategy) from `<record>/construction/nfr-design/`
 - Read infrastructure design from `<record>/construction/infrastructure-design/`
@@ -68,7 +64,7 @@ retention, or escalation decision that cannot be observed from those sources;
 never invent a missing design artifact. If no deployed target exists, this
 CONDITIONAL stage reports skipped.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create questions file covering:
 - What are the golden signals to track (latency, traffic, errors, saturation)?
@@ -79,17 +75,17 @@ Create questions file covering:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Generate Artifacts
+### Step 3: Generate Artifacts
 
 Create CloudWatch dashboard configurations, alarm definitions (with severity, SNS routing, escalation), SLO/SLI tracking configuration, CloudWatch Logs Insights saved queries, X-Ray tracing configuration, and anomaly detection configuration.
 
-### Step 5: Completion Handoff
+### Step 4: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .aidlc/tools/aidlc-orchestrate.ts report --stage observability-setup --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 6: Present Completion & Request Approval
+### Step 5: Present Completion & Request Approval
 
 Completion emoji: :eyes:
 Review path: `<record>/operation/observability-setup/`

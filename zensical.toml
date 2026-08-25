@@ -10,6 +10,7 @@ nav = [
     { "Getting Started" = [
       "guide/00-introduction.md",
       "guide/01-getting-started.md",
+      "guide/workflow-profiles.md",
       "guide/02-your-first-workflow.md",
     ] },
     { "Core Concepts" = [

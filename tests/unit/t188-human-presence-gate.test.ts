@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:checkSummaryConfirmationEvidence, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -44,12 +44,13 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -465,6 +466,57 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "**Checkpoint**: Consolidated Summary Confirmation",
       );
       expect(audit).toContain("**Questions SHA-256**:");
+      expect(audit).toContain("**Hash Scope**: confirmed-content-v1");
+    });
+
+    test("summary confirmation refuses a same-second cross-shard human turn", () => {
+      const slug = field(proj, "Current Stage");
+      const questions = summaryQuestions(proj, "Looks correct");
+      const questionsFile = relative(proj, questions).replaceAll("\\", "/");
+      const dir = dirname(seededAuditShard(proj));
+      mkdirSync(dir, { recursive: true });
+      const timestamp = "2026-08-19T12:00:00Z";
+      writeFileSync(
+        join(dir, "aaa-prompt.md"),
+        [
+          "## Decision Recorded",
+          `**Timestamp**: ${timestamp}`,
+          "**Event**: DECISION_RECORDED",
+          `**Stage**: ${slug}`,
+          "**Checkpoint**: Consolidated Summary Confirmation",
+          `**Questions File**: ${questionsFile}`,
+          "",
+          "---",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(dir, "zzz-human.md"),
+        [
+          "## Human Turn",
+          `**Timestamp**: ${timestamp}`,
+          "**Event**: HUMAN_TURN",
+          "",
+          "---",
+          "",
+        ].join("\n"),
+      );
+
+      const result = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--details",
+        "Looks correct",
+      ]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("human response after this prompt cannot be proven");
+      expect(result.out).toContain("Present a fresh summary prompt");
+      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
     });
 
     test("summary confirmation refuses a file whose stored answer differs", () => {
@@ -499,6 +551,50 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(result.rc).not.toBe(0);
       expect(result.out).toContain("must contain exactly one");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
+    });
+
+    test("summary confirmation needs a fresh turn after another answer", () => {
+      const slug = field(proj, "Current Stage");
+      const questions = summaryQuestions(proj);
+      expect(
+        guardedLog(proj, [
+          "decision",
+          "--stage",
+          slug,
+          "--checkpoint",
+          "summary-confirmation",
+          "--questions-file",
+          questions,
+          "--decision",
+          "Does this all look correct?",
+        ]).rc,
+      ).toBe(0);
+      recordHumanTurn(proj);
+      expect(
+        guardedLog(proj, [
+          "answer",
+          "--stage",
+          slug,
+          "--details",
+          "A follow-up answer",
+        ]).rc,
+      ).toBe(0);
+      summaryQuestions(proj, "Looks correct");
+
+      const result = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--details",
+        "Looks correct",
+      ]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("turn was already consumed");
       expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
     });
 

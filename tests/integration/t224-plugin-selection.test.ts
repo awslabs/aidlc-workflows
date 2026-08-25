@@ -209,7 +209,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     const sidecar = join(proj, ".claude", "tools", "data", "plugin-contrib-test-pro.json");
     const composed = readFileSync(stagePath, "utf-8");
     expect(composed).toContain("test-pro-regression-suite");
-    expect(composed).toContain("Step 9a (test-pro)");
+    expect(composed).toContain("Step 8a (test-pro)");
     expect(existsSync(sidecar)).toBe(true);
 
     const disable = runUtility(proj, ["select-plugins", "aidlc"]);
@@ -217,7 +217,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(disable.stdout).toContain("Stripped merged contributions of disabled plugin(s): test-pro");
     const stripped = readFileSync(stagePath, "utf-8");
     expect(stripped).not.toContain("test-pro-regression-suite");
-    expect(stripped).not.toContain("Step 9a (test-pro)");
+    expect(stripped).not.toContain("Step 8a (test-pro)");
     expect(stripped).not.toContain("<!-- plugin:test-pro:");
     expect(existsSync(sidecar)).toBe(false);
     // The compiled core node no longer carries the plugin's merged entries.
@@ -257,7 +257,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     });
     const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
     expect(body).not.toContain("test-pro-regression-suite");
-    expect(body).not.toContain("Step 9a (test-pro)");
+    expect(body).not.toContain("Step 8a (test-pro)");
   });
 
   test("unknown plugin names hard-fail and list valid names", () => {
@@ -519,7 +519,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(existsSync(join(composedProj, ".claude", "skills", "aidlc-custom-composed", "SKILL.md"))).toBe(true);
 
     const selectedBoth = runUtility(composedProj, ["select-plugins", "aidlc,test-pro"]);
-    expect(selectedBoth.status).toBe(0);
+    expect(selectedBoth.status, selectedBoth.stderr).toBe(0);
     expect(JSON.stringify(grid(composedProj)[scopeName])).toBe(seededEntryJson);
 
     const init = runUtility(composedProj, ["intent-create", "--scope", scopeName, "--project-dir", composedProj]);

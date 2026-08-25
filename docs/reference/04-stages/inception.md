@@ -392,31 +392,27 @@ large scope with significant unknowns.
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-product-agent persona from
-   `agents/aidlc-product-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-product-agent/`.
-
-2. **Load Prior Context** -- If brownfield: read RE artifacts from
+1. **Load Prior Context** -- If brownfield: read RE artifacts from
    `aidlc/spaces/<active-space>/codekb/<repo>/`. Read user's project
    description from the intent's `audit/` shards.
 
-3. **Analyze User Request** -- Assess the request for:
+2. **Analyze User Request** -- Assess the request for:
    - **Clarity**: How well-defined is the request?
    - **Type**: New feature, enhancement, refactoring, bug fix, migration
    - **Scope**: Single component, multi-component, system-wide
    - **Complexity**: Simple, standard, complex
 
-4. **Determine Depth** -- Based on complexity assessment:
+3. **Determine Depth** -- Based on complexity assessment:
    - **Minimal**: Clear request, narrow scope, well-understood domain
    - **Standard**: Moderate scope, some unknowns, multiple stakeholders
    - **Comprehensive**: Large scope, significant unknowns, complex domain
 
-5. **Assess Current Requirements** -- Extract and organize what is already
+4. **Assess Current Requirements** -- Extract and organize what is already
    known from the user's input: explicit functional requirements, implied
    non-functional requirements, constraints and assumptions, business context
    and goals.
 
-6. **Completeness Analysis** -- Evaluate coverage across six dimensions:
+5. **Completeness Analysis** -- Evaluate coverage across six dimensions:
    1. Functional requirements -- core behaviors, features, use cases
    2. Non-functional requirements -- performance, security, scalability,
       reliability
@@ -429,7 +425,7 @@ large scope with significant unknowns.
 
    Identify gaps in each dimension.
 
-7. **Generate Clarifying Questions** -- PROACTIVE: always generate clarifying
+6. **Generate Clarifying Questions** -- PROACTIVE: always generate clarifying
    questions unless requirements are exceptionally clear and complete across
    all six dimensions. Create
    `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
@@ -439,7 +435,7 @@ large scope with significant unknowns.
 
    Offer the tri-mode question flow: Guide Me / Edit File / Chat.
 
-8. **Collect and Analyze Answers** -- Read the questions file, confirm all
+7. **Collect and Analyze Answers** -- Read the questions file, confirm all
    `[Answer]:` tags are filled. If any are blank, present unanswered questions
    via AskUserQuestion and write answers back. Do NOT proceed with partial
    answers. Run:
@@ -448,11 +444,11 @@ large scope with significant unknowns.
    - Contradiction check between answers
    - Missing detail identification
 
-9. **Follow-Up Questions** -- If ANY ambiguity, vagueness, or contradictions
+8. **Follow-Up Questions** -- If ANY ambiguity, vagueness, or contradictions
    found, create follow-up questions targeting the specific issues. Resolve
    all ambiguities before proceeding. "When in doubt, ask."
 
-10. **Generate Requirements** -- Create
+9. **Generate Requirements** -- Create
     `<record>/inception/requirements-analysis/requirements.md` containing:
     - Intent analysis -- what the user is trying to achieve (goals, not just
       features)
@@ -463,10 +459,10 @@ large scope with significant unknowns.
     - Out of scope -- explicitly excluded items
     - Open questions -- remaining uncertainties for later stages
 
-11. **Prepare Completion** -- Verify the requirements artifacts. Do not edit
+10. **Prepare Completion** -- Verify the requirements artifacts. Do not edit
     `<record>/aidlc-state.md`; the engine owns completion and routing.
 
-12. **Present Completion & Request Approval** -- Display completion message
+11. **Present Completion & Request Approval** -- Display completion message
     with :mag: emoji and review path. The approval gate has two variants:
 
     **If User Stories is set to SKIP in the execution state:** 3-option gate:
@@ -719,16 +715,12 @@ This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-design-agent persona from
-   `agents/aidlc-design-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-design-agent/`.
-
-2. **Load Prior Context** -- Read rough mockups from
+1. **Load Prior Context** -- Read rough mockups from
    `<record>/ideation/rough-mockups/` (if exists). Read user stories from
    `<record>/inception/user-stories/`. Read requirements from
    `<record>/inception/requirements-analysis/`.
 
-3. **Generate Clarifying Questions** -- Create
+2. **Generate Clarifying Questions** -- Create
    `<record>/inception/refined-mockups/refined-mockups-questions.md` with
    questions covering:
    - How each user story should be represented in the UI
@@ -742,18 +734,18 @@ This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
 
    Follows stage-protocol.md question flow.
 
-4. **Collect and Analyze Answers** -- Validate design decisions against user
+3. **Collect and Analyze Answers** -- Validate design decisions against user
    stories and requirements for consistency.
 
-5. **Generate Artifacts** -- Create mid-to-high fidelity mockups (per user
+4. **Generate Artifacts** -- Create mid-to-high fidelity mockups (per user
    story/screen), interaction specification document, design system mapping,
    responsive behavior specification, and accessibility compliance checklist.
    For non-UI initiatives, create API developer experience specification.
 
-6. **Prepare Completion** -- Verify the refined-mockup artifacts. Do not edit
+5. **Prepare Completion** -- Verify the refined-mockup artifacts. Do not edit
    state; report the gate outcome through `aidlc-orchestrate.ts`.
 
-7. **Present Completion & Request Approval** -- Display completion message
+6. **Present Completion & Request Approval** -- Display completion message
    with :art: emoji. Standard approval gate (Approve / Request Changes).
 
 ### Outputs
@@ -820,18 +812,12 @@ dependencies; the aidlc-design-agent contributes UI component structure.
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-architect-agent persona from
-   `agents/aidlc-architect-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-architect-agent/`. Load aidlc-aws-platform-agent persona
-   from `agents/aidlc-aws-platform-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-aws-platform-agent/` for AWS service mapping.
-
-2. **Load Prior Context** -- Read requirements, user stories (if produced),
+1. **Load Prior Context** -- Read requirements, user stories (if produced),
    and RE artifacts (if brownfield, especially architecture.md,
    component-inventory.md, dependencies.md). Scope context comes from
    `<record>/aidlc-state.md`.
 
-3. **Create Design Plan with Questions** -- Create
+2. **Create Design Plan with Questions** -- Create
    `<record>/inception/domain-design/domain-design-questions.md`
    with context-appropriate questions using `[Answer]:` tag format covering:
    - Component boundary decisions
@@ -843,20 +829,20 @@ dependencies; the aidlc-design-agent contributes UI component structure.
    - UI component structure (if user-facing, informed by UX designer
      perspective)
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md section 3 question flow. MANDATORY ambiguity analysis:
    scan for vague language, contradictions, missing details. Create follow-up
    questions if ANY ambiguity found. Resolve all ambiguities before proceeding.
 
-5. **Generate the Component Catalogue** -- Create the single consolidated
+4. **Generate the Component Catalogue** -- Create the single consolidated
    `components.md` (see Outputs below): a fenced `yaml` catalogue (source of
    truth) plus the derived human view (mermaid diagram + summary/ownership/
    rationale tables).
 
-6. **Prepare Completion** -- Verify the design artifacts. Do not edit state;
+5. **Prepare Completion** -- Verify the design artifacts. Do not edit state;
    report the gate outcome through `aidlc-orchestrate.ts`.
 
-7. **Present Completion & Request Approval** -- Display completion message
+6. **Present Completion & Request Approval** -- Display completion message
    with :building_construction: emoji, summary of design artifacts, key
    architectural decisions highlighted, and review path. 3-option approval
    gate: Approve / Request Changes / Add Units Generation (if it was skipped
@@ -955,20 +941,13 @@ actual unit artifacts.
 
 **PART 1: Planning**
 
-1. **Load Agent Personas** -- Load aidlc-architect-agent persona from
-   `agents/aidlc-architect-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-architect-agent/`. Load aidlc-delivery-agent persona
-   from `agents/aidlc-delivery-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-delivery-agent/` for feasibility validation and
-   prioritization.
-
-2. **Load Prior Context** -- Read all artifacts from
+1. **Load Prior Context** -- Read all artifacts from
    `<record>/inception/domain-design/` (the consolidated `components.md`
    component catalogue and the `decisions.md` ADR log). Read
    requirements. Read user stories (if produced). Scope context comes from
    `<record>/aidlc-state.md`.
 
-3. **Create Decomposition Plan with Questions** -- Create
+2. **Create Decomposition Plan with Questions** -- Create
    `<record>/inception/units-generation/units-generation-questions.md` with
    questions using `[Answer]:` tag format covering:
    - Unit boundary strategy (by service, by feature, by domain, by deployment
@@ -983,25 +962,25 @@ actual unit artifacts.
    risk-first, walking-skeleton-first). Those are economic-sequencing
    decisions that belong to Stage 2.9 Delivery Planning.
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md section 3 question flow. MANDATORY ambiguity analysis:
    scan for vague language, contradictions, missing details. Create follow-up
    questions if ANY ambiguity found. Resolve all ambiguities before proceeding.
 
-5. **Get Plan Approval** -- Present the decomposition plan to the user via
+4. **Get Plan Approval** -- Present the decomposition plan to the user via
    AskUserQuestion: summarize the approach (unit boundary strategy, estimated
    unit count, dependency structure). Options: Approve Plan / Revise Plan.
 
 **PART 2: Generation**
 
-6. **Execute Plan -- Generate Unit Artifacts** -- Based on the approved plan,
+5. **Execute Plan -- Generate Unit Artifacts** -- Based on the approved plan,
    generate the 4 output artifacts (see Outputs below).
 
-7. **Prepare Completion** -- Verify the unit artifacts and record the unit
+6. **Prepare Completion** -- Verify the unit artifacts and record the unit
    list for Construction. Do not edit state; report the gate outcome through
    `aidlc-orchestrate.ts`.
 
-8. **Present Completion & Request Approval** -- Display completion message
+7. **Present Completion & Request Approval** -- Display completion message
    with :wrench: emoji, summary of units defined, dependencies mapped, stories
    assigned, and review path. Standard 2-option approval gate: Approve
    (continue to Construction phase) / Request Changes.
@@ -1041,7 +1020,7 @@ Standard 2-option gate: **Approve** (continue to Construction phase) /
   skip condition at this stage — single-Unit flows still produce a trivial
   DAG.
 - The two-part structure (plan then generate) allows the user to approve the
-  decomposition strategy before Units are defined. Step 5 has an intermediate
+  decomposition strategy before Units are defined. Step 4 has an intermediate
   approval gate (Approve Plan / Revise Plan) separate from the final
   completion gate.
 - The dependency DAG feeds 2.9's economic Bolt sequencing. 2.9 chooses a
@@ -1162,16 +1141,11 @@ All Inception phase artifacts:
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-delivery-agent persona from
-   `agents/aidlc-delivery-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-delivery-agent/`. Load aidlc-architect-agent for build
-   order validation.
-
-2. **Load Prior Context** -- Read all Inception phase artifacts: requirements,
+1. **Load Prior Context** -- Read all Inception phase artifacts: requirements,
    user stories, domain design, units, the contract summary (if produced), and
    team formation (if exists).
 
-3. **Generate Clarifying Questions** -- Create
+2. **Generate Clarifying Questions** -- Create
    `<record>/inception/delivery-planning/delivery-planning-questions.md`
    with questions covering:
    - Sequencing heuristic: risk-first, value-first, walking-skeleton-first,
@@ -1189,12 +1163,12 @@ All Inception phase artifacts:
 
    Follows stage-protocol.md question flow.
 
-4. **Collect and Analyze Answers** -- Validate that the chosen Bolt
+3. **Collect and Analyze Answers** -- Validate that the chosen Bolt
    sequence respects 2.7's dependency DAG (with aidlc-architect-agent input).
    Flag any deviation from topological order so it can be justified in the
    rationale artifact.
 
-5. **Generate Artifacts** -- Create four artifacts in
+4. **Generate Artifacts** -- Create four artifacts in
    `<record>/inception/delivery-planning/`:
    - `bolt-plan.md` — the ordered sequence of Bolts; per-Bolt Units of
      Work, walking-skeleton marker, Definition of Done, confidence
@@ -1207,18 +1181,18 @@ All Inception phase artifacts:
    - `external-dependency-map.md` — gated items mapped to consuming Bolts
      (lightweight or empty when fully AI-contained).
 
-6. **Phase Boundary Verification** -- Run Inception-to-Construction
+5. **Phase Boundary Verification** -- Run Inception-to-Construction
    verification check:
    - Requirements to Stories to Architecture alignment
    - All stories trace to requirements
    - Architecture covers all stories
    - Write results to `<record>/verification/phase-check-inception.md`
 
-7. **Prepare Completion** -- Verify the delivery and boundary-verification
+6. **Prepare Completion** -- Verify the delivery and boundary-verification
    artifacts. Do not write the phase or stage state; the approval report owns
    the atomic Inception-to-Construction transition.
 
-8. **Present Completion & Request Approval** -- Display completion message
+7. **Present Completion & Request Approval** -- Display completion message
    with :calendar: emoji. Approval gate: Approve (proceed to Construction) /
    Request Changes. The user can override stage inclusion/exclusion at this
    gate.

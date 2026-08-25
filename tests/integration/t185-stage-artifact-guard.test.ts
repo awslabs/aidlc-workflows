@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,advance,finalize,complete-workflow), function:handleApprove, function:handleAdvance, function:handleFinalize, function:handleCompleteWorkflow, function:verifyStageArtifacts, function:producesArtifactsExist, function:workspaceHasSourceFile
+// covers: cli:aidlc-state(approve,advance,finalize,complete-workflow), function:handleApprove, function:handleAdvance, function:handleFinalize, function:handleCompleteWorkflow, function:verifyStageArtifacts, function:producesArtifactsExist, function:workspaceHasSourceFile, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:summaryConfirmationAnswer, function:summaryConfirmationContentHash, function:visibleMarkdownLines
 //
 // t185 - stage-completion artifact guard (issue #366).
 //
@@ -40,8 +40,15 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -50,45 +57,108 @@ import {
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
+  seedBoltDag,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  SUMMARY_CONFIRMATION_HASH_SCOPE,
+  sourceBaselineAuditFields,
+  summaryConfirmationContentHash,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 
-function reviewCodeGen(proj: string, unit?: string): void {
+function reviewStage(
+  proj: string,
+  stage: string,
+  reviewer: string,
+  unit?: string,
+): void {
+  if (stage === "code-generation" && unit) {
+    let unitIsResolved = false;
+    try {
+      const graph = JSON.parse(
+        readFileSync(join(seededRecordDir(proj), "runtime-graph.json"), "utf-8"),
+      ) as { bolt_dag?: { units?: Array<{ name?: unknown }> } };
+      unitIsResolved =
+        graph.bolt_dag?.units?.some((candidate) => candidate.name === unit) === true;
+    } catch {
+      // Seed a focused DAG below.
+    }
+    if (!unitIsResolved) seedBoltDag(proj, [unit]);
+
+    const dir = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      "code-generation",
+    );
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "source-manifest.json"),
+      `${JSON.stringify({
+        stage: "code-generation",
+        unit,
+        version: 1,
+        writes: [{ path: "src/" }],
+      }, null, 2)}\n`,
+    );
+  }
   const args = [
     LOG,
     "review",
     "--stage",
-    "code-generation",
+    stage,
     "--reviewer",
-    "aidlc-architecture-reviewer-agent",
+    reviewer,
     "--iteration",
     "1",
     "--project-dir",
     proj,
   ];
   if (unit) args.splice(4, 0, "--unit", unit);
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Several artifact-guard fixtures are deliberately non-Git. Source binding
+  // cannot be computed there, so isolate the artifact-guard contract with the
+  // documented freshness switch while still requiring a valid manifest.
+  env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
+  // These fixtures assert the artifact guard, not review admission: the
+  // documented switches keep Plan Approval and summary confirmation out of it.
+  env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD = "1";
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
   for (const suffix of [[], ["--verdict", "READY"]]) {
-    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env });
     if ((result.status ?? -1) !== 0) {
-      throw new Error(`reviewCodeGen failed: ${result.stdout}${result.stderr}`);
+      throw new Error(`reviewStage failed: ${result.stdout}${result.stderr}`);
     }
   }
 }
 
+function reviewCodeGen(proj: string, unit?: string): void {
+  reviewStage(
+    proj,
+    "code-generation",
+    "aidlc-architecture-reviewer-agent",
+    unit,
+  );
+}
+
 // Drive a state subcommand with the artifact guard ENABLED (clear the suite's
 // bypass var). Returns exit code + combined output.
-function guarded(proj: string, args: string[]): { rc: number; out: string } {
-  const env = { ...process.env };
+function guarded(
+  proj: string,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): { rc: number; out: string } {
+  const env = { ...process.env, ...extraEnv };
   delete env.AIDLC_SKIP_ARTIFACT_GUARD;
   delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
-  env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -140,6 +210,20 @@ function summaryGuarded(proj: string, args: string[]): { rc: number; out: string
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+function summaryReportGuarded(
+  proj: string,
+  args: string[],
+): { rc: number; out: string } {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+  delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+  const r = spawnSync(BUN, [ORCHESTRATE, ...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    env,
+  });
+  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
 function field(proj: string, name: string): string {
   return guarded(proj, ["get", name]).out.trim();
 }
@@ -153,20 +237,44 @@ function writeRecordDoc(proj: string, rel: string): void {
   writeFileSync(full, "# stub\n\n## A\n\n## B\n");
 }
 
-function writeSummaryQuestions(proj: string, answer = ""): string {
+function writeSummaryQuestions(
+  proj: string,
+  answer = "",
+  stage = "feasibility",
+): string {
   const full = join(
     seededRecordDir(proj),
     "ideation",
-    "feasibility",
-    "feasibility-questions.md",
+    stage,
+    `${stage}-questions.md`,
   );
   mkdirSync(join(full, ".."), { recursive: true });
   writeFileSync(
     full,
     [
-      "# Feasibility Questions",
+      "# Questions",
+      "",
+      "## Sources",
+      "",
+      "- [desc] Initial description: Build a purchasing workflow.",
+      "",
+      "## Q1. Is the proposed approach feasible?",
+      "",
+      "A. Proceed",
+      "X. Other (please specify)",
+      "",
+      "[Answer]: A. Proceed",
+      "",
+      "## Q2. Which review mode should be used?",
+      "",
+      "A. Human review",
+      "X. Other (please specify)",
+      "",
+      "[Answer]: A. Human review",
       "",
       "## Consolidated Summary Confirmation",
+      "",
+      "- Proceed with a purchasing workflow.",
       "",
       "- Looks correct",
       "- Request changes",
@@ -186,14 +294,78 @@ function appendAudit(
   appendAuditEntry(event, fields, proj);
 }
 
-function confirmSummary(proj: string, questions: string): void {
+function writeAuditShardRows(
+  proj: string,
+  name: string,
+  rows: Array<{
+    timestamp: string;
+    event: string;
+    fields?: Record<string, string>;
+  }>,
+): void {
+  const dir = dirname(seededAuditShard(proj));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, name),
+    `${rows.map((row) => [
+      `## ${row.event}`,
+      `**Timestamp**: ${row.timestamp}`,
+      `**Event**: ${row.event}`,
+      ...Object.entries(row.fields ?? {}).map(([key, value]) =>
+        `**${key}**: ${value}`
+      ),
+    ].join("\n")).join("\n---\n")}\n\n---\n`,
+  );
+}
+
+function scopedSummaryReceiptFields(
+  proj: string,
+  questions: string,
+  details = "Looks correct",
+): Record<string, string> {
+  return {
+    Stage: "feasibility",
+    Details: details,
+    Checkpoint: "Consolidated Summary Confirmation",
+    "Questions File": relative(proj, questions).replaceAll("\\", "/"),
+    "Questions SHA-256": summaryConfirmationContentHash(
+      readFileSync(questions, "utf-8"),
+    ),
+    "Hash Scope": SUMMARY_CONFIRMATION_HASH_SCOPE,
+  };
+}
+
+function appendSummaryReceipt(
+  proj: string,
+  questions: string,
+  hashScope?: string,
+): void {
+  const fields: Record<string, string> = {
+    Stage: "feasibility",
+    Details: "Looks correct",
+    Checkpoint: "Consolidated Summary Confirmation",
+    "Questions File": relative(proj, questions).replaceAll("\\", "/"),
+    "Questions SHA-256": createHash("sha256")
+      .update(readFileSync(questions))
+      .digest("hex"),
+  };
+  if (hashScope) fields["Hash Scope"] = hashScope;
+  appendAudit(proj, "SUMMARY_CONFIRMATION_RECORDED", fields);
+}
+
+function confirmSummary(
+  proj: string,
+  questions: string,
+  stage = "feasibility",
+  confirmedBody?: string,
+): void {
   const env = { ...process.env };
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const decision = spawnSync(BUN, [
     LOG,
     "decision",
     "--stage",
-    "feasibility",
+    stage,
     "--checkpoint",
     "summary-confirmation",
     "--questions-file",
@@ -205,12 +377,16 @@ function confirmSummary(proj: string, questions: string): void {
   ], { encoding: "utf-8", env });
   expect(decision.status).toBe(0);
   appendAudit(proj, "HUMAN_TURN");
-  writeSummaryQuestions(proj, "Looks correct");
+  if (confirmedBody === undefined) {
+    writeSummaryQuestions(proj, "Looks correct", stage);
+  } else {
+    writeFileSync(questions, confirmedBody);
+  }
   const answer = spawnSync(BUN, [
     LOG,
     "answer",
     "--stage",
-    "feasibility",
+    stage,
     "--checkpoint",
     "summary-confirmation",
     "--questions-file",
@@ -228,6 +404,20 @@ function recordArtifactWrite(proj: string, rel: string): string {
   writeRecordDoc(proj, rel);
   appendAudit(proj, "ARTIFACT_CREATED", { File: full, Tool: "Write" });
   return full;
+}
+
+function summaryMutationResult(
+  proj: string,
+  mutate: (body: string) => string,
+): { rc: number; out: string } {
+  const questions = writeSummaryQuestions(proj);
+  confirmSummary(proj, questions);
+  writeFileSync(questions, mutate(readFileSync(questions, "utf-8")));
+  recordArtifactWrite(
+    proj,
+    "ideation/feasibility/feasibility-assessment.md",
+  );
+  return summaryGuarded(proj, ["advance", "feasibility"]);
 }
 
 // Write a file at the workspace root (outside the aidlc/ tree + harness dirs).
@@ -334,7 +524,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     const slug = field(proj, "Current Stage");
     const r = guarded(proj, ["gate-start", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect(r.out).toContain("Refusing to present the approval gate");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [-] ${slug}`,
     );
@@ -345,7 +535,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     bypassed(proj, ["checkbox", `${slug}=revising`]);
     const r = guarded(proj, ["revise", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect(r.out).toContain("Refusing to present the approval gate");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [R] ${slug}`,
     );
@@ -421,20 +611,997 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       confirmSummary(proj, questions);
       const result = summaryGuarded(proj, ["advance", "feasibility"]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("no recorded native-tool write after");
+      expect(result.out).toContain("was not saved after the confirmed answers");
     });
 
-    test("refuses when answers change after the receipt", () => {
+    test("allows Assumption Confirmation after generation and terminal review", () => {
+      bypassed(proj, ["set", "Current Stage=intent-capture"]);
+      bypassed(proj, ["checkbox", "intent-capture=in-progress"]);
+      const questions = writeSummaryQuestions(proj, "", "intent-capture");
+      confirmSummary(proj, questions, "intent-capture");
+      recordArtifactWrite(
+        proj,
+        "ideation/intent-capture/intent-statement.md",
+      );
+      recordArtifactWrite(
+        proj,
+        "ideation/intent-capture/stakeholder-map.md",
+      );
+      writeFileSync(
+        questions,
+        `${readFileSync(questions, "utf-8")}\n## Assumption Confirmation\n\n- A procurement reviewer may be needed.\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      );
+      appendAudit(proj, "ARTIFACT_UPDATED", {
+        File: questions,
+        Tool: "Edit",
+      });
+      reviewStage(
+        proj,
+        "intent-capture",
+        "aidlc-product-lead-agent",
+      );
+
+      const result = summaryReportGuarded(proj, [
+        "report",
+        "--stage",
+        "intent-capture",
+        "--result",
+        "awaiting-approval",
+      ]);
+      expect(result.rc).toBe(0);
+      expect(result.out).toContain('"kind":"print"');
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+        "- [?] intent-capture",
+      );
+    });
+
+    test("accepts a follow-up Q section after Assumption Confirmation on a fresh receipt", () => {
       const questions = writeSummaryQuestions(proj);
-      confirmSummary(proj, questions);
-      writeFileSync(questions, `${readFileSync(questions, "utf-8")}\nChanged\n`);
+      const body = `${readFileSync(questions, "utf-8")}
+## Assumption Confirmation
+
+[Answer]: B. Convert to follow-up questions
+
+## Q3. Which fallback should be used?
+
+A. Manual review
+X. Other (please specify)
+
+[Answer]: A. Manual review
+`;
+      writeFileSync(questions, body);
+      confirmSummary(
+        proj,
+        questions,
+        "feasibility",
+        body.replace("[Answer]: \n", "[Answer]: Looks correct\n"),
+      );
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
+    });
+
+    test("accepts stage-specific question headings without imposing Q<n> grammar", () => {
+      const questions = writeSummaryQuestions(proj);
+      const body = readFileSync(questions, "utf-8")
+        .replace("## Q1. Is the proposed approach feasible?", "## Question 1")
+        .replace(
+          "## Q2. Which review mode should be used?",
+          "## Context\n\nThe stage may use contextual sections.\n\n## Q1 ##",
+        );
+      writeFileSync(questions, body);
+      confirmSummary(
+        proj,
+        questions,
+        "feasibility",
+        body.replace("[Answer]: \n", "[Answer]: Looks correct\n"),
+      );
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
+    });
+
+    test("accepts two consecutive Requested Changes feedback sections in order", () => {
+      const questions = writeSummaryQuestions(proj);
+      const body = `${readFileSync(questions, "utf-8")}\n` +
+        [
+          "## Requested Changes Feedback",
+          "",
+          "[Answer]: Clarify the workflow owner.",
+          "",
+          "## Requested Changes Feedback",
+          "",
+          "[Answer]: Add the fallback reviewer.",
+          "",
+        ].join("\n");
+      writeFileSync(questions, body);
+      confirmSummary(
+        proj,
+        questions,
+        "feasibility",
+        body.replace("[Answer]: \n", "[Answer]: Looks correct\n"),
+      );
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
+    });
+
+    test("ignores H2-looking text in comments, tilde fences, and indented fences", () => {
+      const questions = writeSummaryQuestions(proj);
+      const body = readFileSync(questions, "utf-8").replace(
+        "## Consolidated Summary Confirmation",
+        [
+          "<!--",
+          "## Commented Example",
+          "-->",
+          "",
+          "~~~markdown",
+          "## Tilde Fence Example",
+          "~~~",
+          "",
+          "   ```markdown",
+          "   ## Indented Fence Example",
+          "   ```",
+          "",
+          "## Consolidated Summary Confirmation",
+        ].join("\n"),
+      );
+      writeFileSync(questions, body);
+      confirmSummary(
+        proj,
+        questions,
+        "feasibility",
+        body.replace("[Answer]: \n", "[Answer]: Looks correct\n"),
+      );
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
+    });
+
+    test("does not launder a Q section through a tilde fence containing backticks", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "~~~text\n```\n~~~\n\n## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not let a comment marker in a fence info string hide a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "~~~markdown <!--\n~~~\n## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not let a multiline code span comment marker hide a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "`literal comment example\n<!-- marker inside code\nstill literal code`\n" +
+          "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    for (const [name, opener] of [
+      ["unescaped", "`literal"],
+      ["escaped", "\\`literal"],
+    ] as const) {
+      test(`does not let an ${name} multiline code opener consume an ATX heading`, () => {
+        const result = summaryMutationResult(
+          proj,
+          (body) =>
+            `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+            `${opener}\n## Q3. Fabricated question \`\n\n[Answer]: A. Fabricated\n`,
+        );
+        expect(result.rc).not.toBe(0);
+        expect(result.out).toContain("changed after the human confirmed");
+      });
+    }
+
+    for (const [name, block] of [
+      ["pre", "<pre>\n## Literal example\n</pre>"],
+      ["script", "<script>\n## Literal example\n</script>"],
+    ] as const) {
+      test(`keeps H2-looking text literal inside a raw ${name} HTML block`, () => {
+        const result = summaryMutationResult(
+          proj,
+          (body) =>
+            `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+            `${block}\n`,
+        );
+        expect(result.rc).toBe(0);
+      });
+    }
+
+    for (const [name, indentation] of [["space", "    "], ["tab", "\t"]]) {
+      test(`does not let a ${name}-indented code comment marker hide a later question`, () => {
+        const result = summaryMutationResult(
+          proj,
+          (body) =>
+            `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+            `${indentation}<!-- literal comment marker\n` +
+            "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+        );
+        expect(result.rc).not.toBe(0);
+        expect(result.out).toContain("changed after the human confirmed");
+      });
+    }
+
+    test("does not let a multiline HTML attribute comment marker hide a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          '<div data-example="\n<!--">literal</div>\n' +
+          "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not accept a summary answer from a multiline HTML attribute", () => {
+      const questions = writeSummaryQuestions(proj);
+      const decision = spawnSync(BUN, [
+        LOG,
+        "decision",
+        "--stage",
+        "feasibility",
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--decision",
+        "Does this all look correct?",
+        "--project-dir",
+        proj,
+      ], { encoding: "utf-8", env: process.env });
+      expect(decision.status).toBe(0);
+      appendAudit(proj, "HUMAN_TURN");
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "[Answer]: \n",
+          '<div data-example="\n[Answer]: Looks correct\n">literal</div>\n',
+        ),
+      );
+      const answer = spawnSync(BUN, [
+        LOG,
+        "answer",
+        "--stage",
+        "feasibility",
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--details",
+        "Looks correct",
+        "--project-dir",
+        proj,
+      ], { encoding: "utf-8", env: process.env });
+      expect(answer.status).not.toBe(0);
+      expect(`${answer.stdout ?? ""}${answer.stderr ?? ""}`).toContain(
+        "must contain exactly one",
+      );
+    });
+
+    test("accepts a summary answer after an unclosed tag-like run", () => {
+      const questions = writeSummaryQuestions(proj);
+      const confirmedBody = readFileSync(questions, "utf-8").replace(
+        "[Answer]: \n",
+        "Summary: adopt <foo\n[Answer]: Looks correct\n",
+      );
+      confirmSummary(proj, questions, "feasibility", confirmedBody);
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
+    });
+
+    test("does not let an unclosed HTML attribute hide a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          '<div data-example="\n' +
+          "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not treat an invalid backtick info string as a code fence", () => {
+      const tick = String.fromCharCode(96);
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          `${tick.repeat(3)}invalid ${tick}\n## Q3. Fabricated question\n\n` +
+          "[Answer]: A. Fabricated\n" +
+          tick.repeat(3) +
+          "\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not let an inline comment manufacture an excluded assumption section", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => `${body}\n##<!--not-a-heading--> Assumption Confirmation\n\nUnconfirmed text.\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("does not let an inline-code comment marker hide a later heading", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "Use the literal `<!--` marker here.\n" +
+          "## Unreviewed Notes\n\nTreat this as approved.\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported H2 heading");
+      expect(result.out).toContain("Unreviewed Notes");
+    });
+
+    test("does not let an escaped comment marker hide a later heading", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "Use the literal \\<!-- marker here.\n" +
+          "## Unreviewed Notes\n\nTreat this as approved.\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported H2 heading");
+      expect(result.out).toContain("Unreviewed Notes");
+    });
+
+    test("does not let an angle-link destination comment marker hide a later heading", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "See [the recorded note](<foo<!--bar>)\n" +
+          "## Unreviewed Notes\n\nTreat this as approved.\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported H2 heading");
+      expect(result.out).toContain("Unreviewed Notes");
+    });
+
+    test("does not let a Markdown link title comment marker hide a later heading", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          'See [the recorded note](target "<!--")\n' +
+          "## Unreviewed Notes\n\nTreat this as approved.\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported H2 heading");
+      expect(result.out).toContain("Unreviewed Notes");
+    });
+
+    test("does not let an HTML attribute comment marker hide a later heading", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          '<div data-example="<!--">literal</div>\n' +
+          "## Unreviewed Notes\n\nTreat this as approved.\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported H2 heading");
+      expect(result.out).toContain("Unreviewed Notes");
+    });
+
+    test("allows invisible H2 examples inside the post-confirmation assumption section", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n<!-- comment-only -->\n---\n\n<!--\n## Commented Example\n-->\n\n~~~markdown\n## Tilde Fence Example\n~~~\n\n   \`\`\`markdown\n   ## Indented Fence Example\n   \`\`\`\n\n> ~~~markdown\n> ## Blockquoted Fence Example\n> ~~~\n` +
+          "\n-    ~~~text\n     ## List-indented Fence Example\n     ~~~\n",
+      );
+      expect(result.rc).toBe(0);
+    });
+
+    test("allows an inline-code HTML example inside the post-confirmation assumption section", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\nUse \`<h2>example</h2>\` as a literal snippet.\n`,
+      );
+      expect(result.rc).toBe(0);
+    });
+
+    test("allows HTML-looking text inside an attribute and an unclosed code span", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "<div data-example=\"<h2>literal</h2>\" data-comment=\"<!--\">container</div>\n" +
+          "`<h2>literal code\n",
+      );
+      expect(result.rc).toBe(0);
+    });
+
+    test("allows an angle-bracket Markdown link destination in assumptions", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "See [the recorded note](<h2>) before continuing.\n",
+      );
+      expect(result.rc).toBe(0);
+    });
+
+    test("does not mistake an unclosed Markdown link for a literal HTML heading", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "See [the recorded note](<h2>Q3. Which fallback should be used?</h2>\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported HTML H2 heading");
+    });
+
+    test("does not treat an escaped link closer as an HTML exemption", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "See [the recorded note\\](<h2>)\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported HTML H2 heading");
+    });
+
+    test("allows a space-containing angle link destination in assumptions", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "See [the recorded note](<h2 class=example>) before continuing.\n",
+      );
+      expect(result.rc).toBe(0);
+    });
+
+    test("does not treat an unclosed space-containing angle link as literal HTML", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "See [the recorded note](<h2 class=example>\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported HTML H2 heading");
+    });
+
+    test("allows four-space indented container-looking examples in assumptions", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "    > ## Literal example\n    - ## Another literal example\n" +
+          "    <h2>Indented literal example</h2>\n" +
+          "\t<h2>Tab-indented literal example</h2>\n",
+      );
+      expect(result.rc).toBe(0);
+    });
+
+    test("does not launder a heading after a list-indented fenced block", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "-    ~~~text\n     ## Literal example\n     ~~~\n" +
+          "## Q3. Which fallback should be used?\n\n[Answer]: A. Manual review\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    for (const [name, opener] of [
+      ["list-item tilde fence", "- ~~~text"],
+      ["blockquote tilde fence", "> ~~~text"],
+      ["list-item backtick fence", " * ```"],
+      ["list-item HTML comment", "- <!--"],
+      ["blockquote HTML comment", "> <!--"],
+    ] as const) {
+      test(`does not launder a heading through an unclosed container-scoped ${name}`, () => {
+        const result = summaryMutationResult(
+          proj,
+          (body) =>
+            `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+            `${opener}\n\n## Q3. Which fallback should be used?\n\n` +
+            "[Answer]: A. Manual review\n",
+        );
+        expect(result.rc).not.toBe(0);
+        expect(result.out).toContain("changed after the human confirmed");
+      });
+    }
+
+    for (const [name, body] of [
+      ["a list-continuation fence", "- item\n  ~~~text"],
+      ["a list-continuation comment", "- item\n  <!--"],
+      [
+        "a lazily continued list fence",
+        "- item\ncontinued paragraph\n  ~~~text",
+      ],
+      ["a lazily continued blockquote fence", "> item\n  ~~~text"],
+      ["a blockquote-following top-level fence", "> item\n~~~text"],
+      ["a lazily continued blockquote comment", "> item\n  <!--"],
+    ] as const) {
+      test(`does not launder a heading through ${name}`, () => {
+        const result = summaryMutationResult(
+          proj,
+          (original) =>
+            `${original}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+            `${body}\n\n## Q3. Which fallback should be used?\n\n` +
+            "[Answer]: A. Manual review\n",
+        );
+        expect(result.rc).not.toBe(0);
+        expect(result.out).toContain("changed after the human confirmed");
+      });
+    }
+
+    test("does not launder an inline raw HTML heading", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "Visible text <h2>Q3. Which fallback should be used?</h2>\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported HTML H2 heading");
+    });
+
+    test("does not treat a double-escaped raw HTML heading as literal text", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "\\\\<h2>Q3. Which fallback should be used?</h2>\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported HTML H2 heading");
+    });
+
+    test("refuses when a confirmed Q answer changes after the receipt", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => body.replace(
+          "[Answer]: A. Proceed",
+          "[Answer]: X. Use a different approach",
+        ),
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+      expect(result.out).toContain("fresh human turn");
+      expect(result.out).toContain("end the turn");
+      expect(result.out).toContain(
+        "remove or repair every invalid or duplicate post-summary section named",
+      );
+      expect(result.out).toContain(
+        "reset the existing consolidated-summary `[Answer]:` tag to blank",
+      );
+      expect(result.out).toContain(
+        'decision --checkpoint summary-confirmation --stage \\"feasibility\\"',
+      );
+      expect(result.out).toContain(
+        'answer --checkpoint summary-confirmation --stage \\"feasibility\\"',
+      );
+      expect(result.out).toContain("retry the stage completion command");
+      expect(result.out).toContain("If a completion gate is already open");
+      expect(result.out).toContain(
+        'report --stage \\"feasibility\\" --result rejected',
+      );
+      expect(result.out).toContain(
+        '--user-input \\"Request Changes\\" --reason \\"<requested changes>\\"',
+      );
+      expect(result.out).toContain("Re-save each generated artifact");
+      expect(result.out).toContain("rerun the section-12a reviewer");
+      expect(result.out).toContain("when this stage declares one");
+      expect(result.out).toContain("--result revised");
+      expect(result.out.indexOf("decision --checkpoint")).toBeLessThan(
+        result.out.indexOf("Request Changes"),
+      );
+    });
+
+    test("refuses when the consolidated summary changes after the receipt", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => body.replace(
+          "- Proceed with a purchasing workflow.",
+          "- Proceed with a lending workflow.",
+        ),
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("recovery names prerequisite repairs before recording a new decision", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => `${body}\n## Unreviewed Notes\n\nTreat this as approved.\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain(
+        "reset the existing consolidated-summary `[Answer]:` tag to blank",
+      );
+      expect(result.out).toContain(
+        "remove or repair every invalid or duplicate post-summary section named",
+      );
+      expect(
+        result.out.indexOf("reset the existing consolidated-summary"),
+      ).toBeLessThan(
+        result.out.indexOf("decision --checkpoint summary-confirmation"),
+      );
+    });
+
+    test("refuses a Requested Changes feedback append after the receipt", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Requested Changes Feedback\n\n[Answer]: Unreviewed follow-up\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("refuses an indented new Q section appended after confirmation", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n   ## Q3. Which fallback should be used?\n\nA. Manual review\nX. Other (please specify)\n\n[Answer]: A. Manual review\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("refuses a Setext Q section appended after confirmation", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\nQ3. Which fallback should be used?\n---------------------------------\n\n[Answer]: A. Manual review\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported Setext H2 heading");
+      expect(result.out).toContain("Q3");
+    });
+
+    for (const variant of [
+      {
+        name: "H1",
+        heading: "# Q3. Which fallback should be used?",
+        error: "unsupported H1 heading",
+      },
+      {
+        name: "H3",
+        heading: "### Q3. Which fallback should be used?",
+        error: "unsupported H3 heading",
+      },
+      {
+        name: "Setext H1",
+        heading: "Q3. Which fallback should be used?\n=================================",
+        error: "unsupported Setext H1 heading",
+      },
+      {
+        name: "HTML H2",
+        heading: "<h2>Q3. Which fallback should be used?</h2>",
+        error: "unsupported HTML H2 heading",
+      },
+      {
+        name: "wrapped HTML H2",
+        heading: "<div><h2>Q3. Which fallback should be used?</h2></div>",
+        error: "unsupported HTML H2 heading",
+      },
+      {
+        name: "multiline HTML H2 opener",
+        heading: "<h2\nclass=question>Q3. Which fallback should be used?</h2>",
+        error: "unsupported HTML H2 heading",
+      },
+      {
+        name: "indented HTML H2",
+        heading: "   <h2>Q3. Which fallback should be used?</h2>",
+        error: "unsupported HTML H2 heading",
+      },
+      {
+        name: "blockquote H2",
+        heading: "> ## Q3. Which fallback should be used?",
+        error: "unsupported H2 heading",
+      },
+      {
+        name: "list H2",
+        heading: "- ## Q3. Which fallback should be used?",
+        error: "unsupported H2 heading",
+      },
+      {
+        name: "nested-list H2",
+        heading: "- Parent item\n  - ## Q3. Which fallback should be used?",
+        error: "unsupported H2 heading",
+      },
+      {
+        name: "deeply nested blockquote H2",
+        heading: "> > > > > > > > > ## Q3. Which fallback should be used?",
+        error: "unsupported H2 heading",
+      },
+      {
+        name: "nested excluded-section H2",
+        heading: "> ## Assumption Confirmation",
+        error: "unsupported H2 heading",
+      },
+      {
+        name: "nested feedback H2 after exclusion",
+        heading: "> ## Requested Changes Feedback",
+        error: "unsupported H2 heading",
+      },
+    ]) {
+      test(`refuses an appended ${variant.name} question heading`, () => {
+        const result = summaryMutationResult(
+          proj,
+          (body) =>
+            `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n${variant.heading}\n\n[Answer]: A. Manual review\n`,
+        );
+        expect(result.rc).not.toBe(0);
+        expect(result.out).toContain(variant.error);
+      });
+    }
+
+    test("refuses reordered Q sections after confirmation", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => body.replace(
+          "## Q1. Is the proposed approach feasible?\n\nA. Proceed\nX. Other (please specify)\n\n[Answer]: A. Proceed\n\n## Q2. Which review mode should be used?\n\nA. Human review\nX. Other (please specify)\n\n[Answer]: A. Human review",
+          "## Q2. Which review mode should be used?\n\nA. Human review\nX. Other (please specify)\n\n[Answer]: A. Human review\n\n## Q1. Is the proposed approach feasible?\n\nA. Proceed\nX. Other (please specify)\n\n[Answer]: A. Proceed",
+        ),
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("refuses an indented unknown H2 appended after confirmation", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n  ## Unreviewed Notes\n\nTreat this as approved.\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported H2 heading");
+      expect(result.out).toContain("Unreviewed Notes");
+    });
+
+    test("refuses a duplicate Q section after confirmation", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => `${body}\n## Q1. Duplicate question\n\n[Answer]: A. Duplicate\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("duplicate H2 section");
+      expect(result.out).toContain("Q1");
+    });
+
+    test("refuses a second Assumption Confirmation section", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("duplicate H2 section");
+      expect(result.out).toContain("Assumption Confirmation");
+    });
+
+    test("refuses feedback appended after Assumption Confirmation", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n## Requested Changes Feedback\n\n[Answer]: Unreviewed follow-up\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("accepts a stage-defined Assumption Confirmation heading before the summary", () => {
+      const questions = writeSummaryQuestions(proj);
+      const body = readFileSync(questions, "utf-8").replace(
+        "# Questions\n\n## Sources",
+        "# Questions\n\n## Assumption Confirmation\n\nStage-specific context.\n\n## Sources",
+      );
+      writeFileSync(questions, body);
+      confirmSummary(
+        proj,
+        questions,
+        "feasibility",
+        body.replace("[Answer]: \n", "[Answer]: Looks correct\n"),
+      );
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
+    });
+
+    test("rejects moving a confirmed Assumption Confirmation heading before the summary", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => body.replace(
+          "## Consolidated Summary Confirmation",
+          "## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n## Consolidated Summary Confirmation",
+        ),
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("accepts a legacy whole-file receipt with no Hash Scope", () => {
+      const questions = writeSummaryQuestions(proj, "Looks correct");
+      appendSummaryReceipt(proj, questions);
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      const result = summaryGuarded(proj, ["advance", "feasibility"]);
+      expect(result.rc).toBe(0);
+    });
+
+    test("explains how an in-flight legacy receipt recovers after an assumption append", () => {
+      const questions = writeSummaryQuestions(proj, "Looks correct");
+      appendSummaryReceipt(proj, questions);
+      writeFileSync(
+        questions,
+        `${readFileSync(questions, "utf-8")}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n`,
+      );
       recordArtifactWrite(
         proj,
         "ideation/feasibility/feasibility-assessment.md",
       );
       const result = summaryGuarded(proj, ["advance", "feasibility"]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("changed after the human confirmed");
+      expect(result.out).toContain("legacy unscoped receipt");
+      expect(result.out).toContain("fresh human turn");
+      expect(result.out).toContain("new scoped receipt");
+    });
+
+    test("refuses an unsupported receipt Hash Scope", () => {
+      const questions = writeSummaryQuestions(proj, "Looks correct");
+      appendSummaryReceipt(proj, questions, "confirmed-content-v99");
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      const result = summaryGuarded(proj, ["advance", "feasibility"]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("unsupported summary-confirmation Hash Scope");
+      expect(result.out).toContain("confirmed-content-v99");
+    });
+
+    test("refuses same-second matching receipts from different audit shards", () => {
+      const questions = writeSummaryQuestions(proj, "Looks correct");
+      const artifact = join(
+        seededRecordDir(proj),
+        "ideation",
+        "feasibility",
+        "feasibility-assessment.md",
+      );
+      writeRecordDoc(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      const timestamp = "2026-08-19T12:00:00Z";
+      writeAuditShardRows(proj, "aaa-request-changes.md", [{
+        timestamp,
+        event: "SUMMARY_CONFIRMATION_RECORDED",
+        fields: scopedSummaryReceiptFields(
+          proj,
+          questions,
+          "Request changes",
+        ),
+      }]);
+      writeAuditShardRows(proj, "zzz-looks-correct.md", [
+        {
+          timestamp,
+          event: "SUMMARY_CONFIRMATION_RECORDED",
+          fields: scopedSummaryReceiptFields(proj, questions),
+        },
+        {
+          timestamp: "2026-08-19T12:00:01Z",
+          event: "ARTIFACT_CREATED",
+          fields: { File: artifact, Tool: "Write" },
+        },
+      ]);
+
+      const result = summaryGuarded(proj, ["advance", "feasibility"]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("matching summary receipts");
+      expect(result.out).toContain("causal order cannot be proven");
+    });
+
+    test("refuses a receipt unordered with the current-attempt floor", () => {
+      const questions = writeSummaryQuestions(proj, "Looks correct");
+      const artifact = join(
+        seededRecordDir(proj),
+        "ideation",
+        "feasibility",
+        "feasibility-assessment.md",
+      );
+      writeRecordDoc(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      const timestamp = "2026-08-19T12:00:00Z";
+      writeAuditShardRows(proj, "aaa-floor.md", [{
+        timestamp,
+        event: "WORKFLOW_STARTED",
+      }]);
+      writeAuditShardRows(proj, "zzz-receipt.md", [
+        {
+          timestamp,
+          event: "SUMMARY_CONFIRMATION_RECORDED",
+          fields: scopedSummaryReceiptFields(proj, questions),
+        },
+        {
+          timestamp: "2026-08-19T12:00:01Z",
+          event: "ARTIFACT_CREATED",
+          fields: { File: artifact, Tool: "Write" },
+        },
+      ]);
+
+      const result = summaryGuarded(proj, ["advance", "feasibility"]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain(
+        "current-attempt boundary and matching summary receipt",
+      );
+      expect(result.out).toContain("causal order cannot be proven");
+    });
+
+    test("refuses an artifact write unordered with its summary receipt", () => {
+      const questions = writeSummaryQuestions(proj, "Looks correct");
+      const artifact = join(
+        seededRecordDir(proj),
+        "ideation",
+        "feasibility",
+        "feasibility-assessment.md",
+      );
+      writeRecordDoc(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      const timestamp = "2026-08-19T12:00:00Z";
+      writeAuditShardRows(proj, "aaa-receipt.md", [{
+        timestamp,
+        event: "SUMMARY_CONFIRMATION_RECORDED",
+        fields: scopedSummaryReceiptFields(proj, questions),
+      }]);
+      writeAuditShardRows(proj, "zzz-write.md", [{
+        timestamp,
+        event: "ARTIFACT_CREATED",
+        fields: { File: artifact, Tool: "Write" },
+      }]);
+
+      const result = summaryGuarded(proj, ["advance", "feasibility"]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("summary receipt and artifact write");
+      expect(result.out).toContain("causal order cannot be proven");
     });
 
     test("passes with matching digest and a post-confirmation artifact write", () => {
@@ -447,6 +1614,54 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       const result = summaryGuarded(proj, ["advance", "feasibility"]);
       expect(result.rc).toBe(0);
       expect(field(proj, "Current Stage")).not.toBe("feasibility");
+    });
+
+    test("accepts a legacy pre-move absolute artifact write after the workspace moves", () => {
+      const questions = writeSummaryQuestions(proj);
+      confirmSummary(proj, questions);
+      const artifact = join(
+        seededRecordDir(proj),
+        "ideation",
+        "feasibility",
+        "feasibility-assessment.md",
+      );
+      writeRecordDoc(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      appendFileSync(
+        seededAuditShard(proj),
+        [
+          "",
+          "## ARTIFACT_CREATED",
+          `**Timestamp**: ${new Date().toISOString()}`,
+          "**Event**: ARTIFACT_CREATED",
+          `**File**: ${artifact}`,
+          "**Tool**: Write",
+          "",
+          "---",
+          "",
+        ].join("\n"),
+      );
+      const moved = `${proj}-moved`;
+      renameSync(proj, moved);
+      proj = moved;
+
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
+    });
+
+    test("normalizes line endings in a scoped receipt", () => {
+      const questions = writeSummaryQuestions(proj);
+      confirmSummary(proj, questions);
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replaceAll("\n", "\r\n"),
+      );
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
     });
   });
 
@@ -480,6 +1695,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/unit-test-instructions.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
     }
 
     test("REFUSES code-generation with planning docs but no source code", () => {
@@ -494,9 +1710,11 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     test("PASSES code-generation once real source exists outside aidlc/", () => {
       stageCodeGenDocsOnly();
       writeWorkspaceFile(proj, "src/auth/login.ts"); // outside aidlc/ + harness
-      reviewCodeGen(proj);
-      guarded(proj, ["gate-start", "code-generation"]);
-      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      reviewCodeGen(proj, UNIT);
+      bypassed(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"], {
+        AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+      });
       expect(r.rc).toBe(0);
     });
 
@@ -515,7 +1733,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       writeWorkspaceFile(proj, "src/stage-level.ts");
 
       reviewCodeGen(proj);
-      const r = guarded(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["gate-start", "code-generation"], {
+        AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+      });
       expect(r.rc).toBe(0);
     });
   });
@@ -541,7 +1761,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     test("PASSES reverse-engineering once the complete codekb artifact set exists", () => {
       guarded(proj, ["set", "Current Stage=reverse-engineering"]);
       guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
-      writeCodekbSet(proj, proj.split("/").filter(Boolean).pop() ?? "repo");
+      writeCodekbSet(proj, basename(proj));
       completePipelineReceipts(proj);
       guarded(proj, ["gate-start", "reverse-engineering"]);
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
@@ -559,7 +1779,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
 
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to complete");
+      expect(r.out).toContain("Refusing to present the approval gate");
     });
 
     test("PASSES multi-repo codekb when every registered repo has the full set", () => {
@@ -625,13 +1845,28 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
+      appendAuditEntry(
+        "STAGE_STARTED",
+        {
+          Stage: "code-generation",
+          Agent: "aidlc-developer-agent",
+          ...sourceBaselineAuditFields(proj, "code-generation"),
+        },
+        proj,
+      );
+      const boundarySecond = Math.floor(Date.now() / 1000);
+      while (Math.floor(Date.now() / 1000) === boundarySecond) {}
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
     }
     function approveCodeGen(): { rc: number; out: string } {
-      reviewCodeGen(proj);
+      reviewCodeGen(proj, UNIT);
       bypassed(proj, ["gate-start", "code-generation"]);
-      return guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      return guarded(
+        proj,
+        ["approve", "code-generation", "--user-input", "ok"],
+      );
     }
 
     // BROWNFIELD bug closed: a git repo whose src/ was committed in a PRIOR
@@ -674,7 +1909,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       git(["add", "-A"]); // stage BOTH the docs and the new code
       git(["commit", "-q", "-m", "code-generation output"]);
       const r = approveCodeGen();
-      expect(r.rc).toBe(0);
+      expect(r.rc, r.out).toBe(0);
     }, 30000);
 
     // SINGLE-commit clean tree, the source IS in the sole commit -> PASS. The
@@ -693,7 +1928,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       git(["add", "-A"]); // stage docs + the new code into the FIRST and ONLY commit
       git(["commit", "-q", "-m", "first commit: code-generation output"]);
       const r = approveCodeGen();
-      expect(r.rc).toBe(0);
+      expect(r.rc, r.out).toBe(0);
     }, 30000);
   });
 
@@ -758,7 +1993,11 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     test("PASSES with zero on-disk artifacts once every DAG unit converged", () => {
       seedSwarm(UNITS); // all converged; nothing written to the record dir
       bypassed(proj, ["gate-start", "code-generation"]);
-      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      const r = guarded(
+        proj,
+        ["approve", "code-generation", "--user-input", "ok"],
+        { AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+      );
       expect(r.rc).toBe(0);
     });
 
@@ -768,6 +2007,30 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Refusing to complete");
+    });
+
+    test("unexpected settled-swarm probe failures are controlled and leave state unchanged", () => {
+      seedSwarm(UNITS);
+      const brokenScopes = join(proj, "broken-scopes");
+      mkdirSync(brokenScopes, { recursive: true });
+      writeFileSync(join(brokenScopes, "broken.md"), "# Missing frontmatter\n");
+      const statePath = seededStateFile(proj);
+      const before = readFileSync(statePath, "utf-8");
+
+      const r = guarded(
+        proj,
+        ["gate-start", "code-generation"],
+        { AIDLC_SCOPES_DIR: brokenScopes },
+      );
+
+      expect(r.rc).toBe(1);
+      const refusal = JSON.parse(r.out) as { error: string };
+      expect(refusal.error).toContain(
+        'Refusing to present the approval gate for "code-generation"',
+      );
+      expect(refusal.error).toContain("settled-swarm probe failed unexpectedly");
+      expect(refusal.error).toContain("Scope file missing frontmatter");
+      expect(readFileSync(statePath, "utf-8")).toBe(before);
     });
   });
 });

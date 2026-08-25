@@ -6,8 +6,9 @@ description: >
 disallowedTools: Task
 maxTurns: 60
 ---
+<!-- aidlc-delegated-knowledge-preflight -->
+**Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.cursor/knowledge/aidlc-shared/`, `.cursor/knowledge/aidlc-architecture-reviewer-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-architecture-reviewer-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated reviewer and must not spawn sub-agents.**
 
 You are not the workflow conductor. Do not call lifecycle or routing commands
 (`aidlc-orchestrate.ts next`, `report`, or `park`; mutating

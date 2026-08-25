@@ -130,9 +130,14 @@ stage's question flow:
 
 The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
-and a later human turn, binding it to the questions-file SHA-256. Completion refuses
-a missing or stale receipt, a changed questions file, or a declared artifact
-without a native write after the receipt. Per-unit stages require one
+and a later human turn, binding it to the questions-file digest and its recorded
+`Hash Scope` (`confirmed-content-v1` for the normalized canonical questions
+content, including all visible Q<n> and feedback sections in file order; one
+post-summary `Assumption Confirmation` section is excluded; unscoped legacy
+receipts use the whole-file SHA-256). Completion refuses a missing or stale receipt, a changed
+confirmed section or forbidden heading, or a declared artifact without a native
+write after the receipt. A legacy in-flight receipt must be re-confirmed to
+create a scoped receipt before that permitted append can be accepted. Per-unit stages require one
 unit-scoped receipt per applicable Unit; isolated runs use the same check with
 their `single-stage:<slug>` workflow identity.
 
@@ -170,11 +175,21 @@ How "source work" is detected depends on the workspace:
   filesystem-existence check: at least one file must exist outside the `aidlc/`
   workspace tree and the harness dirs.
 
-Today only `code-generation` declares it (it is the one stage whose body writes
-application code to the workspace root). A team that adds its own code- or
-config-emitting stage (a contract generator, an IaC executor) should set
-`workspace_requires: true` on it so the same guard applies. Bypass it for CI
-with `AIDLC_SKIP_ARTIFACT_GUARD=1`.
+Today only `code-generation` declares it. Its per-unit reviews additionally
+require `<record>/construction/<unit>/code-generation/source-manifest.json`:
+a strict attribution index of every created, modified, or deleted application-
+source path. The engine binds manifest bytes and claimed content into the unit
+receipt, compares every fresh unit against a content-addressed stage-entry
+baseline, and refuses changed paths outside the fresh claims union. Directory
+claims cover later additions; in a main multi-repo workspace every entry names
+its recorded repo, while a Bolt's manifest is relative to its one selected repo.
+Missing pre-upgrade fields fail open only as documented migration evidence;
+present-but-unbindable or destroyed modern evidence fails closed. A team that
+adds its own code- or config-emitting stage (a contract generator, an IaC
+executor) should set `workspace_requires: true` so the workspace guard applies.
+Bypass it for CI with `AIDLC_SKIP_ARTIFACT_GUARD=1`; that switch also bypasses
+the review-time required-output existence check. Bypass source binding and
+attribution separately with `AIDLC_SKIP_SOURCE_FRESHNESS=1`.
 
 ### `produces_kinds`
 

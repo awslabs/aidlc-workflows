@@ -57,16 +57,12 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowledge from `.claude/knowledge/aidlc-product-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - If brownfield: Read RE artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints)
 - Read user's project description from `<record>/audit/<host>-<clone>.md`
 
-### Step 3: Analyze User Request
+### Step 2: Analyze User Request
 
 Assess the user's request for:
 - **Clarity**: How well-defined is the request?
@@ -74,14 +70,14 @@ Assess the user's request for:
 - **Scope**: Single component, multi-component, system-wide
 - **Complexity**: Simple, standard, complex
 
-### Step 4: Determine Depth
+### Step 3: Determine Depth
 
 Based on complexity assessment:
 - **Minimal**: Clear request, narrow scope, well-understood domain
 - **Standard**: Moderate scope, some unknowns, multiple stakeholders
 - **Comprehensive**: Large scope, significant unknowns, complex domain
 
-### Step 5: Assess Current Requirements
+### Step 4: Assess Current Requirements
 
 Extract and organize what is already known from the user's input:
 - Explicit functional requirements
@@ -89,7 +85,7 @@ Extract and organize what is already known from the user's input:
 - Constraints and assumptions
 - Business context and goals
 
-### Step 6: Completeness Analysis
+### Step 5: Completeness Analysis
 
 Evaluate coverage across six dimensions:
 1. **Functional requirements** — Core behaviors, features, use cases
@@ -101,7 +97,7 @@ Evaluate coverage across six dimensions:
 
 Identify gaps in each dimension.
 
-### Step 7: Generate Clarifying Questions
+### Step 6: Generate Clarifying Questions
 
 PROACTIVE: Always generate clarifying questions unless requirements are exceptionally clear and complete across all six dimensions.
 
@@ -109,7 +105,7 @@ Create `<record>/inception/requirements-analysis/requirements-analysis-questions
 
 Then follow the unified question flow from stage-protocol.md section 3: offer the user a choice between guided (interactive) and self-guided (file edit) modes. In either case, ensure all answers are written to the file before proceeding.
 
-### Step 8: Collect and Analyze Answers
+### Step 7: Collect and Analyze Answers
 
 After all answers are collected:
 1. Read `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
@@ -120,14 +116,14 @@ After all answers are collected:
 - Check for contradictions between answers
 - Identify missing details needed for requirements generation
 
-### Step 9: Follow-Up Questions
+### Step 8: Follow-Up Questions
 
-If ANY ambiguity, vagueness, or contradictions found in Step 8:
+If ANY ambiguity, vagueness, or contradictions found in Step 7:
 - Create follow-up questions targeting the specific ambiguities
 - Resolve all ambiguities before proceeding
 - When in doubt, ask. Incomplete answers lead to poor designs.
 
-### Step 10: Confirm the Consolidated Summary
+### Step 9: Confirm the Consolidated Summary
 
 MANDATORY PRE-GENERATION STOP: After every original and follow-up answer is
 filled, append or update a `## Consolidated Summary Confirmation` entry in
@@ -152,7 +148,7 @@ confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
 `requirements.md` until the confirmation entry contains the user's explicit
 `Looks correct` answer and the receipt command succeeds.
 
-### Step 11: Generate Requirements
+### Step 10: Generate Requirements
 
 Create `<record>/inception/requirements-analysis/requirements.md` containing:
 - **Intent analysis** — What the user is trying to achieve (goals, not just features)
@@ -166,13 +162,13 @@ Create `<record>/inception/requirements-analysis/requirements.md` containing:
 These IDs are permanent traceability keys. Downstream stages must preserve
 them exactly rather than renumbering or replacing them with prose references.
 
-### Step 12: Completion Handoff
+### Step 11: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 13: Present Completion & Request Approval
+### Step 12: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :mag:
 - Summary of requirements produced

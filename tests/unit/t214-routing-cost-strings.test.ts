@@ -20,6 +20,7 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -43,8 +44,12 @@ const GRID = require("../../dist/claude/.claude/tools/data/scope-grid.json") as 
 const GRAPH = require("../../dist/claude/.claude/tools/data/stage-graph.json") as Array<{
   slug: string;
   phase: string;
+  for_each?: string;
 }>;
 const PHASE = new Map(GRAPH.map((s) => [s.slug, s.phase]));
+const PER_UNIT = new Set(
+  GRAPH.filter((s) => s.for_each === "unit-of-work").map((s) => s.slug),
+);
 
 // Independent derivation (mirrors gridCostSummary), applying the optional
 // greenfield reverse-engineering adjustment so the scope-change expectation
@@ -52,20 +57,30 @@ const PHASE = new Map(GRAPH.map((s) => [s.slug, s.phase]));
 function counts(
   stages: Record<string, "EXECUTE" | "SKIP">,
   greenfieldAdjust = false,
-): { execute: number; total: number; gates: number } {
+): { execute: number; total: number; gates: number; perUnitStages: number } {
   const st = { ...stages };
   if (greenfieldAdjust && st["reverse-engineering"] === "EXECUTE") {
     st["reverse-engineering"] = "SKIP";
   }
   const total = Object.keys(st).length;
+  const hasUnitDag = st["units-generation"] === "EXECUTE";
   let execute = 0;
   let gates = 0;
+  let perUnitStages = 0;
   for (const [slug, action] of Object.entries(st)) {
     if (action !== "EXECUTE") continue;
     execute++;
     if (PHASE.get(slug) !== "initialization") gates++;
+    if (hasUnitDag && PER_UNIT.has(slug)) perUnitStages++;
   }
-  return { execute, total, gates };
+  return { execute, total, gates, perUnitStages };
+}
+
+function costClause(cost: ReturnType<typeof counts>): string {
+  const perUnit = cost.perUnitStages > 0
+    ? `, ${cost.perUnitStages} ${cost.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
+    : "";
+  return `${cost.execute} of ${cost.total} stages, ${cost.gates} approval gates${perUnit}`;
 }
 
 interface RunResult {
@@ -105,15 +120,26 @@ afterEach(() => {
   proj = "";
 });
 
-describe("t214 keyword-hit confirm carries the cost clause", () => {
-  test('bugfix confirm names "N of T stages, G approval gates"', () => {
+describe("t214 keyword-hit confirm carries the effective cost clause", () => {
+  test("greenfield bugfix confirm adjusts reverse engineering and omits per-unit fan-out", () => {
     proj = createTestProject();
     const d = directiveOf(runNext(proj, ["fix login bug"]).out);
     expect(d.kind).toBe("ask");
     const q = String(d.question);
     expect(q).toContain('"bugfix"');
-    const bf = counts(GRID.bugfix.stages);
-    expect(q).toContain(`${bf.execute} of ${bf.total} stages, ${bf.gates} approval gates`);
+    const bf = counts(GRID.bugfix.stages, true);
+    expect(q).toContain(costClause(bf));
+    expect(q).not.toContain("per unit of work");
+  });
+
+  test("brownfield bugfix confirm keeps nominal reverse-engineering counts", () => {
+    proj = createTestProject();
+    writeFileSync(join(proj, "app.ts"), "export const existing = true;\n");
+    const d = directiveOf(runNext(proj, ["fix login bug"]).out);
+    expect(d.kind).toBe("ask");
+    const q = String(d.question);
+    expect(q).toContain(costClause(counts(GRID.bugfix.stages)));
+    expect(q).not.toContain("per unit of work");
   });
 });
 
@@ -126,9 +152,9 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
     expect(d.kind).toBe("ask");
     const q = String(d.question);
     expect(q).toContain("compose");
-    const express = counts(GRID.express.stages);
-    const classic = counts(GRID.classic.stages);
-    const feature = counts(GRID.feature.stages);
+    const express = counts(GRID.express.stages, true);
+    const classic = counts(GRID.classic.stages, true);
+    const feature = counts(GRID.feature.stages, true);
     expect(q).toContain(
       `express = ${express.execute} of ${express.total} stages`,
     );
@@ -148,9 +174,23 @@ describe("t214 birth print carries the cost parenthetical", () => {
     expect(d.kind).toBe("print");
     const m = String(d.message);
     expect(m).toContain("intent-create --scope bugfix");
-    const bf = counts(GRID.bugfix.stages);
-    expect(m).toContain(`(${bf.execute} of ${bf.total} stages, ${bf.gates} approval gates`);
+    const bf = counts(GRID.bugfix.stages, true);
+    expect(m).toContain(`(${costClause(bf)})`);
+    expect(m).not.toContain("per unit of work");
   });
+
+  for (const scope of ["classic", "feature"]) {
+    test(`next ${scope} retains the derived per-unit clause`, () => {
+      proj = createTestProject();
+      removeWorkspaceRecord(proj);
+      const d = directiveOf(runNext(proj, [scope]).out);
+      expect(d.kind).toBe("print");
+      const expected = counts(GRID[scope].stages, true);
+      expect(expected.perUnitStages).toBeGreaterThan(0);
+      expect(String(d.message)).toContain(costClause(expected));
+      expect(String(d.message)).toContain("per unit of work");
+    });
+  }
 });
 
 describe("t214 scope-change stdout carries the Approval gates line", () => {

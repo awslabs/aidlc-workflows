@@ -39,17 +39,13 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowledge from `.claude/knowledge/aidlc-product-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read intent statement from `<record>/ideation/intent-capture/`
 - Read feasibility assessment from `<record>/ideation/feasibility/` (if exists)
 - Read constraint register and RAID log (if exist)
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/ideation/scope-definition/scope-definition-questions.md` with questions:
 - What is the minimum viable scope that delivers value?
@@ -60,21 +56,21 @@ Create `<record>/ideation/scope-definition/scope-definition-questions.md` with q
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Run ambiguity detection, contradiction analysis, and scope-vs-timeline validation.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create scope definition document (in/out boundary), prioritized intent backlog (proto-Units using MoSCoW/WSJF/RICE), and value stream map.
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage scope-definition --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :dart:
 Review path: `<record>/ideation/scope-definition/`

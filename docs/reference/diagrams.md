@@ -211,7 +211,7 @@ flowchart TD
 
 ## 5. Operation Flow
 
-The Operation phase covers deployment, environment provisioning, observability, incident response, performance validation, and feedback. All seven stages are CONDITIONAL (the entire phase may be skipped for poc and bugfix scopes). All stages run inline. Stage 4.7 is the terminal stage; upon approval, the workflow is complete or a new Ideation cycle can begin.
+The Operation phase covers deployment, environment provisioning, observability, incident response, performance validation, and feedback. All seven stages are CONDITIONAL (the entire phase may be skipped for mvp and poc scopes). All stages run inline. Stage 4.7 is the terminal stage; upon approval, the workflow is complete or a new Ideation cycle can begin.
 
 ```mermaid
 flowchart TD
@@ -444,7 +444,7 @@ flowchart TD
 
 Each stage loads knowledge in a strict 6-step order. This ensures guardrails take precedence, followed by shared methodology, then agent-specific knowledge, then team customizations, and finally prior stage artifacts. The sequence diagram below shows the loading order for any stage activation.
 
-> **Note:** Steps 1-5 are agent knowledge loading (defined in each agent file); Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
+> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5; Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
 
 ```mermaid
 sequenceDiagram

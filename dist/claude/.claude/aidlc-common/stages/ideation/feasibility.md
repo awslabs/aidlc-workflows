@@ -43,19 +43,14 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` and knowledge from `.claude/knowledge/aidlc-architect-agent/`.
-Orchestrator will separately invoke aidlc-aws-platform-agent and aidlc-compliance-agent for their perspectives.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read intent statement from `<record>/ideation/intent-capture/`
 - Read market research from `<record>/ideation/market-research/` (if exists)
 - Load guardrails from
   `aidlc/spaces/<active-space>/memory/{org,team,project}.md`
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/ideation/feasibility/feasibility-questions.md` with questions:
 - What existing systems must this integrate with?
@@ -67,23 +62,23 @@ Create `<record>/ideation/feasibility/feasibility-questions.md` with questions:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Run ambiguity detection and contradiction analysis.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create feasibility assessment (technical viability, risk analysis), constraint register (technical, organizational, regulatory), and RAID log (Risks, Assumptions, Issues, Dependencies).
 
 The orchestrator will pass these artifacts to aidlc-aws-platform-agent for AWS landscape assessment and aidlc-compliance-agent for regulatory scanning, then synthesize all inputs.
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage feasibility --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :test_tube:
 Review path: `<record>/ideation/feasibility/`

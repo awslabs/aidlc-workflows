@@ -117,7 +117,6 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync,
 import { join } from "node:path";
 import {
   ActiveDirectiveLockContendedError,
-  activeIntentUuid,
   clearSessionIntentHandoff,
   composeMarkerPath,
   consumeCopilotConversation,
@@ -125,9 +124,11 @@ import {
   COMPOSE_MARKER_TTL_MS,
   docsRoot,
   errorMessage,
+  findIntentByUuid,
   getField,
   hasCurrentSharedResumeWait,
   hasPendingDecision,
+  hookChildEnv,
   isEngineToolCall,
   hooksHealthDir,
   isoTimestamp,
@@ -137,11 +138,13 @@ import {
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
+  resolveWorkflowSelection,
   stageDir,
-  stateFilePath,
+  stateFilePathForSelection,
   stopHookDir,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
+  validSessionId,
   updateCopilotStopCount,
   SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
@@ -913,7 +916,10 @@ interface EngineDirective {
 // because we will not trap a turn on the engine's behalf when we cannot read a
 // directive. We pass --project-dir explicitly so the engine resolves the same
 // workspace regardless of the spawned process's cwd.
-function runEngineNextDirective(projectDir: string): EngineDirective | null {
+function runEngineNextDirective(
+  projectDir: string,
+  sessionId: string,
+): EngineDirective | null {
   const enginePath = join(projectDir, harnessDir(), "tools", "aidlc-orchestrate.ts");
   if (!existsSync(enginePath)) return null;
   // The spawn MUST be time-bounded. Without a timeout a hung `next` (an engine
@@ -932,11 +938,19 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
   // forever: tier 3 would look implemented and never fire. markEngineTouch() is a
   // no-op when it sees this env var (aidlc-lib.ts).
   const proc = Bun.spawnSync({
-    cmd: ["bun", enginePath, "next", "--project-dir", projectDir],
+    cmd: [
+      "bun",
+      enginePath,
+      "next",
+      "--project-dir",
+      projectDir,
+    ],
     stdout: "pipe",
     stderr: "pipe",
     timeout: ENGINE_TIMEOUT_MS,
-    env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
+    env: hookChildEnv(projectDir, sessionId, {
+      [STOP_HOOK_PROBE_ENV]: "1",
+    }),
   });
   if (proc.exitCode !== 0) return null;
   const stdout = new TextDecoder().decode(proc.stdout).trim();
@@ -1050,13 +1064,18 @@ function continuationReason(
   }
   if (kind === "load-steering" && continueToken) {
     const exactContent = JSON.stringify(rulesContent ?? []);
+    // Print order and execution order intentionally differ. The opaque token
+    // must precede the large payload so host truncation cannot discard it, but
+    // the conductor must still apply this chunk before advancing the cursor.
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
-      "Apply every path/text entry in this exact `rules_content` payload before continuing:\n\n" +
-      `${exactContent}\n\nThen run ` +
+      "Preserve this step-two continuation command, but do not run it yet: " +
       `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
-      "and keep following each load-steering step it returns until it answers `run-stage`. " +
-      "Do not summarise or narrate these rule chunks to the user."
+      "First, apply every path/text entry in the exact `rules_content` payload below. " +
+      "Second, run the preserved command and keep following each load-steering step it " +
+      "returns, applying its rule chunk before every continuation, until it answers " +
+      "`run-stage`. Do not summarise or narrate these " +
+      `rule chunks to the user.\n\n${exactContent}`
     );
   }
   return (
@@ -1075,6 +1094,15 @@ function continuationReason(
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
+let earlySessionId = "";
+try {
+  const early = JSON.parse(input) as { session_id?: unknown };
+  if (typeof early.session_id === "string") {
+    earlySessionId = validSessionId(early.session_id) ?? "";
+  }
+} catch {
+  /* malformed input remains fail-open */
+}
 
 // Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
 try {
@@ -1092,7 +1120,10 @@ if (process.stdin.isTTY) return allowStop();
 
 // No-op outside AIDLC: if there is no workflow state file under the project dir,
 // there is nothing to enforce — allow the stop. Defends the frontmatter scoping.
-const statePath = stateFilePath(projectDir);
+const selection = resolveWorkflowSelection(projectDir, {
+  sessionId: earlySessionId || undefined,
+});
+const statePath = stateFilePathForSelection(projectDir, selection);
 if (!existsSync(statePath)) return allowStop();
 
 let stateContent: string;
@@ -1116,7 +1147,7 @@ let transcriptPath: string | null = null;
 // session-scoped `<sessionId>.transcript` pointer written below. "" when absent
 // (a TTY/empty invocation or a host that omits it); writeCurrentTranscriptPath
 // still writes the unscoped `current.transcript` fallback in that case.
-let sessionId = "";
+let sessionId = earlySessionId;
 // Transcript format: Codex's rollout JSONL lives under a `.../sessions/<date>/
 // rollout-*.jsonl` path and uses a {type,payload} shape; Claude's is message-
 // shaped JSONL. Default to Claude; switch to Codex when the path looks like a
@@ -1128,7 +1159,9 @@ try {
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if ("stop_hook_active" in obj) stopHookActive = obj.stop_hook_active === true;
-    if (typeof obj.session_id === "string") sessionId = obj.session_id;
+    if (typeof obj.session_id === "string") {
+      sessionId = validSessionId(obj.session_id) ?? "";
+    }
     if (typeof obj.transcript_path === "string" && obj.transcript_path.length > 0) {
       transcriptPath = obj.transcript_path;
       if (/[/\\]rollout-[^/\\]*\.jsonl$/.test(transcriptPath)) transcriptFormat = "codex";
@@ -1143,8 +1176,8 @@ try {
 // A confirmed second intent deliberately moves the shared cursor before this
 // old conversation ends. The PostToolUse hook writes an exact per-session
 // receipt for that transition. Allow only when the receipt is fresh, the
-// session still owns the original intent, and the created intent is still the
-// active cursor; an unrelated concurrent cursor change satisfies none of these.
+// session now owns the created intent. The shared cursor is intentionally not
+// evidence here: another session may move it before this Stop event.
 if (sessionId) {
   const handoff = readSessionIntentHandoff(projectDir, sessionId);
   if (handoff) {
@@ -1152,12 +1185,15 @@ if (sessionId) {
     const fresh =
       handoff.issuedAtMs <= now &&
       now - handoff.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
+    const target = findIntentByUuid(projectDir, handoff.toIntentUuid);
     const exactBoundary =
       fresh &&
-      readSessionIntentUuid(projectDir, sessionId) === handoff.fromIntentUuid &&
-      activeIntentUuid(projectDir) === handoff.toIntentUuid;
-    clearSessionIntentHandoff(projectDir, sessionId);
+      readSessionIntentUuid(projectDir, sessionId) === handoff.toIntentUuid &&
+      target !== null &&
+      selection.space === target.space &&
+      selection.intent === target.dirName;
     if (exactBoundary) {
+      clearSessionIntentHandoff(projectDir, sessionId);
       resetGuard(projectDir);
       recordHookDrop(
         projectDir,
@@ -1166,6 +1202,7 @@ if (sessionId) {
       );
       return allowStop();
     }
+    if (!fresh) clearSessionIntentHandoff(projectDir, sessionId);
   }
 }
 
@@ -1232,7 +1269,7 @@ const directive: EngineDirective | null = copilotEvidence
   ? retainedDirective
     ? { ...retainedDirective, retained: true }
     : { kind: "rehydrate", retained: true }
-  : runEngineNextDirective(projectDir);
+  : runEngineNextDirective(projectDir, sessionId);
 if (directive === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
   return allowStop();

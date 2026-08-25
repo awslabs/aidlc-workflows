@@ -30,7 +30,12 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -109,6 +114,19 @@ function recordReview(
   p: string,
   verdict: "READY" | "NOT-READY",
 ): void {
+  const dir = join(
+    seededRecordDir(p),
+    "inception",
+    "requirements-analysis",
+  );
+  mkdirSync(dir, { recursive: true });
+  for (const name of [
+    "requirements.md",
+    "requirements-analysis-questions.md",
+  ]) {
+    const path = join(dir, name);
+    if (!existsSync(path)) writeFileSync(path, `# ${name}\n`);
+  }
   const base = [
     "review",
     "--stage",

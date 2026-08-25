@@ -9,7 +9,11 @@ import {
   workspaceCommandUtilityArgv,
 } from "./aidlc-lib.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { packagedDistributionRoot, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
+import {
+  isCompiledExecutable,
+  packagedDistributionRoot,
+  runtimeHarnessDir,
+} from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
 type RouteKind =
@@ -1067,7 +1071,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   const previousHarness = process.env.AIDLC_HARNESS_DIR;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
   process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
-  if (import.meta.url.includes("/$bunfs/")) {
+  if (isCompiledExecutable()) {
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
   try {
@@ -1143,7 +1147,7 @@ async function runSensorScriptFile(
 }
 
 async function execute(action: Action): Promise<number> {
-  const isCompiled = import.meta.url.includes("/$bunfs/");
+  const isCompiled = isCompiledExecutable();
   if (action.type === "delegate") {
     // Tool modules are imported lazily in compiled mode to keep dev-mode startup
     // fast and to avoid loading every tool for help/version calls.
@@ -1185,7 +1189,7 @@ export async function main(argv: string[]): Promise<void> {
     await metrics.sendMetricFromStdin();
     return;
   }
-  if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
+  if (isCompiledExecutable() && !process.env.AIDLC_HARNESS_DIR) {
     // Compiled, no explicit harness: probe the project install (.claude /
     // .kiro / .codex by tools/data/harness.json) rather than assuming
     // .claude — module-relative derivation can't work from $bunfs, and every

@@ -84,6 +84,7 @@ import {
   auditBlockField,
   auditShardDir,
   boltSlugForUnit,
+  filterProducesByKind,
   filteredRawIndexEntries,
   findAllEvents,
   getField,
@@ -91,23 +92,32 @@ import {
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
   parseArgs,
+  parseSourceListing,
   readAuditShardEvents,
-  readAllAuditShards,
+  readUnitSourceManifest,
+  readUnitSourceSnapshot,
   readStateFile,
   relativeRecordDir,
   reviewArtifactFingerprint,
   reviewedSourceRef,
+  resolveAuditWorktreePath,
   resolveBoltDag,
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
+  sourceListingSha256,
   terminalReviewVerdict,
+  sourceClaimCovers,
+  sourceListingEntriesEqual,
+  type SourceClaimModel,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   worktreeAuditFilePath,
   worktreePath,
   worktreeRuntimeGraphPath,
   workspaceSourceFingerprint as worktreeSourceFingerprint,
+  workspaceSourceExclusionPathspecs,
+  workspaceSourceListing,
   worktreeStateFilePath,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -338,32 +348,52 @@ function reviewerReceiptError(
 ): ReceiptCheck {
   const boltSlug = swarmBoltSlug(unit);
   const wt = worktreePath(projectDir, boltSlug);
-  const audit = readAllAuditShards(wt);
-  if (!audit) {
-    return {
-      error: `claimed converged but worktree audit is missing; expected a terminal review by ${reviewer}`,
-    };
-  }
+  const creationRows = readAuditShardEvents(projectDir)
+    .filter(
+      (row) =>
+        row.event === "WORKTREE_CREATED" &&
+        auditBlockField(row.block, "Bolt slug") === boltSlug &&
+        (
+          auditBlockField(row.block, "Worktree path") !== null &&
+          resolveAuditWorktreePath(
+            projectDir,
+            auditBlockField(row.block, "Worktree path") as string,
+          ) === wt
+        ),
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shard === b.shard) return a.pos - b.pos;
+      return a.shard < b.shard ? -1 : 1;
+    });
+  const creationBlock = creationRows.at(-1)?.block ?? null;
+  const creationBaseCommit = creationBlock === null
+    ? null
+    : auditBlockField(creationBlock, "Base commit");
+  const creationBaseListing = creationBlock === null
+    ? null
+    : auditBlockField(creationBlock, "Base Source Listing");
+  const creationModern = creationBaseCommit !== null || creationBaseListing !== null;
 
   const relevant = new Set([
     "BOLT_STARTED",
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
-  const events = audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position) => ({
-      block,
-      position,
-      event: auditBlockField(block, "Event") ?? "",
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-    }))
+  const events = readAuditShardEvents(wt)
     .filter((event) => relevant.has(event.event))
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      return a.position - b.position;
+      if (a.shard === b.shard) return a.pos - b.pos;
+      return a.shard < b.shard ? -1 : 1;
     });
+  const crossShardTied = (index: number): boolean =>
+    events.some(
+      (candidate, other) =>
+        other !== index &&
+        candidate.timestamp === events[index].timestamp &&
+        candidate.shard !== events[index].shard,
+    );
 
   let boltStart = -1;
   for (let i = 0; i < events.length; i++) {
@@ -371,7 +401,14 @@ function reviewerReceiptError(
       events[i].event === "BOLT_STARTED" &&
       auditBlockField(events[i].block, "Bolt slug") === boltSlug
     ) {
-      boltStart = i;
+      if (crossShardTied(i)) {
+        let end = i;
+        while (end + 1 < events.length && events[end + 1].timestamp === events[i].timestamp) end++;
+        boltStart = end;
+        i = end;
+      } else {
+        boltStart = i;
+      }
     }
   }
   if (boltStart === -1) {
@@ -380,9 +417,58 @@ function reviewerReceiptError(
     };
   }
 
+  const boltStartBlock = events[boltStart].block;
+  const baseCommit = auditBlockField(boltStartBlock, "Base commit");
+  const baseSourceListing = auditBlockField(boltStartBlock, "Base Source Listing");
+  if (
+    creationModern &&
+    (baseCommit !== creationBaseCommit || baseSourceListing !== creationBaseListing)
+  ) {
+    return {
+      error: `claimed converged but modern WORKTREE_CREATED attestation was not propagated to BOLT_STARTED for unit "${unit}"`,
+    };
+  }
+  let verifiedBaseListing: Map<string, string> | null = null;
+  if (baseCommit !== null) {
+    const metaPath = join(wt, ".aidlc", "worktree-meta.json");
+    let meta: unknown;
+    try {
+      meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+    } catch {
+      return { error: `claimed converged but worktree base-commit metadata is missing or malformed for unit "${unit}"` };
+    }
+    if (
+      typeof meta !== "object" || meta === null || Array.isArray(meta) ||
+      (meta as Record<string, unknown>).baseCommit !== baseCommit ||
+      baseSourceListing === null ||
+      (meta as Record<string, unknown>).baseSourceListing !== baseSourceListing
+    ) {
+      return { error: `claimed converged but worktree Base commit/source listing does not match its BOLT_STARTED attestation for unit "${unit}"` };
+    }
+    const listingPath = join(wt, ".aidlc", "base-source-listing.tsv");
+    let serialized: string;
+    try {
+      serialized = readFileSync(listingPath, "utf-8");
+    } catch {
+      return { error: `claimed converged but worktree base source listing is missing for unit "${unit}"` };
+    }
+    if (`sha256:${sourceListingSha256(serialized)}` !== baseSourceListing) {
+      return { error: `claimed converged but worktree base source listing hash does not match for unit "${unit}"` };
+    }
+    verifiedBaseListing = parseSourceListing(serialized);
+    if (verifiedBaseListing === null) {
+      return { error: `claimed converged but worktree base source listing is malformed for unit "${unit}"` };
+    }
+  }
+
   const pendingRequests = new Map<
     string,
-    { fingerprint: string | null; recovery: boolean }
+    {
+      fingerprint: string | null;
+      recovery: boolean;
+      timestamp: string;
+      shard: string;
+    }
   >();
   let latestTerminal:
     | { block: string; requestedFingerprint: string | null }
@@ -403,14 +489,25 @@ function reviewerReceiptError(
     if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
     const requestKey = `${unit}\u0000${iteration}`;
     if (event.event === "REVIEW_REQUESTED") {
+      if (crossShardTied(i)) continue;
       pendingRequests.set(requestKey, {
         fingerprint: auditBlockField(event.block, "Artifact Fingerprint"),
         recovery: auditBlockField(event.block, "Recovery") === "stale-receipt",
+        timestamp: event.timestamp,
+        shard: event.shard,
       });
       continue;
     }
+    if (crossShardTied(i)) {
+      pendingRequests.delete(requestKey);
+      continue;
+    }
     const request = pendingRequests.get(requestKey);
-    if (!request || !pendingRequests.delete(requestKey)) continue;
+    if (
+      request === undefined ||
+      (request.timestamp === event.timestamp && request.shard !== event.shard) ||
+      !pendingRequests.delete(requestKey)
+    ) continue;
     const rawVerdict = auditBlockField(event.block, "Verdict");
     const verdict = request.recovery
       ? rawVerdict === "READY" || rawVerdict === "NOT-READY"
@@ -459,7 +556,14 @@ function reviewerReceiptError(
   if (!definition?.workspace_requires) return { error: null };
   const recordedSourceFp = auditBlockField(latestTerminal.block, "Source Fingerprint");
   if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return { error: null };
-  if (recordedSourceFp === null) return { error: null }; // pre-binding migration
+  if (recordedSourceFp === null) {
+    if (baseCommit === null) return { error: null }; // pre-binding worktree migration
+    return {
+      error:
+        `claimed converged but modern worktree unit "${unit}" has no Source Fingerprint; ` +
+        `re-run the reviewer in the worktree and record a fresh verdict before finalizing`,
+    };
+  }
   const currentSourceFp = worktreeSourceFingerprint(wt);
   if (
     recordedSourceFp === UNBINDABLE_FINGERPRINT ||
@@ -473,6 +577,112 @@ function reviewerReceiptError(
         `re-invoke the reviewer against the current worktree source and record a fresh ` +
         `verdict before finalizing`,
     };
+  }
+
+  // Pre-upgrade worktrees have no attested base commit and retain migration
+  // fail-open behavior. Modern worktrees must validate the exact unit binding
+  // that the reviewer saw before trusting its claims for footprint coverage.
+  if (baseCommit !== null) {
+    const frameworkPathspecs = workspaceSourceExclusionPathspecs(wt);
+    if (frameworkPathspecs === null) {
+      return {
+        error:
+          `claimed converged but worktree source-role metadata is malformed for unit "${unit}"`,
+      };
+    }
+    const recordedUnitFp = auditBlockField(
+      latestTerminal.block,
+      "Unit Source Fingerprint",
+    );
+    const bindingBypass =
+      auditBlockField(latestTerminal.block, "Unit Source Binding Bypass") ===
+      "true";
+    if (bindingBypass || recordedUnitFp === null || recordedUnitFp === UNBINDABLE_FINGERPRINT) {
+      return {
+        error:
+          `claimed converged but unit "${unit}" has no verifiable modern Unit Source Fingerprint; ` +
+          `re-run the reviewer in the worktree and record a fresh verdict before finalizing`,
+      };
+    }
+    const manifest = readUnitSourceManifest(wt, stage, unit, {
+      worktreeRelative: true,
+    });
+    const snapshot = readUnitSourceSnapshot(wt, stage, unit, recordedUnitFp);
+    if (
+      !manifest.ok ||
+      snapshot === null ||
+      snapshot.manifestSha256 !== manifest.rawBytesSha256
+    ) {
+      return {
+        error:
+          `claimed converged but unit "${unit}"'s reviewed source manifest binding is missing, ` +
+          `corrupt, or no longer matches its review; re-run the reviewer in the worktree and ` +
+          `record a fresh verdict before finalizing`,
+      };
+    }
+    const reviewedClaims: SourceClaimModel = {
+      claims: manifest.claims,
+      prefixes: manifest.prefixes,
+    };
+    const idx = join(tmpdir(), `aidlc-swarm-footprint-${process.pid}-${randomUUID().slice(0, 8)}`);
+    const env = { ...process.env, GIT_INDEX_FILE: idx };
+    const git = (args: string[]) => spawnSync("git", ["-C", wt, ...args], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    try {
+      if (git(["read-tree", "HEAD"]).status !== 0 || git(["add", "-A"]).status !== 0) {
+        return { error: `claimed converged but the worktree footprint could not be computed for unit "${unit}"` };
+      }
+      const excluded = git([
+        "reset", "-q", "HEAD", "--",
+        ...frameworkPathspecs,
+      ]);
+      if (excluded.status !== 0) return { error: `claimed converged but framework paths could not be excluded from unit "${unit}"'s footprint` };
+      const tree = git(["write-tree"]);
+      if (tree.status !== 0 || !tree.stdout.trim()) return { error: `claimed converged but the worktree footprint tree could not be written for unit "${unit}"` };
+      const diff = git([
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        baseCommit,
+        tree.stdout.trim(),
+      ]);
+      if (diff.status !== 0) return { error: `claimed converged but the worktree footprint could not be compared for unit "${unit}"` };
+      const outside = new Set(
+        diff.stdout
+          .split("\0")
+          .filter(Boolean),
+      );
+      const currentListing = workspaceSourceListing(wt);
+      if (verifiedBaseListing === null || currentListing === null) {
+        return { error: `claimed converged but raw-aware worktree footprint evidence is unavailable for unit "${unit}"` };
+      }
+      for (const [path, oid] of verifiedBaseListing) {
+        if (!sourceListingEntriesEqual(currentListing.get(path), oid)) {
+          outside.add(path.slice(path.indexOf("\0") + 1));
+        }
+      }
+      for (const path of currentListing.keys()) {
+        if (!verifiedBaseListing.has(path)) outside.add(path.slice(path.indexOf("\0") + 1));
+      }
+      const outsideClaims = [...outside]
+        .filter((path) => !sourceClaimCovers(`\0${path}`, reviewedClaims));
+      if (outsideClaims.length > 0) {
+        const rendered = outsideClaims.slice(0, 10).join(", ") +
+          (outsideClaims.length > 10 ? ` … and ${outsideClaims.length - 10} more` : "");
+        return {
+          error:
+            `claimed converged but the worktree wrote application-source paths outside unit "${unit}"'s ` +
+            `source manifest (${rendered}); update construction/${unit}/code-generation/source-manifest.json ` +
+            `in the worktree, re-run the reviewer there, and record a fresh verdict before finalizing`,
+        };
+      }
+    } finally {
+      rmSync(idx, { force: true });
+    }
   }
   return { error: null, fingerprint: recordedSourceFp };
 }
@@ -507,6 +717,10 @@ function bindReviewedSource(
     maxBuffer: 512 * 1024 * 1024,
   });
   try {
+    const frameworkPathspecs = workspaceSourceExclusionPathspecs(wt);
+    if (frameworkPathspecs === null) {
+      return { error: "cannot resolve the Bolt worktree source role" };
+    }
     const head = git(["rev-parse", "HEAD^{commit}"]);
     if (head.status !== 0 || !head.stdout.trim()) return { error: "cannot resolve the Bolt HEAD commit" };
     if (git(["read-tree", "HEAD"]).status !== 0) return { error: "cannot seed the source snapshot index" };
@@ -560,8 +774,7 @@ function bindReviewedSource(
     }
     const restore = git([
       "reset", "-q", "HEAD", "--",
-      ":(top)aidlc/", ":(top).aidlc/",
-      ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+      ...frameworkPathspecs,
     ]);
     if (restore.status !== 0) return { error: "cannot exclude framework state from the source snapshot" };
     const tree = git(["write-tree"]);
@@ -595,6 +808,7 @@ function emitSwarmStarted(
   pd: string,
   batch: string,
   units: string[],
+  obligations: string[],
   concurrency: string,
   attempt: SwarmAttemptStamp,
 ): void {
@@ -603,6 +817,7 @@ function emitSwarmStarted(
     {
       "Batch number": batch,
       "Unit names": units.join(","),
+      "Unit obligations": obligations.join(","),
       "Concurrency cap": concurrency,
       Stage: attempt.stage,
       "Run floor": attempt.floor,
@@ -729,6 +944,12 @@ function handlePrepare(rest: string[]): void {
   if (units.length === 0) {
     fail("--units resolved to an empty list");
   }
+  if (flags["degraded-from"]) {
+    const requested = flags["degraded-from"] as DriverName;
+    if (!DRIVER_VALUES.includes(requested)) {
+      fail(`--degraded-from must be one of: ${DRIVER_VALUES.join(", ")}`);
+    }
+  }
   const state = readStateFile(projectDir);
   const stage = (getField(state, "Current Stage") ?? "")
     .trim()
@@ -748,18 +969,33 @@ function handlePrepare(rest: string[]): void {
       );
     }
   }
-  const dag = resolveBoltDag(projectDir);
+  const dag = resolveBoltDag(projectDir, flags.intent, flags.space);
   if (dag.state === "malformed") {
     fail(
       `prepare cannot resolve the authoritative unit DAG: ${dag.reason} ` +
         `(${dag.detail}). Fix unit-of-work-dependency.md before starting the swarm.`,
     );
   }
-  const slugUniverse =
-    dag.state === "ok"
-      ? [...new Set([...dag.units, ...units])]
-      : units;
-  assertUniqueSwarmBoltSlugs(slugUniverse);
+  const stageDefinition = resolveStage(stage);
+  if (dag.state !== "ok") {
+    fail("prepare requires a current resolved Unit DAG");
+  }
+  for (const unit of units) {
+    if (!dag.units.includes(unit)) {
+      fail(`prepare unit "${unit}" is not in the current resolved Unit DAG`);
+    }
+    if (
+      stageDefinition &&
+      filterProducesByKind(
+        stageDefinition.produces_kinds,
+        stageDefinition.produces ?? [],
+        dag.unitKinds?.get(unit) ?? null,
+      ).length === 0
+    ) {
+      fail(`prepare unit "${unit}" has no applicable required outputs for stage "${stage}"`);
+    }
+  }
+  assertUniqueSwarmBoltSlugs(dag.units);
 
   // P7: the construction repo this batch targets. resolveConstructionRepo errors
   // on a multi-repo intent with no --repo (forwarded as the batch failure), infers
@@ -792,11 +1028,11 @@ function handlePrepare(rest: string[]): void {
   // one. The driver-selection read (AIDLC_USE_SWARM) is conductor-side; the tool
   // only learns a degrade happened via this flag.
   if (flags["degraded-from"]) {
-    const requested = flags["degraded-from"] as DriverName;
-    if (!DRIVER_VALUES.includes(requested)) {
-      fail(`--degraded-from must be one of: ${DRIVER_VALUES.join(", ")}`);
-    }
-    emitSwarmDegraded(projectDir, flags.batch, requested);
+    emitSwarmDegraded(
+      projectDir,
+      flags.batch,
+      flags["degraded-from"] as DriverName,
+    );
   }
 
   const prepared: {
@@ -813,7 +1049,22 @@ function handlePrepare(rest: string[]): void {
     const boltSlug = swarmBoltSlug(unit);
     const created = runTool(
       "aidlc-worktree.ts",
-      ["create", "--slug", boltSlug, "--base", base, ...repoArgs],
+      [
+        "create",
+        "--slug",
+        boltSlug,
+        "--base",
+        base,
+        "--swarm-unit",
+        unit,
+        "--swarm-batch",
+        flags.batch,
+        "--swarm-stage",
+        attempt.stage,
+        "--swarm-floor",
+        attempt.floor,
+        ...repoArgs,
+      ],
       projectDir
     );
     if (!created.ok) {
@@ -858,7 +1109,14 @@ function handlePrepare(rest: string[]): void {
   // data to pass finalize's exact-attempt check.
   const readyUnits = prepared.filter((unit) => unit.ok).map((unit) => unit.unit);
   if (readyUnits.length > 0) {
-    emitSwarmStarted(projectDir, flags.batch, readyUnits, concurrency, attempt);
+    emitSwarmStarted(
+      projectDir,
+      flags.batch,
+      readyUnits,
+      dag.units,
+      concurrency,
+      attempt,
+    );
   }
 
   console.log(
@@ -935,7 +1193,29 @@ function handleFinalize(rest: string[]): void {
   // The universe of units in the batch; defaults to the claimed set when the
   // conductor passes only --claimed (then declined-unit accounting is a no-op).
   const allUnits = flags.units ? splitCsv(flags.units) : claimed.slice();
-  for (const unit of new Set([...allUnits, ...claimed])) swarmBoltSlug(unit);
+  const dag = resolveBoltDag(projectDir, flags.intent, flags.space);
+  if (dag.state !== "ok") fail("finalize requires a current resolved Unit DAG");
+  const currentStage = (getField(readStateFile(projectDir), "Current Stage") ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+  const stageDefinition = resolveStage(currentStage);
+  for (const unit of new Set([...allUnits, ...claimed])) {
+    swarmBoltSlug(unit);
+    if (!dag.units.includes(unit)) {
+      fail(`finalize unit "${unit}" is not in the current resolved Unit DAG`);
+    }
+    if (
+      stageDefinition &&
+      filterProducesByKind(
+        stageDefinition.produces_kinds,
+        stageDefinition.produces ?? [],
+        dag.unitKinds?.get(unit) ?? null,
+      ).length === 0
+    ) {
+      fail(`finalize unit "${unit}" has no applicable required outputs for stage "${currentStage}"`);
+    }
+  }
   const claimedSet = new Set(claimed);
   const testFile = flags["test-file"];
   const checkCmd = flags["check-cmd"];

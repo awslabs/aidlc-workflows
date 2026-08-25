@@ -15,11 +15,11 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
     prereq_bullets: `- **Kiro IDE**: Sign in and select Claude Opus 4.8 as the chat model before starting a workflow.
 - **bun**: Required for the CLI tools and hook scripts (tracking progress, writing the decision log, deciding what runs next). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
 - **Activation**: Open the project in Kiro IDE and invoke \`/aidlc\`; the command loads the shipped \`skills/aidlc/SKILL.md\`, which drives the workflow. The \`.kiro/hooks/aidlc-*.json\` v2 hook files register in the IDE's Agent Hooks panel.
-- **Permissions**: delegation-target agent \`.md\` files receive the IDE-native read/write/shell grants they need. The approval gates plus your IDE permission settings remain the control boundary.`,
+- **Permissions**: the conductor and delegation-target agent \`.md\` files carry IDE-native \`tools:\` grants and \`permissions.rules\` capability rules. The approval gates plus your IDE permission settings remain the control boundary.`,
 
     prereq_bullets_tail: "",
 
-    agents_note: `On Kiro IDE the \`/aidlc\` command loads \`skills/aidlc/SKILL.md\`, which drives the workflow. The full 14-role roster supplies the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests through Markdown personas with IDE-native tool grants; the shipped agent-v1 JSON files and \`settings/cli.json\` are CLI-only compatibility surfaces and do not select an IDE default agent.`,
+    agents_note: `On Kiro IDE the \`/aidlc\` command loads \`skills/aidlc/SKILL.md\` as the conductor, and \`agents/aidlc.md\` exposes that conductor in the IDE agent selector. The full 14-role roster supplies the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests through Markdown personas with IDE-native \`tools:\` grants and \`permissions.rules\`. The IDE distribution ships no agent-v1 JSON files or \`settings/cli.json\`; those are Kiro CLI surfaces.`,
 
     structure_extra: "",
 

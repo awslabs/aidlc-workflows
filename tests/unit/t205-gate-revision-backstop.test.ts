@@ -49,7 +49,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -141,6 +146,17 @@ function recordStageStarted(proj: string, slug: string): void {
 }
 
 function recordReview(proj: string, slug: string, iteration: number): void {
+  if (slug === "requirements-analysis") {
+    const dir = join(seededRecordDir(proj), "inception", slug);
+    mkdirSync(dir, { recursive: true });
+    for (const name of [
+      "requirements.md",
+      "requirements-analysis-questions.md",
+    ]) {
+      const path = join(dir, name);
+      if (!existsSync(path)) writeFileSync(path, `# ${name}\n`);
+    }
+  }
   const args = [
     LOG,
     "review",
@@ -656,6 +672,12 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "ARTIFACT_UPDATED")).toBeGreaterThanOrEqual(1);
 
     recordPipelineLinks(proj, ["repo-a", "repo-b"]);
+    const reentered = guardedReport(proj, [
+      "--result",
+      "revised",
+    ]);
+    expect(reentered.rc).toBe(0);
+    expect(reentered.out).toContain('"kind":"print"');
     const freshApproval = guardedReport(proj, [
       "--result",
       "approved",

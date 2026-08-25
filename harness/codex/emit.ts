@@ -20,7 +20,10 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { dirname, join, posix, relative, win32 } from "node:path";
 import { stringify } from "smol-toml";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
-import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
+import {
+  absorbReviewerKnowledge,
+  injectDelegatedKnowledgePreflight,
+} from "../../scripts/agent-knowledge.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
@@ -32,6 +35,9 @@ import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "record-human-turn" },
+  // POSIX Codex commands receive the validated payload session directly, so
+  // sandboxed macOS does not depend on `ps` ancestry for workflow isolation.
+  { event: "PreToolUse", matcher: "Bash", target: "bind-bash-session" },
   { event: "PreToolUse", matcher: "spawn_agent", target: "deliver-stage-rules" },
   { event: "PreToolUse", target: "state-transition-guard" },
   // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;
@@ -115,6 +121,11 @@ sandbox_mode = "workspace-write"
 [sandbox_workspace_write]
 network_access = true
 # writable_roots = ["/absolute/path/to/main-repo/.git"]
+
+# Delegated roles are leaves. The conductor owns every spawn and agents cannot
+# recursively delegate.
+[agents]
+max_depth = 1
 
 # Gates (D-3 both-track): prose gates are the floor; these flags enable the
 # structured request_user_input tool (verified working at 0.137.0+; the
@@ -241,7 +252,7 @@ function emitTrustSeed(harnessDir: string): string {
 // session defaults (live-verified on codex-cli 0.139.0 and 0.142.5: a role
 // TOML without `model` spawns on the config.toml model + effort). judgment
 // omits both keys;
-// balanced pins a model but inherits effort; templated pins both.
+// balanced and templated both pin a model and medium effort.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
   // BOM tolerance, matching the packager's agent reader and the rule parser.
@@ -316,7 +327,11 @@ export default function emit(ctx: EmitContext): void {
     // Reviewer knowledge absorption (scripts/agent-knowledge.ts): the emit
     // plugin reads core/agents/*.md directly, so the packager's transform
     // never runs here - absorb into the body the same way it does.
-    const absorbedBody = absorbReviewerKnowledge(body, name, coreRoot);
+    const absorbedBody = injectDelegatedKnowledgePreflight(
+      absorbReviewerKnowledge(body, name, coreRoot),
+      name,
+      harnessDir,
+    );
     const description = (fm.description ?? "").replace(/\s+/g, " ").trim();
     // The authored source of truth is `tier:` on the core .md; the packager's
     // frontmatter transform doesn't run against emit.ts (Codex reads directly

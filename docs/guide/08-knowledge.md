@@ -52,7 +52,7 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 .claude/knowledge/
 ├── aidlc-shared/                       # Loaded by every agent
 │   ├── ai-dlc-principles.md        # Core methodology principles
-│   ├── audit-format.md             # 86-event audit taxonomy
+│   ├── audit-format.md             # 87-event audit taxonomy
 │   ├── brownfield.md               # Brownfield safeguards and reverse-engineering guidance
 │   ├── knowledge-readme-template.md # Optional README template a team can copy into Tier 2
 │   ├── state-template.md           # State file contract
@@ -295,7 +295,7 @@ Both knowledge files and rules customize agent behavior, but they are not interc
 
 A useful rule of thumb: **if a human reviewer would reject a stage's output when the rule is violated, it belongs in the space memory layer (`aidlc/spaces/<active-space>/memory/`).** If they would use the rule as background context when reviewing, it is knowledge.
 
-Rules and knowledge sit on different planes, and that is why their loading behaves differently. Knowledge files are reference material that agents weigh during a stage. Rules resolve through a strict-additive chain — org, then team, then project, then phase, then stage — that the framework compiles ahead of the workflow; every applicable rule reaches the agent, and nothing is silently dropped. Conflicts between layers are caught at admission time, when a team or project rule is first written, rather than reconciled mid-stage.
+Rules and knowledge sit on different planes, and that is why their loading behaves differently. Knowledge files are reference material that agents weigh during a stage. Rules resolve through a strict-additive chain — org, then team, then project, then phase, then stage — that the framework compiles ahead of the workflow; every applicable rule reaches the agent, and nothing is silently dropped. For kept learnings, the gate protocol asks the orchestrator to check potential conflicts against org policy before the deterministic writer runs; the writer does not independently enforce that LLM check, and runtime does not reconcile conflicts mid-stage.
 
 For the full rule model — file locations, the five-layer chain, the learning loop, and admission-time conflict checks — see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md).
 
@@ -381,7 +381,11 @@ If you want to **constrain** how the agent applies a methodology principle, add 
 
 ### Don't edit agent files to inject team context
 
-`.claude/agents/*.md` defines the agent's persona, tool access, and knowledge-loading sequence. Editing them to add team knowledge is a common mistake — the changes are overwritten on framework upgrade. Always use `aidlc/knowledge/<agent>/` instead.
+`.claude/agents/*.md` defines the projected persona and tool access, and the
+packager adds its mandatory delegated knowledge preflight. Editing that
+generated file to add team knowledge is a common mistake — the changes are
+overwritten on framework upgrade. Always use `aidlc/knowledge/<agent>/`
+instead.
 
 ### Name the directories to match the agent slug
 

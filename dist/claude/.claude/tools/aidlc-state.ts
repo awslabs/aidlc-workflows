@@ -1,20 +1,40 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve as resolvePath,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
-  activeIntent,
   activeUnitCheckpoint,
   appendSlug,
   appendUnderHeading,
   artifactFilename,
+  BLOCKING_SENSOR_OVERRIDE_CHOICE,
+  BLOCKING_SENSOR_OVERRIDE_DECISION,
+  BLOCKING_SENSOR_OVERRIDE_OPTIONS,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
   codekbDir,
   codekbRepoName,
   countCheckboxes,
+  currentSwarmSourceMergeChain,
+  currentSwarmAttemptObligations,
   emitError,
   errorMessage,
   extractMarkdownSection,
@@ -25,6 +45,7 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  harnessDir,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   humanActedSinceGate,
@@ -49,8 +70,10 @@ import {
   pipelineLinkEvidence,
   producesArtifactFile,
   readAllAuditShards,
+  readAuditShardEvents,
   readStateFile,
   recordDir,
+  recoveryGuidance,
   relativeMemoryPath,
   relativeRecordDir,
   removeField,
@@ -61,6 +84,10 @@ import {
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
   resolveReviewClass,
+  resolveWorkflowSelection,
+  sourceClaimCovers,
+  sourceBaselineAuditFields,
+  sourceListingEntriesEqual,
   resolveProjectDir,
   resolveStage,
   setCheckbox,
@@ -71,17 +98,23 @@ import {
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
+  usesStageLevelPerUnitArtifacts,
   validateUnitName,
   validScopes,
   withAuditLock,
   worktreeDocsDir,
   worktreePath,
   worktreeStateFilePath,
+  workspaceSourceState,
   writeStateFile,
   writeFileAtomic,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import {
+  stageValidationAuditFields,
+  VALIDATION_WARNING_FIELD,
+} from "./aidlc-validity.ts";
 import {
   stageUsageAuditFields,
   workflowUsageAuditFields,
@@ -506,6 +539,7 @@ let projectDir: string | undefined;
 // (undefined), so error() keys the sentinel for them — correct.
 let lockIntent: string | undefined;
 let lockSpace: string | undefined;
+let stateSessionOverride: string | undefined;
 
 export function main(argv: string[]): void {
   const args = [...argv];
@@ -516,6 +550,8 @@ export function main(argv: string[]): void {
     projectDir = args[pdIdx + 1];
     args.splice(pdIdx, 2);
   }
+  stateSessionOverride =
+    resolveWorkflowSelection(resolveProjectDir(projectDir)).sessionId ?? undefined;
 
   const subcommand = args[0];
 
@@ -901,6 +937,13 @@ function handleUnit(args: string[]): void {
   // `unit start` calls could both pass the single-active-unit check.
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
+    const scope = getField(content, "Scope");
+    if (usesStageLevelPerUnitArtifacts(scope, content)) {
+      error(
+        `Refusing unit ${action} for "${unit}": the effective workflow plan skips ` +
+          "Units Generation, so this stage runs once at stage level.",
+      );
+    }
 
     // Only an engine-eligible autonomous swarm owns SWARM_UNIT_* bookkeeping.
     // The autonomy grant persists across backward jumps, where inline per-unit
@@ -1093,7 +1136,13 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
     const result = spawnSync(command[0], command.slice(1), {
       cwd: pd,
       encoding: "utf-8",
-      env: { ...process.env, AIDLC_PROJECT_DIR: pd },
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: pd,
+        ...(stateSessionOverride
+          ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
+          : {}),
+      },
       timeout: 30_000,
     });
     if (result.status !== 0) {
@@ -1167,7 +1216,13 @@ function requireEngineRoutedWaveUnit(
     const result = spawnSync(command[0], command.slice(1), {
       cwd: pd,
       encoding: "utf-8",
-      env: { ...process.env, AIDLC_PROJECT_DIR: pd },
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: pd,
+        ...(stateSessionOverride
+          ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
+          : {}),
+      },
       timeout: 30_000,
     });
     if (result.status !== 0) {
@@ -1422,6 +1477,7 @@ function autonomousSwarmOwnsStage(
   }
   const scope = getField(stateContent, "Scope");
   if (!scope) return true;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
   return first === null || first.slug !== stage.slug;
 }
@@ -1441,15 +1497,128 @@ function isSettledSwarmForArtifactGuard(
   pd: string,
   stage: { slug: string; phase: string; for_each?: string; mode?: string },
   stateContent: string,
+  action: ReviewerPreconditionAction = "complete",
 ): boolean {
+  if (getField(stateContent, "Construction Iteration")?.trim() === "unit-major") {
+    return false;
+  }
   if (!isAutonomousSwarmStage(pd, stateContent, stage)) return false;
-  const resolution = resolveBoltDag(pd);
-  if (resolution.state !== "ok") return false;
+  const units = currentAttemptSwarmUnits(pd, stage.slug, action);
+  if (units === null || units.length === 0) return false;
   // Shared attempt-scoped read (aidlc-lib.ts): a row counts only when its
   // Stage names this slug AND its Run floor equals the current attempt's
   // floor, so stale-attempt and cross-stage rows never satisfy the guard.
   const converged = swarmConvergedUnits(pd, stage.slug);
-  return resolution.units.every((unit) => converged.has(unit));
+  return units.every((unit) => converged.has(unit));
+}
+
+function settledSwarmForArtifactGuardOrError(
+  pd: string,
+  stage: { slug: string; phase: string; for_each?: string; mode?: string },
+  stateContent: string,
+  action: ReviewerPreconditionAction,
+): boolean {
+  try {
+    return isSettledSwarmForArtifactGuard(pd, stage, stateContent, action);
+  } catch (e) {
+    error(
+      `${reviewerPreconditionPrefix(stage.slug, action)}: the settled-swarm probe failed unexpectedly ` +
+        `(${errorMessage(e)}). Restore readable state, audit, and Unit DAG evidence before retrying.`,
+    );
+  }
+}
+
+function currentAttemptSwarmUnits(
+  pd: string,
+  stageSlug: string,
+  action: ReviewerPreconditionAction,
+): string[] | null {
+  const obligations = currentSwarmAttemptObligations(pd, stageSlug);
+  if (obligations.state === "invalid") {
+    error(
+      `${reviewerPreconditionPrefix(stageSlug, action)}: current swarm Unit obligations are invalid ` +
+        `(${obligations.reason}). Restore unit-of-work-dependency.md or restart the stage attempt.`,
+    );
+  }
+  const resolution = resolveBoltDag(pd);
+  if (obligations.state === "none") {
+    return resolution.state === "ok" ? resolution.units : null;
+  }
+  if (resolution.state !== "ok") {
+    error(
+      `${reviewerPreconditionPrefix(stageSlug, action)}: the current Unit DAG cannot be compared with ` +
+        `the attempt-bound Unit obligations. Restore unit-of-work-dependency.md or restart the stage attempt.`,
+    );
+  }
+  const live = new Set(resolution.units);
+  const missing = [...obligations.units].filter((unit) => !live.has(unit)).sort();
+  const added = resolution.units
+    .filter((unit) => !obligations.units.has(unit))
+    .sort();
+  if (missing.length > 0 || added.length > 0) {
+    const detail = [
+      missing.length > 0 ? `missing attempt Units: ${missing.join(", ")}` : "",
+      added.length > 0 ? `added Units: ${added.join(", ")}` : "",
+    ].filter(Boolean).join("; ");
+    error(
+      `${reviewerPreconditionPrefix(stageSlug, action)}: the Unit DAG changed during the current swarm attempt ` +
+        `(${detail}). Restore unit-of-work-dependency.md to the attempt-bound Unit set or restart the stage attempt.`,
+    );
+  }
+  return [...obligations.units];
+}
+
+function verifySettledSwarmSourceBinding(
+  pd: string,
+  stage: { slug: string; workspace_requires?: boolean },
+  action: ReviewerPreconditionAction,
+): void {
+  if (
+    stage.workspace_requires !== true ||
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1"
+  ) {
+    return;
+  }
+  const units = currentAttemptSwarmUnits(pd, stage.slug, action);
+  if (units === null) {
+    error(
+      `${reviewerPreconditionPrefix(stage.slug, action)}: its settled swarm Unit obligations cannot be resolved for the current attempt.`,
+    );
+  }
+  const chain = currentSwarmSourceMergeChain(pd, stage.slug);
+  if (chain.state === "none") {
+    error(
+      `Refusing to complete "${stage.slug}": every Bolt converged, but no current-attempt post-merge main-checkout source binding exists. Merge each reviewed source commit before approval.`,
+    );
+  }
+  if (chain.state === "invalid") {
+    error(
+      `Refusing to complete "${stage.slug}": its post-merge main-checkout source binding chain is invalid (${chain.reason}). Re-run the affected source merge or restart the Bolt attempt.`,
+    );
+  }
+  const missing = units.filter((unit) => !chain.units.has(unit));
+  if (missing.length > 0) {
+    error(
+      `Refusing to complete "${stage.slug}": ${missing.length} converged unit(s) have no current-attempt post-merge source binding (${missing.join(", ")}). Merge every reviewed source commit before approval.`,
+    );
+  }
+  const current = workspaceSourceState(pd);
+  if (current === null || current.fingerprint !== chain.fingerprint) {
+    error(
+      `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch). Revert the unreviewed edit or restart and re-review the affected Bolt.`,
+    );
+  }
+}
+
+function priorAcceptedSourceFields(
+  pd: string,
+  stage: { slug: string; workspace_requires?: boolean },
+): Record<string, string> {
+  if (stage.workspace_requires !== true) return {};
+  const chain = currentSwarmSourceMergeChain(pd, stage.slug);
+  return chain.state === "ready"
+    ? { "Prior Accepted Source Fingerprint": chain.fingerprint }
+    : {};
 }
 
 // Deterministic off-switch for the approve-time gate-revision backstop (mirrors
@@ -1486,13 +1655,9 @@ function producesDirsForStage(
   if (rec === null) return [];
   const perUnit = stage.for_each === "unit-of-work";
   if (perUnit) {
-    const resolution = resolveBoltDag(pd);
     const stateContent = readStateFile(pd);
     const scope = getField(stateContent, "Scope");
-    const unitProducerAction =
-      parseStateStageSuffixes(stateContent).get("units-generation") ??
-      (scope ? loadScopeMapping()[scope]?.stages["units-generation"] : undefined);
-    if (resolution.state === "none" && unitProducerAction !== "EXECUTE") {
+    if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
       return [join(rec, "construction", stage.slug)];
     }
     const ctorRoot = join(rec, "construction");
@@ -1525,17 +1690,21 @@ function producesArtifactsExist(
   const produces = stage.produces ?? [];
   if (produces.length === 0) return true; // nothing declared -> nothing to verify
   if (stage.for_each === "unit-of-work" && stage.produces_kinds !== undefined) {
-    const resolution = resolveBoltDag(pd);
-    if (resolution.state === "ok" && resolution.unitKinds !== null) {
-      const allVacuous = resolution.units.every(
-        (u) =>
-          filterProducesByKind(
-            stage.produces_kinds,
-            produces,
-            resolution.unitKinds?.get(u) ?? null,
-          ).length === 0,
-      );
-      if (allVacuous) return true;
+    const stateContent = readStateFile(pd);
+    const scope = getField(stateContent, "Scope");
+    if (!usesStageLevelPerUnitArtifacts(scope, stateContent)) {
+      const resolution = resolveBoltDag(pd);
+      if (resolution.state === "ok" && resolution.unitKinds !== null) {
+        const allVacuous = resolution.units.every(
+          (u) =>
+            filterProducesByKind(
+              stage.produces_kinds,
+              produces,
+              resolution.unitKinds?.get(u) ?? null,
+            ).length === 0,
+        );
+        if (allVacuous) return true;
+      }
     }
   }
   const dirs = producesDirsForStage(pd, stage);
@@ -1552,6 +1721,521 @@ function producesArtifactsExist(
     }
   }
   return false;
+}
+
+interface SensorFireVerdict {
+  fire_id: string;
+  sensor_id: string;
+  stage: string;
+  output_path: string;
+  result: "passed" | "failed" | "budget-override";
+  detail_path: string | null;
+  note?: string;
+}
+
+interface BlockingSensorIssue {
+  sensorId: string;
+  outputPath: string;
+  detailPath: string | null;
+  reason: string;
+}
+
+interface GateSensorEvaluation {
+  issues: BlockingSensorIssue[];
+  fingerprints: Map<string, string>;
+}
+
+function pathIsWithin(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" ||
+    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+// Resolve every existing declared deliverable, reusing the same stage directory
+// placement as producesArtifactsExist. --artifacts may name resolved paths or
+// filenames; it supplements the graph walk for optional/custom emitters but
+// cannot introduce an undeclared deliverable or escape a canonical produce dir.
+function existingDeclaredArtifactPaths(
+  pd: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    produces?: string[];
+    optional_produces?: string[];
+  },
+  artifacts?: string,
+): string[] {
+  const names = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ];
+  const declaredFilenames = new Set(names.map(artifactFilename));
+  const dirs = producesDirsForStage(pd, stage);
+  const projectRoot = realpathSync(pd);
+  const roots = dirs.flatMap((dir) => {
+    if (!existsSync(dir)) return [];
+    let canonical: string;
+    try {
+      canonical = realpathSync(dir);
+      if (!statSync(canonical).isDirectory()) return [];
+    } catch {
+      return [];
+    }
+    if (!pathIsWithin(projectRoot, canonical)) {
+      error(
+        `Refusing gate sensor dispatch for "${stage.slug}": resolved produce directory ` +
+          `"${dir}" escapes the project root after canonicalization.`,
+      );
+    }
+    return [canonical];
+  });
+  const found = new Set<string>();
+  const addIfDeclaredFile = (candidate: string): void => {
+    if (!declaredFilenames.has(basename(candidate)) || !existsSync(candidate)) {
+      return;
+    }
+    let canonical: string;
+    try {
+      canonical = realpathSync(candidate);
+      if (!statSync(canonical).isFile()) return;
+    } catch {
+      return;
+    }
+    if (!roots.some((root) => pathIsWithin(root, canonical))) {
+      error(
+        `Refusing gate sensor artifact "${candidate}" for "${stage.slug}": ` +
+          "the canonical path is outside the stage's resolved produce directories.",
+      );
+    }
+    found.add(canonical);
+  };
+
+  for (const dir of dirs) {
+    for (const filename of declaredFilenames) {
+      addIfDeclaredFile(join(dir, filename));
+    }
+  }
+
+  for (const token of (artifacts ?? "").split(",")) {
+    const value = token.trim();
+    if (!value) continue;
+    const variants = declaredFilenames.has(basename(value))
+      ? [value]
+      : [value, artifactFilename(value)];
+    for (const variant of variants) {
+      if (
+        isAbsolute(variant) ||
+        variant.includes("/") ||
+        variant.includes("\\")
+      ) {
+        addIfDeclaredFile(
+          isAbsolute(variant) ? variant : resolvePath(pd, variant),
+        );
+      }
+      for (const dir of dirs) addIfDeclaredFile(join(dir, variant));
+    }
+  }
+
+  return [...found];
+}
+
+function parseSensorFireVerdict(stdout: string): SensorFireVerdict | null {
+  const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const value = JSON.parse(lines[i]) as Partial<SensorFireVerdict>;
+      if (
+        typeof value.fire_id === "string" &&
+        typeof value.sensor_id === "string" &&
+        typeof value.stage === "string" &&
+        typeof value.output_path === "string" &&
+        (value.result === "passed" ||
+          value.result === "failed" ||
+          value.result === "budget-override") &&
+        (value.detail_path === null || typeof value.detail_path === "string") &&
+        (value.note === undefined || typeof value.note === "string")
+      ) {
+        return value as SensorFireVerdict;
+      }
+    } catch {
+      // Keep scanning in case a wrapper wrote a banner before the JSON verdict.
+    }
+  }
+  return null;
+}
+
+function gateSensorDispatchTimeoutMs(): number | undefined {
+  const raw = process.env.AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS;
+  if (!raw) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function diagnosticSnippet(value: string | null | undefined): string {
+  return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function gateSensorMatchesOutput(
+  sensor: NonNullable<
+    NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
+  >[number],
+  outputPath: string,
+): boolean {
+  return sensor.matches === undefined ||
+    new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
+}
+
+function artifactFingerprint(path: string): string | null {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function fireGateSensors(
+  pd: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  artifacts?: string,
+): GateSensorEvaluation {
+  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
+  const issues: BlockingSensorIssue[] = [];
+  const fingerprints = new Map<string, string>();
+  if (paths.length === 0) return { issues, fingerprints };
+
+  const sensors = (stage.sensors_applicable ?? []).filter((sensor) =>
+    sensor.fire_on === "gate"
+  );
+  for (const sensor of sensors) {
+    if (sensor.default_severity !== "blocking") continue;
+    for (const outputPath of paths) {
+      if (!gateSensorMatchesOutput(sensor, outputPath) || fingerprints.has(outputPath)) {
+        continue;
+      }
+      const fingerprint = artifactFingerprint(outputPath);
+      if (fingerprint === null) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "artifact became unreadable before sensor dispatch",
+        });
+        continue;
+      }
+      fingerprints.set(outputPath, fingerprint);
+    }
+  }
+
+  const executable = compiledExecutable();
+  const sensorTool = fileURLToPath(new URL("./aidlc-sensor.ts", import.meta.url));
+  for (const sensor of sensors) {
+    for (const outputPath of paths) {
+      if (!gateSensorMatchesOutput(sensor, outputPath)) continue;
+      const expectedFingerprint = fingerprints.get(outputPath);
+      if (
+        sensor.default_severity === "blocking" &&
+        (
+          expectedFingerprint === undefined ||
+          artifactFingerprint(outputPath) !== expectedFingerprint
+        )
+      ) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "artifact changed before sensor dispatch",
+        });
+        continue;
+      }
+      const args = [
+        "fire",
+        sensor.id,
+        "--stage",
+        stage.slug,
+        "--output-path",
+        outputPath,
+      ];
+      const command = executable
+        ? [executable, "sensor", ...args]
+        : [process.execPath, sensorTool, ...args];
+      const result = spawnSync(command[0], command.slice(1), {
+        cwd: pd,
+        encoding: "utf-8",
+        timeout: gateSensorDispatchTimeoutMs(),
+        env: {
+          ...process.env,
+          AIDLC_PROJECT_DIR: pd,
+          CLAUDE_PROJECT_DIR: pd,
+        },
+      });
+      if (sensor.default_severity !== "blocking") continue;
+      if (artifactFingerprint(outputPath) !== expectedFingerprint) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "artifact changed during sensor evaluation",
+        });
+        continue;
+      }
+      if (result.error) {
+        const code = (result.error as NodeJS.ErrnoException).code ?? "unknown";
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason:
+            code === "ETIMEDOUT"
+              ? "dispatcher timeout"
+              : `dispatcher spawn failed (${code})`,
+        });
+        continue;
+      }
+      if (result.status !== 0) {
+        const stderr = diagnosticSnippet(result.stderr);
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason:
+            result.status === null
+              ? `dispatcher terminated by ${result.signal ?? "unknown signal"}`
+              : `dispatcher exited ${result.status}${stderr ? `: ${stderr}` : ""}`,
+        });
+        continue;
+      }
+      const verdict = parseSensorFireVerdict(result.stdout ?? "");
+      if (verdict === null) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "dispatcher returned no valid verdict",
+        });
+        continue;
+      }
+      let verdictOutputPath: string | null = null;
+      try {
+        verdictOutputPath = realpathSync(
+          isAbsolute(verdict.output_path)
+            ? verdict.output_path
+            : resolvePath(pd, verdict.output_path),
+        );
+      } catch {
+        // The exact output file is already known to exist; an unresolvable
+        // verdict path is invalid evaluation evidence.
+      }
+      if (
+        verdict.sensor_id !== sensor.id ||
+        verdict.stage !== stage.slug ||
+        verdictOutputPath !== outputPath
+      ) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "dispatcher verdict identity did not match the requested fire",
+        });
+        continue;
+      }
+      if (verdict.result === "failed" && verdict.detail_path !== null) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath: verdict.output_path,
+          detailPath: verdict.detail_path,
+          reason: "reported findings",
+        });
+        continue;
+      }
+      if (verdict.result === "passed" && verdict.note === undefined) continue;
+      issues.push({
+        sensorId: sensor.id,
+        outputPath: verdict.output_path,
+        detailPath: verdict.detail_path,
+        reason:
+          verdict.result === "passed"
+            ? verdict.note ?? "invalid passed verdict"
+            : verdict.result === "budget-override"
+              ? "sensor execution exceeded its budget"
+              : "failed verdict omitted its detail path",
+      });
+    }
+  }
+  return { issues, fingerprints };
+}
+
+function verifyGateSensorArtifactsUnchanged(
+  slug: string,
+  evaluation: GateSensorEvaluation,
+): void {
+  for (const [outputPath, fingerprint] of evaluation.fingerprints) {
+    if (artifactFingerprint(outputPath) === fingerprint) continue;
+    error(
+      `Refusing to open the gate for "${slug}": blocking sensor artifact ` +
+        `"${outputPath}" changed after evaluation. Retry so every blocking sensor ` +
+        "checks the bytes that enter the gate.",
+    );
+  }
+}
+
+function auditEventIsAfter(
+  later: ReturnType<typeof readAuditShardEvents>[number],
+  earlier: ReturnType<typeof readAuditShardEvents>[number],
+): boolean {
+  if (later.shard === earlier.shard) return later.pos > earlier.pos;
+  return later.timestamp > earlier.timestamp;
+}
+
+function hasBlockingSensorOverrideAuthorization(
+  pd: string,
+  slug: string,
+): boolean {
+  const rows = readAuditShardEvents(pd);
+  const stageRows = rows.filter((row) => {
+    const workflow = auditField(row.block, "Workflow");
+    return auditField(row.block, "Stage") === slug &&
+      !workflow?.startsWith("single-stage:");
+  });
+  const boundaries = stageRows.filter((row) =>
+    row.event === "STAGE_STARTED" ||
+    row.event === "STAGE_AWAITING_APPROVAL" ||
+    row.event === "GATE_REJECTED"
+  );
+  const interactions = stageRows.filter((row) =>
+    row.event === "DECISION_RECORDED" ||
+    row.event === "QUESTION_ANSWERED"
+  );
+  const answers = interactions.filter((row) =>
+    row.event === "QUESTION_ANSWERED" &&
+    auditField(row.block, "Details") === BLOCKING_SENSOR_OVERRIDE_CHOICE
+  );
+
+  for (const answer of answers) {
+    if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
+      continue;
+    }
+    if (
+      !interactions.every((row) =>
+        row === answer || auditEventIsAfter(answer, row)
+      )
+    ) {
+      continue;
+    }
+    const decision = interactions.findLast((row) => {
+      if (
+        row.event !== "DECISION_RECORDED" ||
+        row.shard !== answer.shard ||
+        row.pos >= answer.pos ||
+        auditField(row.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
+      ) {
+        return false;
+      }
+      const options = (auditField(row.block, "Options") ?? "")
+        .split(",")
+        .map((option) => option.trim());
+      return BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) =>
+        options.includes(option)
+      );
+    });
+    if (!decision) continue;
+    const humanTurn = rows.some((row) =>
+      row.event === "HUMAN_TURN" &&
+      row.shard === answer.shard &&
+      row.pos > decision.pos &&
+      row.pos < answer.pos
+    );
+    if (humanTurn) return true;
+  }
+  return false;
+}
+
+function enforceBlockingGateSensors(
+  pd: string,
+  stateContent: string,
+  slug: string,
+  reportResult: "awaiting-approval" | "revised",
+  issues: BlockingSensorIssue[],
+  overrideRequested: boolean,
+  overrideInput?: string,
+): void {
+  if (issues.length === 0) return;
+  const sensorIds = [...new Set(issues.map((issue) => issue.sensorId))];
+  const detailPaths = issues.flatMap((issue) =>
+    issue.detailPath === null ? [] : [issue.detailPath]
+  );
+  const reasons = issues.map(
+    (issue) => `${issue.sensorId}@${issue.outputPath}: ${issue.reason}`,
+  );
+  if (overrideRequested) {
+    if (isAutonomousMode(stateContent)) {
+      error(
+        `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
+          "is autonomous. Unattended runs must halt on blocking sensor findings or " +
+          "unavailable evaluations.",
+      );
+    }
+    if (overrideInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
+      error(
+        `Refusing blocking sensor override for "${slug}": --user-input must be the ` +
+          `exact offered choice "${BLOCKING_SENSOR_OVERRIDE_CHOICE}".`,
+      );
+    }
+    if (!hasBlockingSensorOverrideAuthorization(pd, slug)) {
+      error(
+        `Refusing blocking sensor override for "${slug}": no fresh authorization receipt ` +
+          `proves that "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" was offered and selected after ` +
+          "a HUMAN_TURN. Record the decision and exact answer through aidlc-log.ts, then retry.",
+      );
+    }
+    return;
+  }
+  error(
+    `Blocking gate sensor evaluation did not pass for "${slug}". Sensors: ` +
+      `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
+      `Reasons: ${reasons.join("; ")}. Fix the findings and retry, or first run ` +
+      `bun ${harnessDir()}/tools/aidlc-log.ts decision --stage ${slug} ` +
+      `--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}" --options ` +
+      `"${BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(",")}", present those choices, and ` +
+      `after the human selects "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" record it with ` +
+      `aidlc-log.ts answer. Then retry: bun ${harnessDir()}/tools/aidlc-orchestrate.ts ` +
+      `report --stage ${slug} --result ${reportResult} --override-blocking-sensors ` +
+      `--user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}". Autonomous mode cannot override.`,
+  );
+}
+
+function addBlockingSensorOverrideFields(
+  fields: Record<string, string>,
+  issues: BlockingSensorIssue[],
+  overrideRequested: boolean,
+): void {
+  if (issues.length === 0 || !overrideRequested) return;
+  fields["Blocking Sensor Override"] = "true";
+  fields["Blocking Sensor IDs"] = [
+    ...new Set(issues.map((issue) => issue.sensorId)),
+  ].join(",");
+  const detailPaths = issues.flatMap((issue) =>
+    issue.detailPath === null ? [] : [issue.detailPath]
+  );
+  if (detailPaths.length > 0) {
+    fields["Blocking Sensor Detail Paths"] = detailPaths.join(",");
+  }
+  fields["Blocking Sensor Reasons"] = issues
+    .map((issue) => `${issue.sensorId}: ${issue.reason}`)
+    .join("; ");
+}
+
+function verifyGateOpeningGuards(
+  pd: string,
+  content: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+): void {
+  verifyStageArtifacts(pd, stage, "present-approval-gate");
+  verifySummaryConfirmationPrecondition(pd, content, stage);
+  verifyPipelineLinkPrecondition(pd, stage);
+  if (!reviewerGateGuardDisabled()) {
+    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+  }
 }
 
 // True when any non-doc file exists in the workspace - a file outside the
@@ -1696,7 +2380,8 @@ function workspaceHasWork(pd: string): boolean {
 // untouched. `stage` is the StageEntry being completed. No-op when bypass active.
 function verifyStageArtifacts(
   pd: string,
-  stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean }
+  stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean },
+  action: ReviewerPreconditionAction = "complete",
 ): void {
   if (artifactGuardDisabled()) return;
 
@@ -1704,16 +2389,25 @@ function verifyStageArtifacts(
   // convergence ledger; its artifacts live in Bolt worktrees this walk cannot
   // see. Same exemption the engine's report-side evidence gate applies.
   let settledSwarm = false;
+  let stateContent: string | null = null;
   try {
-    settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, readStateFile(pd));
+    stateContent = readStateFile(pd);
   } catch {
     // No readable state file: not a swarm settle; stay strict.
+  }
+  if (stateContent !== null) {
+    settledSwarm = settledSwarmForArtifactGuardOrError(
+      pd,
+      stage,
+      stateContent,
+      action,
+    );
   }
   if (settledSwarm) return;
 
   if (!producesArtifactsExist(pd, stage)) {
     error(
-      `Refusing to complete "${stage.slug}": none of its declared artifacts exist ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
         `to produce output before the gate. Produce the artifacts before completing. ` +
         `(declared: ${(stage.produces ?? []).join(", ") || "none"})`
@@ -1722,7 +2416,7 @@ function verifyStageArtifacts(
 
   if (stage.workspace_requires && !workspaceHasWork(pd)) {
     error(
-      `Refusing to complete "${stage.slug}": it is a code-producing stage ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: it is a code-producing stage ` +
         `(workspace_requires) but no source work is evident outside the aidlc/ ` +
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
@@ -1835,32 +2529,118 @@ function verifyReviewerPrecondition(
   // WORKFLOW_STARTED/STAGE_JUMPED floor, the unit-major STAGE_STARTED skip,
   // and per-unit write invalidation are all documented there.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
-  const perUnit = stage.for_each === "unit-of-work";
+  const perUnit =
+    stage.for_each === "unit-of-work" &&
+    !usesStageLevelPerUnitArtifacts(getField(content, "Scope"), content);
+  const pendingRecoveryUnits = Array.from(receipts.unitPending)
+    .filter(([, pending]) => pending.recovery)
+    .map(([unit]) => unit);
+  if (receipts.stagePending?.recovery || pendingRecoveryUnits.length > 0) {
+    const scope =
+      pendingRecoveryUnits.length > 0
+        ? ` for Unit${pendingRecoveryUnits.length === 1 ? "" : "s"} ${pendingRecoveryUnits.join(", ")}`
+        : "";
+    error(
+      `${reviewerPreconditionPrefix(stage.slug, action)}: the recovery review${scope} ` +
+        "is still in progress. Finish that review and record its result before " +
+        "presenting the gate or completing the stage.",
+    );
+  }
 
-  // Source-state equality composes with v2's bounded stale-receipt recovery:
-  // the newest modern binding is reconciled once for the workspace. A mismatch
-  // blocks every completion route and exposes one Recovery: stale-receipt pass,
-  // even when the normal iteration budget is exhausted. One fresh receipt
-  // against the current tree restores the collected per-unit receipts. This is
-  // deliberately not per-unit attribution; see RFC #662.
+  // Source-state equality composes with v2's bounded stale-receipt recovery.
+  // The workspace-global newest-receipt reconciliation remains the outer
+  // boundary; freshReviewReceipts additionally validates each modern unit
+  // binding and applies newest-fresh-claimant shielding per path.
   const sourceFreshnessOff =
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
-  const settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, content);
+  const settledSwarm =
+    perUnit &&
+    settledSwarmForArtifactGuardOrError(
+      pd,
+      stage,
+      content,
+      action,
+    );
+  // A tightly bounded reconciliation handles the one intentional exception to
+  // the global outer boundary: after an unclaimed addition is reverted, the
+  // current baseline delta can be fully covered by fresh modern unit bindings
+  // even though the newest workspace-global receipt saw the transient file.
+  // Any legacy/missing/stale unit evidence or remaining unclaimed baseline delta
+  // keeps the normal global-first refusal.
+  let baselineChanged: Set<string> | null = null;
+  let baselineUnclaimed: string[] | null = null;
+  if (
+    stage.workspace_requires === true &&
+    receipts.sourceBaseline.state === "ready" &&
+    receipts.currentSourceListing !== null
+  ) {
+    baselineChanged = new Set<string>();
+    const baseline = receipts.sourceBaseline.listing;
+    for (const [pathKey, oid] of baseline) {
+      if (
+        !sourceListingEntriesEqual(
+          receipts.currentSourceListing.get(pathKey),
+          oid,
+        )
+      ) {
+        baselineChanged.add(pathKey);
+      }
+    }
+    for (const pathKey of receipts.currentSourceListing.keys()) {
+      if (!baseline.has(pathKey)) baselineChanged.add(pathKey);
+    }
+    const claimModels = [...receipts.freshUnitClaims.values()];
+    baselineUnclaimed = [...baselineChanged]
+      .filter((pathKey) => !claimModels.some((claims) => sourceClaimCovers(pathKey, claims)))
+      .sort();
+  }
+  const resolutionForReconciliation = perUnit ? resolveBoltDag(pd) : null;
+  const applicableReconciliationUnits =
+    resolutionForReconciliation?.state === "ok"
+      ? resolutionForReconciliation.units.filter(
+          (unit) =>
+            filterProducesByKind(
+              stage.produces_kinds,
+              stage.produces ?? [],
+              resolutionForReconciliation.unitKinds?.get(unit) ?? null,
+            ).length > 0,
+        )
+      : [];
+  const baselineReversionReconciled =
+    receipts.sourceStale &&
+    perUnit &&
+    applicableReconciliationUnits.length > 0 &&
+    applicableReconciliationUnits.every(
+      (unit) =>
+        receipts.unitVerdicts.has(unit) &&
+        receipts.freshUnitClaims.has(unit) &&
+        !receipts.unitStale.has(unit),
+    ) &&
+    baselineUnclaimed?.length === 0;
   const staleSource =
     stage.workspace_requires === true &&
     !sourceFreshnessOff &&
     !settledSwarm &&
-    receipts.sourceStale;
+    receipts.sourceStale &&
+    !baselineReversionReconciled;
   if (staleSource) {
     staleSourcePreconditionError(
+      pd,
+      content,
       stage.slug,
       reviewer,
       receipts.sourceStaleProgress?.recoverySpent === true,
     );
   }
 
-  // Already-[x] recovery skips only existence/cardinality. A modern binding was
-  // still compared above, so crash-window recovery cannot ship changed source.
+  if (settledSwarm) {
+    verifySettledSwarmSourceBinding(pd, stage, action);
+    return;
+  }
+
+  // Already-[x] recovery skips only existence/cardinality and therefore every
+  // attribution check that depends on a complete fresh-unit claim union. The
+  // modern global binding was still compared above, preserving crash recovery.
   if (!requireReceiptExistence) return;
 
   const sawStageReview = receipts.stageVerdict !== null;
@@ -1870,6 +2650,8 @@ function verifyReviewerPrecondition(
     if (!sawStageReview) {
       if (receipts.stageStale) {
         staleReviewPreconditionError(
+          pd,
+          content,
           stage.slug,
           reviewer,
           receipts.stageStaleProgress?.recoverySpent === true,
@@ -1928,7 +2710,8 @@ function verifyReviewerPrecondition(
           `run \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
           `${reviewer} --iteration <next ordinal>\`, then record the verdict with ` +
           `the same command plus \`--verdict <READY|NOT-READY>\` and stop editing ` +
-          `produces[] artifacts.`,
+          `produces[] artifacts, that unit's source-manifest.json, and that unit's ` +
+          `claimed source paths.`,
       );
     }
     if (recoverySpent.length > 0) {
@@ -1937,12 +2720,13 @@ function verifyReviewerPrecondition(
           ? `For autonomous units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
             `do not put them in --claimed or finalize/merge them. Halt and ask the ` +
             `human whether to restart each Bolt; on approval abort/discard the old ` +
-            `Bolt and rerun the current swarm prepare step so a fresh BOLT_STARTED ` +
-            `boundary resets review accounting.`
+            `Bolt and rerun the current swarm prepare step so the fresh Bolt ` +
+            `attempt restores one review allowance.`
           : `For units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
-            `present the situation to the human at the approval gate. Only a human ` +
-            `Request Changes decision resets the review attempt; do not record it ` +
-            `on the human's behalf.`,
+            `the one recovery review was already used and their output changed ` +
+            `again. ${recoveryGuidance(pd, content, stage.slug)} Only a human ` +
+            `Request Changes decision resets the review attempt; do not record ` +
+            `that rejection on the human's behalf.`,
       );
     }
     if (neverReviewed.length > 0) {
@@ -1961,19 +2745,61 @@ function verifyReviewerPrecondition(
         guidance.join(" ")
     );
   }
+
+  const attributionApplies =
+    stage.workspace_requires === true && !sourceFreshnessOff && !settledSwarm;
+  if (!attributionApplies) return;
+
+  if (
+    receipts.sourceBaseline.state === "unbindable" ||
+    receipts.sourceBaseline.state === "invalid"
+  ) {
+    error(
+      `Refusing to complete "${stage.slug}": the stage's source baseline snapshot is missing, ` +
+        `inconsistent with other modern source-binding evidence, or does not match its recorded hash, ` +
+        `so unclaimed source changes cannot be verified. Re-enter the stage ` +
+        `(a stage jump records a fresh baseline) or set AIDLC_SKIP_SOURCE_FRESHNESS=1 to bypass ` +
+        `deterministically.`,
+    );
+  }
+  if (
+    receipts.sourceBaseline.state === "ready" &&
+    receipts.currentSourceListing !== null
+  ) {
+    const unclaimed = baselineUnclaimed ?? [];
+    if (unclaimed.length > 0) {
+      const rendered = unclaimed.slice(0, 10).map((key) => {
+        const separator = key.indexOf("\0");
+        const repo = key.slice(0, separator);
+        const path = key.slice(separator + 1);
+        return repo ? `${repo}/${path}` : path;
+      });
+      const more = unclaimed.length > 10 ? ` … and ${unclaimed.length - 10} more` : "";
+      error(
+        `Refusing to complete "${stage.slug}": ${unclaimed.length} application-source path(s) changed during this stage run ` +
+          `that no reviewed unit's source manifest claims (${rendered.join(", ")}${more}). Add each path to the owning ` +
+          `unit's source-manifest.json and record that unit's one bounded stale-receipt recovery review ` +
+          `(aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ${reviewer} --iteration <next ordinal>, ` +
+          `then --verdict <READY|NOT-READY>), or revert the change. Unclaimed source changes fail closed (RFC #662).`,
+      );
+    }
+  }
 }
 
 function staleSourcePreconditionError(
+  pd: string,
+  content: string,
   slug: string,
   reviewer: string,
   recoverySpent: boolean,
 ): never {
   if (recoverySpent) {
     error(
-      `Refusing to complete "${slug}": the workspace source no longer matches ` +
-        `the stale-receipt recovery review (source-fingerprint mismatch). ` +
-        `Present this at the approval gate. Only a human Request Changes decision ` +
-        `resets the review attempt; do not record it on the human's behalf.`,
+      `Refusing to complete "${slug}": the workspace source changed again after ` +
+        `the one recovery review by ${reviewer} (source-fingerprint mismatch). ` +
+        `${recoveryGuidance(pd, content, slug)} ` +
+        "Only a human Request Changes decision resets the review attempt; do not " +
+        "record that rejection on the human's behalf.",
     );
   }
   error(
@@ -2017,6 +2843,8 @@ function verifyPipelineLinkPrecondition(
 }
 
 function staleReviewPreconditionError(
+  pd: string,
+  content: string,
   slug: string,
   reviewer: string,
   recoverySpent: boolean,
@@ -2024,11 +2852,11 @@ function staleReviewPreconditionError(
 ): never {
   if (recoverySpent) {
     error(
-      `${reviewerPreconditionPrefix(slug, action)}: its stale-receipt recovery review from ` +
-        `${reviewer} was invalidated by another later write to a declared ` +
-        `produces[] artifact. Present the situation to the human at the approval ` +
-        `gate. Only a human Request Changes decision resets the review attempt; ` +
-        `do not record it on the human's behalf.`
+      `${reviewerPreconditionPrefix(slug, action)}: this stage's output document ` +
+        `changed again after the one recovery review by ${reviewer}. ` +
+        recoveryGuidance(pd, content, slug) +
+        " Only a human Request Changes decision resets the review attempt; do not " +
+        "record that rejection on the human's behalf."
     );
   }
   error(
@@ -2100,7 +2928,10 @@ function reviewRecoverySpentInCurrentAttempt(
   return false;
 }
 
-function handleAdvance(args: string[]): void {
+function handleAdvance(
+  args: string[],
+  inheritedValidationWarning?: string,
+): void {
   // Keep only the positional <completed-slug> [<next-slug>]; any flags are
   // filtered out so they are not misread as the next slug.
   const positional = args.filter((a) => !a.startsWith("--"));
@@ -2290,6 +3121,13 @@ function handleAdvance(args: string[]): void {
     content = setPhaseProgress(content, nextStage.phase, "Active");
   }
 
+  const validationFields =
+    !alreadyMarkedCompleted || !stageCompletedAlreadyAudited
+      ? stageValidationAuditFields(pd, completedStage, content)
+      : {};
+  const validationWarning =
+    inheritedValidationWarning ?? validationFields[VALIDATION_WARNING_FIELD];
+
   // 4. Atomic audit emission — audit-first, then state write.
   // If audit fails, throw before touching state (writeStateFile below is skipped).
   try {
@@ -2297,6 +3135,7 @@ function handleAdvance(args: string[]): void {
     if (!alreadyMarkedCompleted || !stageCompletedAlreadyAudited) {
       emitAudit(pd, "STAGE_COMPLETED", {
         Stage: completedSlug,
+        ...validationFields,
         Details: `Stage ${completedStage.name} completed`,
         ...usageFields,
       });
@@ -2318,6 +3157,9 @@ function handleAdvance(args: string[]): void {
     emitAudit(pd, "STAGE_STARTED", {
       Stage: nextSlug,
       Agent: nextStage.lead_agent,
+      ...(nextStage.workspace_requires
+        ? sourceBaselineAuditFields(pd, nextSlug)
+        : {}),
     });
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
@@ -2336,6 +3178,7 @@ function handleAdvance(args: string[]): void {
       already_completed: alreadyMarkedCompleted,
       memory_path: relativeMemoryPath(nextStage.phase, nextStage.slug, relativeRecordDir(pd)),
       timestamp,
+      ...(validationWarning ? { warnings: [validationWarning] } : {}),
     })
   );
   });
@@ -2444,7 +3287,10 @@ function handleFinalize(args: string[]): void {
   });
 }
 
-function handleCompleteWorkflow(args: string[]): void {
+function handleCompleteWorkflow(
+  args: string[],
+  inheritedValidationWarning?: string,
+): void {
   // Keep <completed-slug> positional and distinct from the --reason value.
   // --reason takes a value, so its argument is excluded from positionals too.
   const reasonIdx = args.indexOf("--reason");
@@ -2536,10 +3382,17 @@ function handleCompleteWorkflow(args: string[]): void {
       `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
     );
   }
+  const validationFields =
+    !alreadyMarkedCompleted || !stageCompletedAlreadyAudited
+      ? stageValidationAuditFields(pd, completedStage, content)
+      : {};
+  const validationWarning =
+    inheritedValidationWarning ?? validationFields[VALIDATION_WARNING_FIELD];
   try {
     if (!alreadyMarkedCompleted || !stageCompletedAlreadyAudited) {
       emitAudit(pd, "STAGE_COMPLETED", {
         Stage: completedSlug,
+        ...validationFields,
         Details: `Final stage ${completedStage.name} completed`,
         ...stageUsageFields,
       });
@@ -2570,8 +3423,16 @@ function handleCompleteWorkflow(args: string[]): void {
   // automatic inference from state, so a crashed run never self-completes. Runs
   // under the workspace lock already held (every intents.json mutation takes the
   // sentinel bucket). No-op for the legacy flat record (no registry row).
-  const completedIntentDir = activeIntent(pd);
-  if (completedIntentDir) updateIntentStatus(pd, completedIntentDir, "complete");
+  const completedSelection = resolveWorkflowSelection(pd);
+  const completedIntentDir = completedSelection.intent;
+  if (completedIntentDir) {
+    updateIntentStatus(
+      pd,
+      completedIntentDir,
+      "complete",
+      completedSelection.space,
+    );
+  }
   console.log(
     JSON.stringify({
       completed: completedSlug,
@@ -2579,6 +3440,7 @@ function handleCompleteWorkflow(args: string[]): void {
       status: "Completed",
       reason: reason || null,
       timestamp,
+      ...(validationWarning ? { warnings: [validationWarning] } : {}),
     })
   );
   });
@@ -2608,15 +3470,21 @@ function validateSlugInState(
   }
 }
 
-// gate-start <slug> — transition [-] → [?], emit STAGE_AWAITING_APPROVAL.
-// On an existing [?] gate, re-run every opening guard without emitting or
-// writing another transition. This lets report revalidate legacy/recovered
-// gates instead of treating their persisted checkbox as proof of validity.
+// gate-start <slug> — fire gate-bound sensors, then transition [-] → [?] and
+// emit STAGE_AWAITING_APPROVAL.
+// On an existing [?] gate, re-run every opening guard without writing another
+// transition. A consumed blocking-sensor override emits a Revalidated row so
+// its human authorization cannot be reused; ordinary revalidation stays quiet.
 // --recovered marks a BACKFILLED gate row (the engine opening a gate the
 // conductor skipped, e.g. report's explicit-stage recovery) with
 // Recovered=true so audit consumers can tell backfills from organic opens.
 function handleGateStart(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts gate-start <slug> [--artifacts <csv>] [--recovered]");
+  if (args.length < 1) {
+    error(
+      "Usage: aidlc-state.ts gate-start <slug> [--artifacts <csv>] " +
+        "[--recovered] [--override-blocking-sensors] [--user-input <choice>]",
+    );
+  }
   const slug = args[0];
   let artifacts: string | undefined;
   const artifactsIdx = args.indexOf("--artifacts");
@@ -2624,8 +3492,40 @@ function handleGateStart(args: string[]): void {
     artifacts = args[artifactsIdx + 1];
   }
   const recovered = args.includes("--recovered");
+  const overrideBlockingSensors = args.includes("--override-blocking-sensors");
+  const overrideInput = getFlagValue(args.slice(1), "--user-input");
 
   const pd = resolveProjectDir(projectDir);
+  // Sensor dispatch MUST stay outside the state transaction: aidlc-sensor.ts
+  // takes the same audit lock around its FIRED and terminal rows.
+  const preflightContent = readStateFile(pd);
+  const preflightStage = findStageBySlug(slug);
+  if (!preflightStage) error(`Unknown stage: ${slug}`);
+  validateSlugInState(
+    preflightContent,
+    slug,
+    ["in-progress", "awaiting-approval"],
+  );
+  verifyGateOpeningGuards(
+    pd,
+    preflightContent,
+    preflightStage,
+  );
+  const gateSensorEvaluation = fireGateSensors(
+    pd,
+    preflightStage,
+    artifacts,
+  );
+  enforceBlockingGateSensors(
+    pd,
+    preflightContent,
+    slug,
+    "awaiting-approval",
+    gateSensorEvaluation.issues,
+    overrideBlockingSensors,
+    overrideInput,
+  );
+
   // C2b lost-update safety: validate→transition→emit-audit→write under one
   // lock (the state-precondition check and the write see one snapshot).
   withAuditLock(pd, () => {
@@ -2635,13 +3535,28 @@ function handleGateStart(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
   const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
-  verifyStageArtifacts(pd, stage);
-  verifySummaryConfirmationPrecondition(pd, content, stage);
-  verifyPipelineLinkPrecondition(pd, stage);
-  if (!reviewerGateGuardDisabled()) {
-    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
-  }
+  verifyGateOpeningGuards(pd, content, stage);
+  verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
   if (alreadyAwaiting) {
+    if (
+      gateSensorEvaluation.issues.length > 0 &&
+      overrideBlockingSensors
+    ) {
+      try {
+        const fields: Record<string, string> = {
+          Stage: slug,
+          Revalidated: "true",
+        };
+        addBlockingSensorOverrideFields(
+          fields,
+          gateSensorEvaluation.issues,
+          true,
+        );
+        emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
+      } catch (e) {
+        error(`Audit emission failed: ${errorMessage(e)}`);
+      }
+    }
     console.log(
       JSON.stringify({
         slug,
@@ -2661,6 +3576,11 @@ function handleGateStart(args: string[]): void {
     const fields: Record<string, string> = { Stage: slug };
     if (artifacts) fields.Artifacts = artifacts;
     if (recovered) fields.Recovered = "true";
+    addBlockingSensorOverrideFields(
+      fields,
+      gateSensorEvaluation.issues,
+      overrideBlockingSensors,
+    );
     emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
@@ -2679,12 +3599,99 @@ function handleGateStart(args: string[]): void {
 // delegates to handleAdvance or handleCompleteWorkflow for the remaining
 // transitions. Eliminates the t59-class bug where the orchestrator approved
 // but forgot to call advance, leaving Current Stage pointing at a [x] slug.
+function verifyApprovalDecision(
+  pd: string,
+  content: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  userInput?: string,
+): { approvalInput: string | undefined; autonomousDecision: boolean } {
+  const autonomousDecision = isAutonomousConstructionDecision(
+    content,
+    stage.phase,
+  );
+  const approvalInput = userInput?.trim();
+  const approvalAuthorship =
+    autonomousDecision || humanPresenceGuardDisabled()
+      ? null
+      : selfAttributedDecisionMarker(approvalInput, "approval");
+  if (approvalAuthorship) {
+    error(
+      `Refusing to approve "${stage.slug}": decision self-attribution blocked ` +
+        `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}". ` +
+        "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
+        "An approval is the human's to make. End the turn and let them answer; if a " +
+        "completion precondition is blocking you, surface that blocker at the gate instead " +
+        "of recording a decision on their behalf.",
+    );
+  }
+  if (!autonomousDecision && !humanPresenceGuardDisabled()) {
+    const rawRevisionCount = getField(content, "Revision Count");
+    const parsedRevisionCount = rawRevisionCount
+      ? parseInt(rawRevisionCount, 10)
+      : 0;
+    const revisionCount = Number.isFinite(parsedRevisionCount)
+      ? parsedRevisionCount
+      : 0;
+    const matchesOfferedApproval =
+      approvalInput === "Approve" ||
+      (approvalInput === "Accept as-is" && revisionCount >= 3);
+    if (!matchesOfferedApproval) {
+      const cancellation = isNonAnswer(approvalInput)
+        ? " The reply is cancellation boilerplate, not consent."
+        : "";
+      error(
+        `Refusing to approve "${stage.slug}": received reply ` +
+          `${formatReceivedReply(approvalInput)} did not match an offered choice at ` +
+          `the held gate.${cancellation} Re-present the original held gate with every ` +
+          "offered choice and wait for the human to choose one.",
+      );
+    }
+  }
+  if (
+    !autonomousDecision &&
+    !humanPresenceGuardDisabled() &&
+    !humanActedSinceGate(pd)
+  ) {
+    error(
+      `Refusing to approve "${stage.slug}": a real human has not acted at this gate ` +
+        "since it opened. The approval gate requires a typed human turn before it can " +
+        "commit. Acknowledge the gate as a human, then approve. (autonomous Construction " +
+        "is exempt)",
+    );
+  }
+  return { approvalInput, autonomousDecision };
+}
+
 function handleApprove(args: string[]): void {
   if (args.length < 1) error("Usage: aidlc-state.ts approve <slug> [--user-input <text>]");
   const slug = args[0];
   const { userInput } = parseApproveFlags(args.slice(1));
 
   const pd = resolveProjectDir(projectDir);
+  const preflightContent = readStateFile(pd);
+  const preflightStage = findStageBySlug(slug);
+  if (!preflightStage) error(`Unknown stage: ${slug}`);
+  validateSlugInState(preflightContent, slug, "awaiting-approval");
+  const preflightDecision = verifyApprovalDecision(
+    pd,
+    preflightContent,
+    preflightStage,
+    userInput,
+  );
+  verifyStageArtifacts(pd, preflightStage);
+  verifySummaryConfirmationPrecondition(
+    pd,
+    preflightContent,
+    preflightStage,
+  );
+  const preflightBackstop =
+    !revisionBackstopDisabled() &&
+    !preflightDecision.autonomousDecision &&
+    unrecordedRevisionSinceGateOpen(pd, preflightStage);
+  const backstopSensorEvaluation = preflightBackstop
+    ? fireGateSensors(pd, preflightStage)
+    : { issues: [], fingerprints: new Map<string, string>() };
+
   // Per-stage token/cost rollup - computed BEFORE the lock opens (ledger read
   // only, try/caught). Approve is the STAGE_COMPLETED that fires in the normal
   // gate flow (the nested advance/complete-workflow suppress their own once this
@@ -2703,47 +3710,13 @@ function handleApprove(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
-  const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
   validateSlugInState(content, slug, "awaiting-approval");
-  const approvalInput = userInput?.trim();
-  // Nor is the conductor's OWN decision an approval. The presence guard below
-  // proves a human is in the session; it cannot prove this choice is theirs, so
-  // a self-attributed approval ("CONDUCTOR DEFAULT, session unattended") would
-  // commit a gate no human resolved and leave a GATE_APPROVED row indistinguishable
-  // from a real one. Autonomous Construction is exempt (it owns the decision).
-  const approvalAuthorship =
-    autonomousDecision || humanPresenceGuardDisabled()
-      ? null
-      : selfAttributedDecisionMarker(approvalInput, "approval");
-  if (approvalAuthorship) {
-    error(
-      `Refusing to approve "${slug}": decision self-attribution blocked ` +
-        `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}". ` +
-        "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
-        "An approval is the human's to make. End the turn and " +
-        "let them answer; if a completion precondition is blocking you, surface that blocker at " +
-        "the gate instead of recording a decision on their behalf.",
-    );
-  }
-  if (!autonomousDecision && !humanPresenceGuardDisabled()) {
-    const rawRevisionCount = getField(content, "Revision Count");
-    const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
-    const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
-    const matchesOfferedApproval =
-      approvalInput === "Approve" ||
-      (approvalInput === "Accept as-is" && revisionCount >= 3);
-    if (!matchesOfferedApproval) {
-      const cancellation = isNonAnswer(approvalInput)
-        ? " The reply is cancellation boilerplate, not consent."
-        : "";
-      error(
-        `Refusing to approve "${slug}": received reply ${formatReceivedReply(approvalInput)} ` +
-          `did not match an offered choice at the held gate.${cancellation} ` +
-          "Re-present the original held gate with every offered choice and wait for the human " +
-          "to choose one.",
-      );
-    }
-  }
+  const { approvalInput, autonomousDecision } = verifyApprovalDecision(
+    pd,
+    content,
+    stage,
+    userInput,
+  );
 
   // Artifact guard (issue #366): a stage cannot be approved without evidence of
   // work on disk. Runs BEFORE any mutation so a refusal (error() -> exit) leaves
@@ -2754,29 +3727,6 @@ function handleApprove(args: string[]): void {
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
-
-  // Human-presence guard: a gate cannot be approved unless a real
-  // human acted at THIS gate since the last gate resolution. Runs BEFORE any
-  // mutation so a refusal (error() -> exit) leaves state untouched (same slot
-  // as the artifact guard above). Carve-outs FIRST: autonomous Construction
-  // (swarm / Bolt) and the suite-wide test bypass never require presence.
-  if (autonomousDecision) {
-    // skip the presence check — autonomous Construction has no human at the gate
-  } else if (humanPresenceGuardDisabled()) {
-    // skip — suite-wide deterministic off-switch (AIDLC_SKIP_HUMAN_PRESENCE_GUARD)
-  } else if (!humanActedSinceGate(pd)) {
-    // Ledger-event presence check: refuse unless a HUMAN_TURN event was appended
-    // AFTER the last gate resolution (GATE_APPROVED / GATE_REJECTED /
-    // QUESTION_ANSWERED) in ledger order - the boundary is the prior resolution,
-    // NOT this gate's open event (one human turn drives both open and approve).
-    // Cascade-safety + freshness fall out of order; no marker file / turn counter.
-    error(
-      `Refusing to approve "${slug}": a real human has not acted at this gate ` +
-        `since it opened. The approval gate requires a typed human turn before it ` +
-        `can commit. Acknowledge the gate as a human, then approve. (autonomous ` +
-        `Construction is exempt)`
-    );
-  }
 
   // Gate-revision backstop: reconcile a revision the conductor performed at an
   // open gate but never recorded (it skipped the `reject` verb). When the ledger
@@ -2789,11 +3739,17 @@ function handleApprove(args: string[]): void {
   // after review instead of leaving an invalid [?] gate open.
   // Skipped under the off-switch and in autonomous Construction (no human at the
   // gate, so no human-driven revision to reconcile).
-  if (
+  const backstopNow =
     !revisionBackstopDisabled() &&
     !autonomousDecision &&
-    unrecordedRevisionSinceGateOpen(pd, stage)
-  ) {
+    unrecordedRevisionSinceGateOpen(pd, stage);
+  if (backstopNow && !preflightBackstop) {
+    error(
+      `Refusing to approve "${slug}": revision evidence changed during the gate ` +
+        "preflight. Retry the approval so revised bytes can be checked before re-entry.",
+    );
+  }
+  if (backstopNow) {
     const priorCount = getField(content, "Revision Count");
     const priorParsed = priorCount ? parseInt(priorCount, 10) : 0;
     const revCount = (Number.isFinite(priorParsed) ? priorParsed : 0) + 1;
@@ -2809,6 +3765,7 @@ function handleApprove(args: string[]): void {
         Details:
           "Backfilled by the revision backstop: the artifact was revised at " +
           "an open gate with no reject recorded",
+        ...priorAcceptedSourceFields(pd, stage),
       });
       emitAudit(pd, "STAGE_REVISING", {
         Stage: slug,
@@ -2819,10 +3776,20 @@ function handleApprove(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     writeStateFile(pd, content);
+    verifyGateSensorArtifactsUnchanged(slug, backstopSensorEvaluation);
     verifySummaryConfirmationPrecondition(pd, content, stage);
+    verifyPipelineLinkPrecondition(pd, stage);
     if (!reviewerGateGuardDisabled()) {
       verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
     }
+    enforceBlockingGateSensors(
+      pd,
+      content,
+      slug,
+      "revised",
+      backstopSensorEvaluation.issues,
+      false,
+    );
     try {
       emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
         Stage: slug,
@@ -2864,6 +3831,12 @@ function handleApprove(args: string[]): void {
   content = setField(content, "Completed", String(completedCount));
   content = setField(content, "Last Completed Stage", slug);
 
+  // Capture before the first audit append. The lifecycle-facing helper is
+  // fail-open: failures produce a receipt-less completion plus a persistent
+  // warning instead of stranding GATE_APPROVED without STAGE_COMPLETED.
+  const validationFields = stageValidationAuditFields(pd, stage, content);
+  const validationWarning = validationFields[VALIDATION_WARNING_FIELD];
+
   // Atomic audit emissions (audit-first). GATE_APPROVED records the human
   // decision; STAGE_COMPLETED records the state transition the approval
   // implies. Both emit here so the audit trail is correct even if the
@@ -2875,6 +3848,7 @@ function handleApprove(args: string[]): void {
 
     emitAudit(pd, "STAGE_COMPLETED", {
       Stage: slug,
+      ...validationFields,
       Details: `Stage ${stage.name} approved by gate`,
       ...usageFields,
     });
@@ -2894,12 +3868,12 @@ function handleApprove(args: string[]): void {
     // Delegate to handleAdvance. The slug is now [x], so handleAdvance takes
     // the alreadyMarkedCompleted path and skips re-emitting STAGE_COMPLETED.
     // Reentrant call — runs under the depth-2 lock without re-acquire.
-    handleAdvance([slug]);
+    handleAdvance([slug], validationWarning);
   } else {
     // Final stage — complete the workflow. handleCompleteWorkflow re-sets
     // the checkbox to [x] (idempotent) and emits PHASE_COMPLETED +
     // PHASE_VERIFIED + WORKFLOW_COMPLETED. Reentrant call — see above.
-    handleCompleteWorkflow([slug]);
+    handleCompleteWorkflow([slug], validationWarning);
   }
   });
 }
@@ -3051,6 +4025,7 @@ function handleReject(args: string[]): void {
     const rejFields: Record<string, string> = {
       Stage: slug,
       Feedback: feedback,
+      ...priorAcceptedSourceFields(pd, stage),
     };
     emitAudit(pd, "GATE_REJECTED", rejFields);
     emitAudit(pd, "STAGE_REVISING", {
@@ -3067,12 +4042,42 @@ function handleReject(args: string[]): void {
   });
 }
 
-// revise <slug> — transition [R] → [?] (re-enter gate after revision work)
+// revise <slug> — fire gate-bound sensors, then transition [R] → [?]
+// (re-enter gate after revision work)
 function handleRevise(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts revise <slug>");
+  if (args.length < 1) {
+    error(
+      "Usage: aidlc-state.ts revise <slug> [--override-blocking-sensors] " +
+        "[--user-input <choice>]",
+    );
+  }
   const slug = args[0];
+  const overrideBlockingSensors = args.includes("--override-blocking-sensors");
+  const overrideInput = getFlagValue(args.slice(1), "--user-input");
 
   const pd = resolveProjectDir(projectDir);
+  // Sensor dispatch MUST stay outside the state transaction: aidlc-sensor.ts
+  // takes the same audit lock around its FIRED and terminal rows.
+  const preflightContent = readStateFile(pd);
+  const preflightStage = findStageBySlug(slug);
+  if (!preflightStage) error(`Unknown stage: ${slug}`);
+  validateSlugInState(preflightContent, slug, "revising");
+  verifyGateOpeningGuards(
+    pd,
+    preflightContent,
+    preflightStage,
+  );
+  const gateSensorEvaluation = fireGateSensors(pd, preflightStage);
+  enforceBlockingGateSensors(
+    pd,
+    preflightContent,
+    slug,
+    "revised",
+    gateSensorEvaluation.issues,
+    overrideBlockingSensors,
+    overrideInput,
+  );
+
   // C2b lost-update safety: validate→transition→emit-audit→write under one lock.
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
@@ -3080,21 +4085,24 @@ function handleRevise(args: string[]): void {
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "revising");
-  verifyStageArtifacts(pd, stage);
-  verifySummaryConfirmationPrecondition(pd, content, stage);
-  if (!reviewerGateGuardDisabled()) {
-    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
-  }
+  verifyGateOpeningGuards(pd, content, stage);
+  verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
   content = setField(content, "Last Updated", timestamp);
 
   try {
-    emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
+    const fields: Record<string, string> = {
       Stage: slug,
       Details: "Re-entering gate after revision",
-    });
+    };
+    addBlockingSensorOverrideFields(
+      fields,
+      gateSensorEvaluation.issues,
+      overrideBlockingSensors,
+    );
+    emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
@@ -3253,7 +4261,11 @@ function handleSkip(args: string[]): void {
 
   try {
     if (!skipAlreadyAudited) {
-      emitAudit(pd, "STAGE_SKIPPED", { Stage: slug, Reason: reason });
+      emitAudit(pd, "STAGE_SKIPPED", {
+        Stage: slug,
+        Reason: reason,
+        "Skip Kind": "conditional-runtime",
+      });
     }
     if (nextStage) {
       if (crossesPhaseBoundary) {
@@ -3280,6 +4292,9 @@ function handleSkip(args: string[]): void {
         emitAudit(pd, "STAGE_STARTED", {
           Stage: nextStage.slug,
           Agent: nextStage.lead_agent,
+          ...(nextStage.workspace_requires
+            ? sourceBaselineAuditFields(pd, nextStage.slug)
+            : {}),
         });
       }
     } else {
@@ -3310,9 +4325,15 @@ function handleSkip(args: string[]): void {
 
   writeStateFile(pd, content);
   if (!nextStage) {
-    const completedIntentDir = activeIntent(pd);
+    const completedSelection = resolveWorkflowSelection(pd);
+    const completedIntentDir = completedSelection.intent;
     if (completedIntentDir) {
-      updateIntentStatus(pd, completedIntentDir, "complete");
+      updateIntentStatus(
+        pd,
+        completedIntentDir,
+        "complete",
+        completedSelection.space,
+      );
     }
   }
   console.log(JSON.stringify({
@@ -4027,8 +5048,12 @@ function handleFork(args: string[]): void {
   // omitted -> default-resolution (the active cursor / lone intent). The SAME
   // selector threads main-side state/audit/lock AND the worktree mirror, and
   // MUST match what merge resolves so they touch one record.
-  const intent = flags.intent;
-  const space = flags.space;
+  const selection = resolveWorkflowSelection(pd, {
+    intent: flags.intent,
+    space: flags.space,
+  });
+  const intent = selection.intent ?? undefined;
+  const space = selection.space;
   // recordPrefix is the worktree mirror's relative record dir (null -> the flat
   // legacy mirror, today's behaviour); wtRecord is the resolved record-dir NAME
   // the worktree state file lives under (null -> flat). Resolved on the MAIN
@@ -4046,7 +5071,7 @@ function handleFork(args: string[]): void {
   // `resolvedIntent` for the wrapping lock AND every main-side read/write/audit
   // below. `wtRecord` is the same value (kept as a distinct name for the
   // worktree-mirror write, whose null->flat semantics read clearer there).
-  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const resolvedIntent = selection.intent ?? undefined;
   const wtRecord = resolvedIntent;
   // Publish the resolved lock context so any errorWithSlug fired inside the
   // per-intent withAuditLock below routes ERROR_LOGGED to the bucket we hold
@@ -4122,7 +5147,7 @@ function handleFork(args: string[]): void {
     try {
       appendAuditEntryUnlocked("STATE_FORKED", {
         "Bolt slug": slug,
-        "Worktree path": wtPath,
+        "Worktree path": relative(pd, wtPath).replaceAll("\\", "/"),
         "Source state hash": sha,
         "Target state hash": sha, // fork = byte-identical copy
       }, pd, resolvedIntent, space);
@@ -4194,8 +5219,12 @@ function handleMerge(args: string[]): void {
 
   // Same selector the fork used -> the SAME intent record on both ends (vision
   // §5). recordPrefix pins the worktree mirror; wtRecord is its record-dir NAME.
-  const intent = flags.intent;
-  const space = flags.space;
+  const selection = resolveWorkflowSelection(pd, {
+    intent: flags.intent,
+    space: flags.space,
+  });
+  const intent = selection.intent ?? undefined;
+  const space = selection.space;
   const recordPrefix = relativeRecordDir(pd, intent, space);
   // Resolve the intent ONCE before locking (same rationale as handleFork):
   // activeIntent maps an omitted selector to the active record, so resolvedIntent
@@ -4204,7 +5233,7 @@ function handleMerge(args: string[]): void {
   // even when --intent is omitted; raw flags.intent would key the sentinel while
   // the writes hit the per-intent shard (lost-update race). wtRecord is the same
   // value, named for the worktree-mirror read where null->flat reads clearer.
-  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const resolvedIntent = selection.intent ?? undefined;
   const wtRecord = resolvedIntent;
   // Publish the lock context for the in-transaction error path (see error()).
   lockIntent = resolvedIntent;
@@ -4300,7 +5329,7 @@ function handleMerge(args: string[]): void {
     try {
       appendAuditEntryUnlocked("STATE_MERGED", {
         "Bolt slug": slug,
-        "Worktree path": wtPath,
+        "Worktree path": relative(pd, wtPath).replaceAll("\\", "/"),
         "Source state hash": wtSha,
         "Target state hash": postMergeSha,
         "Conflict resolution": conflictResolutionField,

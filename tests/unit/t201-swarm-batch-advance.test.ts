@@ -64,7 +64,6 @@ resetAidlcEnv();
 
 const BUN = process.execPath; // the bun running this test
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
-const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -266,7 +265,10 @@ function runRawDirective(proj: string, args: string[]): Directive {
   return JSON.parse((r.stdout ?? "").trim()) as Directive;
 }
 
-function runReport(proj: string): Directive {
+function runReport(
+  proj: string,
+  extraEnv: Record<string, string> = {},
+): Directive {
   const r = spawnSync(BUN, [
     ORCH,
     "report",
@@ -276,36 +278,13 @@ function runReport(proj: string): Directive {
     "approved",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8", env: process.env });
+  ], { encoding: "utf-8", env: { ...process.env, ...extraEnv } });
   try {
     return JSON.parse((r.stdout ?? "").trim()) as Directive;
   } catch {
     throw new Error(
       `runReport did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
     );
-  }
-}
-
-function logReviewReady(proj: string, unit: string): void {
-  const args = [
-    LOG,
-    "review",
-    "--stage",
-    "code-generation",
-    "--reviewer",
-    "aidlc-architecture-reviewer-agent",
-    "--unit",
-    unit,
-    "--iteration",
-    "1",
-    "--project-dir",
-    proj,
-  ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-    }
   }
 }
 
@@ -411,18 +390,18 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.units).toEqual(["b"]);
   }, 30000);
 
-  test("4b: autonomous settle requires one architecture review per converged unit", () => {
+  test("4b: settled autonomous swarm trusts finalize-time per-unit reviews", () => {
     const proj = seedProject();
     seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth", "api"]);
 
-    const refused = runReport(proj);
-    expect(refused.kind).toBe("error");
-    expect(refused.message).toContain("declares a reviewer");
-
-    logReviewReady(proj, "auth");
-    logReviewReady(proj, "api");
-    const accepted = runReport(proj);
+    // SWARM_UNIT_CONVERGED is the finalize referee's protected receipt. Finalize
+    // already required each Bolt's configured review, unit source binding, and
+    // footprint before emitting it, so the main-checkout settle gate must not
+    // demand duplicate review rows.
+    const accepted = runReport(proj, {
+      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+    });
     expect(accepted.kind).toBe("done");
   }, 30000);
 });

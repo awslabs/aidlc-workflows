@@ -21,8 +21,8 @@
 //         classification,
 //       * <record>/ideation/ exists with a questions file carrying filled
 //         [Answer]: lines and at least one structured (heading-bearing) artifact,
-//       * MORE than 6 stages are marked complete `- [x]` (POC > bugfix; the .sh's
-//         test 10 — 3 init + Ideation stages),
+//       * MORE than 6 stages are marked complete `- [x]` (the POC milestone from
+//         the .sh's test 10 — 3 init + Ideation stages),
 //       * audit.md has substantial content,
 //   - RENDER (the tui-only value-add): the captured grid showed a gate menu
 //     (`❯` caret + the `Enter to select` / `Submit answers` footer) at least once —
@@ -225,8 +225,8 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
         // so we catch a gate menu (caret + footer) while the gates are up. Use the
-        // shared gridHasMenu() so the caret is matched platform-invariantly (`❯` on
-        // tmux, ASCII `>` on Windows ConPTY — the same detector the answer-gate uses).
+        // shared gridHasMenu(), which requires the exact `❯` caret in both
+        // reconstructed backends.
         pollTimer = setInterval(() => {
           const grid = drive(["capture", "--session", session]).stdout;
           if (gridHasMenu(grid)) {

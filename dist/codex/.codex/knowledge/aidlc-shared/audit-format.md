@@ -22,13 +22,13 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (86 events, 22 categories)
+## Event Registry (87 events, 22 categories)
 
 ### Workflow Lifecycle (4 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request | `tools/aidlc-utility.ts intent-create` |
+| ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request; optional Source Baseline (`sha256:<listing-hash>` or `unbindable`) | `tools/aidlc-utility.ts intent-create` |
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
 | ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Timestamp, Stage | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
@@ -46,11 +46,11 @@ deduplicate timestamp fields produced by older versions.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| ✓ `STAGE_STARTED` | Stage enters `[-]` Active | Timestamp, Stage, Agent | `tools/aidlc-state.ts advance`, `tools/aidlc-utility.ts intent-create` (init stages) |
-| `STAGE_AWAITING_APPROVAL` | Stage enters `[?]` (gate open) | Timestamp, Stage, Artifacts, optional `Recovered=true` (backfilled gate row) | `tools/aidlc-state.ts gate-start` (organic, or `--recovered` backfill), `tools/aidlc-state.ts revise` (gate re-entry), `tools/aidlc-state.ts approve` (backstop re-entry after its opening guards pass) |
+| ✓ `STAGE_STARTED` | Stage enters `[-]` Active | Timestamp, Stage, Agent; optional Source Baseline when the entered stage declares `workspace_requires` | `tools/aidlc-state.ts advance`, `tools/aidlc-utility.ts intent-create` (init stages) |
+| `STAGE_AWAITING_APPROVAL` | Stage enters `[?]` (gate open) | Timestamp, Stage, Artifacts, optional `Recovered=true` (backfilled gate row) or `Revalidated=true` (an already-open gate consumed a blocking-sensor override); a blocking-sensor override also carries Blocking Sensor Override, Blocking Sensor IDs, optional Blocking Sensor Detail Paths, and Blocking Sensor Reasons. Its authorization is the preceding exact `DECISION_RECORDED` → `HUMAN_TURN` → `QUESTION_ANSWERED` pair. | `tools/aidlc-state.ts gate-start` (organic, `--recovered` backfill, or override revalidation), `tools/aidlc-state.ts revise` (gate re-entry), `tools/aidlc-state.ts approve` (backstop re-entry after its opening guards pass) |
 | `STAGE_REVISING` | Stage enters `[R]` (user rejected gate) | Timestamp, Stage, Revision count, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | ✓ `STAGE_COMPLETED` | Stage finishes (`[x]`) | Timestamp, Stage, Details, Artifacts | `tools/aidlc-state.ts approve` (gated stages; also auto-advances to next), `tools/aidlc-state.ts advance` (non-gated stages), `tools/aidlc-utility.ts intent-create` (init stages) |
-| `STAGE_JUMPED` | Forward/backward/redo jump target reached | Timestamp, Direction, Source, Target, Scope | `tools/aidlc-jump.ts execute` |
+| `STAGE_JUMPED` | Forward/backward/redo jump target reached | Timestamp, Direction, Source, Target, Scope; optional Source Baseline | `tools/aidlc-jump.ts execute` |
 | `STAGE_SKIPPED` | Current stage reports a justified skip, or a jump skips it (`[S]`) | Timestamp, Stage, Reason | `tools/aidlc-state.ts skip` (internally routed by `aidlc-orchestrate.ts report --result skipped`), `tools/aidlc-jump.ts execute` |
 
 ### Session Events (5 events — hook-owned, independent of workflow lifecycle)
@@ -98,12 +98,37 @@ operational evidence, not a tamper-proof human-authorship boundary.
 |-------|------|-----------------|---------|
 | `DECISION_RECORDED` | Before presenting a non-gate structured question, to record the options shown. Consolidated-summary prompts also carry checkpoint identity | Timestamp, Stage, Decision, Options; optional Checkpoint, Questions File, Unit, Workflow | `tools/aidlc-log.ts decision` |
 | `GATE_APPROVED` | Human approved at gate | Timestamp, Stage, User Input | `tools/aidlc-state.ts approve` |
-| `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
+| `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop), optional Prior Accepted Source Fingerprint (the prior attempt's validated final swarm aggregate; never a replacement completion baseline) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | `QUESTION_ANSWERED` | Non-gate question answered by user | Timestamp, Stage, Details | `tools/aidlc-log.ts answer` |
-| `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256; optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
-| `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent; reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, Artifact Fingerprint (`sha256:<hex>` over the bytes dispatched for review), optional Unit (authoritative-DAG per-unit stages), optional Retry (`pending-request` recovery of an unmatched request), optional Recovery (`stale-receipt` bounded recovery after artifact/source invalidation) | `tools/aidlc-log.ts review` |
-| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage, must pair to the same request iteration and unchanged request fingerprint, and is reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, Verdict, Artifact Fingerprint (must match the request and current bytes), optional Unit (per-unit stages), optional Source Fingerprint (`workspace_requires` stages only: git-native source hash or `unbindable`; modern unbindable receipts fail closed) | `tools/aidlc-log.ts review --verdict` |
+| `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256, Hash Scope (required on new receipts; legacy rows may omit it); optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
+| `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent; reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, Artifact Fingerprint (`sha256:<hex>` over the bytes dispatched for review), optional Unit (authoritative-DAG per-unit stages), Source Fingerprint on `workspace_requires` stages, Unit Source Fingerprint (manifest bytes + claimed source listing) on per-unit `workspace_requires` stages, optional Retry (`pending-request` recovery of an unmatched request), optional Recovery (`stale-receipt` bounded recovery after artifact/source invalidation) | `tools/aidlc-log.ts review` |
+| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage, must pair to the same request iteration and unchanged request/source fingerprints, and is reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, Verdict, Artifact Fingerprint (must match the request and current bytes), optional Unit (per-unit stages), Source Fingerprint on `workspace_requires` stages (git-native source hash or `unbindable`; modern unbindable receipts fail closed), plus Unit Source Fingerprint on per-unit `workspace_requires` receipts. Pre-2.6.69 receipts may carry Unit Source Binding Bypass (`true`) | `tools/aidlc-log.ts review --verdict` |
 | `PIPELINE_LINK_COMPLETED` | A declared pipeline link returned in order; current-attempt receipts gate pipeline approval and are reserved from the public audit CLI | Timestamp, Stage, Link, Position (`k/N`), optional Repo (required by the protocol for multi-repo chains), optional Workflow (`single-stage:<slug>` for isolated runs) | `tools/aidlc-log.ts link` |
+
+`Hash Scope: confirmed-content-v1` identifies the semantic questions-file digest
+used by newly emitted receipts. It normalizes line endings, preserves the
+original order of the preamble and confirmed sections, and trims trailing
+whitespace from the resulting canonical content. It includes every visible
+Q<n> section and each `Requested Changes Feedback` section, including follow-up
+questions added after an assumption decision. Exactly one visible top-level
+`Assumption Confirmation` section is valid only after the summary and is
+excluded, along with its contents; a same-named pre-summary section remains part
+of the confirmed digest. The excluded section's assumptions and answer are not
+covered by the digest and remain subject to the stage's existing decision/answer
+and sensor checks. Any other visible Markdown or
+raw-HTML heading after the summary is invalid. Heading-like text in HTML
+comments, code spans, fenced or indented code, and HTML attribute values is not
+a section.
+A receipt with no `Hash Scope` retains the legacy whole-file digest contract;
+an in-flight legacy receipt therefore needs a fresh human confirmation to
+create a scoped receipt before an allowed post-confirmation append can recover.
+Any other scope is rejected.
+
+Summary-confirmation authority comparisons preserve append order within one
+audit shard. Across shards, different timestamps establish order; equal
+timestamps are causally unordered. Completion fails closed when such a tie
+could change the current attempt, selected receipt, or whether an artifact was
+written after confirmation, and requires fresh evidence with a later timestamp.
 
 ### Unit Lifecycle Events (4 events — inline per-unit Construction stages)
 
@@ -187,11 +212,11 @@ would fill the ledger with non-changes and break reconstruction-from-the-ledger.
 
 ### Construction Bolt Events (4 events)
 
-Emitted only during Phase 3 (Construction). See `stage-protocol.md` Terminology for the planned Bolt (a 2.9 delivery slice). `BOLT_STARTED` / `BOLT_COMPLETED` (and swarm-path `BOLT_FAILED`) are emitted from `aidlc-bolt.ts` on the swarm / worktree path; a default gated run does not record them. `AUTONOMY_MODE_SET` is emitted by `aidlc-bolt.ts set-autonomy` after the ladder on any walk, including a default gated run.
+Emitted only during Phase 3 (Construction). See `stage-protocol.md` Terminology for Bolt as a sprint-like iteration whose intended Unit grouping is recorded during Delivery Planning (2.9), while runtime batching comes from the Unit dependency graph. `BOLT_STARTED` / `BOLT_COMPLETED` (and swarm-path `BOLT_FAILED`) are emitted from `aidlc-bolt.ts` on the swarm / worktree path; a default gated run does not record them. `AUTONOMY_MODE_SET` is emitted by `aidlc-bolt.ts set-autonomy` after the ladder on any walk, including a default gated run.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `BOLT_STARTED` | Swarm / worktree path only: `aidlc-bolt.ts start` for one Unit (its worktree). Not emitted on a default gated stage-major run. | Timestamp, Bolt names, Batch number, Walking skeleton (true/false), optional Bolt slug (when --worktree) | `tools/aidlc-bolt.ts start` |
+| `BOLT_STARTED` | Swarm / worktree path only: `aidlc-bolt.ts start` for one Unit and its worktree. Not emitted on a default gated stage-major run. | Timestamp, Bolt names, Batch number, Walking skeleton (true/false), optional Bolt slug, Base commit, and Base Source Listing (when `--worktree`; the listing is the content-addressed raw-aware source baseline propagated from worktree creation) | `tools/aidlc-bolt.ts start` |
 | `BOLT_COMPLETED` | Swarm / worktree path only: `aidlc-bolt.ts complete` for that same Unit/worktree. Does **not** close the batch — `SWARM_COMPLETED` does. | Timestamp, Bolt names, Batch number, optional Bolt slug (when --merge) | `tools/aidlc-bolt.ts complete` |
 | `BOLT_FAILED` | A Bolt failed during code-generation, or was explicitly aborted by the user | Timestamp, Failed Bolt, Error summary, optional Bolt slug (halt-and-ask correlation surface read by `aidlc-worktree info --slug`), optional Reason (`aborted` for explicit abort), optional Succeeded siblings | `tools/aidlc-bolt.ts fail` and `tools/aidlc-bolt.ts abort` |
 | `AUTONOMY_MODE_SET` | User answered the ladder prompt after the walking skeleton | Timestamp, Mode (`autonomous` or `gated`) | `tools/aidlc-bolt.ts set-autonomy` |
@@ -200,9 +225,13 @@ Emitted only during Phase 3 (Construction). See `stage-protocol.md` Terminology 
 
 Emitted during Phase 3 (Construction) when Bolts run inside per-Bolt git worktrees. Worktree primitive emits `WORKTREE_*`; state fork/merge subcommands emit `STATE_*`; audit fork/merge subcommands emit `AUDIT_*`.
 
+`Worktree path` values are project-relative (`.aidlc/worktrees/bolt-<slug>`) in
+new rows. Readers resolve them against the project root and remain compatible
+with legacy absolute values.
+
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `WORKTREE_CREATED` | Per-Bolt git worktree created from main on Bolt start | Timestamp, Bolt slug, Worktree path, Branch name, Base branch | `tools/aidlc-worktree.ts` (`create`) |
+| `WORKTREE_CREATED` | Per-Bolt git worktree created from main on Bolt start | Timestamp, Bolt slug, project-relative Worktree path, Branch name, Base branch, Base commit, Base Source Listing (`sha256:<hash>` over the raw-aware source listing computed from the immutable base before the audit-first create), Repo (recorded selector or `-` for the workspace root), optional Intent record and Swarm Unit/Batch/Stage/Run floor provenance | `tools/aidlc-worktree.ts` (`create`) |
 | `WORKTREE_MERGED` | Bolt's worktree merged back to main on gate approval | Timestamp, Bolt slug, Worktree path, Target branch, Strategy | `tools/aidlc-worktree.ts` (`merge`) |
 | `WORKTREE_DISCARDED` | Aborted Bolt's worktree explicitly removed | Timestamp, Bolt slug, Worktree path, Reason | `tools/aidlc-worktree.ts` (`discard`) |
 | `STATE_FORKED` | State file forked to worktree on Bolt start | Timestamp, Bolt slug, Worktree path, Source state hash, Target state hash | `tools/aidlc-state.ts` (`fork`) |
@@ -233,19 +262,19 @@ Emitted when Construction's Bolt-merge step calls aidlc-pipeline-deploy-agent vi
 
 ### Sensor Events (5 events)
 
-Emitted by the deterministic-sensor system. The sensor dispatcher emits the four `SENSOR_*` events; the paired-coverage doctor row emits `GUARDRAIL_LOADED` with `Scope: all`, because doctor reads the full resolved guardrail set without an active stage (the per-workflow org → project → phase → stage scoping in the When-clause below describes the steady-state loader, not doctor's unscoped read). Coverage is environmental — every Inception/Construction/Operation stage that writes markdown emits at least one `SENSOR_FIRED` row from the registry-default sensors (`upstream-coverage`, `required-sections`); Construction/Operation TS/JS writes additionally emit `linter` and `type-check` rows. Advisory-only; the future ralph driver introduces blocking semantics for Construction-phase sensors.
+Emitted by the deterministic-sensor system. The sensor dispatcher emits the four `SENSOR_*` events; the paired-coverage doctor row emits `GUARDRAIL_LOADED` with `Scope: all`, because doctor reads the full resolved guardrail set without an active stage (the per-workflow org → project → phase → stage scoping in the When-clause below describes the steady-state loader, not doctor's unscoped read). `fire_on: write` sensors run from the PostToolUse hook on matching writes; `fire_on: gate` sensors run once per existing declared deliverable before `gate-start` opens the first gate, `revise` re-enters it, or the approve-time revision backstop attempts recovered re-entry. Blocking severity is enforced only for gate-fired sensors in this release; write-fired failures remain advisory.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `SENSOR_FIRED` | Dispatcher invoked a sensor against a stage output (per PostToolUse Write/Edit match on the sensor's `matches` filter) | Timestamp, Fire id, Sensor ID, Stage slug, Output path | `tools/aidlc-sensor.ts` `fire` |
+| `SENSOR_FIRED` | Dispatcher invoked a sensor against a stage output, from either a matching PostToolUse Write/Edit or gate-boundary deliverable dispatch | Timestamp, Fire id, Sensor ID, Stage slug, Output path | `tools/aidlc-sensor.ts` `fire` |
 | `SENSOR_PASSED` | Sensor completed and reported no findings (also: tool-unavailable, script-error fall-through — see Note footnote) | Timestamp, Fire id, Sensor ID, Stage slug, Output path, Duration ms | `tools/aidlc-sensor.ts` `fire` |
 | `SENSOR_FAILED` | Sensor completed and reported findings; detail file written at `<record>/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md` | Timestamp, Fire id, Sensor ID, Stage slug, Output path, Detail path, Findings count | `tools/aidlc-sensor.ts` `fire` |
 | `SENSOR_BUDGET_OVERRIDE` | Sensor exceeded its configured cap (registry / binding / depth-derived per the three-layer cap model) and was terminated or skipped | Timestamp, Fire id, Sensor ID, Stage slug, Output path, Cap layer, Cap value, Observed value | `tools/aidlc-sensor.ts` `fire` |
 | `GUARDRAIL_LOADED` | Guardrail loader resolved the scope-hierarchical guardrail set for the active workflow (org → project → phase → stage); doctor's paired-coverage check reads from this event | Timestamp, Scope, Path, Rule count | `tools/aidlc-utility.ts` |
 
-> The `Note` field on `SENSOR_PASSED` is optional. It carries `tool-unavailable` when the per-sensor script's underlying binary isn't on PATH (advisory PASS, not failure), or `script-error: <reason>` for spawn-failure / non-zero exit / malformed JSON / detail-write failure paths. Pair correlation is via `Fire id` (echoed verbatim from `SENSOR_FIRED` to the terminal row); `Output path` alone does not disambiguate when the PostToolUse Write/Edit hook fires the same sensor + stage + path tuple multiple times within a stage.
+> The `Note` field on `SENSOR_PASSED` is optional. It carries `tool-unavailable` when the per-sensor script's underlying binary isn't on PATH, or `script-error: <reason>` for spawn-failure / non-zero exit / malformed JSON / detail-write failure paths. Those remain advisory for write-fired sensors, but a blocking gate binding requires a verified pass, so any `Note`, dispatcher failure, malformed verdict, or budget override refuses gate entry. Pair correlation is via `Fire id` (echoed verbatim from `SENSOR_FIRED` to the terminal row); `Output path` alone does not disambiguate repeated write dispatches or a later gate dispatch of the same sensor + stage + path tuple.
 
-> **Pair by `Fire id`, not by audit-row index.** The PostToolUse Write/Edit hook can fan out a single tool call to four parallel sensor fires (one per applicable sensor on the matching stage). Terminal rows interleave by spawn duration — a 200ms linter beats a 4s tsc — so `findAllEvents("SENSOR_FIRED")[i]` does NOT pair with `findAllEvents("SENSOR_PASSED")[i]` by index. Audit-walking consumers (the `sensor_firings[]` populator, doctor, designer) MUST match terminal rows to FIRED rows via the 8-hex `Fire id` correlator. The dispatcher emits `Fire id` on every row precisely so this pairing remains O(1) under arbitrary fan-out + interleave.
+> **Pair by `Fire id`, not by audit-row index.** Write dispatch can fan out one tool call across several sensors, while gate dispatch fans each gate-bound sensor across every existing deliverable. Terminal rows may interleave by spawn duration, so `findAllEvents("SENSOR_FIRED")[i]` does NOT pair with `findAllEvents("SENSOR_PASSED")[i]` by index. Audit-walking consumers (the `sensor_firings[]` populator, doctor, designer) MUST match terminal rows to FIRED rows via the 8-hex `Fire id` correlator.
 
 ### Learning Loop (3 events)
 
@@ -257,14 +286,15 @@ Emitted by stage-protocol §13 (Learnings Ritual). The runtime-graph compile emi
 | `RULE_LEARNED` | The learning gate persisted a kept learning as a practice line under the routed heading in `{project,team}.md` | Timestamp, Stage, Candidate-ID, Content-Hash, Destination, Heading, Source | `tools/aidlc-learnings.ts persist` |
 | `SENSOR_PROPOSED` | The learning gate scaffolded a project-tier sensor manifest and bound it to the originating stage's `sensors:` frontmatter | Timestamp, Stage, Candidate-ID, Sensor ID, Manifest path, Matches, Destinations, Source | `tools/aidlc-learnings.ts persist` |
 
-### Swarm (6 events)
+### Swarm (7 events)
 
-All six swarm events emit from the swarm referee `aidlc-swarm.ts` — the deterministic verdict surface the conductor consults. The referee is stateless (no iteration counter): `prepare` captures the exact stage-attempt token, forks the per-unit worktrees, and emits stamped `SWARM_STARTED` (and `SWARM_DEGRADED` when the conductor reports a loud downgrade); `finalize` requires that prepared token to still match the current attempt before merging, then preserves it on each convergence row. A worktree prepared by the immediately preceding unstamped release remains finalizable only when its frozen audit prefix proves the matching legacy `SWARM_STARTED`, `BOLT_STARTED`, `STATE_FORKED`, and `AUDIT_FORKED` sequence, the fork hash still matches, all three worktree mirrors exist, and the derived frozen attempt still equals the current attempt; this compatibility path never emits a backdated start or adopts a stale worktree. It re-verifies the conductor's claimed-converged set, serialised-merges the genuine passes, and emits the per-Unit pair (`SWARM_UNIT_CONVERGED` / `SWARM_UNIT_FAILED` — except a converged unit whose merge-back failed, which gets neither row until a finalize retry merges it), the per-failed-Unit baton row (`SWARM_BATON_RETURNED`), and the batch tally (`SWARM_COMPLETED`). The `check` subcommand emits nothing — it is an advisory verdict that informs the conductor's retry decision. The engine is read-only and the conductor never emits audit events, so the deterministic tool owns the whole swarm taxonomy. Because the loop and its cap live in the driver (the ultracode script's `for`-bound or the subagent floor's harness ceiling), not in the referee, the per-Unit rows carry no `Iterations` / `Cap value` fields — there is no counter to record.
+Six events emit from the swarm referee `aidlc-swarm.ts` — the deterministic verdict surface the conductor consults — and `SWARM_SOURCE_MERGED` emits from `aidlc-worktree.ts` after application source lands in main. The referee is stateless (no iteration counter): `prepare` captures the exact stage-attempt token, stamps the Unit/Batch/Stage/Run floor into `WORKTREE_CREATED` plus worktree metadata, forks the per-unit worktrees, and emits `SWARM_STARTED` with both the prepared batch and the full attempt-bound Unit obligation set (and `SWARM_DEGRADED` when the conductor reports a loud downgrade); `finalize` requires that prepared token to still match the current attempt before merging, then preserves it on each convergence row. Completion compares the live authored DAG with that durable obligation set and refuses shrink or expansion until the DAG is restored or the stage attempt restarts. A worktree prepared by the immediately preceding unstamped release remains finalizable only when its frozen audit prefix proves the matching legacy `SWARM_STARTED`, `BOLT_STARTED`, `STATE_FORKED`, and `AUDIT_FORKED` sequence, the fork hash still matches, all three worktree mirrors exist, and the derived frozen attempt still equals the current attempt; this compatibility path never emits a backdated start or adopts a stale worktree. It re-verifies the conductor's claimed-converged set, serialised-merges the genuine passes, and emits the per-Unit pair (`SWARM_UNIT_CONVERGED` / `SWARM_UNIT_FAILED` — except a converged unit whose merge-back failed, which gets neither row until a finalize retry merges it), the per-failed-Unit baton row (`SWARM_BATON_RETURNED`), and the batch tally (`SWARM_COMPLETED`). Source merge then requires authority correlated to durable worktree provenance and the current Bolt/batch/stage attempt, links the main checkout from the stage-entry baseline or the prior attempt's validated final aggregate recorded on `GATE_REJECTED`, and emits `SWARM_SOURCE_MERGED`. Rejection never replaces the completion baseline. The opening link is revalidated against that trusted predecessor; later links must form an exact fingerprint chain. A pre-binding worktree whose convergence predates immutable source fields retains the historical branch merge; modern incomplete authority fails closed. If Git mutation lands but `SWARM_SOURCE_MERGED` cannot be appended, the command preserves the worktree and reports a non-retryable `[merge-succeeded:<sha>]` failure: do not rerun the merge, because no authenticated recovery receipt exists; restart the stage attempt or use the explicit source-freshness off-switch only with human approval. The `check` subcommand emits nothing — it is an advisory verdict that informs the conductor's retry decision. Because the loop and its cap live in the driver, the per-Unit rows carry no `Iterations` / `Cap value` fields.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `SWARM_STARTED` | Swarm referee `prepare` captured the exact attempt and forked a batch of dependency-linked Units | Timestamp, Batch number, Unit names, Concurrency cap, Stage, Run floor | `tools/aidlc-swarm.ts` |
-| `SWARM_UNIT_CONVERGED` | A swarm Unit re-verified green (and untampered) at the `finalize` gate AND its AIDLC metadata merge-back landed (a converged unit in `merge_failures` gets no row until a finalize retry merges it) | Timestamp, Batch number, Unit name, Stage, Run floor (the exact token captured by `SWARM_STARTED`; consumers require an exact current-attempt match), optional Source Fingerprint and Source Commit (immutable reviewed source accepted by `aidlc-worktree merge`), or `Source Freshness Bypass: true` when finalize explicitly used `AIDLC_SKIP_SOURCE_FRESHNESS=1` (merge must repeat the switch) | `tools/aidlc-swarm.ts` |
+| `SWARM_STARTED` | Swarm referee `prepare` captured the exact attempt and forked a batch of dependency-linked Units | Timestamp, Batch number, Unit names, Unit obligations, Concurrency cap, Stage, Run floor | `tools/aidlc-swarm.ts` |
+| `SWARM_UNIT_CONVERGED` | A swarm Unit re-verified green (and untampered) and its AIDLC metadata merge-back landed; unless explicitly bypassed, finalize also verified the current global/unit source bindings and raw-aware base-to-worktree footprint against reviewed source-manifest claims | Timestamp, Batch number, Unit name, Stage, Run floor, optional Source Fingerprint and Source Commit (immutable reviewed source accepted by `aidlc-worktree merge`), or `Source Freshness Bypass: true` when finalize explicitly used `AIDLC_SKIP_SOURCE_FRESHNESS=1` (the freshness/unit/footprint guarantees do not apply and merge must repeat the switch) | `tools/aidlc-swarm.ts` |
+| `SWARM_SOURCE_MERGED` | The immutable reviewed source for one current-attempt swarm Unit landed in main and extended the aggregate source chain | Timestamp, Batch number, Unit name, Stage, Run floor, Previous Source Fingerprint, Source Fingerprint, Source Commit, Merge commit, Repo (recorded selector or `-` for the workspace root) | `tools/aidlc-worktree.ts merge` |
 | `SWARM_UNIT_FAILED` | A swarm Unit failed the `finalize` re-verify (not claimed, claimed-but-red, or tampered) | Timestamp, Batch number, Unit name, Reason | `tools/aidlc-swarm.ts` |
 <!-- Reason for a CLAIMED-but-red / tampered unit is always the tool's own verdict (`error`); for a DECLINED (unclaimed) unit it is the conductor's typed attribution via `finalize --reasons` (`unsatisfiable` / `budget-exhausted` / `cap-exhausted`, defaulting to `cap-exhausted`) — the tool records the conductor's knowledge call, it does not judge unsatisfiability itself (D-I). -->
 | `SWARM_BATON_RETURNED` | A swarm Unit returned the baton to the conductor for orchestrator-mediated coordination | Timestamp, Batch number, Unit name, Reason | `tools/aidlc-swarm.ts` |
@@ -275,7 +305,7 @@ All six swarm events emit from the swarm referee `aidlc-swarm.ts` — the determ
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`) — there is no longer a separate "free-form hook entry" format. A hook with no active workflow in `cwd` is a no-op; session events only append to a workflow's audit.md when one exists.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`), which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`), which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 
@@ -320,3 +350,32 @@ The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the can
 
 ---
 ```
+
+## Validation basis on `STAGE_COMPLETED`
+
+Main-workflow `STAGE_COMPLETED` entries may include a compact schema-3 receipt:
+
+```text
+**Validation Basis**: {"schema":3,"graphContract":"sha256:...","projectType":"brownfield","inputs":[{"artifact":"code-summary","producer":"code-generation","required":true,"instanceCount":12,"presentCount":12,"structureHash":"sha256:...","contentHash":"sha256:..."}],"outputs":[...]}
+```
+
+The resolver first computes the concrete runtime artifact-instance set using
+the Bolt DAG, unit kinds, `produces_kinds`, and canonical filename aliases. The
+receipt then stores deterministic stage-level aggregate fingerprints rather
+than every Unit/path row. Optional inputs are included only when at least one
+instance was present when completion was reported. This is a report-time
+snapshot: it does not prove which bytes the stage actually read. "Observed"
+dependency means recorded in this receipt, not runtime read instrumentation;
+changes before capture become the baseline and changes after capture are
+detectable.
+
+If receipt capture is unavailable, the owning completion tool still appends a
+receipt-less `STAGE_COMPLETED` with `Validation Warning`. That completion is
+untracked and advisory rather than a reason to abort the state transition.
+
+The latest receipt remains useful as dependency evidence after a stage is
+reopened, while only a completion in the current attempt counts as current
+tracking for the stage itself. Earlier schemas and receipt-less completions fail
+open until the stage completes with this schema. Schema 2 is deliberately
+untracked because it cannot distinguish its old zero-instance resolution from
+the stage-level zero-Unit resolution introduced with schema 3.

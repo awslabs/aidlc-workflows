@@ -8,7 +8,14 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   readAllAuditShards,
@@ -19,11 +26,22 @@ import {
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
 import {
+  adaptWindowsLaunch,
+  fileSignalMet,
+  filterConsoleOwnedWindowsProcesses,
+  filterOwnedWindowsDescendants,
+  filterSpawnOwnedWindowsDescendants,
   gridHasOption,
   gridIsApprovalGate,
   normalizeTuiCommand,
+  newConsoleProcessIds,
+  parsePortablePath,
   pickRevisionOption,
   pickRevisionTypeSomethingOption,
+  resolvePortablePathPattern,
+  runBoundedCommand,
+  shouldForceKillWindowsChildRoot,
+  winSessionDir,
 } from "../harness/tui-drive.ts";
 import {
   cleanupTuiProject,
@@ -153,6 +171,396 @@ describe("tui-drive setting-source isolation", () => {
     expect(
       normalizeTuiCommand(["node", "script.js", "claude"], env()),
     ).toEqual(["node", "script.js", "claude"]);
+  });
+});
+
+describe("tui-drive structured Windows launch adapter", () => {
+  const specialArgs = [
+    "",
+    "two words",
+    'quote"inside',
+    "a&b|c<d>e^f%g!h(i)",
+    "trailing\\",
+  ];
+
+  test("keeps .exe and ordinary binaries on direct structured argv", () => {
+    expect(
+      adaptWindowsLaunch("C:\\Program Files\\Claude\\claude.exe", specialArgs),
+    ).toEqual({
+      file: "C:\\Program Files\\Claude\\claude.exe",
+      args: specialArgs,
+    });
+    expect(adaptWindowsLaunch("custom-binary", specialArgs)).toEqual({
+      file: "custom-binary",
+      args: specialArgs,
+    });
+  });
+
+  test("routes .ps1 through non-interactive PowerShell -File with argv intact", () => {
+    expect(
+      adaptWindowsLaunch(
+        "C:\\Program Files\\Claude\\claude.ps1",
+        specialArgs,
+      ),
+    ).toEqual({
+      file: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        "C:\\Program Files\\Claude\\claude.ps1",
+        ...specialArgs,
+      ],
+    });
+  });
+
+  test("routes .cmd and .bat through ComSpec with focused cmd quoting", () => {
+    for (const extension of ["cmd", "bat"]) {
+      const launch = adaptWindowsLaunch(
+        `C:\\Program Files\\Claude\\claude.${extension}`,
+        specialArgs,
+        { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      );
+      expect(launch).toEqual({
+        file: "C:\\Windows\\System32\\cmd.exe",
+        args: [
+          "/d",
+          "/s",
+          "/c",
+          `"C:\\Program^ Files\\Claude\\claude.${extension} ` +
+            `^^^"^^^" ^^^"two^^^ words^^^" ^^^"quote\\^^^"inside^^^" ` +
+            `^^^"a^^^&b^^^|c^^^<d^^^>e^^^^f^^^%g^^^!h^^^(i^^^)^^^" ` +
+            `^^^"trailing\\\\^^^""`,
+        ],
+        windowsVerbatimArguments: true,
+      });
+    }
+  });
+});
+
+describe("tui-drive portable until-file paths", () => {
+  test("parses POSIX, Git-Bash, drive, UNC, relative, and mixed forms structurally", () => {
+    expect(parsePortablePath("/var/tmp/project/signals/*/done.txt")).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["var", "tmp", "project", "signals", "*", "done.txt"],
+    });
+    expect(
+      parsePortablePath(
+        "/c/Users/dev/project/signals/*/done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "git-bash-absolute",
+      root: "C:\\",
+      segments: ["Users", "dev", "project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("c:\\Users\\dev\\project\\signals\\*\\done.txt")).toEqual({
+      kind: "drive-absolute",
+      root: "C:\\",
+      segments: ["Users", "dev", "project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("\\\\server\\share\\project\\signals/*\\done.txt")).toEqual({
+      kind: "unc-absolute",
+      root: "\\\\server\\share\\",
+      segments: ["project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("signals\\*\\done.txt")).toEqual({
+      kind: "relative",
+      root: "",
+      segments: ["signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("C:\\Users/dev\\project/signals\\*\\done.txt")).toEqual({
+      kind: "drive-absolute",
+      root: "C:\\",
+      segments: ["Users", "dev", "project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("/x/signals/done.txt", "posix")).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["x", "signals", "done.txt"],
+    });
+    expect(parsePortablePath("//x/share/done.txt", "posix")).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["x", "share", "done.txt"],
+    });
+  });
+
+  test("resolves each absolute root without flattening it into a relative string", () => {
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "signals\\*\\done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "relative",
+      root: "C:\\repo",
+      segments: ["signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "D:\\data\\signals\\*\\done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "drive-absolute",
+      root: "D:\\",
+      segments: ["data", "signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "/d/data/signals/*/done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "git-bash-absolute",
+      root: "D:\\",
+      segments: ["data", "signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "\\\\server\\share\\signals\\*\\done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "unc-absolute",
+      root: "\\\\server\\share\\",
+      segments: ["signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "/project",
+        "/x/signals/*/done.txt",
+        "posix",
+      ),
+    ).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["x", "signals", "*", "done.txt"],
+    });
+  });
+
+  test("matches wildcarded forward, backslash, mixed, and native absolute paths", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-until-file-"));
+    const signal = join(root, "signals", "record", "done.txt");
+    try {
+      mkdirSync(dirname(signal), { recursive: true });
+      writeFileSync(signal, "complete\n");
+
+      expect(fileSignalMet(root, "signals/*/done.txt")).toBe(true);
+      expect(fileSignalMet(root, "signals\\*\\done.txt")).toBe(true);
+      expect(fileSignalMet(root, "signals/*\\done.txt")).toBe(true);
+      expect(fileSignalMet(root, join(root, "signals", "*", "done.txt"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("tui-drive bounded Windows subprocesses", () => {
+  test("sanitized session-name collisions use distinct authenticated channels", () => {
+    expect(winSessionDir("a/b")).not.toBe(winSessionDir("a_b"));
+  });
+
+  test("the shared sync runner enforces its wall-clock timeout", () => {
+    const startedAt = Date.now();
+    const result = runBoundedCommand(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 10000)"],
+      100,
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.timedOut).toBe(true);
+    expect(result.errorCode).toBe("ETIMEDOUT");
+    expect(elapsedMs).toBeLessThan(2_000);
+  });
+
+  test("parent PID reuse cannot authorize children outside the recorded lifetime", () => {
+    const recordedRoot = {
+      pid: 4100,
+      parentPid: 100,
+      creationDate: "2026-08-24T08:00:00.000Z",
+      commandLine: "owned-root",
+    };
+    const legitimateChild = {
+      pid: 4101,
+      parentPid: 4100,
+      creationDate: "2026-08-24T08:00:01.000Z",
+      commandLine: "owned-child",
+    };
+    const reusedRoot = {
+      pid: 4100,
+      parentPid: 200,
+      creationDate: "2026-08-24T08:00:03.000Z",
+      commandLine: "unrelated-root",
+    };
+    const unrelatedChild = {
+      pid: 4102,
+      parentPid: 4100,
+      creationDate: "2026-08-24T08:00:03.100Z",
+      commandLine: "unrelated-child",
+    };
+
+    expect(
+      filterOwnedWindowsDescendants(
+        recordedRoot,
+        null,
+        [legitimateChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual([legitimateChild]);
+    expect(
+      filterOwnedWindowsDescendants(
+        recordedRoot,
+        reusedRoot,
+        [legitimateChild, unrelatedChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual([]);
+    expect(
+      filterOwnedWindowsDescendants(
+        recordedRoot,
+        null,
+        [unrelatedChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual([]);
+  });
+
+  test("authoritative spawn lifetimes cover fast exits without trusting a bare PID", () => {
+    const spawn = {
+      pid: 4150,
+      parentPid: 4100,
+      startedAfter: "2026-08-24T08:00:00.000Z",
+    };
+    const ownedChild = {
+      pid: 4151,
+      parentPid: 4150,
+      creationDate: "2026-08-24T08:00:00.100Z",
+      commandLine: "owned-child",
+    };
+    const preexistingChild = {
+      ...ownedChild,
+      pid: 4152,
+      creationDate: "2026-08-24T07:59:59.900Z",
+      commandLine: "preexisting-child",
+    };
+    const recycledChild = {
+      ...ownedChild,
+      pid: 4153,
+      creationDate: "2026-08-24T08:00:02.100Z",
+      commandLine: "recycled-child",
+    };
+    const recycledRoot = {
+      pid: 4150,
+      parentPid: 9000,
+      creationDate: "2026-08-24T08:00:02.050Z",
+      commandLine: "recycled-root",
+    };
+
+    expect(
+      filterSpawnOwnedWindowsDescendants(
+        spawn,
+        recycledRoot,
+        [ownedChild, preexistingChild, recycledChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual({ status: "ok", value: [ownedChild] });
+    expect(
+      filterSpawnOwnedWindowsDescendants(
+        spawn,
+        {
+          ...recycledRoot,
+          creationDate: "2026-08-24T08:00:01.000Z",
+        },
+        [ownedChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual({
+      status: "error",
+      message:
+        "target pid 4150 is still live or was reused inside its recorded lifetime",
+    });
+    expect(
+      filterSpawnOwnedWindowsDescendants(
+        spawn,
+        null,
+        [{ ...ownedChild, creationDate: "not-a-date" }],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual({
+      status: "error",
+      message:
+        "cannot verify child pid 4151 of target pid 4150: invalid creation time",
+    });
+  });
+
+  test("identity-less fast exits require stable ConPTY console membership", () => {
+    const legitimate = {
+      pid: 4201,
+      parentPid: 4200,
+      creationDate: "2026-08-24T08:00:00.100Z",
+      commandLine: "owned-child",
+    };
+    const unrelated = {
+      ...legitimate,
+      pid: 4202,
+      commandLine: "unrelated-recycled-child",
+    };
+
+    expect(
+      filterConsoleOwnedWindowsProcesses(
+        [4201, 4202],
+        [legitimate, unrelated],
+        [4201],
+      ),
+    ).toEqual([legitimate]);
+    expect(
+      filterConsoleOwnedWindowsProcesses([4201], [legitimate], []),
+    ).toEqual([]);
+    expect(newConsoleProcessIds([4201], [4202])).toEqual([4202]);
+    expect(
+      filterConsoleOwnedWindowsProcesses(
+        [4202],
+        [unrelated],
+        [4202],
+      ),
+    ).toEqual([unrelated]);
+  });
+
+  test("an exited or recycled ConPTY root never regains taskkill authority", () => {
+    const recorded = {
+      pid: 5100,
+      parentPid: 5000,
+      creationDate: "2026-08-24T08:00:00.000Z",
+      commandLine: "owned-child",
+    };
+    const recycled = {
+      ...recorded,
+      creationDate: "2026-08-24T08:01:00.000Z",
+      commandLine: "unrelated-child",
+    };
+
+    expect(
+      shouldForceKillWindowsChildRoot(undefined, recorded, recorded),
+    ).toBe(true);
+    expect(
+      shouldForceKillWindowsChildRoot(
+        "2026-08-24T08:00:30.000Z",
+        recorded,
+        recorded,
+      ),
+    ).toBe(false);
+    expect(
+      shouldForceKillWindowsChildRoot(undefined, recorded, recycled),
+    ).toBe(false);
   });
 });
 

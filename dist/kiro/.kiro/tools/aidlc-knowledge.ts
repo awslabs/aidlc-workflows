@@ -62,8 +62,6 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
-  activeIntent,
-  activeSpace,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditShardName,
@@ -78,7 +76,9 @@ import {
   listSpaces,
   readAtomicReplacedFileNoFollowOrThrow,
   readRegularFileNoFollowOrThrow,
+  resolveWorkflowSelection,
   readAuditShardEvents,
+  redactProjectDirPrefix,
   removeTreeSync,
   renameIntoPlace,
   resolveProjectDir,
@@ -1103,7 +1103,7 @@ export function resolveSpaceFlag(raw: string | undefined, projectDir: string): s
   // for the other ~14 call sites across the framework that read it, which is a
   // larger, separately-owned change.
   const raw_ = raw === undefined;
-  const candidate = raw ?? activeSpace(projectDir);
+  const candidate = raw ?? resolveWorkflowSelection(projectDir).space;
   const valid = validSpaceFlag(candidate);
   if (valid === null) {
     throw new Error(
@@ -3141,17 +3141,18 @@ function ensureDocumentRevisionAudit(
   state: DocumentAuditState = documentAuditState(projectDir, space),
 ): void {
   const projection = state.documents.get(row.id);
+  const auditSource = redactProjectDirPrefix(row.source.path, projectDir);
   if (
     projection?.latestRevision?.event !== "DOCUMENT_REMOVED" &&
     projection?.latestRevision?.digest === row.sha256 &&
-    projection.latestRevision.source === row.source.path
+    projection.latestRevision.source === auditSource
   ) return;
   if (projection?.seen) {
     const fields = {
       Space: space,
       Document: row.id,
       Change: "audit-repair",
-      Source: row.source.path,
+      Source: auditSource,
       Digest: row.sha256,
     };
     appendAuditEntryAtPathUnlocked(
@@ -3165,7 +3166,7 @@ function ensureDocumentRevisionAudit(
     const fields = {
       Space: space,
       Document: row.id,
-      Source: row.source.path,
+      Source: auditSource,
       Digest: row.sha256,
       ...(row.related_intent_ids === undefined
         ? {}
@@ -3189,12 +3190,13 @@ function ensureDocumentRemovalAudit(
 ): void {
   if (!isTombstoned(row)) return;
   const latest = state.documents.get(row.id)?.latestRevision;
+  const auditSource = redactProjectDirPrefix(row.source.path, projectDir);
   if (latest?.event === "DOCUMENT_REMOVED" &&
-      latest.source === row.source.path && latest.digest === row.sha256) return;
+      latest.source === auditSource && latest.digest === row.sha256) return;
   const fields = {
     Space: space,
     Document: row.id,
-    "Last Path": row.source.path,
+    "Last Path": auditSource,
     "Last Digest": row.sha256,
   };
   appendAuditEntryAtPathUnlocked(
@@ -3326,7 +3328,7 @@ export function resolveIntentFlag(
     // The bare flag means "the active one". An absent cursor is a refusal rather
     // than a guess: silently picking an intent would scope a document to whichever
     // one happened to be lying around.
-    const activeDir = activeIntent(projectDir, space);
+    const activeDir = resolveWorkflowSelection(projectDir, { space }).intent;
     if (activeDir === null) {
       throw new Error(
         `--intent was given with no value and this space has no active intent. Pass ` +
@@ -3702,14 +3704,15 @@ export function rebindDocument(
       writeMetadataTo(documentDir(projectDir, space, row.id), row);
       const auditState = documentAuditState(projectDir, space);
       const latestRevision = auditState.documents.get(row.id)?.latestRevision;
+      const auditSource = redactProjectDirPrefix(nextPath, projectDir);
       const hasRebindAudit = latestRevision?.event !== "DOCUMENT_REMOVED" &&
-        latestRevision?.source === nextPath && latestRevision.digest === digest;
+        latestRevision?.source === auditSource && latestRevision.digest === digest;
       if (!hasRebindAudit) {
         const fields = {
           Space: space,
           Document: row.id,
           Change: "rebound",
-          Source: nextPath,
+          Source: auditSource,
           Digest: digest,
         };
         appendAuditEntryAtPathUnlocked(

@@ -29,7 +29,7 @@
 //   - .sh Test 2  assert_eq "$FEAT" "32"     -> Test 2: execCount("feature") === 32 (exact).
 //   - .sh Test 3  mvp in 15..25              -> Test 3: 15 <= execCount("mvp") <= 25.
 //   - .sh Test 4  poc in 5..12               -> Test 4: 5 <= execCount("poc") <= 12.
-//   - .sh Test 5  assert_eq "$BUGFIX" "7"    -> Test 5: execCount("bugfix") === 7 (exact).
+//   - .sh Test 5  assert_eq "$BUGFIX" "9"    -> Test 5: execCount("bugfix") === 9 (exact).
 //   - .sh Test 6  refactor in 7..12          -> Test 6: 7 <= execCount("refactor") <= 12.
 //   - .sh Test 7  infra in 9..16             -> Test 7: 9 <= execCount("infra") <= 16.
 //   - .sh Test 8  security-patch deployment-pipeline=yes AND deployment-execution=yes
@@ -138,9 +138,9 @@ describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from
     expect(n).toBeLessThanOrEqual(12);
   });
 
-  // 5. Bugfix: exactly 7 (init+RE+req+codegen+build).
-  test("5: bugfix executes exactly 7 stages", () => {
-    expect(execCount("bugfix")).toBe(7);
+  // 5. Bugfix: exactly 9 (init+RE+req+codegen+build+deploy pipeline/execution).
+  test("5: bugfix executes exactly 9 stages", () => {
+    expect(execCount("bugfix")).toBe(9);
   });
 
   // 6. Refactor: range 7-12.

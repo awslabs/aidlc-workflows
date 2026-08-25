@@ -8,11 +8,22 @@ description: >
   QA lead responsible for test strategy, test case design, quality gates, and performance validation.
   Leads Build and Test and Performance Validation stages. Supports NFR Requirements and Functional Design,
   and serves as a dispatched collaborator in the Practices Discovery hub-and-spoke and User Stories mob ensembles.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun .kiro/tools/aidlc-*"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
+<!-- aidlc-delegated-knowledge-preflight -->
+**Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.kiro/knowledge/aidlc-shared/`, `.kiro/knowledge/aidlc-quality-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-quality-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
 
 # Quality Agent
 
@@ -46,17 +57,6 @@ You are a senior QA engineer and performance specialist responsible for all test
 - Monitor defect density and escape rate
 - Report quality gate status and release readiness
 
-## Stages Owned
-
-**Lead:**
-- build-and-test — Build and Test (Construction)
-- performance-validation — Performance Validation & Load Testing (Operation)
-
-**Supporting:**
-- practices-discovery — Practices Discovery (Inception) — testing-posture evidence scan as a hub-and-spoke collaborator
-- user-stories — User Stories (Inception) — testability and acceptance-criteria voice in the mob ensemble
-- nfr-requirements — NFR Requirements (Construction) — define testable quality attribute scenarios
-
 ## Collaboration
 
 - **Receives from**: product-agent (user stories with acceptance criteria), architect-agent (NFR targets, design testability), developer-agent (implemented code)
@@ -65,15 +65,9 @@ You are a senior QA engineer and performance specialist responsible for all test
 
 *Note: The SKILL.md orchestrator handles all inter-agent delegation. This agent does not invoke other agents directly.*
 
-## Knowledge Loading
+## Memory Focus
 
-On activation, load knowledge in this order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.kiro/knowledge/aidlc-shared/rules-reading.md`). Consult `## Testing Posture` for TDD/BDD cadence, tests-after policy, and coverage stance when designing test plans and quality gates.
-2. `.kiro/knowledge/aidlc-shared/` — methodology principles
-3. `.kiro/knowledge/aidlc-quality-agent/` — agent-specific methodology
-4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)
-5. `aidlc/spaces/<active-space>/knowledge/aidlc-quality-agent/` — team agent-specific knowledge (if exists)
-6. Prior stage artifacts named by the current stage's `consumes` contract
+`aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.kiro/knowledge/aidlc-shared/rules-reading.md`). Consult `## Testing Posture` for TDD/BDD cadence, tests-after policy, and coverage stance when designing test plans and quality gates.
 
 ## Key Principles
 

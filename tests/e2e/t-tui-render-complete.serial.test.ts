@@ -138,10 +138,10 @@ describe("t-tui-render statusline COMPLETE sentinel (seeded completed, no tokens
               `---- last pane ----\n${pane}\n-------------------`,
           );
         }
-        // EXACT sentinel + full 10-cell bar the branch should draw.
-        // P9: the orientation prefix ("<intent-slug> · ") precedes COMPLETE; the
-        // sentinel + full grid is the contract, so assert from COMPLETE onward.
-        expect(pane).toContain("COMPLETE [▓▓▓▓▓▓▓▓▓▓]");
+        // EXACT orientation separator + sentinel + full 10-cell bar.
+        expect(pane).toContain(
+          "[AIDLC] fixture · COMPLETE [▓▓▓▓▓▓▓▓▓▓]",
+        );
       } finally {
         drive(["kill", "--session", session]);
         cleanupTuiProject(sandbox);

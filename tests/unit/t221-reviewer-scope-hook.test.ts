@@ -375,7 +375,12 @@ function scratchProject(): string {
   mkdirSync(join(dir, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(dir, ".claude", "tools"), { recursive: true });
   cpSync(join(AIDLC_SRC, "hooks", "aidlc-reviewer-scope.ts"), join(dir, ".claude", "hooks", "aidlc-reviewer-scope.ts"));
-  for (const t of ["aidlc-lib.ts", "aidlc-runtime-paths.ts", "aidlc-audit.ts"]) {
+  for (const t of [
+    "aidlc-lib.ts",
+    "aidlc-artifact-vocabulary.ts",
+    "aidlc-runtime-paths.ts",
+    "aidlc-audit.ts",
+  ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
   mkdirSync(join(dir, "aidlc", "spaces", "default", "intents"), { recursive: true });

@@ -20,7 +20,7 @@ AI-DLC uses a two-tier knowledge system that separates framework methodology fro
 |   +-- ai-dlc-principles.md       # Core methodology principles
 |   +-- verification.md            # Phase boundary verification rules
 |   +-- brownfield.md              # Brownfield safeguards
-|   +-- audit-format.md            # 86-event audit taxonomy
+|   +-- audit-format.md            # 87-event audit taxonomy
 |   +-- knowledge-readme-template.md  # Optional README template a team can copy into Tier 2
 |   +-- state-template.md          # State file contract
 +-- aidlc-product-agent/
@@ -149,7 +149,7 @@ sequenceDiagram
 | 5 | `aidlc/knowledge/[agent]/` | 2 | Team | Mid |
 | 6 | Prior stage artifacts | -- | Dynamic | Last |
 
-> **Note:** Steps 1-5 are agent knowledge loading (defined in each agent file). Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
+> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5. Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
 
 ### What Each Layer Contributes
 

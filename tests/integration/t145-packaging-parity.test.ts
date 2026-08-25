@@ -29,6 +29,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -63,15 +64,40 @@ function makeFixture(harness: string, sourceHarness = harness): string {
   const root = mkdtempSync(join(tmpdir(), "aidlc-package-contract-"));
   copyDir(join(REPO_ROOT, "core"), join(root, "core"));
   copyDir(join(REPO_ROOT, "scripts"), join(root, "scripts"));
+  cpSync(join(REPO_ROOT, "package.json"), join(root, "package.json"));
+  cpSync(join(REPO_ROOT, "bun.lock"), join(root, "bun.lock"));
   mkdirSync(join(root, "harness"), { recursive: true });
   copyDir(join(REPO_ROOT, "harness", sourceHarness), join(root, "harness", harness));
   // Emitter imports (notably smol-toml) resolve from the checkout, not from
   // Bun's mutable global package cache.
-  symlinkSync(
-    join(REPO_ROOT, "node_modules"),
-    join(root, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  const nodeModules = join(REPO_ROOT, "node_modules");
+  if (existsSync(nodeModules)) {
+    symlinkSync(
+      nodeModules,
+      join(root, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  } else if (sourceHarness === "codex") {
+    const cache = spawnSync(process.execPath, ["pm", "cache"], {
+      encoding: "utf-8",
+    });
+    const cacheRoot = (cache.stdout ?? "").trim();
+    const packageJson = JSON.parse(
+      readFileSync(join(REPO_ROOT, "package.json"), "utf-8"),
+    ) as { devDependencies?: Record<string, string> };
+    const version = packageJson.devDependencies?.["smol-toml"];
+    const cached =
+      cache.status === 0 && version
+        ? readdirSync(cacheRoot).find((name) =>
+            name.startsWith(`smol-toml@${version}`),
+          )
+        : undefined;
+    if (!cached) throw new Error("smol-toml is unavailable in Bun's package cache");
+    copyDir(
+      join(cacheRoot, cached),
+      join(root, "node_modules", "smol-toml"),
+    );
+  }
   if (harness === sourceHarness) {
     mkdirSync(join(root, "dist"), { recursive: true });
     copyDir(join(REPO_ROOT, "dist", harness), join(root, "dist", harness));

@@ -37,17 +37,13 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-delivery-agent persona from `agents/aidlc-delivery-agent.md` and knowledge from `.aidlc/knowledge/aidlc-delivery-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read scope definition from `<record>/ideation/scope-definition/`
 - Read feasibility assessment and constraint register (if exist)
 - Read intent backlog for work volume estimation
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/ideation/team-formation/team-formation-questions.md` with questions:
 - What teams and individuals are available?
@@ -61,21 +57,21 @@ Create `<record>/ideation/team-formation/team-formation-questions.md` with quest
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Run gap analysis between required skills and available skills.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create team availability assessment, skill matrix (with gap analysis), mob composition plan, RACI matrix, capacity allocation agreement, skill gap remediation plan, and onboarding checklist.
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .aidlc/tools/aidlc-orchestrate.ts report --stage team-formation --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :people_holding_hands:
 Review path: `<record>/ideation/team-formation/`

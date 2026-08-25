@@ -1,6 +1,6 @@
 # Scopes
 
-A scope is the dial that decides *which* of the framework's 33 stages run for a given kind of work, and which sit out. A bugfix doesn't need market research or a deployment pipeline; a regulated enterprise feature needs all of it. Rather than asking the user to hand-pick stages every time, AI-DLC ships eleven named scopes — each one a curated EXECUTE/SKIP verdict over the full stage set, paired with workflow defaults such as depth, test strategy, and an optional review ceiling. Pick the scope and the rest cascades.
+A scope is the dial that decides *which* of the framework's 33 stages run for a given kind of work, and which sit out. A bugfix doesn't need market research or environment provisioning, but it still runs the deployment pipeline and execution stages; a regulated enterprise feature needs the full lifecycle. Rather than asking the user to hand-pick stages every time, AI-DLC ships eleven named scopes — each one a curated EXECUTE/SKIP verdict over the full stage set, paired with workflow defaults such as depth, test strategy, and an optional review ceiling. Pick the scope and the rest cascades.
 
 For a harness engineer, a scope is pure data, authored the same way every other primitive is — as a file. It is two halves: one `core/scopes/aidlc-<name>.md` file (its identity, routing metadata, and workflow defaults) plus a per-stage membership tag (each stage's frontmatter `scopes:` list naming the scopes it runs under). Adding or tuning a scope requires no TypeScript. This chapter walks the workflow: what a scope is made of, how to add a team scope, how to tune an existing one, and what the tooling checks for you versus what it leaves to you.
 
@@ -36,7 +36,7 @@ The scope frontmatter fields are:
 | `depth` | Yes | The default detail level — `Minimal`, `Standard`, or `Comprehensive`. |
 | `testStrategy` | No | Overrides test volume independent of depth. Defaults to matching `depth`. |
 | `review_cap` | No | Maximum review class under this scope: `adversarial`, `advisory`, or `none`. Absence means no scope-level lowering. A cap can lower but never raise a stage's `review_class`; autonomous swarm reviews retain the stage's declared class. |
-| `keywords` | No | Natural-language triggers for `/aidlc <freeform text>` auto-detection. Empty list opts out. |
+| `keywords` | No | Natural-language triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form; an empty list opts out. |
 | `description` | No | The one-liner rendered in `/aidlc --help`. (The compiled scope-table in SKILL.md shows only Scope / Depth / TestStrategy / EXECUTE / Total, leaving the description out.) |
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
 | `runner` | No | `true` includes the scope in the default generated scope-runner set. |

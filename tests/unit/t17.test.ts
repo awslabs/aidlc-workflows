@@ -568,8 +568,8 @@ describe("t17 advance validation", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     runState(proj, ["set", "Scope=bugfix"]);
-    // bugfix's last in-scope stage is build-and-test.
-    const r = runState(proj, ["advance", "build-and-test"]);
+    // bugfix's last in-scope stage is deployment-execution.
+    const r = runState(proj, ["advance", "deployment-execution"]);
     expect(r.rc).toBe(1);
     expect(r.combined).toContain("complete-workflow");
   });

@@ -20,22 +20,22 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 607,
+    "total": 661,
     "enumeratedByClass": {
-      "function": 345,
-      "audit": 86,
+      "function": 397,
+      "audit": 87,
       "scope": 11,
       "stage": 33,
-      "hook": 17,
+      "hook": 18,
       "subcommand": 108,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 171,
-      "audit": 44,
+      "function": 206,
+      "audit": 46,
       "scope": 11,
       "stage": 11,
-      "hook": 17,
+      "hook": 18,
       "subcommand": 96,
       "render-surface": 7
     }
@@ -106,8 +106,13 @@
       "unitClass": "audit",
       "unitId": "BOLT_STARTED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -431,6 +436,10 @@
         {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t323-review-verdict-closure.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -500,6 +509,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t92.test.ts",
           "mechanism": "cli"
         }
@@ -514,6 +527,10 @@
         {
           "file": "tests/e2e/t-tui-custom-harness.serial.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -718,6 +735,18 @@
       "coveredBy": [
         {
           "file": "tests/e2e/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SWARM_SOURCE_MERGED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1268,6 +1297,27 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:BLOCKING_SENSOR_OVERRIDE_CHOICE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BLOCKING_SENSOR_OVERRIDE_DECISION",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BLOCKING_SENSOR_OVERRIDE_OPTIONS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:BOLT_SLUG_MAX_LENGTH",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1343,7 +1393,15 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1430,6 +1488,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1630,6 +1695,54 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:currentStageSourceBaseline",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentSwarmAttemptObligations",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentSwarmSourceMergeChain",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentSwarmSourceOpeningFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:currentUnitLifecycleMode",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1718,6 +1831,18 @@
         {
           "file": "tests/unit/t294-document-extractors-seam.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:effectivePlanAction",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-stage-validity-propagation.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -1984,6 +2109,14 @@
         {
           "file": "tests/unit/t291-review-receipt-recovery.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2001,6 +2134,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:gitCommitSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-source-freshness-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2097,6 +2242,18 @@
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookChildEnv",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -2229,6 +2386,13 @@
     {
       "unitClass": "function",
       "unitId": "function:intentsRegistryPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:intentUuidForSelection",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2975,6 +3139,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseStageFrontmatter",
       "minMechanism": "none",
       "coveredBy": [
@@ -3200,7 +3371,27 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readBaselineSourceSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3234,6 +3425,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readSessionBinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3253,10 +3456,41 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readStateFile",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readUnitSourceManifest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readUnitSourceSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3309,6 +3543,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recoveryGuidance",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:redactProjectDirPrefix",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:refreshActiveDirectiveMarker",
       "minMechanism": "none",
       "coveredBy": [
@@ -3353,6 +3611,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:relativeRecordDirForSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3468,6 +3733,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:resolveAuditProjectPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveAuditWorktreePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:resolveBirthRepoSet",
       "minMechanism": "none",
       "coveredBy": [
@@ -3568,6 +3857,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:resolveSessionIdFromAncestry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:resolveStage",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3576,6 +3877,29 @@
     {
       "unitClass": "function",
       "unitId": "function:resolveUniqueIntentDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveWorkflowSelection",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-orchestrate-session-binding.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:restrictSourceListing",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3759,10 +4083,36 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:serializeSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SESSION_INTENT_HANDOFF_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sessionPidMapDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SessionResolutionConflictError",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3903,6 +4253,56 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:sourceBaselineAuditFields",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceClaimCovers",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceListingEntriesEqual",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceListingSha256",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourcePathKey",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SPACE_NAME_REGEX",
       "minMechanism": "none",
       "coveredBy": [
@@ -4002,6 +4402,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:stateFilePathForSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:STOP_HOOK_PROBE_ENV",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4036,6 +4443,42 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SUMMARY_CONFIRMATION_HASH_SCOPE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryConfirmationAnswer",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryConfirmationContentHash",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4189,6 +4632,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitSourceFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:updateCopilotStopCount",
       "minMechanism": "none",
       "coveredBy": [
@@ -4207,6 +4657,18 @@
         {
           "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:usesStageLevelPerUnitArtifacts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-stage-validity-propagation.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -4291,12 +4753,36 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:validSessionId",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:validSpaceFlag",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/unit/t286-read-write-boundary.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:visibleMarkdownLines",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4354,6 +4840,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:workspaceSourceExclusionPathspecs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:workspaceSourceFingerprint",
       "minMechanism": "none",
       "coveredBy": [
@@ -4363,6 +4861,37 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:workspaceSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:workspaceSourcePathIsExcluded",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:workspaceSourceState",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4418,6 +4947,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeBaselineSourceSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeBufferAtomic",
       "minMechanism": "none",
       "coveredBy": [
@@ -4449,6 +4990,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeSessionBinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4468,10 +5021,57 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeSessionPidAncestry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionPidEntry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeStateFile",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeUnitSourceSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",
@@ -4645,6 +5245,14 @@
         {
           "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4704,6 +5312,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
           "mechanism": "cli"
         },
         {
@@ -4850,6 +5462,18 @@
       "status": "covered"
     },
     {
+      "unitClass": "hook",
+      "unitId": "review-freeze-command",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
       "unitClass": "render-surface",
       "unitId": "statusline-agent-name",
       "minMechanism": "tui",
@@ -4949,6 +5573,10 @@
         {
           "file": "tests/e2e/t-tui-t50-bugfix-scope.serial.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
         },
         {
           "file": "tests/e2e/t52-workflow-state-progression.test.ts",
@@ -5106,6 +5734,10 @@
       "unitId": "refactor",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t130-scope-runners.test.ts",
           "mechanism": "cli"
@@ -5809,6 +6441,10 @@
           "mechanism": "none"
         },
         {
+          "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/e2e/t56-workflow-forward-jump.test.ts",
           "mechanism": "sdk"
         },
@@ -6103,6 +6739,22 @@
         {
           "file": "tests/unit/t291-review-receipt-recovery.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t323-review-verdict-closure.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6218,6 +6870,10 @@
       "unitId": "aidlc-sensor fire",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t92.test.ts",
           "mechanism": "cli"
@@ -6394,6 +7050,10 @@
       "unitId": "aidlc-state gate-start",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t47-failure-injection.test.ts",
           "mechanism": "cli"
@@ -6779,6 +7439,14 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t317-gate-pending-doctor.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t324-doctor-hooks-disabled.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t37.test.ts",
           "mechanism": "cli"
         },
@@ -6883,6 +7551,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
@@ -6933,6 +7605,10 @@
         {
           "file": "tests/integration/t21b.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t191-composed-scope-write.test.ts",
@@ -7103,6 +7779,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
@@ -7132,6 +7812,10 @@
         },
         {
           "file": "tests/integration/t175-space-create-memory-isolation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
           "mechanism": "cli"
         },
         {

@@ -28,6 +28,7 @@ import {
   createTestProject,
   seedAuditFile,
   seedBoltDagBatches,
+  seededAuditDir,
   seededRecordDir,
   seedStateFile,
   seededStateFile,
@@ -61,7 +62,13 @@ function runReview(
     [LOG_TOOL, "review", ...args],
     {
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...extraEnv },
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        ...extraEnv,
+      },
     }
   );
   return {
@@ -97,11 +104,68 @@ function seedProject(scope: "bugfix" | "feature"): string {
       readFileSync(sf, "utf8").replace(
         "- **Scope**: bugfix",
         "- **Scope**: feature"
-      )
+      ).replace(
+        "- [S] units-generation — SKIP (bugfix scope)",
+        "- [ ] units-generation — EXECUTE",
+      ),
     );
   }
   seedBoltDagBatches(proj, [["unit-alpha"]]);
+  const stageArtifacts: Array<[string, string[]]> = [
+    [
+      join(seededRecordDir(proj), "inception", "requirements-analysis"),
+      ["requirements.md", "requirements-analysis-questions.md"],
+    ],
+    [
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "unit-alpha",
+        "functional-design",
+      ),
+      ["entities.md", "rules.md", "functional-spec.md", "traceability.json"],
+    ],
+    [
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "unit-alpha",
+        "code-generation",
+      ),
+      [
+        "code-generation-plan.md",
+        "unit-test-instructions.md",
+        "code-summary.md",
+        "traceability.json",
+      ],
+    ],
+  ];
+  for (const [dir, names] of stageArtifacts) {
+    mkdirSync(dir, { recursive: true });
+    for (const name of names) {
+      writeFileSync(join(dir, name), `# ${name}\n`, "utf-8");
+    }
+  }
   return proj;
+}
+
+function writeSourceManifest(proj: string, unit: string): void {
+  const dir = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "code-generation",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "source-manifest.json"),
+    `${JSON.stringify(
+      { stage: "code-generation", unit, version: 1, writes: [] },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
 }
 
 function writeReviewedArtifact(
@@ -122,10 +186,74 @@ function writeReviewedArtifact(
       : "code-generation-plan.md",
   );
   writeFileSync(path, content, "utf-8");
+  if (stage === "code-generation" && unit) {
+    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      `\`\`\`yaml\nunits:\n  - name: ${unit}\n    depends_on: []\n\`\`\`\n`,
+      "utf-8",
+    );
+    writeSourceManifest(proj, unit);
+  }
   return path;
 }
 
 describe("t271 review iteration ceiling", () => {
+  test("autonomous and historical Bolt boundaries cannot authorize a ghost unit", () => {
+    for (const autonomy of [false, true]) {
+      const proj = seedProject("feature");
+      writeReviewedArtifact(proj, "code-generation", "plan\n", "unit-alpha");
+      if (autonomy) {
+        const state = seededStateFile(proj);
+        writeFileSync(
+          state,
+          `${readFileSync(state, "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
+        );
+      }
+      appendAuditEntry("BOLT_STARTED", {
+        "Bolt names": "ghost",
+        "Batch number": "1",
+        "Walking skeleton": "false",
+        "Bolt slug": "ghost",
+      }, proj);
+      const ghost = runReview(proj, [
+        "--stage", "code-generation",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--unit", "ghost",
+        "--iteration", "1",
+      ]);
+      expect(ghost.status).not.toBe(0);
+      expect(ghost.stderr).toContain("not present in the authoritative unit DAG");
+    }
+  });
+
+  test("a fresh STAGE_STARTED clears an earlier cross-shard boundary ambiguity", () => {
+    const proj = seedProject("feature");
+    const auditDir = seededAuditDir(proj);
+    mkdirSync(auditDir, { recursive: true });
+    const tieSecond = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    const block = (event: string, extra: string) =>
+      `# AI-DLC Audit Log\n\n## ${event}\n**Timestamp**: ${tieSecond}\n**Event**: ${event}\n${extra}\n---\n`;
+    writeFileSync(join(auditDir, "tie-a.md"), block("WORKFLOW_STARTED", "**Scope**: feature"));
+    writeFileSync(
+      join(auditDir, "tie-b.md"),
+      block("GATE_REJECTED", "**Stage**: requirements-analysis"),
+    );
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "requirements-analysis",
+      Agent: "aidlc-product-agent",
+    }, proj);
+    const review = runReview(proj, [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ]);
+    expect(review.status).toBe(0);
+  });
+
   test("advisory stage: iteration 1 passes, iteration 2 refused with terminal guidance", () => {
     const proj = seedProject("feature"); // requirements-analysis declares advisory
     const ok = runReview(proj, [
@@ -200,8 +328,9 @@ describe("t271 review iteration ceiling", () => {
 
     const spent = runReview(proj, [...base, "--iteration", "3"]);
     expect(spent.status).not.toBe(0);
-    expect(spent.stderr).toContain("stale-receipt recovery review pass was already spent");
+    expect(spent.stderr).toContain("one recovery review was already used");
     expect(spent.stderr).toContain("human Request Changes decision");
+    expect(spent.stderr).toContain("human's behalf");
   });
 
   test("adversarial stale receipt gets one recovery request after the full budget", () => {
@@ -287,7 +416,7 @@ describe("t271 review iteration ceiling", () => {
     ]);
     expect(retry.status).not.toBe(0);
     expect(retry.stderr).toContain(
-      "stale-receipt recovery review pass was already spent",
+      "one recovery review was already used",
     );
     expect(retry.stderr).not.toContain("Start the one recovery pass");
   });
@@ -352,6 +481,13 @@ describe("t271 review iteration ceiling", () => {
 
   test("inline per-unit reviews remain subject to scope caps", () => {
     const proj = seedProject("bugfix");
+    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: unit-alpha\n    depends_on: []\n```\n",
+      "utf-8",
+    );
     const ok = runReview(proj, [
       "--stage", "functional-design",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -393,6 +529,7 @@ describe("t271 review iteration ceiling", () => {
       "Walking skeleton": "false",
       "Bolt slug": "unit-alpha",
     }, proj);
+    writeSourceManifest(proj, "unit-alpha");
     for (const iteration of ["1", "2"]) {
       const request = [
         "--stage", "code-generation",
@@ -446,6 +583,7 @@ describe("t271 review iteration ceiling", () => {
       "Walking skeleton": "false",
       "Bolt slug": "unit-alpha",
     }, proj);
+    writeSourceManifest(proj, "unit-alpha");
 
     const graph = JSON.parse(readFileSync(STAGE_GRAPH, "utf-8")) as Array<Record<string, unknown>>;
     const codeGeneration = graph.find((stage) => stage.slug === "code-generation");
@@ -665,7 +803,7 @@ describe("t271 review iteration ceiling", () => {
     expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
   });
 
-  test("--unit requires membership in an authoritative DAG", () => {
+  test("--unit requires an authoritative DAG or a matching active Bolt", () => {
     const noDag = createTestProject();
     seedStateFile(noDag, "state-mid-inception.md");
     seedAuditFile(noDag);
@@ -683,16 +821,18 @@ describe("t271 review iteration ceiling", () => {
     const boltBacked = createTestProject();
     seedStateFile(boltBacked, "state-mid-inception.md");
     seedAuditFile(boltBacked);
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "code-generation",
+    }, boltBacked);
     appendAuditEntry("BOLT_STARTED", {
       "Bolt names": "2fa",
       "Batch number": "1",
       "Walking skeleton": "false",
       "Bolt slug": boltSlugForUnit("2fa"),
     }, boltBacked);
-    appendAuditEntry("STAGE_STARTED", {
-      Stage: "code-generation",
-    }, boltBacked);
-    expect(runReview(boltBacked, [...base, "--unit", "2fa"]).status).toBe(0);
+    writeSourceManifest(boltBacked, "2fa");
+    const boltReview = runReview(boltBacked, [...base, "--unit", "2fa"]);
+    expect(boltReview.status, boltReview.stderr).toBe(0);
 
     const mismatchedBolt = createTestProject();
     seedStateFile(mismatchedBolt, "state-mid-inception.md");
@@ -728,6 +868,7 @@ describe("t271 review iteration ceiling", () => {
     const unknown = runReview(proj, [...base, "--unit", "ghost"]);
     expect(unknown.status).not.toBe(0);
     expect(unknown.stderr).toContain("not present in the authoritative unit DAG");
+    writeSourceManifest(proj, "unit-alpha");
     expect(runReview(proj, [...base, "--unit", "unit-alpha"]).status).toBe(0);
   });
 

@@ -111,7 +111,7 @@ When Build and Test (3.6) diagnoses a failure whose ROOT CAUSE lies in the
 generated code or an approach chosen at code-generation (not in this stage's
 own test/build scaffolding), the workflow may return to code-generation and
 repair it rather than writing the approach off or dead-ending at the gate.
-The stage's Step 10 failure-escalation ladder decides WHEN this fires; this
+The stage's Step 9 failure-escalation ladder decides WHEN this fires; this
 subsection defines HOW. It is a sanctioned exception to the NO EMERGENT
 BEHAVIOR RULE (like the revision escape hatch) and to Critical-checklist
 item 5's "complete the current stage before jumping": a failed build-and-test
@@ -166,7 +166,7 @@ impact-estimated fix identified):
    6).
 4. Build and Test then re-runs naturally on the forward replay; choose Modify
    at its own Artifact Re-use prompt (never Redo — it would erase the
-   Loop-Back Log) and re-execute Step 10 fresh.
+   Loop-Back Log) and re-execute Step 9 fresh.
 
 **Re-entry settlement and review.** Backward jumps preserve artifacts, but the
 route depends on whether code-generation has ever used the unit lifecycle
@@ -343,7 +343,12 @@ prepare`:
    ```
 
    Then include the full approved `code-generation-plan.md` and
-   `unit-test-instructions.md`. The approved Testing Contract is authoritative:
+   `unit-test-instructions.md`. The worker must produce the unit's
+   `construction/<unit>/code-generation/source-manifest.json` in the worktree,
+   listing every application-source path it creates, modifies, or deletes,
+   before the in-Bolt review. Because a Bolt is the single selected repository,
+   these paths are worktree-relative and omit `repo` even when the parent intent
+   records multiple repositories. The approved Testing Contract is authoritative:
    workers do not re-resolve memory, and retries reuse the same approved bytes.
    The plan-approval guard rejects a delegated worker whose marker is missing,
    stale, or different from the approved plan. Headless worker harnesses that

@@ -147,6 +147,9 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
     expect(stage).toContain("Every substantive claim block");
     expect(stage).toContain("## Assumptions & Open Questions");
     expect(stage).toContain("Do not invoke the reviewer");
+    expect(stage).toContain("post-summary confirmation to a blank");
+    expect(stage).toContain("record a fresh standard");
+    expect(stage).toContain("reuse that single section");
 
     const reviewer = readFileSync(PRODUCT_LEAD, "utf-8");
     expect(reviewer).toContain("## Intent Capture Grounding Review");

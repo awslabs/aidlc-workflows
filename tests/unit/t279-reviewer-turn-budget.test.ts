@@ -195,16 +195,14 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
   });
 
   test("kiro agent JSONs never receive the cap key (kiro-cli fail-closes on unknown agent-JSON fields)", () => {
-    for (const distName of ["kiro", "kiro-ide"]) {
-      const rosterDir = join(REPO_ROOT, "dist", distName, ".kiro", "agents");
-      for (const f of readdirSync(rosterDir).filter((n) => n.endsWith(".json"))) {
-        const body = readFileSync(join(rosterDir, f), "utf-8");
-        expect(body, `dist/${distName} ${f}`).not.toContain("maxTurns");
-      }
+    const rosterDir = join(REPO_ROOT, "dist", "kiro", ".kiro", "agents");
+    for (const f of readdirSync(rosterDir).filter((n) => n.endsWith(".json"))) {
+      const body = readFileSync(join(rosterDir, f), "utf-8");
+      expect(body, `dist/kiro ${f}`).not.toContain("maxTurns");
     }
   });
 
-  test("reviewer module §12a step 1 DELETES any existing ## Review section before EVERY dispatch (core + dist/claude)", () => {
+  test("reviewer module §12a step 1 records the request before deleting an existing ## Review section (core + dist/claude)", () => {
     // The stale-READY hole: a stage passes review READY; the human rejects at
     // the gate; the builder revises a produces[] artifact; the re-review is
     // itself cut off before writing - and the artifact still carries the
@@ -219,12 +217,18 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     ]) {
       const body = readFileSync(path, "utf-8");
       const labelled = `${path}\n${body}`;
-      expect(labelled).toMatch(/Invoke reviewer sub-agent\.\*\* Before dispatching - on every dispatch, not only the first/);
+      expect(labelled).toMatch(
+        /Invoke reviewer sub-agent\.\*\* Before every dispatch, not only the first,[\s\S]*before changing an existing `## Review` section,[\s\S]*record the request/,
+      );
+      expect(labelled).toContain("Before every dispatch, not only the first");
+      expect(labelled).toContain(
+        "validated pending recovery request suspends the",
+      );
       expect(labelled).toContain("DELETE that section");
       expect(labelled).toMatch(/review history lives in the audit ledger/i);
       // The Part 0 revision-path paragraph names step 1's delete rule as what
       // protects it.
-      expect(labelled).toContain("delete-before-dispatch rule removes the");
+      expect(labelled).toContain("request-first delete rule removes the stale");
       // Negative pin: the rename mechanism must not come back - superseded
       // sections leak reviewer prose into the claim-sources sensor scan.
       expect(labelled).not.toContain("## Review (superseded)");
@@ -252,7 +256,15 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       // The incomplete-attempt path: retry the SAME unmatched request once,
       // consuming no iteration (the advisory budget is one pass - counting a
       // cut-off attempt would exhaust it without any review happening).
-      expect(labelled).toMatch(/On an incomplete attempt:[\s\S]*?`--retry-pending`[\s\S]*?consumes no review iteration/);
+      expect(labelled).toMatch(
+        /On an incomplete attempt:[\s\S]*?Count reviewer dispatches, not fingerprint rebind rows/,
+      );
+      expect(labelled).toContain(
+        "A prior fingerprint rebind does not consume this re-dispatch allowance",
+      );
+      expect(labelled).toMatch(
+        /neither use consumes a review iteration/,
+      );
       expect(labelled).toMatch(/re-dispatch it exactly once/);
       // The second incomplete attempt records the terminal receipt with the
       // named finding and routes per review class.
@@ -260,14 +272,14 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toMatch(/record the terminal receipt with `--verdict NOT-READY`/);
       expect(labelled).toMatch(/on `advisory` it is terminal/);
       expect(labelled).toMatch(/skip the lead re-invoke/);
-      expect(labelled).toMatch(/never deadlocks/);
+      expect(labelled).toMatch(/never presented on \(or deadlocked by\)/);
       // The turn cap is named as the reachable cause of a missing section.
       expect(labelled).toMatch(/hard turn cap/);
       // The complete-review receipt sentence survives verbatim - it was
       // silently dropped once in a rebase (PR #613 round 2, P1) and nothing
       // pinned it; now something does.
-      expect(labelled).toContain(
-        "record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>`",
+      expect(labelled).toMatch(
+        /record\s+the terminal receipt with the same `aidlc-log\.ts review` command plus\s+`--verdict <READY\|NOT-READY>`/,
       );
       // Step 1's dispatch-failure contract now names the incomplete attempt
       // as a retry-pending cause too.
@@ -312,9 +324,15 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
         "utf-8",
       );
       const labelled = `harness ${harness.name} module\n${module}`;
-      // Delete-before-dispatch, on every dispatch.
+      // Request-first, then delete, on every dispatch.
       expect(labelled).toContain("DELETE that section");
-      expect(labelled).toContain("on every dispatch, not only the first");
+      expect(labelled).toContain(
+        "before changing an existing `## Review` section",
+      );
+      expect(labelled).toContain("Before every dispatch, not only the first");
+      expect(labelled).toContain(
+        "validated pending recovery request suspends the",
+      );
       // Canonical-verdict validation.
       expect(labelled).toContain("exactly ONE current `## Review` section");
       expect(labelled).toMatch(/exactly one canonical token, READY or NOT-READY/);
@@ -323,6 +341,9 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toMatch(/no\s+current `## Review` section/);
       expect(labelled).toContain("`--retry-pending`");
       expect(labelled).toContain("re-dispatch it exactly once");
+      expect(labelled).toMatch(
+        /\*\*fingerprint rebind\*\*, not a\s+reviewer re-dispatch/,
+      );
       // The review-class contract is present on every harness - including
       // Copilot, which shipped without it (its bullet predated #718 and the
       // six-harness test lists never caught it).

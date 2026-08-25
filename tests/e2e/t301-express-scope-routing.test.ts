@@ -209,7 +209,7 @@ function runThroughBuild(p: string): void {
   )).toBe(true);
   approve(p, "build-and-test", [
     "construction/build-and-test/build-and-test-summary.md",
-    "construction/build-and-test/build-test-results.md",
+    "construction/build-and-test/test-results.md",
   ]);
   expect(stateField(p, "Lifecycle Phase")).toBe("OPERATION");
 }

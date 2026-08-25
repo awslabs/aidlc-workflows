@@ -13,9 +13,10 @@
 //                                      `aidlc-` prefix and before `.md`
 //   - kind: "deterministic"         — required; sole accepted value today
 //   - command: string               — required; sensor invocation
-//   - default_severity: "advisory"  — required; sole accepted value today
+//   - default_severity: enum        — required; "advisory" | "blocking"
 //   - description: string           — required; one-line capability summary
 //   - category: string              — optional grouping label
+//   - fire_on: enum                  — optional; "write" | "gate" (default write)
 //   - input_schema: object          — optional invocation contract
 //   - output_schema: object         — optional return contract
 //   - timeout_seconds: number       — optional execution budget
@@ -31,9 +32,10 @@ export interface SensorManifest {
   id: string;
   kind: "deterministic";
   command: string;
-  default_severity: "advisory";
+  default_severity: "advisory" | "blocking";
   description: string;
   category?: string;
+  fire_on: "write" | "gate";
   input_schema?: Record<string, unknown>;
   output_schema?: Record<string, unknown>;
   timeout_seconds?: number;
@@ -76,6 +78,8 @@ export function parseSensorManifest(raw: string): SensorManifest {
   if (description !== "") obj.description = description;
   const category = scalarField(fm, "category");
   if (category !== "") obj.category = category;
+  const fireOn = scalarField(fm, "fire_on");
+  obj.fire_on = fireOn === "" ? "write" : fireOn;
   const matches = scalarField(fm, "matches");
   if (matches !== "") obj.matches = matches;
   const timeout = scalarField(fm, "timeout_seconds");
@@ -110,11 +114,9 @@ function requireNonEmptyString(
   }
 }
 
-// Helper: throw if obj[field] !== expected. Centralises the literal-
-// match check used for kind ("deterministic") and default_severity
-// ("advisory"). Optional `hint` appends a trailing clause to the
-// thrown message (e.g., "; other kinds reserved for future releases").
-function requireExactValue<K extends "kind" | "default_severity">(
+// Helper: throw if obj[field] !== expected. Optional `hint` appends a trailing
+// clause to the thrown message (e.g., "; other kinds reserved for future releases").
+function requireExactValue<K extends "kind">(
   obj: SensorManifest,
   field: K,
   expected: SensorManifest[K],
@@ -125,6 +127,20 @@ function requireExactValue<K extends "kind" | "default_severity">(
     const tail = hint ? `; ${hint}` : "";
     throw new Error(
       `${file}: ${field} must be "${expected}" (got "${obj[field]}")${tail}`,
+    );
+  }
+}
+
+function requireEnumValue<K extends "default_severity" | "fire_on">(
+  obj: SensorManifest,
+  field: K,
+  allowed: readonly SensorManifest[K][],
+  file: string,
+): void {
+  if (!allowed.includes(obj[field])) {
+    throw new Error(
+      `${file}: ${field} must be one of: ${allowed.map((v) => `"${v}"`).join(", ")} ` +
+        `(got "${obj[field]}")`,
     );
   }
 }
@@ -174,7 +190,13 @@ export function validateSensorManifest(
     "other kinds reserved for future releases",
   );
   requireNonEmptyString(obj, "command", file);
-  requireExactValue(obj, "default_severity", "advisory", file);
+  requireEnumValue(
+    obj,
+    "default_severity",
+    ["advisory", "blocking"],
+    file,
+  );
+  requireEnumValue(obj, "fire_on", ["write", "gate"], file);
   requireNonEmptyString(obj, "description", file);
 
   if (obj.matches !== undefined) {

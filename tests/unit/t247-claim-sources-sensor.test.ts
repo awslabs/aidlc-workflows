@@ -109,6 +109,28 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings_count).toBe(0);
   });
 
+  test("inline comments do not break source and assumption section headings", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-capture-questions.md",
+      "## Sources",
+      "## Sour<!-- source heading -->ces",
+    );
+    for (const file of ["intent-statement.md", "stakeholder-map.md"]) {
+      replaceInFile(
+        dir,
+        file,
+        "## Assumptions & Open Questions",
+        "## Assumptions & Open <!-- assumptions heading -->Questions",
+      );
+    }
+
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
   test("questions-file-first write passes until a deliverable exists", () => {
     const dir = mkdtempSync(join(tmpdir(), "aidlc-t247-scaffold-"));
     tempDirs.push(dir);
@@ -225,6 +247,27 @@ describe("t247 claim-sources sensor", () => {
     const accepted = run(dir, "intent-capture-questions.md");
     expect(accepted.pass).toBe(true);
     expect(accepted.findings).toEqual([]);
+  });
+
+  test("inline comments do not break assumption confirmation", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      readFileSync(questionsPath, "utf-8") +
+        "\n\n## Assumption <!-- heading -->Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept <!-- answer -->assumptions\n",
+      "utf-8",
+    );
+
+    const result = run(dir, "intent-capture-questions.md");
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
   });
 
   test("a stale confirmation cannot accept a different assumption set", () => {

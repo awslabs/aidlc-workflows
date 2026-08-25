@@ -348,6 +348,7 @@ function scratchProject(): string {
   );
   for (const t of [
     "aidlc-lib.ts",
+    "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-audit.ts",
     "aidlc-testing-posture.ts",
@@ -733,5 +734,18 @@ describe("t265c registrations", () => {
       "utf-8",
     );
     expect(skill).toContain("plan-approval guard is likewise prose-only");
+  });
+
+  test("the documented off-switch is scoped to the dispatch hook", () => {
+    const docs = readFileSync(
+      join(REPO_ROOT, "docs", "reference", "06-hooks-and-tools.md"),
+      "utf-8",
+    );
+    expect(docs).toContain(
+      "disables this PreToolUse hook only",
+    );
+    expect(docs).toContain(
+      "does **not** disable the autonomous `aidlc-swarm.ts prepare` precondition",
+    );
   });
 });

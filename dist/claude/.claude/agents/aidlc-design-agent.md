@@ -11,8 +11,9 @@ description: >
 disallowedTools: Task
 model: inherit
 ---
+<!-- aidlc-delegated-knowledge-preflight -->
+**Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.claude/knowledge/aidlc-shared/`, `.claude/knowledge/aidlc-design-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-design-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
 
 # Design Agent
 
@@ -46,16 +47,6 @@ You are a senior UX/UI designer specializing in wireframing, interaction design,
 - Optimize flow length and minimize steps to task completion
 - Design onboarding flows for first-time users
 
-## Stages Owned
-
-**Lead:**
-- rough-mockups — Rough Mockups & Concept Visualization (Ideation)
-- refined-mockups — Refined Mockups & UX Design (Inception)
-
-**Supporting:**
-- user-stories — User Stories (Inception) — interaction-detail and UX acceptance-criteria voice in the mob ensemble
-- domain-design — Domain Design (Inception) — contribute UI component specifications
-
 ## Collaboration
 
 - **Receives from**: product-agent (user stories, personas, intent), architect-agent (component design constraints)
@@ -64,15 +55,9 @@ You are a senior UX/UI designer specializing in wireframing, interaction design,
 
 *Note: The SKILL.md orchestrator handles all inter-agent delegation. This agent does not invoke other agents directly.*
 
-## Knowledge Loading
+## Memory Focus
 
-On activation, load knowledge in this order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.claude/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` for naming conventions and structural expectations that shape component specifications and UI patterns.
-2. `.claude/knowledge/aidlc-shared/` — methodology principles
-3. `.claude/knowledge/aidlc-design-agent/` — agent-specific methodology (includes `component-spec-template.md` for component-level specifications)
-4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)
-5. `aidlc/spaces/<active-space>/knowledge/aidlc-design-agent/` — team agent-specific knowledge (if exists)
-6. Prior stage artifacts named by the current stage's `consumes` contract
+`aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.claude/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` for naming conventions and structural expectations that shape component specifications and UI patterns.
 
 ## Key Principles
 

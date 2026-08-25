@@ -14,7 +14,14 @@
 // echoing the table; a deliberate retune must edit both, which is the point.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -299,6 +306,9 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
   const kiroHarnesses = HARNESS_MATRIX.filter(
     (harness) => harness.capabilities.kiroAgentJson,
   );
+  const kiroFamilyHarnesses = HARNESS_MATRIX.filter(
+    (harness) => harness.name === "kiro" || harness.name === "kiro-ide",
+  );
   test("matrix exposes at least one kiroAgentJson harness (floor guard)", () => {
     expect(kiroHarnesses.length).toBeGreaterThan(0);
   });
@@ -334,7 +344,7 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
       if (!m) throw new Error("no frontmatter");
       return m[1];
     };
-    for (const harness of kiroHarnesses) {
+    for (const harness of kiroFamilyHarnesses) {
       const dir = join(harness.engineRoot, "agents");
       for (const f of readdirSync(dir).filter((n) => n.endsWith("-agent.md"))) {
         const fm = fmOf(readFileSync(join(dir, f), "utf-8"));
@@ -346,18 +356,16 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     }
   });
 
-  test("kiro cli.json modelDefaults: authored conditional entries only, no tier-derived pins", () => {
-    for (const harness of ["kiro", "kiro-ide"]) {
-      const s = JSON.parse(
-        readFileSync(dist(harness, ".kiro", "settings", "cli.json"), "utf-8"),
-      ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
-      const defaults = s["chat.modelDefaults"];
-      // The authored orchestrator entry survives: conditional (applies only
-      // when the session runs that model), inert for spawns.
-      expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
-      // No tier-derived entry ships while no tier pins a Kiro model.
-      expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
-    }
+  test("Kiro CLI cli.json keeps authored defaults; Kiro IDE ships no CLI settings", () => {
+    const s = JSON.parse(
+      readFileSync(dist("kiro", ".kiro", "settings", "cli.json"), "utf-8"),
+    ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
+    const defaults = s["chat.modelDefaults"];
+    expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
+    expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
+    expect(
+      existsSync(dist("kiro-ide", ".kiro", "settings", "cli.json")),
+    ).toBe(false);
   });
 
   // Full-roster completeness: raw `tier:` must never leak into ANY shipped

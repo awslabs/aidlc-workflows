@@ -302,6 +302,7 @@ Run the health check to confirm everything is in place:
 |-------|-------------------|
 | Prerequisites | `bun` is installed and on `$PATH` |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 16 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
+| Hooks enabled (Claude Code) | No inspected settings file globally disables hooks. Fails loudly when `"disableAllHooks": true` is resolved from any settings layer — enterprise managed settings, `.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json` — since that silently skips every present hook. Follows Claude Code's layer precedence, so a higher-precedence `false` suppresses a lower `true` |
 | Project structure | `.claude/settings.json` exists with expected configuration |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | State file | the active intent's `aidlc-state.md` matches its audit trail (no drift) |
@@ -310,6 +311,7 @@ Run the health check to confirm everything is in place:
 | Scope validation | All 11 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
 | Schema + references | Every stage's YAML frontmatter validates, and every consumes/requires_stage reference resolves |
 | Keyword overlap | No keyword is claimed by more than one scope across the `.claude/scopes/*.md` files |
+| Plugin checks | Optional `tools/<plugin>-doctor.ts` checks from enabled plugins; error findings fail doctor, advisory findings remain visible without changing the exit code |
 | Pending-compose marker | Reports a present `aidlc/.aidlc-compose-pending` (the in-flight compose gate marker) with its age. Fresh (under 24h, the normal state at an open compose gate) passes as advisory; stale (a crashed compose gate stranded it) fails. Silent when absent. Remediation: delete it if no compose gate is pending, or resolve the gate |
 
 ### Example output
@@ -323,6 +325,7 @@ Run the health check to confirm everything is in place:
 ✓ aidlc-session-start.ts present
 ✓ aidlc-session-end.ts present
 ✓ aidlc-statusline.ts present
+✓ Hooks enabled (resolved disableAllHooks is not true)
 ✓ settings.json present
 ✓ AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
 ✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
@@ -360,11 +363,15 @@ Once `--doctor` passes, you are ready to run:
 Or specify a scope directly:
 
 ```
+/aidlc classic
+/aidlc express
 /aidlc feature
 /aidlc bugfix Fix the login timeout issue
 ```
 
-See [Your First Workflow](02-your-first-workflow.md) for a step-by-step walkthrough of what happens next.
+See [Workflow Profiles](workflow-profiles.md) to choose the right lifecycle, then
+[Your First Workflow](02-your-first-workflow.md) for a step-by-step walkthrough
+of what happens next.
 
 ---
 
@@ -409,6 +416,7 @@ See [Customization](13-customization.md) for details on modifying tool permissio
 ## Next Steps
 
 - [Your First Workflow](02-your-first-workflow.md) — annotated walkthrough of a complete run
+- [Workflow Profiles](workflow-profiles.md) — compare Classic, Express, and every other workflow choice
 - [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — choosing the right scope for your task
 - [Troubleshooting](15-troubleshooting.md) — common issues and fixes
 - [Glossary](glossary.md) — terminology reference

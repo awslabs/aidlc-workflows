@@ -13,8 +13,13 @@ export interface HarnessLocation {
   projectDir?: string;
 }
 
-export function isCompiledExecutable(): boolean {
-  return import.meta.url.includes("/$bunfs/");
+export function isCompiledExecutable(
+  moduleUrl = import.meta.url,
+  executable = process.execPath,
+): boolean {
+  const normalizedModuleUrl = moduleUrl.replace(/\\/g, "/");
+  const executableName = basename(executable.replace(/\\/g, "/")).toLowerCase();
+  return normalizedModuleUrl.includes("/$bunfs/") || !executableName.startsWith("bun");
 }
 
 export function compiledExecutable(): string | null {

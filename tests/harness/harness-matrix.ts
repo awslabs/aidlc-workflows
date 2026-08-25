@@ -137,7 +137,7 @@ const HARNESS_CAPABILITIES = {
       wiringFile: ".kiro/hooks/aidlc-test-pro-compose.json",
     },
     memoryInclude: "kiro-steering",
-    kiroAgentJson: true,
+    kiroAgentJson: false,
     ideAgentTools: true,
     reviewerScopeRegistration: "unsupported",
   },
