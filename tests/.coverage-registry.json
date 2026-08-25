@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 661,
+    "total": 664,
     "enumeratedByClass": {
-      "function": 397,
+      "function": 400,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 206,
+      "function": 209,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -1754,6 +1754,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:decodeHarnessPlainText",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t147-kiro-hook-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3995,6 +4007,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:sanitizeHarnessPlainText",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t147-kiro-hook-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:scalarField",
       "minMechanism": "none",
       "coveredBy": [
@@ -4334,6 +4358,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:splitKiroCommandArgs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t147-kiro-hook-adapter.test.ts",
           "mechanism": "cli"
         }
       ],

@@ -1,7 +1,7 @@
 // t147-kiro-hook-adapter: the Kiro stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/kiro-hook-payloads/
 // (field-verbatim captures off kiro-cli 2.6.1 — findings.md §0.2) into
@@ -604,6 +604,11 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(
         splitKiroCommandArgs(String.raw`one\ argument "a\"b"`),
       ).toEqual(["one argument", 'a"b']);
+      expect(
+        splitKiroCommandArgs(
+          String.raw`answer\ the\ question\;\ continue\ without\ waiting`,
+        ),
+      ).toEqual(["answer the question; continue without waiting"]);
 
       for (const [prompt, expected] of [
         [

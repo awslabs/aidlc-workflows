@@ -179,7 +179,7 @@ describe("t308 hook registration matchers select captured fixture tool names", (
       }
     }
 
-    expect(new Set(registrations.map((registration) => registration.file)).size).toBe(4);
+    expect(new Set(registrations.map((registration) => registration.file)).size).toBe(5);
     for (const registration of registrations) {
       expect(
         selectedPatternNames(registration.matcher, KIRO_IDE_OBSERVED_TOOLS),

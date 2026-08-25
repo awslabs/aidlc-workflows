@@ -843,9 +843,10 @@ export function splitDoubleQuotedArgs(raw: string): string[] {
 
 // Kiro prompt/hook arguments are shell-like but may contain native Windows
 // paths before any shell parses them. Preserve backslashes literally unless
-// one escapes whitespace outside quotes or the active quote delimiter. In
-// particular, do not collapse `C:\path`, quoted Windows paths, or UNC `\\host`
-// prefixes while still accepting `one\ argument` and `\"`/`\'` literals.
+// one escapes whitespace or a shell separator outside quotes, or the active
+// quote delimiter. In particular, do not collapse `C:\path`, quoted Windows
+// paths, or UNC `\\host` prefixes while still accepting `one\ argument`,
+// `one\;two`, and `\"`/`\'` literals.
 export function splitKiroCommandArgs(raw: string): string[] {
   const tokens: string[] = [];
   let current = "";
@@ -885,6 +886,10 @@ export function splitKiroCommandArgs(raw: string): string[] {
         !endsOutputPathBeforeOption &&
         next !== undefined &&
         /\s/.test(next);
+      const escapesShellSeparator =
+        quote === null &&
+        !windowsPathToken &&
+        next === ";";
       const escapesQuote =
         next !== undefined &&
         !windowsPathToken &&
@@ -893,7 +898,7 @@ export function splitKiroCommandArgs(raw: string): string[] {
           (quote === null && (next === "'" || next === '"')) ||
           (quote !== null && next === quote)
         );
-      if (escapesWhitespace || escapesQuote) {
+      if (escapesWhitespace || escapesShellSeparator || escapesQuote) {
         current += next;
         i++;
       } else {
