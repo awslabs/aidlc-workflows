@@ -38,6 +38,7 @@ import { fileURLToPath } from "node:url";
 import {
   createIntent,
   readIntentRegistry,
+  splitKiroCommandArgs,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
 } from "../../core/tools/aidlc-lib.ts";
@@ -457,6 +458,147 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("AIDLC WORKFLOW ACTIVE");
       expect(r.stdout).not.toContain("additionalContext");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3a: terminal utility output stays UTF-8 and drops only terminal controls", () => {
+    const dir = scratchProject(true);
+    try {
+      writeFileSync(
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+        [
+          'process.stdout.write("Unicode: ─ ✓ █▒ ⇄\\n");',
+          'process.stdout.write("Path: C:\\\\work\\\\file.txt; literal: \\\\\\\\x1b[31m\\n");',
+          'process.stdout.write("\\u001b[31mred\\u001b[0m\\n");',
+          'process.stdout.write("\\u001b]633;P;Cwd=C:\\\\shell\\\\noise\\u0007");',
+          'process.stdout.write("after-osc\\u0008\\n");',
+          'process.stderr.write("stderr: → preserved\\n");',
+          "process.exit(7);",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const r = runAdapter(dir, "verb-intercept", {
+        cwd: dir,
+        prompt: "/aidlc --status",
+      });
+      expect(r.code).toBe(0);
+      expect(r.stderr).toBe("");
+      expect(r.stdout).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(r.stdout).toContain("Path: C:\\work\\file.txt");
+      expect(r.stdout).toContain("literal: \\\\x1b[31m");
+      expect(r.stdout).toContain("red");
+      expect(r.stdout).toContain("after-osc");
+      expect(r.stdout).toContain("stderr: → preserved");
+      expect(r.stdout).not.toContain("\u001b");
+      expect(r.stdout).not.toContain("\u0008");
+      expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3b: terminal dispatch preserves unquoted, quoted, and UNC Windows paths", () => {
+    const dir = scratchProject(true);
+    try {
+      const argvPath = join(dir, "terminal-argv.json");
+      writeFileSync(
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
+          'process.stdout.write("ok\\n");',
+        ].join("\n"),
+        "utf-8",
+      );
+      for (const [prompt, expected] of [
+        [
+          String.raw`/aidlc --doctor --export --output C:\temp\diag`,
+          String.raw`C:\temp\diag`,
+        ],
+        [
+          String.raw`/aidlc --doctor --export --output "C:\Program Files\diag"`,
+          String.raw`C:\Program Files\diag`,
+        ],
+        [
+          String.raw`/aidlc --doctor --export --output \\server\share\diag`,
+          String.raw`\\server\share\diag`,
+        ],
+      ] as const) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(r.code, prompt).toBe(0);
+        expect(
+          JSON.parse(readFileSync(argvPath, "utf-8")),
+          prompt,
+        ).toEqual(["doctor", "--export", "--output", expected]);
+      }
+
+      const trailing = runAdapter(dir, "verb-intercept", {
+        cwd: dir,
+        prompt:
+          String.raw`/aidlc --doctor --output C:\temp\ --export`,
+      });
+      expect(trailing.code).toBe(0);
+      expect(JSON.parse(readFileSync(argvPath, "utf-8"))).toEqual([
+        "doctor",
+        "--output",
+        "C:\\temp\\",
+        "--export",
+      ]);
+
+      for (const [prompt, expected] of [
+        [
+          '/aidlc --doctor --output "C:\\" --export',
+          "C:\\",
+        ],
+        [
+          '/aidlc --doctor --output "C:\\Program Files\\diag\\" --export',
+          "C:\\Program Files\\diag\\",
+        ],
+        [
+          String.raw`/aidlc --doctor --output .\diag\ --export`,
+          ".\\diag\\",
+        ],
+        [
+          '/aidlc --doctor --output "out\\" --export',
+          "out\\",
+        ],
+        [
+          String.raw`/aidlc --doctor --output out\ --export`,
+          "out\\",
+        ],
+      ] as const) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(r.code, prompt).toBe(0);
+        expect(
+          JSON.parse(readFileSync(argvPath, "utf-8")),
+          prompt,
+        ).toEqual(["doctor", "--output", expected, "--export"]);
+      }
+
+      expect(
+        splitKiroCommandArgs(String.raw`one\ argument "a\"b"`),
+      ).toEqual(["one argument", 'a"b']);
+
+      for (const [prompt, expected] of [
+        [
+          String.raw`/aidlc --doctor --export --output reports\ 2026`,
+          "reports 2026",
+        ],
+        [
+          String.raw`/aidlc --doctor --export --output /tmp/report\ dir`,
+          "/tmp/report dir",
+        ],
+      ] as const) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
+        expect(r.code, prompt).toBe(0);
+        expect(
+          JSON.parse(readFileSync(argvPath, "utf-8")),
+          prompt,
+        ).toEqual(["doctor", "--export", "--output", expected]);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

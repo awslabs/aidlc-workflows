@@ -6,7 +6,7 @@
 // payload shapes. They are deliberately separate files so neither carries a
 // runtime "am I CLI or IDE?" branch.
 //
-// Kiro IDE hook context (live-captured on 0.12-main AND 1.0.165 — see
+// Kiro IDE hook context (live-captured on 0.12-main, 1.0.165, and 1.0.242 — see
 // docs/reference/kiro-ide-hook-payload.md). The channel changed across IDE
 // generations; the adapter accepts BOTH:
 //   1. IDE 1.x (v2 hooks, `.kiro/hooks/aidlc-*.json`): context arrives as JSON
@@ -25,13 +25,15 @@
 //      some PreToolUse and delegation inputs (#543); do not generalize the
 //      PostToolUse limitation to every event.
 //   4. The tool name arrives as the IDE tool name: `fs_write`, `str_replace`,
-//      `fs_append`, `execute_bash`, etc.
+//      `fs_append`, `execute_bash`, etc. IDE 1.0.242's UserPromptSubmit payload
+//      carries prompt:"", but its PreToolUse payload carries the exact shell
+//      command as execute_pwsh. Newer builds may provide the prompt directly.
 //
-// Payload acquisition is GATED to the three tool-payload targets plus the
-// lifecycle boundaries that carry modern session identity (SessionStart and
-// Stop). Every other target is payload-independent and never touches stdin —
-// block fires on EVERY PreToolUse, and a 2s stall on a never-closing stdin
-// there would be felt on every tool call.
+// Payload acquisition is GATED to tool-payload targets, the deterministic
+// terminal-command seams, and lifecycle boundaries that carry modern session
+// identity (SessionStart and Stop). Every other target is payload-independent
+// and never touches stdin — block fires on EVERY PreToolUse, and a 2s stall on
+// a never-closing stdin there would be felt on every tool call.
 //
 // Consequences, by target:
 //   - audit-and-sensors: scrape the written file path from toolResult prose
@@ -43,6 +45,12 @@
 //     STAGE_STARTED slug from the audit tail (no task payload needed).
 //   - log-subagent: recovers the delegate's identity from the result prose or
 //     the 1.x `subagent_<agent>` tool name, plus the message (#459/#543).
+//   - verb-intercept: when UserPromptSubmit exposes `/aidlc ...`, run terminal
+//     utilities before the model and inject sanitized UTF-8 plain text.
+//   - terminal-command-guard: when the prompt is empty, recognize the exact
+//     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
+//     utility once per session/turn, and refuse the duplicate shell call with
+//     its output. Payloads without session_id share the explicit legacy bucket.
 //   - session-start: retain the modern session_id (or the legacy synthetic id)
 //     in workspace-local runtime state.
 //   - stop: prefer the event-local modern session_id; use retained identity for
@@ -59,11 +67,14 @@
 // where <target> ∈ record-human-turn | enforce-approval-gate | session-start |
 //                  audit-and-sensors | rebuild-stage-graph |
 //                  sync-workflow-state | log-subagent | continue-workflow |
-//                  session-end
+//                  session-end | verb-intercept | terminal-command-guard
 
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
+  classifyTerminalCommand,
+  decodeHarnessPlainText,
   hasOpenGate,
   hookDebug,
   humanActedSinceGate,
@@ -72,7 +83,9 @@ import {
   markHumanTurn,
   recordHookDrop,
   resolveProjectDirFromHook,
+  sanitizeHarnessPlainText,
   sessionsDir,
+  splitKiroCommandArgs,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -87,6 +100,7 @@ const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // delegation inputs (#543), so normalization preserves either shape.
 interface IdeHookContext {
   sessionId?: string;
+  prompt?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
@@ -98,16 +112,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// The three targets whose forward depends on the tool payload. Every other
+// The targets whose forward depends on the tool payload. Every other
 // target builds a fixed input (or reads only the filesystem), so it skips
 // payload acquisition entirely and keeps its zero-latency path.
 const PAYLOAD_TARGETS = new Set([
   "audit-and-sensors",
   "log-subagent",
   "rebuild-stage-graph",
+  "terminal-command-guard",
 ]);
 const SESSION_ID_TARGETS = new Set(["session-start", "continue-workflow"]);
-const INPUT_TARGETS = new Set([...PAYLOAD_TARGETS, ...SESSION_ID_TARGETS]);
+const INPUT_TARGETS = new Set([
+  ...PAYLOAD_TARGETS,
+  ...SESSION_ID_TARGETS,
+  "verb-intercept",
+]);
 const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
 const KIRO_IDE_SESSION_FILE = ".kiro-ide-current-session";
 
@@ -133,46 +152,77 @@ if (INPUT_TARGETS.has(target)) {
   let raw = input;
   if (raw.trim().length === 0) raw = process.env.USER_PROMPT ?? "";
   if (raw.trim().length > 0) {
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (!isRecord(parsed)) {
-        ide = { malformedFields: ["payload"] };
-      } else {
-        const rawName = parsed.toolName ?? parsed.tool_name;
-        const rawArgs = parsed.toolArgs ?? parsed.tool_input;
-        const rawResult = parsed.toolResult ?? parsed.tool_response;
-        const rawSuccess = parsed.toolSuccess ?? parsed.tool_success;
-        const rawSessionId = parsed.session_id;
-        const malformedFields: string[] = [];
-        if (rawName !== null && rawName !== undefined && typeof rawName !== "string") {
-          malformedFields.push("toolName");
+    if (target === "verb-intercept" && /^\s*\/aidlc(?![\w-])/.test(raw)) {
+      ide = { prompt: raw };
+    } else {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (!isRecord(parsed)) {
+          ide = { malformedFields: ["payload"] };
+        } else {
+          const rawPrompt = parsed.prompt;
+          const rawName = parsed.toolName ?? parsed.tool_name;
+          const rawArgs = parsed.toolArgs ?? parsed.tool_input;
+          const rawResult = parsed.toolResult ?? parsed.tool_response;
+          const rawSuccess = parsed.toolSuccess ?? parsed.tool_success;
+          const rawSessionId = parsed.session_id;
+          const malformedFields: string[] = [];
+          if (
+            rawPrompt !== null &&
+            rawPrompt !== undefined &&
+            typeof rawPrompt !== "string"
+          ) {
+            malformedFields.push("prompt");
+          }
+          if (
+            rawName !== null &&
+            rawName !== undefined &&
+            typeof rawName !== "string"
+          ) {
+            malformedFields.push("toolName");
+          }
+          if (
+            rawArgs !== null &&
+            rawArgs !== undefined &&
+            !isRecord(rawArgs)
+          ) {
+            malformedFields.push("toolArgs");
+          }
+          if (
+            rawResult !== null &&
+            rawResult !== undefined &&
+            typeof rawResult !== "string"
+          ) {
+            malformedFields.push("toolResult");
+          }
+          if (
+            rawSuccess !== null &&
+            rawSuccess !== undefined &&
+            typeof rawSuccess !== "boolean"
+          ) {
+            malformedFields.push("toolSuccess");
+          }
+          ide = {
+            sessionId: typeof rawSessionId === "string"
+              ? rawSessionId
+              : undefined,
+            prompt: typeof rawPrompt === "string" ? rawPrompt : undefined,
+            toolName: typeof rawName === "string" ? rawName : undefined,
+            toolArgs: isRecord(rawArgs) ? rawArgs : undefined,
+            toolResult: typeof rawResult === "string" ? rawResult : "",
+            toolSuccess: typeof rawSuccess === "boolean"
+              ? rawSuccess
+              : undefined,
+            malformedFields: malformedFields.length > 0
+              ? malformedFields
+              : undefined,
+          };
         }
-        if (rawArgs !== null && rawArgs !== undefined && !isRecord(rawArgs)) {
-          malformedFields.push("toolArgs");
-        }
-        if (rawResult !== null && rawResult !== undefined && typeof rawResult !== "string") {
-          malformedFields.push("toolResult");
-        }
-        if (
-          rawSuccess !== null &&
-          rawSuccess !== undefined &&
-          typeof rawSuccess !== "boolean"
-        ) {
-          malformedFields.push("toolSuccess");
-        }
-        ide = {
-          sessionId: typeof rawSessionId === "string" ? rawSessionId : undefined,
-          toolName: typeof rawName === "string" ? rawName : undefined,
-          toolArgs: isRecord(rawArgs) ? rawArgs : undefined,
-          toolResult: typeof rawResult === "string" ? rawResult : "",
-          toolSuccess: typeof rawSuccess === "boolean" ? rawSuccess : undefined,
-          malformedFields: malformedFields.length > 0 ? malformedFields : undefined,
-        };
+      } catch {
+        // Malformed context — advisory hooks fail open without forwarding an
+        // event whose fields cannot be trusted.
+        ide = { malformedFields: ["JSON"] };
       }
-    } catch {
-      // Malformed context — advisory hooks fail open without forwarding an
-      // event whose fields cannot be trusted.
-      ide = { malformedFields: ["JSON"] };
     }
   }
 }
@@ -180,6 +230,7 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   target,
   hasStdinPayload: input.trim().length > 0,
   hasUserPrompt: (process.env.USER_PROMPT ?? "").length > 0,
+  prompt: (ide.prompt ?? "").slice(0, 160),
   toolName: ide.toolName ?? "",
   sessionId: ide.sessionId ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
@@ -211,6 +262,293 @@ function rememberedKiroIdeSessionId(): string {
   } catch {
     return LEGACY_SESSION_ID;
   }
+}
+
+type TerminalCommand = NonNullable<
+  ReturnType<typeof classifyTerminalCommand>
+>;
+
+interface TerminalInvocation {
+  raw: string;
+  args: string[];
+}
+
+interface TerminalResult {
+  output: string;
+  exitCode: number;
+  typed: string;
+  source: TerminalCommand["source"];
+}
+
+interface TerminalLatch extends TerminalResult {
+  turn: number;
+  raw: string;
+  args: string[];
+  ts: number;
+}
+
+function promptTerminalInvocation(prompt: string): TerminalInvocation {
+  const expanded = prompt.match(/aidlc-orchestrate\.ts next ([^`\n]*)`/);
+  const rawInvocation = expanded
+    ? expanded[1]
+    : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
+  if (rawInvocation === undefined) return { raw: "", args: [] };
+  const raw = rawInvocation.trim();
+  return { raw, args: splitKiroCommandArgs(raw) };
+}
+
+function toolTerminalInvocation(command: string): TerminalInvocation | null {
+  const match = command.trim().match(
+    /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
+  );
+  if (match === null) return null;
+  const runner = match[1] ?? match[2] ?? match[3] ?? "";
+  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return null;
+  const raw = (match[4] ?? "").trim();
+  return { raw, args: splitKiroCommandArgs(raw) };
+}
+
+function terminalTyped(
+  command: TerminalCommand,
+  forwarded: string[],
+): string {
+  return command.source === "read-only-flag"
+    ? `--${command.subcommand}`
+    : (command.display ?? [command.subcommand, ...forwarded].join(" "));
+}
+
+function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
+  const forwarded =
+    command.args ?? (command.arg !== undefined ? [command.arg] : []);
+  const typed = terminalTyped(command, forwarded);
+  if (command.error !== undefined) {
+    return {
+      output: sanitizeHarnessPlainText(command.error),
+      exitCode: 1,
+      typed,
+      source: command.source,
+    };
+  }
+
+  const compiledArgs = (() => {
+    if (command.source === "plugin-verb") {
+      if (command.subcommand === "plugin-list") {
+        return ["plugin", "list", ...forwarded];
+      }
+      if (command.subcommand === "plugin-sync") {
+        return ["plugin", "sync", ...forwarded];
+      }
+      if (command.subcommand === "select-plugins") {
+        return ["plugin", "select", ...forwarded];
+      }
+      if (command.subcommand === "help") return ["plugin", "help"];
+    }
+    if (command.source === "knowledge-verb") {
+      if (command.subcommand === "help") return ["knowledge", "help"];
+      return ["knowledge", command.subcommand, ...forwarded];
+    }
+    if (command.subcommand === "space-create") {
+      return ["space", "create", ...forwarded];
+    }
+    if (command.subcommand === "intent-create") {
+      return ["intent", "create", ...forwarded];
+    }
+    return [command.subcommand, ...forwarded];
+  })();
+  const toolFile = command.source === "knowledge-verb"
+    ? "aidlc-knowledge.ts"
+    : "aidlc-utility.ts";
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+
+  try {
+    const result = Bun.spawnSync(
+      executable
+        ? [executable, ...compiledArgs]
+        : [
+            process.execPath,
+            join(".kiro", "tools", toolFile),
+            command.subcommand,
+            ...forwarded,
+          ],
+      {
+        cwd: projectDir,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          AIDLC_PROJECT_DIR: projectDir,
+          CLAUDE_PROJECT_DIR: projectDir,
+        },
+      },
+    );
+    return {
+      output: (
+        decodeHarnessPlainText(result.stdout) +
+        decodeHarnessPlainText(result.stderr)
+      ).trim(),
+      exitCode: result.exitCode ?? 1,
+      typed,
+      source: command.source,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function terminalSessionId(): string {
+  return ide.sessionId?.trim() || LEGACY_SESSION_ID;
+}
+
+function terminalSessionDir(sessionId: string): string {
+  const key = createHash("sha256").update(sessionId).digest("hex");
+  return join(sessionsDir(projectDir), "kiro-terminal", key);
+}
+
+function turnCounterPath(sessionId: string): string {
+  return join(terminalSessionDir(sessionId), "turn");
+}
+
+function terminalLatchPath(sessionId: string): string {
+  return join(terminalSessionDir(sessionId), "latch.json");
+}
+
+function readTurn(sessionId: string): number {
+  try {
+    const value = Number.parseInt(
+      readFileSync(turnCounterPath(sessionId), "utf-8").trim(),
+      10,
+    );
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function bumpTurn(sessionId: string): number {
+  const turn = readTurn(sessionId) + 1;
+  try {
+    mkdirSync(terminalSessionDir(sessionId), { recursive: true });
+    writeFileSync(turnCounterPath(sessionId), `${turn}\n`, "utf-8");
+  } catch {
+    return 0;
+  }
+  return turn;
+}
+
+function readTerminalLatch(sessionId: string): TerminalLatch | null {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(terminalLatchPath(sessionId), "utf-8"),
+    ) as Partial<TerminalLatch>;
+    if (
+      typeof parsed.turn !== "number" ||
+      typeof parsed.output !== "string" ||
+      typeof parsed.exitCode !== "number" ||
+      typeof parsed.typed !== "string" ||
+      typeof parsed.source !== "string" ||
+      typeof parsed.raw !== "string" ||
+      !Array.isArray(parsed.args)
+    ) {
+      return null;
+    }
+    return parsed as TerminalLatch;
+  } catch {
+    return null;
+  }
+}
+
+function writeTerminalLatch(
+  sessionId: string,
+  turn: number,
+  invocation: TerminalInvocation,
+  result: TerminalResult,
+): void {
+  if (turn <= 0) return;
+  try {
+    mkdirSync(terminalSessionDir(sessionId), { recursive: true });
+    writeFileSync(
+      terminalLatchPath(sessionId),
+      `${JSON.stringify({
+        turn,
+        raw: invocation.raw,
+        args: invocation.args,
+        ...result,
+        ts: Date.now(),
+      })}\n`,
+      "utf-8",
+    );
+  } catch {
+    // Best-effort deduplication; the command output remains available.
+  }
+}
+
+function terminalContext(result: TerminalResult): string {
+  return (
+    "SYSTEM (deterministic harness dispatch): The command " +
+    `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
+    "It carries no workflow work. Relay the output below verbatim, then STOP. " +
+    "Do not call any AIDLC tool this turn.\n\n" +
+    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
+    "--- END OUTPUT ---\n"
+  );
+}
+
+function terminalRefusal(result: TerminalResult): string {
+  return (
+    "AIDLC deterministic terminal command complete. The requested command has " +
+    "already run inside the hook, and this shell call is intentionally refused " +
+    "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
+    "Do not retry or run another AIDLC command this turn. Relay the output below " +
+    "verbatim to the user, then stop.\n\n" +
+    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
+    "--- END OUTPUT ---\n"
+  );
+}
+
+if (target === "verb-intercept") {
+  const sessionId = terminalSessionId();
+  const turn = bumpTurn(sessionId);
+  const invocation = promptTerminalInvocation(ide.prompt ?? "");
+  const command = classifyTerminalCommand(invocation.args);
+  if (command === null) return 0;
+  const result = runTerminalCommand(command);
+  if (result === null) return 0;
+  writeTerminalLatch(sessionId, turn, invocation, result);
+  process.stdout.write(terminalContext(result));
+  return 0;
+}
+
+if (target === "terminal-command-guard") {
+  if ((ide.malformedFields?.length ?? 0) > 0) return 0;
+  const tool = ide.toolName ?? "";
+  if (tool !== "execute_bash" && tool !== "execute_pwsh" && tool !== "shell") {
+    return 0;
+  }
+  const rawCommand = typeof ide.toolArgs?.command === "string"
+    ? ide.toolArgs.command
+    : "";
+  const invocation = toolTerminalInvocation(rawCommand);
+  const sessionId = terminalSessionId();
+  const turn = readTurn(sessionId) || bumpTurn(sessionId);
+  const existing = readTerminalLatch(sessionId);
+  if (
+    existing?.turn === turn &&
+    (
+      invocation !== null ||
+      /aidlc-(?:orchestrate|utility|knowledge)\.ts/i.test(rawCommand)
+    )
+  ) {
+    process.stderr.write(terminalRefusal(existing));
+    return 2;
+  }
+  if (invocation === null) return 0;
+  const command = classifyTerminalCommand(invocation.args);
+  if (command === null) return 0;
+  const result = runTerminalCommand(command);
+  if (result === null) return 0;
+  writeTerminalLatch(sessionId, turn, invocation, result);
+  process.stderr.write(terminalRefusal(result));
+  return 2;
 }
 
 // --- mint: record a HUMAN_TURN event on prompt submit ---
@@ -649,7 +987,12 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
     stdout: "pipe",
     stderr: "ignore",
   });
-  return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
+  return {
+    stdout: new TextDecoder("utf-8").decode(
+      r.stdout ?? new Uint8Array(),
+    ),
+    code: r.exitCode ?? 0,
+  };
 }
 
 const fwd = buildForward();
@@ -680,10 +1023,12 @@ if (target === "session-start") {
   try {
     const parsed = JSON.parse(result.stdout) as { additionalContext?: string };
     if (parsed.additionalContext) {
-      process.stdout.write(parsed.additionalContext);
+      process.stdout.write(sanitizeHarnessPlainText(parsed.additionalContext));
     }
   } catch {
-    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stdout) {
+      process.stdout.write(sanitizeHarnessPlainText(result.stdout));
+    }
   }
   return 0;
 }

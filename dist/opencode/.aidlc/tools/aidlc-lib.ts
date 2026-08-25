@@ -841,6 +841,93 @@ export function splitDoubleQuotedArgs(raw: string): string[] {
   return tokens;
 }
 
+// Kiro prompt/hook arguments are shell-like but may contain native Windows
+// paths before any shell parses them. Preserve backslashes literally unless
+// one escapes whitespace outside quotes or the active quote delimiter. In
+// particular, do not collapse `C:\path`, quoted Windows paths, or UNC `\\host`
+// prefixes while still accepting `one\ argument` and `\"`/`\'` literals.
+export function splitKiroCommandArgs(raw: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let started = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "\\") {
+      const next = raw[i + 1];
+      const outputValueToken = tokens[tokens.length - 1] === "--output";
+      const windowsPathToken =
+        /^[A-Za-z]:$/.test(current) ||
+        current.includes("\\");
+      let followingToken = "";
+      if (next !== undefined && /\s/.test(next)) {
+        let start = i + 1;
+        while (start < raw.length && /\s/.test(raw[start])) start++;
+        let end = start;
+        while (end < raw.length && !/\s/.test(raw[end])) end++;
+        followingToken = raw.slice(start, end);
+      }
+      const endsOutputPathBeforeOption =
+        outputValueToken &&
+        quote === null &&
+        (followingToken === "--export" || followingToken === "--output");
+      const closesQuotedOutputPath =
+        outputValueToken &&
+        quote !== null &&
+        next === quote &&
+        (
+          raw[i + 2] === undefined ||
+          /\s/.test(raw[i + 2])
+        );
+      const escapesWhitespace =
+        quote === null &&
+        !windowsPathToken &&
+        !endsOutputPathBeforeOption &&
+        next !== undefined &&
+        /\s/.test(next);
+      const escapesQuote =
+        next !== undefined &&
+        !windowsPathToken &&
+        !closesQuotedOutputPath &&
+        (
+          (quote === null && (next === "'" || next === '"')) ||
+          (quote !== null && next === quote)
+        );
+      if (escapesWhitespace || escapesQuote) {
+        current += next;
+        i++;
+      } else {
+        current += "\\";
+      }
+      started = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      started = true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) {
+        tokens.push(current);
+        current = "";
+        started = false;
+      }
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (started) tokens.push(current);
+  return tokens;
+}
+
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(
   [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS, ...RESERVED_FUTURE])],
 );
@@ -1100,6 +1187,119 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
     }
   }
   return null;
+}
+
+// Kiro's plain-text hook channel must carry UTF-8 without terminal protocol
+// bytes. Keep this transform narrowly scoped to adapter output that is
+// explicitly plain text: structured hook JSON and refusal payloads must retain
+// their exact bytes and exit semantics.
+export function sanitizeHarnessPlainText(value: string): string {
+  let out = "";
+  let i = 0;
+
+  const csiEnd = (start: number): number => {
+    for (let j = start; j < value.length; j++) {
+      const code = value.charCodeAt(j);
+      if (code >= 0x40 && code <= 0x7e) return j;
+    }
+    return -1;
+  };
+  const stringControlEnd = (start: number): number => {
+    for (let j = start; j < value.length; j++) {
+      const code = value.charCodeAt(j);
+      if (code === 0x07 || code === 0x9c) return j;
+      if (
+        code === 0x1b &&
+        j + 1 < value.length &&
+        value.charCodeAt(j + 1) === 0x5c
+      ) {
+        return j + 1;
+      }
+    }
+    return -1;
+  };
+
+  while (i < value.length) {
+    const code = value.charCodeAt(i);
+
+    if (code === 0x1b) {
+      const next = value.charCodeAt(i + 1);
+      if (next === 0x5b) {
+        const end = csiEnd(i + 2);
+        i = end >= 0 ? end + 1 : i + 1;
+        continue;
+      }
+      if (
+        next === 0x50 ||
+        next === 0x58 ||
+        next === 0x5d ||
+        next === 0x5e ||
+        next === 0x5f
+      ) {
+        const end = stringControlEnd(i + 2);
+        i = end >= 0 ? end + 1 : i + 1;
+        continue;
+      }
+      if (
+        next === 0x28 ||
+        next === 0x29 ||
+        next === 0x2a ||
+        next === 0x2b ||
+        next === 0x2d ||
+        next === 0x2e ||
+        next === 0x2f
+      ) {
+        i = Math.min(value.length, i + 3);
+        continue;
+      }
+      if (next >= 0x40 && next <= 0x5f) {
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
+    }
+
+    if (code === 0x9b) {
+      const end = csiEnd(i + 1);
+      i = end >= 0 ? end + 1 : i + 1;
+      continue;
+    }
+    if (
+      code === 0x90 ||
+      code === 0x98 ||
+      code === 0x9d ||
+      code === 0x9e ||
+      code === 0x9f
+    ) {
+      const end = stringControlEnd(i + 1);
+      i = end >= 0 ? end + 1 : i + 1;
+      continue;
+    }
+    if (
+      (code >= 0x00 && code <= 0x08) ||
+      code === 0x0b ||
+      code === 0x0c ||
+      (code >= 0x0e && code <= 0x1f) ||
+      (code >= 0x7f && code <= 0x9f)
+    ) {
+      i++;
+      continue;
+    }
+
+    out += value[i];
+    i++;
+  }
+
+  return out;
+}
+
+export function decodeHarnessPlainText(
+  bytes: Uint8Array | undefined,
+): string {
+  return sanitizeHarnessPlainText(
+    new TextDecoder("utf-8").decode(bytes ?? new Uint8Array()),
+  );
 }
 
 // --- Engine command detectors (hook classifier seam) ---

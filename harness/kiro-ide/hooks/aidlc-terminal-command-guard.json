@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-terminal-command-guard",
+      "trigger": "PreToolUse",
+      "matcher": "^(execute_bash|execute_pwsh|shell)$",
+      "description": "Runs deterministic AIDLC utility commands before the Windows shell transport when prompt text is unavailable.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts terminal-command-guard" }
+    }
+  ]
+}

@@ -1088,7 +1088,9 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       action.target === "log-subagent" ||
       action.target === "rebuild-stage-graph" ||
       action.target === "session-start" ||
-      action.target === "continue-workflow"
+      action.target === "continue-workflow" ||
+      action.target === "verb-intercept" ||
+      action.target === "terminal-command-guard"
     ) {
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume

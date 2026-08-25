@@ -46,11 +46,14 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
+  decodeHarnessPlainText,
   hasOpenGate,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   markHumanTurn,
+  sanitizeHarnessPlainText,
+  splitKiroCommandArgs,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -216,49 +219,6 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // The repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
 // #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
 // typed `/aidlc …` text. The fallback recovers argv directly from that raw shape.
-function shellWords(input: string): string[] {
-  const words: string[] = [];
-  let word = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
-  let started = false;
-  for (const ch of input) {
-    if (escaped) {
-      word += ch;
-      escaped = false;
-      started = true;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaped = true;
-      started = true;
-      continue;
-    }
-    if (quote !== null) {
-      if (ch === quote) quote = null;
-      else word += ch;
-      started = true;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      started = true;
-    } else if (/\s/.test(ch)) {
-      if (started) {
-        words.push(word);
-        word = "";
-        started = false;
-      }
-    } else {
-      word += ch;
-      started = true;
-    }
-  }
-  if (escaped) word += "\\";
-  if (started) words.push(word);
-  return words;
-}
-
 function extractNextInvocation(
   expandedPrompt: string,
 ): { raw: string; args: string[] } {
@@ -271,7 +231,7 @@ function extractNextInvocation(
     : expandedPrompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
   if (rawInvocation === undefined) return { raw: "", args: [] };
   const raw = rawInvocation.trim();
-  return { raw, args: shellWords(raw) };
+  return { raw, args: splitKiroCommandArgs(raw) };
 }
 
 const PRE_DISPATCH_FLAGS = new Set([
@@ -363,7 +323,9 @@ if (target === "verb-intercept") {
           command,
           { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
         );
-        const directive = run.stdout?.toString().trim() ?? "";
+        const directive = new TextDecoder("utf-8").decode(
+          run.stdout ?? new Uint8Array(),
+        ).trim();
         if (run.exitCode === 0 && directive.length > 0) {
           rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
             force: true,
@@ -443,7 +405,10 @@ if (target === "verb-intercept") {
       executable ? [executable, ...compiledArgs] : [process.execPath, ...utilArgs],
       { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
     );
-    out = ((run.stdout?.toString() ?? "") + (run.stderr?.toString() ?? "")).trim();
+    out = (
+      decodeHarnessPlainText(run.stdout) +
+      decodeHarnessPlainText(run.stderr)
+    ).trim();
   }
 
   // Turn-scoped latch: a terminal command was handled OFF-BAND this turn (the
@@ -495,7 +460,7 @@ if (target === "guard-tool-call") {
   const cmdStr = String(kiro.tool_input?.command ?? "");
   const cwd = projectDir;
   const m = cmdStr.match(/aidlc-orchestrate\.ts\s+next\b([^\n]*)/);
-  const nextArgs = m ? shellWords(m[1].trim()) : [];
+  const nextArgs = m ? splitKiroCommandArgs(m[1].trim()) : [];
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
   // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing
@@ -532,7 +497,8 @@ if (target === "guard-tool-call") {
   // First-next argument fidelity. The userPromptSubmit hook records the exact
   // expanded argv for a non-terminal /aidlc command. Reject any altered first
   // next in the same turn, including the observed total-drop `next` call. Shell
-  // quoting and backslash escapes normalize through shellWords before compare.
+  // Quoting and path-safe escapes normalize through splitKiroCommandArgs
+  // before compare.
   try {
     const forwardingPath = join(cwd, "aidlc", ".aidlc-forwarding-latch");
     if (m !== null && existsSync(forwardingPath)) {
@@ -1006,7 +972,12 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
     cwd: childCwd,
     env: projectEnv,
   });
-  return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
+  return {
+    stdout: new TextDecoder("utf-8").decode(
+      r.stdout ?? new Uint8Array(),
+    ),
+    code: r.exitCode ?? 0,
+  };
 }
 
 const fwd = buildForward();
@@ -1033,10 +1004,12 @@ if (target === "session-start") {
   try {
     const parsed = JSON.parse(result.stdout) as { additionalContext?: string };
     if (parsed.additionalContext) {
-      process.stdout.write(parsed.additionalContext);
+      process.stdout.write(sanitizeHarnessPlainText(parsed.additionalContext));
     }
   } catch {
-    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stdout) {
+      process.stdout.write(sanitizeHarnessPlainText(result.stdout));
+    }
   }
   return 0;
 }

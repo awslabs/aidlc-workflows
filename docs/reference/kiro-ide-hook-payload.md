@@ -1,11 +1,14 @@
 # Kiro IDE hook payload — empirical reference
 
-How Kiro IDE delivers context to a command hook, captured live on TWO IDE
-generations: 0.12-main (probe `.kiro.hook` files that dumped stdin, argv, and
-the full environment) and 1.0.165 (probe v2 hook JSON files; upstream
-#543/#555). This is the evidence base for the `harness/kiro-ide/` adapter; the
-CLI harness (`harness/kiro/`) uses a different, kiro-cli-shaped stdin
-mechanism.
+How Kiro IDE delivers context to a command hook, captured live on 0.12-main
+(probe `.kiro.hook` files that dumped stdin, argv, and the full environment),
+1.0.165 (probe v2 hook JSON files; upstream #543/#555), and 1.0.242
+(UserPromptSubmit and PreToolUse probes on Windows). This is the evidence base
+for the `harness/kiro-ide/` adapter; the CLI harness (`harness/kiro/`) uses a
+different, kiro-cli-shaped stdin mechanism.
+
+The redacted native Windows before/after captures are retained in
+[`research/kiro-windows-output-encoding/`](research/kiro-windows-output-encoding/).
 
 ## The channel changed across IDE generations
 
@@ -27,11 +30,17 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 1.x channel, raced against a broken-channel timeout. The production default is
 2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
 milliseconds for diagnostics and deterministic latency tests. Both field
-spellings are accepted. Acquisition is gated to the three payload-dependent
-targets (`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus
-`session-start` and `continue-workflow` for their modern `session_id`; every
-other target (including the per-tool-call `block` floor) touches neither
-channel and keeps its zero-latency path.
+spellings are accepted. Acquisition is gated to the payload-dependent targets,
+the two terminal-command targets, plus `session-start` and `continue-workflow`
+for their modern `session_id`; every other target (including the per-tool-call
+approval floor) touches neither channel and keeps its zero-latency path.
+
+The legacy environment variable name does not imply raw user text: the measured
+0.12 contract is camelCase JSON. A promptSubmit payload without a `prompt`
+field therefore advances only the legacy turn clock; the terminal utility is
+recognized later from `toolArgs.command` on the matching preToolUse event. Raw
+`/aidlc ...` text remains accepted for newer Kiro generations that expose it
+directly, but is not the 0.12 compatibility claim.
 
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
 CLI), but the adapter keys off the payload channels above.
@@ -43,6 +52,8 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 
 | Event | tool name | tool inputs | result prose | recoverable? |
 |-------|-----------|-------------|--------------|--------------|
+| UserPromptSubmit (1.0.242) | n/a | `{prompt:""}` | n/a | prompt: no; session id: yes |
+| PreToolUse (shell, 1.0.242) | `execute_pwsh` | `{command,cwd,run_in_background,timeout}` | n/a | command: yes |
 | PostToolUse (write) — create | `fs_write` | `{}` (empty) | `Created the <PATH> file.` | path: from the result prose only |
 | PostToolUse (write) — edit | `str_replace` | `{}` (empty) | `Replaced text in <PATH>` | path: from the result prose only |
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
@@ -59,7 +70,8 @@ Result prose is identical on both channels (`toolResult` on 0.12,
    dispatch with `prompt` and `explanation`, shell/write matchers with
    `command`, `cwd`, `run_in_background`, and `timeout`, and PostToolUse inputs
    as well. That 1.0.309 observation was reported, not measured in this
-   repository; the measured base remains the 0.12 and 1.0.165 captures above.
+   repository; the measured base is the 0.12, 1.0.165, and 1.0.242 captures
+   described above.
 2. **1.x carries no success flag.** Only the 0.12 channel's explicit boolean
    `toolSuccess: false` drops a well-formed write from the audit (#417); a 1.x
    payload with the field absent falls through to the path check. Because that
@@ -118,6 +130,17 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 - **session-start** — reads the modern `session_id` and persists it under the
   gitignored runtime session directory; the legacy channel records its stable
   synthetic ID instead.
+- **terminal commands** — newer builds that expose the submitted `/aidlc ...`
+  prompt run deterministic utilities at UserPromptSubmit. IDE 1.0.242 exposes
+  an empty prompt, so the fallback recognizes the exact `execute_pwsh`
+  `aidlc-orchestrate.ts next` call at PreToolUse, runs the classified utility
+  once, and refuses the duplicate shell call. Both routes decode UTF-8
+  explicitly and remove terminal protocol/control bytes only from the
+  plain-text relay; structured hook JSON and unrelated refusal paths are not
+  rewritten. Modern turn/latch state is keyed by a hash of `session_id`, so
+  concurrent chats cannot reuse one another's output; payloads without a
+  session identity use one explicit legacy bucket. The 0.12 camelCase fallback
+  reads the command from `toolArgs.command`.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
   own post-create handoff receipts. Legacy agentStop and broken modern channels

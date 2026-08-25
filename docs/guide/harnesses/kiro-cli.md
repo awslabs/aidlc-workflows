@@ -76,6 +76,12 @@ navigation uses `/aidlc intent [name]`, `/aidlc space [name]`, and
 `/aidlc space-create <name>`. The per-stage (`/aidlc-domain-design`) and
 per-scope (`/aidlc-feature`) runner skills are installed too.
 
+Status, doctor, help, version, and workspace-navigation commands are dispatched
+by the Kiro hook before the model can turn them into workflow work. Their child
+output is decoded as UTF-8 and terminal protocol/control bytes are removed only
+at that plain-text relay boundary; ordinary Unicode, paths, tabs, newlines, and
+literal escape-looking text remain unchanged.
+
 **Start the session from the project root.** The conductor's engine calls are
 pre-approved as project-relative `bun .kiro/tools/<tool>.ts` commands, so a
 session whose working directory is elsewhere pushes the conductor toward

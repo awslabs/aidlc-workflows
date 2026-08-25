@@ -85,6 +85,8 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-write-audit-log.json", dst: "hooks/aidlc-write-audit-log.json" },
     { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
+    { src: "hooks/aidlc-terminal-command.json", dst: "hooks/aidlc-terminal-command.json" },
+    { src: "hooks/aidlc-terminal-command-guard.json", dst: "hooks/aidlc-terminal-command-guard.json" },
     { src: "hooks/aidlc-enforce-approval-gate.json", dst: "hooks/aidlc-enforce-approval-gate.json" },
     { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
     { src: "hooks/aidlc-rebuild-stage-graph.json", dst: "hooks/aidlc-rebuild-stage-graph.json" },
@@ -101,6 +103,8 @@ const manifest: HarnessManifest = {
     // no double-firing observed on any IDE generation tested.
     { src: "hooks/aidlc-write-audit-log.kiro.hook", dst: "hooks/aidlc-write-audit-log.kiro.hook" },
     { src: "hooks/aidlc-record-human-turn.kiro.hook", dst: "hooks/aidlc-record-human-turn.kiro.hook" },
+    { src: "hooks/aidlc-terminal-command.kiro.hook", dst: "hooks/aidlc-terminal-command.kiro.hook" },
+    { src: "hooks/aidlc-terminal-command-guard.kiro.hook", dst: "hooks/aidlc-terminal-command-guard.kiro.hook" },
     { src: "hooks/aidlc-enforce-approval-gate.kiro.hook", dst: "hooks/aidlc-enforce-approval-gate.kiro.hook" },
     { src: "hooks/aidlc-log-subagent.kiro.hook", dst: "hooks/aidlc-log-subagent.kiro.hook" },
     { src: "hooks/aidlc-rebuild-stage-graph.kiro.hook", dst: "hooks/aidlc-rebuild-stage-graph.kiro.hook" },
