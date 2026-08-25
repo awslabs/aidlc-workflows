@@ -95,6 +95,8 @@ For an isolated run's reviewer, add `--single` to both `aidlc-log.ts review` cal
 | `invoke-swarm` | Load every module named in `directive.protocol_modules` before acting - including `reviewer` when emitted, plus `construction` and `swarm` - then follow the swarm module's subsection for this harness. The directive kind is the fallback trigger when the hint field is absent. |
 | `present-gate` | _(engine-future — not emitted today; folded into `run-stage`'s `gate` field.)_ |
 
+**Typed new-work Other response.** For a `new-work-routing` ask, a reply consisting only of `4` or `Other` does not describe a route: ask exactly **"What would you like me to do instead?"** and END THE TURN without calling a tool. Once the human supplies an actual alternative, call `next "<human alternative>"` with their words unchanged and act on the returned directive; never call `report`.
+
 **Settled swarm branch.** When a `run-stage` carries `directive.swarm_settled === true`, branch before ordinary run-stage context or body handling. Load every module named in `directive.protocol_modules`, do not run the stage body or reviewer, and follow the swarm module's settled-swarm re-entry rule: learnings and the single approval gate only.
 
 **Autonomous reviewer boundary.** The complete autonomous review and receipt contract moved to `aidlc-common/protocols/stage-protocol-swarm.md`; load it for every `invoke-swarm` directive, skipping it only if already loaded in this session.

@@ -4,7 +4,9 @@
 // one in-flight intent record but no per-user active-intent cursor. The user
 // submits unrelated scoped work. Kiro must print the engine's typed
 // numbered_prose_question with Other, end the turn, and never replace it after
-// an `intent --json` query.
+// an `intent --json` query. Two follow-up turns prove the Other response route:
+// bare 4 requests details without routing, then substantive prose returns
+// unchanged through next and produces a fresh typed ask.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -43,12 +45,17 @@ const PORT = 9900 + (process.pid % 80);
 const DIAGNOSTICS_PATH = process.env.AIDLC_KIRO_IDE_DIAGNOSTICS ?? "";
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+const OTHER_DETAIL_PROMPT = "What would you like me to do instead?";
+const ALTERNATIVE =
+  "Treat this as a documentation update for the existing work instead.";
 
 interface RoutingDirective {
   kind: "ask";
   ask_type: "new-work-routing";
+  response_route: "next";
   numbered_prose_question: string;
-  available_intents: string[];
+  new_work_description: string;
+  available_intents?: string[];
 }
 
 interface ExtractedDirective {
@@ -65,8 +72,14 @@ function diagnostic(event: string, fields: Record<string, unknown> = {}): void {
   );
 }
 
-function extractRoutingDirective(text: string): ExtractedDirective | null {
-  const start = text.indexOf('{"kind":"ask","ask_type":"new-work-routing"');
+function extractRoutingDirective(
+  text: string,
+  fromIndex = 0,
+): ExtractedDirective | null {
+  const start = text.indexOf(
+    '{"kind":"ask","ask_type":"new-work-routing"',
+    fromIndex,
+  );
   if (start < 0) return null;
   let depth = 0;
   let inString = false;
@@ -95,6 +108,57 @@ function extractRoutingDirective(text: string): ExtractedDirective | null {
     }
   }
   return null;
+}
+
+function routingDirectives(text: string): ExtractedDirective[] {
+  const directives: ExtractedDirective[] = [];
+  let fromIndex = 0;
+  for (;;) {
+    const extracted = extractRoutingDirective(text, fromIndex);
+    if (!extracted) return directives;
+    directives.push(extracted);
+    fromIndex = extracted.end;
+  }
+}
+
+function routingDescriptions(snapshots: KiroIdeDomSnapshot[]): string[] {
+  return [
+    ...new Set(
+      snapshots.flatMap((snapshot) =>
+        routingDirectives(snapshot.text).map(
+          (extracted) => extracted.directive.new_work_description,
+        )
+      ),
+    ),
+  ].sort();
+}
+
+function primaryRoutingDirectiveCount(
+  snapshots: KiroIdeDomSnapshot[],
+): number {
+  const snapshot = routingSnapshot(snapshots);
+  return snapshot ? routingDirectives(snapshot.text).length : 0;
+}
+
+function combinedChatText(snapshots: KiroIdeDomSnapshot[]): string {
+  return snapshots.map((snapshot) => snapshot.text).join("\n");
+}
+
+function routingEntryForDescription(
+  snapshots: KiroIdeDomSnapshot[],
+  description: string,
+): { snapshot: KiroIdeDomSnapshot; extracted: ExtractedDirective } | undefined {
+  return snapshots
+    .flatMap((snapshot) =>
+      routingDirectives(snapshot.text).map((extracted) => ({
+        snapshot,
+        extracted,
+      }))
+    )
+    .filter(
+      (entry) => entry.extracted.directive.new_work_description === description,
+    )
+    .sort((left, right) => right.snapshot.text.length - left.snapshot.text.length)[0];
 }
 
 function visibleMarkdown(text: string): string {
@@ -187,7 +251,7 @@ const SKIP_REASON = skipReason();
 
 describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
   test.skipIf(SKIP_REASON !== null)(
-    `engine typed ask remains authoritative and renders numbered Other${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
+    `engine ask remains authoritative and Other completes its next response route${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const project = setupTuiProject({
         harness: "kiro-ide",
@@ -284,6 +348,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         expect(directive).not.toBeNull();
         expect(directive?.kind).toBe("ask");
         expect(directive?.ask_type).toBe("new-work-routing");
+        expect(directive?.response_route).toBe("next");
         expect(directive?.available_intents).toHaveLength(2);
         const expected = visibleQuestionContent(
           directive?.numbered_prose_question ?? "",
@@ -294,6 +359,125 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         expect(hasExactOrderedOptions(finalSnapshots, directive!)).toBe(true);
         expect(completedTurn(finalSnapshots)).toBe(true);
         expect(chatText).not.toMatch(/aidlc-utility\.ts intent --json/i);
+
+        const initialDescriptions = routingDescriptions(finalSnapshots);
+        const initialDirectiveCount =
+          primaryRoutingDirectiveCount(finalSnapshots);
+        expect(initialDirectiveCount).toBeGreaterThan(0);
+        const otherTarget = await pageTarget(handle.port);
+        await typeAndSubmit(otherTarget, "4", handle.port);
+        otherTarget.close();
+
+        let otherSnapshots: KiroIdeDomSnapshot[] = [];
+        let otherChatText = "";
+        const otherDeadline =
+          Date.now() + Math.min(90_000, TEST_TIMEOUT_MS - 30_000);
+        while (Date.now() < otherDeadline) {
+          await autoApprove(handle.port);
+          const snapshots = await snapshotChatDom(handle.port);
+          const combined = combinedChatText(snapshots);
+          otherSnapshots = snapshots;
+          otherChatText = combined;
+          if (
+            completedTurn(snapshots) &&
+            visibleMarkdown(combined).includes(OTHER_DETAIL_PROMPT)
+          ) {
+            break;
+          }
+          await sleep(1_500);
+        }
+        await sleep(2_000);
+        const settledOther = await snapshotChatDom(handle.port);
+        if (
+          completedTurn(settledOther) &&
+          visibleMarkdown(combinedChatText(settledOther)).includes(
+            OTHER_DETAIL_PROMPT,
+          )
+        ) {
+          otherSnapshots = settledOther;
+          otherChatText = combinedChatText(settledOther);
+        }
+        expect(visibleMarkdown(otherChatText)).toContain(OTHER_DETAIL_PROMPT);
+        expect(completedTurn(otherSnapshots)).toBe(true);
+        expect(routingDescriptions(otherSnapshots)).toEqual(
+          initialDescriptions,
+        );
+        expect(primaryRoutingDirectiveCount(otherSnapshots)).toBe(
+          initialDirectiveCount,
+        );
+        expect(otherChatText).not.toMatch(/aidlc-utility\.ts intent --json/i);
+        expect(otherChatText).not.toMatch(/aidlc-orchestrate\.ts report/i);
+
+        const alternativeTarget = await pageTarget(handle.port);
+        await typeAndSubmit(alternativeTarget, ALTERNATIVE, handle.port);
+        alternativeTarget.close();
+
+        let alternativeSnapshots: KiroIdeDomSnapshot[] = [];
+        let alternativeChatText = "";
+        let alternativeTail = "";
+        let alternativeDirective: RoutingDirective | null = null;
+        const alternativeDeadline =
+          Date.now() + Math.min(90_000, TEST_TIMEOUT_MS - 30_000);
+        while (Date.now() < alternativeDeadline) {
+          await autoApprove(handle.port);
+          const snapshots = await snapshotChatDom(handle.port);
+          const entry = routingEntryForDescription(snapshots, ALTERNATIVE);
+          alternativeSnapshots = snapshots;
+          alternativeChatText = combinedChatText(snapshots);
+          if (entry) {
+            const tail = entry.snapshot.text.slice(entry.extracted.end);
+            const alternativeExpected = visibleQuestionContent(
+              entry.extracted.directive.numbered_prose_question,
+            );
+            alternativeTail = tail;
+            alternativeDirective = entry.extracted.directive;
+            if (
+              completedTurn(snapshots) &&
+              visibleMarkdown(tail).includes(alternativeExpected) &&
+              hasExactOrderedOptions(snapshots, entry.extracted.directive)
+            ) {
+              break;
+            }
+          }
+          await sleep(1_500);
+        }
+        await sleep(2_000);
+        const settledAlternative = await snapshotChatDom(handle.port);
+        const settledAlternativeEntry = routingEntryForDescription(
+          settledAlternative,
+          ALTERNATIVE,
+        );
+        alternativeSnapshots = settledAlternative;
+        alternativeChatText = combinedChatText(settledAlternative);
+        if (settledAlternativeEntry) {
+          alternativeDirective =
+            settledAlternativeEntry.extracted.directive;
+          alternativeTail = settledAlternativeEntry.snapshot.text.slice(
+            settledAlternativeEntry.extracted.end,
+          );
+        }
+        expect(alternativeDirective).not.toBeNull();
+        expect(alternativeDirective?.response_route).toBe("next");
+        expect(alternativeDirective?.new_work_description).toBe(ALTERNATIVE);
+        expect(visibleMarkdown(alternativeTail)).toContain(
+          visibleQuestionContent(
+            alternativeDirective?.numbered_prose_question ?? "",
+          ),
+        );
+        expect(
+          hasExactOrderedOptions(alternativeSnapshots, alternativeDirective!),
+        ).toBe(true);
+        expect(completedTurn(alternativeSnapshots)).toBe(true);
+        expect(alternativeChatText).not.toMatch(
+          /aidlc-orchestrate\.ts report/i,
+        );
+        expect(alternativeChatText).not.toMatch(
+          /aidlc-utility\.ts intent --json/i,
+        );
+        expect(primaryRoutingDirectiveCount(alternativeSnapshots)).toBe(
+          initialDirectiveCount + 1,
+        );
+        expect(routingDescriptions(alternativeSnapshots)).toContain(ALTERNATIVE);
         diagnostic("verified", {
           platform: platform(),
           directive,
@@ -304,6 +488,13 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
           completed_turn: completedTurn(finalSnapshots),
           intent_query_present:
             /aidlc-utility\.ts intent --json/i.test(chatText),
+          other_prompt: visibleMarkdown(otherChatText).includes(
+            OTHER_DETAIL_PROMPT,
+          ),
+          alternative_directive: alternativeDirective,
+          alternative_completed_turn: completedTurn(alternativeSnapshots),
+          report_route_present:
+            /aidlc-orchestrate\.ts report/i.test(alternativeChatText),
         });
       } finally {
         teardown(handle);
