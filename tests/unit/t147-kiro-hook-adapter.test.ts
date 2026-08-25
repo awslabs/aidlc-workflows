@@ -38,6 +38,7 @@ import { fileURLToPath } from "node:url";
 import {
   createIntent,
   readIntentRegistry,
+  sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
@@ -500,7 +501,29 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("3b: terminal dispatch preserves unquoted, quoted, and UNC Windows paths", () => {
+  test("3b: plain-text sanitizer drops unterminated 7-bit and 8-bit controls", () => {
+    for (const introducer of ["\u001b[", "\u009b"]) {
+      expect(sanitizeHarnessPlainText(`before${introducer}31`)).toBe("before");
+    }
+    for (const introducer of [
+      "\u001bP",
+      "\u001bX",
+      "\u001b]",
+      "\u001b^",
+      "\u001b_",
+      "\u0090",
+      "\u0098",
+      "\u009d",
+      "\u009e",
+      "\u009f",
+    ]) {
+      expect(
+        sanitizeHarnessPlainText(`before${introducer}terminal-payload`),
+      ).toBe("before");
+    }
+  });
+
+  test("3c: terminal dispatch preserves unquoted, quoted, and UNC Windows paths", () => {
     const dir = scratchProject(true);
     try {
       const argvPath = join(dir, "terminal-argv.json");

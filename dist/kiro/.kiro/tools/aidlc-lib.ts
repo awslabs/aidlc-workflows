@@ -1226,7 +1226,7 @@ export function sanitizeHarnessPlainText(value: string): string {
       const next = value.charCodeAt(i + 1);
       if (next === 0x5b) {
         const end = csiEnd(i + 2);
-        i = end >= 0 ? end + 1 : i + 1;
+        i = end >= 0 ? end + 1 : value.length;
         continue;
       }
       if (
@@ -1237,7 +1237,7 @@ export function sanitizeHarnessPlainText(value: string): string {
         next === 0x5f
       ) {
         const end = stringControlEnd(i + 2);
-        i = end >= 0 ? end + 1 : i + 1;
+        i = end >= 0 ? end + 1 : value.length;
         continue;
       }
       if (
@@ -1262,7 +1262,7 @@ export function sanitizeHarnessPlainText(value: string): string {
 
     if (code === 0x9b) {
       const end = csiEnd(i + 1);
-      i = end >= 0 ? end + 1 : i + 1;
+      i = end >= 0 ? end + 1 : value.length;
       continue;
     }
     if (
@@ -1273,7 +1273,7 @@ export function sanitizeHarnessPlainText(value: string): string {
       code === 0x9f
     ) {
       const end = stringControlEnd(i + 1);
-      i = end >= 0 ? end + 1 : i + 1;
+      i = end >= 0 ? end + 1 : value.length;
       continue;
     }
     if (
