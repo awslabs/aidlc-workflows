@@ -3114,7 +3114,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain("invalid plugin");
   });
 
-  // --- `plugin build` outDir guard (pre-merge review asks) ---
+  // --- `plugin build` output ownership guard ---
   // Run the CLI directly; assert it REFUSES (exit 1) and leaves the target intact.
   function pluginBuild(outDir: string, extra: string[] = []): { code: number; out: string } {
     const r = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", PLUGIN, "claude", outDir, ...extra], {
@@ -3183,5 +3183,38 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(pluginBuild(d).code).toBe(0); // first build into empty dir
     expect(existsSync(join(d, ".claude-plugin", "plugin.json"))).toBe(true);
     expect(pluginBuild(d).code).toBe(0); // rebuild over the prior projection — allowed
+  });
+
+  test("plugin build refuses a mismatched ownership marker and preserves content", () => {
+    const d = mkdtempSync(join(tmp, "gb-owner-"));
+    expect(pluginBuild(d).code).toBe(0);
+    writeFileSync(
+      join(d, ".aidlc-plugin-projection.json"),
+      `${JSON.stringify({
+        schema: 1,
+        producer: "aidlc-plugin-build",
+        plugin: "other-plugin",
+        harness: "claude",
+      })}\n`,
+    );
+    writeFileSync(join(d, "sentinel.txt"), "preserve");
+
+    const { code, out } = pluginBuild(d);
+    expect(code).toBe(1);
+    expect(out).toContain('belongs to plugin "other-plugin"');
+    expect(readFileSync(join(d, "sentinel.txt"), "utf-8")).toBe("preserve");
+  });
+
+  test("plugin build has no force bypass for output ownership", () => {
+    const d = mkdtempSync(join(tmp, "gb-no-force-"));
+    expect(pluginBuild(d).code).toBe(0);
+    writeFileSync(join(d, "sentinel.txt"), "preserve");
+
+    const { code, out } = pluginBuild(d, ["--force"]);
+    expect(code).toBe(1);
+    expect(out).toContain(
+      "usage: package.ts plugin build <plugin> <harness> <outDir>",
+    );
+    expect(readFileSync(join(d, "sentinel.txt"), "utf-8")).toBe("preserve");
   });
 });

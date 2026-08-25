@@ -200,6 +200,41 @@ describe("t314 standalone plugin validator", () => {
     expect(rules).toContain("manifest-shape");
   });
 
+  test("manifest contribution paths must be canonical and memory remains unsupported", () => {
+    const root = fixture();
+    renameSync(join(root, "stages"), join(root, "custom-stages"));
+    const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      aidlc: { contributes: Record<string, string> };
+    };
+    manifest.aidlc.contributes.stages = "custom-stages/";
+    manifest.aidlc.contributes.memory = "memory/";
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const result = validatePluginRoot(root);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        file: ".aidlc-plugin/plugin.json",
+        rule: "manifest-shape",
+        message:
+          'aidlc.contributes.stages must be "stages/" until configurable contribution paths are supported',
+      }),
+    );
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        file: ".aidlc-plugin/plugin.json",
+        rule: "manifest-shape",
+        message:
+          "aidlc.contributes.memory is not supported by the current plugin projection",
+      }),
+    );
+  });
+
   test("b: stage frontmatter parse and schema failures are reported", () => {
     const root = fixture();
     const stage = join(

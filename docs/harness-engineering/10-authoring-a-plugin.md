@@ -81,14 +81,18 @@ block:
 }
 ```
 
-`contributes` keys map to core subtrees (`stages`, `agents`, `scopes`, `memory`,
-`sensors`, `knowledge`, `tools`) — those are merged alongside core at compose.
+`contributes` declares the conventional plugin subtrees. Configurable routing is
+not implemented yet, so each present value must use the exact canonical path
+shown above; VALIDATE, BUILD, and TEST reject alternatives such as
+`"stages": "custom-stages/"` instead of silently omitting that content.
 `tools` lands CLI scripts in the harness `tools/` dir so a plugin can ship a
 **runnable sensor** (its manifest in `sensors/` + its script in `tools/`) and an
-optional doctor check.
-`memory` merges into the default-space method seed, **not** a `rules/` dir (that
-directory is no longer read — see §4). `overlays` is special: it is **not**
-copied; it holds the per-stage contributions consumed by the merge (§3).
+optional doctor check. `overlays` is special: its canonical directory is
+`contributions/`, whose files are consumed by the merge rather than copied as a
+primitive subtree.
+
+`memory` projection remains deferred. Do not declare `contributes.memory` yet:
+the authoring tools reject it until the default-space method-seed merge ships.
 
 Ship only the keys your plugin uses. `test-pro` ships a support agent, a plugin
 scope, and per-agent methodology knowledge; it still reuses
@@ -256,10 +260,11 @@ projection remains deferred (doc 18 §8 Status).
   names the file and the required shape, rather than letting it land dead. Bind
   the sensor to your own stages via `sensors:`, or to a core stage via a
   contribution's `adds.sensors`. See [Sensors](06-sensors.md).
-- **Method/rules.** *(⏳ deferred.)* Ship a `memory/` subtree — `memory/phases/<phase>.md` (or
-  `memory/{org,team,project}.md`) — via `contributes.memory`. It **merges into
-  the default-space method seed** (`aidlc/spaces/default/memory/`) in the design,
-  but the packager/compose hook does not project or merge `memory/` yet. Do
+- **Method/rules.** *(⏳ deferred.)* A future `contributes.memory` surface will
+  merge `memory/phases/<phase>.md` and `memory/{org,team,project}.md` into the
+  default-space method seed (`aidlc/spaces/default/memory/`). The packager and
+  compose hook do not project that subtree yet, and the authoring tools reject
+  the declaration so a build cannot report success while omitting it. Do
   **not** ship a `rules/` dir — that path is no longer read (the rule layer moved
   into per-space memory). See [Rules and the Loop](05-rules-and-the-loop.md).
 - **Knowledge.** Ship per-agent **methodology** knowledge under

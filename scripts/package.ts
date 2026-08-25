@@ -59,7 +59,6 @@ import {
 } from "./agent-knowledge.ts";
 import { renderOnboarding } from "./onboarding.ts";
 import {
-  assertPluginBuildOutput,
   buildPluginProjection as emitPluginProjection,
   type PluginTarget,
   type PluginTargetTable,
@@ -1152,11 +1151,15 @@ function checkPlugins(harnesses: string[], full: boolean): string[] {
 // trees — writeHarness/emitPlugins rmSync + rewrite dist, which a parallel test
 // tier must never do (it masks drift and races sibling tests). Pure builder call.
 if (argv[0] === "plugin" && argv[1] === "build") {
-  const rest = argv.slice(2).filter((a) => a !== "--force");
-  const force = argv.includes("--force");
-  const [pluginName, harnessName, outDir] = rest;
-  if (!pluginName || !harnessName || !outDir) {
-    console.error("usage: package.ts plugin build <plugin> <harness> <outDir> [--force]");
+  const [pluginName, harnessName, outDir, ...extra] = argv.slice(2);
+  if (
+    !pluginName ||
+    !harnessName ||
+    !outDir ||
+    extra.length > 0 ||
+    [pluginName, harnessName, outDir].some((arg) => arg.startsWith("-"))
+  ) {
+    console.error("usage: package.ts plugin build <plugin> <harness> <outDir>");
     process.exit(1);
   }
   // Proper usage errors, never a raw ENOENT/rmSync stack (round-3).
@@ -1175,27 +1178,19 @@ if (argv[0] === "plugin" && argv[1] === "build") {
     console.error(`unknown plugin harness "${harnessName}" (have: ${discoverHarnessNames().join(", ")})`);
     process.exit(1);
   }
-  // Shared output guard: both the checkout CLI and shipped builder refuse
-  // symlinks, files, and foreign non-empty directories before the clean sweep.
   const outArg = outDir.replace(/[/\\]+$/, "") || outDir;
   const resolvedOut = isAbsolute(outArg) ? outArg : join(process.cwd(), outArg);
   try {
-    assertPluginBuildOutput(
+    buildRepositoryPluginProjection(
+      pluginName,
+      harnessName,
       resolvedOut,
-      target,
-      force,
       resolvedOut,
     );
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
-  buildRepositoryPluginProjection(
-    pluginName,
-    harnessName,
-    resolvedOut,
-    resolvedOut,
-  );
   process.exit(0);
 }
 

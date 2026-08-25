@@ -11,7 +11,6 @@ import {
   sep,
 } from "node:path";
 import {
-  assertPluginBuildOutput,
   buildPluginProjection,
   readPluginTargets,
 } from "./aidlc-plugin-emit.ts";
@@ -171,7 +170,6 @@ export function main(argv: string[]): number {
   }
 
   try {
-    assertPluginBuildOutput(outDir, target, false, outputBoundary);
     buildPluginProjection({
       pluginRoot,
       target,

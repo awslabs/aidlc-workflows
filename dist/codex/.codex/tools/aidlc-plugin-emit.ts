@@ -5,17 +5,20 @@
 // tools/data/plugin-targets.json. This module therefore contains projection
 // behavior but no framework-checkout or harness-manifest dependency.
 
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   basename,
   dirname,
@@ -27,6 +30,7 @@ import {
 } from "node:path";
 import {
   assertPluginContentHasNoSymlinks,
+  assertSupportedPluginContributionPaths,
   scanPluginFiles,
   walkPluginFiles,
 } from "./aidlc-plugin-validate.ts";
@@ -50,6 +54,7 @@ export interface BuildPluginProjectionOptions {
   outputBoundary?: string;
   templateHooksDir: string;
   reviewerAgents?: Iterable<string>;
+  lockTimeoutMs?: number;
 }
 
 export interface PluginProjectionResult {
@@ -58,6 +63,12 @@ export interface PluginProjectionResult {
   outDir: string;
   files: string[];
 }
+
+export const PLUGIN_PROJECTION_MARKER = ".aidlc-plugin-projection.json";
+const PLUGIN_PROJECTION_MARKER_SCHEMA = 1;
+const PLUGIN_PROJECTION_PRODUCER = "aidlc-plugin-build";
+const PLUGIN_BUILD_LOCK_TIMEOUT_MS = 30_000;
+const PLUGIN_BUILD_LOCK_RETRY_MS = 25;
 
 const CONTENT_DIRS = [
   "stages",
@@ -75,6 +86,69 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
     value !== null &&
     !Array.isArray(value)
   );
+}
+
+function canonicalOutputPath(path: string): string {
+  let existing = resolve(path);
+  const missing: string[] = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) break;
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+  try {
+    existing = realpathSync.native(existing);
+  } catch {
+    // resolve() is still a stable fallback when no ancestor can be realpathed.
+  }
+  return join(existing, ...missing);
+}
+
+export function pluginBuildLockPath(outDir: string): string {
+  const key = createHash("sha256")
+    .update(canonicalOutputPath(outDir))
+    .digest("hex");
+  return join(tmpdir(), "aidlc-plugin-build-locks", key);
+}
+
+function waitForLockRetry(): void {
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(wait, 0, 0, PLUGIN_BUILD_LOCK_RETRY_MS);
+}
+
+function withPluginBuildOutputLock<T>(
+  outDir: string,
+  timeoutMs: number,
+  action: () => T,
+): T {
+  const lockDir = pluginBuildLockPath(outDir);
+  mkdirSync(dirname(lockDir), { recursive: true, mode: 0o700 });
+  const started = Date.now();
+  while (true) {
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (Date.now() - started >= timeoutMs) {
+        throw new Error(
+          `could not acquire plugin build output lock "${lockDir}" within ${timeoutMs}ms`,
+        );
+      }
+      waitForLockRetry();
+    }
+  }
+  try {
+    writeFileSync(
+      join(lockDir, "owner.json"),
+      `${JSON.stringify({ pid: process.pid, output: canonicalOutputPath(outDir) })}\n`,
+      "utf-8",
+    );
+    return action();
+  } finally {
+    rmSync(lockDir, { recursive: true, force: true });
+  }
 }
 
 export function readPluginTargets(path: string): PluginTargetTable {
@@ -152,6 +226,32 @@ function absorbPluginReviewerKnowledge(
     );
   });
   return `${content.trimEnd()}\n\n---\n\n${sections.join("\n\n---\n\n")}\n`;
+}
+
+function injectDelegatedKnowledgePreflight(
+  content: string,
+  agentName: string,
+  harnessDir: string,
+): string {
+  const marker = "<!-- aidlc-delegated-knowledge-preflight -->";
+  if (content.includes(marker)) return content;
+  const block =
+    `${marker}\n` +
+    `**Delegated knowledge preflight (mandatory):** Before substantive work, ` +
+    `ensure every readable Markdown file under these directories is loaded, in order: ` +
+    `\`${harnessDir}/knowledge/aidlc-shared/\`, ` +
+    `\`${harnessDir}/knowledge/${agentName}/\`, ` +
+    `\`aidlc/spaces/<active-space>/knowledge/aidlc-shared/\`, then ` +
+    `\`aidlc/spaces/<active-space>/knowledge/${agentName}/\`. ` +
+    `A native resource preload satisfies this requirement; otherwise read the files now. ` +
+    `The dispatch brief supplies rules and artifact paths separately.`;
+  const frontmatter = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  if (!frontmatter) return `${block}\n\n${content.trimStart()}`;
+  return (
+    content.slice(0, frontmatter[0].length) +
+    `${block}\n\n` +
+    content.slice(frontmatter[0].length)
+  );
 }
 
 function projectCursorPluginAgent(
@@ -359,6 +459,11 @@ function copyPluginContent(
           pluginRoot,
           reviewers,
         );
+        projected = injectDelegatedKnowledgePreflight(
+          projected,
+          basename(file, ".md"),
+          target.harnessLeaf,
+        );
         if (target.kind === "cursor") {
           projected = projectCursorPluginAgent(projected, file);
         }
@@ -423,7 +528,7 @@ function assertBuildPathHasNoSymlinks(
 export function assertPluginBuildOutput(
   outDir: string,
   target: PluginTarget,
-  force = false,
+  pluginName: string,
   outputBoundary = outDir,
 ): void {
   const outArg = outDir.replace(/[/\\]+$/, "") || outDir;
@@ -441,25 +546,35 @@ export function assertPluginBuildOutput(
       `refusing to build into "${outDir}" - it is a file, not a directory.`,
     );
   }
-  if (readdirSync(resolvedOut).length === 0 || force) return;
-  let priorProjection = false;
+  if (readdirSync(resolvedOut).length === 0) return;
+  const markerPath = join(resolvedOut, PLUGIN_PROJECTION_MARKER);
+  let marker: Record<string, unknown> | null = null;
   try {
-    const manifest = JSON.parse(
-      readFileSync(
-        join(resolvedOut, target.manifestDir, "plugin.json"),
-        "utf-8",
-      ),
-    ) as { name?: unknown };
-    priorProjection =
-      typeof manifest.name === "string" &&
-      manifest.name.startsWith("aidlc-");
+    const parsed = JSON.parse(readFileSync(markerPath, "utf-8")) as unknown;
+    marker = isPlainRecord(parsed) ? parsed : null;
   } catch {
-    priorProjection = false;
+    marker = null;
   }
-  if (!priorProjection) {
+  if (
+    !marker ||
+    marker.schema !== PLUGIN_PROJECTION_MARKER_SCHEMA ||
+    marker.producer !== PLUGIN_PROJECTION_PRODUCER ||
+    typeof marker.plugin !== "string" ||
+    typeof marker.harness !== "string"
+  ) {
     throw new Error(
-      `refusing to build into non-empty "${outDir}" - it is not a prior AIDLC plugin projection ` +
-        `(no ${target.manifestDir}/plugin.json with an aidlc- name). Point at a fresh/empty directory.`,
+      `refusing to build into non-empty "${outDir}" - it has no valid ${PLUGIN_PROJECTION_MARKER} ownership marker. ` +
+        "Point at a fresh/empty directory.",
+    );
+  }
+  if (
+    marker.plugin !== pluginName ||
+    marker.harness !== target.harnessName
+  ) {
+    throw new Error(
+      `refusing to replace "${outDir}" - its ${PLUGIN_PROJECTION_MARKER} belongs to ` +
+        `plugin "${marker.plugin}" for harness "${marker.harness}", not plugin "${pluginName}" ` +
+        `for harness "${target.harnessName}".`,
     );
   }
 }
@@ -477,6 +592,7 @@ export function buildPluginProjection(
   assertPluginContentHasNoSymlinks(pluginRoot);
   const manifest = readPluginManifest(pluginRoot);
   const pluginName = pluginNameFromManifest(pluginRoot, manifest);
+  assertSupportedPluginContributionPaths(manifest);
   const version = manifest.version || "0.0.1";
   const author = manifest.author || { name: "AIDLC" };
   const description = manifest.description || "";
@@ -484,60 +600,86 @@ export function buildPluginProjection(
     options.reviewerAgents ?? pluginReviewerAgents(pluginRoot),
   );
 
-  rmSync(outDir, { recursive: true, force: true });
-  mkdirSync(outDir, { recursive: true });
+  return withPluginBuildOutputLock(
+    outDir,
+    options.lockTimeoutMs ?? PLUGIN_BUILD_LOCK_TIMEOUT_MS,
+    () => {
+      assertPluginBuildOutput(
+        options.outDir,
+        options.target,
+        pluginName,
+        options.outputBoundary ?? outDir,
+      );
 
-  const hostManifestDir = join(outDir, options.target.manifestDir);
-  mkdirSync(hostManifestDir, { recursive: true });
-  writeFileSync(
-    join(hostManifestDir, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: `aidlc-${pluginName}`,
-        version,
-        description,
-        author,
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  writeFileSync(
-    join(hostManifestDir, "marketplace.json"),
-    `${JSON.stringify(
-      {
-        name: "aidlc-plugins",
-        owner: author,
-        description: "AIDLC plugin catalogue.",
-        plugins: [
+      rmSync(outDir, { recursive: true, force: true });
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(
+        join(outDir, PLUGIN_PROJECTION_MARKER),
+        `${JSON.stringify(
+          {
+            schema: PLUGIN_PROJECTION_MARKER_SCHEMA,
+            producer: PLUGIN_PROJECTION_PRODUCER,
+            plugin: pluginName,
+            harness: options.target.harnessName,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const hostManifestDir = join(outDir, options.target.manifestDir);
+      mkdirSync(hostManifestDir, { recursive: true });
+      writeFileSync(
+        join(hostManifestDir, "plugin.json"),
+        `${JSON.stringify(
           {
             name: `aidlc-${pluginName}`,
-            source: ".",
             version,
             description,
+            author,
           },
-        ],
-      },
-      null,
-      2,
-    )}\n`,
-  );
+          null,
+          2,
+        )}\n`,
+      );
+      writeFileSync(
+        join(hostManifestDir, "marketplace.json"),
+        `${JSON.stringify(
+          {
+            name: "aidlc-plugins",
+            owner: author,
+            description: "AIDLC plugin catalogue.",
+            plugins: [
+              {
+                name: `aidlc-${pluginName}`,
+                source: ".",
+                version,
+                description,
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
 
-  copyHookTemplates(
-    pluginRoot,
-    outDir,
-    options.templateHooksDir,
-    options.target,
-  );
-  writeHookWiring(pluginName, outDir, options.target);
-  copyPluginContent(pluginRoot, outDir, options.target, reviewers);
+      copyHookTemplates(
+        pluginRoot,
+        outDir,
+        options.templateHooksDir,
+        options.target,
+      );
+      writeHookWiring(pluginName, outDir, options.target);
+      copyPluginContent(pluginRoot, outDir, options.target, reviewers);
 
-  return {
-    pluginName,
-    harness: options.target.harnessName,
-    outDir,
-    files: walkPluginFiles(outDir).map((file) =>
-      relative(outDir, file).split(sep).join("/"),
-    ),
-  };
+      return {
+        pluginName,
+        harness: options.target.harnessName,
+        outDir,
+        files: walkPluginFiles(outDir).map((file) =>
+          relative(outDir, file).split(sep).join("/"),
+        ),
+      };
+    },
+  );
 }

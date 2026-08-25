@@ -18,9 +18,9 @@ They show the intended lifecycle, not current behavior.
 ## Status of these files
 
 - `plugin.json` is a **real, created file** in the repo — the manifest for the
-  shipped `test-pro` fixture. (Note: the packager discovers plugin content by
-  directory convention today and does not yet read the manifest's
-  `aidlc.contributes` block — see doc 18 §3.)
+  shipped `test-pro` fixture. The authoring tools validate its
+  `aidlc.contributes` keys and canonical paths; projection still discovers the
+  corresponding bytes by directory convention (see doc 18 §3).
 - `marketplace.json`, `managed-settings.json`, and `aidlc.lock.json` are
   **illustrative examples** for design review only. The installer, marketplace
   resolution, and lockfile writer that would *produce* and *consume* them are

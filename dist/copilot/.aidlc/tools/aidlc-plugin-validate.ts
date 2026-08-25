@@ -14,7 +14,6 @@ import {
 } from "node:fs";
 import {
   basename,
-  isAbsolute,
   join,
   relative,
   resolve,
@@ -121,6 +120,15 @@ const CONTRIBUTION_KEYS = new Set([
   "knowledge",
   "tools",
 ]);
+const CANONICAL_CONTRIBUTION_PATHS: Record<string, string> = {
+  stages: "stages/",
+  overlays: "contributions/",
+  agents: "agents/",
+  scopes: "scopes/",
+  sensors: "sensors/",
+  knowledge: "knowledge/",
+  tools: "tools/",
+};
 const PLUGIN_SYMLINK_SCAN_DIRS = [
   ".aidlc-plugin",
   "stages",
@@ -175,6 +183,74 @@ function addWarning(
   fix: string,
 ): void {
   findings.warnings.push({ file, rule, message, fix });
+}
+
+type ContributionPathIssue = {
+  key: string;
+  message: string;
+  fix: string;
+};
+
+function contributionPathIssues(
+  contributes: Record<string, unknown>,
+): ContributionPathIssue[] {
+  const issues: ContributionPathIssue[] = [];
+  for (const [key, value] of Object.entries(contributes)) {
+    if (!CONTRIBUTION_KEYS.has(key)) {
+      issues.push({
+        key,
+        message: `unknown aidlc.contributes key "${key}"`,
+        fix: `Use one of: ${[...CONTRIBUTION_KEYS].sort().join(", ")}.`,
+      });
+      continue;
+    }
+    if (typeof value !== "string" || value.trim() === "") {
+      issues.push({
+        key,
+        message: `aidlc.contributes.${key} must be a non-empty relative path`,
+        fix: `Point "${key}" at the corresponding canonical plugin subtree.`,
+      });
+      continue;
+    }
+    if (key === "memory") {
+      issues.push({
+        key,
+        message:
+          "aidlc.contributes.memory is not supported by the current plugin projection",
+        fix: "Remove the memory contribution until memory projection ships.",
+      });
+      continue;
+    }
+    const canonical = CANONICAL_CONTRIBUTION_PATHS[key];
+    if (canonical && value !== canonical) {
+      issues.push({
+        key,
+        message:
+          `aidlc.contributes.${key} must be "${canonical}" until configurable contribution paths are supported`,
+        fix: `Move the content to "${canonical}" and set aidlc.contributes.${key} to that exact path.`,
+      });
+    }
+  }
+  return issues;
+}
+
+export function assertSupportedPluginContributionPaths(
+  manifest: Record<string, unknown>,
+  manifestFile = MANIFEST_REL.split(sep).join("/"),
+): void {
+  if (!isPlainRecord(manifest.aidlc)) {
+    throw new Error(`${manifestFile}: manifest aidlc must be an object`);
+  }
+  if (!isPlainRecord(manifest.aidlc.contributes)) {
+    throw new Error(
+      `${manifestFile}: manifest aidlc.contributes must be an object`,
+    );
+  }
+  const issues = contributionPathIssues(manifest.aidlc.contributes);
+  if (issues.length === 0) return;
+  throw new Error(
+    `${manifestFile}: ${issues.map((issue) => issue.message).join("; ")}`,
+  );
 }
 
 export function validatePluginName(
@@ -452,39 +528,14 @@ function validateManifest(
     return { pluginName: declaredName };
   }
 
-  for (const [key, value] of Object.entries(manifest.aidlc.contributes)) {
-    if (!CONTRIBUTION_KEYS.has(key)) {
-      addError(
-        findings,
-        displayFile,
-        "manifest-shape",
-        `unknown aidlc.contributes key "${key}"`,
-        `Use one of: ${[...CONTRIBUTION_KEYS].sort().join(", ")}.`,
-      );
-      continue;
-    }
-    if (typeof value !== "string" || value.trim() === "") {
-      addError(
-        findings,
-        displayFile,
-        "manifest-shape",
-        `aidlc.contributes.${key} must be a non-empty relative path`,
-        `Point "${key}" at the corresponding plugin subtree, for example "${key}/".`,
-      );
-      continue;
-    }
-    if (
-      isAbsolute(value) ||
-      value.split(/[\\/]/).includes("..")
-    ) {
-      addError(
-        findings,
-        displayFile,
-        "manifest-shape",
-        `aidlc.contributes.${key} must stay within the plugin root`,
-        "Use a plugin-relative path without .. segments.",
-      );
-    }
+  for (const issue of contributionPathIssues(manifest.aidlc.contributes)) {
+    addError(
+      findings,
+      displayFile,
+      "manifest-shape",
+      issue.message,
+      issue.fix,
+    );
   }
 
   return { pluginName: declaredName };

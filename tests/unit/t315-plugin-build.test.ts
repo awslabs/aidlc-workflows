@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -17,6 +18,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildPluginProjection,
+  pluginBuildLockPath,
+  readPluginTargets,
+} from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SOURCE_TOOLS = join(
@@ -43,6 +49,7 @@ const EXPECTED_HARNESSES = [
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t315-"));
 const copiedTools = join(scratch, "runtime", "tools");
 const buildTool = join(copiedTools, "aidlc-plugin-build.ts");
+const PROJECTION_MARKER = ".aidlc-plugin-projection.json";
 
 cpSync(SOURCE_TOOLS, copiedTools, { recursive: true });
 
@@ -72,6 +79,34 @@ function copyPlugin(label: string): string {
   const root = join(scratch, label, "test-pro");
   mkdirSync(dirname(root), { recursive: true });
   cpSync(SOURCE_PLUGIN, root, { recursive: true });
+  return root;
+}
+
+function minimalPlugin(name: string): string {
+  const root = join(scratch, "minimal-plugins", name);
+  mkdirSync(join(root, ".aidlc-plugin"), { recursive: true });
+  writeFileSync(
+    join(root, ".aidlc-plugin", "plugin.json"),
+    `${JSON.stringify(
+      {
+        name,
+        version: "1.0.0",
+        description: "Minimal plugin",
+        author: { name: "Fixture" },
+        dependencies: ["core"],
+        aidlc: { contributes: { tools: "tools/" } },
+      },
+      null,
+      2,
+    )}\n`,
+    { encoding: "utf-8", flag: "w" },
+  );
+  mkdirSync(join(root, "tools"), { recursive: true });
+  writeFileSync(
+    join(root, "tools", `${name}-tool.ts`),
+    'console.log("fixture");\n',
+    "utf-8",
+  );
   return root;
 }
 
@@ -137,6 +172,131 @@ describe("t315 standalone plugin builder", () => {
     ).toEqual([]);
   });
 
+  test("the same plugin and harness can rebuild its owned projection", () => {
+    const pluginRoot = copyPlugin("same-owner-rebuild");
+    const outDir = join(scratch, "same-owner-output");
+    expect(run([pluginRoot, "claude", outDir, "--json"]).status).toBe(0);
+    const marker = JSON.parse(
+      readFileSync(join(outDir, PROJECTION_MARKER), "utf-8"),
+    ) as Record<string, unknown>;
+    expect(marker).toEqual({
+      schema: 1,
+      producer: "aidlc-plugin-build",
+      plugin: "test-pro",
+      harness: "claude",
+    });
+    writeFileSync(join(outDir, "stale-sentinel.txt"), "stale\n", "utf-8");
+
+    const rebuilt = run([pluginRoot, "claude", outDir, "--json"]);
+    expect(rebuilt.status, rebuilt.stderr).toBe(0);
+    expect(existsSync(join(outDir, "stale-sentinel.txt"))).toBe(false);
+  });
+
+  test("a different plugin cannot replace another plugin's projection", () => {
+    const owner = copyPlugin("different-plugin-owner");
+    const other = minimalPlugin("other-plugin");
+    const outDir = join(scratch, "different-plugin-output");
+    expect(run([owner, "claude", outDir, "--json"]).status).toBe(0);
+    const manifestPath = join(outDir, ".claude-plugin", "plugin.json");
+    const originalManifest = readFileSync(manifestPath, "utf-8");
+    writeFileSync(join(outDir, "sentinel.txt"), "preserve\n", "utf-8");
+
+    const refused = run([other, "claude", outDir, "--json"]);
+    expect(refused.status).toBe(1);
+    const parsed = JSON.parse(refused.stdout) as {
+      errors: Array<{ rule: string; message: string }>;
+    };
+    expect(parsed.errors).toContainEqual(
+      expect.objectContaining({
+        rule: "build-output",
+        message: expect.stringContaining(
+          'belongs to plugin "test-pro" for harness "claude"',
+        ),
+      }),
+    );
+    expect(readFileSync(join(outDir, "sentinel.txt"), "utf-8")).toBe(
+      "preserve\n",
+    );
+    expect(readFileSync(manifestPath, "utf-8")).toBe(originalManifest);
+  });
+
+  test("shared Kiro output shapes remain bound to the exact harness", () => {
+    const pluginRoot = copyPlugin("kiro-owner");
+    const outDir = join(scratch, "kiro-owned-output");
+    expect(run([pluginRoot, "kiro", outDir, "--json"]).status).toBe(0);
+    writeFileSync(join(outDir, "sentinel.txt"), "preserve\n", "utf-8");
+
+    const refused = run([pluginRoot, "kiro-ide", outDir, "--json"]);
+    expect(refused.status).toBe(1);
+    const parsed = JSON.parse(refused.stdout) as {
+      errors: Array<{ message: string }>;
+    };
+    expect(parsed.errors).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining(
+          'belongs to plugin "test-pro" for harness "kiro"',
+        ),
+      }),
+    );
+    expect(existsSync(join(outDir, "sentinel.txt"))).toBe(true);
+  });
+
+  test("missing and malformed ownership markers refuse rebuilds without mutation", () => {
+    const pluginRoot = copyPlugin("invalid-marker-owner");
+    for (const [label, markerBody] of [
+      ["missing", null],
+      ["malformed", "{not-json}\n"],
+    ] as const) {
+      const outDir = join(scratch, `invalid-marker-${label}`);
+      expect(run([pluginRoot, "claude", outDir, "--json"]).status).toBe(0);
+      const markerPath = join(outDir, PROJECTION_MARKER);
+      if (markerBody === null) rmSync(markerPath);
+      else writeFileSync(markerPath, markerBody, "utf-8");
+      writeFileSync(join(outDir, "sentinel.txt"), "preserve\n", "utf-8");
+
+      const refused = run([pluginRoot, "claude", outDir, "--json"]);
+      expect(refused.status).toBe(1);
+      const parsed = JSON.parse(refused.stdout) as {
+        errors: Array<{ rule: string; message: string }>;
+      };
+      expect(parsed.errors).toContainEqual(
+        expect.objectContaining({
+          rule: "build-output",
+          message: expect.stringContaining("no valid"),
+        }),
+      );
+      expect(existsSync(join(outDir, "sentinel.txt"))).toBe(true);
+    }
+  });
+
+  test("direct emission refuses a contended output lock before creating output", () => {
+    const pluginRoot = copyPlugin("contended-output-lock");
+    const outDir = join(scratch, "contended-output");
+    const lockDir = pluginBuildLockPath(outDir);
+    mkdirSync(lockDir, { recursive: true });
+    const target = readPluginTargets(
+      join(SOURCE_TOOLS, "data", "plugin-targets.json"),
+    ).claude;
+    try {
+      expect(() =>
+        buildPluginProjection({
+          pluginRoot,
+          target,
+          outDir,
+          templateHooksDir: join(
+            SOURCE_TOOLS,
+            "data",
+            "plugin-hooks-template",
+          ),
+          lockTimeoutMs: 25,
+        })
+      ).toThrow("could not acquire plugin build output lock");
+      expect(existsSync(outDir)).toBe(false);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
   test("custom output under a symlinked environmental ancestor remains valid", () => {
     const pluginRoot = copyPlugin("symlinked-environment-custom");
     const realEnvironment = join(scratch, "real-environment");
@@ -191,6 +351,72 @@ describe("t315 standalone plugin builder", () => {
     expect(json.errors.map((finding) => finding.rule)).toContain(
       "manifest-missing",
     );
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  test("non-canonical contribution paths refuse BUILD before output creation", () => {
+    const pluginRoot = copyPlugin("custom-contribution-path");
+    renameSync(join(pluginRoot, "stages"), join(pluginRoot, "custom-stages"));
+    const manifestPath = join(pluginRoot, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      aidlc: { contributes: Record<string, string> };
+    };
+    manifest.aidlc.contributes.stages = "custom-stages/";
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf-8",
+    );
+    const outDir = join(scratch, "custom-contribution-output");
+
+    const result = run([pluginRoot, "claude", outDir, "--json"]);
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      errors: Array<{ rule: string; message: string }>;
+    };
+    expect(parsed.errors).toContainEqual(
+      expect.objectContaining({
+        rule: "manifest-shape",
+        message: expect.stringContaining(
+          'aidlc.contributes.stages must be "stages/"',
+        ),
+      }),
+    );
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  test("direct emission rejects absolute contribution paths before output creation", () => {
+    const pluginRoot = copyPlugin("absolute-contribution-path");
+    const manifestPath = join(pluginRoot, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      aidlc: { contributes: Record<string, string> };
+    };
+    manifest.aidlc.contributes.stages = join(
+      scratch,
+      "outside-plugin-stages",
+    );
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf-8",
+    );
+    const outDir = join(scratch, "absolute-contribution-output");
+    const target = readPluginTargets(
+      join(SOURCE_TOOLS, "data", "plugin-targets.json"),
+    ).claude;
+
+    expect(() =>
+      buildPluginProjection({
+        pluginRoot,
+        target,
+        outDir,
+        templateHooksDir: join(
+          SOURCE_TOOLS,
+          "data",
+          "plugin-hooks-template",
+        ),
+      })
+    ).toThrow('aidlc.contributes.stages must be "stages/"');
     expect(existsSync(outDir)).toBe(false);
   });
 

@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -236,6 +237,48 @@ describe("t316 standalone plugin compose test", () => {
       expect.objectContaining({
         file: "knowledge/linked-content",
         rule: "content-symlink",
+      }),
+    );
+    expect(json.composedFiles).toEqual([]);
+    expect(treeDigest(installRoot)).toBe(before);
+  });
+
+  test("non-canonical contribution paths refuse TEST without touching the live install", () => {
+    const { pluginRoot, installRoot } = copyFixture(
+      "custom-contribution-path",
+    );
+    renameSync(join(pluginRoot, "stages"), join(pluginRoot, "custom-stages"));
+    const manifestPath = join(pluginRoot, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      aidlc: { contributes: Record<string, string> };
+    };
+    manifest.aidlc.contributes.stages = "custom-stages/";
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf-8",
+    );
+    const before = treeDigest(installRoot);
+
+    const result = run([
+      pluginRoot,
+      "--install",
+      installRoot,
+      "--json",
+    ]);
+    expect(result.status).toBe(1);
+    const json = JSON.parse(result.stdout) as {
+      valid: boolean;
+      errors: Array<{ rule: string; message: string }>;
+      composedFiles: string[];
+    };
+    expect(json.valid).toBe(false);
+    expect(json.errors).toContainEqual(
+      expect.objectContaining({
+        rule: "manifest-shape",
+        message: expect.stringContaining(
+          'aidlc.contributes.stages must be "stages/"',
+        ),
       }),
     );
     expect(json.composedFiles).toEqual([]);
