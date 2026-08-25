@@ -106,7 +106,7 @@ The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of 
 |------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|-----------------------------|-----------------------------|--------------------------|
 | `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) | omitted (inherits session model) | `model:` OMITTED (inherits the session model) |
 | `balanced` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.6-terra"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
-| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.6-terra"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | same model, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
+| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.6-terra"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
 
 Key facts behind the table:
 
