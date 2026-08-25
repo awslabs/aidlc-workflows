@@ -1,4 +1,4 @@
-// covers: doc:docs/guide/05-scopes-and-depth.md(scope-stage-matrix), file:tools/data/scope-grid.json, file:tools/data/stage-graph.json
+// covers: doc:docs/guide/05-scopes-and-depth.md(scope-stage-matrix), doc:docs/guide/05-scopes-and-depth.md(scope-routing-table), file:tools/data/scope-grid.json, file:tools/data/stage-graph.json, function:loadScopeMetadata
 //
 // t244 — Doc drift guard for the Stage-by-Scope Matrix in
 // docs/guide/05-scopes-and-depth.md.
@@ -34,6 +34,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
+import { loadScopeMetadata } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const GRID = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
 const GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
@@ -283,6 +284,115 @@ describe("t244 stage-by-scope matrix doc drift guard", () => {
       expect(count, `totals column for ${scope} inconsistent with its cells`).toBe(
         doc.totals[i],
       );
+    });
+  });
+});
+
+// --- The Scope Routing summary table, higher in the same chapter -------------
+// The matrix above is pinned cell by cell. The "Scope Routing Table" earlier in
+// the file transcribes the SAME compiled grid a second time — one row per scope
+// with an `EXECUTE / Total` count, plus Depth and Test Strategy — and nothing
+// pinned it. t213 pins the CLI's rendered table against the cost helper, and
+// t125 pins each scope file's depth/testStrategy against loadScopeMetadata, but
+// neither reads this markdown.
+//
+// A second, unpinned transcription of already-derivable data is the shape that
+// drifts: the agent matrix in docs/reference/05-agent-system.md sat wrong at
+// 6/3/9 while the guide said 10 (fixed and pinned in #902). Same discipline as
+// above — forward (every scope's row is right) and reverse (no extra, unknown,
+// or duplicate rows).
+//
+// Depth and Test Strategy come from loadScopeMetadata rather than a fresh
+// frontmatter parse, so this consumes the framework's own resolution. Test
+// Strategy INHERITS Depth when a scope declares no override, which is why
+// `classic` reads Standard/Standard while `workshop` reads Standard/Minimal.
+describe("t244 scope routing summary table doc drift guard", () => {
+  const SUMMARY_HEADER = "| Scope | EXECUTE / Total | Depth | Test Strategy | Use Case |";
+
+  interface SummaryRow {
+    scope: string;
+    counts: string;
+    depth: string;
+    tests: string;
+    /** real scope rows name the scope in backticks; the auto-detect row does not */
+    quoted: boolean;
+  }
+
+  const allSummaryRows = (): SummaryRow[] => {
+    const lines = readFileSync(DOC, "utf-8").split("\n");
+    const at = lines.findIndex((l) => l.startsWith(SUMMARY_HEADER));
+    expect(at, `summary table header not found in ${DOC}`).toBeGreaterThan(-1);
+    const rows: SummaryRow[] = [];
+    for (let i = at + 2; i < lines.length; i++) {
+      if (!lines[i].startsWith("|")) break;
+      const c = cells(lines[i]);
+      expect(c.length, `summary row column count: "${lines[i].trim()}"`).toBe(5);
+      rows.push({
+        scope: c[0].replace(/`/g, ""),
+        counts: c[1],
+        depth: c[2],
+        tests: c[3],
+        quoted: c[0].startsWith("`"),
+      });
+    }
+    return rows;
+  };
+
+  /** Only the backticked rows are scopes. */
+  const summaryRows = (): SummaryRow[] => allSummaryRows().filter((r) => r.quoted);
+
+  const total = graph.length;
+  const executeCount = (scope: string): number =>
+    Object.values(grid[scope].stages).filter((v) => v === "EXECUTE").length;
+
+  test("9: summary rows — one per compiled scope, no extra, unknown, or duplicate", () => {
+    const rows = summaryRows();
+    const listed = rows.map((r) => r.scope);
+    expect(new Set(listed).size, `duplicate scope rows: ${listed.join(", ")}`).toBe(listed.length);
+    expect([...listed].sort()).toEqual(Object.keys(grid).sort());
+  });
+
+  test("9b: the only non-scope summary row is the auto-detect sentinel", () => {
+    // The filter above drops rows that do not name a scope in backticks. Pin what
+    // it is allowed to drop, or a future stray row would vanish silently instead
+    // of failing — the same reason test 4 checks rows in reverse.
+    const extra = allSummaryRows().filter((r) => !r.quoted);
+    expect(extra.map((r) => r.scope)).toEqual(["(auto-detect)"]);
+    for (const r of extra) {
+      expect([r.counts, r.depth, r.tests], "auto-detect row should read Varies").toEqual([
+        "Varies",
+        "Varies",
+        "Varies",
+      ]);
+    }
+  });
+
+  test("10: summary counts — 'EXECUTE / Total' equals the compiled grid", () => {
+    for (const row of summaryRows()) {
+      expect(row.counts, `summary EXECUTE / Total for ${row.scope}`).toBe(
+        `${executeCount(row.scope)} / ${total}`,
+      );
+    }
+  });
+
+  test("11: summary depth + test strategy match loadScopeMetadata (tests inherit depth)", () => {
+    const meta = loadScopeMetadata();
+    for (const row of summaryRows()) {
+      const m = meta[row.scope];
+      expect(m, `no scope metadata for ${row.scope}`).toBeDefined();
+      expect(row.depth, `summary Depth for ${row.scope}`).toBe(m.depth);
+      expect(row.tests, `summary Test Strategy for ${row.scope}`).toBe(m.testStrategy ?? m.depth);
+    }
+  });
+
+  test("12: the two tables agree with each other on every scope's EXECUTE count", () => {
+    // Cross-check the chapter against itself: the summary count and the matrix
+    // footer total are two renderings of one number, so a partial edit that
+    // updated only one of them is caught even if both somehow matched the grid.
+    const doc = parseDocTable();
+    const summary = new Map(summaryRows().map((r) => [r.scope, Number(r.counts.split("/")[0])]));
+    doc.scopes.forEach((scope, i) => {
+      expect(summary.get(scope), `summary vs matrix footer for ${scope}`).toBe(doc.totals[i]);
     });
   });
 });
