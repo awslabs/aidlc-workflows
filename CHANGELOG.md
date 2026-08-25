@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 Plugin composition now keeps co-located tests and fixtures out of the installed engine tools tree and reports every rejected payload. **Upgrade:** refresh your `dist/<harness>/` shell and each plugin projection, then re-compose plugins; remove any already-installed file named by the new advisory and re-run compose.
 
 * Files under a plugin's `tools/tests/`, `tools/__tests__/`, or `tools/fixtures/` directories, plus `*.test.ts` and `*.spec.ts` tool files, are skipped with an advisory drop that points authors to the top-level `tests/` convention.
-* Previously composed test payloads remain untouched by no-clobber composition but are now audited and reported with removal guidance.
+* Installed test payloads remain untouched by no-clobber composition but are audited from the destination tree even after they disappear from a corrected plugin projection; legacy files without provenance are reported without attributing them to the plugin currently composing.
 
 ## [2.6.110] - 2026-08-26
 

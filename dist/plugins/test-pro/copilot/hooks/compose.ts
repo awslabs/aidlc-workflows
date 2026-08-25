@@ -189,8 +189,16 @@ async function resolveHealthDir(): Promise<string> {
 // severity is a leading `[degraded]`/`[advisory]` token on the reason field.
 type DropSeverity = "degraded" | "advisory";
 const _drops: string[] = [];
+const _installedToolPayloadDrops: string[] = [];
+let installedToolPayloadAuditRan = false;
+function dropLine(reason: string, severity: DropSeverity): string {
+  return `${new Date().toISOString()}\t[${severity}] ${reason.replace(/\r?\n/g, " ")}`;
+}
 function recordDrop(reason: string, severity: DropSeverity = "degraded"): void {
-  _drops.push(`${new Date().toISOString()}\t[${severity}] ${reason.replace(/\r?\n/g, " ")}`);
+  _drops.push(dropLine(reason, severity));
+}
+function recordInstalledToolPayloadDrop(reason: string): void {
+  _installedToolPayloadDrops.push(dropLine(reason, "advisory"));
 }
 // Flush drops as the CURRENT run's complete record: OVERWRITE (not append), and
 // REMOVE the file when the run had none. So the drops file always reflects only
@@ -215,6 +223,30 @@ async function flushDrops(): Promise<void> {
     }
   } catch { /* truly non-fatal */ }
   _drops.length = 0;
+}
+
+// Installed test/fixture payloads are a property of the shared harness tools
+// tree, not of whichever plugin happens to compose next. Legacy compose versions
+// recorded no tool-file provenance, so audit them in one ownership-neutral file
+// instead of blaming every current plugin through its per-plugin drops record.
+async function flushInstalledToolPayloadDrops(): Promise<void> {
+  if (!installedToolPayloadAuditRan) return;
+  try {
+    const healthDir = await resolveHealthDir();
+    const dropFile = join(healthDir, "plugin-compose-installed-tool-payloads.drops");
+    if (_installedToolPayloadDrops.length === 0) {
+      if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+    } else {
+      mkdirSync(healthDir, { recursive: true });
+      writeFileSync(
+        dropFile,
+        _installedToolPayloadDrops.map((line) => line + "\n").join(""),
+        { flag: "w" },
+      );
+    }
+  } catch { /* truly non-fatal */ }
+  _installedToolPayloadDrops.length = 0;
+  installedToolPayloadAuditRan = false;
 }
 
 function escapeRegExp(s: string): string {
@@ -629,7 +661,6 @@ function doctorScriptOwnershipPrecheck(): CopyPrecheck {
 }
 
 function toolsTestPayloadPrecheck(): CopyPrecheck {
-  const toolsRoot = join(PLUGIN_ROOT, "tools");
   const targetRoot = join(HARNESS_DIR, "tools");
   const payloadDirs = new Set(["tests", "__tests__", "fixtures"]);
   const payloadReason = (relPosix: string): string | null => {
@@ -641,26 +672,30 @@ function toolsTestPayloadPrecheck(): CopyPrecheck {
       ? `its basename "${base}" matches a co-located test pattern`
       : null;
   };
-  const drop = (relPosix: string, why: string, landed: boolean): void => {
+  const drop = (relPosix: string, why: string): void => {
     recordDrop(
-      `plugin "${PLUGIN_NAME}" tool file "${relPosix}" ${landed ? "is already installed but is" : "is"} a test/fixture payload: ${why}; plugin tests and fixtures live in top-level "tests/", never inside "tools/"${landed ? "; remove the file and re-run compose" : " - not copied"}`,
+      `plugin "${PLUGIN_NAME}" tool file "${relPosix}" is a test/fixture payload: ${why}; plugin tests and fixtures live in top-level "tests/", never inside "tools/" - not copied`,
       "advisory",
     );
   };
-  // Older compose versions may already have landed test payloads. Audit those
-  // up front because copyTreeNoClobber skips prechecks for existing paths.
-  for (const file of walk(toolsRoot)) {
-    const relPosix = relative(toolsRoot, file).replace(/\\/g, "/");
+  // Audit the INSTALLED tree independently of the current source projection.
+  // Older compose versions recorded no owning plugin for arbitrary tool files,
+  // so these diagnostics deliberately do not attribute the path to PLUGIN_NAME.
+  installedToolPayloadAuditRan = true;
+  for (const file of walk(targetRoot)) {
+    const relPosix = relative(targetRoot, file).replace(/\\/g, "/");
     const why = payloadReason(relPosix);
-    if (why && existsSync(join(targetRoot, relPosix))) {
-      drop(relPosix, why, true);
+    if (why) {
+      recordInstalledToolPayloadDrop(
+        `installed tool file "${relPosix}" is a test/fixture payload: ${why}; originating plugin is not recorded in legacy installs, so ownership is not attributed; remove the file and re-run compose`,
+      );
     }
   }
   return ({ rel }) => {
     const relPosix = rel.replace(/\\/g, "/");
     const why = payloadReason(relPosix);
     if (!why) return true;
-    drop(relPosix, why, false);
+    drop(relPosix, why);
     return false;
   };
 }
@@ -2275,6 +2310,7 @@ try {
   // Non-fatal: never break the user's session over a compose failure.
 }
 } finally {
+  await flushInstalledToolPayloadDrops();
   composeOwnsWorkspaceLock = false;
   lockLib.releaseAuditLock(PROJECT_DIR);
 }

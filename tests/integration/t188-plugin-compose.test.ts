@@ -951,11 +951,11 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain('plugin tests and fixtures live in top-level "tests/"');
   });
 
-  test("tool composition audits but does not delete an already-installed test payload", () => {
+  test("tool composition audits a stale installed payload absent from the corrected projection", () => {
     const body = "// already landed by an older compose\n";
     const { drops, proj } = composeSynthetic(
       "alpha",
-      { "tools/tests/run.test.ts": body },
+      { "tools/alpha-run.ts": 'process.stdout.write("ok");\n' },
       ".claude",
       (_proj, harnessDir) => {
         const installed = join(harnessDir, "tools", "tests", "run.test.ts");
@@ -966,11 +966,41 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const installed = join(proj, ".claude", "tools", "tests", "run.test.ts");
 
     expect(readFileSync(installed, "utf-8")).toBe(body);
+    expect(existsSync(join(proj, ".claude", "tools", "alpha-run.ts"))).toBe(true);
     expect(drops).toContain("[advisory]");
     expect(drops).toContain(
-      'plugin "alpha" tool file "tests/run.test.ts" is already installed',
+      'installed tool file "tests/run.test.ts" is a test/fixture payload',
     );
+    expect(drops).toContain("originating plugin is not recorded");
+    expect(drops).not.toContain('plugin "alpha" tool file "tests/run.test.ts"');
     expect(drops).toContain("remove the file and re-run compose");
+
+    rmSync(installed, { force: true });
+    const rerun = spawnSync(
+      BUN,
+      [join(proj, "_plugin-alpha", "hooks", "compose.ts")],
+      {
+        cwd: proj,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env: {
+          ...process.env,
+          CLAUDE_PLUGIN_ROOT: join(proj, "_plugin-alpha"),
+          CLAUDE_PROJECT_DIR: proj,
+          AIDLC_HARNESS_DIR: ".claude",
+        },
+      },
+    );
+    expect(rerun.status).toBe(0);
+    expect(existsSync(join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "plugin-compose-installed-tool-payloads.drops",
+    ))).toBe(false);
   });
 
   test("duplicate incoming scope identities are rejected within one plugin tree", () => {
