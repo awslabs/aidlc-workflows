@@ -821,7 +821,9 @@ export function filterSpawnOwnedWindowsDescendants(
 function validateWindowsSpawnIdentity(
   spawn: WindowsSpawnAuthority,
   current: WindowsProcessIdentity,
-): WindowsProcessQuery<WindowsProcessIdentity> {
+):
+  | { status: "ok"; value: WindowsProcessIdentity }
+  | { status: "error"; message: string } {
   const started = Date.parse(spawn.startedAfter);
   const created = Date.parse(current.creationDate);
   if (
