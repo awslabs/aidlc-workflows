@@ -125,7 +125,7 @@ function runIde(
   projectDir: string,
   target: string,
   userPrompt: string | null,
-): { stdout: string; code: number } {
+): { stdout: string; stderr: string; code: number } {
   const env: Record<string, string> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
   if (userPrompt === null) {
     delete (env as Record<string, string | undefined>).USER_PROMPT;
@@ -137,7 +137,11 @@ function runIde(
     [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
     { cwd: projectDir, input: "", encoding: "utf-8", env, timeout: 30_000 },
   );
-  return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+  return {
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    code: r.status ?? -1,
+  };
 }
 
 /** Run the IDE adapter with the context written to STDIN (the 1.x channel).
@@ -146,7 +150,7 @@ function runIdeStdin(
   projectDir: string,
   target: string,
   stdinPayload: string,
-): { stdout: string; code: number } {
+): { stdout: string; stderr: string; code: number } {
   const env: Record<string, string> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
   delete (env as Record<string, string | undefined>).USER_PROMPT;
   const r = spawnSync(
@@ -154,7 +158,11 @@ function runIdeStdin(
     [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
     { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: 30_000 },
   );
-  return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+  return {
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    code: r.status ?? -1,
+  };
 }
 
 /** Exercise the public `aidlc adapter kiro-ide` dispatcher route rather than
@@ -163,7 +171,7 @@ function runIdeDispatcherStdin(
   projectDir: string,
   target: string,
   stdinPayload: string,
-): { stdout: string; code: number } {
+): { stdout: string; stderr: string; code: number } {
   const env: Record<string, string> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
   delete (env as Record<string, string | undefined>).USER_PROMPT;
   const r = spawnSync(
@@ -171,7 +179,11 @@ function runIdeDispatcherStdin(
     [join(projectDir, ".kiro", "tools", "aidlc.ts"), "adapter", "kiro-ide", target],
     { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: 30_000 },
   );
-  return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+  return {
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    code: r.status ?? -1,
+  };
 }
 
 function ctx(toolName: string, toolResult: string): string {
@@ -195,6 +207,44 @@ function ctx1x(
     tool_input: {},
     tool_response: toolResponse,
   });
+}
+
+function installPlainTextUtility(dir: string): string {
+  const countPath = join(dir, "terminal-utility-count");
+  writeFileSync(
+    join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+    [
+      'import { existsSync, readFileSync, writeFileSync } from "node:fs";',
+      `const countPath = ${JSON.stringify(countPath)};`,
+      "const count = existsSync(countPath)",
+      '  ? Number.parseInt(readFileSync(countPath, "utf-8"), 10) || 0',
+      "  : 0;",
+      'writeFileSync(countPath, String(count + 1) + "\\n", "utf-8");',
+      'process.stdout.write("Unicode: ─ ✓ █▒ ⇄\\n");',
+      'process.stdout.write("Path: C:\\\\work\\\\file.txt; literal: \\\\\\\\x1b[31m\\n");',
+      'process.stdout.write("\\u001b[31mred\\u001b[0m\\n");',
+      'process.stdout.write("\\u001b]633;P;Cwd=C:\\\\shell\\\\noise\\u0007");',
+      'process.stdout.write("after-osc\\u0008\\n");',
+      'process.stderr.write("stderr: → preserved\\n");',
+      "process.exit(7);",
+    ].join("\n"),
+    "utf-8",
+  );
+  return countPath;
+}
+
+function installArgvUtility(dir: string): string {
+  const argvPath = join(dir, "terminal-argv.json");
+  writeFileSync(
+    join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+    [
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
+      'process.stdout.write("ok\\n");',
+    ].join("\n"),
+    "utf-8",
+  );
+  return argvPath;
 }
 
 describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
@@ -617,6 +667,440 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           "utf-8",
         ).trim(),
       ).toBe("00000000-0000-7000-8000-000000000001");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8c: modern prompt interception preserves UTF-8 and strips terminal controls", () => {
+    const dir = scratchProject(true);
+    try {
+      const countPath = installPlainTextUtility(dir);
+      const r = runIdeStdin(
+        dir,
+        "verb-intercept",
+        JSON.stringify({
+          session_id: "sess_terminal_modern",
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "/aidlc --status",
+        }),
+      );
+      expect(r.code).toBe(0);
+      expect(r.stderr).toBe("");
+      expect(r.stdout).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(r.stdout).toContain("Path: C:\\work\\file.txt");
+      expect(r.stdout).toContain("literal: \\\\x1b[31m");
+      expect(r.stdout).toContain("red");
+      expect(r.stdout).toContain("after-osc");
+      expect(r.stdout).toContain("stderr: → preserved");
+      expect(r.stdout).not.toContain("\u001b");
+      expect(r.stdout).not.toContain("\u0008");
+      expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
+      expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d: empty-prompt IDEs intercept execute_pwsh once and preserve exit-2 refusal semantics", () => {
+    const dir = scratchProject(true);
+    try {
+      const countPath = installPlainTextUtility(dir);
+      const prompt = runIdeStdin(
+        dir,
+        "verb-intercept",
+        JSON.stringify({
+          session_id: "sess_terminal_legacy_prompt",
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }),
+      );
+      expect(prompt.code).toBe(0);
+      expect(prompt.stdout).toBe("");
+
+      const payload = JSON.stringify({
+        session_id: "sess_terminal_legacy_prompt",
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "execute_pwsh",
+        tool_input: {
+          command: "bun .kiro/tools/aidlc-orchestrate.ts next --status",
+          cwd: dir,
+          run_in_background: false,
+          timeout: null,
+        },
+      });
+      const first = runIdeStdin(dir, "terminal-command-guard", payload);
+      expect(first.code).toBe(2);
+      expect(first.stdout).toBe("");
+      expect(first.stderr).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(first.stderr).toContain("OUTPUT (exit 7)");
+      expect(first.stderr).not.toContain("\u001b");
+      expect(first.stderr).not.toContain("Cwd=C:\\shell\\noise");
+      expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
+
+      const retry = runIdeDispatcherStdin(
+        dir,
+        "terminal-command-guard",
+        payload,
+      );
+      expect(retry.code).toBe(2);
+      expect(retry.stderr).toContain("already run inside the hook");
+      expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
+
+      const nextTurn = runIdeStdin(
+        dir,
+        "verb-intercept",
+        JSON.stringify({
+          session_id: "sess_terminal_legacy_prompt",
+          hook_event_name: "UserPromptSubmit",
+          prompt: "/aidlc --stage requirements-analysis",
+        }),
+      );
+      expect(nextTurn.code).toBe(0);
+      const nonTerminal = runIdeStdin(
+        dir,
+        "terminal-command-guard",
+        JSON.stringify({
+          session_id: "sess_terminal_legacy_prompt",
+          hook_event_name: "PreToolUse",
+          tool_name: "execute_pwsh",
+          tool_input: {
+            command:
+              "bun .kiro/tools/aidlc-orchestrate.ts next --stage requirements-analysis",
+          },
+        }),
+      );
+      expect(nonTerminal.code).toBe(0);
+      expect(nonTerminal.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8e: concurrent modern sessions keep terminal turns and output isolated", () => {
+    const dir = scratchProject(true);
+    try {
+      const commandLog = join(dir, "terminal-commands.log");
+      writeFileSync(
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+        [
+          'import { appendFileSync } from "node:fs";',
+          `const log = ${JSON.stringify(commandLog)};`,
+          'appendFileSync(log, process.argv[2] + "\\n", "utf-8");',
+          'process.stdout.write("UTILITY=" + process.argv[2] + "\\n");',
+        ].join("\n"),
+        "utf-8",
+      );
+      const prompt = (sessionId: string) =>
+        runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: sessionId,
+            hook_event_name: "UserPromptSubmit",
+            prompt: "",
+          }),
+        );
+      const guard = (sessionId: string, flag: string) =>
+        runIdeStdin(
+          dir,
+          "terminal-command-guard",
+          JSON.stringify({
+            session_id: sessionId,
+            hook_event_name: "PreToolUse",
+            tool_name: "execute_pwsh",
+            tool_input: {
+              command:
+                `bun .kiro/tools/aidlc-orchestrate.ts next ${flag}`,
+            },
+          }),
+        );
+
+      expect(prompt("session-A").code).toBe(0);
+      expect(prompt("session-B").code).toBe(0);
+
+      const status = guard("session-A", "--status");
+      const doctor = guard("session-B", "--doctor");
+      expect(status.code).toBe(2);
+      expect(status.stderr).toContain("UTILITY=status");
+      expect(status.stderr).not.toContain("UTILITY=doctor");
+      expect(doctor.code).toBe(2);
+      expect(doctor.stderr).toContain("UTILITY=doctor");
+      expect(doctor.stderr).not.toContain("UTILITY=status");
+      expect(readFileSync(commandLog, "utf-8").trim().split("\n")).toEqual([
+        "status",
+        "doctor",
+      ]);
+
+      const retry = guard("session-A", "--status");
+      expect(retry.code).toBe(2);
+      expect(retry.stderr).toContain("UTILITY=status");
+      expect(readFileSync(commandLog, "utf-8").trim().split("\n")).toEqual([
+        "status",
+        "doctor",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8f: newer raw prompt payloads keep terminal interception working", () => {
+    const dir = scratchProject(true);
+    try {
+      const countPath = installPlainTextUtility(dir);
+      const r = runIde(dir, "verb-intercept", "/aidlc --status");
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(r.stdout).not.toContain("\u001b");
+      expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8g: legacy camelCase USER_PROMPT falls back through toolArgs.command", () => {
+    const dir = scratchProject(true);
+    try {
+      const countPath = installPlainTextUtility(dir);
+      const prompt = runIde(
+        dir,
+        "verb-intercept",
+        JSON.stringify({
+          toolName: "",
+          toolArgs: {},
+          toolResult: "",
+          toolSuccess: true,
+        }),
+      );
+      expect(prompt.code).toBe(0);
+      expect(prompt.stdout).toBe("");
+
+      const guard = runIde(
+        dir,
+        "terminal-command-guard",
+        JSON.stringify({
+          toolName: "execute_bash",
+          toolArgs: {
+            command: "bun .kiro/tools/aidlc-orchestrate.ts next --status",
+          },
+          toolResult: "",
+          toolSuccess: true,
+        }),
+      );
+      expect(guard.code).toBe(2);
+      expect(guard.stderr).toContain("Unicode: ─ ✓ █▒ ⇄");
+      expect(guard.stderr).not.toContain("\u001b");
+      expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8h: prompt and pre-tool interception preserve native Windows output paths", () => {
+    const dir = scratchProject(true);
+    try {
+      const argvPath = installArgvUtility(dir);
+      for (const [index, prompt, expected] of [
+        [
+          1,
+          String.raw`/aidlc --doctor --export --output C:\temp\diag`,
+          String.raw`C:\temp\diag`,
+        ],
+        [
+          2,
+          String.raw`/aidlc --doctor --export --output "C:\Program Files\diag"`,
+          String.raw`C:\Program Files\diag`,
+        ],
+        [
+          3,
+          String.raw`/aidlc --doctor --export --output \\server\share\diag`,
+          String.raw`\\server\share\diag`,
+        ],
+      ] as const) {
+        const r = runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: `path-session-${index}`,
+            hook_event_name: "UserPromptSubmit",
+            prompt,
+          }),
+        );
+        expect(r.code, prompt).toBe(0);
+        expect(
+          JSON.parse(readFileSync(argvPath, "utf-8")),
+          prompt,
+        ).toEqual(["doctor", "--export", "--output", expected]);
+      }
+
+      expect(
+        runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: "path-fallback",
+            hook_event_name: "UserPromptSubmit",
+            prompt: "",
+          }),
+        ).code,
+      ).toBe(0);
+      const fallback = runIdeStdin(
+        dir,
+        "terminal-command-guard",
+        JSON.stringify({
+          session_id: "path-fallback",
+          hook_event_name: "PreToolUse",
+          tool_name: "execute_pwsh",
+          tool_input: {
+            command:
+              String.raw`bun .kiro/tools/aidlc-orchestrate.ts next --doctor --export --output C:\fallback\diag`,
+          },
+        }),
+      );
+      expect(fallback.code).toBe(2);
+      expect(JSON.parse(readFileSync(argvPath, "utf-8"))).toEqual([
+        "doctor",
+        "--export",
+        "--output",
+        String.raw`C:\fallback\diag`,
+      ]);
+
+      for (const [index, prompt, expected] of [
+        [
+          1,
+          '/aidlc --doctor --output "C:\\" --export',
+          "C:\\",
+        ],
+        [
+          2,
+          '/aidlc --doctor --output "C:\\Program Files\\diag\\" --export',
+          "C:\\Program Files\\diag\\",
+        ],
+        [
+          3,
+          '/aidlc --doctor --output "out\\" --export',
+          "out\\",
+        ],
+      ] as const) {
+        const r = runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: `path-trailing-${index}`,
+            hook_event_name: "UserPromptSubmit",
+            prompt,
+          }),
+        );
+        expect(r.code, prompt).toBe(0);
+        expect(
+          JSON.parse(readFileSync(argvPath, "utf-8")),
+          prompt,
+        ).toEqual(["doctor", "--output", expected, "--export"]);
+      }
+
+      expect(
+        runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: "path-relative-fallback",
+            hook_event_name: "UserPromptSubmit",
+            prompt: "",
+          }),
+        ).code,
+      ).toBe(0);
+      const relativeFallback = runIdeStdin(
+        dir,
+        "terminal-command-guard",
+        JSON.stringify({
+          session_id: "path-relative-fallback",
+          hook_event_name: "PreToolUse",
+          tool_name: "execute_pwsh",
+          tool_input: {
+            command:
+              String.raw`bun .kiro/tools/aidlc-orchestrate.ts next --doctor --output .\diag\ --export`,
+          },
+        }),
+      );
+      expect(relativeFallback.code).toBe(2);
+      expect(JSON.parse(readFileSync(argvPath, "utf-8"))).toEqual([
+        "doctor",
+        "--output",
+        ".\\diag\\",
+        "--export",
+      ]);
+
+      expect(
+        runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: "path-single-relative",
+            hook_event_name: "UserPromptSubmit",
+            prompt:
+              String.raw`/aidlc --doctor --output out\ --export`,
+          }),
+        ).code,
+      ).toBe(0);
+      expect(JSON.parse(readFileSync(argvPath, "utf-8"))).toEqual([
+        "doctor",
+        "--output",
+        "out\\",
+        "--export",
+      ]);
+
+      const escapedSpacePrompt = runIdeStdin(
+        dir,
+        "verb-intercept",
+        JSON.stringify({
+          session_id: "path-posix-space",
+          hook_event_name: "UserPromptSubmit",
+          prompt:
+            String.raw`/aidlc --doctor --export --output /tmp/report\ dir`,
+        }),
+      );
+      expect(escapedSpacePrompt.code).toBe(0);
+      expect(JSON.parse(readFileSync(argvPath, "utf-8"))).toEqual([
+        "doctor",
+        "--export",
+        "--output",
+        "/tmp/report dir",
+      ]);
+
+      expect(
+        runIdeStdin(
+          dir,
+          "verb-intercept",
+          JSON.stringify({
+            session_id: "path-posix-space-fallback",
+            hook_event_name: "UserPromptSubmit",
+            prompt: "",
+          }),
+        ).code,
+      ).toBe(0);
+      const escapedSpaceFallback = runIdeStdin(
+        dir,
+        "terminal-command-guard",
+        JSON.stringify({
+          session_id: "path-posix-space-fallback",
+          hook_event_name: "PreToolUse",
+          tool_name: "execute_bash",
+          tool_input: {
+            command:
+              String.raw`bun .kiro/tools/aidlc-orchestrate.ts next --doctor --export --output reports\ 2026`,
+          },
+        }),
+      );
+      expect(escapedSpaceFallback.code).toBe(2);
+      expect(JSON.parse(readFileSync(argvPath, "utf-8"))).toEqual([
+        "doctor",
+        "--export",
+        "--output",
+        "reports 2026",
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

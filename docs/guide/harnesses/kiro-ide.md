@@ -124,20 +124,32 @@ synthetic identity retained by SessionStart. Modern Stop likewise prefers its
 event-local `session_id`, preventing one concurrent chat from consuming
 another chat's post-create handoff; legacy agentStop falls back to the retained
 identity. Later 1.x builds populate some PreToolUse and delegation inputs; the
-adapter preserves those fields without depending on them.
+adapter preserves those fields. On Windows, deterministic utilities use those
+seams to avoid the IDE shell-result transport: builds that expose the submitted
+prompt run the utility at UserPromptSubmit, while builds such as 1.0.242 (whose
+prompt field is empty) fall back to the exact `execute_pwsh` PreToolUse command.
+The utility runs once per turn, its UTF-8 text is relayed without terminal
+protocol/control bytes, and the duplicate shell call is refused. Modern chats
+store turn and output state per `session_id`; context without a session identity
+uses one legacy compatibility bucket. Pre-1.0 camelCase payloads take the same
+fallback through `toolArgs.command`; raw prompt text is only a newer-generation
+compatibility shape.
 
 The payload acquisition is **gated to payload-dependent targets**
-(`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus `session-start`
-and `continue-workflow` for their modern `session_id`. A non-empty
-`USER_PROMPT` is consumed immediately on 0.12 builds (which open stdin without
-ever writing); otherwise the adapter reads the 1.x stdin channel with a 2s
-broken-channel ceiling. Every other target - including `block`, which fires on
-every `PreToolUse` - touches neither channel and keeps its zero-latency path.
+(`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`), the terminal
+command seams, plus `session-start` and `continue-workflow` for their modern
+`session_id`. A non-empty `USER_PROMPT` is consumed immediately on 0.12 builds
+(which open stdin without ever writing); otherwise the adapter reads the 1.x
+stdin channel with a 2s broken-channel ceiling. Every other target - including
+the approval floor, which fires on every `PreToolUse` - touches neither channel
+and keeps its zero-latency path.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
 | `aidlc-session-start` | `SessionStart` | Injects workflow resume context once per session (the legacy pre-1.0 file stays wired to per-prompt `promptSubmit` — that generation has no session-start trigger) |
 | `aidlc-mint` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
+| `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available |
+| `aidlc-terminal-command-guard` | `PreToolUse` (`execute_bash\|execute_pwsh\|shell`) | Fallback for empty-prompt IDE versions: runs the classified utility once and refuses the duplicate Windows shell call |
 | `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
 | `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |

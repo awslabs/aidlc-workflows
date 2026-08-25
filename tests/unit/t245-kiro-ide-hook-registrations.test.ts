@@ -15,6 +15,13 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AUTHORED_HOOKS = join(REPO_ROOT, "harness", "kiro-ide", "hooks");
 const DIST_HOOKS = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks");
 const KIRO_IDE_GUIDE = join(REPO_ROOT, "docs", "guide", "harnesses", "kiro-ide.md");
+const WINDOWS_EVIDENCE = join(
+  REPO_ROOT,
+  "docs",
+  "reference",
+  "research",
+  "kiro-windows-output-encoding",
+);
 
 interface HookEntry {
   name: string;
@@ -40,6 +47,8 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
 }> = [
   { file: "aidlc-session-start.json", trigger: "SessionStart", matcher: null, adapterTarget: "session-start" },
   { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "record-human-turn" },
+  { file: "aidlc-terminal-command.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "verb-intercept" },
+  { file: "aidlc-terminal-command-guard.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "terminal-command-guard" },
   { file: "aidlc-enforce-approval-gate.json", trigger: "PreToolUse", matcher: null, adapterTarget: "enforce-approval-gate" },
   { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: "fs_write|str_replace|fs_append", adapterTarget: "audit-and-sensors" },
   { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: "execute_bash", adapterTarget: "rebuild-stage-graph" },
@@ -54,6 +63,8 @@ const EXPECTED_LEGACY_FILES = [
   "aidlc-enforce-approval-gate.kiro.hook",
   "aidlc-log-subagent.kiro.hook",
   "aidlc-record-human-turn.kiro.hook",
+  "aidlc-terminal-command.kiro.hook",
+  "aidlc-terminal-command-guard.kiro.hook",
   "aidlc-rebuild-stage-graph.kiro.hook",
   "aidlc-session-end.kiro.hook",
   "aidlc-session-start.kiro.hook",
@@ -168,5 +179,85 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
     expect(cleanup).toMatch(
       /rm -f \\\n\s+"your-project\/\.kiro\/hooks\/aidlc-\$\{retired_hook\}\.json" \\\n\s+"your-project\/\.kiro\/hooks\/aidlc-\$\{retired_hook\}\.kiro\.hook"/,
     );
+  });
+
+  test("native Windows CLI/IDE output evidence is retained and separates transport from model prose", () => {
+    const ideRows = readFileSync(
+      join(WINDOWS_EVIDENCE, "kiro-ide-windows.ndjson"),
+      "utf-8",
+    ).trim().split("\n").map((line) =>
+      JSON.parse(line) as {
+        capture: string;
+        deterministic_output: string;
+        transport_suffix: string | null;
+        allow_clicks?: number;
+        model_followup: string;
+      }
+    );
+    const baseline = ideRows.filter((row) =>
+      row.capture === "current-v2-baseline"
+    );
+    const fixed = ideRows.filter((row) => row.capture === "2.6.75-cycle1");
+    expect(baseline).toHaveLength(2);
+    expect(fixed).toHaveLength(2);
+    for (const row of baseline) {
+      expect(row.deterministic_output).toMatch(/[█▒░─✓⇄—]/);
+      expect(row.transport_suffix).toContain("powershell.exe\u001b\\");
+      expect(row.model_followup.length).toBeGreaterThan(0);
+    }
+    for (const row of fixed) {
+      expect(row.deterministic_output).toMatch(/[█▒░─✓⇄—]/);
+      expect(row.transport_suffix).toBeNull();
+      expect(row.allow_clicks).toBe(0);
+      expect(row.model_followup.length).toBeGreaterThan(0);
+    }
+
+    const cliRows = readFileSync(
+      join(WINDOWS_EVIDENCE, "kiro-cli-windows.ndjson"),
+      "utf-8",
+    ).trim().split("\n").map((line) =>
+      JSON.parse(line) as {
+        capture: string;
+        runtime: string;
+        platform: string;
+        command: string;
+        transport: {
+          exit_code: number;
+          deterministic_output: string;
+          stderr: string;
+        };
+        model: {
+          stop_reason: string;
+          tool_calls: unknown[];
+          tool_call_issues: unknown[];
+          deterministic_output: string;
+          followup: string;
+        };
+      }
+    );
+    expect(cliRows).toHaveLength(4);
+    expect(
+      cliRows.filter((row) => row.capture === "current-v2-baseline"),
+    ).toHaveLength(2);
+    expect(
+      cliRows.filter((row) => row.capture === "2.6.75-cycle2"),
+    ).toHaveLength(2);
+    expect(new Set(cliRows.map((row) => row.command))).toEqual(
+      new Set(["/aidlc --status", "/aidlc --doctor"]),
+    );
+    for (const row of cliRows) {
+      expect(row.runtime).toBe("kiro-cli-chat 2.15.2");
+      expect(row.platform).toBe("native Windows");
+      expect(row.transport.exit_code).toBe(0);
+      expect(row.transport.stderr).toBe("");
+      expect(row.transport.deterministic_output).toMatch(/[█▒░─✓⇄—]/);
+      expect(row.model.stop_reason).toBe("end_turn");
+      expect(row.model.tool_calls).toEqual([]);
+      expect(row.model.tool_call_issues).toEqual([]);
+      expect(row.model.deterministic_output).toBe(
+        row.transport.deterministic_output,
+      );
+      expect(row.model.followup.length).toBeGreaterThan(0);
+    }
   });
 });

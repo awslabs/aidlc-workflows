@@ -9,6 +9,15 @@ Bolt terminology now preserves the sprint-like Construction iteration while matc
 * Construction guidance keeps current stage-level gates, unit-major's retained gate cascade, and `org.md` → `team.md` → `project.md` walking-skeleton stance executable while labeling future Bolt-major ceremony non-executable.
 * `BOLT_STARTED` and `BOLT_COMPLETED` are documented as per-Unit/worktree events on the swarm path; `SWARM_COMPLETED` remains the event that closes the runtime batch.
 
+## [2.6.85] - 2026-08-25
+
+Kiro now relays deterministic command output through a UTF-8 plain-text hook boundary instead of the Windows shell-result transport that can append terminal debris or corrupt glyphs. **Upgrade:** re-copy `dist/kiro/` or `dist/kiro-ide/` into the project; Kiro IDE overlay installs must include the new `aidlc-terminal-command*` hook registrations.
+
+* Kiro CLI status, doctor, help, version, navigation, plugin, and knowledge output is decoded explicitly as UTF-8; OSC, CSI, and other terminal control bytes, including unterminated sequences, are removed only from the plain-text relay, preserving ordinary Unicode, paths, whitespace, and literal escape-looking text.
+* Kiro IDE runs terminal utilities at `UserPromptSubmit` when the host exposes the submitted prompt. IDE generations such as 1.0.242 that send an empty prompt fall back to the exact `execute_pwsh`/shell `PreToolUse` command, run the classified utility once, and refuse the duplicate shell call before its output enters the Windows transport.
+* Per-session, per-turn latches prevent retries from re-running side-effecting diagnostics without allowing concurrent IDE chats to reuse one another's command output. Payloads without a session identity retain one explicit legacy bucket; non-terminal commands and the existing exit-2 approval, lifecycle, reviewer, and plan guards retain their refusal behavior.
+* Kiro terminal-command argument parsing preserves unquoted drive paths, quoted Windows paths containing spaces, UNC paths, and trailing Windows separators when forwarding options such as `--doctor --output`, while retaining escaped-space values such as `reports\ 2026`.
+
 ## [2.6.84] - 2026-08-25
 
 Compiled Windows executables now keep every routed command inside the native runtime instead of falling back to source-mode `bun` launches. Source installs continue to delegate through their running Bun executable. **Upgrade:** replace the executable and its adjacent `runtime/` directory, or refresh your selected `dist/<harness>/` shell for source installs.
