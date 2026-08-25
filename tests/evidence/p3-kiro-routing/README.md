@@ -1,11 +1,11 @@
 # P3 Kiro New-Work Routing Evidence
 
-Native Windows evidence captured on `aidlc-dev-2` on 2026-08-24 from the
+Native Windows evidence captured on a dedicated test host on 2026-08-24 from the
 uncommitted `fix/kiro-new-work-routing` worktree.
 
 ## Environment
 
-- Windows host: `aidlc-dev-2`
+- Windows host: dedicated native Windows test host
 - Kiro CLI: `kiro-cli-chat 2.15.2`
 - Kiro IDE: `1.0.242`
 - Runner: `bash tests/run-tests.sh --debug -P 8 --e2e --filter <focused-file>`
