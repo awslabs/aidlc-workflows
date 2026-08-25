@@ -276,14 +276,14 @@ adds:                         # STRUCTURAL — set-unioned into the stage node
   required_sections:
     - "Branch Coverage"        # declared H2 (merged into the stage; not machine-enforced yet — see §9)
 fragments:                    # PROSE — spliced into the stage body
-  - anchor: after-step:9
+  - anchor: after-step:8
     order: 100
 ---
 
-## fragment: after-step:9
+## fragment: after-step:8
 
-### Step 9a (test-pro): Branch + coverage enrichment
-…prose the agent reads, inserted after the target stage's Step 9…
+### Step 8a (test-pro): Branch + coverage enrichment
+…prose the agent reads, inserted after the target stage's Step 8…
 ```
 
 `bundle:` is reserved and unused; write `plugin:` for plugin ownership.

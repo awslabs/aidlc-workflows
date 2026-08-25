@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 
 const AGENTS_DIR = join(AIDLC_SRC, "agents");
 
@@ -23,6 +23,68 @@ const AGENTS = [
   "quality",
   "pipeline-deploy",
   "operations",
+] as const;
+
+const ALL_AGENTS = [
+  "architect",
+  "architecture-reviewer",
+  "aws-platform",
+  "compliance",
+  "composer",
+  "delivery",
+  "design",
+  "developer",
+  "devsecops",
+  "operations",
+  "pipeline-deploy",
+  "product",
+  "product-lead",
+  "quality",
+] as const;
+
+const DELEGATED_SURFACES = [
+  {
+    name: "claude",
+    root: join(REPO_ROOT, "dist", "claude", ".claude", "agents"),
+    ext: ".md",
+    harnessDir: ".claude",
+  },
+  {
+    name: "codex",
+    root: join(REPO_ROOT, "dist", "codex", ".codex", "agents"),
+    ext: ".toml",
+    harnessDir: ".codex",
+  },
+  {
+    name: "copilot",
+    root: join(REPO_ROOT, "dist", "copilot", ".github", "agents"),
+    ext: ".md",
+    harnessDir: ".aidlc",
+  },
+  {
+    name: "cursor",
+    root: join(REPO_ROOT, "dist", "cursor", ".cursor", "agents"),
+    ext: ".md",
+    harnessDir: ".cursor",
+  },
+  {
+    name: "kiro-ide",
+    root: join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents"),
+    ext: ".md",
+    harnessDir: ".kiro",
+  },
+  {
+    name: "kiro",
+    root: join(REPO_ROOT, "dist", "kiro", ".kiro", "agents"),
+    ext: ".md",
+    harnessDir: ".kiro",
+  },
+  {
+    name: "opencode",
+    root: join(REPO_ROOT, "dist", "opencode", ".opencode", "agents"),
+    ext: ".md",
+    harnessDir: ".aidlc",
+  },
 ] as const;
 
 const agentFile = (agent: string): string =>
@@ -55,6 +117,31 @@ describe("t46 agent persona stage-reference shape", () => {
       const body = readFileSync(agentFile(agent), "utf-8");
       expect(body).not.toMatch(/^## Stages Owned$/m);
       expect(body).not.toMatch(/^## Knowledge Loading$/m);
+    }
+  });
+
+  test("every harness-native delegated agent carries the mandatory knowledge preflight", () => {
+    for (const surface of DELEGATED_SURFACES) {
+      for (const agent of ALL_AGENTS) {
+        const body = readFileSync(
+          join(surface.root, `aidlc-${agent}-agent${surface.ext}`),
+          "utf-8",
+        );
+        expect(
+          body,
+          `${surface.name}: aidlc-${agent}-agent missing generated preflight`,
+        ).toContain("<!-- aidlc-delegated-knowledge-preflight -->");
+        expect(body).toContain(`${surface.harnessDir}/knowledge/aidlc-shared/`);
+        expect(body).toContain(
+          `${surface.harnessDir}/knowledge/aidlc-${agent}-agent/`,
+        );
+        expect(body).toContain(
+          "aidlc/spaces/<active-space>/knowledge/aidlc-shared/",
+        );
+        expect(body).toContain(
+          `aidlc/spaces/<active-space>/knowledge/aidlc-${agent}-agent/`,
+        );
+      }
     }
   });
 });

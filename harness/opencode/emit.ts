@@ -21,7 +21,10 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
-import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
+import {
+  absorbReviewerKnowledge,
+  injectDelegatedKnowledgePreflight,
+} from "../../scripts/agent-knowledge.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 
 // Rewrite a core persona .md into its opencode-native subagent twin. The
@@ -102,7 +105,7 @@ function embedShippedEntrypoints(raw: string, distRoot: string): string {
 }
 
 export default function emit(ctx: EmitContext): void {
-  const { coreRoot, harnessRoot, distRoot, substituteToken, tierCap } = ctx;
+  const { coreRoot, harnessRoot, distRoot, harnessDir, substituteToken, tierCap } = ctx;
   const SHELL = join(distRoot, ".opencode");
   const ACTIVE_MEMORY = join(distRoot, "aidlc", "spaces", "default", "memory");
   if (!existsSync(ACTIVE_MEMORY)) {
@@ -121,10 +124,15 @@ export default function emit(ctx: EmitContext): void {
         // raw core text - this emission reads core/agents/*.md directly, so
         // the packager's transform (which absorbs for the .aidlc twins)
         // never runs on it.
-        const raw = absorbReviewerKnowledge(
-          readFileSync(join(agentsDir, f), "utf-8"),
-          f.replace(/\.md$/, ""),
-          coreRoot,
+        const agentName = f.replace(/\.md$/, "");
+        const raw = injectDelegatedKnowledgePreflight(
+          absorbReviewerKnowledge(
+            readFileSync(join(agentsDir, f), "utf-8"),
+            agentName,
+            coreRoot,
+          ),
+          agentName,
+          harnessDir,
         );
         const projected = substituteToken(
           emitSubagentMd(raw, join(agentsDir, f), tierCap),

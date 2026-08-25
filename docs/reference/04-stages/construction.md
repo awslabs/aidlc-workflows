@@ -173,14 +173,10 @@ feasibility input.
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-architect-agent (lead) persona and knowledge.
-   Load aidlc-developer-agent persona and knowledge for technical implementation
-   input. Apply aidlc-architect-agent as the primary perspective.
-
-2. **Read Unit Context** -- Read the unit definition, assigned stories,
+1. **Read Unit Context** -- Read the unit definition, assigned stories,
    requirements, and domain design artifacts.
 
-3. **Create Functional Design Plan** -- Analyze the unit's scope and create a
+2. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
    `<record>/construction/{unit-name}/functional-design/functional-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
@@ -195,7 +191,7 @@ feasibility input.
    - Business scenarios (end-to-end user journeys, happy/unhappy paths,
      concurrency edge cases)
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow (offer interaction mode choice, collect
    answers, write back to file). Perform MANDATORY ambiguity analysis:
    - Identify vague answers ("mix of", "not sure", "depends", "probably")
@@ -204,7 +200,7 @@ feasibility input.
    - If ANY ambiguity found: create follow-up questions and resolve before
      proceeding
 
-5. **Generate Artifacts** -- Generate the following in
+4. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/functional-design/`:
    - **functional-spec.md**: Detailed algorithms, workflows, data
      transformations, processing sequences, and decision trees for the unit's
@@ -217,10 +213,10 @@ feasibility input.
      frontend/UI): Component hierarchy, props/state design, interaction flows,
      form validation rules, API integration points
 
-6. **Prepare Completion** -- Verify the unit's Functional Design artifacts.
+5. **Prepare Completion** -- Verify the unit's Functional Design artifacts.
    Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
-7. **Completion** -- Present completion message and approval gate.
+6. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -281,15 +277,10 @@ providing testability and measurability input.
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-architect-agent (lead) persona and knowledge.
-   Load aidlc-devsecops-agent (security requirements), aidlc-compliance-agent
-   (regulatory requirements), and aidlc-quality-agent (testability) personas and
-   knowledge for support input.
-
-2. **Read Prior Artifacts** -- Read functional design artifacts (if they
+1. **Read Prior Artifacts** -- Read functional design artifacts (if they
    exist), requirements, and reverse engineering artifacts.
 
-3. **Assess NFR Categories** -- Analyze the unit across NFR categories:
+2. **Assess NFR Categories** -- Analyze the unit across NFR categories:
    - **Performance**: Response times, throughput, latency targets, resource
      utilization
    - **Security**: Authentication, authorization, data protection, compliance
@@ -299,12 +290,12 @@ providing testability and measurability input.
      data durability
    - **Observability**: Monitoring, logging, alerting, tracing requirements
 
-4. **Generate Questions** -- Create a questions file at
+3. **Generate Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/nfr-requirements/nfr-requirements-questions.md`
    for unclear NFR areas using `[Answer]:` tags. Focus on quantifiable targets
    and specific constraints.
 
-5. **Collect and Analyze Answers** -- Collect answers following
+4. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
    - Identify vague answers ("fast enough", "highly available", "secure")
    - Check for contradictions between NFR targets
@@ -312,7 +303,7 @@ providing testability and measurability input.
    - If ANY ambiguity found: create follow-up questions and resolve before
      proceeding
 
-6. **Generate Artifacts** -- Generate the following in
+5. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/nfr-requirements/`:
    - **performance-requirements.md**: Response time targets, throughput
      requirements, latency budgets, resource constraints, benchmarks
@@ -329,10 +320,10 @@ providing testability and measurability input.
      languages, frameworks, databases, infrastructure tools, and justification
      for each choice
 
-7. **Prepare Completion** -- Verify the unit's NFR Requirements artifacts.
+6. **Prepare Completion** -- Verify the unit's NFR Requirements artifacts.
    Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
-8. **Completion** -- Present completion message and approval gate.
+7. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -394,14 +385,10 @@ infrastructure and platform input.
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-architect-agent (lead) persona and knowledge.
-   Load aidlc-aws-platform-agent persona and knowledge for infrastructure and
-   platform input.
-
-2. **Read Prior Artifacts** -- Read NFR requirements, functional design
+1. **Read Prior Artifacts** -- Read NFR requirements, functional design
    artifacts (if they exist), and domain design for architectural context.
 
-3. **Generate Design Questions** -- Create a questions file at
+2. **Generate Design Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Resilience patterns (circuit breakers, bulkheads, fallback strategies)
@@ -415,7 +402,7 @@ infrastructure and platform input.
    - Logical component boundaries (service isolation, failure domains, blast
      radius)
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
    - Identify vague answers ("mix of", "not sure", "depends", "probably")
    - Check for contradictions between answers
@@ -423,7 +410,7 @@ infrastructure and platform input.
    - If ANY ambiguity found: create follow-up questions and resolve before
      proceeding
 
-5. **Design NFR Solutions** -- Design concrete solutions for each NFR
+4. **Design NFR Solutions** -- Design concrete solutions for each NFR
    category:
    - **Performance**: Caching strategies, query optimization, connection
      pooling, async processing, CDN usage, lazy loading, pagination
@@ -438,7 +425,7 @@ infrastructure and platform input.
      distributed tracing architecture, alerting rules, dashboard specifications,
      SLI/SLO tracking, correlation ID propagation
 
-6. **Generate Artifacts** -- Generate the following in
+5. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/nfr-design/`:
    - **performance-design.md**: Caching architecture, optimization strategies,
      resource pooling, async patterns, performance budgets
@@ -459,10 +446,10 @@ infrastructure and platform input.
      decisions with Infrastructure Design by providing a component-level view
      of where NFR patterns apply.
 
-7. **Prepare Completion** -- Verify the unit's NFR Design artifacts. Do not
+6. **Prepare Completion** -- Verify the unit's NFR Design artifacts. Do not
    edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
-8. **Completion** -- Present completion message and approval gate.
+7. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -525,14 +512,10 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-aws-platform-agent (lead) persona and knowledge.
-   Load aidlc-devsecops-agent (infrastructure security) and aidlc-compliance-agent
-   (data residency, regulatory constraints) personas and knowledge for support input.
-
-2. **Read Prior Artifacts** -- Read all prior design artifacts for context:
+1. **Read Prior Artifacts** -- Read all prior design artifacts for context:
    NFR design, functional design, domain design, NFR requirements.
 
-3. **Generate Infrastructure Questions** -- Create a questions file at
+2. **Generate Infrastructure Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Deployment strategy (containerized, serverless, hybrid, multi-region)
@@ -542,7 +525,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
    - Secrets management (vault, environment variables, rotation policy)
    - Scaling policy (auto-scaling triggers, capacity limits, cost constraints)
 
-4. **Collect and Analyze Answers** -- Collect answers following
+3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
    - Identify vague answers ("cloud-based", "auto-scale", "standard
      monitoring")
@@ -551,7 +534,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
    - If ANY ambiguity found: create follow-up questions and resolve before
      proceeding
 
-5. **Design Infrastructure** -- Design infrastructure across four areas:
+4. **Design Infrastructure** -- Design infrastructure across four areas:
    - **Deployment Architecture**: Compute model (containers, serverless, VMs),
      networking topology, storage strategy, environment layout
      (dev/staging/prod)
@@ -564,7 +547,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      environment promotion, rollback strategy, feature flags, artifact
      management
 
-6. **Generate Artifacts** -- Generate the following in
+5. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/infrastructure-design/`. Keep the content
    **tabular** (deployment, services, shared, and monitoring are tables):
    - **infrastructure-specification.md**: the core infra design — a
@@ -581,11 +564,11 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      automation integration, deployment strategy (blue-green, canary, rolling),
      rollback procedures, environment promotion, secrets management in CI/CD
 
-7. **Prepare Completion** -- Verify the unit's Infrastructure Design
+6. **Prepare Completion** -- Verify the unit's Infrastructure Design
    artifacts. Do not edit state; report the gate outcome through
    `aidlc-orchestrate.ts`.
 
-8. **Completion** -- Present completion message and approval gate.
+7. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -913,17 +896,14 @@ with the aidlc-devsecops-agent providing security testing expertise.
 
 ### Steps
 
-1. **Load Personas** -- Load aidlc-quality-agent (lead) persona and knowledge. Load
-   aidlc-devsecops-agent persona and knowledge for security testing input.
-
-2. **Analyze Testing Requirements** -- Read code generation summaries and
+1. **Analyze Testing Requirements** -- Read code generation summaries and
    per-unit test instructions across all units. Build a source-complete
    inventory of every measurable target from NFR Requirements, NFR Design, and
    every approved Testing Contract. For each target, record a stable ID, source
    path/section, expected value, the check that produces its actual value, and
    any later validation stage that owns it. Catalog all required test types.
 
-3. **Generate Build Instructions** -- Create
+2. **Generate Build Instructions** -- Create
    `<record>/construction/build-and-test/build-instructions.md`:
    - Dependency installation steps
    - Environment setup (env vars, config files, local services)
@@ -931,7 +911,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
    - Build verification steps
    - Troubleshooting common build issues
 
-4-8. **Generate Additional Test Instructions** -- Consult the active test
+3-7. **Generate Additional Test Instructions** -- Consult the active test
    strategy and generate the matching cross-unit instruction files:
    - **Minimal**: Generate no additional files. Unit tests are covered
      per-unit by Code Generation.
@@ -947,7 +927,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
    Each file includes framework setup, run commands and filters, coverage
    targets, and test data or environment setup.
 
-9. **Generate Build and Test Summary** -- Create
+8. **Generate Build and Test Summary** -- Create
    `<record>/construction/build-and-test/build-and-test-summary.md`:
    - Overall build status and prerequisites
    - Test type inventory (which test types were generated)
@@ -959,7 +939,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 
-10. **Execute Build and Tests** -- Attempt to execute the build and test
+9. **Execute Build and Tests** -- Attempt to execute the build and test
     commands documented in the instruction files **via Bash**:
 
     a. **Build**: Run the build commands from build-instructions.md via Bash.
@@ -988,7 +968,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
        - Coverage report (if test framework supports it)
        - The finalized Target Verification Matrix. Every applicable target has
          an actual value, evidence, owning stage, and final `Met`, `Not Met`, or
-         `Unverified` verdict. No `Pending` verdict remains after Step 10.
+         `Unverified` verdict. No `Pending` verdict remains after Step 9.
        - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires
          a loop-back): one `### Loop-back N -- <ISO timestamp>` entry per
          attempt (Diagnosis / Root-cause stage / Planned fix / Estimated impact).
@@ -1061,10 +1041,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
     pass and every applicable target to be `Met`, or the single explanatory
     `N/A` row when no target applies.
 
-11. **Prepare Completion** -- Verify the build/test evidence. Do not edit
+10. **Prepare Completion** -- Verify the build/test evidence. Do not edit
     stage or phase state; the reported gate outcome owns the transition.
 
-12. **Completion** -- Present completion message and approval gate.
+11. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 

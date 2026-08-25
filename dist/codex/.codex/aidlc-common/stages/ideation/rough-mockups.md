@@ -42,16 +42,12 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `.codex/knowledge/aidlc-design-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read intent statement from `<record>/ideation/intent-capture/`
 - Read scope definition and intent backlog from `<record>/ideation/scope-definition/`
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/ideation/rough-mockups/rough-mockups-questions.md` with questions:
 - What are the primary user entry points and key screens/views?
@@ -64,11 +60,11 @@ Create `<record>/ideation/rough-mockups/rough-mockups-questions.md` with questio
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Run contradiction analysis between UX expectations and scope constraints.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 For UI initiatives: Create low-fidelity wireframes (ASCII art or structured descriptions), core user flow diagram, information architecture outline. Include a one-line accessibility note per screen: heading level (h1–h3), primary landmark regions (header/main/nav/footer), keyboard entry point.
 
@@ -76,13 +72,13 @@ For non-UI initiatives: Create system context diagram, key interaction flow sket
 
 All diagrams follow ASCII diagram standards from stage-protocol.md.
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage rough-mockups --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :pencil2:
 Review path: `<record>/ideation/rough-mockups/`

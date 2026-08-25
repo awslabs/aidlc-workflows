@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.81] - 2026-08-25
+
+Agent and stage prompts now omit duplicated ownership and persona-loading prose while every delegated agent retains a mandatory shared and agent-specific knowledge preflight in its generated harness surface. **Upgrade:** re-copy your `dist/<harness>/` shell; active workflow state and project artifacts need no migration.
+
+* Core and plugin persona sources no longer repeat stage ownership, the six-step knowledge-loading list, or Task-tool warning prose already owned by stage metadata, the protocol, and harness tool policy.
+* Every Claude, Codex, Copilot, Cursor, Kiro CLI, Kiro IDE, and OpenCode delegated-agent projection carries the compact methodology/team knowledge preflight, including plugin agents.
+* The remaining Construction stages start with substantive work, with execution-mode ranges, Build and Test plugin anchors, quality-target assertions, loop-back references, and reference documentation renumbered consistently.
+* Codex ships `[agents] max_depth = 1`, matching the single-level delegation boundary documented by its orchestrator.
+
 ## [2.6.80] - 2026-08-25
 
 Concurrent sessions in one checkout now keep workflow selection, usage, lifecycle events, learning candidates, and fresh-intent handoffs bound to the owning session for independent intents within the same space. **Upgrade:** refresh your `dist/<harness>/` shell; Codex users must also re-run `bun scripts/package.ts codex trust --project <absolute-project-path>` because the new Bash session-binding hook adds a trust-table entry.

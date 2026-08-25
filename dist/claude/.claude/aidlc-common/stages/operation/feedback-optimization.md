@@ -50,18 +50,14 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-operations-agent persona from `agents/aidlc-operations-agent.md` and knowledge from `.claude/knowledge/aidlc-operations-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read observability setup from `<record>/operation/observability-setup/`
 - Read performance validation results from `<record>/operation/performance-validation/`
 - Read SLO/SLI configuration
 - Read infrastructure design for drift comparison
 
-### Step 3: Generate Questions
+### Step 2: Generate Questions
 
 Create questions file covering:
 - Are SLOs being met? What is the error budget burn rate?
@@ -72,17 +68,17 @@ Create questions file covering:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Generate Artifacts
+### Step 3: Generate Artifacts
 
 Create SLO compliance report, AWS Cost Explorer analysis & optimization recommendations, AWS Config drift detection report, Trusted Advisor recommendations review, operational insights & improvement proposals, and feedback loop document (inputs to next Ideation cycle).
 
-### Step 5: Completion Handoff
+### Step 4: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage feedback-optimization --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 6: Present Completion & Request Approval
+### Step 5: Present Completion & Request Approval
 
 Completion emoji: :recycle:
 Review path: `<record>/operation/feedback-optimization/`

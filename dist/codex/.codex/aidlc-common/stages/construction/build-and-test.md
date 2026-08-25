@@ -49,11 +49,7 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Personas
-
-Load aidlc-quality-agent (lead) persona from `agents/aidlc-quality-agent.md` and knowledge from `.codex/knowledge/aidlc-quality-agent/`. Load aidlc-devsecops-agent persona from `agents/aidlc-devsecops-agent.md` and knowledge from `.codex/knowledge/aidlc-devsecops-agent/` for security testing input. Apply aidlc-quality-agent as the primary perspective with aidlc-devsecops-agent providing security testing expertise.
-
-### Step 2: Analyze Testing Requirements
+### Step 1: Analyze Testing Requirements
 
 Read code generation outputs across all units from
 `<record>/construction/*/code-generation/code-summary.md` and per-unit test
@@ -75,7 +71,7 @@ check or instruction file that will produce its actual value, and the later
 validation stage that owns it when Build and Test cannot execute it locally.
 Catalog all required test types from this inventory.
 
-### Step 3: Generate Build Instructions
+### Step 2: Generate Build Instructions
 
 Create `<record>/construction/build-and-test/build-instructions.md`:
 - Dependency installation steps
@@ -84,7 +80,7 @@ Create `<record>/construction/build-and-test/build-instructions.md`:
 - Build verification steps
 - Troubleshooting common build issues
 
-### Step 4-8: Generate Test Instructions (Strategy-Aware)
+### Step 3-7: Generate Test Instructions (Strategy-Aware)
 
 Consult the active test strategy from `aidlc-state.md` → `**Test Strategy**` (see stage-protocol.md §8 "Test Strategy"). Generate additional test instruction files based on the strategy level:
 
@@ -110,7 +106,7 @@ Each instruction file should include:
 
 These are soft guidelines — the LLM can generate additional test types at any strategy level if context demands it (e.g., a Minimal security-patch may still warrant security test instructions).
 
-### Step 9: Generate Build and Test Summary
+### Step 8: Generate Build and Test Summary
 
 Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Overall build status and prerequisites
@@ -125,7 +121,7 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Readiness assessment (build-ready, test-ready, deployment-ready)
 - Known limitations or outstanding items
 
-### Step 10: Execute Build and Tests
+### Step 9: Execute Build and Tests
 
 Attempt to execute the build and test commands documented in the instruction files:
 
@@ -160,7 +156,7 @@ Attempt to execute the build and test commands documented in the instruction fil
    - The finalized Target Verification Matrix: actual value, evidence path or
      command output, owning stage, and exactly one final verdict per applicable
      target: `Met`, `Not Met`, or `Unverified`. `Pending` is allowed only while
-     Step 9 is being prepared; no `Pending` verdict may remain when Step 10
+     Step 8 is being prepared; no `Pending` verdict may remain when Step 9
      exits.
    - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires a
      loop-back): one `### Loop-back N — <ISO timestamp>` entry per attempt,
@@ -229,7 +225,7 @@ test-results.md, and present them in this run's isolated-run summary.
 target is `Met` (or the inventory has the single explanatory `N/A` row), update
 the Build and Test Summary with a successful readiness result.
 
-### Step 11: Cross-Unit Final Coverage Gate
+### Step 10: Cross-Unit Final Coverage Gate
 
 This is a stage-level gate, not the Construction phase boundary. Enumerate:
 
@@ -249,13 +245,13 @@ pass/fail verdict, per-ID coverage, owning stage/Unit, target file, and every
 uncovered element. Any uncovered ID is a build-and-test finding that must be
 surfaced at the approval gate.
 
-### Step 12: Completion Handoff
+### Step 11: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage build-and-test --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 13: Completion
+### Step 12: Completion
 
 Present completion message and approval gate:
 

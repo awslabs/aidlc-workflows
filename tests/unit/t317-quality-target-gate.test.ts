@@ -53,7 +53,7 @@ function assertQualityTargetGate(root: string, orgPath: string): void {
     "Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict",
   );
   expect(buildAndTest).toContain(
-    "`Pending` is allowed only while\n     Step 9 is being prepared",
+    "`Pending` is allowed only while\n     Step 8 is being prepared",
   );
   expect(buildAndTest).toContain(
     "Run every applicable command from performance,\n" +

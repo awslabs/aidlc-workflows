@@ -215,6 +215,22 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           ? join(built, "aidlc", "agents", "test-pro-metrics-agent.md")
           : join(built, "agents", "test-pro-metrics-agent.md");
       expect(existsSync(agentSource), `${harness.name}: agent`).toBe(true);
+      const projectedAgent = readFileSync(agentSource, "utf-8");
+      expect(projectedAgent).toContain(
+        "<!-- aidlc-delegated-knowledge-preflight -->",
+      );
+      expect(projectedAgent).toContain(
+        `${harness.manifest.harnessDir}/knowledge/aidlc-shared/`,
+      );
+      expect(projectedAgent).toContain(
+        `${harness.manifest.harnessDir}/knowledge/test-pro-metrics-agent/`,
+      );
+      expect(projectedAgent).toContain(
+        "aidlc/spaces/<active-space>/knowledge/aidlc-shared/",
+      );
+      expect(projectedAgent).toContain(
+        "aidlc/spaces/<active-space>/knowledge/test-pro-metrics-agent/",
+      );
       expect(
         existsSync(join(built, "knowledge", "test-pro-metrics-agent", "methodology.md")),
         `${harness.name}: knowledge`,
@@ -398,7 +414,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(pluginModifiedAfter).toContain(
       "test-pro-branch-coverage-instructions",
     );
-    expect(pluginModifiedAfter).toContain("Step 9a (test-pro)");
+    expect(pluginModifiedAfter).toContain("Step 8a (test-pro)");
     expect(pluginModifiedAfter).not.toBe(pluginModifiedBefore);
     const graphAfterReinstall = JSON.parse(
       readFileSync(
@@ -1304,14 +1320,14 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   // --- Contribution seam: prose fragments ---
   test("prose fragments are spliced into the target stage body", () => {
     const body = stageBody(project, "construction", "build-and-test");
+    expect(body).toContain("Step 8a (test-pro)");
     expect(body).toContain("Step 9a (test-pro)");
-    expect(body).toContain("Step 10a (test-pro)");
   });
 
-  test("fragments land in step order (9a before 9b before 9c)", () => {
+  test("fragments land in step order (8a before 8b before 8c)", () => {
     const body = stageBody(project, "construction", "build-and-test");
-    expect(body.indexOf("Step 9a")).toBeLessThan(body.indexOf("Step 9b"));
-    expect(body.indexOf("Step 9b")).toBeLessThan(body.indexOf("Step 9c"));
+    expect(body.indexOf("Step 8a")).toBeLessThan(body.indexOf("Step 8b"));
+    expect(body.indexOf("Step 8b")).toBeLessThan(body.indexOf("Step 8c"));
   });
 
   // --- Harness-dir token substitution ---
@@ -1336,7 +1352,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     });
     expect(rerun.status).toBe(0);
     const body = stageBody(project, "construction", "build-and-test");
-    const count = (body.match(/Step 9a \(test-pro\)/g) ?? []).length;
+    const count = (body.match(/Step 8a \(test-pro\)/g) ?? []).length;
     expect(count).toBe(1);
   });
 

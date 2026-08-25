@@ -54,12 +54,7 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-delivery-agent persona from `agents/aidlc-delivery-agent.md` and knowledge from `.cursor/knowledge/aidlc-delivery-agent/`.
-Load aidlc-architect-agent for build order validation.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 Read all Inception phase artifacts:
 - Requirements from `<record>/inception/requirements-analysis/`
@@ -80,7 +75,7 @@ Use these affirmed practices when populating `bolt-plan.md`. If no narrower
 statement exists (including when practices-discovery was skipped), use the
 active space's `memory/org.md` defaults.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); this stage (2.9) chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
 
@@ -125,11 +120,11 @@ NOTE: This stage plans the Bolt sequence. It does NOT decide which AIDLC stages 
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Validate the chosen Bolt sequence respects 2.7's dependency DAG (with aidlc-architect-agent input). Flag any deviation from topological order so it can be justified in the rationale artifact.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create four artifacts in `<record>/inception/delivery-planning/`. These are
 documents the user opens and reads at the gate, so the same rule the questions
@@ -145,7 +140,7 @@ the explanation.
 - `risk-and-sequencing-rationale.md` — the why behind the Bolt ordering: WSJF-style scoring, risk-first argument, walking-skeleton-first argument, or value-first argument. References the heuristic used (Cohn, Reinertsen CD3, or SAFe WSJF).
 - `external-dependency-map.md` — gated items (external APIs, data availability windows, approval lead times, external-team hand-offs) mapped to the Bolts that consume them. Lightweight or empty when fully AI-contained.
 
-### Step 6: Phase Boundary Verification
+### Step 5: Phase Boundary Verification
 
 Run the Inception → Construction completeness audit. Read every
 `traceability.json` produced by the Inception stages that executed:
@@ -162,7 +157,7 @@ targets, or missing upstream IDs. Consolidate the tables into
 the top. If any finding remains, stop the transition and revisit the owning
 stage before Construction begins.
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .cursor/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
@@ -186,7 +181,7 @@ code-generation serially, in Bolt build order), so opt in when the plan
 justifies per-unit coherence and early working code over parallel batch
 builds.
 
-### Step 8: Present Completion & Request Approval
+### Step 7: Present Completion & Request Approval
 
 Completion emoji: :calendar:
 Review path: `<record>/inception/delivery-planning/`

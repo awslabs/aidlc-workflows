@@ -43,17 +43,13 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-operations-agent persona from `agents/aidlc-operations-agent.md` and knowledge from `.codex/knowledge/aidlc-operations-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read observability setup from `<record>/operation/observability-setup/`
 - Read NFR design from `<record>/construction/nfr-design/`
 - Read infrastructure design from `<record>/construction/infrastructure-design/`
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create questions file covering:
 - What are the most likely failure modes?
@@ -64,17 +60,17 @@ Create questions file covering:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Generate Artifacts
+### Step 3: Generate Artifacts
 
 Create SSM Automation runbook library, incident response plan (integrated with AWS Incident Manager), escalation matrix, automated remediation documents, disaster recovery procedures, and AWS Backup configuration.
 
-### Step 5: Completion Handoff
+### Step 4: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage incident-response --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 6: Present Completion & Request Approval
+### Step 5: Present Completion & Request Approval
 
 Completion emoji: :fire_engine:
 Review path: `<record>/operation/incident-response/`

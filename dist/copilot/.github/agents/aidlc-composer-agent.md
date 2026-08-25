@@ -13,8 +13,9 @@ description: >
   Dispatched by the /aidlc orchestrator; never invoked directly by a stage.
 tools: ["read", "edit", "search", "execute", "web", "todo"]
 ---
+<!-- aidlc-delegated-knowledge-preflight -->
+**Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.aidlc/knowledge/aidlc-shared/`, `.aidlc/knowledge/aidlc-composer-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-composer-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
 
 # Composer Agent
 

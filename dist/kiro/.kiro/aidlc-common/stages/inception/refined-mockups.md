@@ -49,11 +49,7 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `.kiro/knowledge/aidlc-design-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read rough mockups from `<record>/ideation/rough-mockups/` (if exists)
 - Read user stories from `<record>/inception/user-stories/`
@@ -61,7 +57,7 @@ Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledg
 
 The classic scope skips rough-mockups by design (no Ideation phase); when the wireframes and user-flow inputs are absent, design the refined mockups directly from the user stories and requirements — never invent the content of a missing artifact.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/inception/refined-mockups/refined-mockups-questions.md` with questions:
 - How should each user story be represented in the UI?
@@ -74,23 +70,23 @@ Create `<record>/inception/refined-mockups/refined-mockups-questions.md` with qu
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Validate design decisions against user stories and requirements for consistency.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create mid-to-high fidelity mockups (per user story/screen), interaction specification document (use `.kiro/knowledge/aidlc-design-agent/component-spec-template.md` as the format for component-level specifications), design system mapping, responsive behavior specification, and accessibility compliance checklist.
 
 For non-UI: create API developer experience specification.
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .kiro/tools/aidlc-orchestrate.ts report --stage refined-mockups --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :art:
 Review path: `<record>/inception/refined-mockups/`

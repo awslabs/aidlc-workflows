@@ -193,6 +193,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     // workspace root, where codex runs), NOT the old .codex/aidlc-rules.
     const config = readFileSync(join(CODEX_DST, "config.toml"), "utf-8");
     expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+    expect(config).toContain("[agents]\nmax_depth = 1");
     // The compiled graph's rule display paths are harness-neutral now.
     const graph = readFileSync(join(CODEX_DST, "tools", "data", "stage-graph.json"), "utf-8");
     expect(graph).toContain('"aidlc/spaces/default/memory/org.md"');

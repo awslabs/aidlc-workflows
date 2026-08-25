@@ -40,16 +40,12 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-aws-platform-agent persona from `agents/aidlc-aws-platform-agent.md` and knowledge from `.cursor/knowledge/aidlc-aws-platform-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read infrastructure design from `<record>/construction/infrastructure-design/`
 - Read security requirements from `<record>/construction/nfr-requirements/`
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create questions file covering:
 - Are all environments provisioned per Infra Design?
@@ -59,21 +55,21 @@ Create questions file covering:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Provision and Validate
+### Step 3: Provision and Validate
 
 Provision target AWS environments using IaC from Construction. Validate infrastructure configuration. The orchestrator will invoke aidlc-devsecops-agent for security posture validation.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create provisioned environment inventory, infrastructure validation report, secrets & parameter store audit, stack deployment logs, and environment health check results.
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .cursor/tools/aidlc-orchestrate.ts report --stage environment-provisioning --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :cloud:
 Review path: `<record>/operation/environment-provisioning/`

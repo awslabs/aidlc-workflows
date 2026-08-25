@@ -48,11 +48,7 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agent.md` and knowledge from `.codex/knowledge/aidlc-pipeline-deploy-agent/`.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read CD pipeline config and deployment strategy from `<record>/operation/deployment-pipeline/` (if they exist)
 - Read environment inventory from `<record>/operation/environment-provisioning/` (if exists)
@@ -73,7 +69,7 @@ artifacts. For Express greenfield, deployment proceeds only when those files
 identify a real target; otherwise this CONDITIONAL stage reports skipped.
 Never invent an environment inventory or deployment path.
 
-### Step 3: Pre-Deployment Checks
+### Step 2: Pre-Deployment Checks
 
 Create questions file covering:
 - Are all pre-deployment checks passing?
@@ -83,21 +79,21 @@ Create questions file covering:
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Execute Deployment
+### Step 3: Execute Deployment
 
 Push artifacts through the pipeline. Run smoke tests. Validate health checks. Execute database migrations if needed: delegate to Task tool with subagent_type="aidlc-developer-agent" for migration execution.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create deployment execution log, smoke test results, health check validation report, and database migration log (if applicable).
 
-### Step 6: Completion Handoff
+### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage deployment-execution --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 7: Present Completion & Request Approval
+### Step 6: Present Completion & Request Approval
 
 Completion emoji: :package:
 Review path: `<record>/operation/deployment-execution/`

@@ -9,7 +9,7 @@
 // conditional Construction protocol module.
 // Five surfaces carry the contract:
 //   1. dist/claude/.claude/aidlc-common/stages/construction/build-and-test.md
-//      — Step 10's 4-rung failure-escalation ladder, the `## Loop-Back Log`
+//      — Step 9's 4-rung failure-escalation ladder, the `## Loop-Back Log`
 //      artifact shape, and the single-stage (--single) carve-out.
 //   2. dist/claude/.claude/aidlc-common/protocols/
 //      stage-protocol-construction.md — the loop-back subsection as a sibling
@@ -74,7 +74,7 @@ const CODE_GENERATION = readFileSync(
   "utf-8",
 );
 
-describe("t305 build-and-test.md — Step 10 failure-escalation ladder", () => {
+describe("t305 build-and-test.md — Step 9 failure-escalation ladder", () => {
   test("On-failure block is the ladder, not the old flat retry list", () => {
     expect(STAGE).toContain(
       "**On failure**: Run the same failure-escalation ladder for command failures,\n" +
@@ -267,9 +267,9 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(RECOVERY).not.toContain("stage-protocol.md\n§1");
   });
 
-  test("replay ends with Modify at build-and-test's own re-use prompt + fresh Step 10", () => {
+  test("replay ends with Modify at build-and-test's own re-use prompt + fresh Step 9", () => {
     expect(CONSTRUCTION_PROTOCOL).toContain("choose Modify\n   at its own Artifact Re-use prompt");
-    expect(CONSTRUCTION_PROTOCOL).toContain("re-execute Step 10 fresh");
+    expect(CONSTRUCTION_PROTOCOL).toContain("re-execute Step 9 fresh");
   });
 
   test("re-entry is settlement-aware and every path refreshes per-unit reviews", () => {

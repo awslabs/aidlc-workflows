@@ -93,7 +93,7 @@ SKILL.md references the shared protocol family and stage files:
 
 ### Agent File Format
 
-This implementation renders AI-DLC's agent roles as flat `.md` files in `.claude/agents/` — 14 files: the 11 domain-expert personas, 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer. Each uses YAML frontmatter followed by a markdown body. The frontmatter controls Claude Code's behavior when the agent is activated; the body provides persona, responsibilities, stage ownership, collaboration patterns, knowledge loading order, and key principles.
+This implementation renders AI-DLC's agent roles as flat `.md` files in `.claude/agents/` — 14 files: the 11 domain-expert personas, 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer. Each uses YAML frontmatter followed by a markdown body. The frontmatter controls Claude Code's behavior when the agent is activated; the body provides persona, responsibilities, collaboration patterns, relevant memory focus, and key principles. The packager injects a compact mandatory delegated-knowledge preflight into the projected file.
 
 For full agent system documentation, see [Agent System](05-agent-system.md).
 

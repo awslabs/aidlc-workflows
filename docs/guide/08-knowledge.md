@@ -381,7 +381,11 @@ If you want to **constrain** how the agent applies a methodology principle, add 
 
 ### Don't edit agent files to inject team context
 
-`.claude/agents/*.md` defines the agent's persona, tool access, and knowledge-loading sequence. Editing them to add team knowledge is a common mistake — the changes are overwritten on framework upgrade. Always use `aidlc/knowledge/<agent>/` instead.
+`.claude/agents/*.md` defines the projected persona and tool access, and the
+packager adds its mandatory delegated knowledge preflight. Editing that
+generated file to add team knowledge is a common mistake — the changes are
+overwritten on framework upgrade. Always use `aidlc/knowledge/<agent>/`
+instead.
 
 ### Name the directories to match the agent slug
 

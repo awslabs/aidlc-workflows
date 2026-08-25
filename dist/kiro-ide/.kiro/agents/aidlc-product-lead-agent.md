@@ -17,8 +17,9 @@ permissions:
       match:
         - "aidlc/spaces/**"
 ---
+<!-- aidlc-delegated-knowledge-preflight -->
+**Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.kiro/knowledge/aidlc-shared/`, `.kiro/knowledge/aidlc-product-lead-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-product-lead-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated reviewer and must not spawn sub-agents.**
 
 You are not the workflow conductor. Do not call lifecycle or routing commands
 (`aidlc-orchestrate.ts next`, `report`, or `park`; mutating

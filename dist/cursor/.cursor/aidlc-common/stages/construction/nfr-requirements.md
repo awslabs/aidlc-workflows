@@ -70,26 +70,22 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 This stage supports two execution modes, controlled by the orchestrator:
 
 **QUESTION-ONLY mode** (invoked by orchestrator during a Bolt's question phase):
-Execute Steps 1–5 only (load personas, read artifacts, assess categories, generate questions, collect answers).
+Execute Steps 1–4 only (read artifacts, assess categories, generate questions, collect answers).
 Do NOT proceed to artifact generation. Return control to the orchestrator.
 
 **ARTIFACT-ONLY mode** (invoked by orchestrator during a Bolt's design phase):
-Skip Steps 1–5 (questions already collected and approved).
+Skip Steps 1–4 (questions already collected and approved).
 Read the answered questions file from the per-unit directory.
-Execute Steps 6–8 only (generate artifacts, update state, completion).
+Execute Steps 5–7 only (generate artifacts, update state, completion).
 
 **Full mode** (default — single-unit projects or direct stage invocation):
 Execute all steps sequentially as written.
 
-### Step 1: Load Personas
-
-Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md` and knowledge from `.cursor/knowledge/aidlc-architect-agent/`. Load aidlc-devsecops-agent persona from `agents/aidlc-devsecops-agent.md` and knowledge from `.cursor/knowledge/aidlc-devsecops-agent/` for security requirements input. Load aidlc-compliance-agent persona from `agents/aidlc-compliance-agent.md` and knowledge from `.cursor/knowledge/aidlc-compliance-agent/` for regulatory constraint mapping. Load aidlc-quality-agent persona from `agents/aidlc-quality-agent.md` and knowledge from `.cursor/knowledge/aidlc-quality-agent/` for testable quality attribute scenarios. Apply aidlc-architect-agent as the primary perspective with aidlc-devsecops-agent, aidlc-compliance-agent, and aidlc-quality-agent providing specialist input.
-
-### Step 2: Read Prior Artifacts
+### Step 1: Read Prior Artifacts
 
 Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists), the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced — its SLAs, retry/timeout, and integration-mechanism decisions constrain this unit's NFR targets), and any reverse engineering artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints). Incremental scopes (infra) skip functional-design by design; when its artifacts are absent, derive the NFR context from the requirements and the code knowledge base instead — never invent the content of a missing artifact.
 
-### Step 3: Assess NFR Categories
+### Step 2: Assess NFR Categories
 
 Analyze the unit across NFR categories:
 - **Performance**: Response times, throughput, latency targets, resource utilization
@@ -98,11 +94,11 @@ Analyze the unit across NFR categories:
 - **Reliability**: Availability targets, fault tolerance, disaster recovery, data durability
 - **Observability**: Monitoring, logging, alerting, tracing requirements
 
-### Step 4: Generate Questions
+### Step 3: Generate Questions
 
 Create a questions file at `<record>/construction/{unit-name}/nfr-requirements/nfr-requirements-questions.md` for unclear NFR areas using [Answer]: tags. Focus on quantifiable targets and specific constraints.
 
-### Step 5: Collect and Analyze Answers
+### Step 4: Collect and Analyze Answers
 
 Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file). Perform MANDATORY ambiguity analysis:
 - Identify vague answers ("fast enough", "highly available", "secure")
@@ -111,7 +107,7 @@ Collect answers following stage-protocol.md §3 question flow (offer interaction
 
 If ANY ambiguity found: create follow-up questions and resolve before proceeding.
 
-### Step 6: Generate Artifacts
+### Step 5: Generate Artifacts
 
 Generate the following in `<record>/construction/{unit-name}/nfr-requirements/`:
 
@@ -143,13 +139,13 @@ derived `NFRx.y` IDs. `N/A` requires a justification:
 }
 ```
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .cursor/tools/aidlc-orchestrate.ts report --stage nfr-requirements --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 8: Completion
+### Step 7: Completion
 
 Present completion message and approval gate:
 

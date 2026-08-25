@@ -52,7 +52,11 @@ import { basename, dirname, isAbsolute, join, posix, relative, sep } from "node:
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
-import { absorbReviewerKnowledge, agentNameFromPath } from "./agent-knowledge.ts";
+import {
+  absorbReviewerKnowledge,
+  agentNameFromPath,
+  injectDelegatedKnowledgePreflight,
+} from "./agent-knowledge.ts";
 import { renderOnboarding } from "./onboarding.ts";
 import {
   type Harness,
@@ -291,7 +295,10 @@ function transform(
     // token substitution below covers the absorbed prose like any core .md.
     let s = content.toString("utf-8");
     const agentName = agentNameFromPath(srcPath);
-    if (agentName) s = absorbReviewerKnowledge(s, agentName, CORE_ROOT);
+    if (agentName) {
+      s = absorbReviewerKnowledge(s, agentName, CORE_ROOT);
+      s = injectDelegatedKnowledgePreflight(s, agentName, harnessDir);
+    }
     s = substituteToken(s, harnessDir);
     s = applyRulesRename(s, harnessDir, rulesRename);
     if (harness) s = projectTierFrontmatter(s, srcPath, harness);
@@ -1154,6 +1161,11 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
           basename(file, ".md"),
           CORE_ROOT,
           pluginSrc,
+        );
+        projected = injectDelegatedKnowledgePreflight(
+          projected,
+          basename(file, ".md"),
+          harnessLeaf,
         );
         if (kind === "cursor") projected = projectCursorPluginAgent(projected, file);
         content = Buffer.from(projected, "utf-8");

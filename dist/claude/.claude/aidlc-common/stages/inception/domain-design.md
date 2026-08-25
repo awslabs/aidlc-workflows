@@ -56,19 +56,13 @@ This stage does NOT decide deployment topology (monolith, microservices, serverl
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` and knowledge from `.claude/knowledge/aidlc-architect-agent/`.
-Load aidlc-aws-platform-agent persona from `agents/aidlc-aws-platform-agent.md` and knowledge from `.claude/knowledge/aidlc-aws-platform-agent/` for dependency-service awareness (a component may depend on a managed service — that dependency is captured, but the service itself is not a component).
-Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `.claude/knowledge/aidlc-design-agent/` for UI component specifications and UX-informed design constraints.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read `<record>/inception/requirements-analysis/requirements.md`
 - Read `<record>/inception/user-stories/stories.md` (if produced)
 - If brownfield: Read relevant RE artifacts (especially architecture.md, component-inventory.md, dependencies.md)
 
-### Step 3: Create Design Plan with Questions
+### Step 2: Create Design Plan with Questions
 
 Create `<record>/inception/domain-design/domain-design-questions.md` with context-appropriate questions using [Answer]: tag format:
 - Component boundary decisions (what is a distinct building block, and why)
@@ -78,14 +72,14 @@ Create `<record>/inception/domain-design/domain-design-questions.md` with contex
 - Integration approach with existing components (brownfield)
 - UI component structure (if user-facing, informed by UX designer perspective)
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file).
 - MANDATORY ambiguity analysis: scan for vague language, contradictions, missing details
 - Create follow-up questions if ANY ambiguity found
 - Resolve all ambiguities before proceeding
 
-### Step 5: Generate the Component Catalogue
+### Step 4: Generate the Component Catalogue
 
 Create `<record>/inception/domain-design/components.md`. This single artifact carries both a machine-readable catalogue and the human-readable view.
 
@@ -147,7 +141,7 @@ section of components.md.
 
 When only one decomposition is viable, state why and skip the block.
 
-### Step 6: Record Architecture Decisions (ADRs)
+### Step 5: Record Architecture Decisions (ADRs)
 
 Create `<record>/inception/domain-design/decisions.md`. The `components.md` Rationale table is a quick per-component justification; `decisions.md` is the durable Architecture Decision Record log that the Inception phase rule requires. Record one ADR for every **significant** design choice made here — component-boundary decompositions, entity-ownership calls, cross-component interaction styles, and any deliberate dependency cycle.
 
@@ -159,9 +153,9 @@ Each ADR MUST follow this structure (per the Inception phase guardrails):
   - **Consequences** — the resulting trade-offs, both positive and negative
   - **Alternatives Rejected** — the other viable options considered and why they were not chosen
 
-Number ADRs sequentially (`ADR-001`, `ADR-002`, …). Where a decision came from a Step 5 component-boundary option block, its rejected options populate that ADR's **Alternatives Rejected**. If no significant decision was made (a single obvious decomposition with no trade-offs), state that explicitly in a single ADR rather than leaving the file empty.
+Number ADRs sequentially (`ADR-001`, `ADR-002`, …). Where a decision came from a Step 4 component-boundary option block, its rejected options populate that ADR's **Alternatives Rejected**. If no significant decision was made (a single obvious decomposition with no trade-offs), state that explicitly in a single ADR rather than leaving the file empty.
 
-### Step 7: Record Traceability
+### Step 6: Record Traceability
 
 Create `<record>/inception/domain-design/traceability.json`. When
 `stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`
@@ -182,13 +176,13 @@ Functional Design):
 }
 ```
 
-### Step 8: Completion Handoff
+### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage domain-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 9: Present Completion & Request Approval
+### Step 8: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :building_construction:
 - Summary of components identified (count, key boundaries, entity ownership)
