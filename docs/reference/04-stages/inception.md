@@ -444,7 +444,9 @@ large scope with significant unknowns.
     `<record>/inception/requirements-analysis/requirements.md` containing:
     - Intent analysis -- what the user is trying to achieve (goals, not just
       features)
-    - Functional requirements -- organized by feature area or domain
+    - Functional requirements -- organized by feature area or domain. Give
+      every requirement a stable `FR{n}` ID (for example `FR1`) and every
+      sub-requirement an `FR{n}.{m}` ID (for example `FR1.2`)
     - Non-functional requirements -- performance, security, scalability,
       reliability, and observability targets, each with a stable `NFR{n}` ID
     - Constraints -- technical, business, organizational
