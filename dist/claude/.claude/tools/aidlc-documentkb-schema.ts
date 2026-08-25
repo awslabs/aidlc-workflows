@@ -595,7 +595,7 @@ function validateRow(raw: unknown, where: string, errors: string[]): void {
   // A SIBLING of `summary` (S3a's shipped, reviewed, two-state union), not a
   // field inside it -- this is additive, not a rewrite of that contract. Kept
   // OPTIONAL even when summary.state is "generated": S3a's own pinned tests
-  // (t300) construct a valid `generated` summary carrying only path +
+  // (t325) construct a valid `generated` summary carrying only path +
   // source_revision, with no digest field at all, and that shape must keep
   // validating. So this is corroboration when a writer supplies it (every
   // write this release makes does), not a NEW requirement layered onto an
@@ -738,6 +738,7 @@ export function isTombstoned(row: DocumentRow): boolean {
 // produced from a since-edited original describes a revision that no longer
 // exists and MUST NOT be served.
 export function summaryIsCurrent(row: DocumentRow): boolean {
+  if (isTombstoned(row)) return false;
   if (row.summary.state !== "generated") return false;
   return row.summary.source_revision === row.sha256;
 }
@@ -752,6 +753,7 @@ export function summaryIsCurrent(row: DocumentRow): boolean {
 // DERIVED reader-facing state, exactly as `effectiveExtractionState` derives
 // `"invalidated"` from a `state: "extracted"` union member that also lacks it.
 export function effectiveSummaryState(row: DocumentRow): "absent" | "generated" | "invalidated" {
+  if (isTombstoned(row)) return "absent";
   if (row.summary.state === "generated" && !summaryIsCurrent(row)) return "invalidated";
   return row.summary.state;
 }

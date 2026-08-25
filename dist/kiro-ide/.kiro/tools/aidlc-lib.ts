@@ -10764,7 +10764,11 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
 //
 // Throws (does not exit) so each caller can attach its own flag name and exit
 // code. `what` names the thing in the message: "--text-file", "source", ….
-export function readRegularFileNoFollowOrThrow(path: string, what: string): Buffer {
+export function readRegularFileNoFollowOrThrow(
+  path: string,
+  what: string,
+  maxBytes?: number,
+): Buffer {
   let fd: number;
   try {
     // O_NONBLOCK matters as much as O_NOFOLLOW here, and for a non-obvious
@@ -10813,6 +10817,12 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
           `A hardlink can alias content from elsewhere on the filesystem into this ` +
           `directory. Replace it with an independent copy — ` +
           `cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`,
+      );
+    }
+    if (maxBytes !== undefined && st.size > maxBytes) {
+      throw new Error(
+        `${what} is ${st.size} bytes, above the ${maxBytes}-byte limit: ${path}. ` +
+          `Reduce the file before retrying.`,
       );
     }
     // Fallback for platforms without O_NOFOLLOW, and a pathname/descriptor

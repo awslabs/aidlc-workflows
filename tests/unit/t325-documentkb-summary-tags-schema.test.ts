@@ -1,13 +1,10 @@
 // covers: function:validateDocumentIndex function:validateDocumentMetadata
 //
-// t300 - DocumentKB S3a: the `tags` field and a pinning check of the existing
+// t325 - DocumentKB S3a: the `tags` field and a pinning check of the existing
 // `summary` state-transition validation in aidlc-documentkb-schema.ts.
 //
-// NOTE ON NUMBERING: the dispatch prompt named this file t299, but
-// tests/unit/t299-testing-posture-wiring.test.ts already exists on this
-// branch's base (upstream/v2 @ d542e555 plus #772). t300 is the next free
-// unit number — verified with `ls tests/unit | grep -E '^t3[0-9][0-9]'`
-// returning nothing before this file was added.
+// NOTE ON NUMBERING: rebasing onto v2 found t300-t324 already allocated, so
+// t325 is the next free unit number.
 //
 // Mechanism: none. Pure data-in/data-out validators, zero I/O/spawn/LLM. A
 // direct import satisfies the "none" minMechanism.
@@ -34,8 +31,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   DOCUMENTKB_SCHEMA_VERSION,
+  effectiveSummaryState,
   MAX_TAG_LENGTH,
   MAX_TAGS_PER_DOCUMENT,
+  summaryIsCurrent,
   validateDocumentIndex,
   validateDocumentMetadata,
 } from "../../dist/claude/.claude/tools/aidlc-documentkb-schema.ts";
@@ -70,7 +69,7 @@ function errorMatching(errors: string[], needle: RegExp): string {
   return errors.find((e) => needle.test(e)) ?? "";
 }
 
-describe("t300 tags — omitted or a bounded array of non-empty strings", () => {
+describe("t325 tags — omitted or a bounded array of non-empty strings", () => {
   test("a row with no tags key at all is valid (the pre-S3 shape)", () => {
     const r = validateDocumentIndex(index([row()]));
     expect(r.ok).toBe(true);
@@ -135,7 +134,7 @@ describe("t300 tags — omitted or a bounded array of non-empty strings", () => 
   });
 });
 
-describe("t300 tags hardening (S3a follow-up) — trim, dedupe, control chars", () => {
+describe("t325 tags hardening (S3a follow-up) — trim, dedupe, control chars", () => {
   test("a whitespace-only tag ('   ') is refused, not accepted as a label", () => {
     const r = validateDocumentIndex(index([row({ tags: ["   "] })]));
     expect(r.ok).toBe(false);
@@ -216,7 +215,7 @@ describe("t300 tags hardening (S3a follow-up) — trim, dedupe, control chars", 
   });
 });
 
-describe("t300 summary state transition — pinning what S1 already shipped complete", () => {
+describe("t325 summary state transition — pinning what S1 already shipped complete", () => {
   test("{state:'absent'} round-trips (the S1 shape)", () => {
     expect(validateDocumentIndex(index([row({ summary: { state: "absent" } })])).ok).toBe(true);
   });
@@ -282,5 +281,45 @@ describe("t300 summary state transition — pinning what S1 already shipped comp
 
   test("a bare path string for summary (not an object/state) is refused", () => {
     expect(validateDocumentIndex(index([row({ summary: "documentkb/x/summary.md" })])).ok).toBe(false);
+  });
+
+  test("summary_sha256 is accepted only for a generated summary and must be lowercase sha256", () => {
+    const generated = {
+      state: "generated",
+      path: `documentkb/${UUID}/summary.md`,
+      source_revision: DIGEST,
+    };
+    expect(validateDocumentIndex(index([row({
+      summary: generated,
+      summary_sha256: "b".repeat(64),
+    })])).ok).toBe(true);
+
+    for (const candidate of [
+      row({ summary_sha256: "b".repeat(64) }),
+      row({ summary: generated, summary_sha256: "B".repeat(64) }),
+      row({ summary: generated, summary_sha256: "short" }),
+    ]) {
+      expect(validateDocumentIndex(index([candidate])).ok).toBe(false);
+    }
+  });
+
+  test("summary helpers derive current, invalidated, and tombstoned states directly", () => {
+    const generated = row({
+      summary: {
+        state: "generated",
+        path: `documentkb/${UUID}/summary.md`,
+        source_revision: DIGEST,
+      },
+    }) as unknown as Parameters<typeof summaryIsCurrent>[0];
+    expect(summaryIsCurrent(generated)).toBe(true);
+    expect(effectiveSummaryState(generated)).toBe("generated");
+
+    generated.sha256 = "b".repeat(64);
+    expect(summaryIsCurrent(generated)).toBe(false);
+    expect(effectiveSummaryState(generated)).toBe("invalidated");
+
+    generated.removed_at = "2026-08-25T12:00:00Z";
+    expect(summaryIsCurrent(generated)).toBe(false);
+    expect(effectiveSummaryState(generated)).toBe("absent");
   });
 });

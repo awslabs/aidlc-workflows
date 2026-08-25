@@ -832,7 +832,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // `summarize` publications) and a pre-placed directory forcing a real
     // filesystem write failure -- neither is observable from an in-process
     // call.
-    "unit/t301-knowledge-summarize.test.ts",
+    "unit/t326-knowledge-summarize.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

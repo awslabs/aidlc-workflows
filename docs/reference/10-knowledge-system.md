@@ -84,6 +84,8 @@ and treated as untrusted data: `summarize <id> --text-file <path>
 --source-revision <sha256>` persists LLM-authored summary text the tool never
 generates itself, and a summary whose `source_revision` no longer matches the
 row's digest is reported `invalidated` and withheld, exactly like extraction.
+Tags emitted by `list` or `show` carry an inline untrusted-data notice because
+they may also be LLM-authored from customer content.
 
 Each per-document `metadata.json` duplicates the row identity and source facts
 needed to rebuild a lost `index.json`. That is the recovery boundary: surviving

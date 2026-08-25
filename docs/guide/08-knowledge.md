@@ -108,11 +108,13 @@ workflow.
 
 A document can also carry a short **summary and tags**, so an agent can cite its
 gist without re-reading the whole file. The agent writes the summary itself and
-persists it with `summarize <id>`, bound to the revision it describes. Edit the
-original without re-summarizing and the summary reports `invalidated` and is
+persists it with `summarize <id>`, bound to the revision it describes. After the
+original is edited, run `sync`; the summary then reports `invalidated` and is
 withheld rather than served stale — the same revision-binding rule the extracted
 text follows. Tags survive that invalidation; passing `--tags` replaces the set,
-omitting it leaves the existing tags alone.
+omitting it leaves the existing tags alone. Because tags may be LLM-authored
+from customer content, `list` and `show` frame them as untrusted labels, never
+instructions.
 
 Recovery is intentionally limited. If only `documentkb/index.json` is lost,
 `sync` rebuilds it from the surviving per-document `metadata.json` records,
