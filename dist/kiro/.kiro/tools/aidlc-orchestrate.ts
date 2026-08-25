@@ -4271,8 +4271,9 @@ function eligibleAutonomousSwarmBatches(
   // suppresses swarm EMISSION. Deliberately here and not in
   // isAutonomousSwarmCandidate: isSettledAutonomousSwarm must keep granting
   // the report-side approve exemption for units a PRIOR stage-major swarm
-  // legitimately built in worktrees (their artifacts never reach the main
-  // tree), even if the knob was flipped afterwards.
+  // legitimately built in worktrees (their convergence and source-merge
+  // authority remain the routing signal even though reviewed record artifacts
+  // are copied back), even if the knob was flipped afterwards.
   if (readConstructionIteration(stateContent) === "unit-major") return null;
   const r = resolveBoltBatches(projectDir);
   if (r.state !== "ok" || r.batches.length === 0) return null;

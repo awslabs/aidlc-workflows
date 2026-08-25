@@ -6430,6 +6430,16 @@ export interface ReviewArtifactEntry {
   required: boolean;
 }
 
+export interface ReviewArtifactSnapshotEntry extends ReviewArtifactEntry {
+  state: "file" | "missing" | "not-file";
+  bytes?: Buffer;
+}
+
+export interface ReviewArtifactSnapshot {
+  fingerprint: string;
+  entries: ReviewArtifactSnapshotEntry[];
+}
+
 export function reviewArtifactEntries(
   projectDir: string,
   stage: ReviewFingerprintStage,
@@ -6568,7 +6578,7 @@ export function reviewArtifactEntries(
  * missing declared artifacts are explicit manifest entries, so creating one
  * after review also invalidates the receipt.
  */
-export function reviewArtifactFingerprint(
+export function reviewArtifactSnapshot(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
@@ -6576,8 +6586,9 @@ export function reviewArtifactFingerprint(
     requireRequiredArtifacts?: boolean;
     boltDag?: BoltDagResolution;
     stateContent?: string | null;
+    captureBytes?: boolean;
   } = {},
-): string | null {
+): ReviewArtifactSnapshot | null {
   let entries: ReviewArtifactEntry[] | null;
   try {
     entries = reviewArtifactEntries(projectDir, stage, unit, {
@@ -6590,26 +6601,85 @@ export function reviewArtifactFingerprint(
   if (entries === null) return null;
 
   const manifest: Array<[string, string]> = [];
+  const snapshot: ReviewArtifactSnapshotEntry[] = [];
+  let anchorReal: string;
+  try {
+    anchorReal = realpathSync(projectDir);
+  } catch {
+    return null;
+  }
   for (const entry of entries.sort((a, b) => a.logicalPath.localeCompare(b.logicalPath))) {
-    if (entry.path === null || !existsSync(entry.path)) {
+    if (entry.path === null) {
       if (entry.required && options.requireRequiredArtifacts === true) return null;
       manifest.push([entry.logicalPath, "missing"]);
+      snapshot.push({ ...entry, state: "missing" });
       continue;
     }
     try {
-      const stat = statSync(entry.path);
-      if (!stat.isFile()) {
+      const safePath = assertNoSymlinkInChainOrThrow(
+        anchorReal,
+        relative(projectDir, entry.path),
+      );
+      const bytes = readRegularFileNoFollowOrThrow(
+        safePath,
+        `review artifact ${entry.logicalPath}`,
+      );
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      manifest.push([entry.logicalPath, `sha256:${digest}`]);
+      snapshot.push({
+        ...entry,
+        state: "file",
+        ...(options.captureBytes === true ? { bytes } : {}),
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         if (entry.required && options.requireRequiredArtifacts === true) return null;
-        manifest.push([entry.logicalPath, "not-file"]);
+        manifest.push([entry.logicalPath, "missing"]);
+        snapshot.push({ ...entry, state: "missing" });
         continue;
       }
-      const digest = createHash("sha256").update(readFileSync(entry.path)).digest("hex");
-      manifest.push([entry.logicalPath, `sha256:${digest}`]);
-    } catch {
-      return null;
+      if (entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([entry.logicalPath, "not-file"]);
+      snapshot.push({ ...entry, state: "not-file" });
     }
   }
-  return `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+  return {
+    fingerprint: `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`,
+    entries: snapshot,
+  };
+}
+
+type SwarmConvergenceSourceKind = "legacy" | "bypass" | "bound" | "invalid";
+
+function swarmConvergenceSourceKind(block: string): SwarmConvergenceSourceKind {
+  const fingerprint = auditBlockField(block, "Source Fingerprint");
+  const commit = auditBlockField(block, "Source Commit");
+  const bypass = auditBlockField(block, "Source Freshness Bypass");
+  if (fingerprint === null && commit === null && bypass === null) return "legacy";
+  if (fingerprint === null && commit === null && bypass === "true") return "bypass";
+  if (
+    bypass === null &&
+    fingerprint !== null &&
+    commit !== null &&
+    /^[0-9a-f]{40,64}$/.test(fingerprint) &&
+    /^[0-9a-f]{40,64}$/.test(commit)
+  ) {
+    return "bound";
+  }
+  return "invalid";
+}
+
+export function reviewArtifactFingerprint(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+    stateContent?: string | null;
+  } = {},
+): string | null {
+  return reviewArtifactSnapshot(projectDir, stage, unit, options)?.fingerprint ?? null;
 }
 
 // Collect the fresh terminal review receipts for a stage from the audit
@@ -14269,13 +14339,29 @@ export function latestMainWorkflowStageRunFloorForProject(
   intent?: string,
   space?: string,
 ): string {
+  return latestMainWorkflowStageRunFloorFromRows(
+    auditRows ?? readAuditShardEvents(projectDir, intent, space),
+    slug,
+    unitMajor,
+    unit,
+    auditRows !== undefined,
+  );
+}
+
+function latestMainWorkflowStageRunFloorFromRows(
+  rowsInput: readonly AuditShardEvent[],
+  slug: string,
+  unitMajor = false,
+  unit?: string,
+  preSorted = false,
+): string {
   const relevant = new Set([
     "WORKFLOW_STARTED",
     "STAGE_STARTED",
     "STAGE_JUMPED",
     "GATE_REJECTED",
   ]);
-  const rows = (auditRows ?? readAuditShardEvents(projectDir, intent, space))
+  const rows = rowsInput
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
       const stage = auditBlockField(row.block, "Stage");
@@ -14291,7 +14377,7 @@ export function latestMainWorkflowStageRunFloorForProject(
         !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
       );
     });
-  if (!auditRows) {
+  if (!preSorted) {
     rows.sort((a, b) => {
       if (a.timestamp !== b.timestamp) {
         return a.timestamp < b.timestamp ? -1 : 1;
@@ -14352,17 +14438,74 @@ export function swarmConvergedUnits(
   projectDir: string,
   slug: string,
 ): Set<string> {
-  const audit = readAllAuditShards(projectDir);
-  if (!audit) return new Set();
-  const startedAt = latestMainWorkflowStageStarted(audit, slug);
-  const floor = latestMainWorkflowStageRunFloorForProject(projectDir, slug);
+  const unreadableShards: string[] = [];
+  const auditRows = readAuditShardEvents(
+    projectDir,
+    undefined,
+    undefined,
+    unreadableShards,
+  );
+  if (unreadableShards.length > 0 || auditRows.length === 0) return new Set();
+  const stageStarts = auditRows
+    .filter(
+      (row) =>
+        row.event === "STAGE_STARTED" &&
+        auditBlockField(row.block, "Stage") === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  const startedAt = stageStarts.at(-1)?.timestamp ?? null;
+  const floor = latestMainWorkflowStageRunFloorFromRows(auditRows, slug);
+  const sourceChain = currentSwarmSourceMergeChain(projectDir, slug);
+  const rowsByUnit = new Map<string, AuditShardEvent[]>();
+  for (const row of auditRows) {
+    if (row.event !== "SWARM_UNIT_CONVERGED") continue;
+    if (auditBlockField(row.block, "Stage") !== slug) continue;
+    if ((auditBlockField(row.block, "Run floor") ?? "") !== floor) continue;
+    if (startedAt && row.timestamp < startedAt) continue;
+    const unit = auditBlockField(row.block, "Unit name");
+    if (!unit) continue;
+    const rows = rowsByUnit.get(unit) ?? [];
+    rows.push(row);
+    rowsByUnit.set(unit, rows);
+  }
   const converged = new Set<string>();
-  for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
-    if (auditBlockField(block, "Stage") !== slug) continue;
-    if ((auditBlockField(block, "Run floor") ?? "") !== floor) continue;
-    if (startedAt && timestamp < startedAt) continue;
-    const unit = auditBlockField(block, "Unit name");
-    if (unit) converged.add(unit);
+  for (const [unit, rows] of rowsByUnit) {
+    rows.sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+    const latestTimestamp = rows.at(-1)?.timestamp;
+    if (!latestTimestamp) continue;
+    const latest = rows.filter((row) => row.timestamp === latestTimestamp);
+    const identities = new Set(
+      latest.map((row) =>
+        [
+          auditBlockField(row.block, "Batch number") ?? "",
+          auditBlockField(row.block, "Source Fingerprint") ?? "",
+          auditBlockField(row.block, "Source Commit") ?? "",
+          auditBlockField(row.block, "Source Freshness Bypass") ?? "",
+        ].join("\0")
+      ),
+    );
+    if (
+      new Set(latest.map((row) => row.shard)).size > 1 &&
+      identities.size !== 1
+    ) continue;
+    const block = latest.at(-1)?.block;
+    if (!block) continue;
+    const sourceKind = swarmConvergenceSourceKind(block);
+    if (sourceKind === "invalid") continue;
+    if (
+      sourceKind === "bound" &&
+      (sourceChain.state !== "ready" || !sourceChain.units.has(unit))
+    ) continue;
+    converged.add(unit);
   }
   return converged;
 }
@@ -14393,8 +14536,7 @@ export function currentSwarmAttemptObligations(
       auditBlockField(row.block, "Stage") === slug &&
       auditBlockField(row.block, "Run floor") === floor &&
       ((row.event === "SWARM_UNIT_CONVERGED" &&
-        (auditBlockField(row.block, "Source Commit") !== null ||
-          auditBlockField(row.block, "Source Freshness Bypass") !== null)) ||
+        swarmConvergenceSourceKind(row.block) !== "legacy") ||
         row.event === "SWARM_SOURCE_MERGED"),
   );
   const missingObligations = (): SwarmAttemptObligations =>

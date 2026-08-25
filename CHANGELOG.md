@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.109] - 2026-08-26
+
+Autonomous swarm convergence now preserves reviewed record artifacts and completes immutable application-source landing before a modern Unit can advance. **Upgrade:** refresh your `dist/<harness>/` shell so the updated referee, worktree recovery, routing guard, and swarm protocol are installed together.
+
+* `aidlc-swarm finalize` snapshots the exact declared artifact bytes and bound `source-manifest.json` that passed the Unit review, rejects symlinked source or destination paths, applies the complete per-Unit record set with rollback on failure, and only then merges state, audit, and runtime metadata.
+* Finalize result rows now include `bolt_slug`; the swarm protocol uses it to require `aidlc-worktree merge` for every converged Unit before `next`. Modern `SWARM_UNIT_CONVERGED` rows do not advance batch routing until the matching `SWARM_SOURCE_MERGED` aggregate authority exists.
+* Rerunning `aidlc-worktree merge` after source authority landed but worktree, branch, or retained-ref cleanup failed derives the exact intent/repository/source/merge authority, refuses ambiguity, and performs cleanup-only reconciliation even after stage-attempt turnover. It does not reapply source or emit duplicate merge authority.
+* Immutable reviewed source still lands from the `Source Commit`; bound merge and commit porcelain run with all repository hooks disabled, so post-merge and post-commit hooks cannot replace bytes after convergence.
+
 ## [2.6.108] - 2026-08-26
 
 Unattended drivers can now explicitly withhold human-presence authority across every harness, preventing scheduled prompts from satisfying approval and interview gates. **Upgrade:** refresh your `dist/<harness>/` shell and set `AIDLC_UNATTENDED=1` on any process that submits prompts without a person present.

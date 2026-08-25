@@ -676,6 +676,30 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(finalizeOut).not.toContain("cannot create the immutable reviewed-source commit");
     expect(finalizeOut).toContain('"converged": 1');
   }, 60000);
+
+  test("6d: finalize lands reviewed record artifacts and the bound source manifest", () => {
+    setupReferee();
+    if (wtproj === undefined) throw new Error("referee fixture was not created");
+    const unitRecord = join(
+      seededRecordDir(wtproj),
+      "construction",
+      "win",
+      "code-generation",
+    );
+    expect(readFileSync(join(unitRecord, "code-summary.md"), "utf-8")).toBe(
+      "# code-summary\n",
+    );
+    expect(
+      JSON.parse(readFileSync(join(unitRecord, "source-manifest.json"), "utf-8")),
+    ).toMatchObject({
+      stage: "code-generation",
+      unit: "win",
+      version: 1,
+    });
+    // Application source still lands only through the later, correlated
+    // aidlc-worktree merge and its SWARM_SOURCE_MERGED authority.
+    expect(existsSync(join(wtproj, "win.txt"))).toBe(false);
+  }, 60000);
 });
 
 describe("t135 referee - autonomous reviewer receipt is a finalize precondition", () => {

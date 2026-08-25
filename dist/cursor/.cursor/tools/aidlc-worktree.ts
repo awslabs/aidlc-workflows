@@ -12,8 +12,9 @@
 // checkout.
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
@@ -1783,6 +1784,279 @@ function renderSourcePathKeys(keys: Iterable<string>): string {
     .join(", ");
 }
 
+interface MergedSwarmAuthority {
+  unit: string;
+  batch: string;
+  stage: string;
+  floor: string;
+  sourceCommit: string;
+  mergeCommit: string;
+  repo: string | null;
+  space: string;
+  intent?: string;
+}
+
+interface SwarmWorktreeIdentity {
+  unit: string;
+  batch: string;
+  stage: string;
+  floor: string;
+}
+
+function currentSwarmWorktreeIdentity(
+  pd: string,
+  slug: string,
+): SwarmWorktreeIdentity | null | undefined {
+  const path = join(worktreePath(pd, slug), ".aidlc", WORKTREE_META_FILENAME);
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    const unit = parsed.swarmUnit;
+    const batch = parsed.swarmBatch;
+    const stage = parsed.swarmStage;
+    const floor = parsed.swarmFloor;
+    return (
+        typeof unit === "string" &&
+        boltSlugForUnit(unit) === slug &&
+        typeof batch === "string" &&
+        /^[1-9][0-9]*$/.test(batch) &&
+        typeof stage === "string" &&
+        stage.length > 0 &&
+        typeof floor === "string" &&
+        floor.length > 0
+      )
+      ? { unit, batch, stage, floor }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function mergedSwarmCleanupAuthority(
+  pd: string,
+  slug: string,
+  target: string,
+  explicitRepo?: string,
+  intent?: string,
+  space?: string,
+  identity?: SwarmWorktreeIdentity,
+): MergedSwarmAuthority | null {
+  const audit = allWorktreeAuditRows(pd);
+  const candidates = new Map<
+    string,
+    {
+      authority: MergedSwarmAuthority;
+      cleanupEvidence: boolean;
+      order: number;
+    }
+  >();
+  let matchedSlugAuthority = false;
+  for (let order = 0; order < audit.rows.length; order++) {
+    const row = audit.rows[order];
+    if (row.event !== "SWARM_SOURCE_MERGED") continue;
+    const unit = auditBlockField(row.block, "Unit name");
+    if (unit === null || boltSlugForUnit(unit) !== slug) continue;
+    if (space !== undefined && row.authoritySpace !== space) continue;
+    if (intent !== undefined && row.authorityIntent !== intent) continue;
+    const repoField = auditBlockField(row.block, "Repo");
+    const repo =
+      repoField === "-"
+        ? null
+        : repoField !== null && isValidRepoName(repoField)
+          ? repoField
+          : undefined;
+    if (repo === undefined) continue;
+    if (explicitRepo !== undefined && repo !== explicitRepo) continue;
+    const batch = auditBlockField(row.block, "Batch number");
+    const stage = auditBlockField(row.block, "Stage");
+    const floor = auditBlockField(row.block, "Run floor");
+    const sourceCommit = auditBlockField(row.block, "Source Commit");
+    const mergeCommit = auditBlockField(row.block, "Merge commit");
+    if (
+      !batch ||
+      !/^[1-9][0-9]*$/.test(batch) ||
+      !stage ||
+      !floor ||
+      !sourceCommit ||
+      !/^[0-9a-f]{40,64}$/.test(sourceCommit) ||
+      !mergeCommit ||
+      !/^[0-9a-f]{40,64}$/.test(mergeCommit)
+    ) continue;
+    if (
+      identity !== undefined &&
+      (unit !== identity.unit ||
+        batch !== identity.batch ||
+        stage !== identity.stage ||
+        floor !== identity.floor)
+    ) continue;
+    matchedSlugAuthority = true;
+    const convergence = audit.rows.find(
+      (candidate) =>
+        candidate.authoritySpace === row.authoritySpace &&
+        candidate.authorityIntent === row.authorityIntent &&
+        candidate.event === "SWARM_UNIT_CONVERGED" &&
+        auditBlockField(candidate.block, "Batch number") === batch &&
+        auditBlockField(candidate.block, "Unit name") === unit &&
+        auditBlockField(candidate.block, "Stage") === stage &&
+        auditBlockField(candidate.block, "Run floor") === floor &&
+        auditBlockField(candidate.block, "Source Commit") === sourceCommit &&
+        rowAfter(row, candidate),
+    );
+    if (!convergence) continue;
+    const repoCwd = repo === null ? pd : repoDir(pd, repo);
+    if (
+      !runGit(["cat-file", "-e", `${sourceCommit}^{commit}`], repoCwd).ok ||
+      !runGit(["merge-base", "--is-ancestor", mergeCommit, target], repoCwd).ok
+    ) continue;
+    const branch = runGit(
+      ["rev-parse", "--verify", `refs/heads/bolt-${slug}`],
+      repoCwd,
+    );
+    const retained = retainedSourceRefs(repoCwd, slug);
+    const cleanupEvidence =
+      (branch.ok && branch.stdout.trim() === sourceCommit) ||
+      (retained?.some((entry) => entry.oid === sourceCommit) ?? false);
+    const authority: MergedSwarmAuthority = {
+      unit,
+      batch,
+      stage,
+      floor,
+      sourceCommit,
+      mergeCommit,
+      repo,
+      space: row.authoritySpace,
+      ...(row.authorityIntent === undefined
+        ? {}
+        : { intent: row.authorityIntent }),
+    };
+    candidates.set(
+      [
+        authority.space,
+        authority.intent ?? "",
+        authority.repo ?? "",
+        authority.unit,
+        authority.batch,
+        authority.stage,
+        authority.floor,
+        authority.sourceCommit,
+        authority.mergeCommit,
+      ].join("\0"),
+      { authority, cleanupEvidence, order },
+    );
+  }
+  const values = [...candidates.values()];
+  const evidenced = values.filter((candidate) => candidate.cleanupEvidence);
+  if (evidenced.length > 1) {
+    errorWithSlug(
+      slug,
+      "refusing cleanup-only merge: multiple durable SWARM_SOURCE_MERGED authorities match this Bolt slug; retry with the original --space, --intent, and --repo selectors",
+    );
+  }
+  const selected =
+    evidenced.length === 1
+      ? evidenced[0]
+      : values.sort((a, b) => a.order - b.order).at(-1);
+  const authority = selected?.authority;
+  if (authority !== undefined) return authority;
+  if (matchedSlugAuthority) {
+    errorWithSlug(
+      slug,
+      `refusing cleanup-only merge: no matching durable source authority is reachable from target ${target}; restore the original target or pass the exact creating selectors`,
+    );
+  }
+  return null;
+}
+
+function reconcileMergedSwarmCleanup(
+  pd: string,
+  slug: string,
+  repoCwd: string,
+  target: string,
+  authority: MergedSwarmAuthority | null,
+): boolean {
+  if (authority === null) return false;
+  const cleanupTag = `[merge-succeeded:${authority.mergeCommit}]`;
+
+  const wtPath = worktreePath(pd, slug);
+  const branchName = `bolt-${slug}`;
+  const dirExists = existsSync(wtPath);
+  const registered = repositoryRegistersBoltWorktree(pd, repoCwd, slug);
+  if (dirExists || registered) {
+    if (!dirExists) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} worktree registration remains but its checkout directory is missing; restore the registration or prune it before retrying cleanup`,
+      );
+    }
+    const align = runGit(["reset", "--hard", authority.sourceCommit], wtPath);
+    if (!align.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cleanup-only source alignment failed: ${align.stderr.trim() || `exit ${align.code}`}`,
+      );
+    }
+    const removed = runGit(["worktree", "remove", "--force", wtPath], repoCwd);
+    if (!removed.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cleanup-only worktree remove failed: ${removed.stderr.trim() || `exit ${removed.code}`}`,
+      );
+    }
+  }
+
+  const branch = runGit(
+    ["rev-parse", "--verify", `refs/heads/${branchName}`],
+    repoCwd,
+  );
+  if (branch.ok) {
+    const branchOid = branch.stdout.trim();
+    if (branchOid !== authority.sourceCommit) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cleanup-only branch ${branchName} moved after source landing; preserve it for inspection`,
+      );
+    }
+    const deleted = runGit(
+      ["update-ref", "-d", `refs/heads/${branchName}`, branchOid],
+      repoCwd,
+    );
+    if (!deleted.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cleanup-only branch deletion failed: ${deleted.stderr.trim() || `exit ${deleted.code}`}`,
+      );
+    }
+  }
+  const retained = retainedSourceRefs(repoCwd, slug);
+  if (retained === null) {
+    errorWithSlug(
+      slug,
+      `${cleanupTag} cleanup-only reviewed-source ref enumeration failed`,
+    );
+  }
+  const refCleanupError = deleteRetainedSourceRefs(repoCwd, retained);
+  if (refCleanupError) {
+    errorWithSlug(
+      slug,
+      `${cleanupTag} cleanup-only reviewed-source ref deletion failed: ${refCleanupError}`,
+    );
+  }
+  console.log(
+    JSON.stringify({
+      emitted: null,
+      slug,
+      worktree_path: wtPath,
+      target,
+      source_authority: authority.mergeCommit,
+      cleanup_reconciled: true,
+    }),
+  );
+  return true;
+}
+
 function refuseConfiguredMergeDrivers(
   slug: string,
   repoCwd: string,
@@ -1850,12 +2124,45 @@ function handleMerge(args: string[]): void {
   ) {
     flags.repo = recorded.repoSelector;
   }
+  const worktreeIdentity = currentSwarmWorktreeIdentity(pd, slug);
+  const cleanupAuthority =
+    worktreeIdentity === null
+      ? null
+      : mergedSwarmCleanupAuthority(
+          pd,
+          slug,
+          flags.target,
+          flags.repo,
+          flags.intent,
+          flags.space,
+          worktreeIdentity,
+        );
+  if (recorded === null && cleanupAuthority !== null) {
+    flags.space = cleanupAuthority.space;
+    if (cleanupAuthority.intent !== undefined) {
+      flags.intent = cleanupAuthority.intent;
+    }
+    if (cleanupAuthority.repo !== null) {
+      flags.repo = cleanupAuthority.repo;
+    }
+  }
   // P7: anchor every git op to the target sibling repo. The merge runs IN that
   // repo's main checkout (squash/merge/ff/commit/worktree-remove/branch-D); the
   // rebase still runs in the worktree (wtPath). Legacy single-repo → repoCwd=pd.
   const repoTarget = resolveRepoTarget(pd, flags, slug);
   const repoCwd = repoTarget.cwd;
   assertNotSiblingWorktree(repoCwd);
+  if (
+    reconcileMergedSwarmCleanup(
+      pd,
+      slug,
+      repoCwd,
+      flags.target,
+      cleanupAuthority,
+    )
+  ) {
+    return;
+  }
 
   // Defensive HEAD check: the caller must have <target> checked out at the repo cwd.
   const head = runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoCwd);
@@ -1993,6 +2300,14 @@ function handleMerge(args: string[]): void {
 
   let commitSha = "";
   const priorTargetHead = currentSha(repoCwd);
+  const disabledHooksPath = join(
+    tmpdir(),
+    `aidlc-disabled-hooks-${process.pid}-${randomUUID()}`,
+  ).replaceAll("\\", "/");
+  const mutationArgs = (args: string[]): string[] =>
+    sourceRecord?.kind === "bound"
+      ? ["-c", `core.hooksPath=${disabledHooksPath}`, ...args]
+      : args;
   // conflictCwd records which checkout the conflicting state lives in:
   // squash/merge run in the target repo's main checkout (cwd = repoCwd), rebase
   // runs in the worktree (cwd = wtPath). For conflict-file enumeration, we query
@@ -2004,7 +2319,7 @@ function handleMerge(args: string[]): void {
   switch (strategy) {
     case "squash": {
       const m = runGit(
-        ["merge", "--squash", "--no-verify", mergeTarget],
+        mutationArgs(["merge", "--squash", "--no-verify", mergeTarget]),
         repoCwd,
       );
       if (!m.ok) {
@@ -2021,7 +2336,10 @@ function handleMerge(args: string[]): void {
       if (expectedTree === null) {
         errorWithSlug(slug, "cannot resolve the staged squash merge tree");
       }
-      const c = runGit(["commit", "--no-verify", "-m", message], repoCwd);
+      const c = runGit(
+        mutationArgs(["commit", "--no-verify", "-m", message]),
+        repoCwd,
+      );
       if (!c.ok) {
         errorWithSlug(
           slug,
@@ -2040,13 +2358,16 @@ function handleMerge(args: string[]): void {
       break;
     }
     case "merge": {
-      const m = runGit([
-        "merge",
-        "--no-ff",
-        "--no-commit",
-        "--no-verify",
-        mergeTarget,
-      ], repoCwd);
+      const m = runGit(
+        mutationArgs([
+          "merge",
+          "--no-ff",
+          "--no-commit",
+          "--no-verify",
+          mergeTarget,
+        ]),
+        repoCwd,
+      );
       if (!m.ok) {
         if (isConflict(m)) {
           conflictHit = true;
@@ -2062,7 +2383,12 @@ function handleMerge(args: string[]): void {
         errorWithSlug(slug, "cannot resolve the staged merge tree");
       }
       const c = runGit(
-        ["commit", "--no-verify", "-m", `Merge bolt ${slug}`],
+        mutationArgs([
+          "commit",
+          "--no-verify",
+          "-m",
+          `Merge bolt ${slug}`,
+        ]),
         repoCwd,
       );
       if (!c.ok) {

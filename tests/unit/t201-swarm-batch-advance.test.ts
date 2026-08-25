@@ -13,15 +13,12 @@
 // stage's real gate) instead of another invoke-swarm, so the conductor presents
 // the single stage gate and the workflow advances.
 //
-// THE COMPLETION SIGNAL IS THE AUDIT LEDGER, NOT DISK ARTIFACTS. A swarm unit is
-// built inside an isolated Bolt worktree; `aidlc-bolt complete --merge`
-// consolidates only the AIDLC metadata (state + audit + runtime-graph fragment)
-// back to the main checkout, never the unit's produced artifact files. So the
-// engine keys batch advance on the `SWARM_UNIT_CONVERGED` audit rows the referee
-// (`aidlc-swarm.ts finalize`) writes back, one per genuinely-converged unit,
-// each carrying a `Unit name` field. This test seeds those rows directly into
-// the deterministic audit shard (no git worktrees, no live model) to control the
-// converged set, exactly the way it would look after real finalize merges.
+// THE COMPLETION SIGNAL IS THE AUDIT LEDGER. Finalize lands reviewed record
+// artifacts plus AIDLC metadata and writes SWARM_UNIT_CONVERGED. A modern
+// source-bound row is routing authority only after aidlc-worktree merge emits
+// the matching SWARM_SOURCE_MERGED aggregate link; legacy fieldless rows retain
+// their migration behavior. This test seeds rows directly into the deterministic
+// audit shard (no git worktrees, no live model) to control the converged set.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-orchestrate.ts):
 //   - tryEmitSwarm (batch selection + terminal settle) + swarmConvergedUnits
@@ -45,7 +42,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -175,6 +172,9 @@ function seedConverged(
     runFloorSecond?: number;
     runFloorOrdinal?: number;
     omitStamp?: boolean;
+    sourceCommit?: string;
+    bypass?: boolean;
+    malformedSource?: "fingerprint-only" | "bad-bypass";
   } = {},
 ): void {
   let body = "";
@@ -193,6 +193,18 @@ function seedConverged(
             : `STAGE_STARTED:${fixtureTs(opts.runFloorSecond)}#${opts.runFloorOrdinal ?? 1}`,
         ],
       );
+    }
+    if (opts.sourceCommit) {
+      fields.push(
+        ["Source Fingerprint", "a".repeat(40)],
+        ["Source Commit", opts.sourceCommit],
+      );
+    } else if (opts.bypass) {
+      fields.push(["Source Freshness Bypass", "true"]);
+    } else if (opts.malformedSource === "fingerprint-only") {
+      fields.push(["Source Fingerprint", "a".repeat(40)]);
+    } else if (opts.malformedSource === "bad-bypass") {
+      fields.push(["Source Freshness Bypass", "false"]);
     }
     body += auditBlock(
       "Swarm Unit Converged",
@@ -404,6 +416,85 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     });
     expect(accepted.kind).toBe("done");
   }, 30000);
+
+  test("4c: modern convergence without SWARM_SOURCE_MERGED does not advance", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    seedConverged(proj, ["auth"], 0, {
+      sourceCommit: "b".repeat(40),
+    });
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["auth"]);
+  }, 30000);
+
+  test("4d: incomplete modern and malformed bypass rows fail closed", () => {
+    for (const malformedSource of ["fingerprint-only", "bad-bypass"] as const) {
+      const proj = seedProject();
+      seedBoltDagBatches(proj, [["auth"], ["api"]]);
+      seedConverged(proj, ["auth"], 0, { malformedSource });
+      const d = runNext(proj);
+      expect(d.kind).toBe("invoke-swarm");
+      expect(d.units).toEqual(["auth"]);
+    }
+  }, 30000);
+
+  test("4e: an older legacy or bypass row cannot override newer bound convergence", () => {
+    for (const older of ["legacy", "bypass"] as const) {
+      const proj = seedProject();
+      seedBoltDagBatches(proj, [["auth"], ["api"]]);
+      seedConverged(
+        proj,
+        ["auth"],
+        0,
+        older === "bypass" ? { bypass: true } : {},
+      );
+      seedConverged(proj, ["auth"], 1, {
+        sourceCommit: "b".repeat(40),
+      });
+      const d = runNext(proj);
+      expect(d.kind).toBe("invoke-swarm");
+      expect(d.units).toEqual(["auth"]);
+    }
+  }, 30000);
+
+  test.skipIf(process.platform === "win32")(
+    "4f: an unreadable newest shard fails routing closed",
+    () => {
+      const proj = seedProject();
+      seedBoltDagBatches(proj, [["auth"], ["api"]]);
+      seedConverged(proj, ["auth"], 0);
+      const newest = join(seededAuditDir(proj), "newest-bound.md");
+      writeFileSync(
+        newest,
+        [
+          "# AI-DLC Audit Log\n",
+          auditBlock(
+            "Swarm Unit Converged",
+            fixtureTs(1),
+            "SWARM_UNIT_CONVERGED",
+            [
+              ["Batch number", "1"],
+              ["Unit name", "auth"],
+              ["Stage", "code-generation"],
+              ["Run floor", "unstarted#0"],
+              ["Source Fingerprint", "a".repeat(40)],
+              ["Source Commit", "b".repeat(40)],
+            ],
+          ),
+        ].join(""),
+      );
+      chmodSync(newest, 0o000);
+      try {
+        const d = runNext(proj);
+        expect(d.kind).toBe("invoke-swarm");
+        expect(d.units).toEqual(["auth"]);
+      } finally {
+        chmodSync(newest, 0o600);
+      }
+    },
+    30000,
+  );
 });
 
 describe("t201 converged-set freshness floor (stage re-run replay guard)", () => {

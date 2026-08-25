@@ -2399,9 +2399,10 @@ function autonomousSwarmOwnsStage(
 }
 
 // Settled-autonomous-swarm exemption, mirroring isSettledAutonomousSwarm in
-// aidlc-orchestrate.ts (the report path's disk-backed-guard exemption). A
-// swarm's per-unit artifacts live in Bolt worktrees, not the main checkout, so
-// the produces-existence walk below cannot see them; the audit ledger can. The
+// aidlc-orchestrate.ts (the report path's disk-backed-guard exemption). Finalize
+// copies reviewed per-unit record artifacts into main, but the current-attempt
+// convergence plus source-merge ledger remains the authoritative complete-set
+// signal and avoids reconstructing a cross-Unit verdict from file presence. The
 // exemption is granted only when EVERY unit of a valid DAG has a convergence
 // row from the CURRENT stage attempt (rows before the latest main-workflow
 // STAGE_STARTED for this slug are a prior run's). Anything ambiguous - not the
@@ -3302,8 +3303,8 @@ function verifyStageArtifacts(
   if (artifactGuardDisabled()) return;
 
   // A settled autonomous swarm proved its work through the referee's per-unit
-  // convergence ledger; its artifacts live in Bolt worktrees this walk cannot
-  // see. Same exemption the engine's report-side evidence gate applies.
+  // convergence and source-merge ledger. Reviewed records now land in main, but
+  // file presence alone cannot replace that complete-set authority.
   let settledSwarm = false;
   let stateContent: string | null = null;
   try {

@@ -74,13 +74,13 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditShardDir,
   boltSlugForUnit,
@@ -96,9 +96,12 @@ import {
   readAuditShardEvents,
   readUnitSourceManifest,
   readUnitSourceSnapshot,
+  readRegularFileNoFollowOrThrow,
   readStateFile,
+  recordDir,
   relativeRecordDir,
   reviewArtifactFingerprint,
+  reviewArtifactSnapshot,
   reviewedSourceRef,
   resolveAuditWorktreePath,
   resolveBoltDag,
@@ -119,6 +122,7 @@ import {
   workspaceSourceExclusionPathspecs,
   workspaceSourceListing,
   worktreeStateFilePath,
+  writeBufferAtomic,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { evaluateCodeGenerationApproval } from "./aidlc-testing-posture.ts";
@@ -156,7 +160,18 @@ interface SourceBinding {
 
 interface ReceiptCheck {
   error: string | null;
-  fingerprint?: string;
+  artifactFingerprint?: string;
+  sourceFingerprint?: string;
+  unitSourceFingerprint?: string;
+}
+
+interface ReviewedRecordSnapshotEntry {
+  logicalPath: string;
+  bytes: Buffer | null;
+}
+
+interface ReviewedRecordSnapshot {
+  entries: ReviewedRecordSnapshotEntry[];
 }
 
 interface SwarmAttemptStamp {
@@ -553,11 +568,17 @@ function reviewerReceiptError(
     };
   }
 
-  if (!definition?.workspace_requires) return { error: null };
+  if (!definition?.workspace_requires) {
+    return { error: null, artifactFingerprint: recordedArtifactFp };
+  }
   const recordedSourceFp = auditBlockField(latestTerminal.block, "Source Fingerprint");
-  if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return { error: null };
+  if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") {
+    return { error: null, artifactFingerprint: recordedArtifactFp };
+  }
   if (recordedSourceFp === null) {
-    if (baseCommit === null) return { error: null }; // pre-binding worktree migration
+    if (baseCommit === null) {
+      return { error: null, artifactFingerprint: recordedArtifactFp };
+    }
     return {
       error:
         `claimed converged but modern worktree unit "${unit}" has no Source Fingerprint; ` +
@@ -582,6 +603,7 @@ function reviewerReceiptError(
   // Pre-upgrade worktrees have no attested base commit and retain migration
   // fail-open behavior. Modern worktrees must validate the exact unit binding
   // that the reviewer saw before trusting its claims for footprint coverage.
+  let unitSourceFingerprint: string | undefined;
   if (baseCommit !== null) {
     const frameworkPathspecs = workspaceSourceExclusionPathspecs(wt);
     if (frameworkPathspecs === null) {
@@ -604,6 +626,7 @@ function reviewerReceiptError(
           `re-run the reviewer in the worktree and record a fresh verdict before finalizing`,
       };
     }
+    unitSourceFingerprint = recordedUnitFp;
     const manifest = readUnitSourceManifest(wt, stage, unit, {
       worktreeRelative: true,
     });
@@ -684,7 +707,234 @@ function reviewerReceiptError(
       rmSync(idx, { force: true });
     }
   }
-  return { error: null, fingerprint: recordedSourceFp };
+  return {
+    error: null,
+    artifactFingerprint: recordedArtifactFp,
+    sourceFingerprint: recordedSourceFp,
+    unitSourceFingerprint,
+  };
+}
+
+function captureReviewedRecordSnapshot(
+  projectDir: string,
+  unit: string,
+  stage: NonNullable<ReturnType<typeof resolveStage>>,
+  receipt: ReceiptCheck,
+): { snapshot?: ReviewedRecordSnapshot; error?: string } {
+  const wt = worktreePath(projectDir, swarmBoltSlug(unit));
+  const artifacts = reviewArtifactSnapshot(wt, stage, unit, {
+    requireRequiredArtifacts: true,
+    captureBytes: true,
+  });
+  if (artifacts === null) {
+    return { error: `cannot snapshot required record artifacts for unit "${unit}"` };
+  }
+  if (
+    receipt.artifactFingerprint !== undefined &&
+    artifacts.fingerprint !== receipt.artifactFingerprint
+  ) {
+    return {
+      error:
+        `record artifacts changed while finalizing unit "${unit}"; ` +
+        `re-run the reviewer against the current artifacts`,
+    };
+  }
+
+  const entries: ReviewedRecordSnapshotEntry[] = [];
+  for (const artifact of artifacts.entries) {
+    if (artifact.state === "not-file") {
+      return {
+        error:
+          `record artifact ${artifact.logicalPath} for unit "${unit}" is not a regular file`,
+      };
+    }
+    if (artifact.state === "file" && artifact.bytes === undefined) {
+      return {
+        error: `cannot capture record artifact ${artifact.logicalPath} for unit "${unit}"`,
+      };
+    }
+    entries.push({
+      logicalPath: artifact.logicalPath,
+      bytes: artifact.state === "file" ? artifact.bytes! : null,
+    });
+  }
+
+  if (receipt.unitSourceFingerprint !== undefined) {
+    const wtRecord = recordDir(wt);
+    if (wtRecord === null) {
+      return { error: `cannot resolve reviewed source evidence for unit "${unit}"` };
+    }
+    const manifest = readUnitSourceManifest(wt, stage.slug, unit, {
+      worktreeRelative: true,
+    });
+    const snapshot = readUnitSourceSnapshot(
+      wt,
+      stage.slug,
+      unit,
+      receipt.unitSourceFingerprint,
+    );
+    if (
+      !manifest.ok ||
+      snapshot === null ||
+      snapshot.manifestSha256 !== manifest.rawBytesSha256
+    ) {
+      return {
+        error:
+          `reviewed source evidence changed while finalizing unit "${unit}"; ` +
+          `re-run the reviewer`,
+      };
+    }
+
+    const manifestPath = join(
+      wtRecord,
+      "construction",
+      unit,
+      stage.slug,
+      "source-manifest.json",
+    );
+    let manifestBytes: Buffer;
+    try {
+      manifestBytes = readRegularFileNoFollowOrThrow(
+        assertNoSymlinkInChainOrThrow(
+          realpathSync(wt),
+          relative(wt, manifestPath),
+        ),
+        `source manifest for unit ${unit}`,
+      );
+    } catch {
+      return { error: `cannot capture reviewed source evidence for unit "${unit}"` };
+    }
+    if (
+      createHash("sha256").update(manifestBytes).digest("hex") !==
+        manifest.rawBytesSha256
+    ) {
+      return {
+        error:
+          `reviewed source evidence changed while finalizing unit "${unit}"; ` +
+          `re-run the reviewer`,
+      };
+    }
+    entries.push(
+      {
+        logicalPath:
+          `construction/${unit}/${stage.slug}/source-manifest.json`,
+        bytes: manifestBytes,
+      },
+    );
+  }
+
+  return { snapshot: { entries } };
+}
+
+function mergeReviewedRecordSnapshot(
+  projectDir: string,
+  unit: string,
+  snapshot: ReviewedRecordSnapshot,
+): string | null {
+  const record = recordDir(projectDir);
+  if (record === null) return `cannot resolve the main record directory for unit "${unit}"`;
+  let root: string;
+  try {
+    root = assertNoSymlinkInChainOrThrow(
+      realpathSync(projectDir),
+      relative(projectDir, record),
+    );
+    if (!lstatSync(root).isDirectory()) {
+      return `main record path is not a directory for unit "${unit}"`;
+    }
+  } catch (error) {
+    return (
+      `cannot validate the main record directory for unit "${unit}": ` +
+      `${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  const operations: Array<{
+    target: string;
+    logicalPath: string;
+    next: Buffer | null;
+    previous: Buffer | null;
+  }> = [];
+  for (const entry of snapshot.entries) {
+    try {
+      const target = assertNoSymlinkInChainOrThrow(root, entry.logicalPath);
+      const previous = existsSync(target)
+        ? readRegularFileNoFollowOrThrow(
+            target,
+            `existing record artifact ${entry.logicalPath}`,
+          )
+        : null;
+      operations.push({
+        target,
+        logicalPath: entry.logicalPath,
+        next: entry.bytes,
+        previous,
+      });
+    } catch (error) {
+      return (
+        `record artifact preflight failed for ${entry.logicalPath}: ` +
+        `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  const applied: typeof operations = [];
+  try {
+    for (const operation of operations) {
+      if (operation.next === null) {
+        rmSync(operation.target, { force: true });
+        applied.push(operation);
+      } else {
+        mkdirSync(dirname(operation.target), { recursive: true });
+        writeBufferAtomic(operation.target, operation.next);
+        applied.push(operation);
+        if (
+          process.env.AIDLC_TEST === "1" &&
+          process.env.AIDLC_TEST_RECORD_VERIFY_FAIL === operation.logicalPath
+        ) {
+          throw new Error(
+            `injected verification failure for ${operation.logicalPath}`,
+          );
+        }
+        if (
+          !readRegularFileNoFollowOrThrow(
+            operation.target,
+            `landed record artifact ${operation.logicalPath}`,
+          ).equals(operation.next)
+        ) {
+          throw new Error(`verification failed for ${operation.logicalPath}`);
+        }
+      }
+    }
+  } catch (error) {
+    const rollbackErrors: string[] = [];
+    for (const operation of [...applied].reverse()) {
+      try {
+        if (operation.previous === null) {
+          rmSync(operation.target, { force: true });
+        } else {
+          mkdirSync(dirname(operation.target), { recursive: true });
+          writeBufferAtomic(operation.target, operation.previous);
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(
+          `${operation.logicalPath}: ${
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError)
+          }`,
+        );
+      }
+    }
+    return (
+      `record artifact transaction failed for unit "${unit}": ` +
+      `${error instanceof Error ? error.message : String(error)}` +
+      (rollbackErrors.length > 0
+        ? `; rollback failed for ${rollbackErrors.join(", ")}`
+        : "")
+    );
+  }
+  return null;
 }
 
 // Materialize the reviewed application bytes as an immutable commit without
@@ -1253,6 +1503,7 @@ function handleFinalize(rest: string[]): void {
   const genuine: string[] = [];
   const preparedAttempts = new Map<string, SwarmAttemptStamp>();
   const sourceBindings = new Map<string, SourceBinding>();
+  const recordSnapshots = new Map<string, ReviewedRecordSnapshot>();
   const sourceFreshnessBypassed =
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
   for (const unit of allUnits) {
@@ -1323,10 +1574,29 @@ function handleFinalize(rest: string[]): void {
             detail: receipt.error,
           });
         } else {
-          const bound = receipt.fingerprint
-            ? bindReviewedSource(projectDir, swarmBoltSlug(unit), receipt.fingerprint)
+          const captured = stageDefinition
+            ? captureReviewedRecordSnapshot(
+                projectDir,
+                unit,
+                stageDefinition,
+                receipt,
+              )
+            : { error: `cannot resolve stage "${currentStage}"` };
+          const bound = receipt.sourceFingerprint
+            ? bindReviewedSource(
+                projectDir,
+                swarmBoltSlug(unit),
+                receipt.sourceFingerprint,
+              )
             : {};
-          if (bound.error) {
+          if (captured.error || !captured.snapshot) {
+            results.push({
+              unit,
+              status: "failed",
+              reason: "error",
+              detail: captured.error ?? `cannot snapshot record artifacts for unit "${unit}"`,
+            });
+          } else if (bound.error) {
             results.push({
               unit,
               status: "failed",
@@ -1335,6 +1605,7 @@ function handleFinalize(rest: string[]): void {
             });
           } else {
             if (bound.binding) sourceBindings.set(unit, bound.binding);
+            recordSnapshots.set(unit, captured.snapshot);
             genuine.push(unit);
             preparedAttempts.set(unit, preparedAttempt);
             results.push({ unit, status: "converged" });
@@ -1377,6 +1648,14 @@ function handleFinalize(rest: string[]): void {
   const mergeFailures: { unit: string; detail: string }[] = [];
   for (const unit of [...genuine].sort()) {
     const boltSlug = swarmBoltSlug(unit);
+    const recordSnapshot = recordSnapshots.get(unit);
+    const recordMergeError = recordSnapshot
+      ? mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot)
+      : `reviewed record snapshot is missing for unit "${unit}"`;
+    if (recordMergeError !== null) {
+      mergeFailures.push({ unit, detail: recordMergeError });
+      continue;
+    }
     runTool("aidlc-bolt.ts", ["release-merge", "--slug", boltSlug], projectDir);
     const merged = runTool(
       "aidlc-bolt.ts",
@@ -1429,7 +1708,10 @@ function handleFinalize(rest: string[]): void {
 
   const envelope = {
     batch,
-    units: results,
+    units: results.map((result) => ({
+      ...result,
+      bolt_slug: swarmBoltSlug(result.unit),
+    })),
     converged: convergedCount,
     failed: failedCount,
     merge_failures: mergeFailures,

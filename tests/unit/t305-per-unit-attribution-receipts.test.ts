@@ -22,7 +22,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   currentStageSourceBaseline,
@@ -2430,6 +2430,266 @@ describe("t305 healthy settled-swarm source completion", () => {
 });
 
 describe("t305 post-merge source authority failure", () => {
+  test("historical source authority does not block a reused Unit in a later attempt", () => {
+    const project = swarmFixture();
+    const unit = "reused-unit";
+    const source = `${unit}.ts`;
+    seedBoltDag(project, [unit]);
+
+    const runCycle = (batch: string, value: string): void => {
+      const prepared = runSwarm(project, [
+        "prepare",
+        "--batch",
+        batch,
+        "--units",
+        unit,
+        "--base",
+        "main",
+      ]);
+      expect(prepared.rc, prepared.out).toBe(0);
+      const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+      writeFileSync(join(wt, source), `export const value = ${JSON.stringify(value)};\n`);
+      const reviewed = review(
+        wt,
+        seededRecordDir(wt),
+        unit,
+        [{ path: source }],
+        {},
+        "1",
+      );
+      expect(reviewed.request.rc, reviewed.request.out).toBe(0);
+      expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+      const finalized = runSwarm(project, [
+        "finalize",
+        "--batch",
+        batch,
+        "--units",
+        unit,
+        "--claimed",
+        unit,
+        "--check-cmd",
+        `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+      ]);
+      expect(finalized.rc, finalized.out).toBe(0);
+      const merged = spawnSync(
+        process.execPath,
+        [
+          WORKTREE,
+          "merge",
+          "--slug",
+          unit,
+          "--target",
+          "main",
+          "--strategy",
+          "squash",
+          "--project-dir",
+          project,
+        ],
+        { cwd: project, encoding: "utf-8" },
+      );
+      expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    };
+
+    runCycle("1", "first");
+    const firstChain = currentSwarmSourceMergeChain(project, "code-generation");
+    if (firstChain.state !== "ready") {
+      throw new Error("first source merge did not form a ready chain");
+    }
+    appendAuditEntry(
+      "GATE_REJECTED",
+      {
+        Stage: "code-generation",
+        Feedback: "repeat",
+        "Prior Accepted Source Fingerprint": firstChain.fingerprint,
+      },
+      project,
+    );
+    runCycle("2", "second");
+    expect(readFileSync(join(project, source), "utf-8")).toContain("second");
+  }, 120000);
+
+  test("a post-authority branch cleanup failure is idempotently reconcilable", () => {
+    const project = swarmFixture();
+    const unit = "cleanup-retry";
+    seedBoltDag(project, [unit]);
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const source = `${unit}.ts`;
+    writeFileSync(join(wt, source), "export const cleanupRetry = true;\n");
+    const reviewed = review(
+      wt,
+      seededRecordDir(wt),
+      unit,
+      [{ path: source }],
+    );
+    expect(reviewed.request.rc, reviewed.request.out).toBe(0);
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const marker = join(project, ".aidlc", "cleanup-branch-blocked");
+    const hook = join(project, ".git", "hooks", "reference-transaction");
+    writeFileSync(
+      hook,
+      [
+        "#!/bin/sh",
+        '[ "$1" = "prepared" ] || exit 0',
+        "while read old new ref; do",
+        `  if [ "$ref" = "refs/heads/bolt-${unit}" ]; then`,
+        '    case "$new" in',
+        "      000000*)",
+        `        if [ ! -e "${marker}" ]; then`,
+        `          touch "${marker}"`,
+        "          exit 1",
+        "        fi",
+        "        ;;",
+        "    esac",
+        "  fi",
+        "done",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(hook, 0o755);
+
+    const first = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    const firstOutput = `${first.stdout ?? ""}${first.stderr ?? ""}`;
+    expect(first.status).not.toBe(0);
+    expect(firstOutput).toContain("[merge-succeeded:");
+    expect(firstOutput).toContain(`branch -D bolt-${unit} failed`);
+    expect(existsSync(join(project, source))).toBe(true);
+    expect(existsSync(wt)).toBe(false);
+    expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
+      .toHaveLength(1);
+
+    const authorityBlocks = readAllAuditShards(project)
+      .split(/\n---\n/)
+      .filter(
+        (block) =>
+          block.includes(`**Unit name**: ${unit}`) &&
+          (
+            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
+            block.includes("**Event**: SWARM_SOURCE_MERGED")
+          ),
+      );
+    const decoyAudit = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "cleanup-decoy",
+      "audit",
+    );
+    mkdirSync(decoyAudit, { recursive: true });
+    writeFileSync(
+      join(decoyAudit, "decoy.md"),
+      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
+    );
+    const ambiguous = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    expect(ambiguous.status).not.toBe(0);
+    expect(`${ambiguous.stdout}${ambiguous.stderr}`).toContain(
+      "multiple durable SWARM_SOURCE_MERGED authorities",
+    );
+
+    appendAuditEntry(
+      "STAGE_STARTED",
+      { Stage: "code-generation", Agent: "aidlc-developer-agent" },
+      project,
+    );
+    const originalIntent = basename(seededRecordDir(project));
+    const headAfterLanding = spawnSync(
+      "git",
+      ["-C", project, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const retried = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--space",
+        "default",
+        "--intent",
+        originalIntent,
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    expect(retried.status, `${retried.stdout ?? ""}${retried.stderr ?? ""}`).toBe(0);
+    expect(retried.stdout).toContain('"cleanup_reconciled":true');
+    expect(
+      spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+        encoding: "utf-8",
+      }).stdout.trim(),
+    ).toBe(headAfterLanding);
+    expect(
+      spawnSync(
+        "git",
+        ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/bolt-${unit}`],
+        { encoding: "utf-8" },
+      ).status,
+    ).toBe(1);
+    expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
+      .toHaveLength(1);
+  }, 120000);
+
   test("durable modern worktree evidence prevents field-deletion branch fallback", () => {
     const project = swarmFixture();
     const unit = "modern-downgrade";
@@ -2508,7 +2768,7 @@ describe("t305 post-merge source authority failure", () => {
     expect(existsSync(join(project, "unreviewed.ts"))).toBe(false);
   }, 120000);
 
-  test("an unrelated source write during merge is not folded into aggregate authority", () => {
+  test("a post-merge hook cannot stage unrelated source into aggregate authority", () => {
     const project = swarmFixture();
     const unit = "merge-interleave";
     seedBoltDag(project, [unit]);
@@ -2547,10 +2807,15 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(finalized.rc, finalized.out).toBe(0);
 
-    const hook = join(project, ".git", "hooks", "post-commit");
+    const hook = join(project, ".git", "hooks", "post-merge");
     writeFileSync(
       hook,
-      "#!/bin/sh\nprintf '%s\\n' 'export const unreviewed = true;' > merge-interleaved.ts\n",
+      [
+        "#!/bin/sh",
+        "printf '%s\\n' 'export const unreviewed = true;' > merge-interleaved.ts",
+        "git add -- merge-interleaved.ts",
+        "",
+      ].join("\n"),
     );
     chmodSync(hook, 0o755);
     const merged = spawnSync(
@@ -2570,21 +2835,17 @@ describe("t305 post-merge source authority failure", () => {
       { cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
-    expect(merged.status).not.toBe(0);
-    expect(output).toContain("[merge-succeeded:");
-    expect(output).toContain(
-      "post-merge source does not match landed merge commit",
-    );
-    expect(output).toContain("Do not retry this merge");
+    expect(merged.status, output).toBe(0);
+    expect(output).not.toContain("[merge-succeeded:");
     expect(existsSync(join(project, source))).toBe(true);
-    expect(existsSync(join(project, "merge-interleaved.ts"))).toBe(true);
-    expect(existsSync(wt)).toBe(true);
-    expect(readAllAuditShards(project)).not.toContain(
+    expect(existsSync(join(project, "merge-interleaved.ts"))).toBe(false);
+    expect(existsSync(wt)).toBe(false);
+    expect(readAllAuditShards(project)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
   }, 120000);
 
-  test("an interleaved write to a reviewed path is not folded into aggregate authority", () => {
+  test("a post-merge hook cannot replace the reviewed source path", () => {
     const project = swarmFixture();
     const unit = "merge-interleave-same-path";
     seedBoltDag(project, [unit]);
@@ -2623,10 +2884,15 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(finalized.rc, finalized.out).toBe(0);
 
-    const hook = join(project, ".git", "hooks", "post-commit");
+    const hook = join(project, ".git", "hooks", "post-merge");
     writeFileSync(
       hook,
-      `#!/bin/sh\nprintf '%s\\n' 'export const tampered = true;' >> ${source}\n`,
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' 'export const tampered = true;' >> ${source}`,
+        `git add -- ${source}`,
+        "",
+      ].join("\n"),
     );
     chmodSync(hook, 0o755);
     const merged = spawnSync(
@@ -2646,22 +2912,18 @@ describe("t305 post-merge source authority failure", () => {
       { cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
-    expect(merged.status).not.toBe(0);
-    expect(output).toContain("[merge-succeeded:");
-    expect(output).toContain(
-      "post-merge source does not match landed merge commit",
+    expect(merged.status, output).toBe(0);
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(readFileSync(join(project, source), "utf-8")).toBe(
+      "export const reviewed = true;\n",
     );
-    expect(output).toContain("Do not retry this merge");
-    expect(readFileSync(join(project, source), "utf-8")).toContain(
-      "tampered",
-    );
-    expect(existsSync(wt)).toBe(true);
-    expect(readAllAuditShards(project)).not.toContain(
+    expect(existsSync(wt)).toBe(false);
+    expect(readAllAuditShards(project)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
   }, 120000);
 
-  test("a second commit created by a post-commit hook is refused", () => {
+  test("a post-commit hook cannot create a second source commit", () => {
     const project = swarmFixture();
     const unit = "merge-second-commit";
     seedBoltDag(project, [unit]);
@@ -2731,13 +2993,11 @@ describe("t305 post-merge source authority failure", () => {
       { cwd: project, encoding: "utf-8" },
     );
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
-    expect(merged.status).not.toBe(0);
-    expect(output).toContain("[merge-succeeded:");
-    expect(output).toContain(
-      "unexpected commit or tree change landed during the source merge",
-    );
-    expect(existsSync(wt)).toBe(true);
-    expect(readAllAuditShards(project)).not.toContain(
+    expect(merged.status, output).toBe(0);
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(existsSync(join(project, "hook-commit.ts"))).toBe(false);
+    expect(existsSync(wt)).toBe(false);
+    expect(readAllAuditShards(project)).toContain(
       "**Event**: SWARM_SOURCE_MERGED",
     );
   }, 120000);
@@ -2831,9 +3091,10 @@ describe("t305 post-merge source authority failure", () => {
 
 describe("t305 stage and protocol source-attribution requirements", () => {
   test("pins schema, Bolt-relative paths, review freeze, and workspace_requires semantics", () => {
-    const stage=readFileSync(STAGE,"utf-8"); const reviewer=readFileSync(join(PROTOCOL,"stage-protocol-reviewer.md"),"utf-8"); const construction=readFileSync(join(PROTOCOL,"stage-protocol-construction.md"),"utf-8"); const definition=readFileSync(join(PROTOCOL,"stage-definition.md"),"utf-8");
+    const stage=readFileSync(STAGE,"utf-8"); const reviewer=readFileSync(join(PROTOCOL,"stage-protocol-reviewer.md"),"utf-8"); const construction=readFileSync(join(PROTOCOL,"stage-protocol-construction.md"),"utf-8"); const definition=readFileSync(join(PROTOCOL,"stage-definition.md"),"utf-8"); const swarm=readFileSync(join(PROTOCOL,"stage-protocol-swarm.md"),"utf-8");
     expect(stage).toContain('"version": 1'); expect(stage).toContain("created, modified, or deleted"); expect(stage).toContain("trailing `/` directory claim"); expect(stage).toContain("MUST omit `repo`"); expect(stage).toContain("unclaimed changed paths\nblock stage completion"); expect(stage).toContain("engine-validated against its strict schema");
     expect(reviewer).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewer).toContain("claimed source paths");
     expect(construction).toContain("before the in-Bolt review"); expect(construction).toContain("worktree-relative and omit `repo`"); expect(definition).toContain("source-manifest.json"); expect(definition).toContain("stage-entry source baseline");
+    expect(swarm).toContain("Post-finalize source landing"); expect(swarm).toContain("cleanup-only reconciliation"); expect(swarm).toContain("SWARM_SOURCE_MERGED");
   });
 });
