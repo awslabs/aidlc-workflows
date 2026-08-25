@@ -650,7 +650,7 @@ front/report proposals.
 contains task text, copy the dispatch's task text exactly without paraphrasing. For report-only
 composition, derive a concise description from the report's actual findings;
 for a task-less front composition, derive it from the proposed work the human
-will approve. Never return a front/report proposal that can only create by scope.
+will approve. Never return a front/report proposal that would create from only a scope name.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.

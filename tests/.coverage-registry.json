@@ -1074,7 +1074,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t171-birth-gate-registry.test.ts",
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
           "mechanism": "cli"
         },
         {
@@ -2690,7 +2690,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t171-birth-gate-registry.test.ts",
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3769,18 +3769,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:resolveBirthRepoSet",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/integration/t165-intent-create-p4.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:resolveBoltDag",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3806,6 +3794,18 @@
         {
           "file": "tests/unit/t257-default-scope-resolver.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveIntentRepoSet",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5639,7 +5639,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t143-scope-start-birth.test.ts",
+          "file": "tests/integration/t143-scope-start-creation.test.ts",
           "mechanism": "sdk"
         },
         {
@@ -7639,7 +7639,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t171-birth-gate-registry.test.ts",
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
           "mechanism": "cli"
         },
         {

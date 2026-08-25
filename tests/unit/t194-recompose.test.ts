@@ -137,7 +137,7 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
     const rowOf = (state: string): string =>
       /- \*\*Stages to Skip\*\*: (.*)/.exec(state)?.[1] ?? "";
     const creationRow = rowOf(readState(proj));
-    expect(creationRow).toContain("(reverse-engineering - greenfield)");
+    expect(creationRow).toContain("(reverse-engineering — greenfield)");
 
     const skip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     expect(skip.status).toBe(0);

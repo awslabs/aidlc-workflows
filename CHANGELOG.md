@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.94] - 2026-08-25
+
+AI-DLC now describes intent startup consistently as creation across generated harness guidance, user-facing errors, status text, documentation, and the lossless adaptive-composer contract. No command or flag changes are required. The retired `intent-birth` compatibility error still redirects old invocations, and the reserved legacy record name remains switch-reachable. **Upgrade:** refresh your `dist/<harness>/` shell; integrations that read composer proposals must rename `birthDescription` to `creationDescription`, and custom tools importing the renamed internal helpers must update their imports.
+
+* User-facing errors, generated runners, harness instructions, workflow guidance, documentation, diagnostics, comments, and test names now use `create`, `created`, and `creation` terminology.
+* Front/report composer proposals require nonblank `creationDescription` while preserving the existing lossless contract: task text stays verbatim, report-only and task-less plans derive grounded text, and the same-turn creation command retains the literal `--` delimiter plus POSIX-safe single-argument escaping.
+* Internal aidlc-lib names now use `CreatedIntent`, `resolveIntentRepoSet`, and `workflowIsCreated`; workflow behavior is unchanged.
+
 ## [2.6.93] - 2026-08-25
 
 `/aidlc --doctor` now detects project hooks that never start, hooks that stop during a workflow, and Claude Code managed policy that permits only managed hooks. **Upgrade:** re-copy your `dist/<harness>/` shell into the project, approve Claude project hooks through `/hooks`, and fully restart Claude Code.
