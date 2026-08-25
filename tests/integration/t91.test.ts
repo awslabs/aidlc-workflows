@@ -72,16 +72,24 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import {
+  createIntent,
+  setActiveIntentCursor,
+  writeSessionBinding,
+  writeSessionPidEntry,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -381,6 +389,77 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
       payload("bun .claude/tools/aidlc-state.ts gate-start intent-capture"),
     );
     expect(existsSync(graphPath(p))).toBe(true);
+  }, 30000);
+
+  test("3b: divergent payload selects the payload workflow in the compile child", () => {
+    const p = makeProject();
+    const payloadIntent = createIntent(
+      p,
+      "payload-work",
+      "default",
+      "feature",
+    );
+    const ancestryIntent = createIntent(
+      p,
+      "ancestry-work",
+      "default",
+      "feature",
+    );
+    setActiveIntentCursor(p, DEFAULT_RECORD_DIR, "default");
+    writeSessionBinding(
+      p,
+      "payload-session",
+      "default",
+      payloadIntent.dirName,
+    );
+    writeSessionBinding(
+      p,
+      "ancestry-session",
+      "default",
+      ancestryIntent.dirName,
+    );
+    const payloadAuditDir = join(payloadIntent.recordDir, "audit");
+    mkdirSync(payloadAuditDir, { recursive: true });
+    writeFileSync(
+      join(payloadAuditDir, "fixture.md"),
+      AUDIT_GATE_APPROVED,
+      "utf-8",
+    );
+    const witnessPath = join(p, "runtime-child-env.json");
+    writeFileSync(
+      join(p, ".claude", "tools", "aidlc-runtime.ts"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        'import { resolveWorkflowSelection } from "./aidlc-lib.ts";',
+        "const selection = resolveWorkflowSelection(process.cwd());",
+        `writeFileSync(${JSON.stringify(witnessPath)}, JSON.stringify({`,
+        "  selectedIntent: selection.intent,",
+        "  selectedSession: selection.sessionId,",
+        '}), "utf-8");',
+      ].join("\n"),
+      "utf-8",
+    );
+    writeSessionPidEntry(p, process.pid, "ancestry-session");
+
+    const r = runHook(
+      p,
+      JSON.stringify({
+        session_id: "payload-session",
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            "bun .claude/tools/aidlc-state.ts approve --stage intent-capture",
+        },
+      }),
+    );
+
+    expect(r.status, r.out).toBe(0);
+    expect(
+      JSON.parse(readFileSync(witnessPath, "utf-8")),
+    ).toEqual({
+      selectedIntent: payloadIntent.dirName,
+      selectedSession: "payload-session",
+    });
   }, 30000);
 
   // --- Case 3: non-aidlc Bash (git status) -> no dispatch + no heartbeat ---

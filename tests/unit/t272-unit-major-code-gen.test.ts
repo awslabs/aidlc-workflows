@@ -282,7 +282,13 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     "--project-dir", proj,
   ];
   for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const r = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+      },
+    });
     if ((r.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
     }

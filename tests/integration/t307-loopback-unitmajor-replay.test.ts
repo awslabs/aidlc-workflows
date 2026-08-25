@@ -90,6 +90,7 @@ function run(
     env: {
       ...process.env,
       AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
@@ -117,6 +118,7 @@ function next(args: string[] = []): Directive {
     env: {
       ...process.env,
       AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",

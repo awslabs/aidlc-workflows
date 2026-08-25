@@ -11,10 +11,10 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  activeSpace,
   docsRoot,
   getField,
   resolveProjectDir,
+  resolveWorkflowSelection,
   stateFilePath,
   visibleMarkdownLines,
 } from "./aidlc-lib.ts";
@@ -696,7 +696,7 @@ export function resolveTestingPostureFromSections(
 export function resolveTestingPosture(
   projectDir: string,
 ): TestingPostureContract {
-  const space = activeSpace(projectDir);
+  const space = resolveWorkflowSelection(projectDir).space;
   const memoryDir = join(projectDir, "aidlc", "spaces", space, "memory");
   const sections: TestingPostureSections = {};
   for (const layer of ["org", "team", "project"] as const) {

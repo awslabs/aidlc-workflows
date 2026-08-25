@@ -187,7 +187,8 @@ Missing pre-upgrade fields fail open only as documented migration evidence;
 present-but-unbindable or destroyed modern evidence fails closed. A team that
 adds its own code- or config-emitting stage (a contract generator, an IaC
 executor) should set `workspace_requires: true` so the workspace guard applies.
-Bypass it for CI with `AIDLC_SKIP_ARTIFACT_GUARD=1`; bypass source binding and
+Bypass it for CI with `AIDLC_SKIP_ARTIFACT_GUARD=1`; that switch also bypasses
+the review-time required-output existence check. Bypass source binding and
 attribution separately with `AIDLC_SKIP_SOURCE_FRESHNESS=1`.
 
 ### `produces_kinds`

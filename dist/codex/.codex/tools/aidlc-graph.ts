@@ -57,7 +57,6 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
-  activeSpace,
   auditLockOwnedByProcess,
   type AgentMetadata,
   errorMessage,
@@ -79,6 +78,7 @@ import {
   parseStageFrontmatter,
   planFilePath,
   resolveProjectDir,
+  resolveWorkflowSelection,
   type ScopeDefinition,
   type StageEntry,
   stageEnabledBySelection,
@@ -333,7 +333,9 @@ function memoryDisplayPath(rel: string): string {
  *  `memorySegmentsForSpace`. (The TPL templates dir is this + "templates"; see
  *  `memoryTemplatesDir`.) */
 export function memoryDirFor(projectDir: string, space?: string): string {
-  return join(projectDir, ...memorySegmentsForSpace(space ?? activeSpace(projectDir)));
+  const resolvedSpace =
+    space ?? resolveWorkflowSelection(projectDir).space;
+  return join(projectDir, ...memorySegmentsForSpace(resolvedSpace));
 }
 
 /** The TPL template-override source-of-truth dir for a workspace:
@@ -345,7 +347,9 @@ export function memoryDirFor(projectDir: string, space?: string): string {
  *  gets teamB's templates. Kept here (not hardcoded in the dispatcher) so it
  *  stays byte-aligned with where the packager emits and the resolver reads. */
 export function memoryTemplatesDir(projectDir: string, space?: string): string {
-  return join(projectDir, ...memorySegmentsForSpace(space ?? activeSpace(projectDir)), "templates");
+  const resolvedSpace =
+    space ?? resolveWorkflowSelection(projectDir).space;
+  return join(projectDir, ...memorySegmentsForSpace(resolvedSpace), "templates");
 }
 
 /** The FRAMEWORK-DEFAULT templates dir — the read-only, engine-shipped middle

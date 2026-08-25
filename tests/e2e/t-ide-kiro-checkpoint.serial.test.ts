@@ -69,12 +69,16 @@ import { cleanupTuiProject, KIRO_IDE_SRC, setupTuiProject } from "../harness/tui
 import {
   autoApprove,
   generateKiroIdeSeed,
+  inspectKiroIdeChatSurfaceDocument,
   KIRO_IDE_BIN,
   launchKiroIde,
   pageTarget,
+  prepareKiroIdeChat,
   removeSeedDir,
+  settleKiroIdeChatSurface,
   snapshotChatDom,
   teardown,
+  type KiroIdeChatSurfaceState,
   typeAndSubmit,
   waitForCdp,
   waitForChatInput,
@@ -226,6 +230,46 @@ function skipReason(): string | null {
 }
 const SKIP_REASON = skipReason();
 
+const CLEAR_CHAT_SURFACE: KiroIdeChatSurfaceState = {
+  chatFrameCount: 1,
+  blockedHitPoints: [],
+  blockingOverlays: [],
+};
+const MIGRATION_BLOCKED_CHAT_SURFACE: KiroIdeChatSurfaceState = {
+  chatFrameCount: 1,
+  blockedHitPoints: [
+    {
+      x: 852,
+      y: 666,
+      hitTag: "DIV",
+      hitClassName: "welcome-carousel-modal-block",
+      hitText:
+        "We've upgraded how sessions are stored " +
+        "Migrate your previous sessions to keep them accessible.",
+    },
+  ],
+  blockingOverlays: [
+    {
+      text:
+        "We've upgraded how sessions are stored " +
+        "Migrate your previous sessions to keep them accessible. " +
+        "Go to documentation Remind me later",
+      className: "welcome-carousel-modal-block",
+      role: "dialog",
+      ariaModal: "true",
+      rect: { x: 0, y: 0, width: 1024, height: 768 },
+    },
+  ],
+};
+
+async function assertChatSurfaceUnblocked(port: number): Promise<string | null> {
+  const prepared = await prepareKiroIdeChat(port);
+  expect(prepared.surface.chatFrameCount).toBeGreaterThan(0);
+  expect(prepared.surface.blockingOverlays).toHaveLength(0);
+  expect(prepared.surface.blockedHitPoints).toHaveLength(0);
+  return prepared.dismissed;
+}
+
 // ---------------------------------------------------------------------------
 // Disk-only assertion helpers (never assert on chat prose).
 // ---------------------------------------------------------------------------
@@ -274,6 +318,126 @@ function gateOpenedCountFor(sandbox: string, slug: string): number {
   return auditEventCountFor(sandbox, "STAGE_AWAITING_APPROVAL", slug);
 }
 
+describe("kiro-ide-driver startup overlay reconciliation", () => {
+  test("the real DOM probe rejects a non-ARIA element intercepting the chat iframe", () => {
+    const rect = {
+      x: 688,
+      y: 35,
+      left: 688,
+      top: 35,
+      right: 1016,
+      bottom: 746,
+      width: 328,
+      height: 711,
+      toJSON: () => ({}),
+    };
+    const blocker = {
+      tagName: "DIV",
+      className: "opaque-startup-overlay",
+      innerText: "Blocking startup overlay",
+      textContent: "Blocking startup overlay",
+    } as unknown as Element;
+    const frame = {
+      tagName: "IFRAME",
+      className: "webview ready",
+      getBoundingClientRect: () => rect,
+      contains: () => false,
+    } as unknown as Element;
+    const doc = {
+      querySelectorAll: (selector: string) =>
+        selector === "[aria-modal='true']" ? [] : [frame],
+      elementFromPoint: () => blocker,
+    } as unknown as Document;
+    const styleOf = (() => ({
+      display: "block",
+      visibility: "visible",
+      opacity: "1",
+      pointerEvents: "auto",
+    })) as unknown as typeof getComputedStyle;
+
+    const surface = inspectKiroIdeChatSurfaceDocument(doc, styleOf);
+
+    expect(surface.chatFrameCount).toBe(1);
+    expect(surface.blockingOverlays).toHaveLength(0);
+    expect(surface.blockedHitPoints).toHaveLength(2);
+    expect(surface.blockedHitPoints.map((hit) => hit.hitClassName)).toEqual([
+      "opaque-startup-overlay",
+      "opaque-startup-overlay",
+    ]);
+  });
+
+  test("dismisses the current session-migration modal and waits for a clear chat hit-test", async () => {
+    const surfaces = [MIGRATION_BLOCKED_CHAT_SURFACE, CLEAR_CHAT_SURFACE];
+    let now = 0;
+    let dismissCalls = 0;
+
+    const prepared = await settleKiroIdeChatSurface(
+      {
+        inspect: async () => surfaces.shift() ?? CLEAR_CHAT_SURFACE,
+        dismissMigration: async () => {
+          dismissCalls++;
+          return "clicked:remind me later";
+        },
+        wait: async (ms) => {
+          now += ms;
+        },
+        now: () => now,
+      },
+      20,
+      5,
+    );
+
+    expect(dismissCalls).toBe(1);
+    expect(prepared.dismissed).toBe("clicked:remind me later");
+    expect(prepared.surface).toEqual(CLEAR_CHAT_SURFACE);
+  });
+
+  test("older Kiro with no migration modal proceeds without a dismissal", async () => {
+    let dismissCalls = 0;
+    const prepared = await settleKiroIdeChatSurface(
+      {
+        inspect: async () => CLEAR_CHAT_SURFACE,
+        dismissMigration: async () => {
+          dismissCalls++;
+          return null;
+        },
+        wait: async () => {},
+        now: () => 0,
+      },
+      20,
+      5,
+    );
+
+    expect(dismissCalls).toBe(0);
+    expect(prepared.dismissed).toBeNull();
+    expect(prepared.surface).toEqual(CLEAR_CHAT_SURFACE);
+  });
+
+  test("does not accept CDP-reachable chat behind a persistent blocking overlay", async () => {
+    let now = 0;
+    let dismissCalls = 0;
+
+    await expect(
+      settleKiroIdeChatSurface(
+        {
+          inspect: async () => MIGRATION_BLOCKED_CHAT_SURFACE,
+          dismissMigration: async () => {
+            dismissCalls++;
+            return dismissCalls === 1 ? "clicked:remind me later" : null;
+          },
+          wait: async (ms) => {
+            now += ms;
+          },
+          now: () => now,
+        },
+        10,
+        5,
+      ),
+    ).rejects.toThrow("blocking overlay remains over chat");
+    expect(dismissCalls).toBeGreaterThan(1);
+  });
+});
+
 describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate enforcement)", () => {
   // Drives the SHIPPED dist/kiro-ide tree and asserts the live HUMAN_TURN event
   // plus the committed GATE_APPROVED ledger row. The second, fabricated approval
@@ -318,6 +482,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate 
         // Poll for the chat input instead of a fixed settle sleep.
         expect(await waitForChatInput(handle.port)).toBe(true);
         diagnostic("chat-ready");
+        const startupDismissed = await assertChatSurfaceUnblocked(handle.port);
+        diagnostic("chat-surface-unblocked", { startupDismissed });
 
         const t = await pageTarget(handle.port);
         // typeAndSubmit focuses + verifies the text landed + retries before Enter -
@@ -477,6 +643,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate 
       try {
         expect(await waitForCdp(handle.port)).toBe(true);
         expect(await waitForChatInput(handle.port)).toBe(true);
+        const startupDismissed = await assertChatSurfaceUnblocked(handle.port);
+        diagnostic("chat-surface-unblocked", { startupDismissed });
 
         const t = await pageTarget(handle.port);
         // A prompt that drives FIVE separate shell tool calls in one un-ended turn, so

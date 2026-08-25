@@ -54,7 +54,7 @@ function emitAudit(
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
-  const rawArgs = argv;
+  const rawArgs = [...argv];
 
   // Extract --project-dir
   const filteredArgs: string[] = [];

@@ -27,7 +27,6 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   errorMessage,
-  activeIntent,
   findAllEvents,
   getField,
   loadStageGraph,
@@ -37,7 +36,7 @@ import {
   parseMemoryHeadings,
   parseStateStageSuffixes,
   readAllAuditShards,
-  activeSpace,
+  resolveWorkflowSelection,
   readStateFile,
   relativeMemoryPath,
   relativeRecordDir,
@@ -1173,9 +1172,13 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
   // two cursors differ, the empty graph is written under the worktree-space path
   // but re-read under the main-space path → ENOENT, fragment-fork exits 1 despite
   // a successful write. One resolved space keeps both sides on the same segment.
-  const space = flags.space ?? activeSpace(projectDir);
+  const selection = resolveWorkflowSelection(projectDir, {
+    space: flags.space,
+    intent,
+  });
+  const space = selection.space;
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
-  const wtRecord = activeIntent(projectDir, space, intent) ?? undefined;
+  const wtRecord = selection.intent ?? undefined;
 
   const wtPath = worktreePath(projectDir, flags.slug);
   const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);

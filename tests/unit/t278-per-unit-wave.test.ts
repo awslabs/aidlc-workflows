@@ -213,7 +213,13 @@ function review(
     const result = spawnSync(
       BUN,
       [...args, ...suffix, "--project-dir", proj],
-      { encoding: "utf-8" },
+      {
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        },
+      },
     );
     if ((result.status ?? -1) !== 0) {
       throw new Error(`review failed: ${result.stdout}${result.stderr}`);
@@ -687,8 +693,9 @@ describe("t278 engine-emitted wave contract", () => {
     const stillSpent = reviewRequestResult(proj, "alpha", 1);
     expect(stillSpent.status).not.toBe(0);
     expect(stillSpent.out).toContain(
-      "stale-receipt recovery review pass was already spent",
+      "one recovery review was already used",
     );
+    expect(stillSpent.out).toContain("Request Changes decision");
     expect(auditEventCount(proj, "GATE_REJECTED")).toBe(0);
 
     appendAuditEntry("HUMAN_TURN", {}, proj);

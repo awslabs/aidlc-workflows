@@ -60,11 +60,19 @@
 //          appears (use when the screen is actively streaming — the statusline
 //          token counter / spinner means it never goes byte-stable).
 //          Exits 0 on match, 1 on timeout.
+//   startup --session <name> --ready-pattern <regex> [--timeout-ms N]
+//          One bounded grid-driven startup loop for Claude: dismiss a visible
+//          supported trust / bypass modal, or return immediately once the
+//          caller's ready UI/statusline pattern is painted. Exits 1 on timeout.
 //   capture --session <name> [--ansi]
 //          Print the current pane (plain text; --ansi keeps colour escapes —
 //          tmux only; the node-pty grid is always plain text).
 //   kill   --session <name>
 //          Kill the session (idempotent).
+//   wait-dead --session <name> [--timeout-ms N]
+//          Poll the backend until the session process tree is gone. On Windows
+//          this checks the recorded daemon, pty child, and kill-time descendant
+//          PIDs. Exits 1 if any tracked process survives the bound.
 //   answer-gate --session <name> --project-dir <dir>
 //          [--per-gate-timeout-ms N] [--overall-timeout-ms N]
 //          [--until-file <relpath>] [--until-state-field <name=regex>]
@@ -136,6 +144,9 @@ import { stateFilePathFor } from "./sdk-drive.ts";
 const POLL_INTERVAL_MS = 150;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STABLE_MS = 600;
+const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
+const DEFAULT_DEAD_TIMEOUT_MS = 5_000;
+const DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS = 2_000;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
 const WIN_CHILD_SPEC_ENV = "AIDLC_TUI_CHILD_SPEC_B64";
@@ -380,7 +391,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Backend contract (§2.3). Both backends satisfy the same five operations; the
+// Backend contract (§2.3). Both backends satisfy the same operations; the
 // CLI dispatch and the `wait` polling loop are backend-agnostic.
 // ---------------------------------------------------------------------------
 
@@ -404,6 +415,8 @@ interface Backend {
   capture(session: string, ansi: boolean): string;
   /** Kill the session (idempotent). */
   kill(session: string): void;
+  /** Labels for live backend processes or cleanup-verification blockers. */
+  liveProcesses(session: string): string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +499,11 @@ const tmuxBackend: Backend = {
   kill(session) {
     tmux(["kill-session", "-t", session]); // idempotent; ignore errors
   },
+
+  liveProcesses(session) {
+    const r = tmux(["has-session", "-t", session]);
+    return r.code === 0 ? [`tmux-session:${session}`] : [];
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -505,6 +523,8 @@ const tmuxBackend: Backend = {
 //                     capture/wait clients read it.
 //   <dir>/meta.json — { cols, rows } so a client can resize/diagnose.
 //   <dir>/pid       — the daemon pid, for kill's force-terminate backstop.
+//   <dir>/child.pid — the node-pty child pid.
+//   <dir>/tree.pids — the daemon's kill-time process-tree snapshot.
 // The channels are deliberately dumb files (no named pipes / sockets) so the
 // same code runs anywhere a filesystem does.
 // ---------------------------------------------------------------------------
@@ -516,6 +536,140 @@ function winSessionDir(session: string): string {
   return join(tmpdir(), "tui-drive", safe);
 }
 
+function readPid(path: string): number | null {
+  if (!existsSync(path)) return null;
+  const pid = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
+  return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runBoundedProcessSnapshotCommand(
+  file: string,
+  args: string[],
+  timeoutMs = DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS,
+): { stdout: string; error?: string } {
+  const result = spawnSync(file, args, {
+    encoding: "utf8",
+    maxBuffer: 5 * 1024 * 1024,
+    windowsHide: true,
+    timeout: timeoutMs,
+  });
+  const spawnError = result.error as NodeJS.ErrnoException | undefined;
+  if (spawnError?.code === "ETIMEDOUT") {
+    return {
+      stdout: result.stdout ?? "",
+      error: `process snapshot timed out after ${timeoutMs}ms`,
+    };
+  }
+  if (spawnError || result.status !== 0 || !(result.stdout ?? "").trim()) {
+    return {
+      stdout: result.stdout ?? "",
+      error:
+        spawnError?.message ??
+        (result.stderr ?? "").trim() ??
+        `process snapshot exited ${result.status ?? "without status"}`,
+    };
+  }
+  return { stdout: result.stdout ?? "" };
+}
+
+function cmdSnapshotTimeoutProbe(a: Args): void {
+  const timeoutMs = Number(a.flags["timeout-ms"] ?? "100");
+  const expectedError = `process snapshot timed out after ${timeoutMs}ms`;
+  const startedAt = Date.now();
+  const result = runBoundedProcessSnapshotCommand(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    timeoutMs,
+  );
+  const elapsedMs = Date.now() - startedAt;
+  if (result.error !== expectedError) {
+    fail(
+      `snapshot timeout probe expected '${expectedError}', got ` +
+        `'${result.error ?? "no error"}'`,
+      1,
+    );
+  }
+  process.stdout.write(`${JSON.stringify({ elapsedMs, error: result.error })}\n`);
+}
+
+function winProcessTreePids(rootPids: number[]): {
+  pids: number[];
+  error?: string;
+} {
+  if (process.platform !== "win32") return { pids: rootPids };
+  const result = runBoundedProcessSnapshotCommand(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      "Get-CimInstance Win32_Process | " +
+        "Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress",
+    ],
+  );
+  if (result.error) {
+    return {
+      pids: rootPids,
+      error: result.error,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(result.stdout) as
+      | { ProcessId: number; ParentProcessId: number }
+      | Array<{ ProcessId: number; ParentProcessId: number }>;
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    const tree = new Set<number>(rootPids);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const row of rows) {
+        if (
+          tree.has(Number(row.ParentProcessId)) &&
+          !tree.has(Number(row.ProcessId))
+        ) {
+          tree.add(Number(row.ProcessId));
+          changed = true;
+        }
+      }
+    }
+    return { pids: [...tree] };
+  } catch (error) {
+    return {
+      pids: rootPids,
+      error: `invalid PowerShell process snapshot: ${String(error)}`,
+    };
+  }
+}
+
+function trackedWinPids(dir: string): Map<number, Set<string>> {
+  const tracked = new Map<number, Set<string>>();
+  const add = (pid: number | null, label: string): void => {
+    if (pid === null) return;
+    const labels = tracked.get(pid) ?? new Set<string>();
+    labels.add(label);
+    tracked.set(pid, labels);
+  };
+  add(readPid(join(dir, "pid")), "daemon");
+  add(readPid(join(dir, "child.pid")), "pty-child");
+  const treePath = join(dir, "tree.pids");
+  if (existsSync(treePath)) {
+    for (const line of readFileSync(treePath, "utf8").split(/\r?\n/)) {
+      const pid = Number.parseInt(line.trim(), 10);
+      if (Number.isFinite(pid) && pid > 0) add(pid, "tree");
+    }
+  }
+  return tracked;
+}
+
 const win32Backend: Backend = {
   async start(session, cwd, width, height, cmd) {
     if (cmd.length === 0) fail("no command after `--` to run in the session");
@@ -523,6 +677,20 @@ const win32Backend: Backend = {
     const dir = winSessionDir(session);
     // Idempotent start: tear down any stale daemon + channel dir first.
     win32Backend.kill(session);
+    const staleDeadline = Date.now() + DEFAULT_DEAD_TIMEOUT_MS;
+    while (
+      win32Backend.liveProcesses(session).length > 0 &&
+      Date.now() < staleDeadline
+    ) {
+      await sleep(POLL_INTERVAL_MS);
+    }
+    const stale = win32Backend.liveProcesses(session);
+    if (stale.length > 0) {
+      fail(
+        `stale Windows session '${session}' survived cleanup: ${stale.join(", ")}`,
+        1,
+      );
+    }
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "meta.json"), JSON.stringify({ cols: width, rows: height }));
@@ -597,6 +765,21 @@ const win32Backend: Backend = {
   kill(session) {
     const dir = winSessionDir(session);
     if (!existsSync(dir)) return;
+    const daemonPid = readPid(join(dir, "pid"));
+    const childPid = readPid(join(dir, "child.pid"));
+    const roots = [daemonPid, childPid].filter(
+      (pid): pid is number => pid !== null,
+    );
+    if (roots.length > 0) {
+      const snapshot = winProcessTreePids(roots);
+      writeFileSync(join(dir, "tree.pids"), `${snapshot.pids.join("\n")}\n`);
+      const errorPath = join(dir, "tree.error");
+      if (snapshot.error) {
+        writeFileSync(errorPath, snapshot.error);
+      } else {
+        rmSync(errorPath, { force: true });
+      }
+    }
     // 1) Ask the daemon to tear the pty down cleanly (it filters the ConPTY
     //    "Socket is closed" / AttachConsole teardown noise itself).
     try {
@@ -607,27 +790,43 @@ const win32Backend: Backend = {
     // 2) Force-kill backstop: node-pty hangs on ConPTY teardown (p.kill() →
     //    "Socket is closed"), so never block on it. Hard-terminate the daemon
     //    pid after a short grace; the daemon's process.exit closes the pty.
-    const pidPath = join(dir, "pid");
-    if (existsSync(pidPath)) {
-      const pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
-      if (Number.isFinite(pid)) {
-        // Best-effort: SIGTERM, then the OS reaps. On Windows taskkill /F /PID
-        // is the reliable force-terminate (Stop-Process equivalent from the
-        // capture-v3 spike); on POSIX a plain kill suffices (this branch only
-        // runs on win32 in practice, but stays portable for local inspection).
-        if (process.platform === "win32") {
-          spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
+    if (daemonPid !== null) {
+      // Best-effort: SIGTERM, then the OS reaps. On Windows taskkill /F /PID
+      // is the reliable force-terminate (Stop-Process equivalent from the
+      // capture-v3 spike); on POSIX a plain kill suffices (this branch only
+      // runs on win32 in practice, but stays portable for local inspection).
+      if (process.platform === "win32") {
+        spawnSync("taskkill", ["/F", "/T", "/PID", String(daemonPid)], {
+          stdio: "ignore",
+        });
+        if (childPid !== null && processIsAlive(childPid)) {
+          spawnSync("taskkill", ["/F", "/T", "/PID", String(childPid)], {
             stdio: "ignore",
           });
-        } else {
-          try {
-            process.kill(pid, "SIGTERM");
-          } catch {
-            // already dead
-          }
+        }
+      } else {
+        try {
+          process.kill(daemonPid, "SIGTERM");
+        } catch {
+          // already dead
         }
       }
     }
+  },
+
+  liveProcesses(session) {
+    const dir = winSessionDir(session);
+    if (!existsSync(dir)) return [];
+    const live = [...trackedWinPids(dir)]
+      .filter(([pid]) => processIsAlive(pid))
+      .map(([pid, labels]) => `${[...labels].sort().join("+")}:${pid}`);
+    const errorPath = join(dir, "tree.error");
+    if (existsSync(errorPath)) {
+      live.unshift(
+        `tree-snapshot-error:${readFileSync(errorPath, "utf8").trim()}`,
+      );
+    }
+    return live;
   },
 };
 
@@ -712,6 +911,7 @@ async function runWinDaemon(a: Args): Promise<void> {
     cwd,
     env: launch.env,
   });
+  writeFileSync(join(dir, "child.pid"), String(child.pid));
 
   child.onData((data) => term.write(data));
 
@@ -940,6 +1140,132 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
   process.exit(1);
 }
 
+export type TuiStartupAction =
+  | "wait"
+  | "ready"
+  | "dismiss-trust"
+  | "dismiss-bypass";
+
+export interface TuiStartupState {
+  trustDismissed: boolean;
+  bypassDismissed: boolean;
+}
+
+export function initialTuiStartupState(): TuiStartupState {
+  return { trustDismissed: false, bypassDismissed: false };
+}
+
+const CLAUDE_TRUST_MODAL_RE =
+  /(?:Do you trust (?:the files in )?this folder|Yes, I trust this folder)/i;
+const CLAUDE_BYPASS_MODAL_RE = /Bypass Permissions mode/i;
+
+function regexMatches(re: RegExp, text: string): boolean {
+  re.lastIndex = 0;
+  return re.test(text);
+}
+
+/**
+ * Pure reducer for Claude's startup grid. Visible supported modals take
+ * precedence over a ready marker because older Claude versions can paint the
+ * underlying UI before the modal is dismissed. Each modal is answered at most
+ * once so a slow repaint cannot spill repeated numeric input into the prompt.
+ */
+export function advanceTuiStartup(
+  state: TuiStartupState,
+  screen: string,
+  readyPattern: RegExp,
+): { state: TuiStartupState; action: TuiStartupAction } {
+  const trustVisible = regexMatches(CLAUDE_TRUST_MODAL_RE, screen);
+  const bypassVisible = regexMatches(CLAUDE_BYPASS_MODAL_RE, screen);
+
+  if (trustVisible && !state.trustDismissed) {
+    return {
+      state: { ...state, trustDismissed: true },
+      action: "dismiss-trust",
+    };
+  }
+  if (bypassVisible && !state.bypassDismissed) {
+    return {
+      state: { ...state, bypassDismissed: true },
+      action: "dismiss-bypass",
+    };
+  }
+  if (trustVisible || bypassVisible) {
+    return { state, action: "wait" };
+  }
+  if (regexMatches(readyPattern, screen)) {
+    return { state, action: "ready" };
+  }
+  return { state, action: "wait" };
+}
+
+async function cmdStartup(backend: Backend, a: Args): Promise<void> {
+  const session = requireFlag(a, "session");
+  const readyPatternText = requireFlag(a, "ready-pattern");
+  const timeoutMs = Number(
+    a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS,
+  );
+  const readyPattern = new RegExp(readyPatternText);
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let state = initialTuiStartupState();
+  let screen = "";
+
+  writeTuiTrace(session, "startup_begin", {
+    readyPattern: readyPatternText,
+    timeoutMs,
+  });
+
+  while (Date.now() < deadline) {
+    screen = backend.capture(session, false);
+    const step = advanceTuiStartup(state, screen, readyPattern);
+    state = step.state;
+
+    if (step.action === "ready") {
+      const elapsedMs = Date.now() - startedAt;
+      writeTuiTrace(session, "startup_ready", {
+        readyPattern: readyPatternText,
+        elapsedMs,
+        state,
+        screen,
+      });
+      process.stdout.write(
+        `startup ready /${readyPatternText}/ after ${elapsedMs}ms\n`,
+      );
+      return;
+    }
+
+    if (step.action === "dismiss-trust") {
+      writeTuiTrace(session, "startup_action", {
+        action: step.action,
+        screen,
+      });
+      backend.send(session, "1", false, false);
+    } else if (step.action === "dismiss-bypass") {
+      writeTuiTrace(session, "startup_action", {
+        action: step.action,
+        screen,
+      });
+      backend.send(session, "2", false, false);
+    }
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  writeTuiTrace(session, "startup_timeout", {
+    readyPattern: readyPatternText,
+    timeoutMs,
+    state,
+    screen,
+  });
+  process.stderr.write(
+    `tui-drive: timed out after ${timeoutMs}ms waiting for startup ` +
+      `ready /${readyPatternText}/\n` +
+      `---- last pane ----\n${screen}\n-------------------\n`,
+  );
+  process.exit(1);
+}
+
 function cmdCapture(backend: Backend, a: Args): void {
   const session = requireFlag(a, "session");
   const ansi = a.bools.ansi === true;
@@ -953,6 +1279,42 @@ function cmdKill(backend: Backend, a: Args): void {
   writeTuiTrace(session, "kill", {});
   backend.kill(session);
   process.stdout.write(`killed session '${session}'\n`);
+}
+
+async function cmdWaitDead(backend: Backend, a: Args): Promise<void> {
+  const session = requireFlag(a, "session");
+  const timeoutMs = Number(
+    a.flags["timeout-ms"] ?? DEFAULT_DEAD_TIMEOUT_MS,
+  );
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let live = backend.liveProcesses(session);
+  writeTuiTrace(session, "wait_dead_begin", { timeoutMs, live });
+
+  while (live.length > 0 && Date.now() < deadline) {
+    await sleep(POLL_INTERVAL_MS);
+    live = backend.liveProcesses(session);
+  }
+
+  const elapsedMs = Date.now() - startedAt;
+  if (live.length === 0) {
+    writeTuiTrace(session, "wait_dead_complete", { elapsedMs });
+    process.stdout.write(
+      `session '${session}' process tree exited after ${elapsedMs}ms\n`,
+    );
+    return;
+  }
+
+  writeTuiTrace(session, "wait_dead_timeout", {
+    timeoutMs,
+    elapsedMs,
+    live,
+  });
+  process.stderr.write(
+    `tui-drive: session '${session}' still has live processes after ` +
+      `${timeoutMs}ms: ${live.join(", ")}\n`,
+  );
+  process.exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1670,6 +2032,9 @@ async function main(): Promise<void> {
   if (sub === "__win-daemon") {
     return runWinDaemon(a);
   }
+  if (sub === "__snapshot-timeout-probe") {
+    return cmdSnapshotTimeoutProbe(a);
+  }
 
   const backend = selectBackend();
   switch (sub) {
@@ -1679,16 +2044,20 @@ async function main(): Promise<void> {
       return cmdSend(backend, a);
     case "wait":
       return cmdWait(backend, a);
+    case "startup":
+      return cmdStartup(backend, a);
     case "capture":
       return cmdCapture(backend, a);
     case "kill":
       return cmdKill(backend, a);
+    case "wait-dead":
+      return cmdWaitDead(backend, a);
     case "answer-gate":
       return cmdAnswerGate(backend, a);
     default:
       fail(
         `unknown subcommand '${sub ?? ""}'. ` +
-          `Use: start | send | wait | capture | kill | answer-gate`,
+          `Use: start | send | wait | startup | capture | kill | wait-dead | answer-gate`,
       );
   }
 }

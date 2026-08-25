@@ -1340,7 +1340,7 @@ export function intentsDir(projectDir: string, space?: string): string {
 // engine's per-agent METHODOLOGY knowledge at <harness>/knowledge/ (shipped,
 // untouched). Created lazily by ensure-exists, never by SEED.
 export function knowledgeDir(projectDir: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return join(workspaceRoot(projectDir), "spaces", sp, "knowledge");
 }
 
@@ -1416,15 +1416,27 @@ export function activeIntent(
 // The absolute RECORD directory for an intent:
 // `aidlc/spaces/<space>/intents/<slug>-<id8>/`. Returns null when no intent
 // resolves, signalling the bare-space-root resolution in the path helpers.
+function resolveRecordDir(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): { dir: string | null; space: string } {
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  return {
+    dir:
+      selection.intent === null
+        ? null
+        : join(intentsDir(projectDir, selection.space), selection.intent),
+    space: selection.space,
+  };
+}
+
 export function recordDir(
   projectDir: string,
   intent?: string,
   space?: string,
 ): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  const slug = activeIntent(projectDir, sp, intent);
-  if (slug === null) return null;
-  return join(intentsDir(projectDir, sp), slug);
+  return resolveRecordDir(projectDir, intent, space).dir;
 }
 
 // Relative record-dir prefix for the engine's agent-consumed artifact/diary
@@ -1440,8 +1452,9 @@ export function relativeRecordDir(
   intent?: string,
   space?: string,
 ): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  const slug = activeIntent(projectDir, sp, intent);
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const sp = selection.space;
+  const slug = selection.intent;
   if (slug === null) return null;
   return `aidlc/spaces/${sp}/intents/${slug}`;
 }
@@ -1452,7 +1465,7 @@ export function relativeRecordDir(
 // by repo and shared across every intent in the space, so it must NOT carry the
 // intents/<slug> tail. Mirrors knowledgeDir's space-aware shape.
 export function codekbDir(projectDir: string, repo: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return join(workspaceRoot(projectDir), "spaces", sp, "codekb", repo);
 }
 
@@ -1461,7 +1474,7 @@ export function codekbDir(projectDir: string, repo: string, space?: string): str
 // can read the active-space cursor — NOT relativeSpaceRecordPrefix, which is
 // pinned to the default space).
 export function relativeCodekbDir(projectDir: string, repo: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
@@ -1471,8 +1484,17 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
-export function codekbRepoName(projectDir: string, space?: string): string {
-  const repos = intentRepos(projectDir, undefined, space);
+export function codekbRepoName(
+  projectDir: string,
+  space?: string,
+  intent?: string,
+): string {
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const repos = intentRepos(
+    projectDir,
+    selection.intent ?? undefined,
+    selection.space,
+  );
   return repos.length === 1 ? repos[0] : basename(projectDir);
 }
 
@@ -1977,8 +1999,8 @@ export interface SpaceInfo {
 // active per the active-space cursor. "default" is always reported even when no
 // spaces dir exists yet (the resolver treats it as always-valid — activeSpace()
 // returns it), so the listing never claims zero spaces on a fresh shell.
-export function listSpaces(projectDir: string): SpaceInfo[] {
-  const active = activeSpace(projectDir);
+export function listSpaces(projectDir: string, activeOverride?: string): SpaceInfo[] {
+  const active = activeOverride ?? activeSpace(projectDir);
   const names = new Set<string>([DEFAULT_SPACE]);
   try {
     for (const name of readdirSync(spacesRoot(projectDir))) {
@@ -2006,12 +2028,19 @@ export interface IntentInfo {
 // suffix so a registry row resolves to its record dir even when the slug was
 // later renamed. A record dir with no registry row (a hand-created or migrated
 // orphan) is appended so the listing never hides an on-disk intent.
-export function listIntents(projectDir: string, space?: string): IntentInfo[] {
+export function listIntents(
+  projectDir: string,
+  space?: string,
+  activeIntentOverride?: string | null,
+): IntentInfo[] {
   const sp = space ?? activeSpace(projectDir);
   const registry = readIntentRegistry(projectDir, sp);
   const dirs = listIntentDirs(projectDir, sp);
   // activeIntent() returns the record DIR NAME of the active intent (or null).
-  const activeDir = activeIntent(projectDir, sp);
+  const activeDir =
+    activeIntentOverride === undefined
+      ? activeIntent(projectDir, sp)
+      : activeIntentOverride;
   const claimedDirs = new Set<string>();
   const infos: IntentInfo[] = registry.map((entry) => {
     // Match the row to its record dir via the shared join rule (stored dirName,
@@ -2112,13 +2141,499 @@ export function sessionsDir(projectDir: string): string {
   return join(workspaceRoot(projectDir), SESSIONS_DIR);
 }
 
-// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
-// session id is normalised to the slug shape so a host-supplied id can never
-// escape the sessions dir (path traversal / separators); an empty id yields "".
+// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. Session
+// ids must already match the canonical safe shape; normalization-changing
+// values are rejected so distinct raw identities cannot alias one record.
+function safeSessionId(sessionId: string): string {
+  const safe = sessionId
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 180);
+  if (!safe || safe === "." || safe === "..") return "";
+  return safe;
+}
+
+export function validSessionId(sessionId: string | undefined): string | null {
+  const raw = sessionId ?? "";
+  return raw && safeSessionId(raw) === raw ? raw : null;
+}
+
+export class SessionResolutionConflictError extends Error {
+  constructor(
+    readonly overrideSessionId: string,
+    readonly ancestrySessionId: string,
+  ) {
+    super(
+      `Session override "${overrideSessionId}" conflicts with the owning conversation ` +
+        `"${ancestrySessionId}". Work from the owning conversation, or rebind this ` +
+        "session with the intent/space switch verbs.",
+    );
+    this.name = "SessionResolutionConflictError";
+  }
+}
+
 function sessionRecordPath(projectDir: string, sessionId: string): string {
-  const safe = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!safe) return "";
-  return join(sessionsDir(projectDir), safe);
+  const valid = validSessionId(sessionId);
+  if (!valid) return "";
+  return join(sessionsDir(projectDir), valid);
+}
+
+export interface SessionBinding {
+  space: string;
+  intent: string | null;
+  boundAt: string;
+}
+
+function sessionBindingPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.binding.json` : "";
+}
+
+function safeIntentRecordName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
+}
+
+// Read a session's pinned workflow selection. Malformed, unsafe, or stale
+// records degrade to no binding so cursor behavior remains the fallback.
+export function readSessionBinding(projectDir: string, sessionId: string): SessionBinding | null {
+  const path = sessionBindingPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<SessionBinding>;
+    if (
+      typeof candidate.space !== "string" ||
+      !SPACE_NAME_REGEX.test(candidate.space) ||
+      (candidate.intent !== null &&
+        (typeof candidate.intent !== "string" || !safeIntentRecordName(candidate.intent))) ||
+      typeof candidate.boundAt !== "string" ||
+      candidate.boundAt.length === 0
+    ) {
+      return null;
+    }
+    if (
+      candidate.intent !== null &&
+      !existsSync(join(intentsDir(projectDir, candidate.space), candidate.intent, "aidlc-state.md"))
+    ) {
+      return null;
+    }
+    return candidate as SessionBinding;
+  } catch {
+    return null;
+  }
+}
+
+// Pin a session to one space and optional intent record. This is machine-local
+// runtime state, so any write failure silently falls back to shared cursors.
+export function writeSessionBinding(
+  projectDir: string,
+  sessionId: string,
+  space: string,
+  intent: string | null,
+): void {
+  const path = sessionBindingPath(projectDir, sessionId);
+  if (
+    !path ||
+    !SPACE_NAME_REGEX.test(space) ||
+    (intent !== null && !safeIntentRecordName(intent))
+  ) {
+    return;
+  }
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    const binding: SessionBinding = { space, intent, boundAt: isoTimestamp() };
+    writeFileSync(path, `${JSON.stringify(binding)}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+function sessionRebindOfferPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.rebind-offer` : "";
+}
+
+export function readSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+): string | null {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    return readFileSync(path, "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+  signature: string,
+): void {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path || !signature) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${signature}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function clearSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+): void {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent runtime receipt */
+  }
+}
+
+interface SessionPidEntry {
+  sessionId: string;
+  startTime: string | null;
+}
+
+interface ProcessIdentity {
+  ppid: number;
+  startTime: string | null;
+}
+
+const SESSION_ANCESTRY_BUDGET_MS = 50;
+const SESSION_ANCESTRY_MAX_DEPTH = 64;
+const SESSION_ANCESTRY_CACHE_MS = 1000;
+const sessionAncestryCache = new Map<
+  string,
+  { sessionId: string | null; expiresAt: number }
+>();
+
+function sessionProcessPlatform(): NodeJS.Platform {
+  const testPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+  if (
+    testPlatform === "linux" ||
+    testPlatform === "darwin" ||
+    testPlatform === "win32"
+  ) {
+    return testPlatform;
+  }
+  return process.platform;
+}
+
+export function sessionPidMapDir(projectDir: string): string {
+  return join(sessionsDir(projectDir), "pids");
+}
+
+function sessionPidEntryPath(projectDir: string, pid: number): string {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return "";
+  return join(sessionPidMapDir(projectDir), String(pid));
+}
+
+function linuxProcessIdentity(pid: number): ProcessIdentity | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const close = raw.lastIndexOf(")");
+    if (close < 0) return null;
+    const fields = raw.slice(close + 1).trim().split(/\s+/);
+    const ppid = Number.parseInt(fields[1] ?? "", 10);
+    const startTime = fields[19] ?? "";
+    if (!Number.isSafeInteger(ppid) || ppid < 0 || startTime.length === 0) return null;
+    return { ppid, startTime };
+  } catch {
+    return null;
+  }
+}
+
+function macProcessIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+  if (process.env.AIDLC_TEST_PS_DENIED === "1") return null;
+  const timeout = Math.max(1, deadlineMs - Date.now());
+  if (timeout <= 1) return null;
+  try {
+    const result = spawnSync("ps", ["-o", "ppid=,lstart=", "-p", String(pid)], {
+      encoding: "utf-8",
+      timeout,
+    });
+    if (result.status !== 0) return null;
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(result.stdout ?? "");
+    if (!match) return null;
+    const ppid = Number.parseInt(match[1], 10);
+    return Number.isSafeInteger(ppid) ? { ppid, startTime: match[2] } : null;
+  } catch {
+    return null;
+  }
+}
+
+function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
+  const platform = sessionProcessPlatform();
+  if (platform === "linux") return linuxProcessIdentity(pid);
+  if (platform === "darwin") return macProcessIdentity(pid, deadlineMs);
+  // Windows process ancestry is optional in this increment. Returning null
+  // preserves cursor behavior without paying for a PowerShell process.
+  return null;
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry | null {
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<SessionPidEntry>;
+    if (
+      typeof candidate.sessionId !== "string" ||
+      validSessionId(candidate.sessionId) === null ||
+      (candidate.startTime !== null && typeof candidate.startTime !== "string")
+    ) {
+      return null;
+    }
+    return candidate as SessionPidEntry;
+  } catch {
+    return null;
+  }
+}
+
+// Write one PID ownership record. Exported for deterministic ancestry tests;
+// production callers normally use writeSessionPidAncestry().
+export function writeSessionPidEntry(
+  projectDir: string,
+  pid: number,
+  sessionId: string,
+  deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+): void {
+  sessionAncestryCache.delete(projectDir);
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (
+    Date.now() >= deadlineMs ||
+    !path ||
+    validSessionId(sessionId) === null ||
+    !processIsAlive(pid)
+  ) {
+    return;
+  }
+  const identity = processIdentity(pid, deadlineMs);
+  try {
+    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
+    const entry: SessionPidEntry = {
+      sessionId,
+      startTime: identity?.startTime ?? null,
+    };
+    writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (Date.now() >= deadlineMs || !/^\d+$/.test(name)) continue;
+    const pid = Number.parseInt(name, 10);
+    const entry = readSessionPidEntry(projectDir, pid);
+    const identity = processIdentity(pid, deadlineMs);
+    const stale =
+      !entry ||
+      !processIsAlive(pid) ||
+      (entry.startTime !== null &&
+        (identity?.startTime === null ||
+          identity?.startTime === undefined ||
+          identity.startTime !== entry.startTime));
+    if (!stale) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+}
+
+// Map the harness process and each ancestor to the current session. The hook
+// process itself is intentionally excluded because later tool subprocesses are
+// siblings, not descendants, of that short-lived hook.
+export function writeSessionPidAncestry(projectDir: string, sessionId: string): void {
+  sessionAncestryCache.delete(projectDir);
+  if (validSessionId(sessionId) === null || sessionProcessPlatform() === "win32") return;
+  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  gcSessionPidEntries(projectDir, deadline);
+  const seen = new Set<number>();
+  let pid = process.ppid;
+  for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
+    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) break;
+    seen.add(pid);
+    const identity = processIdentity(pid, deadline);
+    if (!identity) break;
+    writeSessionPidEntry(projectDir, pid, sessionId, deadline);
+    pid = identity.ppid;
+  }
+}
+
+// Resolve the nearest mapped ancestor of the calling process. Every failure is
+// a silent miss so tools retain cursor behavior when process metadata is absent.
+export function resolveSessionIdFromAncestry(projectDir: string): string | null {
+  const cached = sessionAncestryCache.get(projectDir);
+  if (cached && cached.expiresAt > Date.now()) return cached.sessionId;
+  const resolved = resolveSessionIdFromAncestryUncached(projectDir);
+  if (resolved === null) {
+    sessionAncestryCache.set(projectDir, {
+      sessionId: null,
+      expiresAt: Date.now() + SESSION_ANCESTRY_CACHE_MS,
+    });
+  } else {
+    sessionAncestryCache.delete(projectDir);
+  }
+  return resolved;
+}
+
+// Build a hook-spawned child's environment from authoritative payload identity.
+// A valid divergent payload carries a private source marker so the selection
+// chokepoint can let payload identity win without weakening bare env refusal.
+export function hookChildEnv(
+  projectDir: string,
+  payloadSessionId: string | undefined,
+  extra: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    ...extra,
+  };
+  const payloadSession = validSessionId(payloadSessionId);
+  if (!payloadSession) return env;
+  env.AIDLC_SESSION_OVERRIDE = payloadSession;
+  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+  if (ancestrySession !== null && ancestrySession !== payloadSession) {
+    env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+  } else {
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  }
+  return env;
+}
+
+function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
+  if (sessionProcessPlatform() === "win32") return null;
+  if (!existsSync(sessionPidMapDir(projectDir))) return null;
+  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const seen = new Set<number>();
+  let pid = process.ppid;
+  for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
+    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) return null;
+    seen.add(pid);
+    const identity = processIdentity(pid, deadline);
+    if (!identity || !processIsAlive(pid)) return null;
+    const entry = readSessionPidEntry(projectDir, pid);
+    if (
+      entry &&
+      (entry.startTime === null || entry.startTime === identity.startTime)
+    ) {
+      return entry.sessionId;
+    }
+    pid = identity.ppid;
+  }
+  return null;
+}
+
+export interface WorkflowSelection {
+  space: string;
+  intent: string | null;
+  sessionId: string | null;
+  binding: SessionBinding | null;
+}
+
+export interface WorkflowSelectionOptions {
+  space?: string;
+  intent?: string;
+  sessionId?: string;
+}
+
+// Resolve one stable workflow target for an operation. Explicit selectors win,
+// then the session binding, then the legacy cursor and lone-intent rules.
+export function resolveWorkflowSelection(
+  projectDir: string,
+  options: WorkflowSelectionOptions = {},
+): WorkflowSelection {
+  const explicitSession = validSessionId(options.sessionId);
+  let sessionId: string | null;
+  if (explicitSession) {
+    sessionId = explicitSession;
+  } else {
+    const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
+    // This refusal is a footgun guard against stale exported overrides, not a
+    // security boundary. The SOURCE marker is an internal hookChildEnv contract.
+    // Deliberately setting both variables is an intentional same-user act
+    // equivalent to a sanctioned session switch; no privilege boundary exists
+    // between callers that could authenticate it.
+    const payloadOverride =
+      envSession !== null &&
+      process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
+    const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+    if (
+      envSession &&
+      ancestrySession &&
+      envSession !== ancestrySession &&
+      !payloadOverride
+    ) {
+      throw new SessionResolutionConflictError(envSession, ancestrySession);
+    }
+    sessionId = envSession ?? ancestrySession;
+  }
+  const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+  const space = options.space ?? binding?.space ?? activeSpace(projectDir);
+  let intent: string | null;
+  if (options.intent !== undefined) {
+    intent = options.intent;
+  } else if (binding && binding.space === space) {
+    intent = binding.intent;
+  } else {
+    intent = activeIntent(projectDir, space);
+  }
+  return { space, intent, sessionId, binding };
+}
+
+export function stateFilePathForSelection(
+  projectDir: string,
+  selection: WorkflowSelection,
+): string {
+  const root =
+    selection.intent === null
+      ? intentsDir(projectDir, selection.space)
+      : join(intentsDir(projectDir, selection.space), selection.intent);
+  return join(root, "aidlc-state.md");
+}
+
+export function relativeRecordDirForSelection(selection: WorkflowSelection): string | null {
+  if (selection.intent === null) return null;
+  return `aidlc/spaces/${selection.space}/intents/${selection.intent}`;
+}
+
+export function intentUuidForSelection(
+  projectDir: string,
+  selection: WorkflowSelection,
+): string | null {
+  if (selection.intent === null) return null;
+  return (
+    listIntents(projectDir, selection.space).find(
+      (entry) => entry.dirName === selection.intent,
+    )?.uuid ?? null
+  );
 }
 
 // Read the intent UUID this conversation last stamped, or null. Best-effort.
@@ -2273,7 +2788,7 @@ export function readCurrentSessionId(projectDir: string): string | null {
 // Record the most-recently-active session id. Best-effort; no-op on a blank id
 // (a TTY/empty hook invocation has no session to record).
 export function writeCurrentSessionId(projectDir: string, sessionId: string): void {
-  if (!sessionId) return;
+  if (validSessionId(sessionId) === null) return;
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
     writeFileSync(currentSessionPath(projectDir), `${sessionId}\n`, "utf-8");
@@ -2340,6 +2855,7 @@ export function createIntent(
   space: string,
   scope?: string,
   repos?: string[],
+  sessionId?: string,
 ): BornIntent {
   const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
@@ -2379,6 +2895,12 @@ export function createIntent(
     space,
   );
   setActiveIntentCursor(projectDir, dirName, space);
+  const creatingSession =
+    validSessionId(sessionId) ??
+    resolveSessionIdFromAncestry(projectDir);
+  if (creatingSession) {
+    writeSessionBinding(projectDir, creatingSession, space, dirName);
+  }
   return { uuid, slug, dirName, recordDir: recordPath, space };
 }
 
@@ -2561,9 +3083,14 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
 // SOURCE (flatStateSource/flatMigrationSource above).
 
 export function stateFilePath(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return join(spaceRecordRoot(projectDir, space), "aidlc-state.md");
-  return join(dir, "aidlc-state.md");
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  if (resolved.dir === null) {
+    return join(
+      spaceRecordRoot(projectDir, resolved.space),
+      "aidlc-state.md",
+    );
+  }
+  return join(resolved.dir, "aidlc-state.md");
 }
 
 // The engine's final validated run-stage is the active execution cursor. Most
@@ -2649,8 +3176,12 @@ function resolveActiveDirectiveTarget(
   space?: string,
 ): ActiveDirectiveTarget {
   const canonicalProjectDir = realpathSync(resolvePath(projectDir));
-  const resolvedSpace = space ?? activeSpace(canonicalProjectDir);
-  const recordDirName = activeIntent(canonicalProjectDir, resolvedSpace, intent);
+  const selection = resolveWorkflowSelection(canonicalProjectDir, {
+    space,
+    intent,
+  });
+  const resolvedSpace = selection.space;
+  const recordDirName = selection.intent;
   const recordsRoot = intentsDir(canonicalProjectDir, resolvedSpace);
   const root = recordDirName === null
     ? spaceRecordRoot(canonicalProjectDir, resolvedSpace)
@@ -3613,9 +4144,15 @@ export function updateCopilotStopCount(
 // timestamp — see auditShards()/readAllAuditShards(). With no intent resolved the
 // shard lands under the bare space record root (no flat audit.md any more).
 export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return join(spaceRecordRoot(projectDir, space), "audit", auditShardName(projectDir));
-  return join(dir, "audit", auditShardName(projectDir));
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  if (resolved.dir === null) {
+    return join(
+      spaceRecordRoot(projectDir, resolved.space),
+      "audit",
+      auditShardName(projectDir),
+    );
+  }
+  return join(resolved.dir, "audit", auditShardName(projectDir));
 }
 
 // The clone-id token file: `aidlc/.aidlc-clone-id`. Workspace-level,
@@ -4563,6 +5100,13 @@ export function checkSummaryConfirmationEvidence(
   if (
     declared &&
     isPerUnitStage(stage) &&
+    !(
+      options.stateContent !== undefined &&
+      usesStageLevelPerUnitArtifacts(
+        getField(options.stateContent ?? "", "Scope"),
+        options.stateContent,
+      )
+    ) &&
     options.workflow === undefined &&
     options.unit === undefined
   ) {
@@ -4879,6 +5423,34 @@ export function checkSummaryConfirmationEvidence(
           "reconfirmation to create a new scoped receipt. "
         : "";
     const recoveryMessage = legacyRecovery + recovery;
+    // A receipt verifies the questions file under the scope IT recorded:
+    // unscoped legacy receipts cover the whole file, scoped ones cover the
+    // confirmed content. Resolve per receipt so a duplicate-confirmation check
+    // never compares one receipt's digest against another's scope. Returns
+    // null for an unreadable file or an unknown scope, which fails closed at
+    // every call site.
+    const scopeHashes = new Map<string, string | null>();
+    const questionHashForScope = (scope: string | null): string | null => {
+      const key = scope ?? "";
+      const cached = scopeHashes.get(key);
+      if (cached !== undefined) return cached;
+      let value: string | null = null;
+      try {
+        if (scope === null) {
+          value = createHash("sha256")
+            .update(readFileSync(question.path))
+            .digest("hex");
+        } else if (scope === SUMMARY_CONFIRMATION_HASH_SCOPE) {
+          value = summaryConfirmationContentHash(
+            readFileSync(question.path, "utf-8"),
+          );
+        }
+      } catch {
+        value = null;
+      }
+      scopeHashes.set(key, value);
+      return value;
+    };
     let currentHash: string;
     try {
       currentHash = hashScope === null
@@ -4918,14 +5490,47 @@ export function checkSummaryConfirmationEvidence(
         return file !== null &&
           resolveAuditProjectPath(projectDir, file) === artifactAbs;
       });
-      const writeAfterReceipt = writes.some((entry) => {
-        if (entry.shard === receipt.shard) return entry.pos > receipt.pos;
-        if (entry.timestamp !== receipt.timestamp) {
-          return entry.timestamp > receipt.timestamp;
+      const strictlyAfter = (
+        later: AuditShardEvent,
+        earlier: AuditShardEvent,
+      ): boolean => {
+        if (later.shard === earlier.shard) return later.pos > earlier.pos;
+        if (later.timestamp !== earlier.timestamp) {
+          return later.timestamp > earlier.timestamp;
         }
         return false;
-      });
-      if (!writeAfterReceipt) {
+      };
+      const writeAfterReceipt = writes.some((entry) =>
+        strictlyAfter(entry, receipt)
+      );
+      // Re-confirming the SAME answers does not revoke the authorization an
+      // earlier identical confirmation already exercised. A re-record made
+      // only to repair the prompt/turn handshake would otherwise demand that
+      // an already-reviewed document be written again, which the review freeze
+      // forbids - the deadlock this guard is not allowed to create. The
+      // candidate must sit in this attempt window, precede both the selected
+      // receipt and a real write, carry the positive choice, and cover the
+      // answers as they are NOW under its own Hash Scope.
+      const earlierIdenticalConfirmationAuthorizesWrite = !writeAfterReceipt &&
+        orderedReceipts.some((candidate) => {
+          if (candidate === receipt) return false;
+          if (!strictlyAfter(receipt, candidate)) return false;
+          if (auditBlockField(candidate.block, "Details") !== "Looks correct") {
+            return false;
+          }
+          const candidateHash = questionHashForScope(
+            auditBlockField(candidate.block, "Hash Scope"),
+          );
+          if (
+            candidateHash === null ||
+            auditBlockField(candidate.block, "Questions SHA-256") !==
+              candidateHash
+          ) {
+            return false;
+          }
+          return writes.some((entry) => strictlyAfter(entry, candidate));
+        });
+      if (!writeAfterReceipt && !earlierIdenticalConfirmationAuthorizesWrite) {
         const unorderedWrite = writes.find((entry) =>
           entry.timestamp === receipt.timestamp && entry.shard !== receipt.shard
         );
@@ -4939,10 +5544,9 @@ export function checkSummaryConfirmationEvidence(
         return {
           ok: false,
           message:
-            `Refusing to complete "${stage.slug}": artifact ${artifact} has no ` +
-            "recorded native-tool write after the human's consolidated summary " +
-            "confirmation. Regenerate or re-save it after confirmation, then " +
-            "report completion again.",
+            `Refusing to continue "${stage.slug}": this stage's output document ` +
+            `${artifact} was not saved after the confirmed answers. Save the ` +
+            "document after confirmation, then continue.",
         };
       }
     }
@@ -5070,10 +5674,12 @@ export function auditShards(
   if (intent === undefined && space !== undefined) {
     dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
   }
-  const intentDir = auditShardDir(projectDir, intent, space);
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  const intentDir =
+    resolved.dir === null ? null : join(resolved.dir, "audit");
   if (intentDir !== null && !dirs.includes(intentDir)) dirs.push(intentDir);
   if (intentDir === null && dirs.length === 0) {
-    dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
+    dirs.push(join(spaceRecordRoot(projectDir, resolved.space), "audit"));
   }
   const paths: string[] = [];
   for (const shardDir of dirs) {
@@ -5337,6 +5943,8 @@ export function terminalReviewVerdict(
 export interface PendingReviewProgress {
   state: "outstanding" | "retry-required" | "repair-required";
   iteration: number;
+  recovery: boolean;
+  suspensionActive: boolean;
 }
 
 export interface StaleReviewProgress {
@@ -5412,7 +6020,10 @@ function reviewArtifactEntries(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
-  boltDag?: BoltDagResolution,
+  options: {
+    boltDag?: BoltDagResolution;
+    stateContent?: string | null;
+  } = {},
 ): ReviewArtifactEntry[] | null {
   const artifactsForKind = (kind: string | null) => [
     ...filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind).map(
@@ -5464,9 +6075,32 @@ function reviewArtifactEntries(
     }));
   }
 
+  let stateContent = options.stateContent;
+  if (stateContent === undefined) {
+    try {
+      stateContent = readStateFile(projectDir);
+    } catch {
+      stateContent = null;
+    }
+  }
+  if (
+    unit === undefined &&
+    stateContent !== null &&
+    usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    )
+  ) {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      required: artifact.required,
+    }));
+  }
+
   let units: string[];
   let unitKinds = new Map<string, string>();
-  const resolution = boltDag ?? resolveBoltDag(projectDir);
+  const resolution = options.boltDag ?? resolveBoltDag(projectDir);
   if (unit) {
     units = [unit];
     if (resolution.state === "ok" && resolution.unitKinds !== null) {
@@ -5475,6 +6109,17 @@ function reviewArtifactEntries(
   } else if (resolution.state === "ok") {
     units = resolution.units;
     unitKinds = resolution.unitKinds ?? new Map();
+  } else if (resolution.state === "none") {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `construction/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(
+        record,
+        "construction",
+        stage.slug,
+        artifactFilename(artifact.name),
+      ),
+      required: artifact.required,
+    }));
   } else {
     const construction = join(record, "construction");
     units = existsSync(construction)
@@ -5516,11 +6161,15 @@ export function reviewArtifactFingerprint(
   options: {
     requireRequiredArtifacts?: boolean;
     boltDag?: BoltDagResolution;
+    stateContent?: string | null;
   } = {},
 ): string | null {
   let entries: ReviewArtifactEntry[] | null;
   try {
-    entries = reviewArtifactEntries(projectDir, stage, unit, options.boltDag);
+    entries = reviewArtifactEntries(projectDir, stage, unit, {
+      boltDag: options.boltDag,
+      stateContent: options.stateContent,
+    });
   } catch {
     return null;
   }
@@ -5770,6 +6419,9 @@ export function freshReviewReceipts(
     "STAGE_STARTED",
     "STAGE_JUMPED",
     "GATE_REJECTED",
+    "SESSION_STARTED",
+    "SESSION_RESUMED",
+    "BOLT_STARTED",
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
     "REVIEW_REQUESTED",
@@ -5797,8 +6449,34 @@ export function freshReviewReceipts(
   const eventIsCrossShardTied = (index: number): boolean => {
     return auditEventIsCrossShardTied(events, index);
   };
+  const requestTieIsSessionBoundaryOnly = (index: number): boolean => {
+    const event = events[index];
+    let sawSessionBoundary = false;
+    for (let other = 0; other < events.length; other++) {
+      if (
+        other === index ||
+        events[other].timestamp !== event.timestamp ||
+        events[other].shard === event.shard
+      ) {
+        continue;
+      }
+      if (
+        events[other].event !== "SESSION_STARTED" &&
+        events[other].event !== "SESSION_RESUMED"
+      ) {
+        return false;
+      }
+      sawSessionBoundary = true;
+    }
+    return sawSessionBoundary;
+  };
 
-  const perUnit = stage.for_each === "unit-of-work";
+  const perUnit =
+    stage.for_each === "unit-of-work" &&
+    !usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    );
   const unitMajor =
     perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
   const dag = perUnit ? options.boltDag ?? resolveBoltDag(projectDir) : null;
@@ -5867,6 +6545,7 @@ export function freshReviewReceipts(
       fingerprint: string | null;
       timestamp: string;
       shard: string;
+      suspensionActive: boolean;
     }
   >();
   const modernUnitReceipts = new Map<
@@ -5891,8 +6570,66 @@ export function freshReviewReceipts(
   let stageIteration: number | null = null;
   let stageReceiptRecovery = false;
   let stagePending: PendingReviewProgress | null = null;
+  const resetUnitReviewState = (unit: string): void => {
+    for (const [key, request] of pendingRequests) {
+      if (request.unit === unit) pendingRequests.delete(key);
+    }
+    unitVerdicts.delete(unit);
+    unitStale.delete(unit);
+    unitStaleProgress.delete(unit);
+    unitIterations.delete(unit);
+    unitReceiptRecovery.delete(unit);
+    unitPending.delete(unit);
+    if (newestSourceUnit === unit) {
+      newestSourceFingerprint = null;
+      newestSourceUnit = null;
+      newestSourceProgress = null;
+      sourceRecoverySpent = false;
+    }
+  };
+  let groupTimestamp: string | null = null;
+  let deferredSessionBoundary = false;
+  const deferredBoltUnits = new Set<string>();
+  const applyDeferredBoundaries = (): void => {
+    if (deferredSessionBoundary) {
+      for (const request of pendingRequests.values()) {
+        request.suspensionActive = false;
+      }
+    }
+    for (const unit of deferredBoltUnits) resetUnitReviewState(unit);
+    deferredSessionBoundary = false;
+    deferredBoltUnits.clear();
+  };
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
+    if (groupTimestamp !== null && e.timestamp !== groupTimestamp) {
+      applyDeferredBoundaries();
+    }
+    groupTimestamp = e.timestamp;
+    if (e.event === "SESSION_STARTED" || e.event === "SESSION_RESUMED") {
+      if (eventIsCrossShardTied(i)) {
+        deferredSessionBoundary = true;
+        continue;
+      }
+      for (const request of pendingRequests.values()) {
+        request.suspensionActive = false;
+      }
+      continue;
+    }
+    if (e.event === "BOLT_STARTED" && perUnit) {
+      const units = (auditBlockField(e.block, "Bolt names") ?? "")
+        .split(",")
+        .map((unit) => unit.trim())
+        .filter((unit) => unit.length > 0);
+      if (eventIsCrossShardTied(i)) {
+        for (const unit of units) deferredBoltUnits.add(unit);
+        continue;
+      }
+      for (const unit of units) {
+        resetUnitReviewState(unit);
+      }
+      continue;
+    }
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
       const file = auditBlockField(e.block, "File");
       if (!file) continue;
@@ -5955,7 +6692,10 @@ export function freshReviewReceipts(
     ) continue;
     const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
-      if (eventIsCrossShardTied(i)) continue;
+      const tiedAcrossShards = eventIsCrossShardTied(i);
+      const sessionBoundaryOnlyTie =
+        tiedAcrossShards && requestTieIsSessionBoundaryOnly(i);
+      if (tiedAcrossShards && !sessionBoundaryOnlyTie) continue;
       const previous = pendingRequests.get(requestKey);
       const recovery =
         previous?.recovery === true ||
@@ -5968,6 +6708,12 @@ export function freshReviewReceipts(
         fingerprint: auditBlockField(e.block, "Artifact Fingerprint"),
         timestamp: e.timestamp,
         shard: e.shard,
+        suspensionActive:
+          recovery &&
+          !sessionBoundaryOnlyTie &&
+          /^sha256:[0-9a-f]{64}$/.test(
+            auditBlockField(e.block, "Artifact Fingerprint") ?? "",
+          ),
       });
       continue;
     }
@@ -5995,7 +6741,10 @@ export function freshReviewReceipts(
       projectDir,
       stage,
       unit,
-      { boltDag: options.boltDag },
+      {
+        boltDag: options.boltDag,
+        stateContent,
+      },
     );
     const fingerprintUsable =
       artifactFingerprintUsable && currentFingerprint !== null;
@@ -6027,8 +6776,18 @@ export function freshReviewReceipts(
     if (terminalVerdict === null) {
       if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
       const pending: PendingReviewProgress = fingerprintMatches
-        ? { state: "repair-required", iteration }
-        : { state: "outstanding", iteration: iteration + 1 };
+        ? {
+            state: "repair-required",
+            iteration,
+            recovery: request.recovery,
+            suspensionActive: false,
+          }
+        : {
+            state: "outstanding",
+            iteration: iteration + 1,
+            recovery: request.recovery,
+            suspensionActive: false,
+          };
       if (unit) {
         unitVerdicts.delete(unit);
         unitIterations.delete(unit);
@@ -6083,18 +6842,21 @@ export function freshReviewReceipts(
       stageStaleProgress = null;
     }
   }
+  applyDeferredBoundaries();
 
   for (const request of pendingRequests.values()) {
     const pending: PendingReviewProgress = {
       state: "retry-required",
       iteration: request.iteration,
+      recovery: request.recovery,
+      suspensionActive: request.suspensionActive,
     };
     if (request.unit) {
-      unitVerdicts.delete(request.unit);
+      if (!request.recovery) unitVerdicts.delete(request.unit);
       unitIterations.delete(request.unit);
       unitPending.set(request.unit, pending);
     } else {
-      stageVerdict = null;
+      if (!request.recovery) stageVerdict = null;
       stageIteration = null;
       stagePending = pending;
     }
@@ -6966,7 +7728,7 @@ export function workspaceSourceState(
   intent?: string,
   space?: string,
 ): WorkspaceSourceState | null {
-  const repos = intentRepos(projectDir, intent ?? null, space);
+  const repos = intentRepos(projectDir, intent, space);
   if (repos.length === 0) {
     if (!isGitRepoDir(projectDir)) {
       return emptyNoGitWorkspaceSourceState(projectDir);
@@ -7864,7 +8626,7 @@ export function sourceBaselineAuditFields(
   intent?: string,
   space?: string,
 ): Record<string, string> {
-  const repos = intentRepos(projectDir, intent ?? null, space);
+  const repos = intentRepos(projectDir, intent, space);
   const hasGitCheckout =
     repos.length === 0
       ? isGitRepoDir(projectDir)
@@ -8135,8 +8897,13 @@ export function intentRepos(
   intentDirName?: string | null,
   space?: string,
 ): string[] {
-  const sp = space ?? activeSpace(projectDir);
-  const dirName = intentDirName ?? activeIntent(projectDir, sp);
+  if (intentDirName === null) return [];
+  const selection = resolveWorkflowSelection(projectDir, {
+    space,
+    intent: intentDirName,
+  });
+  const sp = selection.space;
+  const dirName = selection.intent;
   if (!dirName) return [];
   for (const entry of readIntentRegistry(projectDir, sp)) {
     if (!recordDirMatches(entry, dirName)) continue;
@@ -8224,8 +8991,8 @@ export function resolveConstructionRepo(
 // lockstep. Stays total (never throws) so the hooks that call the family at
 // module top on a pre-birth shell don't crash.
 export function docsRoot(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  return dir ?? spaceRecordRoot(projectDir, space);
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  return resolved.dir ?? spaceRecordRoot(projectDir, resolved.space);
 }
 
 // The bare record-tree root (doctor's existence check, the init scaffolder's
@@ -8874,6 +9641,7 @@ export function isAutonomousSwarmStage(
   if (!isAutonomousMode(stateContent)) return false;
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
   if (first !== null && first.slug === stage.slug) return false;
   const resolution = resolveBoltDag(projectDir);
@@ -9053,6 +9821,61 @@ export function parseCheckboxes(content: string): CheckboxLine[] {
     match = regex.exec(content);
   }
   return results;
+}
+
+export function recoveryGuidance(
+  _projectDir: string,
+  stateContent: string,
+  stageSlug: string,
+): string {
+  const stage = parseCheckboxes(stateContent).find(
+    (entry) => entry.slug === stageSlug,
+  );
+  if (stage?.suffix.startsWith("SKIP")) {
+    return (
+      "This stage is excluded from the current plan; change to a scope that " +
+      `includes it with /aidlc --scope <scope>, then restart ${stageSlug}.`
+    );
+  }
+  if (!stage || stage.state === "pending") {
+    return (
+      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
+      "answers survive, and the stage will ask for confirmation again."
+    );
+  }
+  if (stage.state === "skipped") {
+    return (
+      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
+      "answers survive, and the stage will ask for confirmation again."
+    );
+  }
+  if (
+    stage.state === "in-progress" ||
+    stage.state === "awaiting-approval"
+  ) {
+    return (
+      "To change this document, tell me what should change and I'll record your " +
+      "Request Changes decision (this works before the gate opens); that unlocks " +
+      "the file for revision and a fresh review."
+    );
+  }
+  if (stage.state === "revising") {
+    return (
+      "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
+      `/aidlc --stage ${stageSlug} (your recorded answers survive; you will ` +
+      "re-confirm the summary once)."
+    );
+  }
+  if (stage.state === "completed") {
+    return (
+      "This stage is already approved; restore the reviewed source state, or " +
+      `jump back with /aidlc --stage ${stageSlug} to redo it.`
+    );
+  }
+  return (
+    `Restart this stage with /aidlc --stage ${stageSlug}; the recorded answers ` +
+    "survive, and the stage will ask for confirmation again."
+  );
 }
 
 export function setCheckbox(
@@ -12479,10 +13302,32 @@ export function nextInScopeStage(
   return null;
 }
 
-// Parse the "- [x] slug — EXECUTE" / "— SKIP" suffix from Stage Progress. The
-// suffix is set by `aidlc-utility init` per scope + Greenfield/Brownfield
-// overrides, then preserved across stage transitions — it represents the
-// plan, not the current run-state (checkbox letters are separate).
+// Resolve one stage's action in the approved workflow plan. State suffixes
+// include recomposition and project-type overrides, so they take precedence
+// over the stock scope grid.
+export function effectivePlanAction(
+  slug: string,
+  scope: string | null | undefined,
+  stateContent: string | null,
+): "EXECUTE" | "SKIP" | undefined {
+  const stateAction = stateContent
+    ? parseStateStageSuffixes(stateContent).get(slug)
+    : undefined;
+  if (stateAction !== undefined) return stateAction;
+  return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
+}
+
+// A per-unit stage uses one stage-level artifact set when the approved plan
+// excludes the Unit DAG producer.
+export function usesStageLevelPerUnitArtifacts(
+  scope: string | null | undefined,
+  stateContent: string | null,
+): boolean {
+  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
+}
+
+// Parse each stage's EXECUTE or SKIP suffix from Stage Progress. The suffix is
+// the approved plan action, independent of the checkbox run state.
 export function parseStateStageSuffixes(
   content: string
 ): Map<string, "EXECUTE" | "SKIP"> {

@@ -825,7 +825,11 @@ bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro
 
 The command validates names, writes `.claude/tools/data/harness.json`, strips a newly disabled plugin's merged contributions from core stage source (structural adds via the compose-written sidecar, spliced prose via its sentinel markers; re-enabling restores them on the next session start), recompiles the full graph with disabled nodes marked `enabled:false`, prunes/regenerates stage and scope runners, and refreshes the generated SKILL.md scope/stage tables in one transaction. `aidlc` is core; omitting it disables core surfaces except the always-on Initialization stages. A change that would strand an active workflow (its scope, or a pending EXECUTE stage in its plan, owned by a plugin the new selection disables) is refused with each dependency named - complete or park the workflow first, or keep the plugin enabled.
 
-`/aidlc plugin sync` runs installed plugin compose hooks. It is safe to run repeatedly; when no plugin roots are present it exits 0 with `no installed plugins; nothing to sync`.
+`/aidlc plugin sync` runs installed plugin compose hooks. It is safe to run
+repeatedly; when no plugin roots are configured it exits 0 with
+`no installed plugins; nothing to sync`. If configured roots have no
+`hooks/compose.ts`, the command exits 1 and names each root and reason. With a
+mixed set, it warns for each skipped root, composes the valid roots, and exits 0.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 

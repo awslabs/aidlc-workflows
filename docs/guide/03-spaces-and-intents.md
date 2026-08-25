@@ -153,14 +153,68 @@ List the intents in your space, then switch to one by name (its slug):
 /aidlc intent export-bug          Switch the active intent to "export-bug"
 ```
 
-Switching moves the `active-intent` cursor. The next `/aidlc` resumes that intent
-right where it stopped — same stage, same state, same audit trail. You can carry
+Switching updates the invoking session's binding and writes through to the
+`active-intent` cursor. The next `/aidlc` in that session resumes the intent
+right where it stopped - same stage, same state, same audit trail. You can carry
 any number of intents at once and move between them freely; each is an independent
 run.
 
 > Bare `/aidlc intent` is read-only — it just lists. Add `--json` for
 > machine-readable output. See [CLI Commands](12-cli-commands.md) for the full
 > flag reference.
+
+### Concurrent sessions in one checkout
+
+Each live session keeps a machine-local binding at
+`aidlc/.aidlc-sessions/<session-id>.binding.json`. The binding records the
+session's space and intent, so another terminal or IDE window can move the shared
+cursors without silently moving this session's workflow.
+
+Session identity follows one order:
+
+1. The host session id delivered to a hook.
+2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
+3. The nearest live PID ancestry entry.
+4. No session identity.
+
+Once identity is known, an explicit space or intent selector wins, followed by
+that session's binding, then the shared `active-space` and `active-intent`
+cursors with the existing lone-intent and empty-workspace fallbacks.
+
+For headless automation, set `AIDLC_SESSION_OVERRIDE` on the harness process,
+not on individual tool commands. Every spawned tool then inherits the same
+identity. If that override disagrees with a session found through PID ancestry,
+AI-DLC refuses before writing either workflow and points you to the owning
+conversation or the intent and space switch verbs for rebinding.
+`AIDLC_SESSION_OVERRIDE_SOURCE=payload` is an internal same-user contract, not
+an authenticated security boundary; deliberately setting both variables is
+treated like an intentional sanctioned session switch.
+
+The cursors remain write-through compatibility state. Older or unsupported
+environments with no binding therefore behave exactly as before.
+
+Session bindings isolate workflow selection across spaces, but the
+harness-native method include is still one mutable checkout-wide surface.
+SessionStart and the space switch verb re-point that surface to the selected
+space, so two simultaneous sessions in different spaces can overwrite which
+space's ambient rules the harness delivers next. This increment supports
+concurrent intents within one space; concurrent multi-space ambient method
+delivery remains future work.
+
+On POSIX, the Codex adapter pins the validated hook payload session into every
+core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
+Codex workflow selection. On Windows, PID ancestry resolution returns no session
+identity and the POSIX command rewrite is unavailable. Shared-process harnesses
+also cannot distinguish chats that use one process, including Kiro IDE
+multi-chat and multi-session opencode. Children of payload-bearing hooks follow
+the payload session; tools without that parent still fall back to the shared
+cursors when ancestry is unavailable unless the harness process has a valid
+`AIDLC_SESSION_OVERRIDE`.
+
+Known limitation: hook writes and the intent and space switch verbs on those
+platforms retain the pre-existing v2 shared-cursor and `.current-session`
+behavior. One chat can therefore affect another chat's navigation or hook
+attribution. Per-session isolation for those paths is future work.
 
 ---
 
@@ -203,7 +257,9 @@ When you switch spaces, two things follow the cursor automatically:
    that team's method.
 
 At `default` this re-pointing is a no-op, which is why a single-team workspace
-never churns its committed files.
+never churns its committed files. The include is checkout-global rather than
+session-local, so simultaneous sessions in different spaces can race on ambient
+method delivery even though their workflow record selection stays bound.
 
 ### Knowing which space you're in
 
@@ -283,7 +339,7 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | Gitignored (per-user, machine-local) | Why |
 |---|---|
 | `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent births and cursor switches. |
-| `…/intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state. |
+| `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* resolves documents linked from outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. |
 

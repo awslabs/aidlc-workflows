@@ -62,8 +62,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
-import { toPortablePath } from "../harness/fixtures.ts";
+import { basename, dirname, join } from "node:path";
+import {
+  createTestProject,
+  seededRecordDir,
+  seededStateFile,
+  toPortablePath,
+} from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // P9: with no intent cursor seeded, the sensor dispatcher resolves the BARE
@@ -1204,6 +1209,67 @@ describe("t92 Group M: upstream-coverage --consumes resolution", () => {
     expect(argv).toContain('"--deliverables"');
     expect(argv).toContain('"competitive-analysis,market-trends,build-vs-buy"');
     expect(argv).toContain('"--output-path"');
+  });
+
+  test("43b: zero-Unit producers resolve consumes from their stage-level directory", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    writeFileSync(
+      seededStateFile(proj),
+      `# AI-DLC State Tracking
+
+## Project Information
+- **Project Type**: Greenfield
+- **Scope**: express
+
+## Stage Progress
+- [S] units-generation — SKIP
+- [-] build-and-test — EXECUTE
+`,
+      "utf-8",
+    );
+    const producerDir = join(
+      seededRecordDir(proj),
+      "construction",
+      "code-generation",
+    );
+    mkdirSync(producerDir, { recursive: true });
+    writeFileSync(
+      join(producerDir, "code-summary.md"),
+      "# Stage-level code summary\n",
+      "utf-8",
+    );
+    const outputPath = join(
+      seededRecordDir(proj),
+      "construction",
+      "build-and-test",
+      "test-results.md",
+    );
+    mkdirSync(dirname(outputPath), { recursive: true });
+    writeFileSync(outputPath, "# Test results\n", "utf-8");
+
+    const sensors = makeForkSensors(
+      "upstream-coverage",
+      "bun .claude/tools/aidlc-sensor-stub-argv.ts",
+    );
+    const argvOut = join(proj, "argv-zero-unit.json");
+    const result = fire(
+      [
+        "upstream-coverage",
+        "--stage",
+        "build-and-test",
+        "--output-path",
+        outputPath,
+      ],
+      {
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_SENSORS_DIR: sensors,
+        AIDLC_T92_ARGV_OUT: argvOut,
+      },
+    );
+    expect(result.rc, result.out).toBe(0);
+    const argv = readFileSync(argvOut, "utf-8");
+    expect(argv).toContain('"code-summary:code-generation"');
   });
 });
 

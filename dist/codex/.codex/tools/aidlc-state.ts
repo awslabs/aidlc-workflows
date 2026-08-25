@@ -21,7 +21,6 @@ import {
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
-  activeIntent,
   activeUnitCheckpoint,
   appendSlug,
   appendUnderHeading,
@@ -74,6 +73,7 @@ import {
   readAuditShardEvents,
   readStateFile,
   recordDir,
+  recoveryGuidance,
   relativeMemoryPath,
   relativeRecordDir,
   removeField,
@@ -84,6 +84,7 @@ import {
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
   resolveReviewClass,
+  resolveWorkflowSelection,
   sourceClaimCovers,
   sourceBaselineAuditFields,
   sourceListingEntriesEqual,
@@ -97,6 +98,7 @@ import {
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
+  usesStageLevelPerUnitArtifacts,
   validateUnitName,
   validScopes,
   withAuditLock,
@@ -537,6 +539,7 @@ let projectDir: string | undefined;
 // (undefined), so error() keys the sentinel for them — correct.
 let lockIntent: string | undefined;
 let lockSpace: string | undefined;
+let stateSessionOverride: string | undefined;
 
 export function main(argv: string[]): void {
   const args = [...argv];
@@ -547,6 +550,8 @@ export function main(argv: string[]): void {
     projectDir = args[pdIdx + 1];
     args.splice(pdIdx, 2);
   }
+  stateSessionOverride =
+    resolveWorkflowSelection(resolveProjectDir(projectDir)).sessionId ?? undefined;
 
   const subcommand = args[0];
 
@@ -932,6 +937,13 @@ function handleUnit(args: string[]): void {
   // `unit start` calls could both pass the single-active-unit check.
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
+    const scope = getField(content, "Scope");
+    if (usesStageLevelPerUnitArtifacts(scope, content)) {
+      error(
+        `Refusing unit ${action} for "${unit}": the effective workflow plan skips ` +
+          "Units Generation, so this stage runs once at stage level.",
+      );
+    }
 
     // Only an engine-eligible autonomous swarm owns SWARM_UNIT_* bookkeeping.
     // The autonomy grant persists across backward jumps, where inline per-unit
@@ -1124,7 +1136,13 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
     const result = spawnSync(command[0], command.slice(1), {
       cwd: pd,
       encoding: "utf-8",
-      env: { ...process.env, AIDLC_PROJECT_DIR: pd },
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: pd,
+        ...(stateSessionOverride
+          ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
+          : {}),
+      },
       timeout: 30_000,
     });
     if (result.status !== 0) {
@@ -1198,7 +1216,13 @@ function requireEngineRoutedWaveUnit(
     const result = spawnSync(command[0], command.slice(1), {
       cwd: pd,
       encoding: "utf-8",
-      env: { ...process.env, AIDLC_PROJECT_DIR: pd },
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: pd,
+        ...(stateSessionOverride
+          ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
+          : {}),
+      },
       timeout: 30_000,
     });
     if (result.status !== 0) {
@@ -1453,6 +1477,7 @@ function autonomousSwarmOwnsStage(
   }
   const scope = getField(stateContent, "Scope");
   if (!scope) return true;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
   return first === null || first.slug !== stage.slug;
 }
@@ -1630,13 +1655,9 @@ function producesDirsForStage(
   if (rec === null) return [];
   const perUnit = stage.for_each === "unit-of-work";
   if (perUnit) {
-    const resolution = resolveBoltDag(pd);
     const stateContent = readStateFile(pd);
     const scope = getField(stateContent, "Scope");
-    const unitProducerAction =
-      parseStateStageSuffixes(stateContent).get("units-generation") ??
-      (scope ? loadScopeMapping()[scope]?.stages["units-generation"] : undefined);
-    if (resolution.state === "none" && unitProducerAction !== "EXECUTE") {
+    if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
       return [join(rec, "construction", stage.slug)];
     }
     const ctorRoot = join(rec, "construction");
@@ -1669,17 +1690,21 @@ function producesArtifactsExist(
   const produces = stage.produces ?? [];
   if (produces.length === 0) return true; // nothing declared -> nothing to verify
   if (stage.for_each === "unit-of-work" && stage.produces_kinds !== undefined) {
-    const resolution = resolveBoltDag(pd);
-    if (resolution.state === "ok" && resolution.unitKinds !== null) {
-      const allVacuous = resolution.units.every(
-        (u) =>
-          filterProducesByKind(
-            stage.produces_kinds,
-            produces,
-            resolution.unitKinds?.get(u) ?? null,
-          ).length === 0,
-      );
-      if (allVacuous) return true;
+    const stateContent = readStateFile(pd);
+    const scope = getField(stateContent, "Scope");
+    if (!usesStageLevelPerUnitArtifacts(scope, stateContent)) {
+      const resolution = resolveBoltDag(pd);
+      if (resolution.state === "ok" && resolution.unitKinds !== null) {
+        const allVacuous = resolution.units.every(
+          (u) =>
+            filterProducesByKind(
+              stage.produces_kinds,
+              produces,
+              resolution.unitKinds?.get(u) ?? null,
+            ).length === 0,
+        );
+        if (allVacuous) return true;
+      }
     }
   }
   const dirs = producesDirsForStage(pd, stage);
@@ -2504,7 +2529,23 @@ function verifyReviewerPrecondition(
   // WORKFLOW_STARTED/STAGE_JUMPED floor, the unit-major STAGE_STARTED skip,
   // and per-unit write invalidation are all documented there.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
-  const perUnit = stage.for_each === "unit-of-work";
+  const perUnit =
+    stage.for_each === "unit-of-work" &&
+    !usesStageLevelPerUnitArtifacts(getField(content, "Scope"), content);
+  const pendingRecoveryUnits = Array.from(receipts.unitPending)
+    .filter(([, pending]) => pending.recovery)
+    .map(([unit]) => unit);
+  if (receipts.stagePending?.recovery || pendingRecoveryUnits.length > 0) {
+    const scope =
+      pendingRecoveryUnits.length > 0
+        ? ` for Unit${pendingRecoveryUnits.length === 1 ? "" : "s"} ${pendingRecoveryUnits.join(", ")}`
+        : "";
+    error(
+      `${reviewerPreconditionPrefix(stage.slug, action)}: the recovery review${scope} ` +
+        "is still in progress. Finish that review and record its result before " +
+        "presenting the gate or completing the stage.",
+    );
+  }
 
   // Source-state equality composes with v2's bounded stale-receipt recovery.
   // The workspace-global newest-receipt reconciliation remains the outer
@@ -2512,12 +2553,14 @@ function verifyReviewerPrecondition(
   // binding and applies newest-fresh-claimant shielding per path.
   const sourceFreshnessOff =
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
-  const settledSwarm = settledSwarmForArtifactGuardOrError(
-    pd,
-    stage,
-    content,
-    action,
-  );
+  const settledSwarm =
+    perUnit &&
+    settledSwarmForArtifactGuardOrError(
+      pd,
+      stage,
+      content,
+      action,
+    );
   // A tightly bounded reconciliation handles the one intentional exception to
   // the global outer boundary: after an unclaimed addition is reverted, the
   // current baseline delta can be fully covered by fresh modern unit bindings
@@ -2582,6 +2625,8 @@ function verifyReviewerPrecondition(
     !baselineReversionReconciled;
   if (staleSource) {
     staleSourcePreconditionError(
+      pd,
+      content,
       stage.slug,
       reviewer,
       receipts.sourceStaleProgress?.recoverySpent === true,
@@ -2605,6 +2650,8 @@ function verifyReviewerPrecondition(
     if (!sawStageReview) {
       if (receipts.stageStale) {
         staleReviewPreconditionError(
+          pd,
+          content,
           stage.slug,
           reviewer,
           receipts.stageStaleProgress?.recoverySpent === true,
@@ -2673,12 +2720,13 @@ function verifyReviewerPrecondition(
           ? `For autonomous units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
             `do not put them in --claimed or finalize/merge them. Halt and ask the ` +
             `human whether to restart each Bolt; on approval abort/discard the old ` +
-            `Bolt and rerun the current swarm prepare step so a fresh BOLT_STARTED ` +
-            `boundary resets review accounting.`
+            `Bolt and rerun the current swarm prepare step so the fresh Bolt ` +
+            `attempt restores one review allowance.`
           : `For units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
-            `present the situation to the human at the approval gate. Only a human ` +
-            `Request Changes decision resets the review attempt; do not record it ` +
-            `on the human's behalf.`,
+            `the one recovery review was already used and their output changed ` +
+            `again. ${recoveryGuidance(pd, content, stage.slug)} Only a human ` +
+            `Request Changes decision resets the review attempt; do not record ` +
+            `that rejection on the human's behalf.`,
       );
     }
     if (neverReviewed.length > 0) {
@@ -2739,16 +2787,19 @@ function verifyReviewerPrecondition(
 }
 
 function staleSourcePreconditionError(
+  pd: string,
+  content: string,
   slug: string,
   reviewer: string,
   recoverySpent: boolean,
 ): never {
   if (recoverySpent) {
     error(
-      `Refusing to complete "${slug}": the workspace source no longer matches ` +
-        `the stale-receipt recovery review (source-fingerprint mismatch). ` +
-        `Present this at the approval gate. Only a human Request Changes decision ` +
-        `resets the review attempt; do not record it on the human's behalf.`,
+      `Refusing to complete "${slug}": the workspace source changed again after ` +
+        `the one recovery review by ${reviewer} (source-fingerprint mismatch). ` +
+        `${recoveryGuidance(pd, content, slug)} ` +
+        "Only a human Request Changes decision resets the review attempt; do not " +
+        "record that rejection on the human's behalf.",
     );
   }
   error(
@@ -2792,6 +2843,8 @@ function verifyPipelineLinkPrecondition(
 }
 
 function staleReviewPreconditionError(
+  pd: string,
+  content: string,
   slug: string,
   reviewer: string,
   recoverySpent: boolean,
@@ -2799,11 +2852,11 @@ function staleReviewPreconditionError(
 ): never {
   if (recoverySpent) {
     error(
-      `${reviewerPreconditionPrefix(slug, action)}: its stale-receipt recovery review from ` +
-        `${reviewer} was invalidated by another later write to a declared ` +
-        `produces[] artifact. Present the situation to the human at the approval ` +
-        `gate. Only a human Request Changes decision resets the review attempt; ` +
-        `do not record it on the human's behalf.`
+      `${reviewerPreconditionPrefix(slug, action)}: this stage's output document ` +
+        `changed again after the one recovery review by ${reviewer}. ` +
+        recoveryGuidance(pd, content, slug) +
+        " Only a human Request Changes decision resets the review attempt; do not " +
+        "record that rejection on the human's behalf."
     );
   }
   error(
@@ -3370,8 +3423,16 @@ function handleCompleteWorkflow(
   // automatic inference from state, so a crashed run never self-completes. Runs
   // under the workspace lock already held (every intents.json mutation takes the
   // sentinel bucket). No-op for the legacy flat record (no registry row).
-  const completedIntentDir = activeIntent(pd);
-  if (completedIntentDir) updateIntentStatus(pd, completedIntentDir, "complete");
+  const completedSelection = resolveWorkflowSelection(pd);
+  const completedIntentDir = completedSelection.intent;
+  if (completedIntentDir) {
+    updateIntentStatus(
+      pd,
+      completedIntentDir,
+      "complete",
+      completedSelection.space,
+    );
+  }
   console.log(
     JSON.stringify({
       completed: completedSlug,
@@ -4264,9 +4325,15 @@ function handleSkip(args: string[]): void {
 
   writeStateFile(pd, content);
   if (!nextStage) {
-    const completedIntentDir = activeIntent(pd);
+    const completedSelection = resolveWorkflowSelection(pd);
+    const completedIntentDir = completedSelection.intent;
     if (completedIntentDir) {
-      updateIntentStatus(pd, completedIntentDir, "complete");
+      updateIntentStatus(
+        pd,
+        completedIntentDir,
+        "complete",
+        completedSelection.space,
+      );
     }
   }
   console.log(JSON.stringify({
@@ -4981,8 +5048,12 @@ function handleFork(args: string[]): void {
   // omitted -> default-resolution (the active cursor / lone intent). The SAME
   // selector threads main-side state/audit/lock AND the worktree mirror, and
   // MUST match what merge resolves so they touch one record.
-  const intent = flags.intent;
-  const space = flags.space;
+  const selection = resolveWorkflowSelection(pd, {
+    intent: flags.intent,
+    space: flags.space,
+  });
+  const intent = selection.intent ?? undefined;
+  const space = selection.space;
   // recordPrefix is the worktree mirror's relative record dir (null -> the flat
   // legacy mirror, today's behaviour); wtRecord is the resolved record-dir NAME
   // the worktree state file lives under (null -> flat). Resolved on the MAIN
@@ -5000,7 +5071,7 @@ function handleFork(args: string[]): void {
   // `resolvedIntent` for the wrapping lock AND every main-side read/write/audit
   // below. `wtRecord` is the same value (kept as a distinct name for the
   // worktree-mirror write, whose null->flat semantics read clearer there).
-  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const resolvedIntent = selection.intent ?? undefined;
   const wtRecord = resolvedIntent;
   // Publish the resolved lock context so any errorWithSlug fired inside the
   // per-intent withAuditLock below routes ERROR_LOGGED to the bucket we hold
@@ -5148,8 +5219,12 @@ function handleMerge(args: string[]): void {
 
   // Same selector the fork used -> the SAME intent record on both ends (vision
   // §5). recordPrefix pins the worktree mirror; wtRecord is its record-dir NAME.
-  const intent = flags.intent;
-  const space = flags.space;
+  const selection = resolveWorkflowSelection(pd, {
+    intent: flags.intent,
+    space: flags.space,
+  });
+  const intent = selection.intent ?? undefined;
+  const space = selection.space;
   const recordPrefix = relativeRecordDir(pd, intent, space);
   // Resolve the intent ONCE before locking (same rationale as handleFork):
   // activeIntent maps an omitted selector to the active record, so resolvedIntent
@@ -5158,7 +5233,7 @@ function handleMerge(args: string[]): void {
   // even when --intent is omitted; raw flags.intent would key the sentinel while
   // the writes hit the per-intent shard (lost-update race). wtRecord is the same
   // value, named for the worktree-mirror read where null->flat reads clearer.
-  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const resolvedIntent = selection.intent ?? undefined;
   const wtRecord = resolvedIntent;
   // Publish the lock context for the in-transaction error path (see error()).
   lockIntent = resolvedIntent;

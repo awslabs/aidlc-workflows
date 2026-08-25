@@ -20,22 +20,22 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 641,
+    "total": 661,
     "enumeratedByClass": {
-      "function": 378,
+      "function": 397,
       "audit": 87,
       "scope": 11,
       "stage": 33,
-      "hook": 17,
+      "hook": 18,
       "subcommand": 108,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 194,
-      "audit": 45,
+      "function": 206,
+      "audit": 46,
       "scope": 11,
       "stage": 11,
-      "hook": 17,
+      "hook": 18,
       "subcommand": 96,
       "render-surface": 7
     }
@@ -106,8 +106,13 @@
       "unitClass": "audit",
       "unitId": "BOLT_STARTED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -430,6 +435,10 @@
         },
         {
           "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t323-review-verdict-closure.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1390,6 +1399,10 @@
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1475,6 +1488,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1817,6 +1837,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:effectivePlanAction",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-stage-validity-propagation.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:emitError",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2077,6 +2109,14 @@
         {
           "file": "tests/unit/t291-review-receipt-recovery.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2202,6 +2242,18 @@
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookChildEnv",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -2334,6 +2386,13 @@
     {
       "unitClass": "function",
       "unitId": "function:intentsRegistryPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:intentUuidForSelection",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3366,6 +3425,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readSessionBinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3382,6 +3453,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3465,6 +3543,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recoveryGuidance",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:redactProjectDirPrefix",
       "minMechanism": "none",
       "coveredBy": [
@@ -3521,6 +3611,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:relativeRecordDirForSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3760,6 +3857,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:resolveSessionIdFromAncestry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:resolveStage",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3771,6 +3880,22 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveWorkflowSelection",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t312-orchestrate-session-binding.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3969,6 +4094,25 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sessionPidMapDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SessionResolutionConflictError",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4258,6 +4402,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:stateFilePathForSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:STOP_HOOK_PROBE_ENV",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4512,6 +4663,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:usesStageLevelPerUnitArtifacts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-stage-validity-propagation.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:uuidv7",
       "minMechanism": "none",
       "coveredBy": [
@@ -4584,6 +4747,18 @@
         {
           "file": "tests/unit/t60.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:validSessionId",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -4815,6 +4990,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeSessionBinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4831,6 +5018,41 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionPidAncestry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionPidEntry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5023,6 +5245,14 @@
         {
           "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5082,6 +5312,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5222,6 +5456,18 @@
         },
         {
           "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "review-freeze-command",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6493,6 +6739,22 @@
         {
           "file": "tests/unit/t291-review-receipt-recovery.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t323-review-verdict-closure.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7285,6 +7547,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
@@ -7335,6 +7601,10 @@
         {
           "file": "tests/integration/t21b.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t191-composed-scope-write.test.ts",
@@ -7505,6 +7775,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
@@ -7534,6 +7808,10 @@
         },
         {
           "file": "tests/integration/t175-space-create-memory-isolation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
           "mechanism": "cli"
         },
         {

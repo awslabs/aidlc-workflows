@@ -32,6 +32,9 @@ import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "record-human-turn" },
+  // POSIX Codex commands receive the validated payload session directly, so
+  // sandboxed macOS does not depend on `ps` ancestry for workflow isolation.
+  { event: "PreToolUse", matcher: "Bash", target: "bind-bash-session" },
   { event: "PreToolUse", matcher: "spawn_agent", target: "deliver-stage-rules" },
   { event: "PreToolUse", target: "state-transition-guard" },
   // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;
@@ -241,7 +244,7 @@ function emitTrustSeed(harnessDir: string): string {
 // session defaults (live-verified on codex-cli 0.139.0 and 0.142.5: a role
 // TOML without `model` spawns on the config.toml model + effort). judgment
 // omits both keys;
-// balanced pins a model but inherits effort; templated pins both.
+// balanced and templated both pin a model and medium effort.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
   // BOM tolerance, matching the packager's agent reader and the rule parser.

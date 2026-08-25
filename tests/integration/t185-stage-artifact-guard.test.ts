@@ -121,6 +121,10 @@ function reviewStage(
   // cannot be computed there, so isolate the artifact-guard contract with the
   // documented freshness switch while still requiring a valid manifest.
   env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
+  // These fixtures assert the artifact guard, not review admission: the
+  // documented switches keep Plan Approval and summary confirmation out of it.
+  env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD = "1";
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
   for (const suffix of [[], ["--verdict", "READY"]]) {
     const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env });
     if ((result.status ?? -1) !== 0) {
@@ -601,7 +605,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       confirmSummary(proj, questions);
       const result = summaryGuarded(proj, ["advance", "feasibility"]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("no recorded native-tool write after");
+      expect(result.out).toContain("was not saved after the confirmed answers");
     });
 
     test("allows Assumption Confirmation after generation and terminal review", () => {
@@ -1651,6 +1655,7 @@ X. Other (please specify)
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/unit-test-instructions.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
     }
 
     test("REFUSES code-generation with planning docs but no source code", () => {
@@ -1813,6 +1818,7 @@ X. Other (please specify)
       while (Math.floor(Date.now() / 1000) === boundarySecond) {}
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
     }
     function approveCodeGen(): { rc: number; out: string } {
       reviewCodeGen(proj, UNIT);

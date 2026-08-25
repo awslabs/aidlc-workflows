@@ -250,7 +250,7 @@ cursors and machine-local derived state are ignored.
 | `audit/*.md` (per-clone shards) | `.aidlc-recovery.md` and other `intents/*/.aidlc-*` (transient breadcrumbs) |
 | All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
-| Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-conversation session→intent map) |
+| Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-session UUID stamps, workflow bindings, PID ancestry map) |
 | Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-hooks-health/`, `.aidlc-sensors/` (heartbeats, advisory findings) |
 
 ---
