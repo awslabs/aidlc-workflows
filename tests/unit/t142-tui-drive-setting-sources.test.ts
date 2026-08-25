@@ -786,6 +786,64 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.confirmedSummaries.size).toBe(2);
   });
 
+  test("prefers the latest summary prompt over a retained Q heading in tool output", () => {
+    const state = createKiroNumberedProseAnswerState();
+    const screen = [
+      "Editing intent-capture-questions.md",
+      "- ## Scope",
+      "+ ## Q8. Scope",
+      "",
+      "Does this all look correct before I generate the intent artifacts?",
+      "1. Looks correct",
+      "2. Request changes",
+    ].join("\n");
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBe("Looks correct");
+    expect(state.answeredQuestions.size).toBe(0);
+    expect(state.confirmedSummaries.size).toBe(1);
+  });
+
+  test("recognizes Kiro's Question N of M guide rendering", () => {
+    const state = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        "Question 1 of 8\nWhich outcome matters most?\n1. Recommended\n2. Other",
+        state,
+      ),
+    ).toBe("Q1: 1");
+    expect(state.answeredQuestions).toEqual(new Set([1]));
+  });
+
+  test("recognizes Kiro's Question N dash-rendered batches", () => {
+    const state = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        [
+          "Question 1 — What problem are we solving?",
+          "1. Personal task management",
+          "Question 2 — Who is the customer?",
+          "1. Just me",
+          "Question 3 — What does success look like?",
+          "1. It works reliably",
+        ].join("\n"),
+        state,
+      ),
+    ).toBe("Q1: 1, Q2: 1, Q3: 1");
+    expect(state.answeredQuestions).toEqual(new Set([1, 2, 3]));
+  });
+
+  test("answers an explicitly restated pending question without repainted options", () => {
+    const state = createKiroNumberedProseAnswerState();
+    state.answeredQuestions = new Set([2, 3, 4]);
+    expect(
+      nextKiroNumberedProseAnswer(
+        "Saved Q2-Q4. Q1 still pending.\n" +
+          "Waiting on your pick for Q1 above, then we'll do the last batch.",
+        state,
+      ),
+    ).toBe("Q1: 1");
+    expect(state.answeredQuestions).toEqual(new Set([1, 2, 3, 4]));
+  });
+
   test("recognizes restated summary and approval choices after an unmatched reply", () => {
     const summaryState = createKiroNumberedProseAnswerState();
     expect(

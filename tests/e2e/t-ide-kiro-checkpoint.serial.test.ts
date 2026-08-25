@@ -163,6 +163,36 @@ function runSetupTool(sandbox: string, tool: string, args: string[]): void {
   }
 }
 
+function runGit(sandbox: string, args: string[]): void {
+  const result = spawnSync("git", ["-C", sandbox, ...args], {
+    encoding: "utf-8",
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `git ${args.join(" ")} failed (${result.status ?? "no status"}): ` +
+        `${result.stderr || result.stdout}`,
+    );
+  }
+}
+
+function seedBindableWorkspace(sandbox: string): void {
+  runGit(sandbox, ["init", "-q"]);
+  runGit(sandbox, ["config", "user.email", "t@test"]);
+  runGit(sandbox, ["config", "user.name", "t"]);
+  writeFileSync(
+    join(sandbox, ".gitignore"),
+    ".kiro/\naidlc/\nAGENTS.md\n",
+    "utf-8",
+  );
+  writeFileSync(
+    join(sandbox, "app.ts"),
+    "export const approvalFixture = true;\n",
+    "utf-8",
+  );
+  runGit(sandbox, ["add", "-A"]);
+  runGit(sandbox, ["commit", "-qm", "seed bindable workspace"]);
+}
+
 /** Construct the real gate shape the live journey claims to exercise. */
 function seedApprovalGate(sandbox: string): void {
   seedGateFor(sandbox, COMMITTED_SLUG);
@@ -172,16 +202,67 @@ function seedGateFor(sandbox: string, slug: string): void {
   const phase = slug === COMMITTED_SLUG ? "inception" : "construction";
   const stageDir = join(seededRecordDir(sandbox), phase, slug);
   mkdirSync(stageDir, { recursive: true });
-  writeFileSync(
-    join(stageDir, "requirements.md"),
-    "# Requirements\n\n- Preserve one approval commit per human turn.\n",
-    "utf-8",
-  );
-  writeFileSync(
-    join(stageDir, "requirements-analysis-questions.md"),
-    "# Requirements Analysis Questions\n\n- No open questions.\n",
-    "utf-8",
-  );
+  if (slug === COMMITTED_SLUG) {
+    writeFileSync(
+      join(stageDir, "requirements.md"),
+      "# Requirements\n\n- Preserve one approval commit per human turn.\n",
+      "utf-8",
+    );
+    writeFileSync(
+      join(stageDir, "requirements-analysis-questions.md"),
+      "# Requirements Analysis Questions\n\n- No open questions.\n",
+      "utf-8",
+    );
+  } else {
+    for (const [name, body] of [
+      [
+        "code-generation-plan.md",
+        "# Code Generation Plan\n\n## Scope\n\nKeep the fixture minimal.\n\n## Steps\n\nAdd one source file.\n",
+      ],
+      [
+        "unit-test-instructions.md",
+        "# Unit Test Instructions\n\n## Coverage\n\nVerify the approval guard.\n\n## Commands\n\nRun the focused fixture test.\n",
+      ],
+      [
+        "code-summary.md",
+        "# Code Summary\n\n## Changes\n\nAdded the approval fixture.\n\n## Verification\n\nThe source receipt is bindable.\n",
+      ],
+    ]) {
+      writeFileSync(join(stageDir, name), body, "utf-8");
+    }
+    writeFileSync(
+      join(stageDir, "traceability.json"),
+      `${JSON.stringify(
+        {
+          stage: "code-generation",
+          upstream_ids: ["approval-fixture"],
+          coverage: [
+            {
+              id: "approval-fixture",
+              status: "OK",
+              target: "app.ts",
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    writeFileSync(
+      join(stageDir, "source-manifest.json"),
+      `${JSON.stringify(
+        {
+          stage: "code-generation",
+          version: 1,
+          writes: [{ path: "app.ts" }],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+  }
   const reviewer =
     slug === COMMITTED_SLUG
       ? "aidlc-product-lead-agent"
@@ -438,6 +519,29 @@ describe("kiro-ide-driver startup overlay reconciliation", () => {
   });
 });
 
+describe("t-ide-kiro-checkpoint fixture", () => {
+  test("code-generation gate review binds to a real source fingerprint", () => {
+    const sandbox = setupTuiProject({
+      harness: "kiro-ide",
+      withState: "state-mid-inception.md",
+      withAudit: true,
+    });
+    try {
+      seedBindableWorkspace(sandbox);
+      runSetupTool(sandbox, "aidlc-state.ts", [
+        "checkbox",
+        `${BLOCKED_SLUG}=in-progress`,
+      ]);
+      seedGateFor(sandbox, BLOCKED_SLUG);
+      const audit = readFileSync(seededAuditShard(sandbox), "utf-8");
+      expect(audit).not.toContain("**Source Fingerprint**: unbindable");
+      expect(audit).toMatch(/\*\*Source Fingerprint\*\*: [0-9a-f]{40,64}/);
+    } finally {
+      cleanupTuiProject(sandbox);
+    }
+  });
+});
+
 describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate enforcement)", () => {
   // Drives the SHIPPED dist/kiro-ide tree and asserts the live HUMAN_TURN event
   // plus the committed GATE_APPROVED ledger row. The second, fabricated approval
@@ -455,6 +559,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate 
         withState: "state-mid-inception.md",
         withAudit: true,
       });
+      seedBindableWorkspace(sandbox);
       seedApprovalGate(sandbox);
 
       // One human prompt forces the constructed same-turn cascade: approve the open

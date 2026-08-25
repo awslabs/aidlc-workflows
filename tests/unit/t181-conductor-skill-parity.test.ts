@@ -29,7 +29,7 @@
 // (t148/package.ts --check), so gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -49,6 +49,40 @@ function harnessQuestionAnnexes(): string[] {
         `harness/${harness.name}/skills/aidlc/question-rendering.md`,
     )
     .sort();
+}
+
+function stageDefinitionFiles(): string[] {
+  const coreRoot = join(REPO_ROOT, "core", "aidlc-common", "stages");
+  const core = readdirSync(coreRoot, { withFileTypes: true })
+    .filter((phase) => phase.isDirectory())
+    .flatMap((phase) =>
+      readdirSync(join(coreRoot, phase.name), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map(
+          (entry) =>
+            `core/aidlc-common/stages/${phase.name}/${entry.name}`,
+        ),
+    );
+  const pluginsRoot = join(REPO_ROOT, "plugins");
+  const plugins = readdirSync(pluginsRoot, { withFileTypes: true })
+    .filter((plugin) => plugin.isDirectory())
+    .flatMap((plugin) => {
+      const stagesRoot = join(pluginsRoot, plugin.name, "stages");
+      if (!existsSync(stagesRoot)) return [];
+      return readdirSync(stagesRoot, { withFileTypes: true })
+        .filter((phase) => phase.isDirectory())
+        .flatMap((phase) =>
+          readdirSync(join(stagesRoot, phase.name), {
+            withFileTypes: true,
+          })
+            .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+            .map(
+              (entry) =>
+                `plugins/${plugin.name}/stages/${phase.name}/${entry.name}`,
+            ),
+        );
+    });
+  return [...core, ...plugins].sort();
 }
 
 // A bare `--init` flag token: `--init` not preceded by another flag char — the
@@ -117,6 +151,27 @@ const KIRO_TASK_LIST_TOKEN =
 
 const KIRO_SUBAGENT_TOKEN =
   '{mode:"blocking", task:"...", stages:[{name:"...", role:"aidlc-...", prompt_template:"..."}]}';
+
+const KIRO_DIARY_TOKENS = [
+  "**Kiro diary write discipline.**",
+  "output-only targets, never context",
+  "NEVER call a read tool or shell read/existence command on them at any point",
+  "replace only the exact canonical heading line",
+  "This preserves all existing entries without reading them",
+  "Do not use a shell append that creates a duplicate heading",
+  "do not read back to verify an update",
+  "Do not probe, bootstrap, or initialize it",
+  "`directive.memory_path` stays engine-created and output-only on this path",
+  "`directive.memory_path` is engine-created and output-only",
+  "include the Kiro diary write discipline verbatim",
+  "Every `entry.unit_memory_path` is engine-created and output-only",
+];
+
+const RETIRED_KIRO_DIARY_TOKENS = [
+  "initializing the diary",
+  "initialize the diary at `directive.memory_path`",
+  "First checking the diary exists",
+];
 
 const SUMMARY_STOP_SKILL_TOKENS = [
   "before running the stage body or writing `produces`",
@@ -362,6 +417,72 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  test("Kiro conductor SKILLs never read, probe, or initialize engine-created stage diaries", () => {
+    const persona = readFileSync(
+      join(REPO_ROOT, "core", "aidlc-common", "conductor.md"),
+      "utf-8",
+    );
+    expect(persona).toContain("The engine creates `memory.md`");
+    expect(persona).toContain("NEVER probe for `memory.md`");
+    expect(persona).toContain("append timestamped bullets");
+
+    const failures: string[] = [];
+    const bodies = new Map<string, string>();
+    for (const harness of ["kiro", "kiro-ide"]) {
+      const rel = `harness/${harness}/skills/aidlc/SKILL.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      bodies.set(harness, body);
+      for (const token of KIRO_DIARY_TOKENS) {
+        if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
+      }
+      for (const token of RETIRED_KIRO_DIARY_TOKENS) {
+        if (body.includes(token)) failures.push(`${rel}  retired: ${token}`);
+      }
+    }
+    expect(failures).toEqual([]);
+
+    const cli = bodies.get("kiro") as string;
+    const ide = bodies.get("kiro-ide") as string;
+    for (const anchor of [
+      "**Isolated stage-runner branch.**",
+      "| `run-stage` |",
+      "**Per-unit batch waves (optional).**",
+    ]) {
+      const nextAnchor =
+        anchor === "**Isolated stage-runner branch.**"
+          ? "For an isolated run's reviewer"
+          : anchor === "| `run-stage` |"
+            ? "| `ask` |"
+            : "`directive.mode` selects";
+      const cliStart = cli.indexOf(anchor);
+      const ideStart = ide.indexOf(anchor);
+      expect(cliStart, `Kiro CLI missing ${anchor}`).toBeGreaterThan(-1);
+      expect(ideStart, `Kiro IDE missing ${anchor}`).toBeGreaterThan(-1);
+      expect(
+        cli.slice(cliStart, cli.indexOf(nextAnchor, cliStart)).trim(),
+        `${anchor} diary contract drifted between Kiro CLI and IDE`,
+      ).toBe(ide.slice(ideStart, ide.indexOf(nextAnchor, ideStart)).trim());
+    }
+  });
+
+  test("stage definitions preserve the engine-owned diary boundary", () => {
+    const failures: string[] = [];
+    for (const rel of stageDefinitionFiles()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes("memory.md")) continue;
+      if (!body.includes("engine-created")) {
+        failures.push(`${rel} missing engine-created diary ownership`);
+      }
+      for (const retired of [
+        "create on stage start if absent",
+        "Before the approval gate, read memory.md",
+      ]) {
+        if (body.includes(retired)) failures.push(`${rel} retired: ${retired}`);
+      }
+    }
+    expect(failures).toEqual([]);
   });
 
   test("every conductor stops for summary confirmation before artifact work", () => {

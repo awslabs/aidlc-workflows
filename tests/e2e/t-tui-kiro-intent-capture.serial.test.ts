@@ -314,8 +314,12 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");
         const questionAnsweredAt = auditMd.lastIndexOf("**Event**: QUESTION_ANSWERED");
+        const summaryConfirmedAt = auditMd.lastIndexOf(
+          "**Event**: SUMMARY_CONFIRMATION_RECORDED",
+        );
         const gateOpenedAt = auditMd.lastIndexOf("**Event**: STAGE_AWAITING_APPROVAL");
-        expect(questionAnsweredAt).toBeGreaterThan(-1);
+        expect(summaryConfirmedAt).toBeGreaterThan(-1);
+        expect(questionAnsweredAt).toBeGreaterThan(summaryConfirmedAt);
         expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
       } finally {
         drive(["kill", "--session", session]);

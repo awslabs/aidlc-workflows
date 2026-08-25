@@ -145,6 +145,30 @@ function lastMatchIndex(input: string, pattern: RegExp): number {
   return index;
 }
 
+function nextKiroSummaryConfirmationAnswer(
+  screen: string,
+  state: KiroNumberedProseAnswerState,
+): string | null {
+  const summaryPrompts = [
+    ...screen.matchAll(/look correct before I ([^?]{1,120})\?/gi),
+  ];
+  if (summaryPrompts.length > 0) {
+    const key = summaryPrompts
+      .at(-1)![1]
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (!state.confirmedSummaries.has(key)) {
+      state.confirmedSummaries.add(key);
+      return "Looks correct";
+    }
+  } else if (state.confirmedSummaries.size === 0) {
+    state.confirmedSummaries.add("");
+    return "Looks correct";
+  }
+  return null;
+}
+
 /**
  * Choose the next human-shaped response for Kiro's numbered-prose protocol.
  * A stage may combine candidate selection with the free-text learning channel,
@@ -176,12 +200,35 @@ export function nextKiroNumberedProseAnswer(
     return "1";
   }
 
-  const confirmationQuestions = [
-    ...screen.matchAll(/\bQ(\d+):\s*1 confirmed\b/gi),
-  ]
+  // The viewport retains prior turns and tool diffs. Only line-anchored
+  // conversational question labels count; source-file diffs such as "+## Q8"
+  // are not active prompts. Whichever prompt type appears latest wins.
+  const confirmationQuestionMatches = [
+    ...screen.matchAll(/^[ \t]*Q(\d+):[ \t]*1 confirmed\b/gim),
+  ];
+  const visibleQuestionMatches = [
+    ...screen.matchAll(/^[ \t]*Q(\d+)(?:[.:]|[ \t]*[—-])/gim),
+    ...screen.matchAll(
+      /^[ \t]*Question[ \t]+(\d+)(?:[ \t]+of[ \t]+\d+\b|[ \t]*[.:—-])/gim,
+    ),
+  ];
+  const latestQuestionIndex = Math.max(
+    -1,
+    ...confirmationQuestionMatches.map((match) => match.index ?? -1),
+    ...visibleQuestionMatches.map((match) => match.index ?? -1),
+  );
+  const summaryPromptIndex = lastMatchIndex(
+    screen,
+    /\bDoes this all look correct(?: before I [^?]{1,120})?\?/gi,
+  );
+  if (summaryPromptIndex > latestQuestionIndex) {
+    return nextKiroSummaryConfirmationAnswer(screen, state);
+  }
+
+  const confirmationQuestions = confirmationQuestionMatches
     .map((match) => Number.parseInt(match[1], 10))
     .filter((id) => Number.isFinite(id) && !state.confirmedQuestions.has(id));
-  const visibleQuestions = [...screen.matchAll(/\bQ(\d+)(?:[.:]|\s*[—-])/g)]
+  const visibleQuestions = visibleQuestionMatches
     .map((match) => Number.parseInt(match[1], 10))
     .filter((id) => Number.isFinite(id) && !state.answeredQuestions.has(id));
   const confirmations = [...new Set(confirmationQuestions)].sort((a, b) => a - b);
@@ -195,6 +242,23 @@ export function nextKiroNumberedProseAnswer(
     ].join(", ");
   }
 
+  // Kiro may save a partial batch, then restate that an earlier question is
+  // still pending without repainting its options. Answer only IDs explicitly
+  // named by that current restatement and not already recorded by the driver.
+  const restatedPendingQuestions = [
+    ...screen.matchAll(/\bQ(\d+)\s+still pending\b/gi),
+    ...screen.matchAll(/\bWaiting on your pick for Q(\d+)\b/gi),
+  ]
+    .map((match) => Number.parseInt(match[1], 10))
+    .filter((id) => Number.isFinite(id) && !state.answeredQuestions.has(id));
+  const pendingRestatements = [...new Set(restatedPendingQuestions)].sort(
+    (a, b) => a - b,
+  );
+  if (pendingRestatements.length > 0) {
+    for (const id of pendingRestatements) state.answeredQuestions.add(id);
+    return pendingRestatements.map((id) => `Q${id}: 1`).join(", ");
+  }
+
   const visibleFollowUps = [...screen.matchAll(/\bF(\d+)\./g)]
     .map((match) => Number.parseInt(match[1], 10))
     .filter((id) => Number.isFinite(id) && !state.answeredFollowUps.has(id));
@@ -204,32 +268,8 @@ export function nextKiroNumberedProseAnswer(
     return pendingFollowUps.map((id) => `F${id}: 1`).join(", ");
   }
 
-  // Consolidated-summary confirmation: one PER checkpoint-bearing stage, so a
-  // multi-stage journey presents several (e.g. reverse-engineering "before I
-  // finalize", then requirements-analysis "before I generate the requirements
-  // artifact"). Key on the newest prompt's distinct "before I ..." tail - the
-  // retained viewport still shows earlier answered prompts, so a bare boolean
-  // (the pre-fix shape) answered only the first and stranded every later one.
   if (/Looks correct[\s\S]*Request changes/i.test(screen)) {
-    const summaryPrompts = [
-      ...screen.matchAll(/look correct before I ([^?]{1,120})\?/gi),
-    ];
-    if (summaryPrompts.length > 0) {
-      const key = summaryPrompts
-        .at(-1)![1]
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-      if (!state.confirmedSummaries.has(key)) {
-        state.confirmedSummaries.add(key);
-        return "Looks correct";
-      }
-    } else if (state.confirmedSummaries.size === 0) {
-      // Prompt without the "before I ..." sentence (looser conductor
-      // phrasing): answer it once, as the pre-fix recognizer did.
-      state.confirmedSummaries.add("");
-      return "Looks correct";
-    }
+    return nextKiroSummaryConfirmationAnswer(screen, state);
   }
   if (learningPromptIndex > approvalPromptIndex) {
     state.learningsAnswered += 1;

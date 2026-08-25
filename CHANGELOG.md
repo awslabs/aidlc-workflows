@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.88] - 2026-08-25
+
+Kiro conductors now treat stage diaries as engine-created write targets instead of pre-stage inputs. Diary observations and lifecycle behavior are unchanged. **Upgrade:** refresh `dist/kiro/` or `dist/kiro-ide/` so the corrected conductor skill is installed.
+
+* Kiro CLI and Kiro IDE treat `memory.md` as output-only: ordinary, isolated, dispatched, and per-Unit wave paths insert observations directly under known canonical headings without a read, existence probe, read-back verification, or initialization step.
+* Stage definitions no longer contradict that boundary by telling the model to create or read the diary; the deterministic `aidlc-learnings surface` tool remains the only reader when candidates are surfaced before a gate.
+* Deterministic instruction-contract coverage keeps both Kiro skills and every stage definition aligned, while live ACP and TUI coverage checks diary access and the numbered-prose checkpoint flow.
+
 ## [2.6.87] - 2026-08-25
 
 DocumentKB documents can now carry an LLM-authored summary and tags, revision-bound to the catalogued source revision so an agent can cite a document's gist without re-reading it. **Upgrade:** refresh your `dist/<harness>/` shell to install the new `summarize` verb and updated knowledge skill.

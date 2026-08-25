@@ -80,10 +80,11 @@ This stage's outputs are markdown artefacts under its record dir. The imported `
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under: Interpretations, Deviations, Tradeoffs, Open questions —
-each with an ISO 8601 timestamp.
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under Interpretations,
+Deviations, Tradeoffs, and Open questions, each with an ISO 8601 timestamp.
 
 Stage files are immutable framework artefacts — the ritual writes into the
 harness, not into this file.

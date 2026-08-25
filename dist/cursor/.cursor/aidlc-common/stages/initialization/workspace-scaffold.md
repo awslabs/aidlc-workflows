@@ -112,9 +112,10 @@ resolver will populate `sensors_applicable` at the next compile.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
+While running this stage, record observations in the engine-created
+`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
+never read, probe, create, or initialize it. Follow the active harness's
+diary-write discipline when inserting entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
 - **Deviations** — places you intentionally departed from the stage prose, and why
