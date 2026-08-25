@@ -5,9 +5,9 @@ All notable changes to this project will be documented in this file.
 
 Audit and usage-ledger read-modify-write transactions now remain serialized during Windows lock handoff instead of allowing retirement or stale recovery to displace a successor. **Upgrade:** re-copy `dist/<harness>/` so all state, audit, active-directive, and usage writers receive the generation-bound lock protocol.
 
-* Stamp every acquisition with a unique owner generation plus the OS process generation where available, and key in-process ownership/reentrancy by canonical lock identity while retaining request bindings for path materialization and active-space changes.
+* Stamp every acquisition with a canonical UUID owner generation plus the OS process generation when the optional platform probe is available; probe failure retains the PID/token stamp and leaves a live owner generation-unknown and fail-closed. In-process ownership/reentrancy is keyed by canonical lock identity while retaining request bindings for path materialization and active-space changes.
 * Retire only the matching generation through bounded, collision-proof private renames; persistent retirement failure retains its receipt and exit recovery handler.
-* Distinguish missing, malformed, and unreadable owner stamps. Malformed/unreadable and matching or generation-unknown live owners fail closed; doctor reports them for quiescent manual recovery.
+* Distinguish missing, malformed, and unreadable owner stamps. Non-canonical tokens, missing or redirected token directories, and non-regular releasable markers are invalid; malformed/unreadable and matching or generation-unknown live owners fail closed, and doctor reports them for quiescent manual recovery.
 * Serialize every canonical acquire, release, cleanup, and recovery through an owner-stamped gate whose publication and retirement are protected by an OS advisory mutex (`flock` or `LockFileEx`). POSIX loading supports glibc, macOS libSystem, standard musl loader/libc names, and discovered musl libraries instead of assuming `libc.so.6`.
 
 ## [2.6.98] - 2026-08-26

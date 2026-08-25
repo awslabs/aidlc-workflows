@@ -10577,6 +10577,7 @@ export interface AuditLockFaultHooksForTests {
   afterReleasableGateCheck?: (gateDir: string) => void;
   posixGateLibraryCandidates?: string[];
   processProbe?: (pid: number) => { alive: boolean; generation: string | null };
+  selfProcessGeneration?: () => string | null;
 }
 
 let AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS: AuditLockFaultHooksForTests | null = null;
@@ -10590,6 +10591,42 @@ export function _setAuditLockFaultHooksForTests(
 
 function ownerStampPath(lockDir: string): string {
   return join(lockDir, "owner.json");
+}
+
+const LOCK_GENERATION_TOKEN_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function lockGenerationTokenDir(lockDir: string, token: string): string | null {
+  if (!LOCK_GENERATION_TOKEN_REGEX.test(token)) return null;
+  const root = resolvePath(lockDir);
+  const tokenDir = resolvePath(root, token);
+  const lexicalChild = relative(root, tokenDir);
+  if (
+    lexicalChild === "" ||
+    lexicalChild === ".." ||
+    lexicalChild.startsWith(`..${sep}`) ||
+    isAbsolute(lexicalChild)
+  ) return null;
+  try {
+    const rootStat = lstatSync(root);
+    const tokenStat = lstatSync(tokenDir);
+    if (
+      !rootStat.isDirectory() ||
+      rootStat.isSymbolicLink() ||
+      !tokenStat.isDirectory() ||
+      tokenStat.isSymbolicLink()
+    ) return null;
+    const realChild = relative(realpathSync(root), realpathSync(tokenDir));
+    if (
+      realChild === "" ||
+      realChild === ".." ||
+      realChild.startsWith(`..${sep}`) ||
+      isAbsolute(realChild)
+    ) return null;
+    return tokenDir;
+  } catch {
+    return null;
+  }
 }
 
 function loadWindowsProcessApi() {
@@ -10793,14 +10830,6 @@ function macProcessGeneration(pid: number): string | null {
   }
 }
 
-function platformHasProcessGeneration(): boolean {
-  return (
-    process.platform === "win32" ||
-    process.platform === "linux" ||
-    process.platform === "darwin"
-  );
-}
-
 type NativeGateMutexReceipt =
   | { kind: "posix"; fd: number }
   | {
@@ -10910,6 +10939,9 @@ function releaseNativeGateMutex(receipt: NativeGateMutexReceipt): void {
 }
 
 function processGeneration(pid: number): string | null {
+  if (pid === process.pid && AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.selfProcessGeneration) {
+    return AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS.selfProcessGeneration();
+  }
   if (pid === process.pid && SELF_PROCESS_GENERATION !== undefined) {
     return SELF_PROCESS_GENERATION;
   }
@@ -10930,7 +10962,6 @@ function writeOwnerStamp(
   token?: string,
 ): LockOwner | null {
   const generation = processGeneration(process.pid);
-  if (platformHasProcessGeneration() && generation === null) return null;
   const owner: LockOwner = {
     pid: process.pid,
     startedAtMs: lockAcquireEpochMs(),
@@ -10970,13 +11001,21 @@ function inspectOwnerStamp(lockDir: string): OwnerStampRead {
   if (!isPlainObject(parsed) || typeof parsed.pid !== "number" || typeof parsed.startedAtMs !== "number") {
     return { status: "invalid" };
   }
+  let token: string | undefined;
+  if (parsed.token !== undefined) {
+    if (
+      typeof parsed.token !== "string" ||
+      lockGenerationTokenDir(lockDir, parsed.token) === null
+    ) return { status: "invalid" };
+    token = parsed.token;
+  }
   return {
     status: "ok",
     owner: {
       pid: parsed.pid,
       startedAtMs: parsed.startedAtMs,
       reapLiveOwnerAfterStale: parsed.reapLiveOwnerAfterStale !== false,
-      ...(typeof parsed.token === "string" && parsed.token.length > 0 ? { token: parsed.token } : {}),
+      ...(token ? { token } : {}),
       ...(typeof parsed.processGeneration === "string" && parsed.processGeneration.length > 0
         ? { processGeneration: parsed.processGeneration }
         : {}),
@@ -11237,31 +11276,46 @@ const PENDING_REAP_GATE_RELEASES = new Map<string, {
   handler: () => void;
 }>();
 
+type ReapGateReleaseState = "held" | "releasable" | "invalid";
+
 function reapGateReleasablePath(
   claimDir: string,
   owner: LockOwner & { token: string },
-): string {
-  return join(claimDir, owner.token, "releasable");
+): string | null {
+  const tokenDir = lockGenerationTokenDir(claimDir, owner.token);
+  return tokenDir === null ? null : join(tokenDir, "releasable");
 }
 
-function reapGateIsReleasable(claimDir: string, owner: LockOwner): boolean {
-  return (
-    typeof owner.token === "string" &&
-    existsSync(reapGateReleasablePath(
-      claimDir,
-      owner as LockOwner & { token: string },
-    ))
+function reapGateReleaseState(
+  claimDir: string,
+  owner: LockOwner,
+): ReapGateReleaseState {
+  if (typeof owner.token !== "string") return "invalid";
+  const path = reapGateReleasablePath(
+    claimDir,
+    owner as LockOwner & { token: string },
   );
+  if (path === null) return "invalid";
+  try {
+    return lstatSync(path).isFile() ? "releasable" : "invalid";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "held"
+      : "invalid";
+  }
 }
 
 function markReapGateReleasable(receipt: OwnerStampedLockReceipt): boolean {
   const path = reapGateReleasablePath(receipt.lockDir, receipt.owner);
+  if (path === null) return false;
   for (let attempt = 0; attempt <= 100; attempt++) {
     try {
       writeFileSync(path, "", { flag: "wx", mode: 0o600 });
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") return true;
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        return reapGateReleaseState(receipt.lockDir, receipt.owner) === "releasable";
+      }
       if (!ownerReceiptMatches(receipt)) return false;
       if (attempt < 100) Bun.sleepSync(5);
     }
@@ -11301,7 +11355,9 @@ function acquireReapClaim(lockDir: string): OwnerStampedLockReceipt | null {
       if (created) return created;
       const inspected = inspectOwnerStamp(claimDir);
       if (inspected.status === "ok") {
-        if (reapGateIsReleasable(claimDir, inspected.owner)) {
+        const releaseState = reapGateReleaseState(claimDir, inspected.owner);
+        if (releaseState === "invalid") return null;
+        if (releaseState === "releasable") {
           AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(
             claimDir,
           );
@@ -12209,7 +12265,7 @@ function clearCoordinationGate(
     if (reason === "released-gate") {
       AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(gateDir);
       return (
-        reapGateIsReleasable(gateDir, current.owner) &&
+        reapGateReleaseState(gateDir, current.owner) === "releasable" &&
         retireReapClaim(gateDir)
       );
     }
@@ -12234,10 +12290,47 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
     const gateDir = reapClaimDir(lockDir);
     if (!existsSync(gateDir)) return;
     const inspected = inspectOwnerStamp(gateDir);
-    if (
-      inspected.status === "ok" &&
-      reapGateIsReleasable(gateDir, inspected.owner)
-    ) {
+    if (inspected.status === "invalid" || inspected.status === "unreadable") {
+      leaks.push({
+        bucket: bucketLabel,
+        lockDir: gateDir,
+        ownerPid: null,
+        reason: inspected.status === "invalid" ? "invalid-owner" : "unreadable-owner",
+        kind: "coordination-gate",
+        cleared: false,
+      });
+      return;
+    }
+    if (inspected.status === "ok") {
+      const releaseState = reapGateReleaseState(gateDir, inspected.owner);
+      if (releaseState === "invalid") {
+        leaks.push({
+          bucket: bucketLabel,
+          lockDir: gateDir,
+          ownerPid: inspected.owner.pid,
+          reason: "invalid-owner",
+          kind: "coordination-gate",
+          cleared: false,
+        });
+        return;
+      }
+      if (releaseState !== "releasable") {
+        const state = ownerProcessState(inspected.owner);
+        if (state === "dead" || state === "different") {
+          const cleared = clear
+            ? clearCoordinationGate(lockDir, inspected.owner, "dead-owner")
+            : false;
+          leaks.push({
+            bucket: bucketLabel,
+            lockDir: gateDir,
+            ownerPid: inspected.owner.pid,
+            reason: "dead-owner",
+            kind: "coordination-gate",
+            cleared,
+          });
+        }
+        return;
+      }
       const cleared = clear
         ? clearCoordinationGate(lockDir, inspected.owner, "released-gate")
         : false;
@@ -12250,22 +12343,6 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
         cleared,
       });
       return;
-    }
-    if (inspected.status === "ok") {
-      const state = ownerProcessState(inspected.owner);
-      if (state === "dead" || state === "different") {
-        const cleared = clear
-          ? clearCoordinationGate(lockDir, inspected.owner, "dead-owner")
-          : false;
-        leaks.push({
-          bucket: bucketLabel,
-          lockDir: gateDir,
-          ownerPid: inspected.owner.pid,
-          reason: "dead-owner",
-          kind: "coordination-gate",
-          cleared,
-        });
-      }
     }
   };
   const probe = (bucketLabel: string, intent?: string, space?: string): void => {

@@ -22,7 +22,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import {
   _posixGateLibraryCandidatesForTests,
@@ -217,6 +217,29 @@ describe("t161 per-intent lock independence", () => {
     expect(auditLockOwnedByProcess(PD, 0)).toBe(false);
     releaseAuditLock(PD);
     expect(auditLockOwnedByProcess(PD, process.pid)).toBe(false);
+  });
+
+  test("an unavailable self-generation probe preserves acquisition with an unknown generation", () => {
+    const lockDir = auditLockDir(PD);
+    _setAuditLockFaultHooksForTests({
+      selfProcessGeneration: () => null,
+    });
+    try {
+      expect(acquireAuditLock(PD, 0, 1)).toBe(true);
+      const owner = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8"));
+      expect(owner.pid).toBe(process.pid);
+      expect(owner.token).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      expect(owner.processGeneration).toBeUndefined();
+      expect(acquireAuditLock(PD, 0, 1)).toBe(false);
+      releaseAuditLock(PD);
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      _setAuditLockFaultHooksForTests(null);
+      releaseAuditLock(PD);
+      rmSync(lockDir, { recursive: true, force: true });
+    }
   });
 
   test("two intents can be held concurrently in-process without contention", () => {
@@ -516,6 +539,66 @@ describe("t161 per-intent lock independence", () => {
       rmSync(driver, { force: true });
     }
   }, 10000);
+
+  test("malformed gate tokens and redirected releasable markers remain fail-closed", () => {
+    const cases = [
+      "traversal-token",
+      "missing-token-dir",
+      "symlink-token-dir",
+      "symlink-releasable",
+    ] as const;
+    for (const kind of cases) {
+      const projectDir = `${PD}-${kind}`;
+      const lockDir = auditLockDir(projectDir);
+      const gateDir = `${lockDir}.reap`;
+      const externalDir = `${gateDir}.external`;
+      const token = kind === "traversal-token"
+        ? `../${basename(externalDir)}`
+        : randomUUID();
+      mkdirSync(gateDir, { recursive: true });
+      if (kind === "traversal-token") {
+        const escaped = resolvePath(gateDir, token);
+        mkdirSync(escaped, { recursive: true });
+        writeFileSync(join(escaped, "releasable"), "");
+      } else if (kind === "symlink-token-dir") {
+        mkdirSync(externalDir, { recursive: true });
+        writeFileSync(join(externalDir, "releasable"), "");
+        symlinkSync(externalDir, join(gateDir, token), "dir");
+      } else if (kind === "symlink-releasable") {
+        mkdirSync(join(gateDir, token), { recursive: true });
+        mkdirSync(externalDir, { recursive: true });
+        const externalMarker = join(externalDir, "releasable");
+        writeFileSync(externalMarker, "");
+        symlinkSync(externalMarker, join(gateDir, token, "releasable"), "file");
+      }
+      writeFileSync(join(gateDir, "owner.json"), JSON.stringify({
+        pid: process.pid,
+        startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+        reapLiveOwnerAfterStale: false,
+        token,
+      }));
+      try {
+        expect(acquireAuditLock(projectDir, 0, 1)).toBe(false);
+        expect(detectLeakedLocks(projectDir, true)).toContainEqual(
+          expect.objectContaining({
+            kind: "coordination-gate",
+            reason: "invalid-owner",
+            cleared: false,
+          }),
+        );
+        expect(existsSync(gateDir)).toBe(true);
+        expect(existsSync(lockDir)).toBe(false);
+        if (kind !== "missing-token-dir") {
+          expect(existsSync(externalDir)).toBe(true);
+          expect(existsSync(join(externalDir, "releasable"))).toBe(true);
+        }
+      } finally {
+        rmSync(gateDir, { recursive: true, force: true });
+        rmSync(externalDir, { recursive: true, force: true });
+        rmSync(`${lockDir}.gate-mutex`, { force: true });
+      }
+    }
+  });
 
   test("withAuditLock keys depth per-identity — two intents don't share a depth counter", () => {
     let innerRan = false;
