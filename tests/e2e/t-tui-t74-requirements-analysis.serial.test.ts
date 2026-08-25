@@ -242,13 +242,10 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
         // so we catch the waiting menu caret + footer while the gates are up. The
-        // highlighted-option caret is PLATFORM-VARIANT: `❯` (U+276F) under tmux on
-        // macOS/Linux, but the real claude DOWNGRADES it to ASCII `>` under Windows
-        // ConPTY (proven by reading grid.txt on the EC2 box 2026-06-06). So we match
-        // the caret only when it precedes a numbered option (`❯ 1.` / `> 1.`) — the
-        // same shape gridHasMenu() uses; a bare `>` input prompt has no `<digit>.` and
-        // cannot satisfy it. This keeps the render proof honest on both platforms.
-        const caretOnOption = /^\s*(?:❯|>)\s+\d+\.\s/m;
+        // The highlighted option must preserve the exact `❯` (U+276F) caret on
+        // every platform. Anchor it to a numbered option so the ordinary `>`
+        // input prompt cannot satisfy the render proof.
+        const caretOnOption = /^\s*❯\s+\d+\.\s/m;
         pollTimer = setInterval(() => {
           const grid = drive(["capture", "--session", session]).stdout;
           if (caretOnOption.test(grid)) sawMenuCaret = true;

@@ -160,6 +160,7 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     "ARTIFACT_REUSED",
     "SWARM_STARTED",
     "SWARM_UNIT_CONVERGED",
+    "SWARM_SOURCE_MERGED",
     "AUTONOMY_MODE_SET",
     "UNIT_STARTED",
     "UNIT_PAUSED",

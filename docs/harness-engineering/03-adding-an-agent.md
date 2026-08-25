@@ -98,9 +98,11 @@ never silently downgraded. Pick `balanced` for reviewer-shaped personas that
 judge novel input against explicit criteria. Pick `templated` only when the
 output is dominantly pattern-following and the methodology is already encoded
 in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
-runbook scaffolding -- templated is the one tier that steps effort down (on
-Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit
-the session model and effort, so the tier changes nothing there). When
+runbook scaffolding. `balanced` and `templated` both step effort down to
+`medium` (on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all
+tiers inherit the session model and effort, so the tier changes nothing there),
+and they currently project identically -- only `judgment` inherits the session
+effort. When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently
 under-reasons. See [Agent System](../reference/05-agent-system.md) for the

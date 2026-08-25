@@ -78,6 +78,38 @@ export interface KiroIdeDomSnapshot {
   }>;
 }
 
+export interface KiroIdeBlockingOverlay {
+  text: string;
+  className: string;
+  role: string;
+  ariaModal: string;
+  rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface KiroIdeBlockedHitPoint {
+  x: number;
+  y: number;
+  hitTag: string;
+  hitClassName: string;
+  hitText: string;
+}
+
+export interface KiroIdeChatSurfaceState {
+  chatFrameCount: number;
+  blockedHitPoints: KiroIdeBlockedHitPoint[];
+  blockingOverlays: KiroIdeBlockingOverlay[];
+}
+
+export interface KiroIdeChatPreparation {
+  dismissed: string | null;
+  surface: KiroIdeChatSurfaceState;
+}
+
 /** One CDP connection to a single page/iframe target. JSON-RPC over a Bun-native
  *  WebSocket. Accumulates Runtime.executionContextCreated events so nested webview
  *  frames are reachable by contextId (the only way to reach the doubly-nested chat
@@ -216,6 +248,11 @@ export class CdpTarget {
 // committing or copying any real profile - nothing sensitive ever touches the repo. The
 // two extra rows + settings only mute cosmetic notification toasts (MCP tools, Builder
 // steering, git-repo prompt); the onboarding row is what unblocks chat.
+//
+// Current Kiro versions can additionally show a session-storage migration carousel.
+// Its "Remind me later" action does not persist a durable global-state key, so it is
+// handled after launch by prepareKiroIdeChat(). The seed stays version-neutral and
+// credential-free instead of copying a mutable Kiro profile or guessing private state.
 const SEED_STATE_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["kiroAgent.onboarding.onboardingCompleted", "true"], // load-bearing: skips the import wall
   ["releaseNotes/lastVersion", "0.0.0"], // mute the release-notes popup (version-agnostic stub)
@@ -433,6 +470,162 @@ export async function waitForChatInput(port: number, timeoutMs = 60_000): Promis
     await sleep(800);
   }
   return false;
+}
+
+// A chat editor can be live inside its nested webview while a top-level overlay
+// intercepts the visible UI. Probe the real top-level hit-testing surface: only the
+// chat iframe itself proves the sampled point is unobstructed. ARIA metadata is useful
+// diagnostics, but is not trusted as the condition for deciding whether a hit blocks.
+export function inspectKiroIdeChatSurfaceDocument(
+  doc: Document = document,
+  styleOf: typeof getComputedStyle = getComputedStyle,
+): KiroIdeChatSurfaceState {
+  const norm = (s: unknown): string => String(s || "").replace(/\s+/g, " ").trim();
+  const visible = (e: Element): boolean => {
+    const r = e.getBoundingClientRect?.();
+    if (!r || !(r.width > 0 && r.height > 0)) return false;
+    const s = styleOf(e);
+    return (
+      s.display !== "none" &&
+      s.visibility !== "hidden" &&
+      Number.parseFloat(s.opacity || "1") > 0
+    );
+  };
+  const rectOf = (e: Element): KiroIdeBlockingOverlay["rect"] => {
+    const r = e.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  };
+  const modalSelector = "[aria-modal='true']";
+  const blockingOverlays = [...doc.querySelectorAll(modalSelector)]
+    .filter((e) => visible(e) && styleOf(e).pointerEvents !== "none")
+    .map((e) => ({
+      text: norm((e as HTMLElement).innerText || e.textContent).slice(0, 1000),
+      className: String(e.className || ""),
+      role: String(e.getAttribute("role") || ""),
+      ariaModal: String(e.getAttribute("aria-modal") || ""),
+      rect: rectOf(e),
+    }));
+  const chatFrames = [
+    ...new Set([
+      ...doc.querySelectorAll("iframe.webview.ready"),
+      ...doc.querySelectorAll("iframe[src*='extensionId=kiro.kiroAgent']"),
+    ]),
+  ].filter(visible);
+  const blockedHitPoints: KiroIdeBlockedHitPoint[] = [];
+  for (const frame of chatFrames) {
+    const r = frame.getBoundingClientRect();
+    const points = [
+      [r.left + r.width / 2, r.top + r.height / 2],
+      [r.left + r.width / 2, r.bottom - Math.min(80, r.height / 4)],
+    ];
+    for (const [x, y] of points) {
+      const hit = doc.elementFromPoint(x, y);
+      const clear = hit === frame || (hit && frame.contains(hit));
+      if (clear) continue;
+      blockedHitPoints.push({
+        x,
+        y,
+        hitTag: String(hit?.tagName || ""),
+        hitClassName: String(hit?.className || ""),
+        hitText: norm((hit as HTMLElement | null)?.innerText || hit?.textContent).slice(0, 500),
+      });
+    }
+  }
+  return {
+    chatFrameCount: chatFrames.length,
+    blockedHitPoints,
+    blockingOverlays,
+  };
+}
+
+const CHAT_SURFACE_STATE_EXPR = `(${inspectKiroIdeChatSurfaceDocument.toString()})()`;
+
+/** Inspect the visible top-level workbench surface, not just the nested chat DOM. */
+export async function inspectKiroIdeChatSurface(port: number): Promise<KiroIdeChatSurfaceState> {
+  const t = await pageTarget(port);
+  try {
+    return await t.evaluate<KiroIdeChatSurfaceState>(CHAT_SURFACE_STATE_EXPR);
+  } finally {
+    t.close();
+  }
+}
+
+const SESSION_MIGRATION_TITLE = "upgraded how sessions are stored";
+const SESSION_MIGRATION_BODY = "migrate your previous sessions";
+
+function hasSessionMigrationOverlay(surface: KiroIdeChatSurfaceState): boolean {
+  return surface.blockingOverlays.some((overlay) => {
+    const text = overlay.text.toLowerCase();
+    return text.includes(SESSION_MIGRATION_TITLE) && text.includes(SESSION_MIGRATION_BODY);
+  });
+}
+
+function chatSurfaceIsReady(surface: KiroIdeChatSurfaceState): boolean {
+  return (
+    surface.chatFrameCount > 0 &&
+    surface.blockingOverlays.length === 0 &&
+    surface.blockedHitPoints.length === 0
+  );
+}
+
+export interface KiroIdeChatSurfaceAdapter {
+  inspect: () => Promise<KiroIdeChatSurfaceState>;
+  dismissMigration: () => Promise<string | null>;
+  wait: (ms: number) => Promise<void>;
+  now: () => number;
+}
+
+/** Reconcile supported startup overlays and return only after the chat iframe is
+ * visibly unobstructed. The injected adapter keeps current/older/persistent-modal
+ * behavior deterministic in tests without launching Electron. */
+export async function settleKiroIdeChatSurface(
+  adapter: KiroIdeChatSurfaceAdapter,
+  timeoutMs = 15_000,
+  pollMs = 250,
+): Promise<KiroIdeChatPreparation> {
+  const deadline = adapter.now() + timeoutMs;
+  let dismissed: string | null = null;
+  let surface: KiroIdeChatSurfaceState = {
+    chatFrameCount: 0,
+    blockedHitPoints: [],
+    blockingOverlays: [],
+  };
+
+  for (;;) {
+    surface = await adapter.inspect();
+    if (chatSurfaceIsReady(surface)) return { dismissed, surface };
+
+    if (hasSessionMigrationOverlay(surface)) {
+      const clicked = await adapter.dismissMigration();
+      if (clicked) dismissed = clicked;
+    }
+
+    if (adapter.now() >= deadline) break;
+    await adapter.wait(pollMs);
+  }
+
+  throw new Error(
+    "kiro-ide-driver: blocking overlay remains over chat after startup reconciliation: " +
+      JSON.stringify(surface),
+  );
+}
+
+/** Dismiss the current Kiro session-migration carousel when present, while allowing
+ * older versions where it is absent. Success requires both zero aria-modal overlays
+ * and clear hit tests over the chat iframe. */
+export function prepareKiroIdeChat(
+  port: number,
+  timeoutMs = 15_000,
+): Promise<KiroIdeChatPreparation> {
+  return settleKiroIdeChatSurface(
+    {
+      inspect: () => inspectKiroIdeChatSurface(port),
+      dismissMigration: () => clickByText(port, ["remind me later"]),
+      wait: sleep,
+      now: Date.now,
+    },
+    timeoutMs,
+  );
 }
 
 /** Cmd+Shift+L on macOS or Ctrl+Shift+L on Windows focuses the Kiro chat input. */

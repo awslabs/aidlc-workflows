@@ -144,6 +144,12 @@ The canonical names are split so the two never collide on the wire:
   `security-test-instructions`, `build-and-test-summary`.
 - `unit-test-instructions` is produced per-unit by `code-generation` and
   consumed by `build-and-test`.
+- `source-manifest.json` is the engine-required per-unit companion to
+  `code-generation`'s declared artifacts. It deliberately is **not** in
+  `produces[]`: changing that set would retroactively invalidate in-flight
+  artifact fingerprints. The strict JSON manifest attributes created, modified,
+  and deleted application-source paths; terminal review stamping requires it,
+  and its bytes/content claims are bound by `Unit Source Fingerprint`.
 - `load-test-results` — emitted by `performance-validation`. Pairs with
   `load-test-plan` already produced by the same stage.
 

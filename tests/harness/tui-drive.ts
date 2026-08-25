@@ -60,11 +60,19 @@
 //          appears (use when the screen is actively streaming — the statusline
 //          token counter / spinner means it never goes byte-stable).
 //          Exits 0 on match, 1 on timeout.
+//   startup --session <name> --ready-pattern <regex> [--timeout-ms N]
+//          One bounded grid-driven startup loop for Claude: dismiss a visible
+//          supported trust / bypass modal, or return immediately once the
+//          caller's ready UI/statusline pattern is painted. Exits 1 on timeout.
 //   capture --session <name> [--ansi]
 //          Print the current pane (plain text; --ansi keeps colour escapes —
 //          tmux only; the node-pty grid is always plain text).
 //   kill   --session <name>
 //          Kill the session (idempotent).
+//   wait-dead --session <name> [--timeout-ms N]
+//          Poll the backend until the session process tree is gone. On Windows
+//          this checks the recorded daemon, pty child, and kill-time descendant
+//          PIDs. Exits 1 if any tracked process survives the bound.
 //   answer-gate --session <name> --project-dir <dir>
 //          [--per-gate-timeout-ms N] [--overall-timeout-ms N]
 //          [--until-file <relpath>] [--until-state-field <name=regex>]
@@ -137,6 +145,9 @@ import { stateFilePathFor } from "./sdk-drive.ts";
 const POLL_INTERVAL_MS = 150;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STABLE_MS = 600;
+const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
+const DEFAULT_DEAD_TIMEOUT_MS = 5_000;
+const DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS = 2_000;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
 const WIN_KILL_GRACE_MS = 300;
@@ -447,6 +458,23 @@ export function runBoundedCommand(
     timedOut: errorCode === "ETIMEDOUT",
     errorCode,
   };
+}
+
+function cmdSnapshotTimeoutProbe(a: Args): void {
+  const timeoutMs = Number(a.flags["timeout-ms"] ?? "100");
+  const expectedError = `process snapshot timed out after ${timeoutMs}ms`;
+  const startedAt = Date.now();
+  const result = runBoundedCommand(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    timeoutMs,
+  );
+  const elapsedMs = Date.now() - startedAt;
+  const error = result.timedOut ? expectedError : "process snapshot did not time out";
+  if (error !== expectedError) {
+    fail(`snapshot timeout probe expected '${expectedError}', got '${error}'`, 1);
+  }
+  process.stdout.write(`${JSON.stringify({ elapsedMs, error })}\n`);
 }
 
 function forceKillWindowsTree(
@@ -1033,7 +1061,7 @@ function clearWindowsSessionAuthority(dir: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Backend contract (§2.3). Both backends satisfy the same five operations; the
+// Backend contract (§2.3). Both backends satisfy the same operations; the
 // CLI dispatch and the `wait` polling loop are backend-agnostic.
 // ---------------------------------------------------------------------------
 
@@ -1057,6 +1085,8 @@ interface Backend {
   capture(session: string, ansi: boolean): string;
   /** Kill the session (idempotent). */
   kill(session: string): void;
+  /** Labels for live backend processes or cleanup-verification blockers. */
+  liveProcesses(session: string): string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1139,6 +1169,11 @@ const tmuxBackend: Backend = {
   kill(session) {
     tmux(["kill-session", "-t", session]); // idempotent; ignore errors
   },
+
+  liveProcesses(session) {
+    const r = tmux(["has-session", "-t", session]);
+    return r.code === 0 ? [`tmux-session:${session}`] : [];
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -1158,6 +1193,8 @@ const tmuxBackend: Backend = {
 //                     capture/wait clients read it.
 //   <dir>/meta.json — { cols, rows, ownerToken } for diagnostics + PID authority.
 //   <dir>/pid       — the daemon pid, for kill's force-terminate backstop.
+//   <dir>/child.pid — the node-pty child pid.
+//   <dir>/tree.pids — the daemon's kill-time process-tree snapshot.
 // The channels are deliberately dumb files (no named pipes / sockets) so the
 // same code runs anywhere a filesystem does.
 // ---------------------------------------------------------------------------
@@ -1267,6 +1304,20 @@ const win32Backend: Backend = {
     const dir = winSessionDir(session);
     // Idempotent start: tear down any stale daemon + channel dir first.
     win32Backend.kill(session);
+    const staleDeadline = Date.now() + DEFAULT_DEAD_TIMEOUT_MS;
+    while (
+      win32Backend.liveProcesses(session).length > 0 &&
+      Date.now() < staleDeadline
+    ) {
+      await sleep(POLL_INTERVAL_MS);
+    }
+    const stale = win32Backend.liveProcesses(session);
+    if (stale.length > 0) {
+      fail(
+        `stale Windows session '${session}' survived cleanup: ${stale.join(", ")}`,
+        1,
+      );
+    }
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
     const ownerToken = randomUUID();
@@ -1817,6 +1868,21 @@ const win32Backend: Backend = {
     }
     clearWindowsSessionAuthority(dir);
   },
+
+  liveProcesses(session) {
+    const { dir } = existingWinSessionDir(session);
+    if (!existsSync(dir)) return [];
+    const tracked: Array<{ label: string; pid: number | null }> = [
+      { label: "daemon", pid: readPidFile(join(dir, "pid")) },
+      { label: "pty-child", pid: readPidFile(join(dir, "child.pid")) },
+    ];
+    return tracked
+      .filter(
+        (entry): entry is { label: string; pid: number } => entry.pid !== null,
+      )
+      .filter(({ pid }) => processIsAlive(pid))
+      .map(({ label, pid }) => `${label}:${pid}`);
+  },
 };
 
 // Resolve import.meta.url to a filesystem path without pulling node:url into the
@@ -1848,12 +1914,26 @@ async function runWinChildWrapper(a: Args): Promise<void> {
   const exitFile = requireFlag(a, "exit-file");
   if (a.rest.length === 0) process.exit(2);
   while (!existsSync(releaseFile)) await sleep(25);
+  const codePage = runBoundedCommand(
+    "chcp.com",
+    ["65001"],
+    DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS,
+    "ignore",
+  );
+  if (codePage.status !== 0) {
+    process.stderr.write("tui-drive child launch failed: unable to select UTF-8 console mode\n");
+    process.exit(127);
+  }
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    TERM: "xterm-256color",
+  };
   const file = resolveWinExecutable(a.rest[0]);
-  const launch = adaptWindowsLaunch(file, a.rest.slice(1));
+  const launch = adaptWindowsLaunch(file, a.rest.slice(1), childEnv);
   const startedAfter = new Date().toISOString();
   const child = spawn(launch.file, launch.args, {
     cwd,
-    env: process.env,
+    env: childEnv,
     stdio: "inherit",
     windowsHide: false,
     windowsVerbatimArguments: launch.windowsVerbatimArguments,
@@ -1998,6 +2078,10 @@ async function runWinDaemon(a: Args): Promise<void> {
   rmSync(targetExitFile, { force: true });
   const selfPath = fileURLToPathSafe(import.meta.url);
   const childStartedAfter = new Date().toISOString();
+  const childEnv = {
+    ...process.env,
+    TERM: "xterm-256color",
+  } as Record<string, string>;
   const child = pty.spawn(process.execPath, [
     "--experimental-strip-types",
     selfPath,
@@ -2017,7 +2101,7 @@ async function runWinDaemon(a: Args): Promise<void> {
     cols,
     rows,
     cwd,
-    env: process.env as Record<string, string>,
+    env: childEnv,
   });
   writeFileSync(join(dir, "child.pid"), String(child.pid));
   const childIdentityDeadline = Date.now() + 2_000;
@@ -2745,6 +2829,132 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
   process.exit(1);
 }
 
+export type TuiStartupAction =
+  | "wait"
+  | "ready"
+  | "dismiss-trust"
+  | "dismiss-bypass";
+
+export interface TuiStartupState {
+  trustDismissed: boolean;
+  bypassDismissed: boolean;
+}
+
+export function initialTuiStartupState(): TuiStartupState {
+  return { trustDismissed: false, bypassDismissed: false };
+}
+
+const CLAUDE_TRUST_MODAL_RE =
+  /(?:Do you trust (?:the files in )?this folder|Yes, I trust this folder)/i;
+const CLAUDE_BYPASS_MODAL_RE = /Bypass Permissions mode/i;
+
+function regexMatches(re: RegExp, text: string): boolean {
+  re.lastIndex = 0;
+  return re.test(text);
+}
+
+/**
+ * Pure reducer for Claude's startup grid. Visible supported modals take
+ * precedence over a ready marker because older Claude versions can paint the
+ * underlying UI before the modal is dismissed. Each modal is answered at most
+ * once so a slow repaint cannot spill repeated numeric input into the prompt.
+ */
+export function advanceTuiStartup(
+  state: TuiStartupState,
+  screen: string,
+  readyPattern: RegExp,
+): { state: TuiStartupState; action: TuiStartupAction } {
+  const trustVisible = regexMatches(CLAUDE_TRUST_MODAL_RE, screen);
+  const bypassVisible = regexMatches(CLAUDE_BYPASS_MODAL_RE, screen);
+
+  if (trustVisible && !state.trustDismissed) {
+    return {
+      state: { ...state, trustDismissed: true },
+      action: "dismiss-trust",
+    };
+  }
+  if (bypassVisible && !state.bypassDismissed) {
+    return {
+      state: { ...state, bypassDismissed: true },
+      action: "dismiss-bypass",
+    };
+  }
+  if (trustVisible || bypassVisible) {
+    return { state, action: "wait" };
+  }
+  if (regexMatches(readyPattern, screen)) {
+    return { state, action: "ready" };
+  }
+  return { state, action: "wait" };
+}
+
+async function cmdStartup(backend: Backend, a: Args): Promise<void> {
+  const session = requireFlag(a, "session");
+  const readyPatternText = requireFlag(a, "ready-pattern");
+  const timeoutMs = Number(
+    a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS,
+  );
+  const readyPattern = new RegExp(readyPatternText);
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let state = initialTuiStartupState();
+  let screen = "";
+
+  writeTuiTrace(session, "startup_begin", {
+    readyPattern: readyPatternText,
+    timeoutMs,
+  });
+
+  while (Date.now() < deadline) {
+    screen = backend.capture(session, false);
+    const step = advanceTuiStartup(state, screen, readyPattern);
+    state = step.state;
+
+    if (step.action === "ready") {
+      const elapsedMs = Date.now() - startedAt;
+      writeTuiTrace(session, "startup_ready", {
+        readyPattern: readyPatternText,
+        elapsedMs,
+        state,
+        screen,
+      });
+      process.stdout.write(
+        `startup ready /${readyPatternText}/ after ${elapsedMs}ms\n`,
+      );
+      return;
+    }
+
+    if (step.action === "dismiss-trust") {
+      writeTuiTrace(session, "startup_action", {
+        action: step.action,
+        screen,
+      });
+      backend.send(session, "1", false, false);
+    } else if (step.action === "dismiss-bypass") {
+      writeTuiTrace(session, "startup_action", {
+        action: step.action,
+        screen,
+      });
+      backend.send(session, "2", false, false);
+    }
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  writeTuiTrace(session, "startup_timeout", {
+    readyPattern: readyPatternText,
+    timeoutMs,
+    state,
+    screen,
+  });
+  process.stderr.write(
+    `tui-drive: timed out after ${timeoutMs}ms waiting for startup ` +
+      `ready /${readyPatternText}/\n` +
+      `---- last pane ----\n${screen}\n-------------------\n`,
+  );
+  process.exit(1);
+}
+
 function cmdCapture(backend: Backend, a: Args): void {
   const session = requireFlag(a, "session");
   const ansi = a.bools.ansi === true;
@@ -2758,6 +2968,42 @@ function cmdKill(backend: Backend, a: Args): void {
   writeTuiTrace(session, "kill", {});
   backend.kill(session);
   process.stdout.write(`killed session '${session}'\n`);
+}
+
+async function cmdWaitDead(backend: Backend, a: Args): Promise<void> {
+  const session = requireFlag(a, "session");
+  const timeoutMs = Number(
+    a.flags["timeout-ms"] ?? DEFAULT_DEAD_TIMEOUT_MS,
+  );
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let live = backend.liveProcesses(session);
+  writeTuiTrace(session, "wait_dead_begin", { timeoutMs, live });
+
+  while (live.length > 0 && Date.now() < deadline) {
+    await sleep(POLL_INTERVAL_MS);
+    live = backend.liveProcesses(session);
+  }
+
+  const elapsedMs = Date.now() - startedAt;
+  if (live.length === 0) {
+    writeTuiTrace(session, "wait_dead_complete", { elapsedMs });
+    process.stdout.write(
+      `session '${session}' process tree exited after ${elapsedMs}ms\n`,
+    );
+    return;
+  }
+
+  writeTuiTrace(session, "wait_dead_timeout", {
+    timeoutMs,
+    elapsedMs,
+    live,
+  });
+  process.stderr.write(
+    `tui-drive: session '${session}' still has live processes after ` +
+      `${timeoutMs}ms: ${live.join(", ")}\n`,
+  );
+  process.exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -3056,31 +3302,19 @@ function makeTerminator(projectDir: string, a: Args): Terminator {
   };
 }
 
-// The AUQ highlighted-option caret, as a PLATFORM-INVARIANT signal. The real claude
-// renders the highlighted option's caret as `❯` (U+276F) under tmux on macOS/Linux,
-// but DOWNGRADES it to an ASCII `>` under Windows ConPTY (PROVEN by reading the
-// reconstructed grid.txt on the EC2 box 2026-06-06: the option line came through as
-// `> 1. feature ...`, codepoint 62, while `❯` was absent — even though every OTHER
-// glyph, `▎`/`→`/box-drawing, survived; it is specifically claude's caret choice
-// that varies by terminal). A caret-only `❯` check (the original gridHasMenu) thus
-// never matched on Windows and hung every answer-gate journey there.
-//
-// We match the caret ONLY when it precedes a numbered option (`❯ 1.` / `> 1.`), which
-// is what AUQ paints on its highlighted row. This is the load-bearing reason a bare
-// `>` is SAFE here: the claude input prompt line is also `>` (`> /aidlc feature`,
-// `> `), but it is NEVER followed by `<digit>.`, so it cannot satisfy this pattern.
-// Anchored per-line so the prompt elsewhere on screen can't bleed in.
-const AUQ_CARET_OPTION = /^\s*(?:❯|>)\s+\d+\.\s/m;
+// The AUQ highlighted-option caret. The Windows ConPTY boundary is UTF-8, so the
+// reconstructed grid must carry the same exact `❯` (U+276F) glyph as tmux.
+// Anchor it to a numbered option so the ordinary `>` input prompt cannot match.
+const AUQ_CARET_OPTION = /^\s*❯\s+\d+\.\s/m;
 function gridHasCaret(grid: string): boolean {
   return AUQ_CARET_OPTION.test(grid);
 }
 
 // Is a waiting AskUserQuestion menu painted on the grid right now? A menu shows
-// the highlighted-default caret (`❯` on tmux, `>` on Windows ConPTY — see
-// gridHasCaret) on a numbered option AND a footer. CRITICAL: the Submit screen
-// DROPS the `Enter to select` footer and shows `Submit answers` instead — a
-// footer-only waiter sails past Submit and hangs forever (cost a full macOS run
-// during the spike). So we accept EITHER footer.
+// the highlighted-default `❯` caret on a numbered option AND a footer. CRITICAL:
+// the Submit screen DROPS the `Enter to select` footer and shows `Submit answers`
+// instead — a footer-only waiter sails past Submit and hangs forever (cost a full
+// macOS run during the spike). So we accept EITHER footer.
 export function gridHasMenu(grid: string): boolean {
   return gridHasCaret(grid) && (grid.includes("Enter to select") || grid.includes("Submit answers"));
 }
@@ -3106,13 +3340,13 @@ function gridIsSubmitScreen(grid: string): boolean {
 //     toggled `[ ]`↔`[✔]` forever). A multi-tab form is advanced with the ARROW keys
 //     (`"Tab/Arrow keys to navigate"`, rendered only when there is >1 tab); the
 //     toggled selection PERSISTS across the navigation (verified live).
-// We detect a multi-select question by the checkbox markers it paints on its OPTION
-// lines only — `❯ 1. [ ] Option` / `  2. [✔] Option` (tmux paints `✔`; claude -p /
-// node-pty paint `x`). We deliberately do NOT key off the prose "select all that
-// apply" (it echoes on the Submit review screen) nor the tab-strip `☐`/`☒` glyphs
-// (present on EVERY tab, single-select ones included) — both misfire.
+// We detect a multi-select question by the exact checkbox markers it paints on
+// its OPTION lines only — `❯ 1. [ ] Option` / `  2. [✔] Option`. We deliberately
+// do NOT key off the prose "select all that apply" (it echoes on the Submit
+// review screen) nor the tab-strip `☐`/`☒` glyphs (present on EVERY tab,
+// single-select ones included) — both misfire.
 function gridIsMultiSelect(grid: string): boolean {
-  return /\d+\.\s*\[[ xX✔]\]/.test(grid); // a numbered option line carrying a checkbox
+  return /\d+\.\s*\[[ ✔]\]/.test(grid); // a numbered option line carrying a checkbox
 }
 
 // Is this a MULTI-TAB AUQ form (more than one question batched into one gate)? Such
@@ -3136,7 +3370,7 @@ function gridIsMultiTabForm(grid: string): boolean {
 function parseMenuOptions(grid: string): { num: number; label: string }[] {
   const out: { num: number; label: string }[] = [];
   for (const line of grid.split("\n")) {
-    const m = /^\s*(?:❯|>)?\s*(\d+)\.\s+(.*\S)\s*$/.exec(line);
+    const m = /^\s*❯?\s*(\d+)\.\s+(.*\S)\s*$/.exec(line);
     if (m) out.push({ num: Number(m[1]), label: m[2].trim() });
   }
   return out;
@@ -3668,6 +3902,9 @@ async function main(): Promise<void> {
   if (sub === "__win-child-wrapper") {
     return runWinChildWrapper(a);
   }
+  if (sub === "__snapshot-timeout-probe") {
+    return cmdSnapshotTimeoutProbe(a);
+  }
 
   const backend = selectBackend();
   switch (sub) {
@@ -3677,16 +3914,20 @@ async function main(): Promise<void> {
       return cmdSend(backend, a);
     case "wait":
       return cmdWait(backend, a);
+    case "startup":
+      return cmdStartup(backend, a);
     case "capture":
       return cmdCapture(backend, a);
     case "kill":
       return cmdKill(backend, a);
+    case "wait-dead":
+      return cmdWaitDead(backend, a);
     case "answer-gate":
       return cmdAnswerGate(backend, a);
     default:
       fail(
         `unknown subcommand '${sub ?? ""}'. ` +
-          `Use: start | send | wait | capture | kill | answer-gate`,
+          `Use: start | send | wait | startup | capture | kill | wait-dead | answer-gate`,
       );
   }
 }

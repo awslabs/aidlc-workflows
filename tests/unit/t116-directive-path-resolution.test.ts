@@ -582,6 +582,27 @@ describe("t116 consumes presence split (consumes_absent)", () => {
       ),
     ).toBe(true);
   });
+
+  test("18: [S] without conditional-skip provenance does not make an on-path producer's absence expected", () => {
+    const dir = emitFor("state-operation.md", "deployment-execution", (proj) => {
+      sedReplaceInFile(
+        seededStateFile(proj),
+        "- [-] deployment-pipeline — EXECUTE",
+        "- [S] deployment-pipeline — EXECUTE",
+      );
+    });
+    const expectedByPath = new Map(
+      (dir.consumes_absent ?? []).map((entry) => [
+        basename(entry.path),
+        entry.expected,
+      ]),
+    );
+
+    expect(expectedByPath.get("cd-config.md")).toBe(false);
+    expect(expectedByPath.get("deployment-strategy.md")).toBe(false);
+    expect(expectedByPath.get("environment-inventory.md")).toBe(false);
+    expect(expectedByPath.get("test-results.md")).toBe(false);
+  });
 });
 
 describe("t116 inline context roster", () => {

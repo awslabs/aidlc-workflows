@@ -153,7 +153,10 @@ plugins, per-plugin enabled-stage counts, and hard-fails if the graph's
 
 `aidlc plugin sync` is the command-line front for installed plugin composition.
 It runs discovered plugin roots' `hooks/compose.ts` files and exits cleanly with
-`no installed plugins; nothing to sync` when no plugin roots are available.
+`no installed plugins; nothing to sync` when no plugin roots are configured. If
+roots are configured but none carries `hooks/compose.ts`, it exits 1 and names
+each root and reason; with a mixed set it warns for each skipped root, composes
+the valid roots, and exits 0.
 
 ### Plugin doctor checks
 

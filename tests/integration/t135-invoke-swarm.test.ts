@@ -76,6 +76,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedBoltDag,
   seedStateFile,
   seededAuditDir,
   seededRecordDir,
@@ -218,7 +219,7 @@ function identityFreeGitEnv(proj: string): NodeJS.ProcessEnv {
   return env;
 }
 
-function seedRefereeProject(): string {
+function seedRefereeProject(units: string[]): string {
   const proj = setupWorktreeFixture();
   // The fixture already seeded the per-intent workspace shell + default record +
   // a seed commit (README only) on main. Write the construction state into the
@@ -247,6 +248,7 @@ function seedRefereeProject(): string {
       "",
     ].join("\n"),
   );
+  seedBoltDag(proj, units);
   spawnSync("git", ["add", "-A"], { cwd: proj });
   spawnSync(
     "git",
@@ -254,6 +256,28 @@ function seedRefereeProject(): string {
     { cwd: proj },
   );
   return proj;
+}
+
+function prepareRefereeProject(proj: string, units: string): void {
+  const prepared = spawnSync(
+    BUN,
+    [
+      SWARM_TOOL,
+      "--project-dir",
+      proj,
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      units,
+      "--base",
+      "main",
+    ],
+    { encoding: "utf-8" },
+  );
+  if (prepared.status !== 0) {
+    throw new Error(`swarm prepare failed: ${prepared.stdout ?? ""}${prepared.stderr ?? ""}`);
+  }
 }
 
 function setAutonomous(proj: string): void {
@@ -305,8 +329,8 @@ function logWorktreeReview(
   iteration = 1,
 ): void {
   const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
   if (seedArtifacts) {
-    const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
     mkdirSync(dir, { recursive: true });
     for (const name of [
       "code-generation-plan",
@@ -322,6 +346,18 @@ function logWorktreeReview(
       if (!existsSync(artifact)) writeFileSync(artifact, body);
     }
   }
+  // The engine-required source manifest is independent of declared produces[];
+  // keep it present even in the test that deliberately omits required artifacts.
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "source-manifest.json"),
+    `${JSON.stringify({
+      stage: "code-generation",
+      unit,
+      version: 1,
+      writes: [{ path: `${unit}.txt` }],
+    }, null, 2)}\n`,
+  );
   for (const terminal of [false, true]) {
     const args = [
       LOG_TOOL,
@@ -337,7 +373,13 @@ function logWorktreeReview(
     ];
     if (terminal) args.push("--verdict", verdict);
     args.push("--project-dir", wt);
-    const logged = spawnSync(BUN, args, { encoding: "utf-8" });
+    const logged = spawnSync(BUN, args, {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+      },
+    });
     if (logged.status !== 0) {
       throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
     }
@@ -348,25 +390,10 @@ function finalizeWithNotReady(iteration: number): {
   status: number;
   out: string;
 } {
-  const proj = seedRefereeProject();
-  notReadyProjects.push(proj);
   const unit = `not-ready-${iteration}`;
-  spawnSync(
-    BUN,
-    [
-      SWARM_TOOL,
-      "--project-dir",
-      proj,
-      "prepare",
-      "--batch",
-      "1",
-      "--units",
-      unit,
-      "--base",
-      "main",
-    ],
-    { encoding: "utf-8" },
-  );
+  const proj = seedRefereeProject([unit]);
+  notReadyProjects.push(proj);
+  prepareRefereeProject(proj, unit);
   const worktree = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
   writeFileSync(join(worktree, `${unit}.txt`), "done\n");
   if (iteration > 1) {
@@ -409,15 +436,11 @@ function finalizeWithNotReady(iteration: number): {
 
 function setupReferee(): void {
   if (wtproj !== undefined) return; // build once; cases 3-6 read the result
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["win", "lose"]);
   wtproj = proj;
 
   // Conductor step 1: prepare forks a worktree per unit + emits SWARM_STARTED.
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "win,lose", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "win,lose");
 
   // Conductor step 2: the worker for `win` converged (writes win.txt); `lose`
   // did not. This test stages win's impl directly — no model.
@@ -448,13 +471,9 @@ function setupReferee(): void {
 
 function setupReviewRefusal(): void {
   if (reviewRefusalProj !== undefined) return;
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["unreviewed"]);
   reviewRefusalProj = proj;
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "unreviewed", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "unreviewed");
   const fin = spawnSync(
     BUN,
     [
@@ -471,13 +490,9 @@ function setupReviewRefusal(): void {
 
 function setupStaleReviewRefusal(): void {
   if (staleReviewProj !== undefined) return;
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["stale"]);
   staleReviewProj = proj;
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "stale", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "stale");
   const wt = join(proj, ".aidlc", "worktrees", "bolt-stale");
   const artifact = join(
     seededRecordDir(wt),
@@ -507,13 +522,9 @@ function setupStaleReviewRefusal(): void {
 
 function setupMissingArtifactsRefusal(): void {
   if (missingArtifactsProj !== undefined) return;
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["missing"]);
   missingArtifactsProj = proj;
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "missing", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "missing");
   logWorktreeReview(proj, "missing", false);
   const fin = spawnSync(
     BUN,
@@ -669,7 +680,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
 
 describe("t135 referee - autonomous reviewer receipt is a finalize precondition", () => {
   test("7b: autonomous prepare requires a current approved testing contract for every unit", () => {
-    const proj = seedRefereeProject();
+    const proj = seedRefereeProject(["planned"]);
     approvalProjects.push(proj);
     setAutonomous(proj);
     const refused = spawnSync(

@@ -37,6 +37,7 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  readAllAuditShards,
   readIntentRegistry,
 } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -368,17 +369,21 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         ctx1x("execute_bash", result),
       );
       expect(bind.code).toBe(0);
+      const createdIntent = readIntentRegistry(dir).find(
+        (intent) => intent.uuid !== originalUuid,
+      );
+      const createdUuid = createdIntent?.uuid;
+      expect(createdUuid).toBeDefined();
+      expect(createdIntent?.dirName).toBeDefined();
+      if (!createdUuid || !createdIntent?.dirName) {
+        throw new Error("intent-create did not produce a resolvable session handoff target");
+      }
       expect(
         readFileSync(
           join(dir, "aidlc", ".aidlc-sessions", sessionId),
           "utf-8",
         ).trim(),
-      ).toBe(originalUuid);
-
-      const createdUuid = readIntentRegistry(dir).find(
-        (intent) => intent.uuid !== originalUuid,
-      )?.uuid;
-      expect(createdUuid).toBeDefined();
+      ).toBe(createdUuid);
       const handoffPath = join(
         dir,
         "aidlc",
@@ -395,13 +400,24 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(stop.stdout.trim()).toBe("");
       expect(existsSync(handoffPath)).toBe(false);
 
-      const before = readAudit(dir).split("SESSION_ENDED").length - 1;
+      const before =
+        readAllAuditShards(dir, createdIntent.dirName, DEFAULT_SPACE)
+          .split("SESSION_ENDED").length - 1;
       const end = runIde(dir, "session-end", null);
       expect(end.code).toBe(0);
-      const after = readAudit(dir).split("SESSION_ENDED").length - 1;
+      const after =
+        readAllAuditShards(dir, createdIntent.dirName, DEFAULT_SPACE)
+          .split("SESSION_ENDED").length - 1;
       expect(after - before).toBe(1);
       expect(
-        existsSync(join(seededRecordDir(dir), ".aidlc-hooks-health", "session-end.last")),
+        existsSync(
+          join(
+            intentsDirOf(dir, DEFAULT_SPACE),
+            createdIntent.dirName,
+            ".aidlc-hooks-health",
+            "session-end.last",
+          ),
+        ),
       ).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });

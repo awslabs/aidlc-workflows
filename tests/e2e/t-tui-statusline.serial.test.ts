@@ -14,6 +14,8 @@
 //   4. Wait for the statusline marker "[AIDLC]" to paint and settle.
 //   5. Assert the captured pane contains "[AIDLC] ready" — the no-workflow
 //      statusline output from aidlc-statusline.ts (no aidlc-docs/ present).
+//   6. Open Claude's token-free `/model` picker and require its exact Unicode
+//      terminal palette (`❯`, `✔`, `◉`, `←/→`, and `·` separators).
 //
 // COST: this launches the claude TUI but submits NO prompt, so it reaches the
 // `ready` statusline state WITHOUT a Bedrock turn — it spends NO tokens (unlike
@@ -159,6 +161,37 @@ describe("t-tui-statusline (statusline renders in a real terminal)", () => {
         // the painted statusline.
         const pane = drive(["capture", "--session", session]).stdout;
         expect(pane).toContain("[AIDLC] ready");
+
+        // --- step 6: assert Claude's real Unicode menu palette ---------------
+        // This is not a synthetic emitter: `/model` opens Claude's built-in
+        // picker without submitting a prompt or spending model tokens. On
+        // Windows, Claude chooses ASCII fallbacks (`>` / `√`) when TERM is
+        // absent, which makes the strict answer-gate caret detector miss every
+        // real AUQ menu. Requiring the actual picker pins the child capability
+        // environment and the reconstructed glyph cells together.
+        drive([
+          "send",
+          "--session",
+          session,
+          "--keys",
+          "/model",
+          "--literal",
+          "--no-enter",
+        ]);
+        drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
+        const sawModelMenu = waitFor(session, "Select model", 15000, 600);
+        const modelPane = drive(["capture", "--session", session]).stdout;
+        if (!sawModelMenu) {
+          throw new Error(
+            `Claude /model picker never appeared.\n` +
+              `---- last pane ----\n${modelPane}\n-------------------`,
+          );
+        }
+        expect(modelPane).toMatch(/^\s*❯\s+\d+\..*✔/m);
+        expect(modelPane).toContain("◉ xHigh effort ←/→ to adjust");
+        expect(modelPane).toContain(
+          "Enter to set as default · s to use this session only · Esc to cancel",
+        );
       } finally {
         drive(["kill", "--session", session]);
         if (existsSync(sandbox)) rmSync(sandbox, { recursive: true, force: true });

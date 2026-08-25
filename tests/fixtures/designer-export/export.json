@@ -197,16 +197,25 @@
         {
           "id": "claim-sources",
           "path": ".claude/sensors/aidlc-claim-sources.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-provenance",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -269,11 +278,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -353,11 +368,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -431,11 +452,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -506,11 +533,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -587,11 +620,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -691,11 +730,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -767,11 +812,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -869,11 +920,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -970,11 +1027,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -1062,16 +1125,25 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "document-traceability",
           "matches": "**/traceability.json"
         }
       ]
@@ -1159,11 +1231,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -1254,16 +1332,25 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "document-traceability",
           "matches": "**/traceability.json"
         }
       ]
@@ -1347,16 +1434,25 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "document-traceability",
           "matches": "**/traceability.json"
         }
       ]
@@ -1436,11 +1532,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -1541,11 +1643,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -1667,26 +1775,41 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
           "path": ".claude/sensors/aidlc-linter.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,js}"
         },
         {
           "id": "type-check",
           "path": ".claude/sensors/aidlc-type-check.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,tsx}"
         },
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "document-traceability",
           "matches": "**/traceability.json"
         }
       ]
@@ -1801,26 +1924,41 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
           "path": ".claude/sensors/aidlc-linter.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,js}"
         },
         {
           "id": "type-check",
           "path": ".claude/sensors/aidlc-type-check.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,tsx}"
         },
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "document-traceability",
           "matches": "**/traceability.json"
         }
       ]
@@ -1948,26 +2086,41 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
           "path": ".claude/sensors/aidlc-linter.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,js}"
         },
         {
           "id": "type-check",
           "path": ".claude/sensors/aidlc-type-check.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,tsx}"
         },
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "document-traceability",
           "matches": "**/traceability.json"
         }
       ]
@@ -2101,26 +2254,41 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
           "path": ".claude/sensors/aidlc-linter.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,js}"
         },
         {
           "id": "type-check",
           "path": ".claude/sensors/aidlc-type-check.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,tsx}"
         },
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "document-traceability",
           "matches": "**/traceability.json"
         }
       ]
@@ -2233,21 +2401,33 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
           "path": ".claude/sensors/aidlc-linter.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,js}"
         },
         {
           "id": "type-check",
           "path": ".claude/sensors/aidlc-type-check.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,tsx}"
         },
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "document-traceability",
           "matches": "**/traceability.json"
         }
       ]
@@ -2331,16 +2511,25 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "type-check",
           "path": ".claude/sensors/aidlc-type-check.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,tsx}"
         }
       ]
@@ -2416,21 +2605,33 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
           "path": ".claude/sensors/aidlc-linter.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,js}"
         },
         {
           "id": "type-check",
           "path": ".claude/sensors/aidlc-type-check.md",
+          "fire_on": "write",
+          "default_severity": "advisory",
+          "category": "code-quality",
           "matches": "**/*.{ts,tsx}"
         }
       ]
@@ -2481,6 +2682,8 @@
         "enterprise",
         "feature",
         "infra",
+        "bugfix",
+        "refactor",
         "security-patch",
         "classic",
         "workshop",
@@ -2511,11 +2714,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -2588,11 +2797,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -2645,6 +2860,8 @@
         "enterprise",
         "feature",
         "infra",
+        "bugfix",
+        "refactor",
         "security-patch",
         "classic",
         "workshop",
@@ -2675,11 +2892,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -2767,11 +2990,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -2852,11 +3081,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -2939,11 +3174,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -3034,11 +3275,17 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-shape",
           "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
@@ -3074,9 +3321,9 @@
         "code-generation": "EXECUTE",
         "build-and-test": "EXECUTE",
         "ci-pipeline": "SKIP",
-        "deployment-pipeline": "SKIP",
+        "deployment-pipeline": "EXECUTE",
         "environment-provisioning": "SKIP",
-        "deployment-execution": "SKIP",
+        "deployment-execution": "EXECUTE",
         "observability-setup": "SKIP",
         "incident-response": "SKIP",
         "performance-validation": "SKIP",
@@ -3425,9 +3672,9 @@
         "code-generation": "EXECUTE",
         "build-and-test": "EXECUTE",
         "ci-pipeline": "SKIP",
-        "deployment-pipeline": "SKIP",
+        "deployment-pipeline": "EXECUTE",
         "environment-provisioning": "SKIP",
-        "deployment-execution": "SKIP",
+        "deployment-execution": "EXECUTE",
         "observability-setup": "SKIP",
         "incident-response": "SKIP",
         "performance-validation": "SKIP",

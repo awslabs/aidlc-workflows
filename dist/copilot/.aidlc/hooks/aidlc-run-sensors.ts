@@ -19,7 +19,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
 import {
   auditFilePath,
@@ -71,12 +71,13 @@ try {
   return 0;
 }
 
-// Step 4 — Extract path. PostToolUse for Write/Edit always carries
-// `tool_input.file_path` as an absolute path (verified by inspection
-// of aidlc-write-audit-log.ts:42 — the includes-filter works precisely
-// because Claude Code passes absolute paths).
-const filePath: string = parsed?.tool_input?.file_path ?? "";
-if (!filePath) return 0;
+// Step 4 — Extract path. Harnesses may provide either an absolute path or a
+// project-relative path, so normalize it before path guards and glob matching.
+const rawFilePath: string = parsed?.tool_input?.file_path ?? "";
+if (!rawFilePath) return 0;
+const filePath = isAbsolute(rawFilePath)
+  ? rawFilePath
+  : join(projectDir, rawFilePath);
 
 // Step 5 — Recursion guard. Skip writes to the dispatcher's detail-file
 // directory. Post-workspace-move that dir re-roots per intent
@@ -200,6 +201,9 @@ if (applicableSensors.length === 0) return 0;
 // Bun.Glob accepts both — both engines agree on the relaxed form.
 const sensorTs = join(projectDir, harnessDir(), "tools", "aidlc-sensor.ts");
 for (const entry of applicableSensors) {
+  // Gate-fired sensors run once per existing deliverable at gate-start. Older
+  // compiled graphs omit fire_on, which preserves the historical write default.
+  if (entry.fire_on === "gate") continue;
   if (!entry.matches) continue;
   const glob = new Bun.Glob(entry.matches);
   if (!glob.match(filePath)) continue;

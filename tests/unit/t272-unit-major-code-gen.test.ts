@@ -52,7 +52,11 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  artifactFilename,
+  latestMainWorkflowStageRunFloorForProject,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -261,6 +265,13 @@ function runStatusSync(proj: string, stage: string): void {
 }
 
 function logReviewReady(proj: string, stage: string, unit: string): void {
+  if (stage === "code-generation") {
+    const dir = join(seededRecordDir(proj), "construction", unit, stage);
+    writeFileSync(
+      join(dir, "source-manifest.json"),
+      `${JSON.stringify({ stage, unit, version: 1, writes: [] }, null, 2)}\n`,
+    );
+  }
   const args = [
     LOG,
     "review",
@@ -271,7 +282,13 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     "--project-dir", proj,
   ];
   for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const r = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+      },
+    });
     if ((r.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
     }
@@ -331,6 +348,22 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(last.stage).toBe("code-generation");
     expect(last.gate).toBe(true);
     expect(last.unit).toBe("beta");
+    const floor = latestMainWorkflowStageRunFloorForProject(
+      proj,
+      "code-generation",
+    );
+    for (const unit of ["alpha", "beta"]) {
+      appendAuditEntry(
+        "SWARM_UNIT_CONVERGED",
+        {
+          "Batch number": "1",
+          "Unit name": unit,
+          Stage: "code-generation",
+          "Run floor": floor,
+        },
+        proj,
+      );
+    }
     const settled = runReport(proj, [
       "--stage", "code-generation", "--result", "approved",
     ]);

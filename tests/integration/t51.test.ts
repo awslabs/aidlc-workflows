@@ -31,14 +31,14 @@
 // ordering case is STRONGER than the original):
 //   - .sh L104 count_event WORKFLOW_STARTED == 1        -> "WORKFLOW_STARTED fires once".
 //   - .sh L105 count_event WORKFLOW_COMPLETED == 1       -> "WORKFLOW_COMPLETED fires once".
-//   - .sh L106 count_event PHASE_STARTED == 3            -> "PHASE_STARTED fires 3x".
-//   - .sh L107 count_event PHASE_COMPLETED == 3          -> "PHASE_COMPLETED fires 3x".
-//   - .sh L108 count_event PHASE_VERIFIED == 3           -> "PHASE_VERIFIED fires 3x".
-//   - .sh L109 count_event PHASE_SKIPPED == 2            -> "PHASE_SKIPPED fires 2x".
-//   - .sh L111 count_event STAGE_STARTED == 6            -> "STAGE_STARTED fires 6x".
-//   - .sh L115 count_event STAGE_COMPLETED == 6          -> "STAGE_COMPLETED fires 6x".
-//   - .sh L117 count_event STAGE_AWAITING_APPROVAL == 3  -> "STAGE_AWAITING_APPROVAL fires 3x".
-//   - .sh L118 count_event GATE_APPROVED == 3            -> "GATE_APPROVED fires 3x".
+//   - PHASE_STARTED == 4                                 -> "PHASE_STARTED fires 4x".
+//   - PHASE_COMPLETED == 4                               -> "PHASE_COMPLETED fires 4x".
+//   - PHASE_VERIFIED == 4                                -> "PHASE_VERIFIED fires 4x".
+//   - PHASE_SKIPPED == 1                                 -> "PHASE_SKIPPED fires once".
+//   - STAGE_STARTED == 8                                 -> "STAGE_STARTED fires 8x".
+//   - STAGE_COMPLETED == 8                               -> "STAGE_COMPLETED fires 8x".
+//   - STAGE_AWAITING_APPROVAL == 5                       -> "STAGE_AWAITING_APPROVAL fires 5x".
+//   - GATE_APPROVED == 5                                 -> "GATE_APPROVED fires 5x".
 //   - .sh L123 first event == WORKFLOW_STARTED           -> "WORKFLOW_STARTED is first event".
 //   - .sh L127 last event == WORKFLOW_COMPLETED          -> "WORKFLOW_COMPLETED is last event".
 //   - .sh L131-138 final-stage GATE_APPROVED line < STAGE_COMPLETED line ->
@@ -46,7 +46,7 @@
 //       last-occurrence line ordering) PLUS a STRONGER per-gated-stage check that
 //       EVERY GATE_APPROVED precedes its paired STAGE_COMPLETED in the stream.
 //   - .sh L142 state Status=Completed                    -> "Status=Completed".
-//   - .sh L145 6 stages marked [x]                       -> "6 stages marked [x]".
+//   - final state has 8 stages marked [x]                -> "8 stages marked [x]".
 //
 // 15 .sh asserts -> 15 expect()-bearing test() cases (the ordering case adds a
 // stronger second expect within the same case; no observable dropped).
@@ -128,8 +128,36 @@ function walkStage(proj: string, slug: string): void {
     "code-generation": "aidlc-architecture-reviewer-agent",
   };
   if (reviewerFor[slug]) {
-    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
-    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
+    for (const suffix of [[], ["--verdict", "READY"]]) {
+      const review = spawnSync(
+        BUN,
+        [
+          LOG,
+          "review",
+          "--stage",
+          slug,
+          "--reviewer",
+          reviewerFor[slug],
+          "--iteration",
+          "1",
+          ...suffix,
+          "--project-dir",
+          proj,
+        ],
+        {
+          encoding: "utf-8",
+          env: {
+            ...env,
+            AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+          },
+        },
+      );
+      if ((review.status ?? -1) !== 0) {
+        throw new Error(
+          `review ${slug} failed: ${review.stdout ?? ""}${review.stderr ?? ""}`,
+        );
+      }
+    }
   }
   const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], {
     encoding: "utf-8",
@@ -168,16 +196,18 @@ let PROJ: string;
 
 beforeAll(() => {
   PROJ = createTestProject();
-  // Bootstrap via init (emits WORKFLOW_STARTED + init phase + 2x PHASE_SKIPPED,
+  // Bootstrap via init (emits WORKFLOW_STARTED + init phase + PHASE_SKIPPED,
   // and init pre-completes the 3 init stages: workspace-scaffold,
   // workspace-detection, state-init). The first post-init EXECUTE stage for
   // bugfix-on-greenfield is requirements-analysis (reverse-engineering is
-  // SKIP-greenfield). Walk the 3 gated EXECUTE stages; approve auto-advances /
+  // SKIP-greenfield). Walk the 5 gated EXECUTE stages; approve auto-advances /
   // auto-completes.
   runInit(PROJ);
   walkStage(PROJ, "requirements-analysis");
   walkStage(PROJ, "code-generation");
   walkStage(PROJ, "build-and-test");
+  walkStage(PROJ, "deployment-pipeline");
+  walkStage(PROJ, "deployment-execution");
 }, 60000);
 
 afterAll(() => {
@@ -197,39 +227,39 @@ describe("t51 bugfix event parity — CLI contract (migrated from t51-bugfix-eve
     expect(countEvent(readAudit(PROJ), "WORKFLOW_COMPLETED")).toBe(1);
   });
 
-  test("3: PHASE_STARTED fires 3x (initialization, inception, construction)", () => {
-    expect(countEvent(readAudit(PROJ), "PHASE_STARTED")).toBe(3);
+  test("3: PHASE_STARTED fires 4x (initialization, inception, construction, operation)", () => {
+    expect(countEvent(readAudit(PROJ), "PHASE_STARTED")).toBe(4);
   });
 
-  test("4: PHASE_COMPLETED fires 3x", () => {
-    expect(countEvent(readAudit(PROJ), "PHASE_COMPLETED")).toBe(3);
+  test("4: PHASE_COMPLETED fires 4x", () => {
+    expect(countEvent(readAudit(PROJ), "PHASE_COMPLETED")).toBe(4);
   });
 
-  test("5: PHASE_VERIFIED fires 3x", () => {
-    expect(countEvent(readAudit(PROJ), "PHASE_VERIFIED")).toBe(3);
+  test("5: PHASE_VERIFIED fires 4x", () => {
+    expect(countEvent(readAudit(PROJ), "PHASE_VERIFIED")).toBe(4);
   });
 
-  test("6: PHASE_SKIPPED fires 2x (ideation, operation)", () => {
-    expect(countEvent(readAudit(PROJ), "PHASE_SKIPPED")).toBe(2);
+  test("6: PHASE_SKIPPED fires once (ideation)", () => {
+    expect(countEvent(readAudit(PROJ), "PHASE_SKIPPED")).toBe(1);
   });
 
-  test("7: STAGE_STARTED fires 6x (3 init + 3 gated)", () => {
-    expect(countEvent(readAudit(PROJ), "STAGE_STARTED")).toBe(6);
+  test("7: STAGE_STARTED fires 8x (3 init + 5 gated)", () => {
+    expect(countEvent(readAudit(PROJ), "STAGE_STARTED")).toBe(8);
   });
 
-  test("8: STAGE_COMPLETED fires 6x", () => {
-    // 3 init + 3 approve. On the final stage, approve delegates to
+  test("8: STAGE_COMPLETED fires 8x", () => {
+    // 3 init + 5 approve. On the final stage, approve delegates to
     // complete-workflow, whose alreadyMarkedCompleted guard suppresses the
-    // duplicate STAGE_COMPLETED — so the count stays 6, not 7.
-    expect(countEvent(readAudit(PROJ), "STAGE_COMPLETED")).toBe(6);
+    // duplicate STAGE_COMPLETED — so the count stays 8, not 9.
+    expect(countEvent(readAudit(PROJ), "STAGE_COMPLETED")).toBe(8);
   });
 
-  test("9: STAGE_AWAITING_APPROVAL fires 3x", () => {
-    expect(countEvent(readAudit(PROJ), "STAGE_AWAITING_APPROVAL")).toBe(3);
+  test("9: STAGE_AWAITING_APPROVAL fires 5x", () => {
+    expect(countEvent(readAudit(PROJ), "STAGE_AWAITING_APPROVAL")).toBe(5);
   });
 
-  test("10: GATE_APPROVED fires 3x", () => {
-    expect(countEvent(readAudit(PROJ), "GATE_APPROVED")).toBe(3);
+  test("10: GATE_APPROVED fires 5x", () => {
+    expect(countEvent(readAudit(PROJ), "GATE_APPROVED")).toBe(5);
   });
 
   // ============================================================
@@ -259,7 +289,7 @@ describe("t51 bugfix event parity — CLI contract (migrated from t51-bugfix-eve
     // STRONGER than the .sh (which only checked the final stage): every
     // GATE_APPROVED must be immediately followed by a STAGE_COMPLETED — the
     // approve invariant (GATE_APPROVED then STAGE_COMPLETED, audit-first) holds
-    // for ALL 3 gated stages, not just the last.
+    // for ALL 5 gated stages, not just the last.
     for (let i = 0; i < stream.length; i++) {
       if (stream[i] === "GATE_APPROVED") {
         expect(stream[i + 1]).toBe("STAGE_COMPLETED");
@@ -276,9 +306,9 @@ describe("t51 bugfix event parity — CLI contract (migrated from t51-bugfix-eve
     expect(content.split("\n").some((l) => /^- \*\*Status\*\*: Completed/.test(l))).toBe(true);
   });
 
-  test("15: 6 stages marked [x] in final state", () => {
+  test("15: 8 stages marked [x] in final state", () => {
     const content = readFileSync(statePath(PROJ), "utf-8");
     const completed = content.split("\n").filter((l) => /^- \[x\] [a-z-]+/.test(l)).length;
-    expect(completed).toBe(6);
+    expect(completed).toBe(8);
   });
 });

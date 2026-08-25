@@ -169,9 +169,9 @@ function agentTierFromMd(s: string, srcPath: string): string {
 // surface there). Called AFTER the token substitution + rules-rename pass.
 // A missing tier: on an agent file fails the build (agentTierFromMd). A null
 // projected model/effort means the harness-native key is OMITTED: the
-// harness's own session/config default applies (the inherit contract for
-// judgment/balanced agents). When every key is omitted the `tier:` line is
-// dropped without a replacement.
+// harness's own session/config default applies for that harness/tier
+// combination. When every key is omitted the `tier:` line is dropped without
+// a replacement.
 function projectTierFrontmatter(
   s: string,
   srcPath: string,

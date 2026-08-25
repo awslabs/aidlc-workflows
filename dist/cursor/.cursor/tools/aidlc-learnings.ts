@@ -111,7 +111,6 @@ import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import {
   activeIntent,
-  activeSpace,
   appendUnderHeading,
   errorMessage,
   findAllEvents,
@@ -123,6 +122,7 @@ import {
   readAllAuditShards,
   readStateFile,
   resolveProjectDir,
+  resolveWorkflowSelection,
   runtimeGraphPath,
   spacesRoot,
   validSpaceFlag,
@@ -303,8 +303,11 @@ function handleSurface(args: string[], projectDir: string): void {
   // fall through to readStateFile()'s OWN internal resolution, which (given
   // the same ambiguity) resolves to the bare/legacy path and fails with an
   // unrelated-looking "state file not found" instead.
-  const space = activeSpace(projectDir);
-  const intent = resolveSurfaceIntent(projectDir, space);
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const intent = selection.binding
+    ? selection.intent
+    : resolveSurfaceIntent(projectDir, space);
   const pinnedIntent = intent ?? undefined;
 
   let stateContent: string;

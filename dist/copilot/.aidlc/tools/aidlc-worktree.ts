@@ -12,25 +12,50 @@
 // checkout.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
   boltSlugForUnit,
+  currentSwarmSourceOpeningFingerprint,
+  currentSwarmSourceMergeChain,
+  discoverSiblingRepos,
   emitError,
   errorMessage,
   findAllEvents,
   getField,
+  gitCommitSourceListing,
+  intentsDir,
+  isValidRepoName,
+  latestMainWorkflowStageRunFloorForProject,
+  listIntentDirs,
+  listSpaces,
+  parseSourceListing,
   readAllAuditShards,
+  readAuditShardEvents,
+  readStateFile,
+  relativeRecordDir,
+  repoDir,
   reviewedSourceRefPrefix,
+  resolveAuditWorktreePath,
   resolveBoltDag,
   resolveConstructionRepo,
   resolveProjectDir,
+  serializeSourceListing,
+  sourceListingEntriesEqual,
+  sourceListingSha256,
+  type WorkspaceSourceState,
   UNBINDABLE_FINGERPRINT,
+  validateUnitName,
   workspaceSourceFingerprint,
+  workspaceSourceExclusionPathspecs,
+  workspaceSourcePathIsExcluded,
+  workspaceSourceState,
   worktreePath,
   worktreeStateFilePath,
+  writeFileAtomic,
 } from "./aidlc-lib.js";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
@@ -40,6 +65,8 @@ import {
 const SLUG_RE = /^[a-z][a-z0-9-]*$/;
 
 const VALID_STRATEGIES = new Set(["squash", "merge", "rebase"]);
+const WORKTREE_META_FILENAME = "worktree-meta.json";
+const WORKTREE_BASE_LISTING_FILENAME = "base-source-listing.tsv";
 const VALID_VERIFY_EVENTS = new Set([
   "WORKTREE_CREATED",
   "WORKTREE_MERGED",
@@ -127,6 +154,53 @@ function retainedSourceRefs(repoCwd: string, slug: string): RetainedSourceRef[] 
   return refs;
 }
 
+function recordedWorktreeSelector(
+  pd: string,
+  slug: string,
+): {
+  intent?: string;
+  space?: string;
+  repoSelector?: string | null;
+} | null {
+  const path = join(worktreePath(pd, slug), ".aidlc", WORKTREE_META_FILENAME);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+      intentRecord?: unknown;
+      repoSelector?: unknown;
+    };
+    const matched =
+      typeof parsed.intentRecord === "string"
+        ? /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)$/.exec(
+            parsed.intentRecord,
+          )
+        : null;
+    if (
+      "repoSelector" in parsed &&
+      parsed.repoSelector !== null &&
+      typeof parsed.repoSelector !== "string"
+    ) {
+      return matched === null
+        ? null
+        : { space: matched[1], intent: matched[2] };
+    }
+    if (matched === null && !("repoSelector" in parsed)) return null;
+    return {
+      ...(matched === null
+        ? {}
+        : {
+            space: matched[1],
+            intent: matched[2],
+          }),
+      ...("repoSelector" in parsed
+        ? { repoSelector: parsed.repoSelector as string | null }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Compare-and-delete each ref: if another process moved one after enumeration,
 // preserve it and report a cleanup failure instead of deleting newer evidence.
 function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): string | null {
@@ -182,9 +256,28 @@ function canonicalise(p: string): string {
   }
 }
 
+function gitCommonDirRealpath(cwd: string): string | null {
+  const top = runGit(["rev-parse", "--show-toplevel"], cwd);
+  const common = runGit(["rev-parse", "--git-common-dir"], cwd);
+  if (!top.ok || !common.ok) return null;
+  try {
+    return realpathSync(resolve(top.stdout.trim(), common.stdout.trim()));
+  } catch {
+    return null;
+  }
+}
+
 function pathKey(p: string): string {
   const normalised = canonicalise(resolve(p)).replace(/\\/g, "/");
   return process.platform === "win32" ? normalised.toLowerCase() : normalised;
+}
+
+function gitCommonDirHash(path: string): string {
+  return createHash("sha256").update(pathKey(path)).digest("hex");
+}
+
+function auditWorktreePath(pd: string, path: string): string {
+  return relative(pd, path).replaceAll("\\", "/");
 }
 
 // --- Validation helpers ---
@@ -220,8 +313,16 @@ function resolveRepoCwd(
   flags: Record<string, string>,
   slug: string,
 ): string {
+  return resolveRepoTarget(pd, flags, slug).cwd;
+}
+
+function resolveRepoTarget(
+  pd: string,
+  flags: Record<string, string>,
+  slug: string,
+): { cwd: string; repo: string | null } {
   try {
-    return resolveConstructionRepo(pd, flags.repo, flags.intent, flags.space).cwd;
+    return resolveConstructionRepo(pd, flags.repo, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, errorMessage(e));
   }
@@ -235,21 +336,103 @@ function resolveRepoCwd(
 // --repo (P7): the sibling repo to fork the worktree inside (a multi-repo intent
 // requires it; a single-repo intent infers the lone repo; a legacy intent with no
 // recorded repos runs in the projectDir, today's behaviour).
+function rawBaseSourceListing(
+  repoCwd: string,
+  baseCommit: string,
+  carriesWorkspaceShell: boolean,
+): { serialized: string; hash: string } | null {
+  const listing = gitCommitSourceListing(
+    repoCwd,
+    baseCommit,
+    carriesWorkspaceShell,
+  );
+  if (listing === null) return null;
+  const serialized = serializeSourceListing(listing);
+  if (parseSourceListing(serialized) === null) return null;
+  return { serialized, hash: `sha256:${sourceListingSha256(serialized)}` };
+}
+
 function handleCreate(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   if (!flags.base) errorWithSlug(slug, "Missing --base <branch>");
+  const swarmValues = [
+    flags["swarm-unit"],
+    flags["swarm-batch"],
+    flags["swarm-stage"],
+    flags["swarm-floor"],
+  ];
+  const hasSwarmValue = swarmValues.some((value) => value !== undefined);
+  if (hasSwarmValue && swarmValues.some((value) => value === undefined)) {
+    errorWithSlug(
+      slug,
+      "Swarm worktree creation requires --swarm-unit, --swarm-batch, --swarm-stage, and --swarm-floor together",
+    );
+  }
+  const swarm =
+    hasSwarmValue
+      ? {
+          unit: flags["swarm-unit"],
+          batch: flags["swarm-batch"],
+          stage: flags["swarm-stage"],
+          floor: flags["swarm-floor"],
+        }
+      : null;
+  if (swarm !== null) {
+    const unitError = validateUnitName(swarm.unit);
+    if (unitError !== null) errorWithSlug(slug, unitError);
+    if (boltSlugForUnit(swarm.unit) !== slug) {
+      errorWithSlug(
+        slug,
+        `Swarm unit ${JSON.stringify(swarm.unit)} does not map to Bolt slug ${JSON.stringify(slug)}`,
+      );
+    }
+    if (!/^[1-9][0-9]*$/.test(swarm.batch)) {
+      errorWithSlug(slug, "Swarm batch must be a positive integer");
+    }
+    if (!swarm.stage || !swarm.floor) {
+      errorWithSlug(slug, "Swarm stage and run floor must be non-empty");
+    }
+  }
 
   const pd = resolveProjectDir(projectDir);
+  const intentRecord = relativeRecordDir(pd, flags.intent, flags.space);
   // P7: anchor every git op to the target sibling repo (or the projectDir for a
   // legacy single-repo intent). The guard is evaluated against that same checkout.
-  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  const repoTarget = resolveRepoTarget(pd, flags, slug);
+  const repoCwd = repoTarget.cwd;
+  const creatingGitCommonDir = gitCommonDirRealpath(repoCwd);
+  if (creatingGitCommonDir === null) {
+    errorWithSlug(slug, "Cannot resolve the creating repository common dir.");
+  }
   assertNotSiblingWorktree(repoCwd);
 
   // Pre-audit checks: every failure here exits without emitting.
   const baseExists = runGit(["rev-parse", "--verify", flags.base], repoCwd);
   if (!baseExists.ok) {
     errorWithSlug(slug, `Base branch does not exist locally: ${flags.base}`);
+  }
+  // Resolve the exact commit object before emitting or creating anything. The
+  // durable per-worktree metadata lets swarm finalize read the fork point even
+  // if the human-readable base branch moves later.
+  const baseCommitResult = runGit(
+    ["rev-parse", "--verify", `${flags.base}^{commit}`],
+    repoCwd,
+  );
+  if (!baseCommitResult.ok) {
+    errorWithSlug(slug, `Base branch does not resolve to a commit: ${flags.base}`);
+  }
+  const baseCommit = baseCommitResult.stdout.trim();
+  if (!/^[0-9a-f]{40,64}$/.test(baseCommit)) {
+    errorWithSlug(slug, `Base branch resolved to an invalid commit id: ${flags.base}`);
+  }
+  const rawBase = rawBaseSourceListing(
+    repoCwd,
+    baseCommit,
+    repoTarget.repo === null,
+  );
+  if (rawBase === null) {
+    errorWithSlug(slug, `Base source listing could not be computed for: ${flags.base}`);
   }
 
   const wtPath = worktreePath(pd, slug);
@@ -270,20 +453,85 @@ function handleCreate(args: string[]): void {
   try {
     auditTs = emitAudit(pd, "WORKTREE_CREATED", {
       "Bolt slug": slug,
-      "Worktree path": wtPath,
+      "Worktree path": auditWorktreePath(pd, wtPath),
       "Branch name": branchName,
       "Base branch": flags.base,
+      "Base commit": baseCommit,
+      "Base Source Listing": rawBase.hash,
+      Repo: repoTarget.repo ?? "-",
+      ...(intentRecord ? { "Intent record": intentRecord } : {}),
+      ...(swarm
+        ? {
+            "Swarm Unit": swarm.unit,
+            "Swarm Batch": swarm.batch,
+            "Swarm Stage": swarm.stage,
+            "Swarm Run floor": swarm.floor,
+          }
+        : {}),
     }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
   }
 
-  const add = runGit(["worktree", "add", wtPath, "-b", branchName, flags.base], repoCwd);
+  // Create from the immutable object just attested above. Keeping flags.base
+  // here would allow a concurrently-moved branch to fork a different tree than
+  // WORKTREE_CREATED/worktree-meta.json record.
+  const add = runGit(["worktree", "add", wtPath, "-b", branchName, baseCommit], repoCwd);
   if (!add.ok) {
+    if (
+      existsSync(wtPath) ||
+      repositoryRegistersBoltWorktree(pd, repoCwd, slug)
+    ) {
+      runGit(["worktree", "remove", "--force", wtPath], repoCwd);
+    }
+    const leakedBranch = runGit(
+      ["rev-parse", "--verify", `refs/heads/${branchName}`],
+      repoCwd,
+    );
+    if (leakedBranch.ok && leakedBranch.stdout.trim() === baseCommit) {
+      runGit(
+        ["update-ref", "-d", `refs/heads/${branchName}`, baseCommit],
+        repoCwd,
+      );
+    }
     errorWithSlug(
       slug,
       `git worktree add failed: ${add.stderr.trim() || add.stdout.trim() || `exit ${add.code}`}`
     );
+  }
+
+  const metaPath = join(wtPath, ".aidlc", WORKTREE_META_FILENAME);
+  const listingPath = join(wtPath, ".aidlc", WORKTREE_BASE_LISTING_FILENAME);
+  try {
+    mkdirSync(dirname(metaPath), { recursive: true });
+    writeFileAtomic(listingPath, rawBase.serialized);
+    writeFileAtomic(
+      metaPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          boltSlug: slug,
+          baseBranch: flags.base,
+          baseCommit,
+          baseSourceListing: rawBase.hash,
+          repoSelector: repoTarget.repo,
+          gitCommonDirHash: gitCommonDirHash(creatingGitCommonDir),
+          ...(intentRecord ? { intentRecord } : {}),
+          ...(swarm
+            ? {
+                swarmUnit: swarm.unit,
+                swarmBatch: swarm.batch,
+                swarmStage: swarm.stage,
+                swarmFloor: swarm.floor,
+              }
+            : {}),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } catch (e) {
+    errorWithSlug(slug, `Worktree metadata write failed: ${errorMessage(e)}`);
   }
 
   console.log(
@@ -293,6 +541,8 @@ function handleCreate(args: string[]): void {
       worktree_path: wtPath,
       branch: branchName,
       base: flags.base,
+      base_commit: baseCommit,
+      base_source_listing: rawBase.hash,
       audit_timestamp: auditTs,
     })
   );
@@ -314,10 +564,18 @@ interface BoundConvergedSourceRecord {
   kind: "bound";
   fingerprint: string;
   commit: string;
+  unit: string;
+  batch: string;
+  stage: string;
+  floor: string;
 }
 
 interface BypassedConvergedSourceRecord {
   kind: "bypass";
+  unit: string;
+  batch: string;
+  stage: string;
+  floor: string;
 }
 
 type ConvergedSourceRecord =
@@ -336,30 +594,931 @@ function convergedUnitName(
   return match ?? slug;
 }
 
+type WorktreeAuditRow = ReturnType<typeof readAuditShardEvents>[number];
+
+interface ScopedWorktreeAuditRow extends WorktreeAuditRow {
+  authorityIntent?: string;
+  authoritySpace: string;
+}
+
+function sortWorktreeAuditRows(rows: WorktreeAuditRow[]): WorktreeAuditRow[] {
+  return rows.sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+}
+
+function latestUnambiguousRow(
+  slug: string,
+  label: string,
+  rows: WorktreeAuditRow[],
+  identity: (row: WorktreeAuditRow) => string,
+): WorktreeAuditRow | null {
+  if (rows.length === 0) return null;
+  sortWorktreeAuditRows(rows);
+  const latestTimestamp = rows.at(-1)?.timestamp as string;
+  const latest = rows.filter((row) => row.timestamp === latestTimestamp);
+  if (
+    new Set(latest.map((row) => row.shard)).size > 1 &&
+    new Set(latest.map(identity)).size !== 1
+  ) {
+    errorWithSlug(
+      slug,
+      `refusing to merge: same-second cross-shard ${label} authority is ambiguous`,
+    );
+  }
+  return latest.at(-1) ?? null;
+}
+
+function allWorktreeAuditRows(
+  pd: string,
+): { rows: ScopedWorktreeAuditRow[]; unreadableShards: string[] } {
+  const rows: ScopedWorktreeAuditRow[] = [];
+  const unreadable = new Set<string>();
+  const seenRows = new Set<string>();
+  for (const { name: space } of listSpaces(pd)) {
+    const intentNames = new Set(listIntentDirs(pd, space));
+    try {
+      for (const entry of readdirSync(intentsDir(pd, space), {
+        withFileTypes: true,
+      })) {
+        if (
+          entry.isDirectory() &&
+          existsSync(join(intentsDir(pd, space), entry.name, "audit"))
+        ) {
+          intentNames.add(entry.name);
+        }
+      }
+    } catch {
+      // The explicit-space read below reports an unreadable aggregate root.
+    }
+    for (const intent of [undefined, ...[...intentNames].sort()]) {
+      const failures: string[] = [];
+      const selectedRows = readAuditShardEvents(pd, intent, space, failures);
+      for (const failure of failures) unreadable.add(failure);
+      for (const row of selectedRows) {
+        const key = `${row.shard}\0${row.pos}`;
+        if (seenRows.has(key)) continue;
+        seenRows.add(key);
+        const shardRelative = relative(intentsDir(pd, space), row.shard)
+          .replaceAll("\\", "/");
+        const parts = shardRelative.split("/");
+        rows.push({
+          ...row,
+          authoritySpace: space,
+          ...(parts.length >= 3 &&
+          parts[0] !== ".." &&
+          parts[1] === "audit"
+            ? { authorityIntent: parts[0] }
+            : {}),
+        });
+      }
+    }
+  }
+  return { rows, unreadableShards: [...unreadable].sort() };
+}
+
+function repoSelectorKey(repo: string | null): string {
+  return repo ?? "\0root";
+}
+
+function repoSelectorLabel(repo: string | null): string {
+  return repo ?? "-";
+}
+
+interface RepositoryBoltEvidence {
+  branch: boolean;
+  durable: boolean;
+  registered: boolean;
+  retained: boolean;
+}
+
+function repositoryRegistersBoltWorktree(
+  pd: string,
+  repoCwd: string,
+  slug: string,
+): boolean {
+  const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
+  if (!listed.ok) return false;
+  const branchName = `bolt-${slug}`;
+  const expectedPath = pathKey(worktreePath(pd, slug));
+  for (const line of listed.stdout.split(/\r?\n/)) {
+    if (
+      (line.startsWith("worktree ") &&
+        pathKey(line.slice("worktree ".length)) === expectedPath) ||
+      line === `branch refs/heads/${branchName}`
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function repositoryBoltEvidence(
+  pd: string,
+  repo: string | null,
+  slug: string,
+): RepositoryBoltEvidence {
+  const cwd = repo === null ? pd : repoDir(pd, repo);
+  if (!runGit(["rev-parse", "--git-dir"], cwd).ok) {
+    return {
+      branch: false,
+      durable: false,
+      registered: false,
+      retained: false,
+    };
+  }
+  const branchName = `bolt-${slug}`;
+  const branch = runGit(
+    ["rev-parse", "--verify", `refs/heads/${branchName}`],
+    cwd,
+  ).ok;
+  const retained = retainedSourceRefs(cwd, slug);
+  const retainedPresent = retained !== null && retained.length > 0;
+  const registered = repositoryRegistersBoltWorktree(pd, cwd, slug);
+  return {
+    branch,
+    durable: branch || retainedPresent || registered,
+    registered,
+    retained: retainedPresent,
+  };
+}
+
+interface DiscardCreationAuthority {
+  evidenceExists: boolean;
+  intent?: string;
+  repo?: string | null;
+  space?: string;
+}
+
+function discardCreationAuthority(
+  pd: string,
+  slug: string,
+  recorded: ReturnType<typeof recordedWorktreeSelector>,
+  explicitRepo?: string,
+): DiscardCreationAuthority {
+  const audit = allWorktreeAuditRows(pd);
+  const creationRows = audit.rows.filter(
+    (row) =>
+      row.event === "WORKTREE_CREATED" &&
+      auditBlockField(row.block, "Bolt slug") === slug,
+  );
+  const selectors = new Map<string, string | null>();
+  selectors.set(repoSelectorKey(null), null);
+  for (const repo of discoverSiblingRepos(pd)) {
+    selectors.set(repoSelectorKey(repo), repo);
+  }
+  for (const row of creationRows) {
+    const field = auditBlockField(row.block, "Repo");
+    if (field === "-") {
+      selectors.set(repoSelectorKey(null), null);
+    } else if (field !== null && isValidRepoName(field)) {
+      selectors.set(repoSelectorKey(field), field);
+    }
+  }
+  if (recorded?.repoSelector !== undefined) {
+    selectors.set(
+      repoSelectorKey(recorded.repoSelector),
+      recorded.repoSelector,
+    );
+  }
+  if (explicitRepo !== undefined && isValidRepoName(explicitRepo)) {
+    selectors.set(repoSelectorKey(explicitRepo), explicitRepo);
+  }
+
+  const evidence = new Map<string, RepositoryBoltEvidence>();
+  for (const [key, repo] of selectors) {
+    evidence.set(key, repositoryBoltEvidence(pd, repo, slug));
+  }
+  const evidenceExists =
+    existsSync(worktreePath(pd, slug)) ||
+    [...evidence.values()].some((value) => value.durable);
+  if (!evidenceExists) return { evidenceExists: false };
+
+  const wellShapedRows = creationRows.filter((row) => {
+    const recordedPath = auditBlockField(row.block, "Worktree path");
+    const branch = auditBlockField(row.block, "Branch name");
+    return (
+      recordedPath !== null &&
+      pathKey(resolveAuditWorktreePath(pd, recordedPath)) ===
+        pathKey(worktreePath(pd, slug)) &&
+      branch === `bolt-${slug}`
+    );
+  });
+  const rowsByTimestamp = new Map<string, ScopedWorktreeAuditRow[]>();
+  for (const row of wellShapedRows) {
+    const current = rowsByTimestamp.get(row.timestamp) ?? [];
+    current.push(row);
+    rowsByTimestamp.set(row.timestamp, current);
+  }
+  for (const tied of rowsByTimestamp.values()) {
+    const durableRepos = new Set<string>();
+    const shards = new Set<string>();
+    for (const row of tied) {
+      const field = auditBlockField(row.block, "Repo");
+      const repo =
+        field === "-"
+          ? null
+          : field !== null && isValidRepoName(field)
+            ? field
+            : undefined;
+      if (
+        repo !== undefined &&
+        evidence.get(repoSelectorKey(repo))?.durable === true
+      ) {
+        durableRepos.add(repoSelectorKey(repo));
+        shards.add(row.shard);
+      }
+    }
+    if (durableRepos.size > 1 && shards.size > 1) {
+      errorWithSlug(
+        slug,
+        "refusing to discard: same-second cross-shard WORKTREE_CREATED repository authority is ambiguous",
+      );
+    }
+  }
+  const corroborated = wellShapedRows.filter((row) => {
+    const field = auditBlockField(row.block, "Repo");
+    const repo =
+      field === "-"
+        ? null
+        : field !== null && isValidRepoName(field)
+          ? field
+          : undefined;
+    return (
+      repo !== undefined &&
+      evidence.get(repoSelectorKey(repo))?.durable === true
+    );
+  });
+  const corroboratedRepos = new Map<string, string | null>();
+  for (const row of corroborated) {
+    const field = auditBlockField(row.block, "Repo") as string;
+    const repo = field === "-" ? null : field;
+    corroboratedRepos.set(repoSelectorKey(repo), repo);
+  }
+  if (corroboratedRepos.size > 1) {
+    const labels = [...corroboratedRepos.values()]
+      .map(repoSelectorLabel)
+      .sort()
+      .map((value) => JSON.stringify(value))
+      .join(", ");
+    errorWithSlug(
+      slug,
+      `refusing to discard: corroborated WORKTREE_CREATED rows disagree on the creating repository (${labels})`,
+    );
+  }
+
+  let authority: ScopedWorktreeAuditRow | undefined;
+  if (corroborated.length > 0) {
+    authority = [...corroborated].sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      if (a.shard !== b.shard) return a.shard < b.shard ? -1 : 1;
+      return a.pos - b.pos;
+    }).at(-1);
+  }
+  const repoField =
+    authority === undefined
+      ? null
+      : auditBlockField(authority.block, "Repo");
+  const auditRepo =
+    repoField === "-"
+      ? null
+      : repoField !== null && isValidRepoName(repoField)
+        ? repoField
+        : undefined;
+  const hasRepoRow = creationRows.some(
+    (row) => auditBlockField(row.block, "Repo") !== null,
+  );
+  const retainedEvidence = [...evidence.values()].some(
+    (value) => value.retained,
+  );
+  const durableRepoEntries = [...evidence.entries()].filter(
+    ([, value]) => value.durable,
+  );
+  const durableRepos = durableRepoEntries.map(([key]) => key);
+  const readableCreationRepos = [
+    ...new Set(
+      creationRows
+        .map((row) => auditBlockField(row.block, "Repo"))
+        .filter((repo): repo is string => repo !== null)
+        .map((repo) => (repo === "-" ? null : repo))
+        .filter(
+          (repo): repo is string | null =>
+            repo === null || isValidRepoName(repo),
+        ),
+    ),
+  ];
+  const modernAuthority =
+    recorded?.repoSelector !== undefined ||
+    hasRepoRow ||
+    retainedEvidence ||
+    audit.unreadableShards.length > 0;
+  if (
+    auditRepo === undefined &&
+    modernAuthority
+  ) {
+    if (audit.unreadableShards.length > 0) {
+      errorWithSlug(
+        slug,
+        "refusing to discard: durable Bolt evidence exists, but WORKTREE_CREATED Repo authority is unreadable; restore readable audit shards and retry",
+      );
+    }
+    if (readableCreationRepos.length > 0) {
+      const repos = readableCreationRepos
+        .map(repoSelectorLabel)
+        .sort()
+        .map((repo) => JSON.stringify(repo))
+        .join(", ");
+      errorWithSlug(
+        slug,
+        `refusing to discard: a readable WORKTREE_CREATED record names ${repos}, but no worktree registration, bolt-${slug} branch, or retained reviewed-source ref remains there to corroborate it. If this Bolt was already discarded, this is expected; otherwise inspect ${repos} for the bolt-${slug} branch`,
+      );
+    }
+    errorWithSlug(
+      slug,
+      "refusing to discard: durable Bolt evidence exists, but no corroborated WORKTREE_CREATED Repo authority is available",
+    );
+  }
+  if (auditRepo === undefined && !modernAuthority) {
+    if (durableRepos.length > 1) {
+      const repos = durableRepoEntries
+        .map(([key]) => repoSelectorLabel(selectors.get(key) ?? null))
+        .sort();
+      const selectedKey =
+        explicitRepo === undefined
+          ? undefined
+          : repoSelectorKey(explicitRepo);
+      const selectedEvidence =
+        selectedKey === undefined
+          ? undefined
+          : evidence.get(selectedKey);
+      const creatingCandidates = durableRepoEntries.filter(
+        ([, value]) => value.registered || value.retained,
+      );
+      if (
+        selectedKey === undefined ||
+        selectedEvidence === undefined ||
+        !selectedEvidence.durable ||
+        creatingCandidates.length !== 1 ||
+        creatingCandidates[0][0] !== selectedKey
+      ) {
+        const labels = repos.map((repo) => JSON.stringify(repo)).join(", ");
+        errorWithSlug(
+          slug,
+          `refusing to discard: pre-upgrade Bolt evidence spans repositories ${labels} without WORKTREE_CREATED Repo authority. Delete the stray bolt-${slug} branch in the repository that is not the creating one, then retry with --repo <creating-repo>`,
+        );
+      }
+    }
+    if (
+      explicitRepo !== undefined &&
+      durableRepos.length === 1 &&
+      durableRepos[0] !== repoSelectorKey(explicitRepo)
+    ) {
+      errorWithSlug(
+        slug,
+        `refusing to discard: selected repository ${JSON.stringify(explicitRepo)} contradicts the only repository carrying pre-upgrade Bolt evidence`,
+      );
+    }
+  }
+  if (
+    auditRepo !== undefined &&
+    recorded?.repoSelector !== undefined &&
+    recorded.repoSelector !== auditRepo
+  ) {
+    errorWithSlug(
+      slug,
+      `refusing to discard: worktree metadata repository ${JSON.stringify(repoSelectorLabel(recorded.repoSelector))} does not match corroborated WORKTREE_CREATED repository ${JSON.stringify(repoSelectorLabel(auditRepo))}`,
+    );
+  }
+  return {
+    evidenceExists: true,
+    ...(auditRepo === undefined
+      ? {}
+      : {
+          repo: auditRepo,
+          space: authority?.authoritySpace,
+          ...(authority?.authorityIntent === undefined
+            ? {}
+            : { intent: authority.authorityIntent }),
+        }),
+  };
+}
+
+function rowAfter(candidate: WorktreeAuditRow, boundary: WorktreeAuditRow): boolean {
+  if (candidate.timestamp !== boundary.timestamp) {
+    return candidate.timestamp > boundary.timestamp;
+  }
+  return candidate.shard === boundary.shard && candidate.pos > boundary.pos;
+}
+
 function convergedSourceRecord(
   pd: string,
   slug: string,
+  repoCwd: string,
   intent?: string,
   space?: string,
+  selectedRepo: string | null = null,
 ): ConvergedSourceRecord | null {
-  let latestBlock: string | undefined;
-  try {
-    const unitName = convergedUnitName(pd, slug, intent, space);
-    for (const e of findAllEvents(readAllAuditShards(pd, intent, space), "SWARM_UNIT_CONVERGED")) {
-      if (auditBlockField(e.block, "Unit name") !== unitName) continue;
-      latestBlock = e.block;
+  const wtPath = worktreePath(pd, slug);
+  let worktreeMeta: {
+    boltSlug: string;
+    baseCommit: string;
+    baseSourceListing: string;
+    intentRecord?: string;
+    swarmUnit?: string;
+    swarmBatch?: string;
+    swarmStage?: string;
+    swarmFloor?: string;
+    repoSelector?: string | null;
+    gitCommonDir?: string;
+    gitCommonDirHash?: string;
+  } | null = null;
+  const metaPath = join(wtPath, ".aidlc", WORKTREE_META_FILENAME);
+  if (existsSync(metaPath)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(metaPath, "utf-8"));
+    } catch {
+      errorWithSlug(
+        slug,
+        "refusing to merge: current worktree metadata is malformed",
+      );
     }
-  } catch {
-    return null; // unreadable audit is not evidence of a source-bound convergence
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed) ||
+      (parsed as Record<string, unknown>).boltSlug !== slug ||
+      typeof (parsed as Record<string, unknown>).baseCommit !== "string" ||
+      typeof (parsed as Record<string, unknown>).baseSourceListing !== "string"
+    ) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: current worktree metadata is incomplete",
+      );
+    }
+    worktreeMeta = {
+      boltSlug: slug,
+      baseCommit: (parsed as Record<string, string>).baseCommit,
+      baseSourceListing: (parsed as Record<string, string>).baseSourceListing,
+      ...(typeof (parsed as Record<string, unknown>).intentRecord === "string"
+        ? { intentRecord: (parsed as Record<string, string>).intentRecord }
+        : {}),
+      ...("repoSelector" in (parsed as Record<string, unknown>)
+        ? {
+            repoSelector: (parsed as Record<string, unknown>)
+              .repoSelector as string | null,
+          }
+        : {}),
+      ...(typeof (parsed as Record<string, unknown>).gitCommonDir === "string"
+        ? { gitCommonDir: (parsed as Record<string, string>).gitCommonDir }
+        : {}),
+      ...(typeof (parsed as Record<string, unknown>).gitCommonDirHash === "string"
+        ? {
+            gitCommonDirHash: (parsed as Record<string, string>)
+              .gitCommonDirHash,
+          }
+        : {}),
+      ...(typeof (parsed as Record<string, unknown>).swarmUnit === "string"
+        ? {
+            swarmUnit: (parsed as Record<string, string>).swarmUnit,
+            swarmBatch: (parsed as Record<string, string>).swarmBatch,
+            swarmStage: (parsed as Record<string, string>).swarmStage,
+            swarmFloor: (parsed as Record<string, string>).swarmFloor,
+          }
+        : {}),
+    };
+    const swarmMetaFields = [
+      worktreeMeta.swarmUnit,
+      worktreeMeta.swarmBatch,
+      worktreeMeta.swarmStage,
+      worktreeMeta.swarmFloor,
+    ];
+    const swarmMetaCount = swarmMetaFields.filter(
+      (value) => value !== undefined,
+    ).length;
+    if (
+      "intentRecord" in worktreeMeta &&
+      (!worktreeMeta.intentRecord ||
+        worktreeMeta.intentRecord !== relativeRecordDir(pd, intent, space))
+    ) {
+      const expected = recordedWorktreeSelector(pd, slug);
+      const recovery =
+        typeof expected?.space === "string" &&
+        typeof expected.intent === "string"
+        ? ` Retry with --space ${expected.space} --intent ${expected.intent}.`
+        : "";
+      errorWithSlug(
+        slug,
+        `refusing to merge: selected intent ${JSON.stringify(relativeRecordDir(pd, intent, space))} does not match worktree provenance ${JSON.stringify(worktreeMeta.intentRecord)}.${recovery}`,
+      );
+    }
+    if (
+      (swarmMetaCount !== 0 && swarmMetaCount !== swarmMetaFields.length) ||
+      (worktreeMeta.swarmUnit !== undefined &&
+        (validateUnitName(worktreeMeta.swarmUnit) !== null ||
+          boltSlugForUnit(worktreeMeta.swarmUnit) !== slug ||
+          !/^[1-9][0-9]*$/.test(worktreeMeta.swarmBatch ?? "") ||
+          !worktreeMeta.swarmStage ||
+          !worktreeMeta.swarmFloor))
+    ) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: current worktree metadata selector/swarm provenance is invalid",
+      );
+    }
   }
-  const bypass = latestBlock
-    ? auditBlockField(latestBlock, "Source Freshness Bypass") ?? undefined
-    : undefined;
+  const retained = retainedSourceRefs(repoCwd, slug);
+  if (retained === null) {
+    errorWithSlug(slug, "refusing to merge: reviewed-source ref enumeration failed");
+  }
+  let requiresSwarmAuthority =
+    retained.length > 0 || worktreeMeta?.swarmUnit !== undefined;
+  let rows: WorktreeAuditRow[];
+  try {
+    rows = readAuditShardEvents(pd, intent, space);
+  } catch {
+    if (requiresSwarmAuthority) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: current modern worktree audit authority is unreadable",
+      );
+    }
+    return null;
+  }
+
+  const creation = latestUnambiguousRow(
+    slug,
+    "WORKTREE_CREATED",
+    rows.filter(
+      (row) =>
+        row.event === "WORKTREE_CREATED" &&
+        auditBlockField(row.block, "Bolt slug") === slug &&
+        (() => {
+          const recordedPath = auditBlockField(row.block, "Worktree path");
+          return (
+            recordedPath !== null &&
+            pathKey(resolveAuditWorktreePath(pd, recordedPath)) ===
+              pathKey(wtPath)
+          );
+        })(),
+    ),
+    (row) =>
+      [
+        auditBlockField(row.block, "Base commit") ?? "",
+        auditBlockField(row.block, "Base Source Listing") ?? "",
+        auditBlockField(row.block, "Branch name") ?? "",
+      ].join("\0"),
+  );
+  if (creation === null) {
+    if (requiresSwarmAuthority) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: current modern worktree has no WORKTREE_CREATED authority",
+      );
+    }
+    return null;
+  }
+  const creationSwarmFields = [
+    auditBlockField(creation.block, "Swarm Unit"),
+    auditBlockField(creation.block, "Swarm Batch"),
+    auditBlockField(creation.block, "Swarm Stage"),
+    auditBlockField(creation.block, "Swarm Run floor"),
+  ];
+  const creationSwarmCount = creationSwarmFields.filter(
+    (value) => value !== null,
+  ).length;
+  if (creationSwarmCount !== 0 && creationSwarmCount !== creationSwarmFields.length) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: WORKTREE_CREATED carries incomplete swarm provenance",
+    );
+  }
+  const creationSwarmUnit = creationSwarmFields[0] ?? undefined;
+  const creationSwarmBatch = creationSwarmFields[1] ?? undefined;
+  const creationSwarmStage = creationSwarmFields[2] ?? undefined;
+  const creationSwarmFloor = creationSwarmFields[3] ?? undefined;
+  if (
+    creationSwarmUnit !== undefined &&
+    (validateUnitName(creationSwarmUnit) !== null ||
+      boltSlugForUnit(creationSwarmUnit) !== slug ||
+      !/^[1-9][0-9]*$/.test(creationSwarmBatch ?? "") ||
+      !creationSwarmStage ||
+      !creationSwarmFloor)
+  ) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: WORKTREE_CREATED swarm provenance is invalid",
+    );
+  }
+  requiresSwarmAuthority ||= creationSwarmUnit !== undefined;
+
+  const mappedUnits = new Set<string>();
+  for (const row of rows) {
+    if (!rowAfter(row, creation)) continue;
+    if (row.event === "SWARM_STARTED") {
+      for (const unit of (auditBlockField(row.block, "Unit names") ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)) {
+        if (boltSlugForUnit(unit) === slug) mappedUnits.add(unit);
+      }
+    } else if (row.event === "SWARM_UNIT_CONVERGED") {
+      const unit = auditBlockField(row.block, "Unit name");
+      if (unit && boltSlugForUnit(unit) === slug) mappedUnits.add(unit);
+    }
+  }
+  if (mappedUnits.size > 1) {
+    errorWithSlug(
+      slug,
+      `refusing to merge: multiple swarm Units map to Bolt slug "${slug}"`,
+    );
+  }
+  requiresSwarmAuthority ||= mappedUnits.size > 0;
+  const creationBaseCommit = auditBlockField(creation.block, "Base commit");
+  const creationBaseListing = auditBlockField(
+    creation.block,
+    "Base Source Listing",
+  );
+  const creationModern =
+    creationBaseCommit !== null || creationBaseListing !== null;
+  const durableModernWorktree = worktreeMeta !== null || retained.length > 0;
+  const modernWorktree = durableModernWorktree || creationModern;
+  if (modernWorktree && (!creationBaseCommit || !creationBaseListing)) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: durable modern worktree evidence is inconsistent with the current WORKTREE_CREATED source attestation",
+    );
+  }
+
+  if (modernWorktree) {
+    if (worktreeMeta === null) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: current worktree metadata is missing",
+      );
+    }
+    if (
+      !("repoSelector" in worktreeMeta) ||
+      (
+        typeof worktreeMeta.gitCommonDir !== "string" &&
+        typeof worktreeMeta.gitCommonDirHash !== "string"
+      )
+    ) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: durable modern worktree evidence lacks creating-repository binding; restart the Bolt attempt",
+      );
+    }
+    const selectedCommonDir = gitCommonDirRealpath(repoCwd);
+    const worktreeCommonDir = gitCommonDirRealpath(wtPath);
+    const metadataCommonDirHash =
+      typeof worktreeMeta.gitCommonDirHash === "string" &&
+      /^[0-9a-f]{64}$/.test(worktreeMeta.gitCommonDirHash)
+        ? worktreeMeta.gitCommonDirHash
+        : typeof worktreeMeta.gitCommonDir === "string"
+          ? gitCommonDirHash(worktreeMeta.gitCommonDir)
+          : null;
+    if (worktreeMeta.repoSelector !== selectedRepo) {
+      errorWithSlug(
+        slug,
+        `refusing to merge: selected repository ${JSON.stringify(selectedRepo ?? "-")} does not match creating repository ${JSON.stringify(worktreeMeta.repoSelector ?? "-")}; retry with the creating --repo selector`,
+      );
+    }
+    if (selectedCommonDir === null) {
+      errorWithSlug(
+        slug,
+        `refusing to merge: could not resolve the selected checkout git directory for repository ${JSON.stringify(selectedRepo ?? "-")} after partial cleanup; restore the selected checkout registration, then retry`,
+      );
+    }
+    if (worktreeCommonDir === null) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: could not resolve the Bolt worktree git directory after partial cleanup; restore the worktree registration or discard and restart the Bolt attempt",
+      );
+    }
+    if (
+      metadataCommonDirHash === null ||
+      metadataCommonDirHash !== gitCommonDirHash(selectedCommonDir) ||
+      metadataCommonDirHash !== gitCommonDirHash(worktreeCommonDir)
+    ) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: recorded creating-repository provenance does not match the selected repository or Bolt worktree; restore the original repository/worktree binding or discard and restart the Bolt attempt",
+      );
+    }
+    if (
+      auditBlockField(creation.block, "Repo") !==
+      (worktreeMeta.repoSelector ?? "-")
+    ) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: WORKTREE_CREATED repository selector does not match worktree metadata",
+      );
+    }
+    if (
+      worktreeMeta.baseCommit !== creationBaseCommit ||
+      worktreeMeta.baseSourceListing !== creationBaseListing ||
+      (worktreeMeta.intentRecord !== undefined &&
+        auditBlockField(creation.block, "Intent record") !==
+          worktreeMeta.intentRecord) ||
+      (worktreeMeta.swarmUnit !== creationSwarmUnit ||
+        worktreeMeta.swarmBatch !== creationSwarmBatch ||
+        worktreeMeta.swarmStage !== creationSwarmStage ||
+        worktreeMeta.swarmFloor !== creationSwarmFloor)
+    ) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: current worktree metadata does not match WORKTREE_CREATED",
+      );
+    }
+  }
+  const unitName =
+    worktreeMeta?.swarmUnit ??
+    creationSwarmUnit ??
+    mappedUnits.values().next().value ??
+    convergedUnitName(pd, slug, intent, space);
+
+  const boltStart = latestUnambiguousRow(
+    slug,
+    "BOLT_STARTED",
+    rows.filter(
+      (row) =>
+        row.event === "BOLT_STARTED" &&
+        auditBlockField(row.block, "Bolt slug") === slug &&
+        rowAfter(row, creation),
+    ),
+    (row) =>
+      [
+        auditBlockField(row.block, "Batch number") ?? "",
+        auditBlockField(row.block, "Base commit") ?? "",
+        auditBlockField(row.block, "Base Source Listing") ?? "",
+      ].join("\0"),
+  );
+  if (boltStart === null) {
+    if (requiresSwarmAuthority) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: current modern worktree has no BOLT_STARTED authority",
+      );
+    }
+    return null;
+  }
+  const batch = auditBlockField(boltStart.block, "Batch number");
+  const boltUnit = auditBlockField(boltStart.block, "Bolt names");
+  if (!batch || !/^[1-9][0-9]*$/.test(batch)) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: current BOLT_STARTED has no valid batch number",
+    );
+  }
+  if (
+    requiresSwarmAuthority &&
+    (!boltUnit ||
+      boltUnit.includes(",") ||
+      boltSlugForUnit(boltUnit) !== slug ||
+      boltUnit !== unitName ||
+      (worktreeMeta?.swarmBatch !== undefined &&
+        worktreeMeta.swarmBatch !== batch))
+  ) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: current BOLT_STARTED does not match swarm worktree provenance",
+    );
+  }
+  if (
+    modernWorktree &&
+    (auditBlockField(boltStart.block, "Base commit") !== creationBaseCommit ||
+      auditBlockField(boltStart.block, "Base Source Listing") !==
+        creationBaseListing)
+  ) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: current BOLT_STARTED does not match WORKTREE_CREATED",
+    );
+  }
+
+  const swarmStart = latestUnambiguousRow(
+    slug,
+    "SWARM_STARTED",
+    rows.filter(
+      (row) =>
+        row.event === "SWARM_STARTED" &&
+        auditBlockField(row.block, "Batch number") === batch &&
+        (auditBlockField(row.block, "Unit names") ?? "")
+          .split(",")
+          .map((unit) => unit.trim())
+          .includes(unitName) &&
+        rowAfter(row, creation) &&
+        rowAfter(row, boltStart),
+    ),
+    (row) =>
+      [
+        auditBlockField(row.block, "Stage") ?? "",
+        auditBlockField(row.block, "Run floor") ?? "",
+        auditBlockField(row.block, "Unit names") ?? "",
+      ].join("\0"),
+  );
+  if (swarmStart === null) {
+    if (requiresSwarmAuthority) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: current autonomous worktree has no SWARM_STARTED authority",
+      );
+    }
+    return null; // ordinary non-swarm Bolt
+  }
+  const stage = auditBlockField(swarmStart.block, "Stage");
+  const floor = auditBlockField(swarmStart.block, "Run floor");
+  if (!stage || !floor) {
+    if (!modernWorktree) return null; // pre-binding swarm migration
+    errorWithSlug(
+      slug,
+      "refusing to merge: current modern SWARM_STARTED lacks Stage/Run floor authority",
+    );
+  }
+  if (
+    worktreeMeta?.swarmStage !== undefined &&
+    (worktreeMeta.swarmStage !== stage ||
+      worktreeMeta.swarmFloor !== floor ||
+      worktreeMeta.swarmBatch !== batch)
+  ) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: current SWARM_STARTED does not match worktree provenance",
+    );
+  }
+  let selectedState: string;
+  try {
+    selectedState = readStateFile(pd, intent, space);
+  } catch {
+    errorWithSlug(
+      slug,
+      "refusing to merge: current swarm state is unavailable",
+    );
+  }
+  const currentStage = getField(selectedState, "Current Stage")?.trim();
+  const currentFloor = latestMainWorkflowStageRunFloorForProject(
+    pd,
+    stage,
+    false,
+    intent,
+    space,
+  );
+  if (currentStage !== stage || currentFloor !== floor) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: this convergence belongs to a stale stage attempt",
+    );
+  }
+
+  const latest = latestUnambiguousRow(
+    slug,
+    "SWARM_UNIT_CONVERGED",
+    rows.filter(
+      (row) =>
+        row.event === "SWARM_UNIT_CONVERGED" &&
+        auditBlockField(row.block, "Unit name") === unitName &&
+        auditBlockField(row.block, "Batch number") === batch &&
+        auditBlockField(row.block, "Stage") === stage &&
+        auditBlockField(row.block, "Run floor") === floor &&
+        rowAfter(row, swarmStart),
+    ),
+    (row) =>
+      [
+        auditBlockField(row.block, "Source Fingerprint") ?? "",
+        auditBlockField(row.block, "Source Commit") ?? "",
+        auditBlockField(row.block, "Source Freshness Bypass") ?? "",
+      ].join("\0"),
+  );
+  if (latest === null) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: the current swarm worktree has no correlated convergence authority; rerun finalize",
+    );
+  }
+
+  const bypass =
+    auditBlockField(latest.block, "Source Freshness Bypass") ?? undefined;
+  const fingerprint =
+    auditBlockField(latest.block, "Source Fingerprint") ?? undefined;
+  const commit = auditBlockField(latest.block, "Source Commit") ?? undefined;
   if (bypass !== undefined) {
     if (bypass !== "true") {
       errorWithSlug(slug, `refusing to merge: invalid Source Freshness Bypass marker "${bypass}"`);
     }
-    if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return { kind: "bypass" };
+    if (fingerprint || commit) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: convergence mixes bypass and bound source authority",
+      );
+    }
+    if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") {
+      return { kind: "bypass", unit: unitName, batch, stage, floor };
+    }
     errorWithSlug(
       slug,
       `refusing to merge: this convergence was finalized with source freshness bypassed; ` +
@@ -368,20 +1527,37 @@ function convergedSourceRecord(
     );
   }
   if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;
-  const fingerprint = latestBlock
-    ? auditBlockField(latestBlock, "Source Fingerprint") ?? undefined
-    : undefined;
-  const commit = latestBlock
-    ? auditBlockField(latestBlock, "Source Commit") ?? undefined
-    : undefined;
-  if (!fingerprint) return null; // pre-binding convergence row
+  if (!fingerprint || !commit) {
+    if (!modernWorktree && !fingerprint && !commit) return null;
+    errorWithSlug(
+      slug,
+      "refusing to merge: the current modern convergence row lacks complete immutable source authority; rerun finalize",
+    );
+  }
   if (fingerprint === UNBINDABLE_FINGERPRINT) {
     errorWithSlug(slug, "refusing to merge: this convergence receipt is unbindable; re-run review and finalize with Git available");
   }
-  if (!commit) {
-    errorWithSlug(slug, "refusing to merge: the source-bound convergence row has no immutable Source Commit; re-run finalize");
+  if (!/^[0-9a-f]{40,64}$/.test(fingerprint) || !/^[0-9a-f]{40,64}$/.test(commit)) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: the current convergence source authority is malformed",
+    );
   }
-  return { kind: "bound", fingerprint, commit };
+  if (!creationBaseCommit) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: bound convergence has no immutable worktree base commit authority",
+    );
+  }
+  return {
+    kind: "bound",
+    fingerprint,
+    commit,
+    unit: unitName,
+    batch,
+    stage,
+    floor,
+  };
 }
 
 function assertConvergedSourceUnchanged(
@@ -406,6 +1582,247 @@ function assertConvergedSourceUnchanged(
   return record.commit;
 }
 
+function sourceListingsEqual(
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [key, value] of left) {
+    if (!sourceListingEntriesEqual(right.get(key), value)) return false;
+  }
+  return true;
+}
+
+function changedSourceListingKeys(
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>,
+): Set<string> {
+  const changed = new Set<string>();
+  for (const [key, value] of left) {
+    if (!sourceListingEntriesEqual(right.get(key), value)) changed.add(key);
+  }
+  for (const key of right.keys()) {
+    if (!left.has(key)) changed.add(key);
+  }
+  return changed;
+}
+
+function changedSourceListingPaths(
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>,
+): string[] {
+  return [...changedSourceListingKeys(left, right)]
+    .sort()
+    .slice(0, 10)
+    .map((key) => {
+      const separator = key.indexOf("\0");
+      const repo = separator === -1 ? "" : key.slice(0, separator);
+      const path = separator === -1 ? key : key.slice(separator + 1);
+      return repo ? `${repo}/${path}` : path;
+    });
+}
+
+function assertAggregateSourceBeforeMerge(
+  pd: string,
+  slug: string,
+  record: ConvergedSourceRecord | null,
+  intent?: string,
+  space?: string,
+): {
+  state: WorkspaceSourceState;
+  openingFingerprint: string;
+} | null {
+  if (!record || record.kind === "bypass") return null;
+  const current = workspaceSourceState(pd, intent, space);
+  if (current === null) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: the main checkout source aggregate is unbindable",
+    );
+  }
+  const chain = currentSwarmSourceMergeChain(
+    pd,
+    record.stage,
+    intent,
+    space,
+  );
+  if (chain.state === "invalid") {
+    errorWithSlug(
+      slug,
+      `refusing to merge: the current swarm source-merge chain is invalid (${chain.reason})`,
+    );
+  }
+  if (chain.state === "ready") {
+    if (chain.units.has(record.unit)) {
+      errorWithSlug(
+        slug,
+        `refusing to merge: unit "${record.unit}" already has current-attempt source-merge authority`,
+      );
+    }
+    if (current.fingerprint !== chain.fingerprint) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: the main checkout source changed after the previous reviewed-source merge",
+      );
+    }
+    return {
+      state: current,
+      openingFingerprint: chain.fingerprint,
+    };
+  }
+
+  const opening = currentSwarmSourceOpeningFingerprint(
+    pd,
+    record.stage,
+    intent,
+    space,
+  );
+  if (opening.state === "invalid") {
+    errorWithSlug(
+      slug,
+      `refusing to merge: the current stage has no verifiable predecessor for the first aggregate link (${opening.reason})`,
+    );
+  }
+  if (
+    opening.source === "stage-baseline" &&
+    opening.listing !== undefined &&
+    !sourceListingsEqual(current.listing, opening.listing)
+  ) {
+    const changed = changedSourceListingPaths(
+      current.listing,
+      opening.listing,
+    );
+    errorWithSlug(
+      slug,
+      `refusing to merge: the main checkout source changed since the stage-entry baseline (${changed.join(", ") || "unknown paths"})`,
+    );
+  }
+  if (
+    opening.source === "prior-accepted" &&
+    current.fingerprint !== opening.fingerprint
+  ) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate",
+    );
+  }
+  return {
+    state: current,
+    openingFingerprint: opening.fingerprint,
+  };
+}
+
+function expectedAggregateAfterCommit(
+  before: ReadonlyMap<string, string>,
+  priorCommittedRepo: ReadonlyMap<string, string>,
+  landedCommittedRepo: ReadonlyMap<string, string>,
+  repo: string | null,
+): Map<string, string> {
+  const expected = new Map(before);
+  for (const key of changedSourceListingKeys(
+    priorCommittedRepo,
+    landedCommittedRepo,
+  )) {
+    const aggregateKey = `${repo ?? ""}${key}`;
+    const landed = landedCommittedRepo.get(key);
+    if (landed === undefined) expected.delete(aggregateKey);
+    else expected.set(aggregateKey, landed);
+  }
+  return expected;
+}
+
+function stagedTreeOid(repoCwd: string): string | null {
+  const tree = runGit(["write-tree"], repoCwd);
+  const oid = tree.ok ? tree.stdout.trim() : "";
+  return /^[0-9a-f]{40,64}$/.test(oid) ? oid : null;
+}
+
+function assertLandedMergeCommit(
+  slug: string,
+  repoCwd: string,
+  priorHead: string,
+  commitSha: string,
+  expectedTree: string,
+  expectedSecondParent: string | null | undefined,
+): void {
+  const parent = runGit(["rev-parse", `${commitSha}^1`], repoCwd);
+  const tree = runGit(["rev-parse", `${commitSha}^{tree}`], repoCwd);
+  const secondParent = runGit(["rev-parse", `${commitSha}^2`], repoCwd);
+  const secondParentMatches =
+    expectedSecondParent === undefined ||
+    (expectedSecondParent === null
+      ? !secondParent.ok
+      : secondParent.ok &&
+        secondParent.stdout.trim() === expectedSecondParent);
+  if (
+    !parent.ok ||
+    parent.stdout.trim() !== priorHead ||
+    !tree.ok ||
+    tree.stdout.trim() !== expectedTree ||
+    !secondParentMatches
+  ) {
+    errorWithSlug(
+      slug,
+      `[merge-succeeded:${commitSha}] unexpected commit or tree change landed during the source merge; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+    );
+  }
+}
+
+function renderSourcePathKeys(keys: Iterable<string>): string {
+  return [...keys]
+    .sort()
+    .slice(0, 10)
+    .map((key) => {
+      const separator = key.indexOf("\0");
+      const repo = separator === -1 ? "" : key.slice(0, separator);
+      const path = separator === -1 ? key : key.slice(separator + 1);
+      return repo ? `${repo}/${path}` : path;
+    })
+    .join(", ");
+}
+
+function refuseConfiguredMergeDrivers(
+  slug: string,
+  repoCwd: string,
+  record: ConvergedSourceRecord | null,
+): void {
+  if (
+    record?.kind !== "bound" ||
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1"
+  ) {
+    return;
+  }
+  const configured = runGit(
+    [
+      "config",
+      "-z",
+      "--name-only",
+      "--get-regexp",
+      "^merge\\..*\\.driver$",
+    ],
+    repoCwd,
+  );
+  if (!configured.ok && configured.code === 1) return;
+  if (!configured.ok) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: cannot inspect effective repository merge-driver configuration",
+    );
+  }
+  const keys = [
+    ...new Set(
+      configured.stdout
+        .split("\0")
+        .map((key) => key.trim())
+        .filter(Boolean),
+    ),
+  ].sort();
+  errorWithSlug(
+    slug,
+    `refusing to merge: repository merge-driver configuration is present (${keys.join(", ")}); remove the merge.<name>.driver configuration, or retry with AIDLC_SKIP_SOURCE_FRESHNESS=1`,
+  );
+}
+
 function handleMerge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -414,10 +1831,28 @@ function handleMerge(args: string[]): void {
   const message = flags.message ?? `Bolt ${slug}`;
 
   const pd = resolveProjectDir(projectDir);
+  const recorded = recordedWorktreeSelector(pd, slug);
+  if (flags.intent === undefined && flags.space === undefined) {
+    if (
+      recorded !== null &&
+      recorded.intent !== undefined &&
+      recorded.space !== undefined
+    ) {
+      flags.intent = recorded.intent;
+      flags.space = recorded.space;
+    }
+  }
+  if (
+    flags.repo === undefined &&
+    typeof recorded?.repoSelector === "string"
+  ) {
+    flags.repo = recorded.repoSelector;
+  }
   // P7: anchor every git op to the target sibling repo. The merge runs IN that
   // repo's main checkout (squash/merge/ff/commit/worktree-remove/branch-D); the
   // rebase still runs in the worktree (wtPath). Legacy single-repo → repoCwd=pd.
-  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  const repoTarget = resolveRepoTarget(pd, flags, slug);
+  const repoCwd = repoTarget.cwd;
   assertNotSiblingWorktree(repoCwd);
 
   // Defensive HEAD check: the caller must have <target> checked out at the repo cwd.
@@ -441,7 +1876,28 @@ function handleMerge(args: string[]): void {
 
   const wtPath = worktreePath(pd, slug);
   const branchName = `bolt-${slug}`;
-  const sourceRecord = convergedSourceRecord(pd, slug, flags.intent, flags.space);
+  const sourceRecord = convergedSourceRecord(
+    pd,
+    slug,
+    repoCwd,
+    flags.intent,
+    flags.space,
+    repoTarget.repo,
+  );
+  const frameworkPathspecs = workspaceSourceExclusionPathspecs(wtPath);
+  if (frameworkPathspecs === null) {
+    errorWithSlug(
+      slug,
+      "cannot resolve the Bolt worktree source role from its metadata",
+    );
+  }
+  const aggregateBefore = assertAggregateSourceBeforeMerge(
+    pd,
+    slug,
+    sourceRecord,
+    flags.intent,
+    flags.space,
+  );
   if (sourceRecord?.kind === "bound" && strategy === "rebase") {
     errorWithSlug(
       slug,
@@ -466,11 +1922,7 @@ function handleMerge(args: string[]): void {
       .filter(Boolean)
       .filter((line) => {
         const path = line.slice(3);
-        if (path.startsWith("aidlc/")) return false;
-        if (path.startsWith(".aidlc/")) return false;
-        return !/(?:^|\/)aidlc\/spaces\/[^/]+\/intents\/.*\/\.aidlc-sensors(?:\/|$)/.test(
-          path,
-        );
+        return workspaceSourcePathIsExcluded(wtPath, path) !== true;
       });
     if (applicationLines.length > 0) {
       const detail = applicationLines.join(", ");
@@ -480,6 +1932,7 @@ function handleMerge(args: string[]): void {
       );
     }
   }
+  refuseConfiguredMergeDrivers(slug, repoCwd, sourceRecord);
 
   // Rebase requires a remote for <target>. The remote-existence check is
   // a pre-audit guard (no state change). The actual `git fetch` is post-
@@ -504,7 +1957,7 @@ function handleMerge(args: string[]): void {
   try {
     auditTs = emitAudit(pd, "WORKTREE_MERGED", {
       "Bolt slug": slug,
-      "Worktree path": wtPath,
+      "Worktree path": auditWorktreePath(pd, wtPath),
       "Target branch": flags.target,
       Strategy: strategy,
     }, flags.intent, flags.space);
@@ -537,6 +1990,7 @@ function handleMerge(args: string[]): void {
   }
 
   let commitSha = "";
+  const priorTargetHead = currentSha(repoCwd);
   // conflictCwd records which checkout the conflicting state lives in:
   // squash/merge run in the target repo's main checkout (cwd = repoCwd), rebase
   // runs in the worktree (cwd = wtPath). For conflict-file enumeration, we query
@@ -547,7 +2001,10 @@ function handleMerge(args: string[]): void {
   let conflictHit = false;
   switch (strategy) {
     case "squash": {
-      const m = runGit(["merge", "--squash", mergeTarget], repoCwd);
+      const m = runGit(
+        ["merge", "--squash", "--no-verify", mergeTarget],
+        repoCwd,
+      );
       if (!m.ok) {
         if (isConflict(m)) {
           conflictHit = true;
@@ -558,7 +2015,11 @@ function handleMerge(args: string[]): void {
           `git merge --squash failed: ${m.stderr.trim() || `exit ${m.code}`}`
         );
       }
-      const c = runGit(["commit", "--no-edit", "-m", message], repoCwd);
+      const expectedTree = stagedTreeOid(repoCwd);
+      if (expectedTree === null) {
+        errorWithSlug(slug, "cannot resolve the staged squash merge tree");
+      }
+      const c = runGit(["commit", "--no-verify", "-m", message], repoCwd);
       if (!c.ok) {
         errorWithSlug(
           slug,
@@ -566,15 +2027,22 @@ function handleMerge(args: string[]): void {
         );
       }
       commitSha = currentSha(repoCwd);
+      assertLandedMergeCommit(
+        slug,
+        repoCwd,
+        priorTargetHead,
+        commitSha,
+        expectedTree,
+        null,
+      );
       break;
     }
     case "merge": {
       const m = runGit([
         "merge",
         "--no-ff",
-        "--no-edit",
-        "-m",
-        `Merge bolt ${slug}`,
+        "--no-commit",
+        "--no-verify",
         mergeTarget,
       ], repoCwd);
       if (!m.ok) {
@@ -587,7 +2055,31 @@ function handleMerge(args: string[]): void {
           `git merge --no-ff failed: ${m.stderr.trim() || `exit ${m.code}`}`
         );
       }
+      const expectedTree = stagedTreeOid(repoCwd);
+      if (expectedTree === null) {
+        errorWithSlug(slug, "cannot resolve the staged merge tree");
+      }
+      const c = runGit(
+        ["commit", "--no-verify", "-m", `Merge bolt ${slug}`],
+        repoCwd,
+      );
+      if (!c.ok) {
+        errorWithSlug(
+          slug,
+          `git commit failed: ${c.stderr.trim() || `exit ${c.code}`}`,
+        );
+      }
       commitSha = currentSha(repoCwd);
+      assertLandedMergeCommit(
+        slug,
+        repoCwd,
+        priorTargetHead,
+        commitSha,
+        expectedTree,
+        sourceRecord?.kind === "bound"
+          ? sourceRecord.commit
+          : undefined,
+      );
       break;
     }
     case "rebase": {
@@ -642,6 +2134,76 @@ function handleMerge(args: string[]): void {
   // "merge failed entirely" from "merge landed, cleanup orphan remains"
   // — these need different recovery actions.
   const cleanupTag = `[merge-succeeded:${commitSha}]`;
+  if (sourceRecord?.kind === "bound") {
+    const aggregateAfter = workspaceSourceState(pd, flags.intent, flags.space);
+    if (aggregateBefore === null || aggregateAfter === null) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cannot bind the post-merge main-checkout source aggregate; worktree and retained source commit preserved`,
+      );
+    }
+    const priorCommittedRepo = gitCommitSourceListing(
+      repoCwd,
+      priorTargetHead,
+      repoTarget.repo === null,
+    );
+    const landedCommittedRepo = gitCommitSourceListing(
+      repoCwd,
+      commitSha,
+      repoTarget.repo === null,
+    );
+    if (priorCommittedRepo === null || landedCommittedRepo === null) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cannot reconstruct the committed source delta; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+      );
+    }
+    const expectedAfter = expectedAggregateAfterCommit(
+      aggregateBefore.state.listing,
+      priorCommittedRepo,
+      landedCommittedRepo,
+      repoTarget.repo,
+    );
+    const mismatchedEntries = [
+      ...changedSourceListingKeys(expectedAfter, aggregateAfter.listing),
+    ];
+    if (mismatchedEntries.length > 0) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} post-merge source does not match landed merge commit ${commitSha} (${renderSourcePathKeys(mismatchedEntries) || "unknown paths"}); no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+      );
+    }
+    if (currentSha(repoCwd) !== commitSha) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} target HEAD changed after the source merge result was verified; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+      );
+    }
+    try {
+      emitAudit(
+        pd,
+        "SWARM_SOURCE_MERGED",
+        {
+          "Batch number": sourceRecord.batch,
+          "Unit name": sourceRecord.unit,
+          Stage: sourceRecord.stage,
+          "Run floor": sourceRecord.floor,
+          "Previous Source Fingerprint": aggregateBefore.openingFingerprint,
+          "Source Fingerprint": aggregateAfter.fingerprint,
+          "Source Commit": sourceRecord.commit,
+          "Merge commit": commitSha,
+          Repo: repoTarget.repo ?? "-",
+        },
+        flags.intent,
+        flags.space,
+      );
+    } catch (e) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} post-merge source authority emission failed (${errorMessage(e)}); the source merge landed but no aggregate receipt exists. Do not retry this merge. Preserve the worktree and restart the stage attempt, or use AIDLC_SKIP_SOURCE_FRESHNESS=1 only with explicit human approval.`,
+      );
+    }
+  }
   if (sourceRecord?.kind === "bypass") {
     const currentBranchOid = runGit(["rev-parse", `${branchName}^{commit}`], repoCwd);
     if (
@@ -671,12 +2233,7 @@ function handleMerge(args: string[]): void {
     // Finalization writes framework metadata into the Bolt even when source
     // freshness is bypassed. Remove only that known residue so ordinary
     // worktree removal can still protect uncommitted application source.
-    const frameworkPaths = [
-      ":(top)aidlc/",
-      ":(top).aidlc/",
-      ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
-    ];
-    for (const frameworkPath of frameworkPaths) {
+    for (const frameworkPath of frameworkPathspecs) {
       const tracked = runGit(["ls-files", "-z", "--", frameworkPath], wtPath);
       if (!tracked.ok) {
         errorWithSlug(
@@ -696,7 +2253,10 @@ function handleMerge(args: string[]): void {
         );
       }
     }
-    const clean = runGit(["clean", "-ffdx", "--", ...frameworkPaths], wtPath);
+    const clean = runGit(
+      ["clean", "-ffdx", "--", ...frameworkPathspecs],
+      wtPath,
+    );
     if (!clean.ok) {
       errorWithSlug(
         slug,
@@ -720,16 +2280,27 @@ function handleMerge(args: string[]): void {
       .filter(Boolean)
       .filter((line) => {
         const path = line.slice(3);
-        if (path.startsWith("aidlc/")) return false;
-        if (path.startsWith(".aidlc/")) return false;
-        return !/(?:^|\/)aidlc\/spaces\/[^/]+\/intents\/.*\/\.aidlc-sensors(?:\/|$)/.test(
-          path,
-        );
+        return workspaceSourcePathIsExcluded(wtPath, path) !== true;
       });
     if (remainingApplicationLines.length > 0) {
       errorWithSlug(
         slug,
         `${cleanupTag} application source changed during the bypassed merge; worktree preserved`,
+      );
+    }
+  } else {
+    // Ordinary Bolts also carry framework-owned runtime attestations under the
+    // root .aidlc/ shell. Git treats that ignored directory as one cleanable
+    // entry, so remove the shell as a unit; non-forced worktree removal below
+    // must continue to protect every application path.
+    const clean = runGit(
+      ["clean", "-ffdx", "--", ...frameworkPathspecs],
+      wtPath,
+    );
+    if (!clean.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} ordinary Bolt metadata cleanup failed: ${clean.stderr.trim() || `exit ${clean.code}`}`,
       );
     }
   }
@@ -824,13 +2395,80 @@ function handleDiscard(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
+  const intentWasExplicit =
+    flags.intent !== undefined || flags.space !== undefined;
+  const recorded = recordedWorktreeSelector(pd, slug);
+  if (
+    flags.intent === undefined &&
+    flags.space === undefined &&
+    recorded?.intent !== undefined &&
+    recorded.space !== undefined
+  ) {
+    flags.intent = recorded.intent;
+    flags.space = recorded.space;
+  }
+  const authority = discardCreationAuthority(
+    pd,
+    slug,
+    recorded,
+    flags.repo,
+  );
+  const wtPath = worktreePath(pd, slug);
+  if (!authority.evidenceExists) {
+    console.log(
+      JSON.stringify({
+        emitted: null,
+        slug,
+        worktree_path: wtPath,
+        reason: "already-discarded",
+      }),
+    );
+    return;
+  }
+  if (authority.space !== undefined) {
+    const authorityRecord =
+      authority.intent === undefined
+        ? null
+        : `aidlc/spaces/${authority.space}/intents/${authority.intent}`;
+    if (
+      intentWasExplicit &&
+      relativeRecordDir(pd, flags.intent, flags.space) !== authorityRecord
+    ) {
+      errorWithSlug(
+        slug,
+        `refusing to discard: selected intent ${JSON.stringify(relativeRecordDir(pd, flags.intent, flags.space))} does not match creating intent ${JSON.stringify(authorityRecord)}`,
+      );
+    }
+    if (!intentWasExplicit && authority.intent !== undefined) {
+      flags.intent = authority.intent;
+      flags.space = authority.space;
+    }
+  }
+  const creatingRepo =
+    authority.repo !== undefined
+      ? authority.repo
+      : recorded?.repoSelector;
+  if (flags.repo === undefined && typeof creatingRepo === "string") {
+    flags.repo = creatingRepo;
+  }
+  if (
+    flags.repo !== undefined &&
+    creatingRepo !== undefined &&
+    flags.repo !== creatingRepo
+  ) {
+    errorWithSlug(
+      slug,
+      `refusing to discard: selected repository ${JSON.stringify(flags.repo)} does not match creating repository ${JSON.stringify(creatingRepo ?? "-")}`,
+    );
+  }
   // P7: anchor every git op to the target sibling repo (or projectDir for legacy).
-  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  const repoCwd =
+    creatingRepo === null ? pd : resolveRepoCwd(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
 
-  const wtPath = worktreePath(pd, slug);
   const branchName = `bolt-${slug}`;
   const dirExists = existsSync(wtPath);
+  const registered = repositoryRegistersBoltWorktree(pd, repoCwd, slug);
   const branchExists = runGit([
     "rev-parse",
     "--verify",
@@ -857,14 +2495,14 @@ function handleDiscard(args: string[]): void {
   try {
     auditTs = emitAudit(pd, "WORKTREE_DISCARDED", {
       "Bolt slug": slug,
-      "Worktree path": wtPath,
+      "Worktree path": auditWorktreePath(pd, wtPath),
       Reason: "agent-discard",
     }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
   }
 
-  if (dirExists) {
+  if (dirExists || registered) {
     const rm = runGit(["worktree", "remove", "--force", wtPath], repoCwd);
     if (!rm.ok) {
       errorWithSlug(
@@ -1082,8 +2720,9 @@ function handleInfo(args: string[]): void {
   // Absence of the file or the field both resolve to merge_held=false — the
   // resume-path check is "do not dispatch a merge that's actively held",
   // not "every Bolt has had its hold state explicitly initialised".
+  const resolvedWorktreePath = resolveAuditWorktreePath(pd, pathMatch[1]);
   let mergeHeld = false;
-  const wtStatePath = worktreeStateFilePath(pathMatch[1]);
+  const wtStatePath = worktreeStateFilePath(resolvedWorktreePath);
   if (existsSync(wtStatePath)) {
     const wtContent = readFileSync(wtStatePath, "utf-8");
     mergeHeld = getField(wtContent, "Merge-Held") === "true";
@@ -1092,7 +2731,7 @@ function handleInfo(args: string[]): void {
   console.log(
     JSON.stringify({
       slug,
-      path: pathMatch[1],
+      path: resolvedWorktreePath,
       branch_name: branchMatch[1],
       audit_timestamp: match.timestamp,
       merge_held: mergeHeld,

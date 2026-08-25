@@ -162,7 +162,7 @@ shape as BGP not recomputing routes mid-packet-flight.
 ### Locked and atomic
 
 Two failure modes the compile must address from day one. This
-implementation's per-Bolt worktrees isolate state for parallel agents
+implementation's worktrees for swarm-mode Bolts isolate state for parallel agents
 most of the time, but `data/stage-graph.json` is repo-shared, not
 worktree-scoped — and the user can launch `/aidlc` in two terminals
 against the same checkout — so the compile needs defence regardless.

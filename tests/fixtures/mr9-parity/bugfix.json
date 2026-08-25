@@ -132,7 +132,7 @@
   {
     "slug": "deployment-pipeline",
     "phase": "operation",
-    "action": "SKIP"
+    "action": "EXECUTE"
   },
   {
     "slug": "environment-provisioning",
@@ -142,7 +142,7 @@
   {
     "slug": "deployment-execution",
     "phase": "operation",
-    "action": "SKIP"
+    "action": "EXECUTE"
   },
   {
     "slug": "observability-setup",

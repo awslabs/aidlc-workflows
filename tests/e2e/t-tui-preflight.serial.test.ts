@@ -7,8 +7,8 @@
 // and it gates the rest: it proves the terminal rendering SUBSTRATE actually
 // WORKS, with the t19 discipline of distinguishing ABSENT (skip-with-reason)
 // from PRESENT-BUT-BROKEN (fail loud). It spends NO tokens and never touches
-// claude — it drives a known-answer target (printf in tmux / cmd.exe via
-// node-pty) and asserts the captured grid carries the sentinel.
+// claude — it drives a known-answer target that fragments a UTF-8 + ANSI payload
+// byte by byte and asserts the captured grid carries every intended glyph.
 //
 // Why a probe, not a bare `command -v` (§6.2): presence != working.
 //   - On Windows `node -e "require('node-pty')"` SUCCEEDS even when the driver
@@ -70,18 +70,36 @@ const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
 const WIN_NODE = IS_WIN ? resolveWinNode() : null;
 
-// The known-answer target — no claude, no tokens. On POSIX a bash printf that
-// holds the pane open; on Windows cmd.exe echoing the sentinel (the calibration
-// proven in the spike). The driver's `start` runs `<cmd...>` after `--`.
+// The known-answer target — no claude, no tokens. It writes every byte
+// separately so Windows must preserve UTF-8 across the exact fragmented-output
+// boundary that previously produced CP437 mojibake. On Windows it also refuses
+// to emit the sentinel unless the real child received TERM=xterm-256color; this
+// catches node-pty's Windows-only failure to propagate its `name` option into
+// the environment. SGR wraps the line to prove xterm/tmux still parse ANSI while
+// plain capture returns stable text.
 const SENTINEL = "AIDLC_TUI_PREFLIGHT_OK";
-const TARGET_CMD: string[] = IS_WIN
-  ? [
-      "cmd.exe",
-      "/d",
-      "/c",
-      `echo ${SENTINEL} & C:\\Windows\\System32\\ping.exe -n 6 127.0.0.1 > nul`,
-    ]
-  : ["bash", "-c", `printf '${SENTINEL}\\n'; sleep 10`];
+const GLYPH_SENTINEL =
+  `${SENTINEL} · ←→ ▓░ ✓✔ ❯☐☒ — ordinary text`;
+const TARGET_SCRIPT = [
+  'const fs = require("node:fs");',
+  'if (process.platform === "win32" && process.env.TERM !== "xterm-256color") {',
+  '  process.stderr.write("TERM_MISMATCH=<" + (process.env.TERM ?? "unset") + ">\\n");',
+  "  process.exit(3);",
+  "}",
+  `const bytes = Buffer.from(${JSON.stringify(`\x1b[32m${GLYPH_SENTINEL}\x1b[0m\r\n`)}, "utf8");`,
+  "let offset = 0;",
+  "const timer = setInterval(() => {",
+  "  fs.writeSync(1, bytes.subarray(offset, offset + 1));",
+  "  offset++;",
+  "  if (offset === bytes.length) clearInterval(timer);",
+  "}, 2);",
+  "setTimeout(() => process.exit(0), 10000);",
+].join("");
+const TARGET_CMD: string[] = [
+  IS_WIN ? (WIN_NODE ?? "node") : process.execPath,
+  "-e",
+  TARGET_SCRIPT,
+];
 
 interface Run {
   rc: number;
@@ -341,7 +359,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
   // skipIf carries the reason in the test name so the SKIP is never silent —
   // it surfaces in the bun output and the junit <skipped/> the runner aggregates.
   test.skipIf(ABSENT_REASON !== null)(
-    `substrate present and a known-answer round-trip reconstructs the grid${
+    `substrate preserves exact fragmented Unicode and ANSI grid rendering${
       ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : ""
     }`,
     () => {
@@ -395,13 +413,14 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           );
         }
 
-        // 3) capture the grid and assert the sentinel is really there — proves
-        // the round-trip (send-or-emit -> render -> capture) closes. On Windows
-        // this is the @xterm/headless grid; on POSIX the tmux capture-pane grid.
-        // Either way capture returns the same current-screen text (D-TUI-2).
+        // 3) Capture the grid and require the exact Unicode payload. On Windows
+        // this is the @xterm/headless grid; on POSIX it is tmux capture-pane.
+        // The SGR bytes must affect terminal attributes without leaking into the
+        // plain-text capture or changing any visible code point.
         const captured = drive(["capture", "--session", session]);
         expect(captured.rc).toBe(0);
-        expect(captured.stdout).toContain(SENTINEL);
+        expect(captured.stdout).toContain(GLYPH_SENTINEL);
+        expect(captured.stdout).not.toContain("\x1b[");
       } finally {
         drive(["kill", "--session", session]);
         if (existsSync(sandbox)) rmSync(sandbox, { recursive: true, force: true });

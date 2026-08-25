@@ -57,7 +57,7 @@ for the release matrix. The script writes each executable under
 target's `runtime/<harness>/` directory, and writes `build-results.json` at
 `build/binaries/`. The native gates run sensors, graph compilation, validation,
 generated-surface checks, plugin selection/composition, orchestration,
-Bolt/Swarm composition, packaged-runtime immutability, hooks, statusline,
+ordinary Bolt and autonomous swarm composition, packaged-runtime immutability, hooks, statusline,
 adapters, and explicit project routing without a `bun` executable on `PATH`.
 The staged `runtime/<harness>/` trees are read-only fallbacks; mutating commands
 must target an installed project harness. Any failed gate fails the build.

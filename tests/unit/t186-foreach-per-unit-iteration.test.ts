@@ -348,7 +348,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     );
   }, 30000);
 
-  test("5b: a composed plan that skips Units Generation uses stage-level paths without a DAG", () => {
+  test("5b: a composed plan that skips Units Generation ignores a stale valid DAG", () => {
     const proj = seedProject("functional-design", "on");
     const statePath = seededStateFile(proj);
     writeFileSync(
@@ -358,6 +358,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
         "- [S] units-generation — SKIP\n- [-] domain-design — EXECUTE",
       ),
     );
+    seedBoltDag(proj, ["stale-alpha"]);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
@@ -366,6 +367,26 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       `${RP}/construction/functional-design/functional-spec.md`,
     );
     expect(d.produces?.some((path) => path.includes("{unit-name}"))).toBe(false);
+
+    const unitStart = spawnSync(
+      BUN,
+      [
+        STATE,
+        "unit",
+        "start",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "stale-alpha",
+        "--project-dir",
+        proj,
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(unitStart.status).not.toBe(0);
+    expect(`${unitStart.stdout ?? ""}${unitStart.stderr ?? ""}`).toContain(
+      "runs once at stage level",
+    );
   }, 30000);
 
   // 6: coverage guard on report, approve with alpha + beta both uncovered ->

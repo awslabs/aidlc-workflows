@@ -119,11 +119,11 @@ describe("t277 nearestStockScopes (in-process, shipped grid)", () => {
     });
   });
 
-  test("stock adoption revalidates the 9-stage proposal as the 7-stage bugfix grid", () => {
+  test("stock adoption revalidates the 11-stage proposal as the 9-stage bugfix grid", () => {
     const proposed = validateGrid(bugfixPlusTwo());
     const adopted = validateGrid(loadScopeGrid().bugfix.stages);
-    expect(proposed.summary?.execute).toBe(9);
-    expect(adopted.summary?.execute).toBe(7);
+    expect(proposed.summary?.execute).toBe(11);
+    expect(adopted.summary?.execute).toBe(9);
     expect(adopted.nearest_stock?.[0]).toEqual({
       scope: "bugfix",
       diff: 0,

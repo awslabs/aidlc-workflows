@@ -77,7 +77,8 @@ const CODE_GENERATION = readFileSync(
 describe("t305 build-and-test.md — Step 10 failure-escalation ladder", () => {
   test("On-failure block is the ladder, not the old flat retry list", () => {
     expect(STAGE).toContain(
-      "**On failure**: If build or tests fail, run the failure-escalation ladder:",
+      "**On failure**: Run the same failure-escalation ladder for command failures,\n" +
+        "`Not Met` targets, and `Unverified` targets:",
     );
     // The retired flat prose must be gone (replaced, not duplicated).
     expect(STAGE).not.toContain(

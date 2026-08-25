@@ -199,6 +199,13 @@ function spaceKnowledgeOf(p: string): string {
     : "default";
   return join(p, "aidlc", "spaces", space, "knowledge");
 }
+function spaceCodekbOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  return join(p, "aidlc", "spaces", space, "codekb");
+}
 const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
 // The DETERMINISTIC per-clone audit shard a spawned utility resolves (the fixture
 // pins the clone-id). seedAuditFile() writes here too, so seed/append/check all
@@ -573,7 +580,7 @@ describe("t27 aidlc-utility doctor", () => {
 // ============================================================
 
 describe("t27 aidlc-utility init", () => {
-  test("14: init creates aidlc-state.md, audit shard dir, and knowledge/ directory", () => {
+  test("14: init creates state, audit, codekb, and knowledge directories", () => {
     const p = emptyDir();
     util(["intent-create", "--scope", "poc"], p);
     // P4: birth writes a per-intent record (state + audit shards), not the flat
@@ -586,6 +593,9 @@ describe("t27 aidlc-utility init", () => {
     // knowledge/ is SPACE-level (ensureWorkspaceDirs creates
     // aidlc/spaces/<space>/knowledge/ — a sibling of intents, not per-record).
     expect(existsSync(spaceKnowledgeOf(p))).toBe(true);
+    expect(existsSync(spaceCodekbOf(p))).toBe(true);
+    expect(statSync(spaceCodekbOf(p)).isDirectory()).toBe(true);
+    expect(readdirSync(spaceCodekbOf(p))).toEqual([]);
   });
 
   test("15: init output contains birth + state-init summary", () => {

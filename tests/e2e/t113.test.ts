@@ -173,8 +173,8 @@ function countEvent(seq: string[], type: string): number {
 
 // Drive a complete bugfix workflow once; return the project dir (audit is read
 // from the born intent's shards via readAllAuditShards(proj)). Bootstrap via
-// init (emits WORKFLOW_STARTED + init phase + 2x PHASE_SKIPPED and pre-completes
-// the 3 init stages), then walk the remaining EXECUTE stages.
+// init (emits WORKFLOW_STARTED + init phase + PHASE_SKIPPED for Ideation and
+// pre-completes the 3 init stages), then walk the remaining EXECUTE stages.
 function driveBugfixToCompletion(): { proj: string } {
   const proj = createTestProject();
   const init = run(
@@ -189,7 +189,9 @@ function driveBugfixToCompletion(): { proj: string } {
   // SKIP-overridden on greenfield; init pre-completes the 3 init stages).
   walkStage("requirements-analysis", proj);
   walkStage("code-generation", proj);
-  walkStage("build-and-test", proj); // final stage -> handleCompleteWorkflow
+  walkStage("build-and-test", proj);
+  walkStage("deployment-pipeline", proj);
+  walkStage("deployment-execution", proj); // final stage -> handleCompleteWorkflow
 
   return { proj };
 }
@@ -200,10 +202,11 @@ afterAll(() => {
 });
 
 // Each `bun <tool>.ts` cold-start costs ~hundreds of ms and a full bugfix drive
-// is ~9 spawns; driving once per test blows bun:test's default 5s per-test
-// timeout. So drive the workflow ONCE per describe in a beforeAll (the walk is
-// deterministic) and share the resulting audit across the assertions. Generous
-// explicit timeouts on the drives keep this honest on a cold/loaded machine.
+// now includes five post-init stage walks; driving once per test blows
+// bun:test's default 5s per-test timeout. So drive the workflow ONCE per
+// describe in a beforeAll (the walk is deterministic) and share the resulting
+// audit across the assertions. Generous explicit timeouts on the drives keep
+// this honest on a cold/loaded machine.
 const DRIVE_TIMEOUT_MS = 60_000;
 
 describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => {
@@ -249,11 +252,11 @@ describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => 
   });
 
   test("the FINAL phase's closure ordering holds: the last PHASE_VERIFIED is immediately followed by WORKFLOW_COMPLETED, with PHASE_COMPLETED before it", () => {
-    // bugfix crosses 3 phase boundaries -> 3 PHASE_VERIFIED / 3 PHASE_COMPLETED.
+    // bugfix crosses 4 phase boundaries -> 4 PHASE_VERIFIED / 4 PHASE_COMPLETED.
     // We pin the FINAL phase's ordering specifically (the others are mid-stream
     // boundaries emitted by handleAdvance; this one is the terminal handler).
-    expect(countEvent(seq, "PHASE_VERIFIED")).toBe(3);
-    expect(countEvent(seq, "PHASE_COMPLETED")).toBe(3);
+    expect(countEvent(seq, "PHASE_VERIFIED")).toBe(4);
+    expect(countEvent(seq, "PHASE_COMPLETED")).toBe(4);
 
     const lastVerified = seq.lastIndexOf("PHASE_VERIFIED");
     const lastCompletedPhase = seq.lastIndexOf("PHASE_COMPLETED");

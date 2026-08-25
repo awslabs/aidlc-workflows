@@ -48,6 +48,7 @@ const TRUST_SUFFIXES = [
   "pre_tool_use:2:0",
   "pre_tool_use:3:0",
   "pre_tool_use:4:0",
+  "pre_tool_use:5:0",
   "post_tool_use:0:0",
   "post_tool_use:1:0",
   "post_tool_use:2:0",
@@ -213,6 +214,10 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
       wiring.hooks.PostToolUse.find((group) => group.matcher === "request_user_input")
         ?.hooks[0]?.command,
     ).toBe("bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn");
+    expect(
+      wiring.hooks.PreToolUse.find((group) => group.matcher === "Bash")
+        ?.hooks[0]?.command,
+    ).toBe("bun .codex/hooks/aidlc-codex-adapter.ts bind-bash-session");
     // Every registration routes through the single authored adapter.
     for (const groups of Object.values(wiring.hooks)) {
       for (const g of groups) {

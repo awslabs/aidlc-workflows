@@ -68,6 +68,37 @@ const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
 const KIRO_IDE_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-ide", "aidlc");
 
+/** Build a disposable Windows user-profile environment for a Claude TUI probe.
+ * CLAUDE_CONFIG_DIR overrides the normal home-based user config lookup, so it
+ * must not survive from the machine running the test. The setting-source
+ * override is also cleared so a bare launch exercises tui-drive's default. */
+export function isolatedTuiUserProfileEnv(
+  userHome: string,
+  nodeBin: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    USERPROFILE: userHome,
+    HOME: userHome,
+    AIDLC_NODE_BIN: nodeBin,
+  };
+  delete env.CLAUDE_CONFIG_DIR;
+  delete env.AIDLC_TUI_SETTING_SOURCES;
+  return env;
+}
+
+/** Match a rendered Claude response only after the empty input prompt returns.
+ * A sentinel can appear while output is still streaming; the U+276F prompt
+ * below is the post-turn idle input row, followed by the persistent mode row. */
+export function completedClaudeTurnPattern(marker: string): string {
+  const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (
+    `${escapedMarker}[\\s\\S]*\\n\\u276f[\\s\\u00a0]*\\n` +
+    "[\\s\\S]*bypass permissions on"
+  );
+}
+
 export function markdownH2Section(body: string, heading: string): string {
   const lines = body.split(/\r?\n/);
   const start = lines.findIndex((line) => line.trimEnd() === `## ${heading}`);

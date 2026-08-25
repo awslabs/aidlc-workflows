@@ -32,6 +32,9 @@
 //   - session-start: the core hook prints
 //     {"additionalContext": "..."}; Codex expects the hookSpecificOutput
 //     wrapper (verified live, findings E1) — the shim re-wraps.
+//   - bind-bash-session: POSIX Bash input is rewritten through
+//     hookSpecificOutput.updatedInput so every command inherits the validated
+//     payload session without process inspection.
 //   - continue-workflow: {"decision":"block","reason"} passes through VERBATIM — the
 //     contract is identical on Codex (stop_hook_active included).
 //   - everything else: advisory; stdout ignored, exit 0.
@@ -41,7 +44,8 @@
 // where <target> ∈ session-start | audit-and-sensors | sync-workflow-state |
 //                  rebuild-stage-graph | validate-state | log-subagent | continue-workflow |
 //                  record-human-turn | state-transition-guard | reviewer-scope |
-//                  review-freeze | deliver-stage-rules | plan-approval-guard
+//                  review-freeze | deliver-stage-rules | plan-approval-guard |
+//                  bind-bash-session
 
 import { createHash } from "node:crypto";
 import {
@@ -57,7 +61,12 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-import { isNonAnswer, sessionsDir, stateFilePath } from "../tools/aidlc-lib.ts";
+import {
+  isNonAnswer,
+  sessionsDir,
+  stateFilePath,
+  validSessionId,
+} from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -168,6 +177,11 @@ const projectDirRaw =
 const projectDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
+const payloadSessionId = validSessionId(codex.session_id);
+if (payloadSessionId) {
+  process.env.AIDLC_SESSION_OVERRIDE = payloadSessionId;
+  process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+}
 const projectEnv = {
   ...process.env,
   AIDLC_PROJECT_DIR: projectDir,
@@ -325,6 +339,15 @@ function wrapContext(coreStdout: string, eventName: string): string {
   return coreStdout;
 }
 
+function wrapUpdatedInput(updatedInput: Record<string, unknown>): string {
+  return `${JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      updatedInput,
+    },
+  })}\n`;
+}
+
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
 
 const heartbeatFile = join(sessionsDir(projectDir), "codex-session.json");
@@ -381,6 +404,32 @@ function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "E
 // --- Targets ------------------------------------------------------------------
 
 switch (target) {
+  case "bind-bash-session": {
+    const command =
+      typeof codex.tool_input?.command === "string"
+        ? codex.tool_input.command
+        : "";
+    if (
+      process.platform === "win32" ||
+      codex.tool_name !== "Bash" ||
+      !payloadSessionId ||
+      !command
+    ) {
+      persistResponse("", 0);
+      return 0;
+    }
+    const prefix =
+      `export AIDLC_SESSION_OVERRIDE='${payloadSessionId}' ` +
+      "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; ";
+    const wrapped = wrapUpdatedInput({
+      ...codex.tool_input,
+      command: command.startsWith(prefix) ? command : `${prefix}${command}`,
+    });
+    persistResponse(wrapped, 0);
+    process.stdout.write(wrapped);
+    return 0;
+  }
+
   case "session-start": {
     reconcilePriorSession();
     // Forward session_id so the core hook's per-session→intent stamp (on

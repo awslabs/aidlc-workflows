@@ -107,6 +107,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test (mirrors t104)
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -312,7 +313,12 @@ try {
   const { join } = require("node:path");
   writeFileSync(
     join(import.meta.dir, "..", "..", ".probe-env-witness.json"),
-    JSON.stringify({ probe: process.env.AIDLC_STOP_HOOK_PROBE ?? null }),
+    JSON.stringify({
+      probe: process.env.AIDLC_STOP_HOOK_PROBE ?? null,
+      sessionOverride: process.env.AIDLC_SESSION_OVERRIDE ?? null,
+      sessionOverrideSource:
+        process.env.AIDLC_SESSION_OVERRIDE_SOURCE ?? null,
+    }),
     "utf-8",
   );
 } catch { /* the witness is diagnostic; never fail the mock over it */ }
@@ -987,6 +993,25 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(parsed.reason).toContain("keep following each load-steering step");
     expect(parsed.reason).toContain("Do not summarise or narrate these rule chunks");
+
+    // Transport order keeps the opaque token ahead of truncatable bulk content.
+    const reasonText = parsed.reason ?? "";
+    const tokenAt = reasonText.indexOf('continue "steering-token-495"');
+    const payloadAt = reasonText.indexOf('"path":"aidlc/spaces/default/memory/org.md"');
+    expect(tokenAt).toBeGreaterThanOrEqual(0);
+    expect(payloadAt).toBeGreaterThanOrEqual(0);
+    expect(tokenAt).toBeLessThan(payloadAt);
+
+    // Execution order remains apply-current-chunk, then advance the cursor.
+    const holdCommandAt = reasonText.indexOf(
+      "Preserve this step-two continuation command, but do not run it yet",
+    );
+    const firstApplyAt = reasonText.indexOf("First, apply every path/text entry");
+    const secondRunAt = reasonText.indexOf("Second, run the preserved command");
+    expect(holdCommandAt).toBeGreaterThanOrEqual(0);
+    expect(firstApplyAt).toBeGreaterThan(holdCommandAt);
+    expect(secondRunAt).toBeGreaterThan(firstApplyAt);
+    expect(reasonText).not.toContain("as you go");
   }, 30000);
 
   // =========================================================================
@@ -1933,12 +1958,44 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // child, so deleting the marking now fails this test.
     const witness = JSON.parse(
       readFileSync(join(proj, ".probe-env-witness.json"), "utf-8"),
-    ) as { probe: string | null };
+    ) as {
+      probe: string | null;
+      sessionOverride: string | null;
+      sessionOverrideSource: string | null;
+    };
     expect(witness.probe).toBe("1");
 
     // Retained as a regression guard on the mock's own inertness: if the mock is
     // ever taught to advance the workflow, this catches the marker moving.
     expect(statSync(enginePath).mtimeMs).toBe(before);
+  }, 30000);
+
+  test("(f2) divergent payload marker avoids refusal fail-open", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    writeSessionPidEntry(proj, process.pid, "ancestry-session");
+
+    const r = runHook(
+      proj,
+      JSON.stringify({
+        session_id: "payload-session",
+        stop_hook_active: false,
+      }),
+      "run-stage",
+    );
+
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    const witness = JSON.parse(
+      readFileSync(join(proj, ".probe-env-witness.json"), "utf-8"),
+    ) as {
+      probe: string | null;
+      sessionOverride: string | null;
+      sessionOverrideSource: string | null;
+    };
+    expect(witness.probe).toBe("1");
+    expect(witness.sessionOverride).toBe("payload-session");
+    expect(witness.sessionOverrideSource).toBe("payload");
   }, 30000);
 
   test("(f2) the probe mark is scoped to the engine consultation, not leaked into the hook's own process", () => {

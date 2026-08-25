@@ -7,12 +7,15 @@ import {
 import {
   codekbDir,
   codekbRepoName,
+  effectivePlanAction,
   filterProducesByKind,
+  getField,
   intentRepos,
   isPerUnitStage,
   recordDir,
   resolveBoltDag,
   toPosix,
+  usesStageLevelPerUnitArtifacts,
 } from "./aidlc-lib.js";
 
 export interface ArtifactOwnerNode {
@@ -43,6 +46,8 @@ export interface ArtifactResolutionOptions {
   runtimeUnits?: readonly ArtifactRuntimeUnit[];
   /** Deterministic test/embedding seam for multi-repo codekb placement. */
   codekbRepos?: readonly string[];
+  /** Workflow state used to mirror the engine's stage-level decision. */
+  stateContent?: string;
 }
 
 export function isCodekbArtifactOwner(owner: { slug: string }): boolean {
@@ -198,6 +203,39 @@ export function resolveArtifactInstances(
   }
 
   if (isPerUnitStage(owner)) {
+    if (options.stateContent !== undefined) {
+      const scope = getField(options.stateContent, "Scope")?.trim();
+      if (!scope) {
+        throw new Error(
+          `Cannot resolve artifacts for per-unit stage "${owner.slug}": ` +
+            "workflow Scope is missing.",
+        );
+      }
+      const unitProducerAction = effectivePlanAction(
+        "units-generation",
+        scope,
+        options.stateContent,
+      );
+      if (unitProducerAction === undefined) {
+        throw new Error(
+          `Cannot resolve artifacts for per-unit stage "${owner.slug}": ` +
+            `Units Generation has no effective action for scope "${scope}".`,
+        );
+      }
+      if (usesStageLevelPerUnitArtifacts(scope, options.stateContent)) {
+        const absolutePath = join(record, owner.phase, owner.slug, filename);
+        return [
+          {
+            artifact,
+            producer: owner.slug,
+            absolutePath,
+            relativePath: relativeToProject(projectDir, absolutePath),
+            unit: null,
+            unitKind: null,
+          },
+        ];
+      }
+    }
     const units = resolveArtifactRuntimeUnits(
       projectDir,
       owner.slug,

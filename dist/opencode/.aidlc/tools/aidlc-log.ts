@@ -10,14 +10,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
-  activeIntent,
-  activeSpace,
   auditBlockField,
   boltSlugForUnit,
+  checkSummaryConfirmationEvidence,
   emitError,
   errorMessage,
   formatReceivedReply,
   freshReviewReceipts,
+  filterProducesByKind,
   getField,
   holdsAuditLock,
   humanActedSinceLastAnswer,
@@ -32,10 +32,14 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   readStateFile,
+  readUnitSourceManifest,
   recordDir,
-  reviewArtifactFingerprint,
+  relativeRecordDir,
+  recoveryGuidance,
   resolveBoltDag,
+  reviewArtifactFingerprint,
   resolveProjectDir,
+  resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
   SUMMARY_CONFIRMATION_CHECKPOINT,
@@ -44,9 +48,11 @@ import {
   summaryConfirmationContentHash,
   stateFilePath,
   toPosix,
+  unitSourceFingerprint,
   UNBINDABLE_FINGERPRINT,
   withAuditLock,
-  workspaceSourceFingerprint,
+  workspaceSourceState,
+  writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
 import type { ReviewClass } from "./aidlc-lib.js";
 
@@ -638,8 +644,9 @@ function handleLink(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
-  const space = activeSpace(pd);
-  const intent = activeIntent(pd, space);
+  const selection = resolveWorkflowSelection(pd);
+  const space = selection.space;
+  const intent = selection.intent;
   if (!intent) {
     error("Cannot resolve the active intent for pipeline link logging.");
   }
@@ -741,8 +748,11 @@ type ReviewAttemptSummary = {
   boltSlug: string | null;
   pendingIterations: Set<number>;
   pendingFingerprints: Map<number, string | null>;
+  pendingSourceFingerprints: Map<number, string | null>;
+  pendingUnitSourceFingerprints: Map<number, string | null>;
   recoveryIteration: number | null;
   recoverySpent: boolean;
+  ambiguity: string | null;
 };
 
 // Count requests in the current stage/unit attempt. The same chronological
@@ -751,7 +761,7 @@ type ReviewAttemptSummary = {
 // per-unit floor because the forked audit inherits the main workflow's prior
 // rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
 function reviewAttemptSummary(
-  audit: string,
+  projectDir: string,
   stateContent: string,
   stage: { slug: string; for_each?: string },
   reviewer: string,
@@ -770,21 +780,20 @@ function reviewAttemptSummary(
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const events: { pos: number; ts: string; event: string; block: string }[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const event = auditBlockField(blocks[i], "Event");
-    if (!event || !relevant.has(event)) continue;
-    events.push({
-      pos: i,
-      ts: auditBlockField(blocks[i], "Timestamp") ?? "",
-      event,
-      block: blocks[i],
+  const events = readAuditShardEvents(projectDir)
+    .filter((row) => relevant.has(row.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shard === b.shard) return a.pos - b.pos;
+      return a.shardIndex - b.shardIndex;
     });
-  }
-  events.sort((a, b) =>
-    a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos
-  );
+  const tiedAcrossShards = (index: number): boolean =>
+    events.some(
+      (row, other) =>
+        other !== index &&
+        row.timestamp === events[index].timestamp &&
+        row.shard !== events[index].shard,
+    );
 
   const unitMajor =
     stage.for_each === "unit-of-work" &&
@@ -794,6 +803,7 @@ function reviewAttemptSummary(
   let boltBatch: string | null = null;
   let boltSlug: string | null = null;
   const expectedBoltSlug = unit === undefined ? null : boltSlugForUnit(unit);
+  let ambiguity: string | null = null;
   for (let i = 0; i < events.length; i++) {
     const entry = events[i];
     if (workflow !== undefined) {
@@ -807,10 +817,12 @@ function reviewAttemptSummary(
       continue;
     }
     if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
+      if (tiedAcrossShards(i)) ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
       floor = i;
       boltStarted = false;
       boltBatch = null;
       boltSlug = null;
+      if (!tiedAcrossShards(i)) ambiguity = null;
       continue;
     }
     if (
@@ -819,10 +831,12 @@ function reviewAttemptSummary(
       auditBlockField(entry.block, "Bolt names") === unit &&
       auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
     ) {
+      if (tiedAcrossShards(i)) ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
       floor = i;
       boltStarted = true;
       boltBatch = auditBlockField(entry.block, "Batch number");
       boltSlug = auditBlockField(entry.block, "Bolt slug");
+      if (!tiedAcrossShards(i)) ambiguity = null;
       continue;
     }
     if (
@@ -838,13 +852,25 @@ function reviewAttemptSummary(
     }
     if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
     if (entry.event === "GATE_REJECTED") {
+      const tied = tiedAcrossShards(i);
+      if (tied) ambiguity = `cross-shard gate boundary tie at ${entry.timestamp}`;
+      else ambiguity = null;
       floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
     } else if (
       entry.event === "STAGE_STARTED" &&
       !unitMajor &&
       !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
     ) {
+      const tied = tiedAcrossShards(i);
+      if (tied) ambiguity = `cross-shard stage boundary tie at ${entry.timestamp}`;
+      else ambiguity = null;
       floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
     }
   }
 
@@ -853,6 +879,8 @@ function reviewAttemptSummary(
   let recoverySpent = false;
   const pendingIterations = new Set<number>();
   const pendingFingerprints = new Map<number, string | null>();
+  const pendingSourceFingerprints = new Map<number, string | null>();
+  const pendingUnitSourceFingerprints = new Map<number, string | null>();
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
     if (
@@ -873,6 +901,10 @@ function reviewAttemptSummary(
     ) {
       continue;
     }
+    if (tiedAcrossShards(i)) {
+      ambiguity = `cross-shard review authority tie at ${entry.timestamp}`;
+      continue;
+    }
     const rawIteration = auditBlockField(entry.block, "Iteration");
     if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
     const iteration = Number(rawIteration);
@@ -889,9 +921,19 @@ function reviewAttemptSummary(
         iteration,
         auditBlockField(entry.block, "Artifact Fingerprint"),
       );
+      pendingSourceFingerprints.set(
+        iteration,
+        auditBlockField(entry.block, "Source Fingerprint"),
+      );
+      pendingUnitSourceFingerprints.set(
+        iteration,
+        auditBlockField(entry.block, "Unit Source Fingerprint"),
+      );
     } else {
       pendingIterations.delete(iteration);
       pendingFingerprints.delete(iteration);
+      pendingSourceFingerprints.delete(iteration);
+      pendingUnitSourceFingerprints.delete(iteration);
     }
   }
   return {
@@ -901,8 +943,11 @@ function reviewAttemptSummary(
     boltSlug,
     pendingIterations,
     pendingFingerprints,
+    pendingSourceFingerprints,
+    pendingUnitSourceFingerprints,
     recoveryIteration,
     recoverySpent,
+    ambiguity,
   };
 }
 
@@ -920,6 +965,7 @@ function reviewBudgetMessage(stage: string, ordinal: number, budget: number): st
 
 function reviewRecoverySpentMessage(
   stage: string,
+  guidance: string | null,
   autonomousBolt?: {
     unit: string;
     slug: string | null;
@@ -927,10 +973,8 @@ function reviewRecoverySpentMessage(
   },
 ): string {
   const prefix =
-    `Refusing REVIEW_REQUESTED for "${stage}": the one stale-receipt recovery ` +
-    "review pass was already spent, and its receipt was invalidated again by " +
-    "another later write to a declared produces[] artifact. Stop editing " +
-    "produces[] artifacts after a review receipt. ";
+    `Cannot start another review for "${stage}": the one recovery review was ` +
+    "already used, and this stage's output document changed again afterward. ";
   if (autonomousBolt) {
     const slug = autonomousBolt.slug ?? autonomousBolt.unit;
     const batch = autonomousBolt.batch
@@ -944,17 +988,40 @@ function reviewRecoverySpentMessage(
       `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
       `--reason "stale review recovery exhausted" --discard\`, then rerun the ` +
       `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
-      `${batch} with the original base/repo arguments. The fresh BOLT_STARTED ` +
-      "boundary resets review accounting without claiming convergence. Do not " +
-      "record GATE_REJECTED on the human's behalf."
+      `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
+      "restores one review allowance without claiming convergence. Do not " +
+      "record a Request Changes decision on the human's behalf."
     );
   }
   return (
     prefix +
-    "Present this refusal to the human at the approval gate. Only a human " +
-    "Request Changes decision (GATE_REJECTED) resets the review attempt; do not " +
+    (guidance ?? "") +
+    " Only a human Request Changes decision resets the review attempt; do not " +
     "record that rejection on the human's behalf."
   );
+}
+
+function reviewRecoveryGuidance(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+): string {
+  try {
+    return recoveryGuidance(projectDir, stateContent, stage);
+  } catch {
+    return (
+      `Restart this stage cleanly with /aidlc --stage ${stage}, then confirm ` +
+      "its summary and review the finished output again."
+    );
+  }
+}
+
+function reviewSummaryEvidenceMessage(stage: string, message: string): string {
+  const cause = message.replace(
+    /^Refusing to (?:complete|continue) "[^"]+"(?: for unit "[^"]+")?:\s*/,
+    "",
+  );
+  return `Cannot start review for "${stage}": ${cause}`;
 }
 
 function reviewRecoveryAlreadyRequestedMessage(stage: string, iteration: number): string {
@@ -984,8 +1051,9 @@ function handleReview(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
-  const space = activeSpace(pd);
-  const intent = activeIntent(pd, space);
+  const selection = resolveWorkflowSelection(pd);
+  const space = selection.space;
+  const intent = selection.intent;
   if (!intent) {
     error("Cannot resolve the active intent for review logging.");
   }
@@ -997,7 +1065,10 @@ function handleReview(args: string[]): void {
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   const retryPending = flags["retry-pending"] === "true";
 
-  const loadContext = () => {
+  const loadContext = (
+    scanReceipts: boolean,
+    enforceAdmissibility = true,
+  ) => {
     const state = readStateFile(pd, intent, space);
     const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
     if (!node?.reviewer) {
@@ -1015,15 +1086,17 @@ function handleReview(args: string[]): void {
     const autonomousCandidate =
       flags.unit !== undefined && isAutonomousSwarmStage(pd, state, node);
     const attempt = reviewAttemptSummary(
-      readAllAuditShards(pd, intent, space),
+      pd,
       state,
       node,
       flags.reviewer,
       flags.unit,
       fields.Workflow,
     );
-    if (flags.unit) {
-      const resolution = resolveBoltDag(pd);
+    const unitResolution =
+      node.for_each === "unit-of-work" ? resolveBoltDag(pd, intent, space) : null;
+    if (enforceAdmissibility && flags.unit) {
+      const resolution = unitResolution ?? resolveBoltDag(pd, intent, space);
       if (resolution.state === "malformed") {
         refuseReview(
           `Cannot record review for "${flags.stage}" unit "${flags.unit}": the authoritative ` +
@@ -1045,8 +1118,25 @@ function handleReview(args: string[]): void {
             `in the authoritative unit DAG (${resolution.units.join(", ")}).`,
         );
       }
+      if (
+        resolution.state === "ok" &&
+        filterProducesByKind(
+          node.produces_kinds,
+          node.produces ?? [],
+          resolution.unitKinds?.get(flags.unit) ?? null,
+        ).length === 0
+      ) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no applicable required outputs for its kind.`,
+        );
+      }
     }
     const declared = node.review_class ?? "adversarial";
+    if (attempt.ambiguity !== null) {
+      refuseReview(
+        `Cannot record review for "${flags.stage}": ${attempt.ambiguity} makes the current review attempt chronology ambiguous. Record a fresh stage/jump boundary, then request the review again.`,
+      );
+    }
     let reviewClass: ReviewClass | null = null;
     let budget: number | null = null;
     if (autonomousCandidate && attempt.boltStarted) {
@@ -1069,11 +1159,69 @@ function handleReview(args: string[]): void {
         // Class resolution fails open; ordinal enforcement remains active.
       }
     }
+    // Receipt freshness is needed only while minting REVIEW_REQUESTED (to
+    // classify bounded stale-receipt recovery). REVIEW_COMPLETED consumes only
+    // node + attempt and then performs its one authoritative source-state walk
+    // while stamping; scanning here would double-walk on every re-review.
     const receipts =
-      reviewClass === null
+      !scanReceipts || reviewClass === null
         ? null
         : freshReviewReceipts(pd, state, node, { reviewClass });
-    return { state, node, attempt, budget, receipts, autonomousCandidate };
+    const requireRequiredArtifacts =
+      process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1" &&
+      !(
+        unitResolution !== null &&
+        unitResolution.state !== "ok" &&
+        flags.unit === undefined
+      );
+    return {
+      state,
+      node,
+      attempt,
+      budget,
+      receipts,
+      autonomousCandidate,
+      requireRequiredArtifacts,
+      unitResolution,
+    };
+  };
+
+  const stampRequestedSourceBinding = (
+    node: ReturnType<typeof loadStageGraphAll>[number],
+  ): void => {
+    if (!node.workspace_requires) return;
+    const sourceState = workspaceSourceState(pd, intent, space);
+    fields["Source Fingerprint"] =
+      sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    const bindsUnitSource =
+      flags.unit !== undefined &&
+      node.for_each === "unit-of-work" &&
+      flags.single !== "true";
+    if (!bindsUnitSource) return;
+    const manifest = readUnitSourceManifest(
+      pd,
+      flags.stage as string,
+      flags.unit as string,
+    );
+    if (!manifest.ok) {
+      const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
+      refuseReview(
+        `Cannot record REVIEW_REQUESTED for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
+          `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
+          "the reviewer will inspect, then dispatch the review.",
+      );
+    }
+    fields["Unit Source Fingerprint"] =
+      sourceState === null
+        ? UNBINDABLE_FINGERPRINT
+        : writeUnitSourceSnapshot(
+            pd,
+            flags.stage as string,
+            flags.unit as string,
+            sourceState.listing,
+            manifest,
+            manifest.rawBytesSha256,
+          );
   };
 
   // REVIEW_REQUESTED owns its ordinal: require a positive integer, count prior
@@ -1090,12 +1238,28 @@ function handleReview(args: string[]): void {
     try {
       withAuditLock(pd, () => {
         const {
+          state,
           node,
           attempt,
           budget,
           receipts,
           autonomousCandidate,
-        } = loadContext();
+          requireRequiredArtifacts,
+          unitResolution,
+        } = loadContext(true, !retryPending);
+        const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
+          stateContent: state,
+          unit: flags.unit,
+          workflow: fields.Workflow,
+        });
+        if (!summaryEvidence.ok) {
+          refuseReview(
+            reviewSummaryEvidenceMessage(
+              flags.stage,
+              summaryEvidence.message,
+            ),
+          );
+        }
         const expected = attempt.requestCount + 1;
         const sameSourceRecoveryScope =
           receipts?.newestSourceUnit === (flags.unit ?? null);
@@ -1122,6 +1286,9 @@ function handleReview(args: string[]): void {
                 refuseReview(
                   reviewRecoverySpentMessage(
                     flags.stage,
+                    autonomousCandidate && attempt.boltStarted
+                      ? null
+                      : reviewRecoveryGuidance(pd, state, flags.stage),
                     autonomousCandidate && attempt.boltStarted && flags.unit
                       ? {
                           unit: flags.unit,
@@ -1156,14 +1323,19 @@ function handleReview(args: string[]): void {
             );
           }
           fields.Retry = "pending-request";
-          const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+          const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+            requireRequiredArtifacts,
+            boltDag: unitResolution ?? undefined,
+          });
           if (fingerprint === null) {
             refuseReview(
-              `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
-                "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
+              `Cannot start review for "${flags.stage}": a required output ` +
+                "document is missing or unreadable. Create every required output " +
+                "document for this stage, then retry the review.",
             );
           }
           fields["Artifact Fingerprint"] = fingerprint;
+          stampRequestedSourceBinding(node);
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           retried = true;
           return;
@@ -1177,6 +1349,9 @@ function handleReview(args: string[]): void {
           refuseReview(
             reviewRecoverySpentMessage(
               flags.stage,
+              autonomousCandidate && attempt.boltStarted
+                ? null
+                : reviewRecoveryGuidance(pd, state, flags.stage),
               autonomousCandidate && attempt.boltStarted && flags.unit
                 ? {
                     unit: flags.unit,
@@ -1219,14 +1394,19 @@ function handleReview(args: string[]): void {
           fields.Recovery = "stale-receipt";
           recovery = "stale-receipt";
         }
-        const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+        const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+          requireRequiredArtifacts,
+          boltDag: unitResolution ?? undefined,
+        });
         if (fingerprint === null) {
           refuseReview(
-            `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
-              "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
+            `Cannot start review for "${flags.stage}": a required output document ` +
+              "is missing or unreadable. Create every required output document " +
+              "for this stage, then retry the review.",
           );
         }
         fields["Artifact Fingerprint"] = fingerprint;
+        stampRequestedSourceBinding(node);
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
     } catch (e) {
@@ -1260,7 +1440,12 @@ function handleReview(args: string[]): void {
 
   try {
     withAuditLock(pd, () => {
-      const { node, attempt } = loadContext();
+      const {
+        node,
+        attempt,
+        requireRequiredArtifacts,
+        unitResolution,
+      } = loadContext(false, false);
       if (!attempt.pendingIterations.has(iteration)) {
         refuseReview(
           `Refusing REVIEW_COMPLETED for "${flags.stage}": no unmatched ` +
@@ -1279,10 +1464,15 @@ function handleReview(args: string[]): void {
             "iteration with --retry-pending before recording the verdict.",
         );
       }
-      const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+      const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+        requireRequiredArtifacts,
+        boltDag: unitResolution ?? undefined,
+      });
       if (fingerprint === null) {
         refuseReview(
-          `Cannot record review for "${flags.stage}": the declared artifact set could not be fingerprinted. Resolve the active intent and readable artifact paths, then record the verdict again.`,
+          `Cannot finish review for "${flags.stage}": a required output document ` +
+            "is missing or unreadable. Restore every required output document " +
+            "to the reviewed state, then record the result again.",
         );
       }
       if (fingerprint !== requestedFingerprint) {
@@ -1293,13 +1483,92 @@ function handleReview(args: string[]): void {
         );
       }
       fields["Artifact Fingerprint"] = fingerprint;
-      // Bind the terminal receipt to the workspace source state the reviewer
-      // inspected. Only workspace-writing stages carry this binding. A newly
-      // unbindable receipt records that explicitly so completion fails closed;
-      // only genuinely legacy fieldless receipts keep migration behavior.
+
+      const bindsUnitSource =
+        node.workspace_requires === true &&
+        flags.unit !== undefined &&
+        node.for_each === "unit-of-work" &&
+        flags.single !== "true";
+      const manifest = bindsUnitSource
+        ? readUnitSourceManifest(pd, flags.stage, flags.unit as string)
+        : null;
+      if (manifest?.ok === false) {
+        const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
+        refuseReview(
+          `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
+            `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
+            "this unit created or modified — including shell- or generator-written files — then request and " +
+            "record the review again.",
+        );
+      }
+
+      // One temporary-index pass supplies both the compatibility fingerprint
+      // and the per-unit listing. A null state is recorded explicitly so new
+      // receipts fail closed while fieldless legacy evidence keeps migrating.
       if (node.workspace_requires) {
-        fields["Source Fingerprint"] =
-          workspaceSourceFingerprint(pd) ?? UNBINDABLE_FINGERPRINT;
+        const sourceState = workspaceSourceState(pd, intent, space);
+        const sourceFingerprint =
+          sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+        const requestedSourceFingerprint =
+          attempt.pendingSourceFingerprints.get(iteration);
+        if (
+          requestedSourceFingerprint === undefined ||
+          requestedSourceFingerprint === null
+        ) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+              `iteration ${iteration} has no source fingerprint. Re-dispatch that exact ` +
+              "iteration with --retry-pending before recording the verdict.",
+          );
+        }
+        if (sourceFingerprint !== requestedSourceFingerprint) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
+              `REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact iteration with ` +
+              "--retry-pending so the reviewer inspects the current bytes.",
+          );
+        }
+        fields["Source Fingerprint"] = sourceFingerprint;
+        if (bindsUnitSource) {
+          const unitFingerprint =
+            sourceState === null || manifest?.ok !== true
+              ? UNBINDABLE_FINGERPRINT
+              : unitSourceFingerprint(
+                  sourceState.listing,
+                  manifest,
+                  manifest.rawBytesSha256,
+                );
+          const requestedUnitFingerprint =
+            attempt.pendingUnitSourceFingerprints.get(iteration);
+          if (
+            requestedUnitFingerprint === undefined ||
+            requestedUnitFingerprint === null
+          ) {
+            refuseReview(
+              `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+                `iteration ${iteration} has no unit source fingerprint. Re-dispatch that exact ` +
+                "iteration with --retry-pending before recording the verdict.",
+            );
+          }
+          if (unitFingerprint !== requestedUnitFingerprint) {
+            refuseReview(
+              `Refusing REVIEW_COMPLETED for "${flags.stage}": unit source or source-manifest.json ` +
+                `changed after REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact ` +
+                "iteration with --retry-pending so the reviewer inspects the current bytes.",
+            );
+          }
+          fields["Unit Source Fingerprint"] = unitFingerprint;
+          if (sourceState !== null && manifest?.ok === true) {
+            writeUnitSourceSnapshot(
+              pd,
+              flags.stage,
+              flags.unit as string,
+              sourceState.listing,
+              manifest,
+              manifest.rawBytesSha256,
+            );
+          }
+        }
       }
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
     }, intent, space);

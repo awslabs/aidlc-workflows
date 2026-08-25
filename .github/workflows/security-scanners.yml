@@ -1,0 +1,216 @@
+name: Security Scanners
+
+on:
+  pull_request:
+    branches:
+      - v2
+  push:
+    branches:
+      - v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scanners-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Gitleaks (full history)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_LINUX_X64_SHA256}  ${archive}" | sha256sum --check -
+          tar -xzf "$archive" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan repository history
+        id: scan
+        env:
+          SCAN_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set +e
+          gitleaks git \
+            --config=.gitleaks.toml \
+            --baseline-path=.gitleaks-baseline.json \
+            --log-opts="$SCAN_REF" \
+            --report-format=sarif \
+            --report-path=gitleaks.sarif \
+            .
+          exit_code=$?
+          set -e
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: gitleaks-sarif
+          path: gitleaks.sarif
+          if-no-files-found: error
+
+      - uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: gitleaks.sarif
+
+      - name: Enforce Gitleaks result
+        if: always()
+        env:
+          SCANNER_EXIT: ${{ steps.scan.outputs.exit_code }}
+        run: |
+          if [ -z "$SCANNER_EXIT" ]; then
+            echo "::error::Gitleaks did not produce an exit status"
+            exit 2
+          fi
+          exit "$SCANNER_EXIT"
+
+  semgrep:
+    name: Semgrep (authored TypeScript)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    env:
+      SEMGREP_VERSION: "1.157.0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: python -m pip install "semgrep==${SEMGREP_VERSION}"
+
+      - name: Scan authored TypeScript
+        id: scan
+        run: |
+          set +e
+          semgrep scan \
+            --oss-only \
+            --metrics=off \
+            --config=p/typescript \
+            --severity=ERROR \
+            --error \
+            --sarif \
+            --output=semgrep.sarif \
+            core harness scripts plugins
+          exit_code=$?
+          set -e
+
+          if ! jq -e '.runs | type == "array"' semgrep.sarif > /dev/null; then
+            echo "::error::Semgrep did not produce valid SARIF"
+            exit_code=2
+          fi
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: error
+
+      - uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: semgrep.sarif
+
+      - name: Enforce Semgrep result
+        if: always()
+        env:
+          SCANNER_EXIT: ${{ steps.scan.outputs.exit_code }}
+        run: |
+          if [ -z "$SCANNER_EXIT" ]; then
+            echo "::error::Semgrep did not produce an exit status"
+            exit 2
+          fi
+          exit "$SCANNER_EXIT"
+
+  bun-audit:
+    name: Bun audit (critical)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Audit locked dependencies
+        id: audit
+        run: |
+          set +e
+          bun audit --json > bun-audit.json 2> bun-audit.stderr
+          audit_exit=$?
+          set -e
+
+          cat bun-audit.stderr >&2
+          jq . bun-audit.json
+          jq -e 'type == "object" and all(.[]; type == "array")' \
+            bun-audit.json > /dev/null
+
+          critical_count=$(
+            jq '[to_entries[].value[] | select(.severity == "critical")] | length' \
+              bun-audit.json
+          )
+          advisory_count=$(
+            jq '[to_entries[].value[]] | length' bun-audit.json
+          )
+          if [ "$audit_exit" -ne 0 ] && [ "$advisory_count" -eq 0 ]; then
+            echo "::error::Bun audit failed without returning advisories"
+            exit 2
+          fi
+          echo "Bun audit exited with $audit_exit; advisories: $advisory_count; critical: $critical_count"
+          echo "critical_count=$critical_count" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: bun-audit
+          path: |
+            bun-audit.json
+            bun-audit.stderr
+          if-no-files-found: error
+
+      # The current lock has known high-severity transitive advisories in the
+      # Claude Agent SDK dependency graph. Keep them visible in the artifact,
+      # while preventing any critical advisory from entering the v2 branch.
+      - name: Enforce critical-severity threshold
+        if: always()
+        env:
+          CRITICAL_COUNT: ${{ steps.audit.outputs.critical_count }}
+        run: |
+          if [ -z "$CRITICAL_COUNT" ]; then
+            echo "::error::Bun audit did not produce a valid result"
+            exit 2
+          fi
+          if [ "$CRITICAL_COUNT" -ne 0 ]; then
+            echo "::error::Bun audit found $CRITICAL_COUNT critical advisories"
+            exit 1
+          fi

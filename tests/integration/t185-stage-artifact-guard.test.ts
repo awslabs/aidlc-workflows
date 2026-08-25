@@ -51,11 +51,13 @@ import {
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
+  seedBoltDag,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   SUMMARY_CONFIRMATION_HASH_SCOPE,
+  sourceBaselineAuditFields,
   summaryConfirmationContentHash,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -71,6 +73,36 @@ function reviewStage(
   reviewer: string,
   unit?: string,
 ): void {
+  if (stage === "code-generation" && unit) {
+    let unitIsResolved = false;
+    try {
+      const graph = JSON.parse(
+        readFileSync(join(seededRecordDir(proj), "runtime-graph.json"), "utf-8"),
+      ) as { bolt_dag?: { units?: Array<{ name?: unknown }> } };
+      unitIsResolved =
+        graph.bolt_dag?.units?.some((candidate) => candidate.name === unit) === true;
+    } catch {
+      // Seed a focused DAG below.
+    }
+    if (!unitIsResolved) seedBoltDag(proj, [unit]);
+
+    const dir = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      "code-generation",
+    );
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "source-manifest.json"),
+      `${JSON.stringify({
+        stage: "code-generation",
+        unit,
+        version: 1,
+        writes: [{ path: "src/" }],
+      }, null, 2)}\n`,
+    );
+  }
   const args = [
     LOG,
     "review",
@@ -84,8 +116,17 @@ function reviewStage(
     proj,
   ];
   if (unit) args.splice(4, 0, "--unit", unit);
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Several artifact-guard fixtures are deliberately non-Git. Source binding
+  // cannot be computed there, so isolate the artifact-guard contract with the
+  // documented freshness switch while still requiring a valid manifest.
+  env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
+  // These fixtures assert the artifact guard, not review admission: the
+  // documented switches keep Plan Approval and summary confirmation out of it.
+  env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD = "1";
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
   for (const suffix of [[], ["--verdict", "READY"]]) {
-    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env });
     if ((result.status ?? -1) !== 0) {
       throw new Error(`reviewStage failed: ${result.stdout}${result.stderr}`);
     }
@@ -103,12 +144,15 @@ function reviewCodeGen(proj: string, unit?: string): void {
 
 // Drive a state subcommand with the artifact guard ENABLED (clear the suite's
 // bypass var). Returns exit code + combined output.
-function guarded(proj: string, args: string[]): { rc: number; out: string } {
-  const env = { ...process.env };
+function guarded(
+  proj: string,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): { rc: number; out: string } {
+  const env = { ...process.env, ...extraEnv };
   delete env.AIDLC_SKIP_ARTIFACT_GUARD;
   delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
-  env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -474,7 +518,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     const slug = field(proj, "Current Stage");
     const r = guarded(proj, ["gate-start", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect(r.out).toContain("Refusing to present the approval gate");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [-] ${slug}`,
     );
@@ -485,7 +529,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     bypassed(proj, ["checkbox", `${slug}=revising`]);
     const r = guarded(proj, ["revise", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect(r.out).toContain("Refusing to present the approval gate");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [R] ${slug}`,
     );
@@ -561,7 +605,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       confirmSummary(proj, questions);
       const result = summaryGuarded(proj, ["advance", "feasibility"]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("no recorded native-tool write after");
+      expect(result.out).toContain("was not saved after the confirmed answers");
     });
 
     test("allows Assumption Confirmation after generation and terminal review", () => {
@@ -1611,6 +1655,7 @@ X. Other (please specify)
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/unit-test-instructions.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
     }
 
     test("REFUSES code-generation with planning docs but no source code", () => {
@@ -1625,9 +1670,11 @@ X. Other (please specify)
     test("PASSES code-generation once real source exists outside aidlc/", () => {
       stageCodeGenDocsOnly();
       writeWorkspaceFile(proj, "src/auth/login.ts"); // outside aidlc/ + harness
-      reviewCodeGen(proj);
-      guarded(proj, ["gate-start", "code-generation"]);
-      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      reviewCodeGen(proj, UNIT);
+      bypassed(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"], {
+        AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+      });
       expect(r.rc).toBe(0);
     });
 
@@ -1646,7 +1693,9 @@ X. Other (please specify)
       writeWorkspaceFile(proj, "src/stage-level.ts");
 
       reviewCodeGen(proj);
-      const r = guarded(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["gate-start", "code-generation"], {
+        AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+      });
       expect(r.rc).toBe(0);
     });
   });
@@ -1690,7 +1739,7 @@ X. Other (please specify)
 
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to complete");
+      expect(r.out).toContain("Refusing to present the approval gate");
     });
 
     test("PASSES multi-repo codekb when every registered repo has the full set", () => {
@@ -1756,13 +1805,28 @@ X. Other (please specify)
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
+      appendAuditEntry(
+        "STAGE_STARTED",
+        {
+          Stage: "code-generation",
+          Agent: "aidlc-developer-agent",
+          ...sourceBaselineAuditFields(proj, "code-generation"),
+        },
+        proj,
+      );
+      const boundarySecond = Math.floor(Date.now() / 1000);
+      while (Math.floor(Date.now() / 1000) === boundarySecond) {}
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/traceability.json`);
     }
     function approveCodeGen(): { rc: number; out: string } {
-      reviewCodeGen(proj);
+      reviewCodeGen(proj, UNIT);
       bypassed(proj, ["gate-start", "code-generation"]);
-      return guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      return guarded(
+        proj,
+        ["approve", "code-generation", "--user-input", "ok"],
+      );
     }
 
     // BROWNFIELD bug closed: a git repo whose src/ was committed in a PRIOR
@@ -1805,7 +1869,7 @@ X. Other (please specify)
       git(["add", "-A"]); // stage BOTH the docs and the new code
       git(["commit", "-q", "-m", "code-generation output"]);
       const r = approveCodeGen();
-      expect(r.rc).toBe(0);
+      expect(r.rc, r.out).toBe(0);
     }, 30000);
 
     // SINGLE-commit clean tree, the source IS in the sole commit -> PASS. The
@@ -1824,7 +1888,7 @@ X. Other (please specify)
       git(["add", "-A"]); // stage docs + the new code into the FIRST and ONLY commit
       git(["commit", "-q", "-m", "first commit: code-generation output"]);
       const r = approveCodeGen();
-      expect(r.rc).toBe(0);
+      expect(r.rc, r.out).toBe(0);
     }, 30000);
   });
 
@@ -1889,7 +1953,11 @@ X. Other (please specify)
     test("PASSES with zero on-disk artifacts once every DAG unit converged", () => {
       seedSwarm(UNITS); // all converged; nothing written to the record dir
       bypassed(proj, ["gate-start", "code-generation"]);
-      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      const r = guarded(
+        proj,
+        ["approve", "code-generation", "--user-input", "ok"],
+        { AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+      );
       expect(r.rc).toBe(0);
     });
 
@@ -1899,6 +1967,30 @@ X. Other (please specify)
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Refusing to complete");
+    });
+
+    test("unexpected settled-swarm probe failures are controlled and leave state unchanged", () => {
+      seedSwarm(UNITS);
+      const brokenScopes = join(proj, "broken-scopes");
+      mkdirSync(brokenScopes, { recursive: true });
+      writeFileSync(join(brokenScopes, "broken.md"), "# Missing frontmatter\n");
+      const statePath = seededStateFile(proj);
+      const before = readFileSync(statePath, "utf-8");
+
+      const r = guarded(
+        proj,
+        ["gate-start", "code-generation"],
+        { AIDLC_SCOPES_DIR: brokenScopes },
+      );
+
+      expect(r.rc).toBe(1);
+      const refusal = JSON.parse(r.out) as { error: string };
+      expect(refusal.error).toContain(
+        'Refusing to present the approval gate for "code-generation"',
+      );
+      expect(refusal.error).toContain("settled-swarm probe failed unexpectedly");
+      expect(refusal.error).toContain("Scope file missing frontmatter");
+      expect(readFileSync(statePath, "utf-8")).toBe(before);
     });
   });
 });

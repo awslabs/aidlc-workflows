@@ -48,6 +48,7 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   activeIntent,
   activeSpace,
+  auditBlockField,
   auditFilePath,
   auditShards,
   createIntent,
@@ -73,6 +74,8 @@ import {
   isPlainObject,
   isoTimestamp,
   isPackageJson,
+  codekbDir,
+  intentsDir,
   codekbRepoName,
   codekbScopeFingerprint,
   parseReScope,
@@ -97,9 +100,11 @@ import {
   parseStageFrontmatter,
   parseStateStageSuffixes,
   readAllAuditShards,
+  readAuditShardEvents,
   readActiveDirectiveMarker,
   recordHookDrop,
   readCurrentSessionId,
+  resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
   resolveBirthRepoSet,
@@ -124,6 +129,8 @@ import {
   stageEnabledBySelection,
   stagesInScope,
   stateFilePath,
+  clearSessionIntentUuid,
+  sourceBaselineAuditFields,
   withAuditLock,
   validateBoltSlug,
   validScopes,
@@ -131,6 +138,7 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeSessionIntentUuid,
+  writeSessionBinding,
   writeStateFile,
   harnessDir,
   rulesSubdir,
@@ -138,7 +146,9 @@ import {
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
   classifyStateVersion,
+  clearSessionRebindOffer,
   CURRENT_STATE_VERSION,
+  type AuditShardEvent,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import {
@@ -993,13 +1003,39 @@ function pluginRootCandidatesFromEnv(): string[] {
 
 async function handlePluginSync(projectDir: string): Promise<void> {
   const roots = pluginRootCandidatesFromEnv();
-  const composePaths = roots
-    .map((root) => ({ root, compose: join(root, "hooks", "compose.ts") }))
-    .filter((item) => existsSync(item.compose));
-
-  if (composePaths.length === 0) {
+  if (roots.length === 0) {
     process.stdout.write("no installed plugins; nothing to sync\n");
     return;
+  }
+
+  const pluginRoots = roots.map((root) => {
+    const compose = join(root, "hooks", "compose.ts");
+    return {
+      root,
+      compose,
+      reason: existsSync(compose)
+        ? null
+        : existsSync(root)
+          ? "missing hooks/compose.ts"
+          : "root directory does not exist",
+    };
+  });
+  const composePaths = pluginRoots.filter((item) => item.reason === null);
+  const skippedRoots = pluginRoots.filter((item) => item.reason !== null);
+  const skippedDetails = skippedRoots
+    .map((item) => `- ${item.root}: ${item.reason}`)
+    .join("\n");
+
+  if (composePaths.length === 0) {
+    die(
+      `plugin-sync: no compose hook found in ${roots.length} configured plugin root(s):\n${skippedDetails}`,
+    );
+  }
+
+  if (skippedRoots.length > 0) {
+    process.stderr.write(
+      `plugin-sync warning: skipped ${skippedRoots.length} configured plugin root(s):\n${skippedDetails}\n`,
+    );
   }
 
   for (const item of composePaths) {
@@ -1064,10 +1100,108 @@ async function handlePluginSync(projectDir: string): Promise<void> {
 // status
 // ---------------------------------------------------------------------------
 
+export const GATE_PENDING_ADVISORY_MS = 24 * 60 * 60 * 1000;
+
+interface PendingOrganicGate {
+  timestamp: string;
+  timestampMs: number;
+}
+
+function pendingOrganicGate(
+  audit: AuditShardEvent[],
+  stage: string,
+): PendingOrganicGate | null {
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_JUMPED",
+    "STAGE_STARTED",
+    "STAGE_AWAITING_APPROVAL",
+    "GATE_APPROVED",
+    "GATE_REJECTED",
+  ]);
+  const events = audit
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+
+  let pending: PendingOrganicGate | null = null;
+  for (let start = 0; start < events.length;) {
+    let end = start + 1;
+    while (
+      end < events.length &&
+      events[end].timestamp === events[start].timestamp
+    ) {
+      end++;
+    }
+
+    // Only same-shard append order is causal. The last effective row in each
+    // shard can be globally last; disagreeing effects therefore fail closed.
+    const effectByShard = new Map<string, "open" | "clear">();
+    for (const event of events.slice(start, end)) {
+      const eventStage = auditBlockField(event.block, "Stage");
+      const boundary =
+        event.event === "WORKFLOW_STARTED" ||
+        event.event === "STAGE_JUMPED" ||
+        (
+          event.event === "STAGE_STARTED" &&
+          eventStage === stage &&
+          !auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")
+        );
+      if (boundary) {
+        effectByShard.set(event.shard, "clear");
+        continue;
+      }
+      if (eventStage !== stage) continue;
+      if (event.event === "STAGE_AWAITING_APPROVAL") {
+        if (
+          auditBlockField(event.block, "Recovered") === "true" ||
+          auditBlockField(event.block, "Revalidated") === "true"
+        ) {
+          continue;
+        }
+        effectByShard.set(event.shard, "open");
+      } else {
+        effectByShard.set(event.shard, "clear");
+      }
+    }
+
+    const effects = new Set(effectByShard.values());
+    if (effects.size > 1 || effects.has("clear")) {
+      pending = null;
+    } else if (effects.has("open")) {
+      const timestamp = events[start].timestamp;
+      const timestampMs = Date.parse(timestamp);
+      pending = Number.isFinite(timestampMs)
+        ? { timestamp, timestampMs }
+        : null;
+    }
+    start = end;
+  }
+  return pending;
+}
+
+function pendingDuration(ageMs: number): string {
+  const minutes = Math.floor(Math.max(0, ageMs) / (60 * 1000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
 function handleStatus(projectDir: string, flags: Record<string, string>): void {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
-  const sp = stateFilePath(projectDir, flags.intent, flags.space);
+  const selection = resolveWorkflowSelection(projectDir, {
+    space: flags.space,
+    intent: flags.intent,
+  });
+  const sp =
+    selection.intent === null
+      ? join(intentsDir(projectDir, selection.space), "aidlc-state.md")
+      : stateFilePath(projectDir, selection.intent, selection.space);
   if (!existsSync(sp)) {
     process.stdout.write(
       `No active AI-DLC workflow found.
@@ -1109,6 +1243,19 @@ To get started:
   if (currentCheckbox?.state === "awaiting-approval") {
     const displayName = currentEntry?.name ?? currentStage;
     statusLine = `Awaiting your approval on ${displayName}`;
+    try {
+      const pending = pendingOrganicGate(
+        readAuditShardEvents(projectDir, flags.intent, flags.space),
+        currentStage,
+      );
+      if (pending) {
+        statusLine +=
+          ` (waiting since ${pending.timestamp}, ` +
+          `~${pendingDuration(Date.now() - pending.timestampMs)})`;
+      }
+    } catch {
+      // Status remains useful when the ledger is absent, unreadable, or stale.
+    }
   } else if (currentCheckbox?.state === "revising") {
     const displayName = currentEntry?.name ?? currentStage;
     const revisionCount = getField(content, "Revision Count");
@@ -1195,7 +1342,7 @@ To get started:
       audit: readAllAuditShards(projectDir, flags.intent, flags.space),
       currentBasis: (stage, stages) =>
         captureStageValidationBasis(projectDir, stage, content, stages, {
-          resolution: { recordPath: dirname(sp) },
+          resolution: { recordPath: dirname(sp), stateContent: content },
         }),
     });
     const directlyStale = validity.issues
@@ -2472,6 +2619,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   const stateMdPath = stateFilePath(projectDir);
   // Read across every per-clone audit shard (single shard in the common case).
   const auditAllShards = readAllAuditShards(projectDir);
+  const auditShardEvents = readAuditShardEvents(projectDir);
   if (existsSync(stateMdPath) && auditAllShards.length > 0) {
     try {
       const auditContent = auditAllShards;
@@ -2604,6 +2752,40 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   } catch {
     // Compose-marker probe failure is non-fatal for the doctor report.
+  }
+
+  // A long-open approval gate is healthy waiting, not a hung workflow. Surface
+  // it as an advisory PASS so operators can distinguish human latency from a
+  // stuck engine without changing doctor's exit code.
+  try {
+    if (existsSync(stateMdPath)) {
+      const stateContent = readFileSync(stateMdPath, "utf-8");
+      const currentStage = getField(stateContent, "Current Stage");
+      const currentCheckbox = currentStage
+        ? parseCheckboxes(stateContent).find((c) => c.slug === currentStage)
+        : undefined;
+      if (currentStage && currentCheckbox?.state === "awaiting-approval") {
+        const pending = pendingOrganicGate(auditShardEvents, currentStage);
+        if (pending) {
+          const ageMs = Date.now() - pending.timestampMs;
+          if (ageMs > GATE_PENDING_ADVISORY_MS) {
+            const displayName =
+              loadStageGraph().find((stage) => stage.slug === currentStage)?.name ??
+              currentStage;
+            const duration = pendingDuration(ageMs);
+            results.push({
+              pass: true,
+              label:
+                `Approval gate pending: ${displayName} (~${duration}); ` +
+                "waiting for a human, not stuck. Run /aidlc --status to review the current gate.",
+              fix: "run `/aidlc --status` to review and resolve the pending approval",
+            });
+          }
+        }
+      }
+    }
+  } catch {
+    // Gate-pending probe failure is non-fatal for the doctor report.
   }
 
   // ===========================================================================
@@ -4241,10 +4423,9 @@ function phasesWithExecuteStages(scope: string): Set<string> {
 
 // Ensure the dirs a workflow writes into exist. Idempotent ensure-exists (SEED
 // ships the shell). Creates the active intent's record dir plus a per-phase
-// artifact dir for each phase the SCOPE RUNS, AND the SPACE-level domain
-// knowledge/ dir (a sibling of intents, not a record subdir); all skipped if
-// already present. The active-intent cursor must be set (createIntent/migration
-// did so) before this runs.
+// artifact dir for each phase the SCOPE RUNS, plus the SPACE-level CodeKB
+// parent and domain knowledge dir; all skipped if already present. The active
+// intent cursor must be set before this runs.
 //
 // Scope-excluded phases get NO folder: an empty `operation/` in a bugfix record
 // reads as work that was planned and skipped, when that phase was never in the
@@ -4265,6 +4446,9 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
   // verification/ is scope-independent: sensor and gate verification can land
   // for any phase, so every record gets it.
   mkdirSync(join(record, "verification"), { recursive: true });
+  // The shared CodeKB parent is safe to inspect before any repository has been
+  // analyzed. Per-repo stores remain lazy and appear only when RE writes them.
+  mkdirSync(dirname(codekbDir(projectDir, "_")), { recursive: true });
   // SPACE-level domain knowledge dir (NOT per-intent): vision §"Spaces" makes
   // knowledge a sibling of memory/codekb/intents under spaces/<space>/, so team
   // domain knowledge accumulates across every intent in the space rather than
@@ -4311,8 +4495,8 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
 //
 // The directory-tree copy + knowledge READMEs that the old `--init` shipped are
 // gone: the workspace shell (spaces/default/memory, native includes) ships in
-// dist/ (SEED), and lazy per-intent/codekb/knowledge dirs are ensure-exists
-// (created on demand). What stays is the scope→stage state-build that routes
+// dist/ (SEED), and lazy workspace dirs are ensure-exists at birth or first
+// use. What stays is the scope→stage state-build that routes
 // the workflow to its first post-init stage — relocated here, now writing into
 // the BORN intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
@@ -4354,6 +4538,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
   const reviewOverride = parseReviewOverride(flags.review);
+  const initialSelection = resolveWorkflowSelection(projectDir);
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
   // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
@@ -4384,6 +4569,14 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // project skips it).
     const migration = migrateFlatLayout(projectDir);
     if (migration) {
+      if (initialSelection.sessionId) {
+        writeSessionBinding(
+          projectDir,
+          initialSelection.sessionId,
+          DEFAULT_SPACE,
+          migration.intentDirName,
+        );
+      }
       gitRmFlatTree(projectDir, migration.movedFrom);
       const migratedState = readStateFile(projectDir);
       const reviewUpdate = applyReviewOverride(
@@ -4444,8 +4637,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         `"${slug}" is a reserved name and cannot be an intent label. Pick a label that describes the work.`
       );
     }
-    const space = activeSpace(projectDir);
-    createIntent(projectDir, slug, space, scope, repos);
+    const space = initialSelection.space;
+    const created = createIntent(
+      projectDir,
+      slug,
+      space,
+      scope,
+      repos,
+      initialSelection.sessionId ?? undefined,
+    );
 
     const ts = isoTimestamp();
 
@@ -4466,6 +4666,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
+      ...sourceBaselineAuditFields(projectDir, "code-generation"),
       ...(reviewOverride !== undefined
         ? {
             "Review Override":
@@ -4530,7 +4731,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       Details: phaseDirDetail,
     });
 
-    handleIntentCreateStateBuild(projectDir, flags, scope, ts, reviewOverride);
+    handleIntentCreateStateBuild(
+      projectDir,
+      flags,
+      scope,
+      ts,
+      reviewOverride,
+      created.dirName,
+      created.space,
+    );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
@@ -4544,6 +4753,8 @@ function handleIntentCreateStateBuild(
   scope: string,
   ts: string,
   reviewOverride: ReviewOverride | undefined,
+  createdDir: string,
+  createdSpace: string,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -4816,13 +5027,12 @@ ${stageProgress}
   // Combined stdout summary (intent born + state-build). The active-intent
   // cursor + the record dir were set by createIntent above; the state file lives
   // under the born intent's record (resolved by writeStateFile's default).
-  const bornDir = activeIntent(projectDir) ?? "(legacy flat record)";
   const submoduleWarningLine =
     uninitSubmodules.length > 0
       ? `Warning: ${uninitSubmodules.length} uninitialized git submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' before proceeding so reverse-engineering can read the code.\n`
       : "";
   process.stdout.write(
-    `Intent created: ${bornDir} (space: ${activeSpace(projectDir)})
+    `Intent created: ${createdDir} (space: ${createdSpace})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
 Project type: ${scan.projectType}
 Languages: ${scan.languages}
@@ -4860,9 +5070,13 @@ function handleUpgrade(): void {
 // shape: {active, spaces:[...], intents:[{uuid,slug,status,repos}]} — consumed
 // by the birth gate, resume-rebind, and statusline; human text is the bare
 // `/aidlc intent` rendering. Pure read.
-function printIntentListing(projectDir: string, asJson: boolean): void {
-  const space = activeSpace(projectDir);
-  const intents = listIntents(projectDir, space);
+function printIntentListing(
+  projectDir: string,
+  asJson: boolean,
+): void {
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const intents = listIntents(projectDir, space, selection.intent);
   const active = intents.find((i) => i.active);
   if (asJson) {
     process.stdout.write(
@@ -4900,8 +5114,12 @@ function printIntentListing(projectDir: string, asJson: boolean): void {
 
 // Print a space listing (human OR --json). --json shape:
 // {active, spaces:[{name,active}]}. Pure read.
-function printSpaceListing(projectDir: string, asJson: boolean): void {
-  const spaces = listSpaces(projectDir);
+function printSpaceListing(
+  projectDir: string,
+  asJson: boolean,
+): void {
+  const selection = resolveWorkflowSelection(projectDir);
+  const spaces = listSpaces(projectDir, selection.space);
   const active = spaces.find((s) => s.active);
   if (asJson) {
     process.stdout.write(
@@ -4957,8 +5175,9 @@ function handleIntent(
     handleHelp();
     return;
   }
-  const space = activeSpace(projectDir);
-  const intents = listIntents(projectDir, space);
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const intents = listIntents(projectDir, space, selection.intent);
   // Exact record-dir match first; then a unique slug match.
   let match = intents.find((i) => i.dirName === target);
   if (!match) {
@@ -4993,8 +5212,14 @@ function handleIntent(
   // session → its stamp moves, not ours → a genuine resume of our session still
   // offers the rebind. writeSessionIntentUuid no-ops on a blank uuid, so an
   // orphan (registry-less) record is fail-safe. Best-effort throughout.
-  const sid = readCurrentSessionId(projectDir);
-  if (sid && match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
+  const sid =
+    selection.sessionId ??
+    readCurrentSessionId(projectDir);
+  if (sid) {
+    writeSessionBinding(projectDir, sid, space, match.dirName);
+    clearSessionRebindOffer(projectDir, sid);
+    if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
+  }
   process.stdout.write(`Active intent → ${match.dirName} (space: ${space})\n`);
 }
 
@@ -5043,7 +5268,22 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
       `Unknown space "${target}". Existing: ${spaces.map((s) => s.name).join(", ")}. This command only switches between existing spaces. Do not create a space to recover from this error - creating one is a separate, deliberate move (/aidlc space create <name>, or legacy /aidlc space-create <name>).`
     );
   }
+  const selection = resolveWorkflowSelection(projectDir);
   setActiveSpaceCursor(projectDir, target);
+  const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
+  if (sessionId) {
+    const targetIntent = activeIntent(projectDir, target);
+    writeSessionBinding(projectDir, sessionId, target, targetIntent);
+    clearSessionRebindOffer(projectDir, sessionId);
+    if (targetIntent) {
+      const uuid = listIntents(projectDir, target).find(
+        (entry) => entry.dirName === targetIntent,
+      )?.uuid;
+      if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
+    } else {
+      clearSessionIntentUuid(projectDir, sessionId);
+    }
+  }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's
   // own resolver; the CLI-native include is the ambient channel). Surgical
@@ -5063,8 +5303,11 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
 // no state read, no audit — mirrors the intent/space read-only query arms.
 function handleCodekbPath(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
-  const space = activeSpace(projectDir);
-  const repo = flags.repo && flags.repo.length > 0 ? flags.repo : codekbRepoName(projectDir, space);
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const repo = flags.repo && flags.repo.length > 0
+    ? flags.repo
+    : codekbRepoName(projectDir, space, selection.intent ?? undefined);
   const dir = relativeCodekbDir(projectDir, repo, space);
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ space, repo, dir })}\n`);
@@ -5101,8 +5344,11 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
 // no audit.
 function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
-  const space = activeSpace(projectDir);
-  const repo = flags.repo && flags.repo.length > 0 ? flags.repo : codekbRepoName(projectDir, space);
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const repo = flags.repo && flags.repo.length > 0
+    ? flags.repo
+    : codekbRepoName(projectDir, space, selection.intent ?? undefined);
   const storeDir = relativeCodekbDir(projectDir, repo, space);
   const storePath = join(projectDir, ...storeDir.split("/"), "reverse-engineering-timestamp.md");
 

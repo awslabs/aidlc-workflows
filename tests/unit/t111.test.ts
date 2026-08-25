@@ -178,6 +178,7 @@ const VALID_EVENT_TYPES = [
   "SENSOR_PROPOSED",
   "SWARM_STARTED",
   "SWARM_UNIT_CONVERGED",
+  "SWARM_SOURCE_MERGED",
   "SWARM_UNIT_FAILED",
   "SWARM_BATON_RETURNED",
   "SWARM_COMPLETED",
@@ -389,8 +390,8 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
 
 describe("VALID_EVENT_TYPES — every canonical type is accepted", () => {
   test("the mirrored list has 86 entries with no duplicates", () => {
-    expect(VALID_EVENT_TYPES.length).toBe(86);
-    expect(new Set(VALID_EVENT_TYPES).size).toBe(86);
+    expect(VALID_EVENT_TYPES.length).toBe(87);
+    expect(new Set(VALID_EVENT_TYPES).size).toBe(87);
   });
 
   // Loop over ALL valid types: each must append a block whose **Event**

@@ -9,7 +9,7 @@ remote.
 
 This chapter is a **manual recipe**: it documents the workshop flow using primitives that already ship today (`aidlc-worktree`, `aidlc-bolt`, plus ordinary git). There is no dedicated `--claim-bolt` CLI yet — claim semantics ride on `git push` to the shared remote, and the recipe makes that contract explicit. A future release may automate the moves this chapter describes; for now, the recipe is the contract.
 
-For the scope's depth/test-strategy/skip-list, see [Scopes and Depth § workshop](05-scopes-and-depth.md#workshop). For the per-Bolt worktree mechanics this chapter assumes, see [State and Audit](10-state-and-audit.md) and the orchestrator's [Construction flow](../reference/03-orchestrator.md). New facilitator? Run through [Getting Started](01-getting-started.md) first — bun and your harness's framework copy must already be in place before any workshop step below.
+For the scope's depth/test-strategy/skip-list, see [Scopes and Depth § workshop](05-scopes-and-depth.md#workshop). For the worktree mechanics used to isolate each Bolt in this chapter, see [State and Audit](10-state-and-audit.md) and the orchestrator's [Construction flow](../reference/03-orchestrator.md). New facilitator? Run through [Getting Started](01-getting-started.md) first — bun and your harness's framework copy must already be in place before any workshop step below.
 
 > **Harness note.** This recipe is harness-neutral: it drives the `aidlc-worktree`
 > and `aidlc-bolt` tools (shared across every harness) plus ordinary git. The
@@ -215,7 +215,7 @@ bun .claude/tools/aidlc-worktree.ts create --slug notifications-worker --base ma
 git push origin bolt-notifications-worker # succeeds — different slug, no race
 ```
 
-Both run `/aidlc` in their respective clones. State and audit fork into the per-Bolt worktrees independently. Each participant's Construction work is local until they merge.
+Both run `/aidlc` in their respective clones. State and audit fork independently into the worktree hosting each participant's Bolt. Each participant's Construction work is local until they merge.
 
 ### What happens if Alice and Bob both pick the same slug
 

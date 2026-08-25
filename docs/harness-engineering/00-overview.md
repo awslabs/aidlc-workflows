@@ -63,11 +63,11 @@ inputs that steer it.
 Everything else a harness engineer configures hangs off these two:
 
 - **Scopes** decide *which* stages run for a given kind of work (a bugfix runs
-  7 of 33 stages; an enterprise feature runs all of them).
+  9 of 33 stages; an enterprise feature runs all of them).
 - **Rules** are standing decisions that travel into every workflow — your
   team's "always do it this way."
-- **Sensors** are deterministic checks bound to stages — an advisory second
-  opinion that fires on every file write.
+- **Sensors** are deterministic checks bound to stages — they run on matching
+  writes or at the approval gate, where a binding may be advisory or blocking.
 - **Knowledge** is the domain context agents load before they work.
 
 ---
@@ -185,7 +185,8 @@ Read it in order the first time:
    context.
 8. **[Construction and the Swarm](08-construction-and-swarm.md)** — set the
    team's Construction autonomy posture in the rule layer, and shape what the
-   per-Unit Bolt swarm can run in parallel through `units-generation`.
+   per-Unit Bolts in an autonomous swarm can run in parallel through
+   `units-generation`.
 9. **[Porting to a New Harness](09-porting-to-a-new-harness.md)** — add another
    CLI harness with one `harness/<name>/` directory and a manifest row, no
    `core/` edits: the manifest contract, the hook adapter, and `emit.ts`.

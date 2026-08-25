@@ -141,6 +141,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "hooks/aidlc-sync-workflow-state.ts",
     "hooks/aidlc-validate-state.ts",
     "hooks/aidlc-write-audit-log.ts",
+    "hooks/review-freeze-command.ts",
     "tools/aidlc-artifact-resolution.ts",
     "tools/aidlc-artifact-vocabulary.ts",
     "tools/aidlc-audit.ts",

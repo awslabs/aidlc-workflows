@@ -519,7 +519,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(existsSync(join(composedProj, ".claude", "skills", "aidlc-custom-composed", "SKILL.md"))).toBe(true);
 
     const selectedBoth = runUtility(composedProj, ["select-plugins", "aidlc,test-pro"]);
-    expect(selectedBoth.status).toBe(0);
+    expect(selectedBoth.status, selectedBoth.stderr).toBe(0);
     expect(JSON.stringify(grid(composedProj)[scopeName])).toBe(seededEntryJson);
 
     const init = runUtility(composedProj, ["intent-create", "--scope", scopeName, "--project-dir", composedProj]);

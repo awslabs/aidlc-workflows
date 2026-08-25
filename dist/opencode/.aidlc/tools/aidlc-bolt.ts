@@ -39,20 +39,26 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  boltSlugForUnit,
   emitError,
   errorMessage,
   getField,
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  readAuditShardEvents,
+  auditBlockField,
   relativeRecordDir,
   readStateFile,
+  resolveAuditWorktreePath,
   resolveProjectDir,
   setFieldStrict,
   setOrInsertField,
+  validateUnitName,
   withAuditLock,
   worktreePath,
   worktreeStateFilePath,
@@ -177,6 +183,156 @@ function parseFlags(args: string[]): Record<string, string> {
   return flags;
 }
 
+function latestWorktreeCreationFields(
+  projectDir: string,
+  slug: string,
+): { modern: boolean; baseCommit: string | null; baseSourceListing: string | null } | null {
+  const currentWorktreePath = worktreePath(projectDir, slug);
+  const rows = readAuditShardEvents(projectDir)
+    .filter(
+      (row) =>
+        row.event === "WORKTREE_CREATED" &&
+        auditBlockField(row.block, "Bolt slug") === slug &&
+        (
+          auditBlockField(row.block, "Worktree path") !== null &&
+          resolveAuditWorktreePath(
+            projectDir,
+            auditBlockField(row.block, "Worktree path") as string,
+          ) === currentWorktreePath
+        ),
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shard === b.shard) return a.pos - b.pos;
+      return a.shard < b.shard ? -1 : 1;
+    });
+  if (rows.length === 0) return null;
+  const latest = rows[rows.length - 1].block;
+  const baseCommit = auditBlockField(latest, "Base commit");
+  const baseSourceListing = auditBlockField(latest, "Base Source Listing");
+  return {
+    modern: baseCommit !== null || baseSourceListing !== null,
+    baseCommit,
+    baseSourceListing,
+  };
+}
+
+function worktreeBaseFields(
+  projectDir: string,
+  slug: string,
+): { baseCommit: string; baseSourceListing: string } | null {
+  const creation = latestWorktreeCreationFields(projectDir, slug);
+  const metaPath = join(worktreePath(projectDir, slug), ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) {
+    if (creation?.modern) {
+      throw new Error(`modern WORKTREE_CREATED for "${slug}" requires worktree metadata at ${metaPath}`);
+    }
+    return null;
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(metaPath, "utf-8")) as unknown;
+  } catch (e) {
+    throw new Error(`invalid worktree metadata at ${metaPath}: ${errorMessage(e)}`);
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`invalid worktree metadata at ${metaPath}: expected an object`);
+  }
+  const meta = value as Record<string, unknown>;
+  const allowed = new Set([
+    "version",
+    "boltSlug",
+    "baseBranch",
+    "baseCommit",
+    "baseSourceListing",
+    "intentRecord",
+    "repoSelector",
+    "gitCommonDir",
+    "gitCommonDirHash",
+    "swarmUnit",
+    "swarmBatch",
+    "swarmStage",
+    "swarmFloor",
+  ]);
+  const unknown = Object.keys(meta).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    throw new Error(
+      `invalid worktree metadata at ${metaPath}: unknown field(s): ${unknown.sort().join(", ")}`,
+    );
+  }
+  if (meta.version !== 1) {
+    throw new Error(`invalid worktree metadata at ${metaPath}: version must equal 1`);
+  }
+  if (meta.boltSlug !== slug) {
+    throw new Error(
+      `invalid worktree metadata at ${metaPath}: boltSlug must equal ${JSON.stringify(slug)}`,
+    );
+  }
+  if (typeof meta.baseBranch !== "string" || meta.baseBranch.length === 0) {
+    throw new Error(`invalid worktree metadata at ${metaPath}: baseBranch must be non-empty`);
+  }
+  if (typeof meta.baseCommit !== "string" || !/^[0-9a-f]{40,64}$/.test(meta.baseCommit)) {
+    throw new Error(`invalid worktree metadata at ${metaPath}: baseCommit must be a Git object id`);
+  }
+  if (
+    typeof meta.baseSourceListing !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(meta.baseSourceListing)
+  ) {
+    throw new Error(`invalid worktree metadata at ${metaPath}: baseSourceListing must be a sha256 fingerprint`);
+  }
+  if (
+    creation?.modern &&
+    (creation.baseCommit !== meta.baseCommit ||
+      creation.baseSourceListing !== meta.baseSourceListing)
+  ) {
+    throw new Error(
+      `worktree metadata at ${metaPath} does not match the authoritative WORKTREE_CREATED attestation`,
+    );
+  }
+  if (
+    "intentRecord" in meta &&
+    (typeof meta.intentRecord !== "string" || meta.intentRecord.length === 0)
+  ) {
+    throw new Error(
+      `invalid worktree metadata at ${metaPath}: intentRecord must be non-empty when present`,
+    );
+  }
+  const swarmFields = [
+    meta.swarmUnit,
+    meta.swarmBatch,
+    meta.swarmStage,
+    meta.swarmFloor,
+  ];
+  const swarmCount = swarmFields.filter((value) => value !== undefined).length;
+  if (swarmCount !== 0 && swarmCount !== swarmFields.length) {
+    throw new Error(
+      `invalid worktree metadata at ${metaPath}: swarmUnit/swarmBatch/swarmStage/swarmFloor must appear together`,
+    );
+  }
+  if (
+    swarmCount > 0 &&
+    (typeof meta.swarmUnit !== "string" ||
+      validateUnitName(meta.swarmUnit) !== null ||
+      boltSlugForUnit(meta.swarmUnit) !== slug ||
+      typeof meta.swarmBatch !== "string" ||
+      !/^[1-9][0-9]*$/.test(meta.swarmBatch) ||
+      typeof meta.swarmStage !== "string" ||
+      meta.swarmStage.length === 0 ||
+      typeof meta.swarmFloor !== "string" ||
+      meta.swarmFloor.length === 0)
+  ) {
+    throw new Error(
+      `invalid worktree metadata at ${metaPath}: swarm provenance is malformed`,
+    );
+  }
+  if (creation !== null && !creation.modern) return null;
+  return {
+    baseCommit: meta.baseCommit,
+    baseSourceListing: meta.baseSourceListing,
+  };
+}
+
 // --- Subcommand: start ---
 // Usage: aidlc-bolt start --name <bolt-names> --batch <n>
 //                         [--walking-skeleton true|false]
@@ -221,11 +377,13 @@ function handleStart(args: string[]): void {
   // Validate state-file shape FIRST. setFieldStrict-equivalent: read state
   // and confirm we can find it; if not, fail before any audit emit so a
   // missing state file doesn't leave an orphan BOLT_STARTED.
+  let baseFields: { baseCommit: string; baseSourceListing: string } | null = null;
   if (useWorktree) {
     try {
       readStateFile(pd);
+      baseFields = worktreeBaseFields(pd, flags.slug);
     } catch (e) {
-      failJson("start-worktree", flags.slug, "state-read-failed", errorMessage(e));
+      failJson("start-worktree", flags.slug, "state-or-worktree-meta-read-failed", errorMessage(e));
     }
   }
 
@@ -241,6 +399,10 @@ function handleStart(args: string[]): void {
     };
     if (useWorktree) {
       fields["Bolt slug"] = flags.slug;
+      if (baseFields !== null) {
+        fields["Base commit"] = baseFields.baseCommit;
+        fields["Base Source Listing"] = baseFields.baseSourceListing;
+      }
     }
     emitAudit(pd, "BOLT_STARTED", fields, flags.intent, flags.space);
   } catch (e) {

@@ -60,9 +60,20 @@ Read code generation outputs across all units from
 instructions from
 `<record>/construction/*/code-generation/unit-test-instructions.md`. For a
 zero-Unit scope such as `express`, read the stage-level equivalents under
-`<record>/construction/code-generation/`. Review NFR requirements across units
-(if they exist) to identify performance and security testing needs. Catalog all
-test types required.
+`<record>/construction/code-generation/`.
+
+Build a source-complete inventory of every measurable quality target before
+generating instructions. Read all applicable stage-level and per-unit sources:
+
+- every artifact under `nfr-requirements/`
+- every artifact under `nfr-design/`
+- every approved `## Testing Contract` in `code-generation-plan.md`
+
+For each target, record a stable target ID (derive one from the source path and
+section when the source has none), source path/section, expected value, the
+check or instruction file that will produce its actual value, and the later
+validation stage that owns it when Build and Test cannot execute it locally.
+Catalog all required test types from this inventory.
 
 ### Step 3: Generate Build Instructions
 
@@ -105,6 +116,12 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Overall build status and prerequisites
 - Test type inventory (which test types were generated)
 - Coverage expectations per unit
+- A `## Target Verification Matrix` with one row per target and these columns:
+  Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict
+- Each applicable target begins with Actual and Evidence `Pending`, and Verdict
+  `Pending`. `N/A` is valid only when the source inventory found no applicable
+  measurable target; in that case write one explanatory `N/A` row. An
+  applicable target may never use `N/A`.
 - Readiness assessment (build-ready, test-ready, deployment-ready)
 - Known limitations or outstanding items
 
@@ -123,23 +140,48 @@ Attempt to execute the build and test commands documented in the instruction fil
    once, never N times. Capture and report stage-level/per-unit pass/fail
    results without double counting.
 3. **Integration tests** (if applicable): Run integration test commands. Capture results.
-4. **Report results**: Create or update `<record>/construction/build-and-test/test-results.md` with:
+4. **Other applicable checks**: Run every applicable command from performance,
+   security, contract, E2E, accessibility, and other generated instruction
+   files. A check may be deferred only when it requires a deployed or
+   production-like environment AND the current execution plan contains a later
+   validation stage that explicitly owns that check (for example,
+   `performance-validation`). Record the owning stage and expected evidence
+   path. A deferred target remains `Unverified` and cannot contribute to a
+   successful stage result. If no later owning stage is scheduled, the target
+   is `Unverified`, not deferred successfully.
+5. **Finalize and report results**: Create or update
+   `<record>/construction/build-and-test/test-results.md` and the Build and Test
+   Summary on every exit path, including loop-back, halt-and-ask, abort, and
+   accepted failure, with:
    - Build status (success/failure + output)
    - Test results (total, passed, failed, skipped)
    - Failure details (test name, assertion, stack trace)
    - Coverage report (if test framework supports it)
+   - The finalized Target Verification Matrix: actual value, evidence path or
+     command output, owning stage, and exactly one final verdict per applicable
+     target: `Met`, `Not Met`, or `Unverified`. `Pending` is allowed only while
+     Step 9 is being prepared; no `Pending` verdict may remain when Step 10
+     exits.
    - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires a
      loop-back): one `### Loop-back N — <ISO timestamp>` entry per attempt,
      carrying Diagnosis / Root-cause stage / Planned fix / Estimated impact. This section
      is APPEND-ONLY and must survive re-runs of this stage (choose Modify,
      never Redo, on loop-back re-entry — Redo would erase the ledger).
 
-**On failure**: If build or tests fail, run the failure-escalation ladder:
+**Failure predicate**: Build and Test has failed when any build or test command
+fails OR any applicable target is `Not Met` or `Unverified`. Before entering
+failure handling, finalize the matrix and summary with all evidence available
+on that exit path. Weakening, relaxing, lowering, or disabling a defined
+quality target is never an acceptable fix.
+
+**On failure**: Run the same failure-escalation ladder for command failures,
+`Not Met` targets, and `Unverified` targets:
 
 1. **In-stage fix (max 2 attempts)** — for root causes inside this stage's own
-   remit (test config, build scripts, environment setup): read the error
-   output, identify the failing configuration or scaffolding, apply the fix,
-   re-run the failing step.
+   remit (test config, build scripts, environment setup, or an executable target
+   check): read the failure evidence, identify the failing configuration or
+   scaffolding, apply the fix, re-run the failing step, and refresh the target
+   matrix.
 2. **Classify and estimate impact** — when in-stage attempts are exhausted OR the
    diagnosis points upstream: decide whether the root cause lies in the
    generated source or test code — regardless of defect size — or an approach
@@ -183,7 +225,9 @@ iteration the replay uses the serial per-unit walk, never the autonomous swarm.
 to move. Stop at rung 2, log the diagnosis + impact-estimated options in
 test-results.md, and present them in this run's isolated-run summary.
 
-**On success**: Update the Build and Test Summary with actual results (not just instructions).
+**On success**: Only when every executed command passed AND every applicable
+target is `Met` (or the inventory has the single explanatory `N/A` row), update
+the Build and Test Summary with a successful readiness result.
 
 ### Step 11: Cross-Unit Final Coverage Gate
 
