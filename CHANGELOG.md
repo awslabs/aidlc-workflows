@@ -18,8 +18,11 @@ Filesystem descendant checks now enforce one mixed-separator boundary on every h
 
 ## [2.6.91] - 2026-08-25
 
-Copilot no longer asks an AI-DLC workflow question twice when the model attempts to use a native question picker. Running workflows now refuse picker calls and direct the model to render numbered prose in chat, preserving the trusted human-turn check. **Upgrade:** refresh your `dist/copilot/` shell; in-flight workflows need no migration.
+Lone-repository CodeKB scope fingerprints now avoid Git's unreliable combination of positive and exclude pathspecs and reject fingerprints that contain no files, while Copilot no longer asks an AI-DLC workflow question twice when the model attempts to use a native question picker. **Upgrade:** refresh your `dist/<harness>/` shell before minting or checking CodeKB scope fingerprints, and re-mint (or re-run reverse engineering for) any stored scope timestamp whose fingerprint is `4b825dc642cb6eb9a060e54bf8d69288fbee4904`, the empty-tree value written by the pre-fix bug; in-flight Copilot workflows need no migration.
 
+* `codekbScopeFingerprint` omits exclusions outside analyzed roots, drops analyzed paths covered by exclusions, and preserves root and nested-project scope boundaries without silently rewriting malformed absolute paths.
+* Scopes that stage zero paths now mint `unknown` and report `UNVERIFIED`, never a false `CURRENT` or permanent `STALE` verdict.
+* Deterministic regression coverage verifies distinct narrow fingerprints, full-root exclusions, nested-project boundaries, malformed paths, and empty scopes.
 * The Copilot PreToolUse adapter denies native picker execution IDs such as `ask_user` and `vscode/askQuestions` only when the session-selected workflow has valid `Status: Running` state; projects with no workflow, completed workflows, and unusable state fail open.
 * Picker tool results still never count as `HUMAN_TURN`; the user's next chat message records the trusted turn used by answer and approval logging.
 
