@@ -1,7 +1,7 @@
 // covers: function:gridCostSummary, function:scopeCostSummary, function:validateGrid, function:renderScopeTable
 //
 // t213 - the scope-cost summary helper (issue: preview the cost at scope
-// confirmation). The confirm string, the birth print, the scope-change output,
+// confirmation). The confirm string, the creation print, the scope-change output,
 // and the composer validator all read scopeCostSummary/gridCostSummary; this
 // test pins those helpers against an INDEPENDENT derivation computed inside the
 // test from the shipped scope-grid.json + stage-graph.json. Nothing is

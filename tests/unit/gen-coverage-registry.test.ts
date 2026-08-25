@@ -797,7 +797,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // that behaviourally beats grepping the source for "--all", which matched the
     // comment explaining the flag does not exist.
     "unit/t292-knowledge-list-show.test.ts",
-    // t297 births real intents through the shipped tool, because a hand-written
+    // t297 creates real intents through the shipped tool, because a hand-written
     // intents.json would let the test agree with a fiction rather than with the
     // registry shape the code actually meets.
     "unit/t297-knowledge-intents.test.ts",
@@ -858,7 +858,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t164-shard-ordering-and-lock-bucket.test.ts",
     "integration/t165-intent-create-p4.test.ts",
     "integration/t166-multi-repo-construction.test.ts",
-    "integration/t171-birth-gate-registry.test.ts",
+    "integration/t171-creation-gate-registry.test.ts",
     "integration/t172-migration-audit-trail.test.ts",
     "integration/t173-session-switch-restamp.test.ts",
     "integration/t175-space-create-memory-isolation.test.ts",
@@ -992,6 +992,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t291-review-receipt-recovery.test.ts",
     "unit/t302-protocol-modules.test.ts",
     "unit/t317-gate-pending-doctor.test.ts",
+    "unit/t319-doctor-hooks-blocked.test.ts",
     "unit/t315-pipeline-link-receipts.test.ts",
     "unit/t313-plugin-doctor-checks.test.ts",
     "unit/t320-review-confirmation-deadlock.test.ts",

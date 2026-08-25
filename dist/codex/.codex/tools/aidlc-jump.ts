@@ -374,7 +374,7 @@ function handleExecute(args: string[]): void {
   // over entirely reads Skipped. Backward (or a caller-mis-specified redo
   // that crosses a boundary): every phase after the target just had its
   // EXECUTE stages reset to pending above, so those rows return to Pending,
-  // leaving zero-EXECUTE phases at their birth Skipped. Either way the
+  // leaving zero-EXECUTE phases in their initial Skipped state. Either way the
   // target's phase is now the active one.
   if (crossesPhaseBoundary && currentStageForPhase) {
     const phaseIdx = (p: string): number =>

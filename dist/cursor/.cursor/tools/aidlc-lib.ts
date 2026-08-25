@@ -595,12 +595,13 @@ export function toPosix(p: string): string {
 //   intent: explicit arg > active-intent pointer > lone-intent > null.
 //
 // NULL RESOLUTION (P9 end state — no flat root). When NO intent record resolves
-// (activeIntent() → null: a fresh SEED shell before auto-birth, or a flat project
+// (activeIntent() → null: a fresh SEED shell before auto-create, or a flat project
 // still awaiting migration), the absolute path helpers resolve to the bare SPACE
 // record root (aidlc/spaces/<space>/intents/ — see spaceRecordRoot). No
 // aidlc-state.md ever lives directly there, so existence-gated consumers
-// (loadStateFileIfPresent) read "no workflow yet" and the orchestrator
-// births/errors. The ONLY surviving flat `aidlc-docs` read is the one-time
+// (loadStateFileIfPresent) read "no workflow yet" and the orchestrator either
+// creates an intent or reports an error. The ONLY surviving flat `aidlc-docs`
+// read is the one-time
 // migration's SOURCE (flatStateSource/flatMigrationSource below).
 // activeIntent() returning null IS that "no record yet" signal.
 
@@ -1153,7 +1154,7 @@ function terminalCommandFromWorkspaceCommand(
 
 // Classify the post-`/aidlc` argument tokens. Returns the terminal command to run
 // deterministically, or null when the input is NOT a terminal command (freeform
-// intent text, a --scope/--stage/--phase jump, a config/scope change, birth — all
+// intent text, a --scope/--stage/--phase jump, a config/scope change, creation - all
 // of which carry workflow work and MUST go through the engine + conductor). The
 // matching rules are byte-for-byte the engine's parseNextFlags terminal branches
 // (read-only flag anywhere; workspace verb only at index 0) so the seam and the
@@ -1161,7 +1162,7 @@ function terminalCommandFromWorkspaceCommand(
 export function classifyTerminalCommand(args: string[]): TerminalCommand | null {
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
-  // freeform intent text and the funnel offers to birth an intent named
+  // freeform intent text and the funnel offers to create an intent named
   // "help". Sole-token only: `help` inside a longer description stays freeform.
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { subcommand: "help", source: "read-only-flag" };
@@ -1950,10 +1951,11 @@ export function scopePathCovered(incoming: string[], storePath: string): boolean
 
 // The bare SPACE record root: `aidlc/spaces/<space>/intents/`. The absolute path
 // helpers resolve here when no intent record exists (activeIntent → null) — a
-// fresh SEED shell before auto-birth, or a flat project still awaiting migration.
+// fresh SEED shell before auto-create, or a flat project still awaiting migration.
 // No aidlc-state.md ever lives directly here, so existence-gated readers
 // (loadStateFileIfPresent) see "no workflow yet" and the orchestrator
-// births/errors. This is the P9 end state — there is no flat `aidlc-docs/` root.
+// creates an intent or reports an error. This is the P9 end state; there is no
+// flat `aidlc-docs/` root.
 function spaceRecordRoot(projectDir: string, space?: string): string {
   return intentsDir(projectDir, space);
 }
@@ -2056,12 +2058,13 @@ export function intentDirNameBase(label: string, date: Date = new Date()): strin
 
 // Resolve a within-space dir clash by appending a numeric counter: `<base>`,
 // `<base>-2`, `<base>-3`, … (the date prefix has no hex tail to extend, unlike the
-// pre-spike scheme). Two intents born the same day with the same short label is
-// the only collision case; the counter keeps the readable name AND uniqueness, and
+// pre-spike scheme). Two intents created on the same day with the same short
+// label are the only collision case; the counter keeps the readable name AND
+// uniqueness, and
 // the canonical id is still the row's UUIDv7. Returns the first free name.
 //
 // Bounded by MAX_DIR_COLLISIONS: 998 same-day same-label intents is not a real
-// workflow — it is a bug or a pathological caller (e.g. a script birthing in a
+// workflow - it is a bug or a pathological caller (e.g. a script creating intents in a
 // loop with a constant label). Fail LOUD with a diagnostic rather than spin, so
 // the cause surfaces. Safe to throw here: the caller holds the workspace lock via
 // withAuditLock, which releases in its `finally` (and an on-exit net), so the
@@ -2135,7 +2138,7 @@ export function needsFlatMigration(projectDir: string): boolean {
   const flatState = flatStateSource(projectDir);
   if (!existsSync(flatState)) return false;
   // Any new-layout intent RECORD already present → migration ran (or a fresh
-  // born intent exists); do not move a second tree on top of it.
+  // created intent exists); do not move a second tree on top of it.
   if (anyIntentRecordExists(projectDir)) return false;
   return true;
 }
@@ -2162,7 +2165,7 @@ export function anyIntentRecordExists(projectDir: string): boolean {
 export interface IntentRegistryEntry {
   uuid: string;
   slug: string;
-  // The on-disk record dir name. SPIKE (date-prefix): stored verbatim at birth so
+  // The on-disk record dir name. SPIKE (date-prefix): stored verbatim at creation so
   // readers join a row to its dir DIRECTLY, never reconstructing it from slug+uuid
   // (the date-prefixed name `<YYMMDD>-<label>` is not derivable from {slug,uuid}).
   // Optional for back-compat: pre-spike rows (and hand-written fixtures) omit it,
@@ -2233,7 +2236,7 @@ export function readIntentRegistry(projectDir: string, space?: string): IntentRe
 // --- The deterministic query layer: "what exists" (one source, two modes) ----
 //
 // listSpaces()/listIntents() are the single shared readers the verb handlers,
-// the auto-birth gate, the resume-rebind, and the statusline all call (P4
+// the auto-create gate, the resume-rebind, and the statusline all call (P4
 // query-layer box). Pure reads — they never mutate. A space exists iff its dir
 // is present under aidlc/spaces/; an intent's authoritative row is the
 // registry, joined with the on-disk record presence.
@@ -3077,7 +3080,7 @@ export function findIntentByUuid(
   return null;
 }
 
-// --- Intent birth: the deterministic mutation behind the engine's directive ---
+// --- Intent creation: the deterministic mutation behind the engine's directive ---
 //
 // createIntent() is the single deterministic primitive the `intent-create` tool
 // handler calls: mint a UUIDv7, create the record dir, append the registry row,
@@ -3086,10 +3089,10 @@ export function findIntentByUuid(
 // — it owns only the identity + dir + registry + cursor, the parts that must be
 // crash-safe and clash-free. The CALLER MUST already hold the WORKSPACE lock
 // (invariant 2: every intents.json mutation takes the workspace bucket); a
-// concurrent birth is serialized by that lock, so the within-space dir-clash
+// concurrent creation is serialized by that lock, so the within-space dir-clash
 // disambiguation here only ever resolves a same-uuid id8 collision, never a
 // cross-process race.
-export interface BornIntent {
+export interface CreatedIntent {
   uuid: string;
   slug: string;
   dirName: string;
@@ -3104,7 +3107,7 @@ export function createIntent(
   scope?: string,
   repos?: string[],
   sessionId?: string,
-): BornIntent {
+): CreatedIntent {
   const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
   // SPIKE (date-prefix): the dir name is `<YYMMDD>-<short-label>`, the `label` arg
@@ -3123,12 +3126,12 @@ export function createIntent(
   mkdirSync(recordPath, { recursive: true });
   // BIND the record so the resolvers recognize it immediately: activeIntent()
   // only treats a record dir as real once it holds an aidlc-state.md (the cursor
-  // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). Birth
-  // mkdir's the dir, but the full state body is written AFTER birth by the
+  // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). createIntent()
+  // creates the dir, but the full state body is written AFTER creation by the
   // caller (handleIntentCreate, via the default-resolving writeStateFile). Write
   // a header-only stub here so the cursor resolves to THIS record between mint
   // and the full write — without it, activeIntent() returns null and the
-  // post-birth state/audit writes leak to the flat fallback (a bootstrap gap).
+  // post-creation state/audit writes leak to the flat fallback (a bootstrap gap).
   const statePath = join(recordPath, "aidlc-state.md");
   if (!existsSync(statePath)) {
     writeFileSync(statePath, "# AI-DLC State Tracking\n", "utf-8");
@@ -5917,7 +5920,7 @@ export function auditShardDir(projectDir: string, intent?: string, space?: strin
 // The deliberate `undefined intent + explicit space` form adds the space-level
 // shard before the resolved intent shards; DocumentKB recovery and doctor/export
 // use that form because space-level provenance is part of their read model.
-// PRE-BIRTH PARITY: when NO intent resolves at all, the space shard IS the
+// PRE-CREATION PARITY: when NO intent resolves at all, the space shard IS the
 // ledger — the append side's auditFilePath falls back to it, so the read side
 // must too, or a project with no intents yet reads an empty ledger where its
 // own appends just landed (that broke 10 fixture suites when this narrowing
@@ -9123,11 +9126,11 @@ export function discoverSiblingRepos(projectDir: string): string[] {
   return [...new Set(found)].sort();
 }
 
-// Resolve the repo set for a new intent at birth: an explicit `--repos a,b` set
+// Resolve the repo set for a new intent at creation: an explicit `--repos a,b` set
 // wins (authoritative when the user names them); absent it, sibling auto-discovery
 // supplies the default. Each name is validated. Returns [] when neither yields a
 // repo (→ no repos row → lone-repo inference). Throws on an invalid explicit name.
-export function resolveBirthRepoSet(
+export function resolveIntentRepoSet(
   projectDir: string,
   explicitReposCsv?: string,
 ): string[] {
@@ -9249,7 +9252,7 @@ export function resolveConstructionRepo(
 // resolves, else the bare space record root (aidlc/spaces/<sp>/intents/). Every
 // family helper below joins under this so the whole tree moves with the intent in
 // lockstep. Stays total (never throws) so the hooks that call the family at
-// module top on a pre-birth shell don't crash.
+// module top on a pre-creation shell don't crash.
 export function docsRoot(projectDir: string, intent?: string, space?: string): string {
   const resolved = resolveRecordDir(projectDir, intent, space);
   return resolved.dir ?? spaceRecordRoot(projectDir, resolved.space);
@@ -9375,14 +9378,14 @@ function touchTurnMarker(path: string): void {
 }
 
 // NO WORKFLOW => NO MARKER. Both markers describe one workflow's turn shape, so
-// with nothing born there is nothing to describe. This self-gate is load-bearing
+// with nothing created there is nothing to describe. This self-gate is load-bearing
 // for more than tidiness: without it a marker write on a FRESH workspace would
 // create the record tree as a side effect (touchTurnMarker mkdir -p's the parent,
-// and docsRoot falls back to the bare space record root before birth), which
+// and docsRoot falls back to the bare space record root before creation), which
 // would break the invariant that `aidlc-orchestrate next` is a PURE READ that
-// births nothing. Mirrors the mint hooks' own `existsSync(stateFilePath(...))`
+// creates nothing. Mirrors the mint hooks' own `existsSync(stateFilePath(...))`
 // self-gate, so all four write sites agree.
-function workflowIsBorn(projectDir: string, intent?: string, space?: string): boolean {
+function workflowIsCreated(projectDir: string, intent?: string, space?: string): boolean {
   try {
     return existsSync(stateFilePath(projectDir, intent, space));
   } catch {
@@ -9394,14 +9397,14 @@ function workflowIsBorn(projectDir: string, intent?: string, space?: string): bo
 // seam of every harness: the core aidlc-record-human-turn.ts hook (Claude,
 // opencode) and both Kiro adapters' inlined `record-human-turn` targets.
 export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
-  if (!workflowIsBorn(projectDir, intent, space)) return;
+  if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));
 }
 
 // Record that the workflow engine was ADVANCED (not merely probed). Called from
 // aidlc-orchestrate.ts's `next` / `report` / `park` entry points. A no-op in three
 // cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe — see above),
-// for read-only utility routing (excluded at the call site), and before birth.
+// for read-only utility routing (excluded at the call site), and before creation.
 //
 // KNOWN COVERAGE GAP — the marker sees LESS than the transcript predicate does.
 // isEngineToolCall (below) counts as engagement any non-read-only aidlc-jump /
@@ -9423,7 +9426,7 @@ export function markHumanTurn(projectDir: string, intent?: string, space?: strin
 // parity behind.
 export function markEngineTouch(projectDir: string, intent?: string, space?: string): void {
   if (process.env[STOP_HOOK_PROBE_ENV] === "1") return;
-  if (!workflowIsBorn(projectDir, intent, space)) return;
+  if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(engineTouchMarkerPath(projectDir, intent, space));
 }
 
@@ -10183,13 +10186,14 @@ export function countCheckboxes(
 // The audit lock is a cross-process mutex: a bare mkdir-EEXIST dir in tmpdir().
 // It is keyed PER INTENT so two intents (or two Bolts in different intents) run
 // truly in parallel without false serialization. Two keying invariants (P4's
-// auto-birth depends on them):
+// auto-create depends on them):
 //
 //  (1) intent-OMITTED hashes a RESERVED sentinel `__workspace__` bucket, distinct
-//      from every per-intent bucket, and does NOT resolve activeIntent() (at
-//      birth there is no active intent; resolving would throw or bucket on
+//      from every per-intent bucket, and does NOT resolve activeIntent() (during
+//      intent creation there is no active intent; resolving would throw or bucket on
 //      "default", and two concurrent first-runs would key different/empty
-//      buckets and both birth). EVERY intents.json mutation takes this workspace
+//      buckets and both create intents). EVERY intents.json mutation takes this
+//      workspace
 //      bucket; only intent-scoped state/audit writes take a per-intent bucket.
 //  (2) the composite identity (projectDir + space + intent | sentinel) keys the
 //      lock dir AND the in-process depth/handler maps, or the maps collide
@@ -10201,7 +10205,7 @@ export function countCheckboxes(
 // holder is NEVER robbed. Reclaim is atomic (rename the dead dir aside, then
 // re-mkdir) so only one waiter wins.
 
-// The reserved bucket for workspace-level mutations (intents.json, intent birth).
+// The reserved bucket for workspace-level mutations (intents.json, intent creation).
 export const WORKSPACE_LOCK_SENTINEL = "__workspace__";
 
 // Default stale-lock age threshold (ms). A lock whose owner is still alive but
@@ -10229,7 +10233,7 @@ export function auditLockIdentity(projectDir: string, intent?: string, space?: s
   try {
     canonicalProjectDir = realpathSync(canonicalProjectDir);
   } catch {
-    // Birth and diagnostics can lock before the project exists. The absolute
+    // Creation and diagnostics can lock before the project exists. The absolute
     // lexical path is stable until realpath can resolve filesystem aliases.
   }
   if (intent === undefined) {
@@ -11520,7 +11524,7 @@ export function pipelineLinkEvidence(
 //
 // Unit-major Construction can run a later stage before that stage's own
 // STAGE_STARTED row exists. For that walk, a stage attempt begins at the latest
-// workflow birth, jump, or stage rejection and deliberately ignores
+// workflow creation, jump, or stage rejection and deliberately ignores
 // STAGE_STARTED. This matches the reviewer-receipt floor: the later stage start
 // must not invalidate work legitimately completed earlier in the same
 // unit-major block.
@@ -12798,7 +12802,7 @@ export function selectionAwareDefaultScope(preferred: string = DEFAULT_SCOPE): D
  * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
  * callers that just need the resolved scope name. `preferred` is the caller's
  * core-era literal (DEFAULT_SCOPE, "classic", for both freeform inference and
- * intent birth).
+ * intent creation).
  * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
  * the nominated freeform default (or the sole enabled plugin's first scope) is
  * returned, falling back to `preferred` when nothing can be chosen.
@@ -13690,7 +13694,7 @@ export function stagesInScope(
 //
 // One source of truth for the ceremony a scope (or an arbitrary composer grid)
 // carries: stage counts, approval-gate count, and per-unit fan-out. The routing
-// strings, the birth print, the scope-change output, and the composer validator
+// strings, the creation print, the scope-change output, and the composer validator
 // all read these numbers instead of recomputing them, so the confirm the user
 // sees agrees with the grid the engine runs.
 
@@ -14926,7 +14930,7 @@ export function filterProducesByKind(
 // State-schema-version classification (shared by runtime + doctor)
 // -----------------------------------------------------------------------------
 // The persisted `aidlc-state.md` carries a `- **State Version**: N` line naming
-// the state-graph schema the workflow was born under. v8 renamed the Inception
+// the state-graph schema the workflow was created under. v8 renamed the Inception
 // `application-design` stage to `domain-design` and inserted `contract-design`,
 // so a pre-v8 state file's stage rows no longer match the compiled graph. An
 // incompatible state must be refused up front by BOTH runtime commands

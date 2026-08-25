@@ -116,7 +116,7 @@ method, state, audit, and artifacts — never application code. Generated code l
 in the workspace's **code repos**: in the common single-repo case, the project dir
 itself; in a multi-repo workspace, the sibling repo directories that are immediate
 children of the workspace root (each with its own `.git`). An intent records the
-repos it touches at birth — auto-discovered, or scoped with `--repos a,b` — in its
+repos it touches at creation - auto-discovered, or scoped with `--repos a,b` - in its
 `intents.json` row (`repos: [...]`); Construction anchors each git operation to one
 of them. An intent with no recorded `repos` is the single-repo default. See
 [CLI Commands](12-cli-commands.md).

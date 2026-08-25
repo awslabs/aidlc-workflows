@@ -598,7 +598,7 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     expect(payload.session_id).toBe("main");
   });
 
-  test("turn-one idle reaches the real Stop hook when workflow state is born during the turn", async () => {
+  test("turn-one idle reaches the real Stop hook when workflow state is created during the turn", async () => {
     const root = freshInstalledProject();
     const { client, prompts } = fakeClient();
     const adapter = await createAdapter({ client, directory: root });

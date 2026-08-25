@@ -35,7 +35,7 @@
 //       wrongly Englished Markdown artifacts that only mix in parsed islands).
 //
 // MECHANISM. (a)/(b)/(d) read the shipped files directly (the `none` floor).
-// (c) SPAWNS the real engine CLI to birth an intent into a temp project, then
+// (c) SPAWNS the real engine CLI to create an intent into a temp project, then
 // calls the shipped hook's exported pure entry in-process. Zero tokens, zero
 // network.
 
@@ -297,12 +297,12 @@ describe("t266 conversation-language rule layer", () => {
   test("c: a delegated dispatch is rewritten to carry all four rules", () => {
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t266-"));
     tempDirs.push(proj);
-    const birth = spawnSync(
+    const creation = spawnSync(
       BUN,
       [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
       { encoding: "utf-8" },
     );
-    expect(birth.status, `intent-create failed: ${birth.stdout}\n${birth.stderr}`).toBe(0);
+    expect(creation.status, `intent-create failed: ${creation.stdout}\n${creation.stderr}`).toBe(0);
 
     const result = augmentDispatchRules(
       "task",
@@ -857,12 +857,12 @@ describe("t266 conversation-language rule layer", () => {
     // of a deterministic test.
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t266-switch-"));
     tempDirs.push(proj);
-    const birth = spawnSync(
+    const creation = spawnSync(
       BUN,
       [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
       { encoding: "utf-8" },
     );
-    expect(birth.status, `intent-create failed: ${birth.stdout}\n${birth.stderr}`).toBe(0);
+    expect(creation.status, `intent-create failed: ${creation.stdout}\n${creation.stderr}`).toBe(0);
 
     // Persist BOTH rules the way the learnings ritual actually leaves them.
     // The write path appends and dedupes on the per-(stage, candidate_id) cid
@@ -968,12 +968,12 @@ describe("t266 conversation-language rule layer", () => {
   test("e3: a team-level language rule never outranks the project-level one it precedes", () => {
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t266-split-"));
     tempDirs.push(proj);
-    const birth = spawnSync(
+    const creation = spawnSync(
       BUN,
       [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
       { encoding: "utf-8" },
     );
-    expect(birth.status, `intent-create failed: ${birth.stdout}\n${birth.stderr}`).toBe(0);
+    expect(creation.status, `intent-create failed: ${creation.stdout}\n${creation.stderr}`).toBe(0);
 
     const memory = join(proj, "aidlc", "spaces", "default", "memory");
     const teamMd = join(memory, "team.md");

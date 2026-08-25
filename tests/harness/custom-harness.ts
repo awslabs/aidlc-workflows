@@ -170,7 +170,7 @@ export const CUSTOM_RULE_MARKER = "PHASE5-DATA-MIGRATION-RULE-XYZZY";
 /** Where the schema-snapshot stage writes its source-schema artefact — a
  *  markdown file under the active intent's record whose write triggers the
  *  custom sensor's glob match. Relative to the project root, with a `*` for the
- *  born intent dir (the id is minted at runtime). Path layout follows the shipped
+ *  created intent dir (the id is minted at runtime). Path layout follows the shipped
  *  per-intent convention: aidlc/spaces/<space>/intents/<slug-id8>/<phase>/<stage>/<artefact>.md.
  *  The `*` glob is honoured by tui-drive's --until-file (globs one segment). */
 export const SNAPSHOT_OUTPUT_REL = join(
@@ -186,7 +186,7 @@ export const SNAPSHOT_OUTPUT_REL = join(
 
 /** Where the migration-plan stage writes its migration-strategy artefact — the
  *  terminal artefact of the chain; the live tui journey terminates on this file
- *  appearing (both gates answered). `*` globs the born intent dir. */
+ *  appearing (both gates answered). `*` globs the created intent dir. */
 export const PLAN_OUTPUT_REL = join(
   "aidlc",
   "spaces",

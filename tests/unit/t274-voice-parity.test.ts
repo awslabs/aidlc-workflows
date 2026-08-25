@@ -159,9 +159,11 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
   // matched case-insensitively so a capitalised reintroduction cannot slip by.
   // "orchestrator" is scanned as a WORD (not a substring) so "orchestration"
   // elsewhere is not double-counted by the phrase entry above it.
+  // Guard user-visible prose from resurfacing the retired automatic-create term.
+  const retiredAutoCreateTerm = "auto-" + "b" + "irth";
   const DENIED = [
     "orchestration engine",
-    "auto-birth",
+    retiredAutoCreateTerm,
     "flag-precedence ladder",
     "maintained by the orchestrator",
   ] as const;
@@ -195,7 +197,7 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
     // "orchestration engine" survives in ONE machine-facing paragraph
     // (per-unit iteration mechanics, not a user-facing template), so this scan
     // covers the two phrases with zero legitimate survivors.
-    const hits = ["auto-birth", "flag-precedence ladder"].filter((p) =>
+    const hits = [retiredAutoCreateTerm, "flag-precedence ladder"].filter((p) =>
       scanned.includes(p),
     );
     expect(hits).toEqual([]);

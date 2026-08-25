@@ -102,7 +102,7 @@ From the scan results, identify:
 
 ### Step 6a: Relay the Submodule Warning (if present)
 
-When the birth output carries the uninitialized-submodules warning (the scanner
+When the creation output carries the uninitialized-submodules warning (the scanner
 found a `.gitmodules` whose submodule paths are empty/uninitialized), relay it to
 the user verbatim and tell them to run `git submodule update --init --recursive`
 before proceeding, since reverse-engineering needs the code on disk. Do NOT offer

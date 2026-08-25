@@ -90,8 +90,8 @@ function editFile(p: string, fn: (s: string) => string): void {
 }
 // P4: `init` (→ intent-create) writes the workflow record per-intent under
 // aidlc/spaces/<space>/intents/<slug>-<id8>/ (state, runtime-graph.json,
-// .aidlc-hooks-health/), NOT the flat aidlc-docs/. Resolve the born record from
-// the active-space + active-intent cursors (flat fallback for a pre-birth/
+// .aidlc-hooks-health/), NOT the flat aidlc-docs/. Resolve the created record from
+// the active-space + active-intent cursors (flat fallback for a pre-creation/
 // pre-migration project).
 function recordDirOf(proj: string): string {
   const spaceCursor = join(proj, "aidlc", "active-space");
@@ -235,9 +235,9 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
 
   // G4b — the custom agent and custom knowledge are real data files in the
   // copied framework, and the custom agent's metadata flows through the SAME
-  // loadAgents() loader the statusline uses. (P4: birth no longer scaffolds a
+  // loadAgents() loader the statusline uses. (P4: creation no longer scaffolds a
   // per-agent knowledge README — the workspace shell ships in dist/ via SEED and
-  // birth only ensure-exists the per-intent record dirs — so the discovery proof
+  // intent creation only ensures the per-intent record dirs exist, so the discovery proof
   // is the loader, exercised through the statusline render, not an init-written
   // README. The agent FILE + custom knowledge FILE checks below are unchanged.)
   test("G4b: custom agent metadata and custom knowledge file are discoverable", () => {
@@ -311,7 +311,7 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
 
       // init routed to the custom head stage (the scope's stage map drove this,
       // not a builtin) — proven in state before the runtime graph is even built.
-      // P4: birth writes per-intent — resolve the born record.
+      // P4: creation writes per-intent - resolve the created record.
       const record = recordDirOf(proj);
       const state = readFileSync(join(record, "aidlc-state.md"), "utf8");
       const current = state.match(/Current Stage\*\*:\s*(.+)/)?.[1]?.trim();
@@ -580,7 +580,7 @@ outputs: none
 
       // 3. write the artefact (the trigger) and invoke the REAL sensor-fire hook
       //    with the PostToolUse payload Claude Code would send for that Write.
-      //    init birthed the intent, so resolve the CONCRETE record (SNAPSHOT_OUTPUT_REL
+      //    init created the intent, so resolve the CONCRETE record (SNAPSHOT_OUTPUT_REL
       //    carries a `*` for the runtime-minted intent dir — resolve it here).
       const artifact = join(recordDirOf(proj), SNAPSHOT_STAGE_PHASE, SNAPSHOT_STAGE_SLUG, `${SNAPSHOT_ARTIFACT}.md`);
       mkdirSync(dirname(artifact), { recursive: true });
@@ -601,7 +601,7 @@ outputs: none
 
       // THE EVIDENCE: a hook-drop was recorded naming the broken sensor + the
       // dispatcher's missing-script reason (advisory surface, not silent). P4:
-      // .aidlc-hooks-health/ resolves under the born intent's record (hooksHealthDir
+      // .aidlc-hooks-health/ resolves under the created intent's record (hooksHealthDir
       // → docsRoot), so read it from the per-intent record after init.
       const dropFile = join(recordDirOf(proj), ".aidlc-hooks-health", "run-sensors.drops");
       expect(existsSync(dropFile)).toBe(true);

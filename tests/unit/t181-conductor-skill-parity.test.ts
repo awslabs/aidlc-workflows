@@ -92,7 +92,7 @@ const BARE_INIT = /(^|[^-\w])--init\b/;
 
 // The workspace-anchor conductor vocabulary every shipped SKILL must define.
 const REQUIRED_TOKENS = [
-  "intent-create", // run-then-continue birth verb (replaced `init`)
+  "intent-create", // run-then-continue creation verb (replaced `init`)
   "stage-protocol-swarm.md", // conditional swarm transport + --repo contract
   "offer a second intent", // P4-completion new-work conductor prose
   "intent and space verbs", // frontmatter utilities tail
@@ -297,7 +297,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect([...blocks.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
-  test("every shipped conductor SKILL stops new-intent births and names its fresh-session flow", () => {
+  test("every shipped conductor SKILL stops after new-intent creation and names its fresh-session flow", () => {
     const failures: string[] = [];
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;

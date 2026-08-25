@@ -282,8 +282,8 @@ function stripFingerprintFields(proj: string): void {
 // Seed the minimum an intent registry needs for intentRepos() to resolve a
 // recorded repo set: the default space's intents dir, an active-intent cursor
 // naming a record that holds an aidlc-state.md, and one registry row carrying
-// `repos`. This is the layout sibling auto-discovery produces at intent birth
-// (resolveBirthRepoSet -> discoverSiblingRepos), so it is the DEFAULT shape,
+// `repos`. This is the layout sibling auto-discovery produces at intent creation
+// (resolveIntentRepoSet -> discoverSiblingRepos), so it is the DEFAULT shape,
 // not an exotic one - which is what makes the exclusion scope matter.
 function registerRepos(projectDir: string, repos: string[]): void {
   const intents = join(projectDir, "aidlc", "spaces", "default", "intents");
@@ -1278,7 +1278,7 @@ describe("t314 multi-unit source attribution", () => {
   }, 60_000);
 
   // #646 review - the recorded-repo layout is the DEFAULT (sibling
-  // auto-discovery populates `repos` at intent birth via resolveBirthRepoSet
+  // auto-discovery populates `repos` at intent creation via resolveIntentRepoSet
   // -> discoverSiblingRepos), and its fingerprint is a sha256 composite over
   // the roof's child repos rather than a single tree object. The removed rule
   // could never consume that shape at all. What must hold: a clean two-unit

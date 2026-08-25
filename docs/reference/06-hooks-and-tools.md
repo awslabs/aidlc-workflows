@@ -8,7 +8,7 @@ This chapter documents the hook system architecture, all seventeen hook scripts,
 
 ## Hook System Architecture
 
-This implementation uses seventeen hook scripts in `.claude/hooks/`. All seventeen are TypeScript (run via `bun`). All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
+This implementation uses seventeen hook scripts in `.claude/hooks/`. All seventeen are TypeScript (run via `bun`). All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active when the host permits project hooks. Claude Code managed `allowManagedHooksOnly: true` overrides the project registration and blocks those hooks; `/aidlc --doctor` detects that policy. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
 
 Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the deliver-stage-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a produces[] write that would void a fresh terminal review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
 
@@ -258,7 +258,7 @@ conversation, or count semantics.
 
 **Source:** `.claude/hooks/aidlc-rebuild-stage-graph.ts`
 **Trigger:** After every `Bash` Claude Code tool call (matcher: `"Bash"`)
-**Purpose:** Bind a pre-workflow session to the intent born by its shell call, and recompile `runtime-graph.json` when a transition-class audit event has just landed
+**Purpose:** Bind a pre-workflow session to the intent created by its shell call, and recompile `runtime-graph.json` when a transition-class audit event has just landed
 
 **Processing steps:**
 
@@ -526,7 +526,7 @@ Next Action: resume current stage
 
 **Lifecycle:**
 1. **Session ownership:** Resolve the ending session's UUID stamp to its intent and space. If a UUID-backed workflow exists but this session has no stamp, exit without emitting; falling back to the shared active cursor could attribute another concurrent conversation's intent.
-2. **Workflow guard:** Exits silently when the resolved intent has no `aidlc-state.md` (the canonical "active workflow" marker). A workspace shell with no born intent emits nothing.
+2. **Workflow guard:** Exits silently when the resolved intent has no `aidlc-state.md` (the canonical "active workflow" marker). A workspace shell with no created intent emits nothing.
 3. **Audit emission:** Appends `SESSION_ENDED` and its health heartbeat to the resolved intent via `aidlc-audit.ts`. Pairs with `session-start.ts`'s `SESSION_STARTED` for session lifecycle observability.
 
 ### Status Line: aidlc-statusline.ts

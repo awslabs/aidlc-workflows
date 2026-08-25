@@ -708,7 +708,7 @@ export function resolveTestingPosture(
   try {
     state = readFileSync(stateFilePath(projectDir), "utf-8");
   } catch {
-    // Pre-birth and focused tests use deterministic defaults.
+    // Pre-creation and focused tests use deterministic defaults.
   }
   return resolveTestingPostureFromSections(sections, {
     scope: (getField(state, "Scope") ?? "feature").trim().toLowerCase(),

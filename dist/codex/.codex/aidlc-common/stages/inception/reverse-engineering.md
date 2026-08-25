@@ -69,7 +69,7 @@ from the intent's registry row before making any reuse or scan decision:
 
 1. Read the active intent's `repos` array from
    `aidlc/spaces/<active-space>/intents/intents.json` (the row whose `uuid`/`slug`
-   matches the active intent). This is the set captured at intent birth (an explicit
+   matches the active intent). This is the set captured at intent creation (an explicit
    `--repos a,b` or sibling auto-discovery).
 2. **Single-repo / unrecorded:** if `repos` is absent, empty, or has exactly one
    entry, RE runs once against the lone repo - the same flow as before. (An

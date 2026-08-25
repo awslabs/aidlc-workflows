@@ -354,7 +354,7 @@ const heartbeatFile = join(sessionsDir(projectDir), "codex-session.json");
 
 function reconcilePriorSession(): void {
   // The heartbeat is recorded even before a workflow exists. If the first turn
-  // births an intent, the utility can then bind this session to that record and
+  // creates an intent, the utility can then bind this session to that record and
   // a later Codex session can reconcile its inferred SESSION_ENDED correctly.
   const hasActiveWorkflow = existsSync(stateFilePath(projectDir));
   try {

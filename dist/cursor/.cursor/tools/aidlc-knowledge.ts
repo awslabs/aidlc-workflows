@@ -3434,7 +3434,7 @@ export function resolveIntentFlag(
   if (intents.length === 0) {
     throw new Error(
       `This space has no intents, so --intent cannot be resolved. Either drop the flag ` +
-        `to index the document space-wide, or birth an intent first.`,
+        `to index the document space-wide, or create an intent first.`,
     );
   }
 

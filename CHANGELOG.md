@@ -1,6 +1,22 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.94] - 2026-08-25
+
+AI-DLC now describes intent startup consistently as creation across generated harness guidance, user-facing errors, status text, documentation, and the lossless adaptive-composer contract. No command or flag changes are required. The retired `intent-birth` compatibility error still redirects old invocations, and the reserved legacy record name remains switch-reachable. **Upgrade:** refresh your `dist/<harness>/` shell; integrations that read composer proposals must rename `birthDescription` to `creationDescription`, and custom tools importing the renamed internal helpers must update their imports.
+
+* User-facing errors, generated runners, harness instructions, workflow guidance, documentation, diagnostics, comments, and test names now use `create`, `created`, and `creation` terminology.
+* Front/report composer proposals require nonblank `creationDescription` while preserving the existing lossless contract: task text stays verbatim, report-only and task-less plans derive grounded text, and the same-turn creation command retains the literal `--` delimiter plus POSIX-safe single-argument escaping.
+* Internal aidlc-lib names now use `CreatedIntent`, `resolveIntentRepoSet`, and `workflowIsCreated`; workflow behavior is unchanged.
+
+## [2.6.93] - 2026-08-25
+
+`/aidlc --doctor` now detects project hooks that never start, hooks that stop during a workflow, and Claude Code managed policy that permits only managed hooks. **Upgrade:** re-copy your `dist/<harness>/` shell into the project, approve Claude project hooks through `/hooks`, and fully restart Claude Code.
+
+* Zero hook heartbeats remain a passing first-run advisory only before workflow progress; after progress they fail with ordered hook-approval, restart, administrator-policy, and attended-session bypass guidance.
+* Existing heartbeats are compared with the newest stage or gate event and fail when workflow progress is more than five minutes newer; ledgers with stage or gate events but no `HUMAN_TURN` receipt also show a passing advisory.
+* Claude installs fail when effective managed `allowManagedHooksOnly: true` blocks `.claude/settings.json` hooks. The check shares the existing `AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows locations, managed-setting precedence, and alphabetical `managed-settings.d/` fragment resolution used by `disableAllHooks`.
+
 ## [2.6.92] - 2026-08-25
 
 Filesystem descendant checks now enforce one mixed-separator boundary on every host, preventing Windows traversal and alias escapes while preserving valid in-bound drive and UNC paths. **Upgrade:** refresh your `dist/<harness>/` shell so every tool receives the strengthened shared path guard.
@@ -10,8 +26,11 @@ Filesystem descendant checks now enforce one mixed-separator boundary on every h
 
 ## [2.6.91] - 2026-08-25
 
-Copilot no longer asks an AI-DLC workflow question twice when the model attempts to use a native question picker. Running workflows now refuse picker calls and direct the model to render numbered prose in chat, preserving the trusted human-turn check. **Upgrade:** refresh your `dist/copilot/` shell; in-flight workflows need no migration.
+Lone-repository CodeKB scope fingerprints now avoid Git's unreliable combination of positive and exclude pathspecs and reject fingerprints that contain no files, while Copilot no longer asks an AI-DLC workflow question twice when the model attempts to use a native question picker. **Upgrade:** refresh your `dist/<harness>/` shell before minting or checking CodeKB scope fingerprints, and re-mint (or re-run reverse engineering for) any stored scope timestamp whose fingerprint is `4b825dc642cb6eb9a060e54bf8d69288fbee4904`, the empty-tree value written by the pre-fix bug; in-flight Copilot workflows need no migration.
 
+* `codekbScopeFingerprint` omits exclusions outside analyzed roots, drops analyzed paths covered by exclusions, and preserves root and nested-project scope boundaries without silently rewriting malformed absolute paths.
+* Scopes that stage zero paths now mint `unknown` and report `UNVERIFIED`, never a false `CURRENT` or permanent `STALE` verdict.
+* Deterministic regression coverage verifies distinct narrow fingerprints, full-root exclusions, nested-project boundaries, malformed paths, and empty scopes.
 * The Copilot PreToolUse adapter denies native picker execution IDs such as `ask_user` and `vscode/askQuestions` only when the session-selected workflow has valid `Status: Running` state; projects with no workflow, completed workflows, and unusable state fail open.
 * Picker tool results still never count as `HUMAN_TURN`; the user's next chat message records the trusted turn used by answer and approval logging.
 

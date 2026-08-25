@@ -30,7 +30,7 @@ dist-ssr
 #
 # Per-user session cursors — ignored (two teammates legitimately point at
 # different spaces/intents at once; committing them would turn per-user
-# navigation into shared state and cause conflicts on births and switches).
+# navigation into shared state and cause conflicts on intent creation and cursor switches).
 aidlc/active-space
 aidlc/spaces/*/intents/active-intent
 #

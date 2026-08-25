@@ -39,7 +39,7 @@ while keeping you in control at every decision point.
 
 ## Initialization Phase (Automatic)
 
-The three initialization stages run deterministically inside `aidlc-utility intent-create`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-births the first intent into the active space and bootstraps its record dir for the workflow.
+The three initialization stages run deterministically inside `aidlc-utility intent-create`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-creates the first intent into the active space and bootstraps its record dir for the workflow.
 
 ### Stage 0.1: Workspace Scaffold
 

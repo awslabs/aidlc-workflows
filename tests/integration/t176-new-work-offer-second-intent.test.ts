@@ -4,14 +4,14 @@
 //
 // The deterministic half of "a second intent alongside an active one" is pinned
 // by t165 (intent-create mints a 2nd record while one is active; two isolated
-// rows; distinct uuids; B's birth never mutates A's shard). What was NEVER
+// rows; distinct uuids; B's creation never mutates A's shard). What was NEVER
 // exercised is the CONVERSATIONAL beat the vision promised: with an intent
 // already active, describing a GENUINELY NEW, UNRELATED piece of work prompts
 // the orchestrator to OFFER a second intent (you confirm), rather than blindly
 // advancing the active intent. RECOGNISING new-work + phrasing the offer is
 // conductor PROSE (knowledge→LLM, in skills/aidlc/SKILL.md); on CONFIRM the prose
 // routes through `next --new-intent`, so the read-only engine emits the SAME
-// birth directive the fresh-start path does (carrying the `--label` seam) rather
+// creation directive the fresh-start path does (carrying the `--label` seam) rather
 // than the conductor hand-building intent-create. Either way it can only be
 // verified LIVE, the way the codebase verifies every conductor behaviour: the
 // Claude Agent SDK driver answering the offer Y/n on a structured callback.
@@ -25,13 +25,13 @@
 //              answerScript confirms YES), then runs `intent-create` and re-enters
 //              the loop — the run-then-continue shape the offer prose names.
 //   disk:      the registry now carries TWO in-flight intents (the offer was
-//              confirmed and the birth fired into the active space).
+//              confirmed and the creation fired into the active space).
 //
 // Assertions stay at the JOURNEY level, tolerant of conversational variance,
 // mirroring t143/t71 — NEVER on assistantText. The proof the OFFER (not just a
-// birth) fired is the CONJUNCTION of (a)+(b)+(c), not any one alone:
+// creation) fired is the CONJUNCTION of (a)+(b)+(c), not any one alone:
 //   (a) an AskUserQuestion menu was surfaced (a human-gated pause). Asked BEFORE
-//       the birth, since stopAfterToolResult halts on the first birth result. NB
+//       the creation, since stopAfterToolResult halts on the first creation result. NB
 //       this alone is NOT proof of the offer — the seeded intent is mid-ideation
 //       at a gating EXECUTE stage, so a CONTINUATION would also surface an
 //       approval gate; the offer-vs-gate distinction is carried by (b)+(c).
@@ -40,14 +40,14 @@
 //       landed as a Bash tool-result; a continuation path never emits it);
 //   (c) a SECOND intent exists on disk — readIntentRegistry has 2 rows.
 // (b)+(c) are airtight: with an intent already active the engine advances it
-// (Branch 10, !stateContent-gated births), so a 2nd intent can ONLY arise from
+// (Branch 10, !stateContent-gated creates), so a 2nd intent can ONLY arise from
 // the conductor's offer→confirm→intent-create. The offer's affirmative option is
 // pinned to "Yes" by the SKILL.md prose, which the answerScript keys on so the
 // confirm is deterministic; a model that ignores that pin fails SAFE (the
-// fallback misses → no birth → (b)+(c) RED), never a false green.
+// fallback misses → no creation → (b)+(c) RED), never a false green.
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock. The run
-// stops the instant the birth tool-result lands (stopAfterToolResult), so no
+// stops the instant the creation tool-result lands (stopAfterToolResult), so no
 // stage body of the new intent is executed. Gated on claude-CLI presence
 // (run-tests.ts:274 — the file calls driveAidlc(), so claude-gate.ts marks it
 // SDK-dependent and the runner skips-with-reason when claude is absent; never a
@@ -68,10 +68,10 @@ const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
 const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 
-// Verbatim birth stdout summary (aidlc-utility.ts handleIntentCreate :2400) — the
-// deterministic surface that proves the offer was CONFIRMED and the birth ran.
+// Verbatim creation stdout summary (aidlc-utility.ts handleIntentCreate :2400) - the
+// deterministic surface that proves the offer was CONFIRMED and the creation ran.
 const INIT_STATE_SUMMARY = "State initialized:";
-const STOP_AFTER_BIRTH = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
+const STOP_AFTER_CREATION = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 
 // A new piece of work in a DIFFERENT domain from the seeded active intent
 // (state-mid-ideation.md's subject is "Test widget feature for e-commerce
@@ -85,9 +85,9 @@ const NEW_WORK =
 // so labelContains("Yes") is anchored by the change under test — not a hopeful
 // guess at the model's wording. resolveSpec/pickContains falls back to the first
 // option if no label contains "Yes" (sdk-drive.ts), so a mislabeled affirmative
-// would fail SAFE (no birth → asserts (b)+(c) fail), never a false green. Any
+// would fail SAFE (no creation → asserts (b)+(c) fail), never a false green. Any
 // non-offer menu (e.g. a continuation approval gate) also takes the fallback —
-// harmless, since (b)+(c) gate on a real birth.
+// harmless, since (b)+(c) gate on a real creation.
 const CONFIRM_OFFER = {
   kind: "byHeader" as const,
   map: {},
@@ -114,15 +114,15 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
           projectDir: proj,
           answerScript: CONFIRM_OFFER,
           timeoutMs: DRIVE_TIMEOUT_MS,
-          stopAfterToolResult: STOP_AFTER_BIRTH,
+          stopAfterToolResult: STOP_AFTER_CREATION,
         });
 
-        // (a) A human-gated pause preceded the birth — an AskUserQuestion menu
-        // was surfaced (judgement→human: the conductor never auto-births). Because
-        // stopAfterToolResult halts on the FIRST birth tool-result, this question
-        // was asked BEFORE the birth — i.e. it is the OFFER gating the birth, not
+        // (a) A human-gated pause preceded the creation - an AskUserQuestion menu
+        // was surfaced (judgement→human: the conductor never auto-creates). Because
+        // stopAfterToolResult halts on the FIRST creation tool-result, this question
+        // was asked BEFORE the creation - i.e. it is the OFFER gating the creation, not
         // a later stage gate (a continuation that ran feasibility would gate but
-        // never birth, failing (b)+(c)). We deliberately do NOT assert the offer's
+        // never create, failing (b)+(c)). We deliberately do NOT assert the offer's
         // question TEXT — it is non-deterministic LLM prose (verified: live runs
         // phrase it "...unrelated pieces of work. How should I proceed?" with no
         // fixed token); the deterministic offer surface is the affirmative option
@@ -132,31 +132,31 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
         // (b) The conductor ACTED on the confirm — the named intent-create tool
         // ran and its verbatim summary landed as a Bash tool-result. This literal
         // is emitted ONLY inside handleIntentCreate, so a continuation path (which
-        // births nothing) never produces it. (b)+(c) are the airtight proof the
+        // creates nothing) never produces it. (b)+(c) are the airtight proof the
         // offer was CONFIRMED: with an intent already active the engine advances
-        // it (Branch 10) and every birth arm is !stateContent-gated, so a 2nd
+        // it (Branch 10) and every creation arm is !stateContent-gated, so a 2nd
         // intent can ONLY appear via the conductor's offer→confirm→intent-create.
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
-        // (c) A SECOND intent now exists on disk (the birth fired into the
+        // (c) A SECOND intent now exists on disk (the creation fired into the
         // active space; the registry carries both rows).
         const reg = readIntentRegistry(proj);
         expect(reg.length).toBe(2);
 
         // (d) The 2nd intent's record dir is `<YYMMDD>-<short-label>` AND the
         // label is a CONDENSED essence, not a truncated copy of the new-work
-        // sentence. This is the offer-birth `--label` proof: the offer routes
+        // sentence. This is the offer-to-create `--label` proof: the offer routes
         // through `next --new-intent`, which emits the SAME createPrintDirective
         // the fresh-start path uses (carrying the `--label "<2-3 word kebab
         // essence>"` placeholder), so the conductor supplies a real label here
-        // exactly as it does on the first birth. WITHOUT that routing the
+        // exactly as it does on the first creation. WITHOUT that routing the
         // conductor fell back to truncating --arguments (e.g. the NOAA sentence →
         // "build-a-standalone-pytho", a mid-word 24-char cut with leading filler).
         // The seeded intent A has no registry dirName (legacy fixture record), so
         // the NEW row is the one with a date-prefixed dirName.
-        const born = reg.find((e) => /^\d{6}-/.test(e.dirName ?? ""));
-        expect(born).toBeDefined();
-        const label = (born?.dirName ?? "").replace(/^\d{6}-/, "");
+        const created = reg.find((e) => /^\d{6}-/.test(e.dirName ?? ""));
+        expect(created).toBeDefined();
+        const label = (created?.dirName ?? "").replace(/^\d{6}-/, "");
         // Concise (the cap is 24; a real essence is well under it) and free of the
         // leading filler words a raw truncation of NEW_WORK would carry ("build",
         // "a", "standalone") — a condensation drops them. Tolerant of model
@@ -165,7 +165,7 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
         // normalizes once), so this also pins slug↔dirName agreement.
         expect(label.length).toBeLessThanOrEqual(24);
         expect(label).toMatch(/^[a-z][a-z0-9-]*$/);
-        expect(born?.slug).toBe(label);
+        expect(created?.slug).toBe(label);
       } finally {
         cleanupTestProject(proj);
       }

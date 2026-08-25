@@ -38,11 +38,11 @@
 //   SP3 jump redo   (2): --stage == current; run-stage(code-generation) +
 //       resolve `.direction` === "redo".
 //   SP4 resume (2): direct routing reaches run-stage(code-generation).
-//   SP5 birth (P4: --init retired, engine names intent-create):
+//   SP5 creation (P4: --init retired, engine names intent-create):
 //     - (a) named scope on a clean workspace -> kind==="print" naming
 //       intent-create + NO aidlc-state.md created by next (read-only — mutation
 //       stays conductor-side).
-//     - (b) named scope over existing state -> NOT a birth (no intent-create
+//     - (b) named scope over existing state -> NOT a creation (no intent-create
 //       print; the old --force re-init guard is gone).
 //   SP6 scope-change (2): kind==="print" + out contains "scope-change --scope mvp".
 //   SP7 normal gate (1):
@@ -399,9 +399,9 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   });
 
   // ============================================================
-  // Special path 5: BIRTH (P4: --init retired) — (a) named scope on a clean
+  // Special path 5: CREATE (P4: --init retired) — (a) named scope on a clean
   // workspace prints the intent-create move + creates NO state; (b) a named scope
-  // over existing state is a resume/scope-change, NOT a birth.
+  // over existing state is a resume/scope-change, NOT a creation.
   // ============================================================
   test("SP5a: named scope (clean) -> print naming intent-create, next creates NO state (read-only)", () => {
     const p = cleanProj();
@@ -414,11 +414,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     expect(directive(r).kind).toBe("print");
     expect(directive(r).message).toContain("intent-create");
-    // Mutation stays conductor-side: next must not have birthed/scaffolded state.
+    // Mutation stays conductor-side: next must not have created/scaffolded state.
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + description -> birth preserves --arguments and does not ask", () => {
+  test("SP5a positional scope + description -> creation preserves --arguments and does not ask", () => {
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
       "next",
@@ -440,7 +440,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5b: named scope over existing state -> not a birth (no intent-create print)", () => {
+  test("SP5b: named scope over existing state -> not a creation (no intent-create print)", () => {
     const p = projWithState("state-mid-ideation.md"); // feature scope state
     const r = run(ORCHESTRATE, ["next", "--scope", "feature", "--project-dir", p]);
     expect(r.out).not.toContain("intent-create");

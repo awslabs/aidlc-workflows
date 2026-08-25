@@ -1,13 +1,13 @@
-// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveBirthRepoSet, function:discoverSiblingRepos
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveIntentRepoSet, function:discoverSiblingRepos
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
-// P4 — retire the user-facing --init; the engine auto-births the first intent
+// P4 - retire the user-facing --init; the engine auto-creates the first intent
 // CONDUCTOR-SIDE (the read-only routing tool NAMES the move, the deterministic
 // `intent-create` handler mutates), plus the intent/space verb families + the
 // deterministic query layer (listSpaces/listIntents, --json) + the intent
 // status lifecycle + the migration wiring.
 //
-// WHY a subprocess for birth: intent-create mutates the workspace under the
+// WHY a subprocess for creation: intent-create mutates the workspace under the
 // WORKSPACE audit lock; spawning the dist tool exercises the real handler +
 // the real lock + the real per-intent state/audit resolution end-to-end, the
 // way the conductor runs it. The query layer (listSpaces/listIntents/slugify/
@@ -64,10 +64,10 @@ let proj: string;
 beforeEach(() => {
   proj = createTestProject();
   // P9: createTestProject seeds ONE default intent record + registry row. Every
-  // case here asserts birth/discovery behaviour against a GENUINELY EMPTY
+  // case here asserts creation/discovery behaviour against a GENUINELY EMPTY
   // workspace (zero intents), so strip the seeded record + cursor + registry —
   // otherwise registry counts are off-by-one and the engine asks to select the
-  // pre-seeded intent instead of birthing. (Mirrors t160's beforeEach.)
+  // pre-seeded intent instead of creating. (Mirrors t160's beforeEach.)
   removeWorkspaceRecord(proj);
 });
 afterEach(() => {
@@ -154,9 +154,9 @@ function hookHeartbeat(p: string, record: string, name: string): string {
 }
 
 // ============================================================
-// Auto-birth on an empty workspace
+// Auto-create on an empty workspace
 // ============================================================
-describe("t164 auto-birth (intent-create) on an empty workspace", () => {
+describe("t164 auto-create (intent-create) on an empty workspace", () => {
   test("intent-create help flags and the init alias are read-only", () => {
     for (const args of [
       ["intent-create", "--help"],
@@ -172,14 +172,14 @@ describe("t164 auto-birth (intent-create) on an empty workspace", () => {
     expect(existsSync(intentsDir(proj))).toBe(false);
   });
 
-  test("birth mints a per-intent record under spaces/default/intents/ with state", () => {
+  test("creation mints a per-intent record under spaces/default/intents/ with state", () => {
     const r = util(["intent-create", "--scope", "poc"]);
     expect(r.status).toBe(0);
     const records = readdirSync(intentsDir(proj)).filter((d) =>
       existsSync(join(intentsDir(proj), d, "aidlc-state.md")),
     );
     expect(records.length).toBe(1);
-    // The born record carries a full state file routed to the first post-init
+    // The created record carries a full state file routed to the first post-init
     // stage (not just the bind stub).
     const state = readFileSync(join(intentsDir(proj), records[0], "aidlc-state.md"), "utf-8");
     expect(state).toContain("## Current Status");
@@ -189,7 +189,7 @@ describe("t164 auto-birth (intent-create) on an empty workspace", () => {
     expect(reg.length).toBe(1);
     expect(reg[0].status).toBe("in-flight");
     expect(reg[0].scope).toBe("poc");
-    // WORKFLOW_STARTED landed in the born intent's audit shard.
+    // WORKFLOW_STARTED landed in the created intent's audit shard.
     const auditDir = join(intentsDir(proj), records[0], "audit");
     const shards = existsSync(auditDir)
       ? readdirSync(auditDir).map((f) => readFileSync(join(auditDir, f), "utf-8")).join("\n")
@@ -197,7 +197,7 @@ describe("t164 auto-birth (intent-create) on an empty workspace", () => {
     expect(shards).toContain("**Event**: WORKFLOW_STARTED");
   });
 
-  test("birth materializes the active-space cursor missing from a fresh clone", () => {
+  test("creation materializes the active-space cursor missing from a fresh clone", () => {
     const cursor = join(proj, "aidlc", "active-space");
     rmSync(cursor, { force: true });
     expect(existsSync(cursor)).toBe(false);
@@ -208,7 +208,7 @@ describe("t164 auto-birth (intent-create) on an empty workspace", () => {
     expect(activeIntent(proj)).not.toBeNull();
   });
 
-  test("birth slugs the freeform --arguments description (SLUG_RE-valid)", () => {
+  test("creation slugs the freeform --arguments description (SLUG_RE-valid)", () => {
     const r = util(["intent-create", "--scope", "feature", "--arguments", "Build the Auth Service!!"]);
     expect(r.status).toBe(0);
     const dir = activeIntent(proj);
@@ -224,7 +224,7 @@ describe("t164 auto-birth (intent-create) on an empty workspace", () => {
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent-create --scope poc");
-    // next is read-only: it must NOT have birthed anything.
+    // next is read-only: it must NOT have created anything.
     expect(existsSync(intentsDir(proj))).toBe(false);
     expect(existsSync(seededStateFile(proj))).toBe(false);
   });
@@ -237,7 +237,7 @@ describe("t164 intent-create fails closed on a bare invocation", () => {
   // A bare `intent-create` (no --scope, no --arguments, no --label) used to
   // silently mint a garbage default-scope intent (scope resolved to the install
   // default, slug == the scope token, empty description), a routing fumble that
-  // became actual corrupt workspace state. Birth is a mutation; a bare call is
+  // became actual corrupt workspace state. Creation is a mutation; a bare call is
   // almost always a mistake, so it must REFUSE, mutate nothing, and point at the
   // blessed entry points.
   test("bare intent-create is refused (exit 1) and mints NOTHING", () => {
@@ -252,7 +252,7 @@ describe("t164 intent-create fails closed on a bare invocation", () => {
     expect(readIntentRegistry(proj).length).toBe(0);
   });
 
-  test("every value-bearing birth flag rejects valueless or blank occurrences", () => {
+  test("every value-bearing creation flag rejects valueless or blank occurrences", () => {
     for (const args of [
       ["intent-create", "--scope"],
       ["intent-create", "--arguments"],
@@ -280,16 +280,16 @@ describe("t164 intent-create fails closed on a bare invocation", () => {
   });
 
   // The guard keys on "no scope AND no args AND no label"; each of the three
-  // signals independently satisfies it, so every blessed path still births.
-  test("any one of --scope / --arguments / --label satisfies the guard (births)", () => {
-    // --scope alone: the engine's birth print directive always supplies it.
+  // signals independently satisfies it, so every blessed path still creates.
+  test("any one of --scope / --arguments / --label satisfies the guard (creates)", () => {
+    // --scope alone: the engine's creation print directive always supplies it.
     expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
     removeWorkspaceRecord(proj);
     // --arguments alone: the init runner forwards a freeform description here;
-    // scope falls back to the install default (a legitimate, described birth).
+    // scope falls back to the install default (a legitimate, described creation).
     expect(util(["intent-create", "--arguments", "build a thing"]).status).toBe(0);
     removeWorkspaceRecord(proj);
-    // --label alone: a described birth with an explicit dir-name essence.
+    // --label alone: a described creation with an explicit dir-name essence.
     expect(util(["intent-create", "--label", "some work"]).status).toBe(0);
   });
 });
@@ -304,7 +304,7 @@ describe("t164 done-on-completed carries the new-work hint", () => {
   test("next on a completed intent returns done whose reason names next --new-intent", () => {
     // beforeEach left an empty workspace; seed a single completed intent (Current
     // Stage = final stage, Status = Completed) so next finds no in-scope stage and
-    // emits `done` (the engine is read-only; it never auto-births alongside it).
+    // emits `done` (the engine is read-only; it never auto-creates alongside it).
     seedStateFile(proj, join(FIXTURES_DIR, "state-completed.md"));
     const r = next([]);
     const d = JSON.parse(r.stdout.trim());
@@ -312,31 +312,31 @@ describe("t164 done-on-completed carries the new-work hint", () => {
     // The completion reason is preserved AND the new-work hint is appended.
     expect(d.reason).toContain("Workflow complete");
     expect(d.reason).toContain("next --new-intent --scope");
-    // It's a HINT, not an auto-birth: the reason still frames it as an offer
+    // It's a HINT, not an auto-create: the reason still frames it as an offer
     // gated on a human yes, and next mutated nothing. seedStateFile writes only
     // the state file (no intents.json row), so the registry starts empty, and
-    // next being read-only, it stays empty (no second intent auto-born).
-    expect(d.reason.toLowerCase()).toContain("never auto-birth");
+    // next being read-only, it stays empty (no second intent auto-created).
+    expect(d.reason.toLowerCase()).toContain("never auto-create");
     expect(readIntentRegistry(proj).length).toBe(0);
   });
 });
 
 // ============================================================
-// The birth directive has TWO tails: a fresh-start birth re-enters the loop in
-// the same session ("re-run `next` to continue"), while a --new-intent birth (a
+// The creation directive has TWO tails: a fresh-start creation re-enters the loop in
+// the same session ("re-run `next` to continue"), while a --new-intent creation (a
 // 2nd, unrelated intent alongside an active/completed one) tells the conductor
 // to STOP and hand off to a fresh session so the new intent doesn't inherit the
 // prior intent's context.
 // ============================================================
-describe("t164 --new-intent birth directive hands off to a fresh session", () => {
-  test("next --new-intent emits a command-neutral birth print that STOPs for a fresh session", () => {
+describe("t164 --new-intent creation directive hands off to a fresh session", () => {
+  test("next --new-intent emits a command-neutral creation print that STOPs for a fresh session", () => {
     // Seed an active intent so this mirrors the real 'second intent while one is
     // live' path; Branch 4a fires before any continuation branch regardless.
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
     const r = next(["--new-intent", "--scope", "bugfix", "fix the flaky login test"]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
-    // Names the birth move for the CONFIRMED scope (not the active intent's scope).
+    // Names the creation move for the CONFIRMED scope (not the active intent's scope).
     expect(d.message).toContain("intent-create --scope bugfix");
     // The shared engine names the handoff but leaves concrete entry/reset
     // commands to each harness SKILL.
@@ -350,7 +350,7 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     // It must NOT carry the fresh-start continuation tail (that would keep the
     // new intent in the polluted session).
     expect(d.message).not.toContain("re-run `next` to continue");
-    // next is read-only: naming the birth move mutates nothing.
+    // next is read-only: naming the creation move mutates nothing.
     expect(readIntentRegistry(proj).length).toBe(0);
   });
 
@@ -370,7 +370,7 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
 
   test("the complete fresh-session handoff moves SESSION_ENDED to the created intent", () => {
     // Real production order: the host starts a session before any workflow
-    // exists, then the first /aidlc invocation births the initial intent.
+    // exists, then the first /aidlc invocation creates the initial intent.
     expect(
       fireHook(SESSION_START, { source: "startup", session_id: "handoff-session-1" }),
     ).toBe(0);
@@ -447,7 +447,7 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     expect(secondAudit).toContain("**Event**: SESSION_ENDED");
   });
 
-  test("concurrent pre-workflow sessions bind only the session that invoked birth", () => {
+  test("concurrent pre-workflow sessions bind only the session that invoked creation", () => {
     expect(fireHook(SESSION_START, { source: "startup", session_id: "session-a" })).toBe(0);
     expect(fireHook(SESSION_START, { source: "startup", session_id: "session-b" })).toBe(0);
 
@@ -486,7 +486,7 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     expect(audit).toContain("**Reason**: clear");
   });
 
-  test("a later birth cannot claim an unstamped session when an intent already exists", () => {
+  test("a later creation cannot claim an unstamped session when an intent already exists", () => {
     expect(
       util(["intent-create", "--scope", "poc", "--arguments", "existing intent"]).status,
     ).toBe(0);
@@ -500,14 +500,14 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     expect(existsSync(join(sessions, "legacy-unstamped"))).toBe(false);
   });
 
-  test("a fresh-start birth (no --new-intent) keeps the same-session continuation tail", () => {
+  test("a fresh-start creation (no --new-intent) keeps the same-session continuation tail", () => {
     // Empty workspace (beforeEach stripped the record): a named scope on a fresh
-    // workspace is the fresh-start birth, it should re-enter the loop in-session.
+    // workspace is the fresh-start creation, it should re-enter the loop in-session.
     const r = next(["--scope", "bugfix"]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent-create --scope bugfix");
-    // Fresh-start tail is unchanged (the birth-directive pins expect this too):
+    // Fresh-start tail is unchanged (the creation-directive pins expect this too):
     // continue in-session, no fresh-session hand-off.
     expect(d.message).toContain("re-run `next` to continue");
     expect(d.message).not.toContain("STOP");
@@ -516,9 +516,9 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
 });
 
 // ============================================================
-// P7 — an intent records its repo set at birth (--repos / sibling discovery)
+// P7 - an intent records its repo set at creation (--repos / sibling discovery)
 // ============================================================
-describe("t165 P7 intent repo set captured at birth", () => {
+describe("t165 P7 intent repo set captured at creation", () => {
   // Make a child dir of the workspace look like a git repo (a .git dir is enough
   // for discoverSiblingRepos, which only probes existsSync(<dir>/.git)).
   const makeRepo = (p: string, name: string): void => {
@@ -530,7 +530,7 @@ describe("t165 P7 intent repo set captured at birth", () => {
     expect(r.status).toBe(0);
     const reg = readIntentRegistry(proj);
     expect(reg.length).toBe(1);
-    // Sorted + deduped by resolveBirthRepoSet.
+    // Sorted + deduped by resolveIntentRepoSet.
     expect(reg[0].repos).toEqual(["repo-a", "repo-b"]);
     // listIntents surfaces the same set through the query layer.
     expect(listIntents(proj)[0].repos).toEqual(["repo-a", "repo-b"]);
@@ -574,30 +574,30 @@ describe("t165 P7 intent repo set captured at birth", () => {
     const r = util(["intent-create", "--scope", "feature", "--repos", "../escape"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Invalid --repos entry");
-    // Nothing was born.
+    // Nothing was created.
     expect(existsSync(intentsDir(proj))).toBe(false);
   });
 });
 
 // ============================================================
-// Concurrent-birth integrity (workspace-keyed append lock)
+// Concurrent creation integrity (workspace-keyed append lock)
 // ============================================================
-describe("t164 concurrent-birth integrity", () => {
-  test("two simultaneous births → 2 distinct intents, no lost intents.json update", async () => {
+describe("t164 concurrent creation integrity", () => {
+  test("two simultaneous creates → 2 distinct intents, no lost intents.json update", async () => {
     // Fire two intent-create processes in parallel against the SAME empty
     // workspace. The workspace-bucket append lock serializes the empty-check +
-    // the intents.json append, so the second sees the first's row — both births
+    // the intents.json append, so the second sees the first's row; both creation attempts
     // land distinct uuids + dirs, and intents.json carries BOTH (no lost write).
     const env = { ...process.env };
     delete env.AWS_AIDLC_DEFAULT_SCOPE;
-    const spawnBirth = (scope: string) =>
+    const spawnCreation = (scope: string) =>
       Bun.spawn({
         cmd: [BUN, UTIL, "intent-create", "--scope", scope, "--project-dir", proj],
         stdout: "ignore",
         stderr: "ignore",
         env,
       });
-    const procs = [spawnBirth("poc"), spawnBirth("bugfix")];
+    const procs = [spawnCreation("poc"), spawnCreation("bugfix")];
     const codes = await Promise.all(procs.map((c) => c.exited));
     expect(codes).toEqual([0, 0]);
 
@@ -619,23 +619,23 @@ describe("t164 concurrent-birth integrity", () => {
 // New work while an intent is active
 // ============================================================
 describe("t164 new-work-while-active", () => {
-  test("a second birth alongside an active intent adds a second intent", () => {
+  test("a second creation alongside an active intent adds a second intent", () => {
     expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
     const first = activeIntent(proj);
     expect(util(["intent-create", "--scope", "feature", "--arguments", "second feature"]).status).toBe(0);
     const reg = readIntentRegistry(proj);
     expect(reg.length).toBe(2);
-    // The active-intent cursor now points at the SECOND (most recent) birth.
+    // The active-intent cursor now points at the SECOND (most recent) creation.
     const second = activeIntent(proj);
     expect(second).not.toBe(first);
   });
 
-  test("bare /aidlc resumes the active intent (happy path, not a birth)", () => {
+  test("bare /aidlc resumes the active intent (happy path, not a creation)", () => {
     expect(util(["intent-create", "--scope", "feature"]).status).toBe(0);
-    // With state present, `next` resolves the happy path — never a birth print.
+    // With state present, `next` resolves the happy path - never a creation print.
     const r = next([]);
     const d = JSON.parse(r.stdout.trim());
-    expect(d.kind).not.toBe("print"); // not a birth
+    expect(d.kind).not.toBe("print"); // not a creation
     expect(r.out).not.toContain("intent-create");
   });
 });
@@ -670,10 +670,10 @@ describe("t164 slugify", () => {
 });
 
 // ============================================================
-// Intent status lifecycle (birth in-flight; complete; abandoned stays in-flight)
+// Intent status lifecycle (creation in-flight; complete; abandoned stays in-flight)
 // ============================================================
 describe("t164 intent status lifecycle", () => {
-  test("birth writes in-flight; updateIntentStatus flips to complete; an abandoned intent stays in-flight", () => {
+  test("creation writes in-flight; updateIntentStatus flips to complete; an abandoned intent stays in-flight", () => {
     expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
     const dir = activeIntent(proj);
     expect(dir).not.toBeNull();
@@ -687,7 +687,7 @@ describe("t164 intent status lifecycle", () => {
     expect(changed).toBe(true);
     expect(readIntentRegistry(proj)[0].status).toBe("complete");
 
-    // Birth a SECOND intent and leave it (abandon) — it stays in-flight, never
+    // Create a SECOND intent and leave it (abandon) - it stays in-flight, never
     // self-completes.
     expect(util(["intent-create", "--scope", "bugfix"]).status).toBe(0);
     const abandoned = readIntentRegistry(proj).find((e) => e.scope === "bugfix");
@@ -707,7 +707,7 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     expect(listIntents(proj).length).toBe(0);
   });
 
-  test("after birth: listIntents has the in-flight row, flagged active", () => {
+  test("after creation: listIntents has the in-flight row, flagged active", () => {
     expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
     const intents = listIntents(proj);
     expect(intents.length).toBe(1);
@@ -780,7 +780,7 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
   test("`intent help` / `space help` print help, not a failed switch", () => {
     // The engine routes these to help upstream; this is the tool-level
     // backstop for a direct invocation. A failed switch here used to die with
-    // an error whose recovery text steered the conductor into birthing.
+    // an error whose recovery text steered the conductor into creating.
     const i = util(["intent", "help"]);
     expect(i.status).toBe(0);
     expect(i.stdout).toContain("Utilities:");
@@ -832,7 +832,7 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
 
   test("an unknown-intent switch fails without inviting new work", () => {
     // The error must steer to the read-only listing ONLY - the old "describe
-    // what to build to start a new one" tail read as an instruction to birth.
+    // what to build to start a new one" tail read as an instruction to create an intent.
     // die() JSON-encodes the message, so inner quotes arrive escaped - match
     // on quote-free fragments.
     const r = util(["intent", "no-such-intent"]);
@@ -877,9 +877,9 @@ describe("t164 doctor readiness against the shipped shell", () => {
 });
 
 // ============================================================
-// Migration wiring: a flat aidlc-docs/ project migrates on first birth + git-rm
+// Migration wiring: a flat aidlc-docs/ project migrates on first creation + git-rm
 // ============================================================
-describe("t164 migration wiring (flat → per-intent on first birth)", () => {
+describe("t164 migration wiring (flat → per-intent on first creation)", () => {
   test("intent-create migrates a flat project, git-rm's the flat tree, and is a no-op re-run", () => {
     // Seed a flat (pre-workspace) project: aidlc-docs/aidlc-state.md present, no
     // intent record, no .migrated marker.
@@ -935,8 +935,8 @@ describe("t164 migration wiring (flat → per-intent on first birth)", () => {
     // The flat tree was removed from the working tree post-move (git-rm step).
     expect(existsSync(join(flat, "aidlc-state.md"))).toBe(false);
 
-    // No-op re-run: a second birth does NOT re-migrate (marker present) — it
-    // births a fresh second intent instead.
+    // No-op re-run: a second creation does NOT re-migrate (marker present) - it
+    // creates a fresh second intent instead.
     const r2 = util(["intent-create", "--scope", "poc"]);
     expect(r2.status).toBe(0);
     const records2 = readdirSync(intentsDir(proj)).filter((d) =>

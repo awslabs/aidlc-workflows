@@ -8,8 +8,8 @@
 // half of that contract plus the KEYWORD-HYGIENE rule the review made a
 // landing requirement:
 //
-//   - A composed scope written with `keywords: []` RESOLVES by --scope (birth
-//     succeeds, the born state carries the scope, the authored grid drives
+//   - A composed scope written with `keywords: []` RESOLVES by --scope (creation
+//     succeeds, the created state carries the scope, the authored grid drives
 //     Stage Progress suffixes) but NEVER wins inference - the shadowing trap:
 //     inference is first-alphabetical, so an authored keyword like `fix` on a
 //     scope named e.g. "auth-fix" would permanently beat stock bugfix. With
@@ -19,7 +19,7 @@
 //     "bugfix"). This is why keywords: [] is the composed default and keyword
 //     grants are an explicit human gate choice.
 //   - BOTH files are required: a .md without a grid entry resolves as an
-//     all-SKIP scope (loadScopeMapping tolerates it; the born workflow's
+//     all-SKIP scope (loadScopeMapping tolerates it; the created workflow's
 //     Stage Progress carries only the always-EXECUTE init stages).
 //
 // Mechanism: cli - spawns the shipped tools against a temp project's copied
@@ -40,7 +40,7 @@ const BUN = process.execPath;
 const utilityIn = (proj: string): string =>
   join(proj, ".claude", "tools", "aidlc-utility.ts");
 
-// Resolve the born record's state file via the active-space/intent cursors
+// Resolve the created record's state file via the active-space/intent cursors
 // (the t60 recordDirOf pattern).
 function statePath(proj: string): string {
   const spaceCursor = join(proj, "aidlc", "active-space");
@@ -59,7 +59,7 @@ function statePath(proj: string): string {
 // copied .claude/scopes/ + (optionally) the grid entry into the copied
 // .claude/tools/data/scope-grid.json. The grid mirrors bugfix but flips
 // requirements-analysis to SKIP so the AUTHORED grid (not any stock one) is
-// provably what the born state carries.
+// provably what the created state carries.
 function authorComposedScope(
   proj: string,
   name: string,
@@ -126,7 +126,7 @@ function freshProject(): string {
 }
 
 describe("t191 composed-scope write contract + keyword hygiene", () => {
-  test("keywords: [] scope resolves by --scope AND the authored grid drives the born state", () => {
+  test("keywords: [] scope resolves by --scope AND the authored grid drives the created state", () => {
     const proj = freshProject();
     authorComposedScope(proj, "composed-t191", {});
     const r = run(proj, ["intent-create", "--scope", "composed-t191"]);
@@ -162,7 +162,7 @@ describe("t191 composed-scope write contract + keyword hygiene", () => {
   test("a .md WITHOUT a grid entry resolves as all-SKIP (both files required)", () => {
     const proj = freshProject();
     authorComposedScope(proj, "gridless-t191", { withGridEntry: false });
-    // The scope is valid (presence = validity) so birth succeeds...
+    // The scope is valid (presence = validity) so creation succeeds...
     const r = run(proj, ["intent-create", "--scope", "gridless-t191"]);
     expect(r.status).toBe(0);
     const state = readFileSync(statePath(proj), "utf-8");

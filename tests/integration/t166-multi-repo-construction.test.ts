@@ -503,11 +503,11 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const proj = freshWorkspace();
     makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
-    const birth = runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
+    const creation = runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     const created = runWorktree(proj, "create", "--slug", "alpha", "--base", "main", "--repo", "repo-a");
 
-    test("birth records the two-repo set", () => {
-      expect(birth.status).toBe(0);
+    test("creation records the two-repo set", () => {
+      expect(creation.status).toBe(0);
     });
     test("create --repo repo-a exits 0 and produces the worktree dir", () => {
       expect(created.status).toBe(0);
@@ -1846,12 +1846,12 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     git(proj, "config", "user.email", "t@t");
     git(proj, "config", "user.name", "t");
     git(proj, "commit", "-q", "-m", "init", "--allow-empty");
-    // Birth with NO --repos and no sibling repos → no repos row recorded.
-    const birth = runUtil(proj, "intent-create", "--scope", "poc");
+    // Creation with NO --repos and no sibling repos → no repos row recorded.
+    const creation = runUtil(proj, "intent-create", "--scope", "poc");
     const created = runWorktree(proj, "create", "--slug", "legacy", "--base", "main");
 
-    test("birth records no repos row", () => {
-      expect(birth.status).toBe(0);
+    test("creation records no repos row", () => {
+      expect(creation.status).toBe(0);
     });
     test("create WITHOUT --repo works (cwd = projectDir, back-compat)", () => {
       expect(created.status).toBe(0);

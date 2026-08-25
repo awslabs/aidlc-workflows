@@ -4,17 +4,17 @@
 // REAL claude TUI (the render half of what t192 proves on the SDK): drive
 // `/aidlc compose "<task>"` on a fresh workspace, answer the rendered
 // approve/edit/reject gate by keystroke (Enter = the leading option, which the
-// SKILL.md composer block pins to Approve), and TERMINATE on the born state
+// SKILL.md composer block pins to Approve), and TERMINATE on the created state
 // landing on disk.
 //
 // What it proves on the SHIPPED tree that the SDK path cannot see: the compose
 // gate RENDERS as a real AskUserQuestion menu a human answers, and answering
-// it drives the write + same-turn birth - one /aidlc invocation, keystrokes
+// it drives the write + same-turn creation - one /aidlc invocation, keystrokes
 // only.
 //
 // Disk assertions (the same P2 contract t192 pins):
 //   - a 10th scope .md + a 10th scope-grid.json key exist (the two-file write),
-//   - the born aidlc-state.md carries the composed (non-stock) scope.
+//   - the created aidlc-state.md carries the composed (non-stock) scope.
 //
 // SPENDS Claude credits - gated behind AIDLC_TUI_LIVE=1 with skip-reasons;
 // tmux-backend only (mirrors t-tui-t50's gating).
@@ -69,7 +69,7 @@ const SKIP_REASON = skipReason();
 
 describe("t-tui compose front journey (live claude TUI)", () => {
   test.skipIf(SKIP_REASON !== null)(
-    `/aidlc compose renders the gate; answering births the composed scope${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
+    `/aidlc compose renders the gate; answering creates the composed scope${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const session = `aidlc_tui_compose_${process.pid}`;
       const sandbox = setupTuiProject({ brownfieldStub: true, noAidlcDocs: true });
@@ -96,8 +96,8 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
         // Answer every rendered gate with the leading (Recommended/Approve)
-        // option; terminate the moment the born state carries ANY Scope field
-        // (birth = the journey's last deterministic mutation). No per-gate
+        // option; terminate the moment the created state carries ANY Scope field
+        // (creation = the journey's last deterministic mutation). No per-gate
         // timeout - the disk terminator is the pass condition.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
@@ -129,7 +129,7 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         const composed = Object.keys(grid).find((k) => !STOCK_SCOPES.has(k));
         expect(composed).toBeDefined();
 
-        // The born state froze the composed scope.
+        // The created state froze the composed scope.
         const stateMd = readFileSync(stateFilePathFor(sandbox), "utf8");
         expect(stateMd).toContain(`- **Scope**: ${composed}`);
       } finally {

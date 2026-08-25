@@ -17,7 +17,7 @@
 //   - answering advances REAL state on disk — the milestone the .sh asserted
 //     (POC, unlike bugfix, includes Ideation, so intent-capture runs):
 //       * the intent-capture intent-statement artifact exists & is non-empty,
-//       * the born intent's aidlc-state.md records the `poc` scope and a greenfield
+//       * the created intent's aidlc-state.md records the `poc` scope and a greenfield
 //         classification,
 //       * <record>/ideation/ exists with a questions file carrying filled
 //         [Answer]: lines and at least one structured (heading-bearing) artifact,

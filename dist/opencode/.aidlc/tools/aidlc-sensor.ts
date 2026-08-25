@@ -265,7 +265,7 @@ function handleDescribe(args: string[]): void {
 //   - everything else: <record>/<phase>/<slug>/<name>.md.
 //
 // Fail-open: when no intent record resolves (recordDir null — a bare test
-// fixture or a pre-birth shell), the workspace shape is unknowable, so the
+// fixture or a pre-creation shell), the workspace shape is unknowable, so the
 // full list threads unchanged. An orphan consume (no producer anywhere in
 // the graph) also threads unchanged — that is a graph defect the doctor
 // surfaces; hiding it here would mask it.

@@ -25,7 +25,7 @@ export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Read stdin for the reason and session identity. The session stamp preserves
-// attribution when intent-birth has already moved the shared active cursor.
+// attribution when intent-create has already moved the shared active cursor.
 // Guard on isTTY — if stdin is a terminal (test / direct-run / debug-mode pipeline
 // that inherits TTY), skip the read to avoid blocking forever.
 let reason = "unknown";

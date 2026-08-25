@@ -1132,7 +1132,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     const dir = scratchProject(true);
     try {
       const created = createIntent(dir, "kiro-posttool-create", "default");
-      const sid = "kiro-birth-session";
+      const sid = "kiro-creation-session";
       const r = runAdapter(dir, "rebuild-stage-graph", {
         hook_event_name: "postToolUse",
         cwd: dir,
@@ -1161,20 +1161,20 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("10: session-start FORWARDS session_id — core hook stamps the per-session→intent record (M3)", () => {
     // M3: the Kiro adapter now forwards session_id when present, so the core
     // hook's per-session→intent STAMP is written (the session→intent record).
-    // Proof: birth an intent (live cursor resolves a uuid), fire session-start
+    // Proof: create an intent (live cursor resolves a uuid), fire session-start
     // with a session_id in the payload, and assert the stamp file
     // aidlc/.aidlc-sessions/<session_id> was written with that uuid. Without
     // the forwarded session_id the core hook's `if (sessionId)` block is inert.
     const dir = scratchProject(true);
     try {
-      const born = createIntent(dir, "kiro-stamp", "default");
+      const created = createIntent(dir, "kiro-stamp", "default");
       const sid = "kiro-session-abc123";
       const r = runAdapter(dir, "session-start", { ...(FIXTURES.agentSpawn as object), session_id: sid });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("AIDLC WORKFLOW ACTIVE");
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(existsSync(stampPath)).toBe(true);
-      expect(readFileSync(stampPath, "utf-8").trim()).toBe(born.uuid);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(created.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

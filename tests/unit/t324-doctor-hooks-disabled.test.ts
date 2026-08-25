@@ -181,6 +181,28 @@ describe("t324 doctor disableAllHooks gate", () => {
     expect(out).toMatch(/Hooks enabled/);
     expect(out).not.toMatch(/Hooks DISABLED/);
   });
+
+  test("managed-settings.d fragments resolve alphabetically inside the managed layer", () => {
+    const proj = setupIntegrationProject();
+    created.push(proj);
+    writeFileSync(
+      managedPath(proj),
+      JSON.stringify({ disableAllHooks: true }, null, 2),
+      "utf-8",
+    );
+    mkdirSync(join(proj, ".claude", "managed-settings.d"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(proj, ".claude", "managed-settings.d", "20-enable.json"),
+      JSON.stringify({ disableAllHooks: false }, null, 2),
+      "utf-8",
+    );
+
+    const { out } = runDoctor(proj);
+    expect(out).toMatch(/Hooks enabled/);
+    expect(out).not.toMatch(/Hooks DISABLED/);
+  });
 });
 
 // Pin the managed-settings path resolver for EVERY platform without needing a

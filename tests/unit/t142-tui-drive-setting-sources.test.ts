@@ -977,10 +977,10 @@ describe("tui fixture runtime graph", () => {
     }
   });
 
-  test("resolves the active intent created by direct custom-harness birth", () => {
+  test("resolves the active intent created by direct custom-harness creation", () => {
     const projectDir = setupTuiProject({ customHarness: true });
     try {
-      const birth = spawnSync(
+      const creation = spawnSync(
         process.execPath,
         [
           join(projectDir, ".claude", "tools", "aidlc-utility.ts"),
@@ -994,7 +994,7 @@ describe("tui fixture runtime graph", () => {
           env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
         },
       );
-      expect(birth.status, birth.stderr).toBe(0);
+      expect(creation.status, creation.stderr).toBe(0);
 
       compileTuiRuntimeGraph(projectDir);
       const graph = JSON.parse(

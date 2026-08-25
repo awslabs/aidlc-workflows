@@ -791,11 +791,11 @@ export function resolveCapturedToolInput(
 // ---------------------------------------------------------------------------
 // File readers — follow the workspace layout the engine writes.
 //
-// P4 — birth writes per-intent: state lands at
+// P4 - creation writes per-intent: state lands at
 // aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md and audit at
 // <record>/audit/<host>-<pid>.md (per-clone shards), NOT the flat aidlc-docs/.
 // These readers resolve the active intent's record from the active-space +
-// active-intent cursors, falling back to the flat layout for a not-yet-born
+// active-intent cursors, falling back to the flat layout for a not-yet-created
 // (pre-migration) project so the readers stay correct in both worlds.
 // ---------------------------------------------------------------------------
 
@@ -819,7 +819,7 @@ export function recordDirFor(projectDir: string): string {
 /** The SPACE-level domain-knowledge dir: aidlc/spaces/<space>/knowledge —
  *  a sibling of intents/ (NOT per-intent). The knowledge relocation (b29ced6)
  *  moved this out of each intent's record so domain knowledge accumulates
- *  across the whole space; the engine ensures it at birth (aidlc-utility.ts
+ *  across the whole space; the engine ensures it at creation (aidlc-utility.ts
  *  ensureWorkspaceDirs → knowledgeDir, lib.ts). Resolves the active space from
  *  the same cursor recordDirFor reads, defaulting to "default". */
 export function spaceKnowledgeDirFor(projectDir: string): string {
@@ -880,7 +880,7 @@ export function readStateFile(projectDir: string): string | undefined {
  * Parse the audit log into an ordered list of event-type strings. Each audit
  * block carries a `**Event**: <TYPE>` line (aidlc-audit.ts:246); we extract
  * those across every per-clone shard under <record>/audit/, OR the flat
- * aidlc-docs/audit.md for a not-yet-born (pre-migration) project. Returns
+ * aidlc-docs/audit.md for a not-yet-created (pre-migration) project. Returns
  * undefined when no audit exists at all. (P4: audit is sharded per clone, but a
  * flat legacy/seeded project keeps one audit.md until migration — readAuditText
  * handles both.)

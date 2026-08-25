@@ -3,7 +3,7 @@
 // t-acp-kiro-journey-workspace.serial.test.ts — the LIVE workspace journey,
 // Kiro-ACP logic half (P10 / Stage E). Proves the SAME composed §0 promise the
 // SDK + Codex legs prove (one feature spanning two repos · per-repo codekb · a
-// 2nd intent alongside active A · a non-default space switch + birth there + no
+// 2nd intent alongside active A · a non-default space switch + create one there + no
 // collision · switch back), expressed in the ACP driver's NATIVE turn shape: a
 // SEQUENCE of single-turn driveKiroAcp invocations against one shared on-disk
 // workspace root, each bounded by stopAfterToolTitle at a tool boundary.
@@ -17,18 +17,18 @@
 // ALL FIVE beats drive through the PRODUCTION `aidlc` conductor (live-verified on
 // this branch, kiro-cli 2.7.0):
 //
-//   * Beats 1-3. Beat 3 (birth a 2nd intent alongside active A) is the conductor's
+//   * Beats 1-3. Beat 3 (create a 2nd intent alongside active A) is the conductor's
 //     AUTHORIZED offer→confirm routing (SKILL.md § "New work while an intent is
 //     active": on a genuine new-work prose it renders an offer, and on the human's
 //     "Yes" it runs `intent-create` DIRECTLY — "the same run-then-continue shape the
 //     print directive already uses"). That does NOT fight the forwarding override in
-//     agents/aidlc.json, so the production conductor births the 2nd intent over a
-//     keepAlive multi-turn ACP session: turn 1 auto-births A, turn 2 (new-work)
+//     agents/aidlc.json, so the production conductor creates the 2nd intent over a
+//     keepAlive multi-turn ACP session: turn 1 auto-creates A, turn 2 (new-work)
 //     stops at the offer's compare-read (`intent --json`), turn 3 (confirm) stops
-//     at the birth. Live-verified: turn 3 ran `intent-create` directly; A's state
+//     at the creation. Live-verified: turn 3 ran `intent-create` directly; A's state
 //     was byte-unchanged.
 //
-//   * Beats 4-5 (space-create teamB · switch · birth into teamB · switch back) now
+//   * Beats 4-5 (space-create teamB · switch · intent creation in teamB · switch back) now
 //     ALSO drive through the production `aidlc` conductor — the d44828b engine fix
 //     routes the workspace navigation verbs through `next`: a LEADING
 //     `space`/`space-create`/`intent` token (parseNextFlags aidlc-orchestrate.ts:276,
@@ -42,12 +42,12 @@
 //     `aidlc-utility.ts <verb>` (run the named tool); zero intent-advance.
 //     Live-verified 3/3 via a throwaway spike (the ndjson trace showed the two-call
 //     pair for space-create/space/space default, never a `next`-advances-A). The
-//     teamB birth (4c) rides the same engine seam: in teamB (zero intents) a
-//     `/aidlc --scope poc "<desc>"` hits the birth gate (Branch 9a →
+//     teamB creation (4c) rides the same engine seam: in teamB (zero intents) a
+//     `/aidlc --scope poc "<desc>"` hits the creation gate (Branch 9a →
 //     createPrintDirective ~:1231) which prints `intent-create …`; the conductor runs
 //     it. Each space verb is its own single-turn driveKiroAcp call (ACP is
 //     single-turn; stopAfterToolTitle catches the named tool's output). This proves
-//     the ACP SURFACE carries the space-switch + isolated-birth mutations live
+//     the ACP SURFACE carries the space-switch + isolated creation mutations live
 //     through the SAME production conductor the SDK + Codex legs exercise.
 //
 // (There is NO Kiro-TUI leg for these beats — Kiro ships no statusline, so the
@@ -138,9 +138,9 @@ function activeRecordDir(root: string): string | undefined {
 /** The RE codekb beat has TWO valid outcomes, and both keep the multi-repo journey
  *  intact. Brownfield: reverse-engineering EXECUTEs and writes a per-repo codekb
  *  store, so the codekbFiles asserts below hold. Greenfield: the engine stamps
- *  reverse-engineering SKIP at intent birth (aidlc-utility.ts records it in the
+ *  reverse-engineering SKIP at intent creation (aidlc-utility.ts records it in the
  *  Stages to Skip row), so no codekb is written and the asserts must not run (the
- *  skip is the correct behaviour, not a flake). This reads the born intent's
+ *  skip is the correct behaviour, not a flake). This reads the created intent's
  *  aidlc-state.md and returns true only for that greenfield RE-skip: Project Type is
  *  Greenfield AND the Stages to Skip row names the reverse-engineering slug. We match
  *  the bare slug, never the row's human annotation (the engine writes it with an
@@ -176,7 +176,7 @@ function greenfieldReSkip(recordDir: string): boolean {
  *  real failure the assertions below catch.
  *
  *  Second cancel arm: a LEGITIMATE greenfield RE-skip. When the intent is greenfield
- *  the engine stamped reverse-engineering SKIP at birth, so this `--single` run never
+ *  the engine stamped reverse-engineering SKIP at creation, so this `--single` run never
  *  writes codekb and would otherwise burn the whole codekb budget (~20 min of live
  *  Kiro credits) waiting for stores that will never appear. So we also cancel the
  *  moment greenfieldReSkip becomes true on disk; the assertions below then take the
@@ -212,7 +212,7 @@ async function driveCodekbUntilBothRepos(
 }
 
 /** Count WORKFLOW_STARTED events in a record's audit shards — exactly one for an
- *  intent's own birth; a SECOND means a foreign birth bled in (the collision the
+ *  intent's own creation; a SECOND means a foreign creation bled in (the collision the
  *  vision forbids). Per-session SessionStart/End hooks append SESSION_* events to
  *  the active intent, so raw shard bytes are not stable across turns; this count
  *  is the stable collision signal (see the SDK leg's note). */
@@ -250,7 +250,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
       // session reads the workspace clean off disk (A active, RE'd), recognises the
       // new-work prose, and renders the offer. Beats 4-5 open a THIRD fresh `aidlc`
       // session (`space`) for the same reason: beat 3's `offer` session is cancelled
-      // mid-birth, so reusing it would resume that birth rather than parse the new
+      // mid-creation, so reusing it would resume that creation rather than parse the new
       // `/aidlc space-create` prompt. Each space verb is a terminal print directive
       // ("…then stop"), so all of beats 4-5 reuse this ONE keepAlive `space` session
       // (spike-verified: three sequential space verbs run clean on one session).
@@ -258,11 +258,11 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
       const offer = new AcpSession(root, "aidlc", true);
       const space = new AcpSession(root, "aidlc", true);
       try {
-        // --- Beat 1: auto-birth A spanning both siblings ---------------------
+        // --- Beat 1: auto-create A spanning both siblings ---------------------
         // Name the scope explicitly: a bare prose `/aidlc "<desc>"` emits an `ask`
         // scope-confirm (orchestrate Branch 8) that the SINGLE-TURN ACP driver
         // cannot answer (it renders as prose, not a protocol gate) — so the turn
-        // would end before birth. `--scope feature` births via Branch 9a with no
+        // would end before creation. `--scope feature` creates via Branch 9a with no
         // gate; the repo span is still captured by sibling auto-discovery.
         const r1 = await driveKiroAcp({
           projectDir: root,
@@ -301,7 +301,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         );
         expect([...r1.toolCallIssues, ...codekbRun.toolCallIssues]).toEqual([]);
         if (greenfieldReSkip(recordADir)) {
-          // Greenfield: reverse-engineering was stamped SKIP at birth, so no per-repo
+          // Greenfield: reverse-engineering was stamped SKIP at creation, so no per-repo
           // codekb is expected. The recorded skip is the correct outcome; accept it
           // and do NOT run the codekb asserts (permissive by design).
           expect(greenfieldReSkip(recordADir)).toBe(true);
@@ -311,11 +311,11 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           expect(codekbFiles(root, "repo-b").length).toBeGreaterThan(0);
         }
 
-        // A's birth emitted exactly one WORKFLOW_STARTED; the RE pass added stage
-        // work but no second birth bled into A's shard.
+        // A's creation emitted exactly one WORKFLOW_STARTED; the RE pass added stage
+        // work but no second creation bled into A's shard.
         expect(workflowStartedCount(recordADir)).toBe(1);
         // Snapshot A's workflow state AFTER the RE pass settles — beats 3-5 must
-        // leave THIS byte-identical (no foreign birth/space switch bleeds into A).
+        // leave THIS byte-identical (no foreign creation/space switch bleeds into A).
         const stateABefore = readFileSync(join(recordADir, "aidlc-state.md"), "utf-8");
 
         // --- Beat 3: a SECOND isolated intent alongside A, via the conductor's
@@ -337,13 +337,13 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // seam (the pre-backstop shape) left the conductor without its own
         // rendered question, so the next turn's "Yes" answered a question the
         // conductor never asked (live-observed: it re-forwarded the prose and
-        // re-rendered the ask instead of birthing).
+        // re-rendered the ask instead of creating).
         // `/aidlc`-prefixed like every other beat: the prefix is what
         // deterministically enters the forwarding loop, whose first `next`
         // carries the prose into Branch 9c. A bare-prose prompt left loop
         // entry to conductor initiative, and live conductors variously ran a
         // bare `next` (prose never forwarded), hand-called intent-create
-        // (an unoffered auto-birth), or tried park (hook-blocked).
+        // (an unoffered auto-create), or tried park (hook-blocked).
         const offerR1 = await driveKiroAcp({
           projectDir: root,
           session: offer,
@@ -370,12 +370,12 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         ).toMatch(/reshape|re-shape|remaining plan|change.*plan/);
         // OUTCOME pins, not tool-surface pins: live conductors compare via
         // `intent --json`, a registry read, or the engine ask - all legitimate.
-        // What the offer turn must NOT do is deterministic: no birth (never
-        // auto-birth; the engine's Branch 9c also refuses to birth from bare
+        // What the offer turn must NOT do is deterministic: no creation (never
+        // auto-create; the engine's Branch 9c also refuses to create from bare
         // prose, so a dark offer can no longer stumble into one) and no stage
         // work on A (state byte-identical). The dark-offer hazard the old
         // compare-read pin guarded is now caught downstream: without a rendered
-        // offer the confirm turn cannot birth, and beat 3b's registry pin reds.
+        // offer the confirm turn cannot create an intent, and beat 3b's registry pin reds.
         expect(
           offerR1.toolCalls.some((tc) => /intent-create/.test(tc.title)),
         ).toBe(false);
@@ -399,8 +399,8 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(reg3.length).toBe(2);
         expect(new Set(reg3.map((e) => e.uuid)).size).toBe(2);
         for (const e of reg3) expect(e.uuid).toMatch(UUIDV7_RE);
-        // A's substantive workflow state is untouched + B's birth did not
-        // bleed into A's shard. The birth's cursor move may legitimately
+        // A's substantive workflow state is untouched + B's creation did not
+        // bleed into A's shard. The created intent's cursor move may legitimately
         // refresh only A's Last Updated timestamp; the offer path itself
         // mutates nothing (SKILL.md pins this - park/report to "make room"
         // are forbidden and hook-blocked).
@@ -409,7 +409,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         ).toBe(withoutLastUpdated(stateABefore));
         expect(workflowStartedCount(recordADir)).toBe(1);
 
-        // --- Beat 4: non-default space — create, switch, birth there; no leak --
+        // --- Beat 4: non-default space - create, switch, create one there; no leak --
         // The space NAVIGATION verbs (space-create / space) are TERMINAL commands —
         // they map 1:1 to an aidlc-utility.ts subcommand and carry no workflow work.
         // On Kiro they are dispatched DETERMINISTICALLY by the userPromptSubmit seam
@@ -421,7 +421,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // driven to its natural end_turn — NOT stopAfterToolTitle (the tool runs inside
         // the hook, never surfaces as an ACP tool_call, so a title stop would never
         // fire). The assertable surface is the on-disk outcome. (Beat 4c below is a
-        // BIRTH — run-then-continue, genuine conductor work — so it keeps its title
+        // CREATE: run-then-continue, genuine conductor work, so it keeps its title
         // stop.) Each verb reuses the keepAlive `space` session; the seam ends every
         // verb turn cleanly so reuse is safe.
         // 4a: create teamB; assert org.md byte-copied from default, fresh empty
@@ -458,12 +458,12 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(switchSpace.toolCallIssues).toEqual([]);
         expect(activeSpace(root)).toBe(TEAM_B_SLUG);
 
-        // 4c: birth into teamB via the conductor's birth gate — in teamB (zero
+        // 4c: intent creation in teamB via the conductor's creation gate - in teamB (zero
         // intents) a `/aidlc --scope poc "<desc>"` hits Branch 9a → createPrintDirective
         // → the conductor runs `intent-create …` directly. knowledge/ now PRESENT
-        // (lazy ensure on first birth); teamB holds its 1 intent, default still holds
+        // (lazy ensure on first creation); teamB holds its 1 intent, default still holds
         // its 2 (no cross-space leak).
-        const birthTeamB = await driveKiroAcp({
+        const teamBCreation = await driveKiroAcp({
           projectDir: root,
           session: space,
           prompt: `/aidlc --scope poc "teamB onboarding flow"`,
@@ -471,7 +471,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           stopAfterToolTitle: /aidlc-utility\.ts intent-create/,
           keepAlive: true,
         });
-        expect(birthTeamB.toolCallIssues).toEqual([]);
+        expect(teamBCreation.toolCallIssues).toEqual([]);
         expect(listIntents(root, TEAM_B_SLUG).length).toBe(1);
         expect(listIntents(root, "default").length).toBe(2);
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
@@ -487,7 +487,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         });
         expect(backToDefault.toolCallIssues).toEqual([]);
         expect(activeSpace(root)).toBe("default");
-        // A's workflow state survived the round trip; no foreign birth bled in.
+        // A's workflow state survived the round trip; no foreign creation bled in.
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
         expect(listIntents(root, "default").length).toBe(2);

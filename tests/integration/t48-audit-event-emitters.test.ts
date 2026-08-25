@@ -327,10 +327,10 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
     ["handleCompleteWorkflow", STATE_TS, ["PHASE_COMPLETED", "PHASE_VERIFIED", "WORKFLOW_COMPLETED"]], // test 11
     ["handleAdvance", STATE_TS, ["STAGE_STARTED"]], // test 12
     ["handleReuseArtifact", STATE_TS, ["ARTIFACT_REUSED"]], // test 13
-    // P4: the birth handler was renamed handleInit -> handleIntentCreate (the
-    // user-facing --init is retired; the engine auto-births). The three birth
+    // P4: the creation handler was renamed handleInit -> handleIntentCreate (the
+    // user-facing --init is retired; the engine auto-creates). The three creation
     // events still pair off it (WORKFLOW_STARTED + the init PHASE_STARTED + the
-    // workspace-scaffold STAGE_STARTED), now into the born intent's record.
+    // workspace-scaffold STAGE_STARTED), now into the created intent's record.
     ["handleIntentCreate", UTIL_TS, ["WORKFLOW_STARTED", "PHASE_STARTED", "STAGE_STARTED"]], // test 14
   ];
 

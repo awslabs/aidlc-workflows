@@ -117,9 +117,9 @@ function proj(stateFixture?: string): string {
 /**
  * Fresh temp project with the seeded record REMOVED — a genuinely empty
  * workspace (zero intents). P9: createTestProject seeds one default record, so a
- * "clean workspace → birth" / "no workflow → confirm scope" case must strip it
+ * "clean workspace → creation" / "no workflow → confirm scope" case must strip it
  * (otherwise the engine asks the user to SELECT the existing intent instead of
- * birthing / confirming). Mirrors t160's beforeEach removeWorkspaceRecord.
+ * creating / confirming). Mirrors t160's beforeEach removeWorkspaceRecord.
  */
 function cleanProj(): string {
   const p = createTestProject();
@@ -289,21 +289,21 @@ describe("t117 explicit resume routing", () => {
 // (.sh Tests 7-8)
 // ============================================================
 
-describe("t117 birth branch (P4: --init retired, engine names intent-create)", () => {
-  // --- Test 7: a named scope over EXISTING state is NOT a birth ---
+describe("t117 creation branch (P4: --init retired, engine names intent-create)", () => {
+  // --- Test 7: a named scope over EXISTING state is NOT a creation ---
   // P4 removed the `--init` flag. A scope named over an existing workflow is a
-  // resume/happy-path or a scope-change, never a birth — the engine must NOT
-  // emit a birth print (the old "Use --force" re-init guard no longer exists
+  // resume/happy-path or a scope-change, never a creation - the engine must NOT
+  // emit a creation print (the old "Use --force" re-init guard no longer exists
   // because there is no re-init move).
-  test("7: named scope over existing state → not a birth (no intent-create print)", () => {
+  test("7: named scope over existing state → not a creation (no intent-create print)", () => {
     const p = proj("state-mid-ideation.md"); // feature scope state
-    // Same scope as state → happy path (run the current stage), no birth.
+    // Same scope as state → happy path (run the current stage), no creation.
     const r = next(["--scope", "feature"], p);
     expect(r.out).not.toContain("intent-create");
     expect(r.out).not.toContain("Use --force to reinitialize");
   });
 
-  // --- Test 8: a named scope on a clean workspace → birth print (no mutation) ---
+  // --- Test 8: a named scope on a clean workspace → creation print (no mutation) ---
   // The engine NAMES the `intent-create` move (read-only) and the conductor runs
   // it; `next` itself must create NO state (mutation stays conductor-side).
   test("8: named scope on a clean workspace → print naming intent-create AND no state created", () => {

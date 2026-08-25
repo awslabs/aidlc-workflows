@@ -28,7 +28,7 @@ outputs: the per-intent record tree (one dir per in-scope phase + verification d
 
 # Workspace Scaffold
 
-Runs deterministically inside `aidlc-utility intent-create`. The workspace shell ships in `dist/` (the SEED); creation only ensure-exists the per-intent record and its in-scope phase dirs (creates them on demand, idempotent). Kept as reference for audit event semantics.
+Runs deterministically inside `aidlc-utility intent-create`. The workspace shell ships in `dist/` (the SEED); intent creation only ensures the per-intent record and its in-scope phase dirs exist (created on demand, idempotently). Kept as reference for audit event semantics.
 
 MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
@@ -54,8 +54,8 @@ subdirectories, no seeded READMEs. A team adds its own markdown here over time;
 the directory is a sibling of `memory/`, `codekb/`, and `intents/`, so domain
 knowledge accumulates across every intent in the space rather than being trapped
 in one intent's record. The agent personas read team knowledge from
-`aidlc/knowledge/aidlc-shared/` and `aidlc/knowledge/<agent>/` if those exist —
-the team creates them; birth does not. (The engine's per-agent METHODOLOGY
+`aidlc/knowledge/aidlc-shared/` and `aidlc/knowledge/<agent>/` if those exist.
+The team creates them; the intent-creation step does not. (The engine's per-agent METHODOLOGY
 knowledge ships separately and read-only under `.aidlc/knowledge/`.)
 
 ### Step 3: Ensure Phase Artifact Directories

@@ -142,13 +142,13 @@ function proj(): string {
   return p;
 }
 
-// P4: intent-create writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the created intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/) and audit into per-clone SHARDS
 // under <record>/audit/<host>-<pid>.md — not the flat aidlc-docs/ trio. After
-// init the active-intent cursor points at the born record, so the later
+// init the active-intent cursor points at the created record, so the later
 // state-tool calls (gate-start/advance/acknowledge-compaction) read/write THAT
 // record. recordDirOf follows the cursor and falls back to flat for F3 (which
-// hand-seeds a flat corrupted state.md and never births a record).
+// hand-seeds a flat corrupted state.md and never creates a record).
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -169,7 +169,7 @@ const auditDirOf = (p: string): string => join(recordDirOf(p), "audit");
 const statePath = (p: string): string =>
   join(recordDirOf(p), "aidlc-state.md");
 
-/** The single audit shard for a freshly-born record. Returns "" when none. */
+/** The single audit shard for a newly created record. Returns "" when none. */
 function auditShardPath(p: string): string {
   const dir = auditDirOf(p);
   if (!existsSync(dir)) return "";
@@ -298,7 +298,7 @@ function auditField(content: string, ev: string, key: string): string {
 // spawned subprocess resolves the SAME shard (the shard name embeds the stable
 // per-clone token, not the PID — aidlc-lib.ts:955-971), so chmod-ing that one
 // shard read-only denies its append. The original test chmod-ed the flat
-// aidlc-docs/audit.md; here the equivalent target is the born record's shard.
+// aidlc-docs/audit.md; here the equivalent target is the created record's shard.
 // ============================================================
 
 describe("t137 F1 — read-only audit shard (audit-first holds)", () => {
@@ -309,7 +309,7 @@ describe("t137 F1 — read-only audit shard (audit-first holds)", () => {
       expect(init(p).status).toBe(0); // sanity: scaffolding succeeded
 
       const shard = auditShardPath(p);
-      expect(shard).not.toBe(""); // birth wrote a shard
+      expect(shard).not.toBe(""); // creation wrote a shard
       const state2 = statePath(p);
 
       // Inject a SESSION_COMPACTED event so acknowledge-compaction has

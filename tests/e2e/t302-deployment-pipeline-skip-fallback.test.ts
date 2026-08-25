@@ -79,7 +79,7 @@ function runSkipFallback(scope: "bugfix" | "refactor"): void {
   });
   projects.push(project);
 
-  const born = spawnSync(
+  const created = spawnSync(
     BUN,
     [
       UTILITY,
@@ -93,7 +93,7 @@ function runSkipFallback(scope: "bugfix" | "refactor"): void {
     ],
     { encoding: "utf-8" },
   );
-  expect(born.status, `${born.stdout}\n${born.stderr}`).toBe(0);
+  expect(created.status, `${created.stdout}\n${created.stderr}`).toBe(0);
 
   const jumped = spawnSync(
     BUN,

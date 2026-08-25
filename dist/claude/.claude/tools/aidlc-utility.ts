@@ -108,7 +108,7 @@ import {
   resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
-  resolveBirthRepoSet,
+  resolveIntentRepoSet,
   resolveProjectDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
@@ -291,10 +291,10 @@ function validateIntentCreateFlagValues(
 
 // Thin wrapper around the canonical appendAuditEntry. All events must be in
 // aidlc-audit.ts VALID_EVENT_TYPES. Throws on invalid event or audit failure —
-// caller is expected to let that propagate (birth failures should stop birth).
+// caller is expected to let that propagate (creation failures should stop creation).
 //
 // Lock-aware (mirrors aidlc-state.ts emitAudit): handleIntentCreate wraps the
-// whole birth transaction in withAuditLock on the WORKSPACE sentinel bucket, so
+// whole creation transaction in withAuditLock on the WORKSPACE sentinel bucket, so
 // this process already owns that OS lock. Routing through appendAuditEntry
 // (which calls the NON-reentrant acquireAuditLock keyed on the same sentinel
 // when intent is omitted) would self-deadlock and burn the 5s retry budget
@@ -1442,6 +1442,48 @@ export function resolveManagedSettingsCandidates(
   return ["/etc/claude-code/managed-settings.json"];
 }
 
+type ClaudeManagedBooleanKey = "disableAllHooks" | "allowManagedHooksOnly";
+
+function managedSettingsFiles(candidate: string): string[] {
+  const files = [candidate];
+  const fragmentsDir = join(dirname(candidate), "managed-settings.d");
+  try {
+    for (const name of readdirSync(fragmentsDir).sort()) {
+      if (!name.endsWith(".json")) continue;
+      const path = join(fragmentsDir, name);
+      try {
+        if (statSync(path).isFile()) files.push(path);
+      } catch {
+        // A fragment that vanished during enumeration carries no policy.
+      }
+    }
+  } catch {
+    // An absent or unreadable fragment directory carries no policy.
+  }
+  return files;
+}
+
+function resolveManagedBooleanSetting(
+  key: ClaudeManagedBooleanKey,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): boolean | undefined {
+  for (const candidate of resolveManagedSettingsCandidates(platform, env)) {
+    let effective: boolean | undefined;
+    for (const path of managedSettingsFiles(candidate)) {
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const value = parsed[key];
+        if (typeof value === "boolean") effective = value;
+      } catch {
+        // Absent, unreadable, or malformed managed files do not define the key.
+      }
+    }
+    if (effective !== undefined) return effective;
+  }
+  return undefined;
+}
+
 interface NamingMismatch {
   file: string;
   stem: string;
@@ -1458,6 +1500,12 @@ const PLUGIN_DOCTOR_FINDING_ID_MAX = 48;
 const PLUGIN_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
 const PLUGIN_DOCTOR_REQUIRED_JSON =
   '{"checks":[{"pass":boolean,"label":string,"fix"?:string,"severity"?:"error"|"advisory"}]}';
+const HOOK_EXECUTION_RECOVERY =
+  "1. Run /hooks to check hook approval and policy state. 2. If hooks need approval, approve them and fully restart the CLI; approval does not take effect until a full restart. 3. If /hooks says hooks are restricted by policy, only your Claude Code administrator can lift allowManagedHooksOnly in managed-settings.json. Until then, for an attended session, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1";
+// Hook heartbeats and audit rows are written in the same turn, normally
+// seconds apart. Five minutes absorbs host scheduling and slow tool-return
+// ordering without hiding a resumed workflow that advances after hooks die.
+const HOOK_HEARTBEAT_STALE_SLACK_MS = 5 * 60 * 1000;
 
 function frontmatterFields(filePath: string, kind: "Agent" | "Scope"): { name: string; plugin: string } {
   const body = readFileSync(filePath, "utf-8");
@@ -1991,55 +2039,88 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     // via `--settings '{"disableAllHooks": true}'`, sitting between managed and
     // local, but that is not persisted to a file so it is unprobeable here.)
     //
-    // We inspect only the on-disk managed-settings FILE. Claude Code can also
-    // receive managed policy through channels we cannot read from here (MDM,
-    // Windows registry, a remote/server-managed source, a `managed-settings.d/`
-    // fragment dir) — so a pass means the resolved value is not true in the
-    // settings files we could inspect, not a guarantee the whole enterprise
-    // layer is clean.
+    // We inspect the on-disk managed-settings file and its alphabetical
+    // managed-settings.d fragments. Claude Code can also receive managed policy
+    // through channels we cannot read here (MDM, Windows registry, or a
+    // remote/server-managed source), so a pass is not a guarantee that every
+    // enterprise channel is clean.
     //
     // Managed-settings file location is platform-specific (resolved by the pure,
     // per-platform-tested resolveManagedSettingsCandidates below).
-    const managedCandidates = resolveManagedSettingsCandidates(process.platform, process.env);
-    const home = process.env.HOME || process.env.USERPROFILE || "";
-    const MANAGED_LABEL = "enterprise managed settings";
-    const hookDisableLayers: Array<[string, string]> = [
-      ...managedCandidates.map((p) => [p, MANAGED_LABEL] as [string, string]),
-      [join(projectDir, harness, "settings.local.json"), ".claude/settings.local.json"],
-      [join(projectDir, harness, "settings.json"), ".claude/settings.json"],
-      ...(home ? [[join(home, ".claude", "settings.json"), "~/.claude/settings.json"] as [string, string]] : []),
-    ];
-    let hooksDisabledBy: string | null = null;
-    for (const [path, label] of hookDisableLayers) {
-      try {
-        const parsed = JSON.parse(readFileSync(path, "utf-8")) as { disableAllHooks?: unknown };
-        // Only a layer that EXPLICITLY sets the boolean resolves it; a layer
-        // that omits the key defers to the next-lower layer.
-        if (typeof parsed.disableAllHooks === "boolean") {
-          if (parsed.disableAllHooks) hooksDisabledBy = label;
-          break; // highest-precedence definition wins, true or false
+    if (harnessName === "claude") {
+      const managedDisableAllHooks = resolveManagedBooleanSetting(
+        "disableAllHooks",
+        process.platform,
+        process.env,
+      );
+      const home = process.env.HOME || process.env.USERPROFILE || "";
+      const MANAGED_LABEL = "enterprise managed settings";
+      const hookDisableLayers: Array<[string, string]> = [
+        [
+          join(projectDir, harness, "settings.local.json"),
+          ".claude/settings.local.json",
+        ],
+        [join(projectDir, harness, "settings.json"), ".claude/settings.json"],
+        ...(home
+          ? [
+              [
+                join(home, ".claude", "settings.json"),
+                "~/.claude/settings.json",
+              ] as [string, string],
+            ]
+          : []),
+      ];
+      let hooksDisabledBy: string | null =
+        managedDisableAllHooks === true ? MANAGED_LABEL : null;
+      if (managedDisableAllHooks === undefined) {
+        for (const [path, label] of hookDisableLayers) {
+          try {
+            const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+              disableAllHooks?: unknown;
+            };
+            // Only a layer that EXPLICITLY sets the boolean resolves it; a layer
+            // that omits the key defers to the next-lower layer.
+            if (typeof parsed.disableAllHooks === "boolean") {
+              if (parsed.disableAllHooks) hooksDisabledBy = label;
+              break; // highest-precedence definition wins, true or false
+            }
+          } catch {
+            // Absent/unreadable/malformed layer — the wiring-config rows own
+            // those cases; only an explicit disableAllHooks value matters here.
+          }
         }
-      } catch {
-        // Absent/unreadable/malformed layer — the wiring-config rows own those
-        // cases; here we only care about an explicit disableAllHooks setting.
+      }
+      // Enterprise managed settings is the highest-precedence layer: nothing
+      // in a project or user file can override it.
+      const disabledByManaged = hooksDisabledBy === MANAGED_LABEL;
+      results.push({
+        pass: hooksDisabledBy === null,
+        label:
+          hooksDisabledBy === null
+            ? "Hooks enabled (resolved disableAllHooks is not true)"
+            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
+        fix:
+          hooksDisabledBy === null
+            ? undefined
+            : disabledByManaged
+              ? `"disableAllHooks": true is enforced by enterprise managed settings — the highest-precedence layer, which a project or user setting cannot override. IT policy must remove it (or set it to false) for AI-DLC to run. If policy mandates disabled hooks, AI-DLC v2 is not compatible with this environment — its workflow engine is hook-driven.`
+              : `remove "disableAllHooks": true from ${hooksDisabledBy} (or set it to false in a higher-precedence layer such as .claude/settings.local.json) and restart the Claude Code session — AI-DLC's workflow engine is hook-driven and cannot advance while hooks are disabled.`,
+      });
+
+      if (
+        resolveManagedBooleanSetting(
+          "allowManagedHooksOnly",
+          process.platform,
+          process.env,
+        ) === true
+      ) {
+        results.push({
+          pass: false,
+          label: "Claude managed hook policy: allowManagedHooksOnly=true",
+          fix: "hooks from .claude/settings.json are blocked by organization policy (allowManagedHooksOnly); only the Claude Code administrator can lift it in managed-settings.json. Until then, the workflow's human-presence and summary-confirmation receipts cannot be minted; attended sessions can set AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1 in the environment that launches the CLI as a temporary bypass",
+        });
       }
     }
-    // Enterprise managed settings is the highest-precedence layer: nothing in a
-    // project or user file can override it, so the remedy must not suggest that.
-    const disabledByManaged = hooksDisabledBy === MANAGED_LABEL;
-    results.push({
-      pass: hooksDisabledBy === null,
-      label:
-        hooksDisabledBy === null
-          ? "Hooks enabled (resolved disableAllHooks is not true)"
-          : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
-      fix:
-        hooksDisabledBy === null
-          ? undefined
-          : disabledByManaged
-            ? `"disableAllHooks": true is enforced by enterprise managed settings — the highest-precedence layer, which a project or user setting cannot override. IT policy must remove it (or set it to false) for AI-DLC to run. If policy mandates disabled hooks, AI-DLC v2 is not compatible with this environment — its workflow engine is hook-driven.`
-            : `remove "disableAllHooks": true from ${hooksDisabledBy} (or set it to false in a higher-precedence layer such as .claude/settings.local.json) and restart the Claude Code session — AI-DLC's workflow engine is hook-driven and cannot advance while hooks are disabled.`,
-    });
   } else {
     // Kiro / Codex: the wiring config is not settings.json (it is
     // agents/aidlc.json / hooks.json — checked below). The core hook bodies
@@ -2496,11 +2577,11 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     });
   }
 
-  // 5. Workspace shell ready (P4: no --init artifact to check). With auto-birth
+  // 5. Workspace shell ready (P4: no --init artifact to check). With auto-create
   // there is no scaffolded aidlc-docs/ to verify; readiness is the SHIPPED SHELL
   // the user copies from dist/: the harness engine dir (.claude/.kiro/.codex)
   // present AND the default space's memory dir present (the source of truth the
-  // native include resolves). When both are present the first /aidlc auto-births
+  // native include resolves). When both are present the first /aidlc auto-creates
   // with no ceremony; a missing piece means the dist/ copy was incomplete.
   const harnessEngineDir = join(projectDir, harnessDir());
   // Pin to the DEFAULT space explicitly: readiness is "did the dist/ shell copy
@@ -2585,21 +2666,74 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // Both hook-health and state-drift checks use the same intent-scoped ledger.
   const auditAllShards = readAllAuditShards(projectDir);
   const auditShardEvents = readAuditShardEvents(projectDir);
+  const stateMdPath = stateFilePath(projectDir);
+  let stateContent = "";
+  try {
+    if (existsSync(stateMdPath)) {
+      stateContent = readFileSync(stateMdPath, "utf-8");
+    }
+  } catch {
+    // An unreadable state contributes no progress evidence; audit remains usable.
+  }
+  const stateProgressedStages = new Set(
+    parseCheckboxes(stateContent)
+      .filter((entry) => entry.state !== "pending")
+      .map((entry) => entry.slug),
+  );
+  const stageOrGateEvents = auditShardEvents.filter(
+    (event) => event.event.startsWith("STAGE_") || event.event.startsWith("GATE_"),
+  );
+  let newestStageOrGateEvent: {
+    timestampMs: number;
+    timestampRaw: string;
+  } | null = null;
+  for (const event of stageOrGateEvents) {
+    const timestampMs = Date.parse(event.timestamp);
+    if (
+      Number.isFinite(timestampMs) &&
+      (newestStageOrGateEvent === null ||
+        timestampMs > newestStageOrGateEvent.timestampMs)
+    ) {
+      newestStageOrGateEvent = {
+        timestampMs,
+        timestampRaw: event.timestamp,
+      };
+    }
+  }
+  const auditProgressedStages = new Set(
+    stageOrGateEvents
+      .map(
+        (event) =>
+          auditBlockField(event.block, "Stage") ??
+          auditBlockField(event.block, "Slug"),
+      )
+      .filter((slug): slug is string => slug !== null),
+  );
+  const progressedStageCount = Math.max(
+    stateProgressedStages.size,
+    auditProgressedStages.size,
+  );
+  const workflowHasProgress = progressedStageCount > 0;
+  const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
+  const hookExecutionRecovery =
+    harnessName === "claude"
+      ? HOOK_EXECUTION_RECOVERY
+      : "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
-  // and evidence that a workflow stage ran in the same intent-scoped ledger:
+  // and evidence that the workflow advanced in the same intent-scoped ledger:
   //   (a) .aidlc-hooks-health/ missing entirely, or present without .last files
-  //       before STAGE_STARTED → hooks have not had a chance to fire. Pass.
+  //       before workflow progress → hooks have not had a chance to fire. Pass.
   //       This preserves debug-only dirs and ignores doctor's HEALTH_CHECKED.
-  //   (b) Directory exists without .last files after STAGE_STARTED, or .last
-  //       files exist but are all unreadable → hooks should have fired. Fail.
-  //   (c) Directory has readable .last files → hooks are working; pass with
-  //       timestamps.
+  //   (b) No readable heartbeat after progress, or unreadable .last files →
+  //       hooks should have fired. Fail.
+  //   (c) Readable .last files exist → compare the newest one to progress.
   const healthDir = hooksHealthDir(projectDir);
   const heartbeatEntries: string[] = [];
+  let newestHeartbeat: { timestampMs: number; timestampRaw: string } | null =
+    null;
   const heartbeatDirExists = existsSync(healthDir);
-  const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   // Track .last presence separately from readable entries so an unreadable
   // heartbeat file remains a failure instead of looking like a fresh install.
   let hasHookFiredContent = false;
@@ -2612,6 +2746,13 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           const ts = readFileSync(join(healthDir, f), "utf-8").trim();
           const name = f.replace(".last", "");
           heartbeatEntries.push(`${name} ${ts}`);
+          const timestampMs = Date.parse(ts);
+          if (
+            Number.isFinite(timestampMs) &&
+            (newestHeartbeat === null || timestampMs > newestHeartbeat.timestampMs)
+          ) {
+            newestHeartbeat = { timestampMs, timestampRaw: ts };
+          }
         } catch {
           // skip unreadable
         }
@@ -2621,28 +2762,68 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   }
   if (heartbeatEntries.length > 0) {
-    // (c) hooks working
+    if (
+      newestHeartbeat !== null &&
+      newestStageOrGateEvent !== null &&
+      newestStageOrGateEvent.timestampMs - newestHeartbeat.timestampMs >
+        HOOK_HEARTBEAT_STALE_SLACK_MS
+    ) {
+      results.push({
+        pass: false,
+        label: `Hooks last fired ${newestHeartbeat.timestampRaw}, but the workflow last advanced ${newestStageOrGateEvent.timestampRaw}`,
+        fix: hookExecutionRecovery,
+      });
+    } else {
+      results.push({
+        pass: true,
+        label: `Hooks last fired: ${heartbeatEntries.join(", ")}`,
+      });
+    }
+  } else if (
+    !heartbeatDirExists &&
+    workflowHasProgress
+  ) {
+    const stages = progressedStageCount === 1 ? "stage" : "stages";
     results.push({
-      pass: true,
-      label: `Hooks last fired: ${heartbeatEntries.join(", ")}`,
+      pass: false,
+      label: `Hooks have never executed although this workflow has progressed ${progressedStageCount} ${stages}`,
+      fix: hookExecutionRecovery,
+    });
+  } else if (
+    heartbeatDirExists &&
+    !hasHookFiredContent &&
+    workflowStageStarted
+  ) {
+    results.push({
+      pass: false,
+      label: "Hook heartbeat data",
+      fix: "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json",
     });
   } else if (
     !heartbeatDirExists ||
     (!hasHookFiredContent && !workflowStageStarted)
   ) {
-    // (a) fresh install, pre-created dir, or debug-only dir before a stage ran.
+    // (a) fresh install, pre-created dir, or debug-only dir before progress.
     results.push({
       pass: true,
       label: "Hook heartbeats: not yet fired (first workflow stage will populate)",
     });
   } else {
-    // (b) a stage ran without any heartbeat, or heartbeat files are unreadable.
+    // (b) heartbeat files exist but are unreadable.
     results.push({
       pass: false,
       label: "Hook heartbeat data",
-      fix: !hasHookFiredContent && workflowStageStarted
-        ? "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json"
-        : "health dir exists but no hooks have fired — verify hooks are registered in settings.json",
+      fix: "health dir exists but heartbeat files are unreadable — verify permissions and hook registration",
+    });
+  }
+
+  if (
+    stageOrGateEvents.length > 0 &&
+    !auditShardEvents.some((event) => event.event === "HUMAN_TURN")
+  ) {
+    results.push({
+      pass: true,
+      label: `Human-turn receipts: 0 HUMAN_TURN rows across ${stageOrGateEvents.length} stage/gate event(s) (advisory) - receipts are not being minted, so presence-gated checkpoints will refuse`,
     });
   }
 
@@ -2723,7 +2904,6 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // should be in a certain shape (e.g., Status=Completed after WORKFLOW_COMPLETED),
   // verify the state actually matches. Covers the rare case where audit-first
   // succeeded but the state write failed (disk full, permission lost mid-run).
-  const stateMdPath = stateFilePath(projectDir);
   if (existsSync(stateMdPath) && auditAllShards.length > 0) {
     try {
       const auditContent = auditAllShards;
@@ -3698,8 +3878,8 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // already exists (cold-safe, see auditExists below); appendAuditEntry
   // self-creates the audit shard/dir, so an unconditional emit on a pristine
   // project would create a record as a side effect, making --doctor NOT
-  // read-only. Doctor runs on a fresh checkout before any workflow is born, so
-  // it must create nothing. On a project with a born intent the emit fires
+  // read-only. Doctor runs on a fresh checkout before any workflow is created, so
+  // it must create nothing. On a project with a created intent the emit fires
   // exactly as before (BARE appendAuditEvent — the only throw is a real write
   // failure, which the rest of the codebase lets propagate).
   let pairedRuleCount: number | null = null;
@@ -4511,7 +4691,7 @@ function gitRmFlatTree(projectDir: string, flatTree: string): void {
 // The phases a scope actually runs: those holding at least one EXECUTE stage.
 // This is the SINGLE derivation behind two decisions that must never disagree:
 // which per-phase dirs a new record gets (ensureWorkspaceDirs) and which phases
-// report PHASE_SKIPPED at birth. Both read the compiled scope grid via
+// report PHASE_SKIPPED at creation. Both read the compiled scope grid via
 // stagesInScope, so the folders on disk and the audit trail always tell the same
 // story, with no LLM input in the path. A phase whose stage set is empty under
 // the enabled bundle (plugin selection can empty one) has nothing to write and
@@ -4540,7 +4720,7 @@ function phasesWithExecuteStages(scope: string): Set<string> {
 function ensureWorkspaceDirs(projectDir: string, scope: string): void {
   // docsDir() default-resolves the active intent's record dir (or the flat
   // fallback when no intent resolves) — the cursor set by createIntent/migration
-  // points it at the born intent.
+  // points it at the created intent.
   const record = docsDir(projectDir);
   mkdirSync(record, { recursive: true });
   // Lazy per-phase artifact dirs, in-scope phases only (stages write reports here).
@@ -4587,22 +4767,22 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
   repointHarnessIncludes(projectDir, activeSpace(projectDir));
 }
 
-// intent-create — the deterministic mutation behind the engine's birth
+// intent-create - the deterministic mutation behind the engine's creation
 // directive (the engine NAMES the move read-only; this tool performs it).
-// Births the FIRST intent into the active space on a fresh workspace, OR a new
+// Creates the FIRST intent in the active space on a fresh workspace, OR a new
 // intent for new work alongside an active one. Crash-safe + concurrent-safe:
 // the WHOLE transaction (migration probe, intent mint, registry append,
 // active-intent cursor, state-build, audit emits) runs inside ONE withAuditLock
 // on the WORKSPACE sentinel bucket — every intents.json mutation takes that
 // bucket (invariant 2), so two concurrent first-runs are serialized and BOTH
-// births land distinct uuids/dirs/rows with no lost update.
+// creation attempts land distinct uuids/dirs/rows with no lost update.
 //
 // The directory-tree copy + knowledge READMEs that the old `--init` shipped are
 // gone: the workspace shell (spaces/default/memory, native includes) ships in
-// dist/ (SEED), and lazy workspace dirs are ensure-exists at birth or first
+// dist/ (SEED), and lazy workspace dirs are ensure-exists at creation or first
 // use. What stays is the scope→stage state-build that routes
 // the workflow to its first post-init stage — relocated here, now writing into
-// the BORN intent's record (the active-intent cursor set first makes the
+// the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
   // Creation mutates the registry and active cursor. Refuse an invocation that
@@ -4651,13 +4831,13 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // construction path. Validated up front so a bad name fails before any mutation.
   let repos: string[];
   try {
-    repos = resolveBirthRepoSet(projectDir, flags.repos);
+    repos = resolveIntentRepoSet(projectDir, flags.repos);
   } catch (e) {
     die(errorMessage(e));
   }
 
   // The whole mutation runs under the WORKSPACE lock so a concurrent first-run
-  // is serialized — both births append distinct rows to intents.json without a
+  // is serialized - both creation attempts append distinct rows to intents.json without a
   // lost update. The migration probe + the registry append are the reads/writes
   // the hazard box demands be in ONE critical section on the sentinel bucket.
   withAuditLock(projectDir, () => {
@@ -4725,7 +4905,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     //   • DETERMINISM→TOOL: --label is slugified (cap 24), the date prefix + collision
     //     counter are appended, the dirName is stored in the registry row.
     // Fallback chain so a NON-LLM caller (direct tool invocation, scripts, or a
-    // conductor that omits --label) still births a sane name: --label, else the
+    // conductor that omits --label) still creates a sane name: --label, else the
     // freeform --arguments (truncated — may cut mid-phrase, the pre-LLM behaviour),
     // else the scope token. The full --arguments text still flows to the audit
     // Request + state Project fields below (verbose prose belongs there, not the dir).
@@ -4753,11 +4933,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
 
     const ts = isoTimestamp();
 
-    // ---- Audit bootstrap + birth events (relocated from the old --init) ----
+    // ---- Audit bootstrap + creation events (relocated from the old --init) ----
 
-    // audit.md: header-only bootstrap if absent. WORKFLOW_STARTED is the birth
+    // audit.md: header-only bootstrap if absent. WORKFLOW_STARTED is the creation
     // event; SESSION_STARTED is owned by the SessionStart hook. This resolves to
-    // the born intent's per-clone audit shard (cursor set above).
+    // the created intent's per-clone audit shard (cursor set above).
     const auditPath = auditFilePath(projectDir);
     if (!existsSync(auditPath)) {
       mkdirSync(dirname(auditPath), { recursive: true });
@@ -4765,8 +4945,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     }
 
     // WORKFLOW_STARTED — mandatory first event of any new workflow. Captures the
-    // birth timestamp so "when did this feature begin?" is answerable from the
-    // audit alone. Lands in the born intent's audit (relocated from --init).
+    // creation timestamp so "when did this feature begin?" is answerable from the
+    // audit alone. Lands in the created intent's audit (relocated from --init).
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
@@ -4777,7 +4957,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
               storedReviewOverride(reviewOverride) || "adversarial (stage defaults)",
           }
         : {}),
-      // Record the intent's repo span at birth (P7). Omitted when no repos were
+      // Record the intent's repo span at creation (P7). Omitted when no repos were
       // captured (legacy single-repo / fresh greenfield → the lone repo is inferred).
       ...(repos.length > 0 ? { Repos: repos.join(", ") } : {}),
     });
@@ -4795,7 +4975,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     });
 
     // PHASE_SKIPPED — one per phase the scope excludes entirely (no EXECUTE
-    // stages in that phase). Captures the scope decision at workflow birth so
+    // stages in that phase). Captures the scope decision at workflow creation so
     // you don't have to derive it later by diffing the stage list. Shares
     // phasesWithExecuteStages with the folder creation below, so a phase that
     // reports skipped here is exactly a phase that gets no folder.
@@ -4819,7 +4999,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
 
     // ---- Ensure-exists record dirs (lazy; SEED ships the shell) ----
     // The shipped shell already carries spaces/default/memory + native includes.
-    // Birth only ensures the dirs this workflow will write into: an artifact dir
+    // Intent creation only ensures the dirs this workflow will write into: an artifact dir
     // per IN-SCOPE phase (a scope-excluded phase gets none), verification/, and
     // the space-level knowledge/ dir. All idempotent: skip any dir that already
     // exists, and never remove one.
@@ -4847,10 +5027,10 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
-// The scope→stage state-build half of birth: the workspace detection + state
+// The scope→stage state-build half of creation: the workspace detection + state
 // file authoring + routing audit emits the old --init ran after scaffolding.
 // Split out only so handleIntentCreate's lock body stays readable; it is called
-// from inside that lock (every write here resolves the born intent's record).
+// from inside that lock (every write here resolves the created intent's record).
 function handleIntentCreateStateBuild(
   projectDir: string,
   flags: Record<string, string>,
@@ -5007,7 +5187,7 @@ function handleIntentCreateStateBuild(
 
   const projectDesc = flags.arguments || "[Project description]";
 
-  // Phase Progress - per-phase status. Birth completes every initialization
+  // Phase Progress - per-phase status. Creation completes every initialization
   // stage ([x]) and hands off to the first post-init stage ([-]), emitting the
   // PHASE_COMPLETED/VERIFIED/STARTED trio for that boundary below - so the
   // seed mirrors it: Initialization is Verified and the first post-init
@@ -5128,9 +5308,9 @@ ${stageProgress}
     });
   }
 
-  // Combined stdout summary (intent born + state-build). The active-intent
+  // Combined stdout summary (intent created + state-build). The active-intent
   // cursor + the record dir were set by createIntent above; the state file lives
-  // under the born intent's record (resolved by writeStateFile's default).
+  // under the created intent's record (resolved by writeStateFile's default).
   const submoduleWarningLine =
     uninitSubmodules.length > 0
       ? `Warning: ${uninitSubmodules.length} uninitialized git submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' before proceeding so reverse-engineering can read the code.\n`
@@ -5172,7 +5352,7 @@ function handleUpgrade(): void {
 // Print an intent listing (the query layer's human OR --json mode). Both modes
 // read the SAME listSpaces/listIntents source so they never diverge. --json
 // shape: {active, spaces:[...], intents:[{uuid,slug,status,repos}]} — consumed
-// by the birth gate, resume-rebind, and statusline; human text is the bare
+// by the creation gate, resume-rebind, and statusline; human text is the bare
 // `/aidlc intent` rendering. Pure read.
 function printIntentListing(
   projectDir: string,
@@ -5295,7 +5475,7 @@ function handleIntent(
   }
   if (!match || match.dirName === null) {
     // Deliberately NOT "describe what to build to start a new one": a conductor
-    // recovering from a failed switch read that as an instruction and birthed an
+    // recovering from a failed switch read that as an instruction and created an
     // unwanted intent. Point at the read-only listing only; starting new work
     // stays a separate, human-confirmed move.
     die(
@@ -6067,7 +6247,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 
     // --- Build the proposed effective grid and validate STRICT --------------
     // Strictness is a DIFF against the pre-flip baseline: a stock scope may be
-    // BORN with structural advisories (e.g. bugfix's code-generation consumes
+    // CREATED with structural advisories (e.g. bugfix's code-generation consumes
     // unit-of-work from the skipped units-generation - the scope author owns
     // that upstream work), and those must not veto an unrelated flip. What the
     // recompose validator hard-rejects is NEW starvation the flips introduce:
@@ -6117,7 +6297,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
       const v = postSuffixes.get(slug) ?? scopeDef.stages[slug];
       return v === "EXECUTE" ? "EXECUTE" : "SKIP";
     };
-    // The Stages to Skip row carries birth/scope-change annotations (entry
+    // The Stages to Skip row carries creation/scope-change annotations (entry
     // shape "<number> (<slug>)", e.g. "2.1 (reverse-engineering — greenfield)")
     // that a bare-slug rebuild would destroy. Preserve each existing entry
     // VERBATIM, in its existing position, when its stage is still skipped;

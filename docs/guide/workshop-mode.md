@@ -49,15 +49,15 @@ Inception runs serially with the facilitator at the keyboard. Construction is wh
 
 ### Before the session
 
-Launch Claude Code in the project (`cd workshop-project && claude`), then birth the first intent with the Workshop scope:
+Launch Claude Code in the project (`cd workshop-project && claude`), then create the first intent with the Workshop scope:
 
 ```
 /aidlc --scope workshop
 ```
 
-Naming the scope on a fresh workspace births the first intent and stamps
+Naming the scope on a fresh workspace creates the first intent and stamps
 `Scope: workshop` and `Default Test Strategy: Minimal` into that intent's
-`aidlc-state.md`. Push the born intent's state to the shared remote so
+`aidlc-state.md`. Push the created intent's state to the shared remote so
 participants clone a project that already knows its workflow configuration.
 
 Per-project default scopes can be set via `AWS_AIDLC_DEFAULT_SCOPE=workshop` in `.claude/settings.json`. With this set, every participant who runs `/aidlc` in a clone gets the Workshop routing automatically without remembering the flag — see [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).

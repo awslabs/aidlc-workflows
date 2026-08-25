@@ -682,10 +682,10 @@ describe("t305 content-addressed source review evidence", () => {
     expect(workspaceSourceState(project)).toBeNull();
   });
 
-  test("no-Git workflow birth and jump both emit empty modern unit-major baselines", () => {
-    const born = createTestProject();
-    dirs.push(born);
-    const created = spawnSync(
+  test("no-Git workflow creation and jump both emit empty modern unit-major baselines", () => {
+    const project = createTestProject();
+    dirs.push(project);
+    const creationResult = spawnSync(
       process.execPath,
       [
         UTILITY,
@@ -695,37 +695,40 @@ describe("t305 content-addressed source review evidence", () => {
         "--label",
         "empty-baseline",
         "--project-dir",
-        born,
+        project,
       ],
       {
         encoding: "utf-8",
         env: {
           ...process.env,
-          AIDLC_WORKFLOW_INTENT: "empty baseline birth",
+          AIDLC_WORKFLOW_INTENT: "empty baseline creation",
         },
       },
     );
-    expect(created.status, `${created.stdout ?? ""}${created.stderr ?? ""}`)
-      .toBe(0);
-    const birthAudit = readAllAuditShards(born);
-    const birthField = /\*\*Event\*\*: WORKFLOW_STARTED[\s\S]*?\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})/
-      .exec(birthAudit)?.[1];
-    expect(birthField).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(
+      creationResult.status,
+      `${creationResult.stdout ?? ""}${creationResult.stderr ?? ""}`,
+    ).toBe(0);
+    const creationAudit = readAllAuditShards(project);
+    const creationField =
+      /\*\*Event\*\*: WORKFLOW_STARTED[\s\S]*?\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})/
+        .exec(creationAudit)?.[1];
+    expect(creationField).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(
       readBaselineSourceSnapshot(
-        born,
+        project,
         "code-generation",
-        birthField as string,
+        creationField as string,
       )?.size,
     ).toBe(0);
-    const bornBaseline = currentStageSourceBaseline(
-      born,
+    const creationBaseline = currentStageSourceBaseline(
+      project,
       "code-generation",
       true,
     );
-    expect(bornBaseline.state).toBe("ready");
-    if (bornBaseline.state === "ready") {
-      expect(bornBaseline.listing.size).toBe(0);
+    expect(creationBaseline.state).toBe("ready");
+    if (creationBaseline.state === "ready") {
+      expect(creationBaseline.listing.size).toBe(0);
     }
 
     const jumped = createTestProject();

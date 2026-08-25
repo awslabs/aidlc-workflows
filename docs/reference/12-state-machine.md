@@ -35,7 +35,7 @@ stateDiagram-v2
 
 **Status values:** `Running`, `Completed`.
 
-A workflow starts when the first intent is born (`aidlc-utility intent-create`, auto-invoked on the first `/aidlc` or via `/aidlc-init`) and ends when the last in-scope stage's approval gate closes. There is no `Paused` status and no `Waiting for Approval` status — approval is a stage-level concern, pause has no UX.
+A workflow starts when the first intent is created (`aidlc-utility intent-create`, auto-invoked on the first `/aidlc` or via `/aidlc-init`) and ends when the last in-scope stage's approval gate closes. There is no `Paused` status and no `Waiting for Approval` status — approval is a stage-level concern, pause has no UX.
 
 A workflow's `Running` state persists across Claude Code sessions. You start a workflow on Monday, stop the session, resume on Tuesday — the workflow is still `Running`; the *session* ended and a new one started.
 
@@ -68,7 +68,7 @@ stateDiagram-v2
 
 **Status values:** `Pending`, `Active`, `Verified`, `Skipped`.
 
-Phase state is tracked in the `## Phase Progress` section of `aidlc-state.md`. Intent birth seeds the section: `Initialization` lands `Verified` (birth completes every init stage before handing off), the first post-init stage's phase lands `Active`, and each later phase lands `Skipped` when the scope leaves it without EXECUTE stages (one `PHASE_SKIPPED` audit row each) or `Pending` otherwise. Phase completion fires both `PHASE_COMPLETED` and `PHASE_VERIFIED` at the phase boundary, then `PHASE_STARTED` for the next one, and the rows flip in the same state write. The section is display-only: routing reads `Lifecycle Phase` and the Stage Progress checkboxes, and `/aidlc --status` recomputes its phase block live.
+Phase state is tracked in the `## Phase Progress` section of `aidlc-state.md`. Intent creation seeds the section: `Initialization` lands `Verified` (creation completes every init stage before handing off), the first post-init stage's phase lands `Active`, and each later phase lands `Skipped` when the scope leaves it without EXECUTE stages (one `PHASE_SKIPPED` audit row each) or `Pending` otherwise. Phase completion fires both `PHASE_COMPLETED` and `PHASE_VERIFIED` at the phase boundary, then `PHASE_STARTED` for the next one, and the rows flip in the same state write. The section is display-only: routing reads `Lifecycle Phase` and the Stage Progress checkboxes, and `/aidlc --status` recomputes its phase block live.
 
 | Transition | Trigger | Emitter |
 |---|---|---|
@@ -79,7 +79,7 @@ Phase state is tracked in the `## Phase Progress` section of `aidlc-state.md`. I
 | `Verified/Active -> Pending` reset | backward `aidlc-jump execute` (reset phases with EXECUTE stages) | `tools/aidlc-jump.ts` |
 | `Pending <-> Skipped` re-derivation | `aidlc-utility scope-change` / `recompose` (not-yet-reached rows only) | `tools/aidlc-utility.ts` |
 
-At the init→post-init hand-off, `aidlc-utility intent-create` itself emits `PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED + STAGE_STARTED` after the final init stage so the audit trail captures the transition instead of going silent between birth and the first `advance`.
+At the init→post-init hand-off, `aidlc-utility intent-create` itself emits `PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED + STAGE_STARTED` after the final init stage so the audit trail captures the transition instead of going silent between creation and the first `advance`.
 
 ---
 
@@ -312,7 +312,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `WORKFLOW_STARTED` | `tools/aidlc-utility.ts` | Mandatory first event on every intent birth |
+| `WORKFLOW_STARTED` | `tools/aidlc-utility.ts` | Mandatory first event on every intent creation |
 | `WORKFLOW_COMPLETED` | `tools/aidlc-state.ts` |  |
 | `WORKFLOW_PARKED` | `tools/aidlc-state.ts` | `park` - workflow parked mid-flow for a later session; no stage advanced |
 | `WORKFLOW_UNPARKED` | `tools/aidlc-state.ts` | `unpark` - park marker cleared on explicit `--resume` re-entry |
@@ -324,7 +324,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `PHASE_STARTED` | `tools/aidlc-utility.ts`, `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | First fire in init; subsequent fires at stage-tool phase boundaries |
 | `PHASE_COMPLETED` | `tools/aidlc-utility.ts`, `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | Paired with `PHASE_VERIFIED` at every boundary |
 | `PHASE_VERIFIED` | `tools/aidlc-utility.ts`, `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | Always paired with `PHASE_COMPLETED` |
-| `PHASE_SKIPPED` | `tools/aidlc-utility.ts` | One per scope-excluded phase, emitted at intent birth |
+| `PHASE_SKIPPED` | `tools/aidlc-utility.ts` | One per scope-excluded phase, emitted at intent creation |
 
 ### Stage lifecycle
 

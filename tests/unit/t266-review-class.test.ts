@@ -209,17 +209,17 @@ describe("t266 review class", () => {
     ).toBe("adversarial");
   });
 
-  test("birth and scope/config routes preserve --review", () => {
+  test("creation and scope/config routes preserve --review", () => {
     const fresh = createTestProject();
     tempDirs.push(fresh);
     removeWorkspaceRecord(fresh);
-    const birth = runOrchestrateNext(
+    const creation = runOrchestrateNext(
       ORCHESTRATE,
       fresh,
       ["--scope", "feature", "--review", "none"],
     );
-    expect(birth.status).toBe(0);
-    expect(String(birth.directive?.message)).toContain(
+    expect(creation.status).toBe(0);
+    expect(String(creation.directive?.message)).toContain(
       "intent-create --scope feature --review none",
     );
 
@@ -298,14 +298,14 @@ describe("t266 review class", () => {
     const fresh = createTestProject();
     tempDirs.push(fresh);
     seedAidlcMemory(fresh);
-    const born = runUtility(fresh, [
+    const created = runUtility(fresh, [
       "intent-create",
       "--scope",
       "feature",
       "--review",
       "none",
     ]);
-    expect(born.status).toBe(0);
+    expect(created.status).toBe(0);
     expect(readFileSync(stateFilePath(fresh), "utf-8")).toContain(
       "- **Review Override**: none",
     );

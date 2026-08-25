@@ -25,7 +25,7 @@
 //   inert:      a run that never calls recompose leaves the state file
 //               byte-identical (the OFF-path gate).
 //
-// Mechanism: cli - spawns the shipped tools against temp projects born via
+// Mechanism: cli - spawns the shipped tools against temp projects created via
 // intent-create (the real state-file shape, not a fixture).
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -80,9 +80,9 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** A born feature-scope project (all 31 post-scaffold stages EXECUTE; cursor
+/** A created feature-scope project (all 31 post-scaffold stages EXECUTE; cursor
  *  at intent-capture after init). */
-function bornProject(scope = "feature"): string {
+function createdProject(scope = "feature"): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);
   const r = run(proj, "aidlc-utility.ts", ["intent-create", "--scope", scope]);
@@ -92,7 +92,7 @@ function bornProject(scope = "feature"): string {
 
 describe("t194 recompose - flips land as suffix edits and the router honours them", () => {
   test("pending SKIP honored: suffix flips, marker untouched, router walks around it", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     const before = readState(proj);
     expect(before).toMatch(/- \[ \] market-research — EXECUTE/);
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
@@ -108,8 +108,8 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
   });
 
   test("pending forward ADD honored: a bugfix-scope grid-SKIP stage promotes and the router walks TO it", () => {
-    const proj = bornProject("bugfix");
-    // bugfix's grid SKIPs user-stories; born state carries the SKIP suffix.
+    const proj = createdProject("bugfix");
+    // bugfix's grid SKIPs user-stories; created state carries the SKIP suffix.
     expect(readState(proj)).toMatch(/- \[ \] user-stories — SKIP/);
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories"]);
     expect(r.status).toBe(0);
@@ -121,39 +121,39 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
   });
 
   test("RECOMPOSED audit event lands with the flip lists", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research,team-formation"]);
     const audit = auditText(proj);
     expect(audit).toContain("**Event**: RECOMPOSED");
     expect(audit).toContain("market-research, team-formation");
   });
 
-  test("Stages to Skip round trip: skip+add leaves the row byte-identical to birth (annotations preserved)", () => {
-    // Birth writes annotated entries ("<number> (<slug>)", and for a
-    // greenfield feature birth the rationale form
+  test("Stages to Skip round trip: skip+add preserves the creation-time row bytes", () => {
+    // Creation writes annotated entries ("<number> (<slug>)", and for a
+    // greenfield feature creation uses the rationale form
     // "2.1 (reverse-engineering — greenfield)"). The rebuild must preserve
     // those bytes for stages whose skip-membership did not change.
-    const proj = bornProject();
+    const proj = createdProject();
     const rowOf = (state: string): string =>
       /- \*\*Stages to Skip\*\*: (.*)/.exec(state)?.[1] ?? "";
-    const birthRow = rowOf(readState(proj));
-    expect(birthRow).toContain("(reverse-engineering — greenfield)");
+    const creationRow = rowOf(readState(proj));
+    expect(creationRow).toContain("(reverse-engineering — greenfield)");
 
     const skip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     expect(skip.status).toBe(0);
     const midRow = rowOf(readState(proj));
-    // The untouched birth annotation survives the flip verbatim, and the
+    // The untouched creation annotation survives the flip verbatim, and the
     // newly-skipped stage renders the scope-change way: number (slug).
     expect(midRow).toContain("(reverse-engineering — greenfield)");
     expect(midRow).toContain("1.2 (market-research)");
 
     const add = run(proj, "aidlc-utility.ts", ["recompose", "--add", "market-research"]);
     expect(add.status).toBe(0);
-    expect(rowOf(readState(proj))).toBe(birthRow);
+    expect(rowOf(readState(proj))).toBe(creationRow);
   });
 
   test("derived fields rebuilt: Total/Completed/Next Stage + --status counts track the plan", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     const before = readState(proj);
     const totalBefore = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(before)?.[1]);
     run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
@@ -178,7 +178,7 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
 
 describe("t194 recompose - rejections", () => {
   test("starved SKIP rejected by the strict validator with the producer named", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "domain-design"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Strict (recompose) mode");
@@ -186,14 +186,14 @@ describe("t194 recompose - rejections", () => {
   });
 
   test("frozen-stage flips rejected: [x] completed and behind-cursor", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     const rx = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "state-init"]);
     expect(rx.status).not.toBe(0);
     expect(rx.out).toContain("not pending");
   });
 
   test("skeleton-gate anchor flip rejected (first EXECUTE stage of Construction)", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "functional-design"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("walking-skeleton gate");
@@ -203,7 +203,7 @@ describe("t194 recompose - rejections", () => {
     // bugfix's first construction EXECUTE is code-generation; functional-design
     // sits ahead of it in the grid. Promoting it would silently relocate the
     // walking-skeleton gate anchor, so the ADD must reject like the SKIP does.
-    const proj = bornProject("bugfix");
+    const proj = createdProject("bugfix");
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--add", "functional-design"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("walking-skeleton gate anchor");
@@ -213,11 +213,11 @@ describe("t194 recompose - rejections", () => {
 
   test("autonomous Construction rejected: recompose refuses with the remediation named", () => {
     // The engine-side anchor for the "never recompose under autonomous
-    // Construction" rule (mirrors the park guard). A born feature project has no
+    // Construction" rule (mirrors the park guard). A created feature project has no
     // Construction Autonomy Mode field, so inject it as autonomous the way
     // set-autonomy would, then confirm the verb refuses and the state is
     // untouched by the rejection.
-    const proj = bornProject();
+    const proj = createdProject();
     const sp = statePathOf(proj);
     const withAutonomy = readFileSync(sp, "utf-8").replace(
       /- \*\*Status\*\*: Running/,
@@ -236,8 +236,8 @@ describe("t194 recompose - rejections", () => {
   test("gated Construction proceeds: recompose flips as today when autonomy is not autonomous", () => {
     // The complement: an explicitly gated run has a human at the gate, so the
     // guard does not fire and the flip lands exactly as the default (no-field)
-    // born-project cases above.
-    const proj = bornProject();
+    // created-project cases above.
+    const proj = createdProject();
     const sp = statePathOf(proj);
     const gated = readFileSync(sp, "utf-8").replace(
       /- \*\*Status\*\*: Running/,
@@ -250,7 +250,7 @@ describe("t194 recompose - rejections", () => {
   });
 
   test("completed workflow rejected: recompose refuses when Status is not Running", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     // Terminalize the workflow the way complete-workflow does.
     const sp = statePathOf(proj);
     const terminal = readFileSync(sp, "utf-8").replace(/- \*\*Status\*\*: Running/, "- **Status**: Completed");
@@ -263,7 +263,7 @@ describe("t194 recompose - rejections", () => {
   });
 
   test("unknown slug, overlap, and empty flips all reject", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     expect(run(proj, "aidlc-utility.ts", ["recompose", "--skip", "no-such-stage"]).status).not.toBe(0);
     expect(
       run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research", "--add", "market-research"]).status,
@@ -272,7 +272,7 @@ describe("t194 recompose - rejections", () => {
   });
 
   test("OFF path is inert: a rejected recompose leaves the state file byte-identical", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     const before = readState(proj);
     run(proj, "aidlc-utility.ts", ["recompose", "--skip", "functional-design"]);
     expect(readState(proj)).toBe(before);
@@ -281,7 +281,7 @@ describe("t194 recompose - rejections", () => {
 
 describe("t194 recompose - the jump readers honour the recomposed plan", () => {
   test("jump target validation: a recompose-SKIPped stage is refused, a promoted one allowed", () => {
-    const proj = bornProject();
+    const proj = createdProject();
     run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     // resolve refuses the suffix-SKIPped target (was grid-EXECUTE).
     const refuse = run(proj, "aidlc-jump.ts", ["resolve", "--stage", "market-research"]);
@@ -289,7 +289,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(refuse.out).toContain("skipped for scope");
     // The promoted direction: bugfix project, ADD a grid-SKIP stage, then
     // resolve targets it successfully.
-    const proj2 = bornProject("bugfix");
+    const proj2 = createdProject("bugfix");
     run(proj2, "aidlc-utility.ts", ["recompose", "--add", "user-stories"]);
     const allow = run(proj2, "aidlc-jump.ts", ["resolve", "--stage", "user-stories"]);
     expect(allow.status).toBe(0);
@@ -299,7 +299,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
   });
 
   test("ADD-then-jump consistency: a forward jump marks the promoted stage [S] like any on-plan stage", () => {
-    const proj = bornProject("bugfix");
+    const proj = createdProject("bugfix");
     run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories"]);
     // Jump forward over the promoted stage to code-generation: the forward
     // loop must mark IN-FLIGHT intermediates [S] against the EFFECTIVE plan.
@@ -316,7 +316,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
   });
 
   test("backward jump resets a promoted stage's [S/x] like any on-plan stage", () => {
-    const proj = bornProject("bugfix");
+    const proj = createdProject("bugfix");
     run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories"]);
     run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"]);
     expect(readState(proj)).toMatch(/- \[S\] user-stories — EXECUTE/);

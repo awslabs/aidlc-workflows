@@ -4,7 +4,7 @@
 //
 // t189 proved dispatch-to-gate (P0: no write before approval). This test
 // proves the P2 half: on APPROVE, the conductor's composer block drives the
-// write + the same-turn birth - the whole front arc in ONE /aidlc invocation:
+// write + the same-turn creation - the whole front arc in ONE /aidlc invocation:
 //
 //   drive:     `/aidlc compose "<task no stock scope fits>"` on a fresh project.
 //   conductor: dispatches the composer -> proposal -> approve/edit/reject gate
@@ -12,7 +12,7 @@
 //              scope files -> the conductor continues into intent-create with
 //              the composed scope - NO second /aidlc invocation.
 //   disk:      a composed scopes/aidlc-<name>.md + a scope-grid.json entry
-//              exist; a born intent's aidlc-state.md carries the composed
+//              exist; a created intent's aidlc-state.md carries the composed
 //              scope; the composed scope ships keywords: [] (the hygiene
 //              default - inferability is an explicit gate choice, never a
 //              compose side effect).
@@ -20,12 +20,12 @@
 // Assertions stay at the JOURNEY level (disk + tool results), tolerant of
 // conversational variance - NEVER on assistantText:
 //   (a) a gate fired (askedQuestions >= 1);
-//   (b) the birth ran (`State initialized:` tool-result - only
+//   (b) the creation ran (`State initialized:` tool-result - only
 //       handleIntentCreate emits it);
 //   (c) a NEW scope .md landed in .claude/scopes/ (10 files, was 9) AND
 //       scope-grid.json gained its entry (10 keys, was 9) - BOTH files, the
 //       write contract;
-//   (d) the born state's Scope names the composed scope (not a stock name);
+//   (d) the created state's Scope names the composed scope (not a stock name);
 //   (e) the composed .md carries keywords: [] (empty list or no entries).
 //
 // If the live composer instead MATCHES a stock scope for this task (allowed
@@ -75,9 +75,9 @@ const STOCK_SCOPES = new Set([
   "security-patch", "classic", "workshop", "express",
 ]);
 
-describe("t192 front composer journey (/aidlc compose -> approve -> write -> birth, sdk live)", () => {
+describe("t192 front composer journey (/aidlc compose -> approve -> write -> creation, sdk live)", () => {
   test(
-    "approve drives the two-file scope write and the same-turn birth on the composed scope",
+    "approve drives the two-file scope write and the same-turn creation on the composed scope",
     async () => {
       const proj = setupIntegrationProject({
         noAidlcDocs: true,
@@ -98,7 +98,7 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
         // (a) the gate fired - the approve/edit/reject turn-stop.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
-        // (b) the birth ran in the SAME drive (one /aidlc invocation).
+        // (b) the creation ran in the SAME drive (one /aidlc invocation).
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
         // (c) BOTH scope files landed: a 12th .md + a 12th grid key.
@@ -117,7 +117,7 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
         // The grid entry is a real stages map, not an empty stub.
         expect(Object.keys(grid[composedName as string].stages ?? {}).length).toBeGreaterThan(0);
 
-        // (d) the born state froze the COMPOSED scope.
+        // (d) the created state froze the COMPOSED scope.
         const spaceCursor = join(proj, "aidlc", "active-space");
         const space = existsSync(spaceCursor)
           ? readFileSync(spaceCursor, "utf-8").trim() || "default"

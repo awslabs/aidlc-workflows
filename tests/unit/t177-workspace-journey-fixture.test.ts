@@ -12,9 +12,9 @@
 //   - the shipped dist/<harness>/ shell landed (engine dir + the aidlc/ memory
 //     shell with the default space),
 //   - repo-a/.git and repo-b/.git exist as IMMEDIATE children of the root,
-//   - discoverSiblingRepos(root) === ["repo-a","repo-b"] (sorted, deduped — the
-//     exact set birth's repo discovery would capture),
-//   - NO intent is pre-born (listIntents(root) is empty — the journey births live),
+//   - discoverSiblingRepos(root) === ["repo-a","repo-b"] (sorted and deduped, the
+//     exact set `intent-create` repo discovery would capture),
+//   - NO intent is pre-created (listIntents(root) is empty; the journey creates one live),
 //   - the workspace root is a fresh os.tmpdir() path, NOT nested under
 //     .claude/worktrees/ (so the construction-worktree guard, a structural git
 //     check, passes when the journey forks worktrees in the siblings),
@@ -42,7 +42,7 @@ import { discoverSiblingRepos, listIntents } from "../../dist/claude/.claude/too
 
 describe("t177 workspace-journey fixture (deterministic, no LLM)", () => {
   for (const harness of HARNESS_MATRIX) {
-    test(`${harness.name}: seeds the shell + two sibling repos, no pre-born intent`, () => {
+    test(`${harness.name}: seeds the shell + two sibling repos, no pre-created intent`, () => {
       const journey = setupWorkspaceJourney(harness.name);
       try {
         // The root is a fresh tmpdir, NOT nested under .claude/worktrees/ (the
@@ -74,11 +74,11 @@ describe("t177 workspace-journey fixture (deterministic, no LLM)", () => {
         expect(existsSync(join(journey.repoA, "main.py"))).toBe(true);
         expect(existsSync(join(journey.repoB, "main.py"))).toBe(true);
 
-        // The exact set birth's discovery would capture: sorted, deduped, with
+        // The exact set `intent-create` discovery would capture: sorted, deduped, with
         // the engine dir + the aidlc roof excluded.
         expect(discoverSiblingRepos(journey.root)).toEqual(["repo-a", "repo-b"]);
 
-        // No intent is pre-born — the journey's step 1 auto-births it live.
+        // No intent is pre-created - the journey's step 1 auto-creates it live.
         expect(listIntents(journey.root)).toEqual([]);
       } finally {
         cleanupWorkspaceJourney(journey);

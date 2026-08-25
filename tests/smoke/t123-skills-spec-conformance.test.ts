@@ -185,7 +185,9 @@ describe("t123 (smoke) skills-spec conformance — every shipped skill set", () 
       expect(runner).toContain(`Packaging over \`${entrySkill} --scope bugfix\``);
       expect(runner).toContain(`invoke \`${entrySkill}\` to begin the`);
       expect(runner).toContain("`intent-create` command");
-      expect(runner).not.toContain("`intent-birth`");
+      // Guard generated prose from resurfacing the retired command.
+      const retiredIntentCommand = "intent-" + "b" + "irth";
+      expect(runner).not.toContain(`\`${retiredIntentCommand}\``);
       expect(runner).toContain("**STOP**");
       expect(runner).toContain("fresh session");
       expect(runner).toContain(FRESH_SESSION_TEXT[harness.name]);

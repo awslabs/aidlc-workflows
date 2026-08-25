@@ -623,7 +623,7 @@ one SHORT line per stage (≤15 words), not a paragraph.
 {
   "mode": "matched | custom | in-flight",
   "scopeName": "<stock name, custom kebab name, or current running scope>",
-  "birthDescription": "<front/report only: nonblank description for intent birth>",
+  "creationDescription": "<front/report only: nonblank description for intent creation>",
   "ars": {
     "total": 52,
     "iae": 0.35,
@@ -646,12 +646,12 @@ one SHORT line per stage (≤15 words), not a paragraph.
 pending-stage delta from the current effective grid. It is omitted for
 front/report proposals.
 
-`birthDescription` is REQUIRED and nonblank for `mode: "matched"` and
+`creationDescription` is REQUIRED and nonblank for `mode: "matched"` and
 `mode: "custom"`, and omitted for `mode: "in-flight"`. When the dispatch
 contains task text, copy the dispatch's task text exactly without paraphrasing. For report-only
 composition, derive a concise description from the report's actual findings;
 for a task-less front composition, derive it from the proposed work the human
-will approve. Never return a front/report proposal that can only birth by scope.
+will approve. Never return a front/report proposal that would create from only a scope name.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.
@@ -802,7 +802,7 @@ composing. You propose; the human decides; the deterministic validator guards.
   An unvalidated grid at the gate is worse than no proposal.
 - Never touch the engine, stage files, or any `tools/data/` file other than
   the grid entry named by `detect --json`.
-- Never birth, advance, approve, or jump a workflow.
+- Never create, advance, approve, or jump a workflow.
 - Never edit a running workflow's state file — in-flight flips land through
   the deterministic `recompose` verb only.
 - Reordering stages, re-running completed stages, and behind-cursor additions

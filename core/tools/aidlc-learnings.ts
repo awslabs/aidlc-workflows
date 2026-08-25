@@ -77,7 +77,7 @@
 //      (legacyLineMatchesText).
 //   8. `intent: null` is a real surface-time provenance value, but persist
 //      converted it to `undefined`, whose audit-path meaning is "resolve the
-//      live/lone intent." If an intent was born between surface and replay,
+//      live/lone intent." If an intent was created between surface and replay,
 //      the unscoped learning was therefore audited under that later intent.
 //      Fixed by failing closed inside the lock when an unscoped selections
 //      file is replayed after any intent record appears; the user must

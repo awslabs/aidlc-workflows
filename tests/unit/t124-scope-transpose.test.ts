@@ -306,7 +306,7 @@ describe("aidlc-graph compile / --check (Bun spawnSync env seam)", () => {
 // Composed-scope survival across compile (the recompile-clobber guard).
 // A composed scope exists ONLY as an appended grid entry (no stage
 // frontmatter names it), so a bare re-transpose would drop it while the
-// scope's .md keeps the name "valid" — the born plan silently resolves
+// scope's .md keeps the name "valid" - the created plan silently resolves
 // all-SKIP. compile must fold composed entries back in, and --check must
 // treat a grid carrying them as clean.
 // ===========================================================================

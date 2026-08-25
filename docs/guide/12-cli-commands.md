@@ -28,7 +28,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc compose "<task>"` | Force the adaptive composer: propose a tailored EXECUTE/SKIP plan for the task |
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
 | `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
-| `/aidlc` | Resume an existing workflow (if an intent exists) or birth the first intent and start new |
+| `/aidlc` | Resume an existing workflow (if an intent exists) or creation the first intent and start new |
 | `/aidlc intent [name]` | List intents in the active space, or switch to an existing intent |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
@@ -88,7 +88,7 @@ flowchart TD
     style START fill:#e1bee7,stroke:#7b1fa2
 ```
 
-<!-- Text fallback: Starting a new workflow: use /aidlc classic (known scope) or /aidlc Build a payments API (auto-detect; the first intent auto-births). Managing an existing workflow: /aidlc (resume), /aidlc --status (view progress), /aidlc --stage (jump to stage), /aidlc --phase (jump to phase). Verify setup: /aidlc --doctor (health check). -->
+<!-- Text fallback: Starting a new workflow: use /aidlc classic (known scope) or /aidlc Build a payments API (auto-detect; the first intent auto-creates). Managing an existing workflow: /aidlc (resume), /aidlc --status (view progress), /aidlc --stage (jump to stage), /aidlc --phase (jump to phase). Verify setup: /aidlc --doctor (health check). -->
 
 ---
 
@@ -158,7 +158,7 @@ Force the composer even when a stock scope would match. Works in three moments:
 /aidlc compose            (mid-workflow: re-shape the pending stages)
 ```
 
-**Behavior:** the conductor dispatches the composer agent, which reads your task (or the scan report, or the running workflow's state), runs the read-only `detect` scan, estimates the five implementation-entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), and proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a reason for every EXECUTE and SKIP. You approve, edit, or reject at a gate. On approve: a stock match births directly; a custom grid is authored as a real scope (two files in the installed tree) and the workflow births on it in the same turn. Every front/report proposal carries a nonblank `birthDescription`: exact original task text when supplied, otherwise a report/plan-grounded description. The birth passes it after `--` as one shell-safe argv value; scope-only compose births are forbidden. An in-flight proposal lands as pending-stage suffix flips via the `recompose` verb (under the audit lock, strict-validated, `RECOMPOSED` audited). `--new-scope` forces synthesis; `--report <path>` seeds the triaged findings into the intent. The `/aidlc-compose` skill is a typeable shortcut over the same path. Mid-workflow you can also just say it in chat ("can we skip market research?") - the conductor recognizes a reshape request and routes it through the same gate and verb, no literal `compose` needed (on the non-Claude harnesses the literal verb remains the documented reliable path).
+**Behavior:** the conductor dispatches the composer agent, which reads your task (or the scan report, or the running workflow's state), runs the read-only `detect` scan, estimates the five implementation-entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), and proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a reason for every EXECUTE and SKIP. You approve, edit, or reject at a gate. On approve: AI-DLC creates the workflow directly for a stock match; for a custom grid, it authors a real scope (two files in the installed tree) and creates the workflow with that scope in the same turn. Every front/report proposal carries a nonblank `creationDescription`: exact original task text when supplied, otherwise a report/plan-grounded description. The creation passes it after `--` as one shell-safe argv value; a compose approval cannot continue with only a scope and no description. An in-flight proposal lands as pending-stage suffix flips via the `recompose` verb (under the audit lock, strict-validated, `RECOMPOSED` audited). `--new-scope` forces synthesis; `--report <path>` seeds the triaged findings into the intent. The `/aidlc-compose` skill is a typeable shortcut over the same path. Mid-workflow you can also just say it in chat ("can we skip market research?") - the conductor recognizes a reshape request and routes it through the same gate and verb, no literal `compose` needed (on the non-Claude harnesses the literal verb remains the documented reliable path).
 
 See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer) for the full flow.
 
@@ -186,8 +186,8 @@ If no state file exists, the framework treats this as a new workflow and asks fo
 
 There is no scaffold command. The shipped `dist/<harness>/` workspace shell
 arrives pre-built (the `.claude/` engine plus `aidlc/spaces/default/memory/`),
-and the engine **auto-births** the first intent on your first `/aidlc` (or when
-you describe what to build). Birth runs the three Initialization stages
+and the engine **auto-creates** the first intent on your first `/aidlc` (or when
+you describe what to build). Creation runs the three Initialization stages
 (Workspace Scaffold, Workspace Detection, State Init) as a single deterministic
 tool call: it creates the intent's record dir at
 `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `audit/` shard dir, an
@@ -207,10 +207,10 @@ The welcome message is rendered at session start via the `companyAnnouncements`
 entry in `settings.json`.
 
 **Multi-repo workspaces.** When your workspace root holds more than one sibling
-code repo (each an immediate child directory with a `.git`), the birth step
+code repo (each an immediate child directory with a `.git`), the creation step
 records the set of repos the intent touches in its `intents.json` row. By default
 it **auto-discovers** every sibling repo; to scope an intent to a specific subset,
-the birth tool accepts `--repos a,b` (a comma-separated list of repo directory
+the creation tool accepts `--repos a,b` (a comma-separated list of repo directory
 names). These are flags of the deterministic `aidlc-utility intent-create` step the
 engine runs for you — not `/aidlc` flags you type. During Construction, each git
 operation (worktree, swarm, Bolt) targets one repo; the conductor passes
@@ -338,7 +338,7 @@ Display current workflow progress without modifying anything.
 
 ### `/aidlc --doctor` — Health check
 
-Validate that all of this implementation's prerequisites, configuration, and stage-graph integrity are in place. Exits 0 on full pass, 1 on any failure; the full report writes to stdout in both cases so the orchestrator surfaces it either way. Core doctor checks are **read-only** — on a fresh shell with no intent yet (no `audit/` shards) they create no files, so the command is safe to run before the first intent is born; once an intent exists it records a `HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
+Validate that all of this implementation's prerequisites, configuration, and stage-graph integrity are in place. Exits 0 on full pass, 1 on any failure; the full report writes to stdout in both cases so the orchestrator surfaces it either way. Core doctor checks are **read-only** — on a fresh shell with no intent yet (no `audit/` shards) they create no files, so the command is safe to run before the first intent is created; once an intent exists it records a `HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
 
 When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing the structured findings (e.g. `gate-unresolved`, `runtime-graph-stale`) for unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
 
@@ -354,12 +354,14 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 |-------|-------------------|
 | Prerequisites | `bun` is installed and on PATH |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 16 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
-| Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
+| Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
-| Hook heartbeats | `.aidlc-hooks-health/` contains recent timestamps from hook executions |
+| Hook heartbeats | `.aidlc-hooks-health/` contains timestamps from hook executions. No heartbeat is advisory only before workflow progress; once work advances it fails, and a newest heartbeat more than five minutes behind the newest stage/gate event fails as stopped, with `/hooks` approval/policy guidance |
+| Claude managed hook policy | On the Claude harness only, uses the existing managed-settings resolver (`AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows paths, macOS, Linux/WSL) plus alphabetical `managed-settings.d/` fragments and fails when effective `allowManagedHooksOnly` is `true` |
+| Human-turn receipts | When stage/gate events exist but the audit has no `HUMAN_TURN`, reports a passing advisory that presence-gated checkpoints will refuse |
 | Hook drops | Surfaces any `.aidlc-hooks-health/<hook>.drops` telemetry - each records a failure a hook swallowed to avoid breaking your tool call - with the drop count and last timestamp per hook, and the remediation (inspect, then delete the file). Advisory - never fails |
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Pending approval | When the current stage has waited at an organic approval gate for more than 24 hours, identifies it as waiting for a human rather than stuck and points to `/aidlc --status` (advisory - never fails) |
@@ -647,7 +649,7 @@ Autonomous swarm construction is exempt: inside a Bolt the reviewer is the
 only pre-merge verification, so the declared class always applies there.
 Updates the `Review Override` field in `aidlc-state.md` and logs a
 `REVIEW_CLASS_CHANGED` audit event. It can be supplied when a workflow is
-born or alongside `--scope`; a same-as-current scope applies the review
+created or alongside `--scope`; a same-as-current scope applies the review
 override as a config change instead of discarding it. For either class, a later
 output write that invalidates a terminal receipt permits one bounded recovery
 request at the next ordinal.
@@ -804,7 +806,7 @@ is no longer needed. Any uncertainty blocks for manual review. Exit codes: `0`
 fully in sync, `1` blocked or error (live paths unchanged), `2` synced but
 advisory warnings remain (e.g. an existing checkout's branch mismatch).
 
-The manifest is optional and never overrides disk: intent birth still
+The manifest is optional and never overrides disk: intent creation still
 auto-discovers whatever sibling repos are actually present, so this tool only
 reproduces and tidies the declared set. `--doctor` carries three advisory rows
 about it (uncommitted `aidlc/` records, `repos.json` vs on-disk drift, and a

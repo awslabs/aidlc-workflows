@@ -308,7 +308,7 @@ export default async ({
   // Sessions whose session-start hook reached an active workflow.
   const started = new Set<string>();
   // Main sessions that delivered a real human turn. Stop enforcement keys on
-  // this lighter latch because workflow state can be born during turn one.
+  // this lighter latch because workflow state can be created during turn one.
   const sawHumanTurn = new Set<string>();
   // Sessions confirmed as main (no parentID) — presence + continue-workflow enforcement
   // apply only to these; child (task-tool) sessions are workers, not humans.
@@ -614,7 +614,7 @@ export default async ({
     event: async ({ event }: { event: { type: string; properties?: Record<string, unknown> } }) => {
       if (event.type !== "session.idle") return;
       const sessionID = (event.properties?.sessionID as string) ?? "";
-      // A workflow can be born during the first turn, after session-start saw
+      // A workflow can be created during the first turn, after session-start saw
       // no state. Let the core Stop hook's own state-file guard decide.
       if (!sessionID || !sawHumanTurn.has(sessionID)) return;
       if (!(await isMainSession(sessionID))) return;
