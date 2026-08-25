@@ -56,8 +56,8 @@
 //     conversationally, Revision Count stuck at 0).
 //   - Completed counter == `- [x]` grid count (aidlc-state.ts:256-258 sync); the
 //     terminator + the cross-run comparison both read this field.
-//   - the AUQ gate footer + caret signal is gridHasMenu (tui-drive.ts; `❯` on
-//     tmux, `>` on Windows ConPTY — platform-invariant).
+//   - the AUQ gate footer + exact `❯` caret signal is gridHasMenu
+//     (tui-drive.ts; identical on tmux and Windows ConPTY).
 //
 // SERIAL (.serial. in the filename): two full back-to-back TUI run-throughs in one
 // test, each its own claude session, sequential. SPENDS REAL TOKENS (two bugfix

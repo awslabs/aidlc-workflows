@@ -261,9 +261,8 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // gates are up. Do not require the phase to paint before answer-gate starts:
         // current live runs can spend >120s bootstrapping init while the statusline
         // still shows `[AIDLC] ready`; the on-disk Completed terminator below is the
-        // deterministic start/progress proof. Use the shared gridHasMenu() so the
-        // caret is matched platform-invariantly (`❯` on tmux, ASCII `>` on Windows
-        // ConPTY — the same detector the answer-gate uses).
+        // deterministic start/progress proof. Use the shared gridHasMenu(), which
+        // requires the exact `❯` caret in both reconstructed backends.
         pollTimer = setInterval(() => {
           const grid = drive(["capture", "--session", session]).stdout;
           if (gridHasMenu(grid)) {

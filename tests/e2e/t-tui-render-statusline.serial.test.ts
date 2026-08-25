@@ -195,7 +195,9 @@ describe("t-tui-render statusline workflow branches (seeded mid-ideation, no tok
   test.skipIf(ABSENT_REASON !== null)(
     `statusline-phase-bar paints [▓▓░░░░░░░░] for 2/7 IDEATION${ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : ""}`,
     () => {
-      expect(pane()).toContain("[▓▓░░░░░░░░]");
+      expect(pane()).toContain(
+        "[AIDLC] fixture · IDEATION [▓▓░░░░░░░░] 2/7 > Feasibility -- Architect Agent | BR:opus-4-8[1m]",
+      );
     },
     90_000,
   );

@@ -138,6 +138,17 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STABLE_MS = 600;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
+const WIN_CHILD_SPEC_ENV = "AIDLC_TUI_CHILD_SPEC_B64";
+const WIN_CHILD_LAUNCHER_ENV = "AIDLC_TUI_CHILD_LAUNCHER_B64";
+const WIN_CHILD_LAUNCHER = [
+  'const { spawn } = require("node:child_process");',
+  `const spec = JSON.parse(Buffer.from(process.env.${WIN_CHILD_SPEC_ENV}, "base64").toString("utf8"));`,
+  `delete process.env.${WIN_CHILD_SPEC_ENV};`,
+  `delete process.env.${WIN_CHILD_LAUNCHER_ENV};`,
+  'const child = spawn(spec.file, spec.args, { cwd: process.cwd(), env: process.env, stdio: "inherit" });',
+  'child.once("error", (err) => { process.stderr.write("tui-drive child launch failed: " + err.message + "\\n"); process.exit(127); });',
+  'child.once("exit", (code) => process.exit(Number.isInteger(code) ? code : 1));',
+].join("");
 
 type Args = {
   positionals: string[];
@@ -261,6 +272,49 @@ function resolveWinExecutable(file: string): string {
   // `where` could not resolve it (e.g. cmd.exe, which ConPTY resolves itself).
   // Return unchanged; node-pty either resolves it or throws its own diagnostic.
   return file;
+}
+
+/**
+ * Start the real Windows target only after the ConPTY console has switched to
+ * UTF-8. ConPTY otherwise interprets fragmented UTF-8 writes through the legacy
+ * console code page: the raw node-pty stream already contains CP437 mojibake,
+ * and xterm can only reproduce those corrupted code points.
+ *
+ * The fixed Node launcher reads the target's structured file/argv from base64
+ * JSON, so the cmd boundary never reparses user arguments. `chcp.com` is silent,
+ * and the launcher inherits stdio, preserving the target's ANSI stream and
+ * interactive console behavior.
+ */
+function winUtf8Launch(
+  file: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { file: string; args: string; env: NodeJS.ProcessEnv } {
+  const launchEnv: NodeJS.ProcessEnv = {
+    ...env,
+    // node-pty's Windows implementation reads `name` but, unlike its Unix
+    // implementation, does not copy it into the child environment. Set the
+    // capability explicitly so Claude selects its Unicode terminal palette
+    // even when the driver was launched directly from PowerShell/Bun.
+    TERM: "xterm-256color",
+    [WIN_CHILD_SPEC_ENV]: Buffer.from(
+      JSON.stringify({ file, args }),
+      "utf8",
+    ).toString("base64"),
+    [WIN_CHILD_LAUNCHER_ENV]: Buffer.from(
+      WIN_CHILD_LAUNCHER,
+      "utf8",
+    ).toString("base64"),
+  };
+  const launcherEval =
+    `eval(Buffer.from(process.env.${WIN_CHILD_LAUNCHER_ENV},'base64').toString('utf8'))`;
+  const commandLine =
+    `/d /s /c chcp.com 65001>nul & "${process.execPath}" -e "${launcherEval}"`;
+  return {
+    file: env.ComSpec || process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe",
+    args: commandLine,
+    env: launchEnv,
+  };
 }
 
 function requireFlag(a: Args, name: string): string {
@@ -647,16 +701,16 @@ async function runWinDaemon(a: Args): Promise<void> {
 
   const term = new Terminal({ cols, rows, allowProposedApi: true });
 
-  // Resolve to an absolute path on Windows: node-pty's ConPTY backend does no
-  // PATH lookup, so a bare `claude` throws "File not found:" even when on PATH.
-  const file = resolveWinExecutable(cmd[0]);
-  const args = cmd.slice(1);
-  const child = pty.spawn(file, args, {
+  // Resolve the real target, then launch it through the UTF-8 console boundary.
+  // The wrapper keeps argv structured and emits no visible output of its own.
+  const targetFile = resolveWinExecutable(cmd[0]);
+  const launch = winUtf8Launch(targetFile, cmd.slice(1), process.env);
+  const child = pty.spawn(launch.file, launch.args, {
     name: "xterm-256color",
     cols,
     rows,
     cwd,
-    env: process.env as Record<string, string>,
+    env: launch.env,
   });
 
   child.onData((data) => term.write(data));
@@ -1066,31 +1120,19 @@ function makeTerminator(projectDir: string, a: Args): Terminator {
   };
 }
 
-// The AUQ highlighted-option caret, as a PLATFORM-INVARIANT signal. The real claude
-// renders the highlighted option's caret as `❯` (U+276F) under tmux on macOS/Linux,
-// but DOWNGRADES it to an ASCII `>` under Windows ConPTY (PROVEN by reading the
-// reconstructed grid.txt on the EC2 box 2026-06-06: the option line came through as
-// `> 1. feature ...`, codepoint 62, while `❯` was absent — even though every OTHER
-// glyph, `▎`/`→`/box-drawing, survived; it is specifically claude's caret choice
-// that varies by terminal). A caret-only `❯` check (the original gridHasMenu) thus
-// never matched on Windows and hung every answer-gate journey there.
-//
-// We match the caret ONLY when it precedes a numbered option (`❯ 1.` / `> 1.`), which
-// is what AUQ paints on its highlighted row. This is the load-bearing reason a bare
-// `>` is SAFE here: the claude input prompt line is also `>` (`> /aidlc feature`,
-// `> `), but it is NEVER followed by `<digit>.`, so it cannot satisfy this pattern.
-// Anchored per-line so the prompt elsewhere on screen can't bleed in.
-const AUQ_CARET_OPTION = /^\s*(?:❯|>)\s+\d+\.\s/m;
+// The AUQ highlighted-option caret. The Windows ConPTY boundary is UTF-8, so the
+// reconstructed grid must carry the same exact `❯` (U+276F) glyph as tmux.
+// Anchor it to a numbered option so the ordinary `>` input prompt cannot match.
+const AUQ_CARET_OPTION = /^\s*❯\s+\d+\.\s/m;
 function gridHasCaret(grid: string): boolean {
   return AUQ_CARET_OPTION.test(grid);
 }
 
 // Is a waiting AskUserQuestion menu painted on the grid right now? A menu shows
-// the highlighted-default caret (`❯` on tmux, `>` on Windows ConPTY — see
-// gridHasCaret) on a numbered option AND a footer. CRITICAL: the Submit screen
-// DROPS the `Enter to select` footer and shows `Submit answers` instead — a
-// footer-only waiter sails past Submit and hangs forever (cost a full macOS run
-// during the spike). So we accept EITHER footer.
+// the highlighted-default `❯` caret on a numbered option AND a footer. CRITICAL:
+// the Submit screen DROPS the `Enter to select` footer and shows `Submit answers`
+// instead — a footer-only waiter sails past Submit and hangs forever (cost a full
+// macOS run during the spike). So we accept EITHER footer.
 export function gridHasMenu(grid: string): boolean {
   return gridHasCaret(grid) && (grid.includes("Enter to select") || grid.includes("Submit answers"));
 }
@@ -1116,13 +1158,13 @@ function gridIsSubmitScreen(grid: string): boolean {
 //     toggled `[ ]`↔`[✔]` forever). A multi-tab form is advanced with the ARROW keys
 //     (`"Tab/Arrow keys to navigate"`, rendered only when there is >1 tab); the
 //     toggled selection PERSISTS across the navigation (verified live).
-// We detect a multi-select question by the checkbox markers it paints on its OPTION
-// lines only — `❯ 1. [ ] Option` / `  2. [✔] Option` (tmux paints `✔`; claude -p /
-// node-pty paint `x`). We deliberately do NOT key off the prose "select all that
-// apply" (it echoes on the Submit review screen) nor the tab-strip `☐`/`☒` glyphs
-// (present on EVERY tab, single-select ones included) — both misfire.
+// We detect a multi-select question by the exact checkbox markers it paints on
+// its OPTION lines only — `❯ 1. [ ] Option` / `  2. [✔] Option`. We deliberately
+// do NOT key off the prose "select all that apply" (it echoes on the Submit
+// review screen) nor the tab-strip `☐`/`☒` glyphs (present on EVERY tab,
+// single-select ones included) — both misfire.
 function gridIsMultiSelect(grid: string): boolean {
-  return /\d+\.\s*\[[ xX✔]\]/.test(grid); // a numbered option line carrying a checkbox
+  return /\d+\.\s*\[[ ✔]\]/.test(grid); // a numbered option line carrying a checkbox
 }
 
 // Is this a MULTI-TAB AUQ form (more than one question batched into one gate)? Such
@@ -1146,7 +1188,7 @@ function gridIsMultiTabForm(grid: string): boolean {
 function parseMenuOptions(grid: string): { num: number; label: string }[] {
   const out: { num: number; label: string }[] = [];
   for (const line of grid.split("\n")) {
-    const m = /^\s*(?:❯|>)?\s*(\d+)\.\s+(.*\S)\s*$/.exec(line);
+    const m = /^\s*❯?\s*(\d+)\.\s+(.*\S)\s*$/.exec(line);
     if (m) out.push({ num: Number(m[1]), label: m[2].trim() });
   }
   return out;
