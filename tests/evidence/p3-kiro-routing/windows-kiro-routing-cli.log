@@ -1,5 +1,5 @@
-Verbose mode: logging to C:\Users\Administrator\src\aidlc-p3-routing-evidence\tests\logs\2026-08-24T22-26-34Z-p15400
-Debug driver traces: C:\Users\Administrator\src\aidlc-p3-routing-evidence\tests\logs\2026-08-24T22-26-34Z-p15400/{sdk,tui,kiro-acp}-drive-*.ndjson
+Verbose mode: logging to <WINDOWS_CHECKOUT>\tests\logs\2026-08-24T22-26-34Z-p15400
+Debug driver traces: <WINDOWS_CHECKOUT>\tests\logs\2026-08-24T22-26-34Z-p15400/{sdk,tui,kiro-acp}-drive-*.ndjson
 AI-DLC Testing Harness
 ======================
 

@@ -1,5 +1,5 @@
-{"ts":"2026-08-24T22:26:37.603Z","event":"spawn","args":["kiro-cli","acp","--agent","aidlc","--trust-all-tools"],"cwd":"C:\\Users\\Administrator\\AppData\\Local\\Temp\\aidlc-tui-yhnfen"}
-{"ts":"2026-08-24T22:26:37.616Z","event":"start","prompt":"/aidlc build a completely separate standalone metrics dashboard unrelated to the active work","projectDir":"C:\\Users\\Administrator\\AppData\\Local\\Temp\\aidlc-tui-yhnfen","agent":"aidlc","trustAllTools":true,"timeoutMs":330000,"reusedSession":false}
+{"ts":"2026-08-24T22:26:37.603Z","event":"spawn","args":["kiro-cli","acp","--agent","aidlc","--trust-all-tools"],"cwd":"<WINDOWS_TEMP>\\aidlc-tui-<id>"}
+{"ts":"2026-08-24T22:26:37.616Z","event":"start","prompt":"/aidlc build a completely separate standalone metrics dashboard unrelated to the active work","projectDir":"<WINDOWS_TEMP>\\aidlc-tui-<id>","agent":"aidlc","trustAllTools":true,"timeoutMs":330000,"reusedSession":false}
 {"ts":"2026-08-24T22:26:37.858Z","event":"reply","id":1,"ok":true}
 {"ts":"2026-08-24T22:26:38.877Z","event":"reply","id":2,"ok":true}
 {"ts":"2026-08-24T22:26:41.217Z","event":"update","kind":"agent_message_chunk"}
@@ -41,8 +41,8 @@
 {"ts":"2026-08-24T22:26:46.803Z","event":"reply","id":3,"ok":true}
 {"ts":"2026-08-24T22:26:46.804Z","event":"result","stopReason":"end_turn","toolCalls":1,"cancelled":false}
 {"ts":"2026-08-24T22:26:46.805Z","event":"end","keepAlive":false,"cancelled":false}
-{"ts":"2026-08-24T22:26:47.519Z","event":"spawn","args":["kiro-cli","acp","--agent","aidlc","--trust-all-tools"],"cwd":"C:\\Users\\Administrator\\AppData\\Local\\Temp\\aidlc-tui-Z1soXt"}
-{"ts":"2026-08-24T22:26:47.523Z","event":"start","prompt":"/aidlc poc Create a tiny TypeScript command-line program that prints Hello World.","projectDir":"C:\\Users\\Administrator\\AppData\\Local\\Temp\\aidlc-tui-Z1soXt","agent":"aidlc","trustAllTools":true,"timeoutMs":330000,"reusedSession":false}
+{"ts":"2026-08-24T22:26:47.519Z","event":"spawn","args":["kiro-cli","acp","--agent","aidlc","--trust-all-tools"],"cwd":"<WINDOWS_TEMP>\\aidlc-tui-<id>"}
+{"ts":"2026-08-24T22:26:47.523Z","event":"start","prompt":"/aidlc poc Create a tiny TypeScript command-line program that prints Hello World.","projectDir":"<WINDOWS_TEMP>\\aidlc-tui-<id>","agent":"aidlc","trustAllTools":true,"timeoutMs":330000,"reusedSession":false}
 {"ts":"2026-08-24T22:26:47.707Z","event":"reply","id":1,"ok":true}
 {"ts":"2026-08-24T22:26:48.616Z","event":"reply","id":2,"ok":true}
 {"ts":"2026-08-24T22:26:51.291Z","event":"update","kind":"agent_message_chunk"}

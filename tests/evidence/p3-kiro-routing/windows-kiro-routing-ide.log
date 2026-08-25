@@ -1,5 +1,5 @@
-Verbose mode: logging to C:\Users\Administrator\src\aidlc-p3-routing-evidence\tests\logs\2026-08-24T22-19-49Z-p12812
-Debug driver traces: C:\Users\Administrator\src\aidlc-p3-routing-evidence\tests\logs\2026-08-24T22-19-49Z-p12812/{sdk,tui,kiro-acp}-drive-*.ndjson
+Verbose mode: logging to <WINDOWS_CHECKOUT>\tests\logs\2026-08-24T22-19-49Z-p12812
+Debug driver traces: <WINDOWS_CHECKOUT>\tests\logs\2026-08-24T22-19-49Z-p12812/{sdk,tui,kiro-acp}-drive-*.ndjson
 AI-DLC Testing Harness
 ======================
 
@@ -13,8 +13,8 @@ bun test v1.3.14 (0d9b296a)
 
 tests\e2e\t-ide-kiro-new-work-routing.serial.test.ts:
 [kiro-ide-driver] AIDLC_KEEP_TEMP=1 - Kiro left running on :9916
-[tui-fixtures] AIDLC_KEEP_TEMP=1 — preserved C:\Users\Administrator\AppData\Local\Temp\aidlc-tui-VHRSHM
-[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - preserved C:\Users\Administrator\AppData\Local\Temp\aidlc-kiro-routing-seed-ZbhJ8M
+[tui-fixtures] AIDLC_KEEP_TEMP=1 — preserved <WINDOWS_TEMP>\aidlc-tui-<id>
+[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - preserved <WINDOWS_TEMP>\aidlc-kiro-routing-seed-<id>
 (pass) t-ide-kiro-new-work-routing (native unselected typed ask) > engine typed ask remains authoritative and renders numbered Other [38889.46ms]
 
  1 pass
