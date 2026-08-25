@@ -11669,7 +11669,66 @@ export function hasUnsafeSingleLineCharacter(value: string): boolean {
       return true;
     }
   }
-  return false;
+	return false;
+}
+
+export function authoritativeProjectDescription(raw: string): {
+  description: string;
+  pastedDocumentPresent: boolean;
+  error?: string;
+} {
+  const open = "<document>";
+  const close = "</document>";
+  const outside: string[] = [];
+  let cursor = 0;
+  let pastedDocumentPresent = false;
+
+  for (;;) {
+    const start = raw.indexOf(open, cursor);
+    const strayClose = raw.indexOf(close, cursor);
+    if (start < 0) {
+      if (strayClose >= 0) {
+        return {
+          description: "",
+          pastedDocumentPresent,
+          error: `project description has ${close} without a matching ${open}`,
+        };
+      }
+      outside.push(raw.slice(cursor));
+      break;
+    }
+    if (strayClose >= 0 && strayClose < start) {
+      return {
+        description: "",
+        pastedDocumentPresent,
+        error: `project description has ${close} before the next ${open}`,
+      };
+    }
+    const end = raw.indexOf(close, start + open.length);
+    if (end < 0) {
+      return {
+        description: "",
+        pastedDocumentPresent,
+        error: `project description has ${open} without a matching ${close}`,
+      };
+    }
+    const nested = raw.indexOf(open, start + open.length);
+    if (nested >= 0 && nested < end) {
+      return {
+        description: "",
+        pastedDocumentPresent,
+        error: "project description has nested <document> blocks",
+      };
+    }
+    outside.push(raw.slice(cursor, start));
+    cursor = end + close.length;
+    pastedDocumentPresent = true;
+  }
+
+  return {
+    description: outside.join("").trim(),
+    pastedDocumentPresent,
+  };
 }
 
 // --- State file I/O ---
@@ -11680,6 +11739,25 @@ export function readStateFile(projectDir: string, intent?: string, space?: strin
     throw new Error(`State file not found: ${path}`);
   }
   return readFileSync(path, "utf-8");
+}
+
+export const PROJECT_DESCRIPTION_FILE = "project-description.json";
+export const DOCUMENT_INPUT_REQUEST_FILE = ".aidlc-document-input-path";
+
+export function projectDescriptionFilePath(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return join(dirname(stateFilePath(projectDir, intent, space)), PROJECT_DESCRIPTION_FILE);
+}
+
+export function documentInputRequestFilePath(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return join(dirname(stateFilePath(projectDir, intent, space)), DOCUMENT_INPUT_REQUEST_FILE);
 }
 
 export function writeStateFile(projectDir: string, content: string, intent?: string, space?: string): void {

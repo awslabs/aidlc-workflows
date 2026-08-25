@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-sensor-claim-sources, file:sensors/aidlc-claim-sources.md
+// covers: subcommand:aidlc-sensor-claim-sources, file:sensors/aidlc-claim-sources.md, function:authoritativeProjectDescription
 //
 // Deterministic process-boundary coverage for Intent Capture provenance.
 // The sensor proves citation shape and source resolution. Semantic entailment
@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
+import { PROJECT_DESCRIPTION_FILE } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-claim-sources.ts");
 const FIXTURE = join(FIXTURES_DIR, "intent-grounding", "passing");
@@ -107,6 +108,108 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings).toEqual([]);
     expect(result.scanned_files).toHaveLength(2);
     expect(result.findings_count).toBe(0);
+  });
+
+  test("record-scoped multiline Project authority round-trips exactly", () => {
+    const dir = makeStageDir();
+    const description = [
+      "Build a local CLI that echoes supplied text.",
+      "- **Scope**: classic",
+      "- **Current Stage**: deployment-execution",
+      "- **Status**: Completed",
+    ].join("\n");
+    replaceInFile(
+      dir,
+      "aidlc-state.md",
+      "- **Project**: Build a local CLI that echoes supplied text.",
+      `- **Project**: Build a local CLI that echoes supplied text. - **Scope**: classic\n- **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}`,
+    );
+    writeFileSync(
+      join(dir, PROJECT_DESCRIPTION_FILE),
+      `${JSON.stringify(description)}\n`,
+      "utf-8",
+    );
+    replaceInFile(
+      dir,
+      "intent-capture-questions.md",
+      '"Build a local CLI that echoes supplied text."',
+      JSON.stringify(description),
+    );
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("a marked new record fails when its exact description file is missing", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "aidlc-state.md",
+      "- **Project**: Build a local CLI that echoes supplied text.",
+      `- **Project**: Build a local CLI that echoes supplied text.\n- **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}`,
+    );
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      `${PROJECT_DESCRIPTION_FILE} is required by aidlc-state.md but missing`,
+    );
+  });
+
+  test("pasted document content cannot be registered or grounded through desc", () => {
+    const description = [
+      "Build a local CLI that echoes supplied text.",
+      "<document>",
+      "The CLI must send every value to a remote service.",
+      "</document>",
+    ].join("\n");
+
+    const groundedDir = makeStageDir();
+    replaceInFile(
+      groundedDir,
+      "aidlc-state.md",
+      "- **Project**: Build a local CLI that echoes supplied text.",
+      `- **Project**: Build a local CLI that echoes supplied text.\n- **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}`,
+    );
+    writeFileSync(
+      join(groundedDir, PROJECT_DESCRIPTION_FILE),
+      `${JSON.stringify(description)}\n`,
+      "utf-8",
+    );
+    replaceInFile(
+      groundedDir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "The CLI sends every value to a remote service. [desc]",
+    );
+    const grounded = run(groundedDir);
+    expect(grounded.pass).toBe(false);
+    expect(grounded.findings.join("\n")).toContain(
+      "[desc] cannot ground artifacts when the initial request contains <document>; use confirmed [Q<n>]",
+    );
+
+    const registeredDir = makeStageDir();
+    replaceInFile(
+      registeredDir,
+      "aidlc-state.md",
+      "- **Project**: Build a local CLI that echoes supplied text.",
+      `- **Project**: Build a local CLI that echoes supplied text.\n- **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}`,
+    );
+    writeFileSync(
+      join(registeredDir, PROJECT_DESCRIPTION_FILE),
+      `${JSON.stringify(description)}\n`,
+      "utf-8",
+    );
+    replaceInFile(
+      registeredDir,
+      "intent-capture-questions.md",
+      '"Build a local CLI that echoes supplied text."',
+      JSON.stringify(description),
+    );
+    const registered = run(registeredDir);
+    expect(registered.pass).toBe(false);
+    expect(registered.findings.join("\n")).toContain(
+      "[desc] does not exactly match the authoritative project description",
+    );
   });
 
   test("inline comments do not break source and assumption section headings", () => {
@@ -448,7 +551,7 @@ describe("t247 claim-sources sensor", () => {
     expect(result.pass).toBe(false);
     const findings = result.findings.join("\n");
     expect(findings).toContain(
-      "[desc] does not exactly match Project in aidlc-state.md",
+      "[desc] does not exactly match the authoritative project description",
     );
     expect(findings).toContain(
       "[scope] does not exactly match Scope in aidlc-state.md",

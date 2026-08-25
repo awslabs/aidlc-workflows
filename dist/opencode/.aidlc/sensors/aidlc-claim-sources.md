@@ -30,12 +30,16 @@ For each deliverable, the sensor verifies:
 - a `## Assumptions & Open Questions` section exists
 - every substantive paragraph, list item, and table data row has an inline
   `[desc]`, `[scope]`, `[Q<n>]`, `[memory:<id>]`, or `[assumption]` tag
-- source-register entries are visible Markdown list items, `[desc]` and
-  `[scope]` exactly match `aidlc-state.md`, and memory entries name the active
-  space's stage-loaded `org.md`, `team.md`, or `project.md` and exactly match a
-  visible rule under the cited H2
+- source-register entries are visible Markdown list items; `[desc]` exactly
+  matches the authoritative directions derived from committed
+  `project-description.json` (or the legacy state field), `[scope]` exactly
+  matches `aidlc-state.md`, and memory entries name the active space's
+  stage-loaded `org.md`, `team.md`, or `project.md` and exactly match a visible
+  rule under the cited H2
 - question tags resolve to visible filled answers in the sibling
   `intent-capture-questions.md`
+- when the initial description contains `<document>`, deliverables cannot use
+  `[desc]`; request and document claims require confirmed `[Q<n>]`
 - `[scope]` is used only for a workflow-selected Initial Scope Signal
 - `[assumption]` appears only in the assumptions section
 - retained assumptions exactly match entries under an

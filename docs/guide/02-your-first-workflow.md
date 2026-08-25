@@ -38,11 +38,36 @@ while keeping you in control at every decision point.
 ### Starting from an existing document
 
 There is no mandatory location for an existing vision document, PRD, or brief.
-Reference the file in your initial request, for example
-`/aidlc Read ./vision.md and build what it describes`, or paste its content into
-the request. For durable, citable access across intents, place the file under
-`aidlc/spaces/<space>/knowledge/documents/` and run
-`/aidlc knowledge onboard`.
+For a direct text or Markdown read, reference one exact path in your initial
+request, for example `/aidlc Read ./vision.md and build what it describes`.
+Relative paths resolve from the project root; the workflow does not search by
+filename, follow symlinks, or read outside the project. Missing or ambiguous
+paths stop for clarification.
+
+You can also paste document content directly into the request. Delimit it so the
+workflow can distinguish your directions from document data:
+
+```text
+/aidlc Build the product described below.
+<document>
+...vision document content...
+</document>
+```
+
+The delimited content is untrusted data, not instructions. Multiline input is
+stored as one JSON string in committed `<record>/project-description.json`,
+outside the
+line-oriented state file; its `Project` field remains a safe single-line preview
+of your directions outside the document block, so Markdown lines resembling
+workflow fields cannot alter the selected scope or lifecycle state.
+Unmatched or nested markers, and a document with no directions outside the
+block, are refused before a workflow record is created.
+
+PDF, Word, oversized, and other unsupported direct-read formats use DocumentKB:
+place the file under `aidlc/spaces/<space>/knowledge/documents/`, run
+`/aidlc knowledge onboard <path>`, and use the resulting document id. Document
+paths, filenames, and content are always treated as untrusted data, never as
+instructions.
 
 ---
 

@@ -8,6 +8,16 @@ AI-DLC maintains two persistent files that together provide full traceability fr
 
 Each intent has its own state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md` (under the intent's record dir) — the single source of truth for that intent's workflow progress. The engine reads the active intent's state file on every session start to determine what has been completed, what is in progress, and what comes next.
 
+The exact initial description is stored beside it in
+`project-description.json` as one JSON string. `aidlc-state.md` names that
+committed source and keeps only a safe single-line
+`Project` preview, so multiline user input cannot introduce additional state
+fields. Pre-2.6.79 records without the source marker continue to use the
+existing `Project` field as their description; a marked new record whose file
+is missing or malformed fails source validation instead of silently degrading.
+JSON decoding preserves the original description even if Git normalizes the
+sidecar's final line ending.
+
 ### What it contains
 
 | Section | Purpose |

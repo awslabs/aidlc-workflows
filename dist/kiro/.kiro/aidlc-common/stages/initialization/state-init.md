@@ -45,7 +45,9 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 Read the state contract from `.kiro/knowledge/aidlc-shared/state-template.md`.
 Overwrite `<record>/aidlc-state.md` with the full populated version generated
 from the compiled stage graph and scope grid:
-- Project description (from orchestrator's $ARGUMENTS or `<record>/audit/<host>-<clone>.md`)
+- Project description: persist the exact text in
+  `<record>/project-description.json` as one JSON string; write only a safe
+  single-line preview to the state `Project` field
 - Project type (greenfield/brownfield from workspace-detection)
 - Workspace state (languages, frameworks, build system from workspace-detection)
 - Start date — run `date -u +'%Y-%m-%dT%H:%M:%SZ'` via Bash

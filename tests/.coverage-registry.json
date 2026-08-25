@@ -1362,6 +1362,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:authoritativeProjectDescription",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t247-claim-sources-sensor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:AUTONOMY_MODE_FIELD",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2053,6 +2065,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:DOCUMENT_INPUT_REQUEST_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:documentExtractors",
       "minMechanism": "none",
       "coveredBy": [
@@ -2062,6 +2081,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:documentInputRequestFilePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3701,6 +3727,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:PROJECT_DESCRIPTION_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:projectDescriptionFilePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -8809,6 +8849,18 @@
         },
         {
           "file": "tests/unit/t85.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility document-input",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-document-input.test.ts",
           "mechanism": "cli"
         }
       ],

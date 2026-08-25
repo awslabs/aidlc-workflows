@@ -113,6 +113,15 @@ and creates NO directory (`mkdir`). It simply prints the canonical per-repo
 codekb directory the reverse-engineering stage writes its artifacts into, so
 prose never hand-derives that path.
 
+`document-input` is the same read-only direct-utility shape. Intent Capture and
+Requirements Analysis invoke
+`bun <harness-dir>/tools/aidlc-utility.ts document-input` after writing the
+selected path with the native file-write tool to the active record's fixed
+`.aidlc-document-input-path` transport. Customer-chosen path bytes never enter
+the shell command. The handler resolves one exact project-root path, refuses
+redirects and unsupported input, and emits the same inline untrusted-path and
+untrusted-content notices as DocumentKB.
+
 ### LLM-driven handlers
 For handlers that benefit from agent reasoning (filesystem scanning, decision-making):
 1. **Task tracking** -- Create tasks via `TaskCreate` for each logical step, transition them with `TaskUpdate` (`in_progress` -> `completed`) as work progresses. This drives the task sidebar in Claude Code.

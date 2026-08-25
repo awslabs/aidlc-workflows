@@ -3,13 +3,17 @@
 This document defines the `aidlc-state.md` section and field contract. The
 engine writes the concrete state file and enumerates stages from the compiled
 stage graph plus scope grid; this template must not hand-list shipped stages.
+The exact initial description is JSON-encoded as one string beside the state
+file in `<record>/project-description.json`; the `Project` field below is its
+safe single-line preview.
 
 Authoritative generated views:
 - Stage graph: `bun .aidlc/tools/aidlc-utility.ts stage-table`
 - Scope grid: `bun .aidlc/tools/aidlc-utility.ts scope-table`
 
 ## Project Information
-- **Project**: [project description]
+- **Project**: [single-line project description preview]
+- **Project Description Source**: project-description.json
 - **Project Type**: [Greenfield/Brownfield]
 - **Scope**: [scope slug from compiled scope grid]
 - **Start Date**: [ISO 8601 timestamp]
