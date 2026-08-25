@@ -18,6 +18,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "claude",
   harnessDir: ".claude",
+  orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",
   tierFlavor: "claude",
 
   // core/<src> → <harnessDir>/<dst>. Claude keeps every core dir name as-is.
@@ -35,10 +36,11 @@ const manifest: HarnessManifest = {
     { src: "scopes", dst: "scopes" },
     { src: "agents", dst: "agents" },
     { src: "hooks", dst: "hooks" },
-    // The three harness-neutral session skills ship in-tree under skills/.
+    // The harness-neutral standalone skills ship in-tree under skills/.
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 
   // Authored harness surfaces copied verbatim (with token substitution on .md)

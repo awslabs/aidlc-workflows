@@ -30,6 +30,7 @@
 // with units [alpha, beta]. All temp dirs cleaned in afterEach.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -44,16 +45,20 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const BUN = process.execPath;
 
 const FD_PRODUCES = [
-  "business-logic-model",
-  "business-rules",
-  "domain-entities",
+  "entities",
+  "rules",
+  "functional-spec",
   "frontend-components",
+  "traceability",
 ];
 
 const tempDirs: string[] = [];
@@ -92,7 +97,7 @@ function constructionState(opts: {
 - **Project**: iteration knob default test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: on
 ${autonomyLine}## Scope Configuration
 - **Stages to Execute**: all
@@ -111,7 +116,7 @@ ${autonomyLine}## Scope Configuration
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -130,7 +135,32 @@ function coverUnit(
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of producesNames) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
+  }
+}
+
+function reviewUnit(proj: string, unit: string): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    "functional-design",
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--unit",
+    unit,
+    "--iteration",
+    "1",
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const result = spawnSync(
+      BUN,
+      [...args, ...suffix, "--project-dir", proj],
+      { encoding: "utf-8" },
+    );
+    if ((result.status ?? -1) !== 0) {
+      throw new Error(`review failed: ${result.stdout}${result.stderr}`);
+    }
   }
 }
 
@@ -154,6 +184,7 @@ function seedProject(opts: {
 function runNext(proj: string): Directive {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
   const r = runOrchestrateNext(ORCH, proj, [], { env });
   if (r.directive === null) {
     throw new Error(
@@ -167,12 +198,15 @@ function runNext(proj: string): Directive {
 // stage-major "advance to beta" shape.
 function coverAlphaFd(proj: string): void {
   coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+  reviewUnit(proj, "alpha");
 }
 
 // Cover both units' functional-design produces, to reach the all-covered gate.
 function coverBothFd(proj: string): void {
   coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
   coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+  reviewUnit(proj, "alpha");
+  reviewUnit(proj, "beta");
 }
 
 // Drive `next` for a given knob value at a given coverage state and return the
@@ -189,8 +223,8 @@ function directiveFor(
 
 describe("t210 construction-iteration knob default (off / non-activating)", () => {
   // The three coverage states and their known stage-major expectations (t186
-  // shapes): empty -> functional-design/alpha; alpha-fd-covered ->
-  // functional-design/beta; both-fd-covered -> functional-design gate on beta.
+  // shapes): empty -> functional-design/alpha build; covered/reviewed Units
+  // remain on functional-design/alpha until the wave completion receipt lands.
   const STATES: Array<{
     name: string;
     cover: (p: string) => void;
@@ -204,12 +238,12 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
     {
       name: "alpha functional-design covered",
       cover: coverAlphaFd,
-      expected: { stage: "functional-design", unit: "beta", gate: false },
+      expected: { stage: "functional-design", unit: "alpha", gate: false },
     },
     {
       name: "both functional-design covered",
       cover: coverBothFd,
-      expected: { stage: "functional-design", unit: "beta", gate: true },
+      expected: { stage: "functional-design", unit: "alpha", gate: false },
     },
   ];
 
@@ -236,13 +270,14 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
   }
 
   // 3: the pivotal ordering difference is REAL: at alpha-fd-covered, stage-major
-  // emits functional-design/beta while unit-major emits nfr-requirements/alpha.
+  // emits functional-design/alpha completion work while unit-major, which uses
+  // the serial legacy coverage path in this fixture, emits nfr-requirements/alpha.
   // This is the negative control proving the deep-equals above are meaningful.
   test("3: unit-major diverges from stage-major at the same coverage state", () => {
     const stageMajor = directiveFor("stage-major", coverAlphaFd);
     const unitMajor = directiveFor("unit-major", coverAlphaFd);
     expect(stageMajor.stage).toBe("functional-design");
-    expect(stageMajor.unit).toBe("beta");
+    expect(stageMajor.unit).toBe("alpha");
     expect(unitMajor.stage).toBe("nfr-requirements");
     expect(unitMajor.unit).toBe("alpha");
   }, 30000);

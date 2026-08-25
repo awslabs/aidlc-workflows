@@ -12,7 +12,7 @@
 //       loads on every stage). If it is deleted or renamed, no other test
 //       notices — the framework keeps working and just starts talking like a
 //       framework again. §1 pins the section and its substance.
-//   (b) The five authored SKILLs are near-copies maintained by hand. The
+//   (b) The six authored SKILLs are near-copies maintained by hand. The
 //       identity paragraph that points at the contract must be present and
 //       WORD-IDENTICAL in all five: a partial edit (the t181 failure mode) would
 //       leave some harnesses on the old framework-voice identity. §2 extracts the
@@ -101,7 +101,7 @@ describe("t272 §1 voice contract lives in the per-stage protocol", () => {
 });
 
 // =========================================================================
-// §2 — All five authored SKILLs point at the contract, identically.
+// §2 — All six authored SKILLs point at the contract, identically.
 // =========================================================================
 describe("t272 §2 the SKILL identity paragraph is shared verbatim", () => {
   const skills = authoredSkills();
@@ -253,7 +253,7 @@ describe("t272 §4 Construction keeps its own voice rules", () => {
 
   test("every conductor SKILL carries the Construction quiet rule, worded identically", () => {
     // Byte-alignment across the matrix for the same reason t181 pins the
-    // narration block that way: authored once, copied five times, so a
+    // narration block that way: authored once, copied six times, so a
     // per-harness reword is drift rather than intent.
     const MARKER = "**Inside Construction.**";
     const paragraphs = new Map<string, string[]>();

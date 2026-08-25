@@ -78,7 +78,7 @@ function userStoriesState(projectDir: string): string {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **Start Date**: 2026-07-17T00:00:00Z
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: aidlc-product-agent
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -86,7 +86,7 @@ function userStoriesState(projectDir: string): string {
 
 ## Scope Configuration
 - **Stages to Execute**: 0.1, 0.2, 0.3, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 2.2, 2.3, 2.4
-- **Stages to Skip**: 2.1, 2.5, 2.6, 2.7, 2.8, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
+- **Stages to Skip**: 2.1, 2.5, 2.6, 2.7, 2.8, 2.9, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
 - **Depth**: Minimal
 - **Test Strategy**: Minimal
 
@@ -135,8 +135,9 @@ function userStoriesState(projectDir: string): string {
 - [x] requirements-analysis — EXECUTE
 - [-] user-stories — EXECUTE
 - [S] refined-mockups — SKIP (live SDK fixture terminal boundary)
-- [S] application-design — SKIP (live SDK fixture terminal boundary)
+- [S] domain-design — SKIP (live SDK fixture terminal boundary)
 - [S] units-generation — SKIP (live SDK fixture terminal boundary)
+- [S] contract-design — SKIP (live SDK fixture terminal boundary)
 - [S] delivery-planning — SKIP (live SDK fixture terminal boundary)
 
 ### CONSTRUCTION PHASE
@@ -298,6 +299,17 @@ function inputMentions(result: CapturedToolResult, value: string): boolean {
   return JSON.stringify(result.input).includes(value);
 }
 
+function readIndex(
+  results: CapturedToolResult[],
+  value: string,
+): number {
+  return results.findIndex(
+    (result) =>
+      result.toolName === "Read" &&
+      inputMentions(result, value),
+  );
+}
+
 function shellCommand(result: CapturedToolResult): string | undefined {
   if (result.toolName !== "Bash" && result.toolName !== "Shell") return undefined;
   return typeof result.input.command === "string"
@@ -348,6 +360,19 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
 
         expect(result.timedOut).toBe(false);
         expect(result.stoppedAfterToolResult).toBe(true);
+        const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
+        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
+        const projectKnowledgeReadIndex = readIndex(
+          result.toolResults,
+          LIVE_KNOWLEDGE_REL,
+        );
+        expect(leadReadIndex, "the inline mob lead persona was not read").toBeGreaterThanOrEqual(0);
+        expect(
+          projectKnowledgeReadIndex,
+          "the inline mob lead's project knowledge was not read",
+        ).toBeGreaterThan(
+          leadReadIndex,
+        );
         expect(
           result.toolResults.some(
             (toolResult) =>
@@ -466,6 +491,13 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
             /"stage"\s*:\s*"user-stories"/.test(toolResult.resultText),
         );
         expect(runStage, "expected the engine's user-stories run-stage directive").toBeDefined();
+        const runStageDirective = JSON.parse(runStage?.resultText ?? "{}") as {
+          next_stage?: string | null;
+        };
+        expect(
+          runStageDirective.next_stage,
+          "the terminal live fixture routed to another stage after user-stories",
+        ).toBeNull();
         expect(runStage?.resultText).toContain(
           ".claude/agents/aidlc-product-agent.md",
         );
@@ -474,17 +506,23 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
             `.claude/agents/${support}.md`,
           );
         }
-        expect(
-          result.toolResults.some(
-            (toolResult) =>
-              toolResult.toolName === "Read" &&
-              inputMentions(
-                toolResult,
-                ".claude/agents/aidlc-product-agent.md",
-              ),
-          ),
-          "the inline mob lead persona was not read",
-        ).toBe(true);
+        // inline_context_paths is only the manifest. The conductor contract
+        // requires it to read each inline persona before any stage/consume read.
+        const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
+        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
+        const stageReadIndex = readIndex(
+          result.toolResults,
+          ".claude/aidlc-common/stages/inception/user-stories.md",
+        );
+        const consumeReadIndex = readIndex(result.toolResults, "requirements.md");
+        expect(leadReadIndex, "the conductor did not read the inline mob lead persona")
+          .toBeGreaterThanOrEqual(0);
+        expect(stageReadIndex, "stage_file read preceded the lead persona read").toBeGreaterThan(
+          leadReadIndex,
+        );
+        expect(consumeReadIndex, "consume read preceded the lead persona read").toBeGreaterThan(
+          leadReadIndex,
+        );
 
         // Round 1 dispatched every declared support. Each brief names the
         // shared draft/input, carries the active-space rules delivered by the

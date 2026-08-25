@@ -29,8 +29,9 @@
 //
 // FIXTURE DISCIPLINE — replicate the .sh's make_project (t91:36-47) EXACTLY:
 // a fresh temp project under aidlc-docs/ + a self-contained .claude/ skeleton
-// with the four tool files (aidlc-runtime.ts, aidlc-lib.ts, aidlc-audit.ts,
-// data/stage-graph.json) and the hook copied in, plus a minimal
+// with the five tool modules (aidlc-runtime.ts, aidlc-lib.ts,
+// aidlc-artifact-vocabulary.ts, aidlc-runtime-paths.ts, aidlc-audit.ts),
+// data/stage-graph.json, and the hook copied in, plus a minimal
 // aidlc-state.md ("- **Scope**: feature"). The COPY (not symlink) matters:
 // the hook spawns `<projectDir>/.claude/tools/aidlc-runtime.ts`, whose
 // aidlc-lib.ts resolves stage-graph.json relative to its own import.meta.url
@@ -96,7 +97,7 @@ afterAll(() => {
 /**
  * make_project (t91:36-47): a fresh temp project with a self-contained
  * .claude/ skeleton so the hook + the compile it spawns resolve every path
- * via CLAUDE_PROJECT_DIR. Copies (NOT symlinks) the four tool files + the hook
+ * via CLAUDE_PROJECT_DIR. Copies (NOT symlinks) the five tool files + the hook
  * — aidlc-lib.ts resolves data/stage-graph.json relative to its own location,
  * so the data file must sit beside the copied lib. toPortablePath round-trips
  * the path on Windows.
@@ -113,6 +114,10 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-lib.ts"),
     join(proj, ".claude", "tools", "aidlc-lib.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-artifact-vocabulary.ts"),
+    join(proj, ".claude", "tools", "aidlc-artifact-vocabulary.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-runtime-paths.ts"),

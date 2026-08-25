@@ -20,7 +20,7 @@ AI-DLC uses a two-tier knowledge system that separates framework methodology fro
 |   +-- ai-dlc-principles.md       # Core methodology principles
 |   +-- verification.md            # Phase boundary verification rules
 |   +-- brownfield.md              # Brownfield safeguards
-|   +-- audit-format.md            # 82-event audit taxonomy
+|   +-- audit-format.md            # 87-event audit taxonomy
 |   +-- knowledge-readme-template.md  # Optional README template a team can copy into Tier 2
 |   +-- state-template.md          # State file contract
 +-- aidlc-product-agent/
@@ -60,6 +60,42 @@ aidlc/knowledge/                    # empty at bootstrap; team-created subdirs
 |   +-- (user-added files)
 +-- [... a directory per agent the team chooses to populate]
 ```
+
+## DocumentKB Derived Catalog
+
+DocumentKB is a space-level derived catalog beneath the Tier 2 knowledge root:
+
+```
+aidlc/spaces/<space>/knowledge/
++-- documents/       # user-owned originals
++-- documentkb/      # tool-owned derived catalog
+    +-- index.json
+    +-- <document-id>/
+        +-- metadata.json
+        +-- content.md
+```
+
+`aidlc-knowledge.ts` stages catalog changes under
+`documentkb/.journal/<transaction-id>/`, then commits them while holding the
+workspace audit lock. The originals under `documents/` are never moved or
+deleted by the framework. Extracted content is revision-bound and treated as
+untrusted data.
+
+Each per-document `metadata.json` duplicates the row identity and source facts
+needed to rebuild a lost `index.json`. That is the recovery boundary: surviving
+metadata records restore IDs and tombstones; deleting the whole `documentkb/`
+tree removes the rebuild source and is not recoverable.
+
+Document provenance is emitted audit-last to the space-level shard at
+`aidlc/spaces/<space>/intents/audit/`, after the catalog write it describes.
+DocumentKB recovery and `--doctor --export` read that shard explicitly. Normal
+workflow-authority readers remain scoped to the active intent's audit shards.
+See [State Machine](12-state-machine.md#audit-last-for-derived-catalogs-document_indexed-document_updated-document_removed)
+for the ordering exception and recovery semantics.
+
+The schema and validation contract are owned by
+`core/tools/aidlc-documentkb-schema.ts`; the command and transaction logic are
+owned by `core/tools/aidlc-knowledge.ts`.
 
 ---
 

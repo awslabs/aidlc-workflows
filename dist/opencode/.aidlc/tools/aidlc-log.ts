@@ -6,7 +6,6 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -14,29 +13,49 @@ import {
   activeIntent,
   activeSpace,
   auditBlockField,
+  boltSlugForUnit,
+  checkSummaryConfirmationEvidence,
   emitError,
   errorMessage,
-  extractMarkdownSection,
+  formatReceivedReply,
+  freshReviewReceipts,
+  filterProducesByKind,
   getField,
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
-  isAutonomousMode,
+  isAutonomousConstructionDecision,
   isAutonomousSwarmStage,
   loadStageGraphAll,
   isNonAnswer,
   parseCheckboxes,
+  pipelineLinkEvidence,
+  pipelineLinks,
   readAllAuditShards,
+  readAuditShardEvents,
   readStateFile,
+  readUnitSourceManifest,
   recordDir,
+  relativeRecordDir,
+  recoveryGuidance,
+  resolveBoltDag,
   reviewArtifactFingerprint,
   resolveProjectDir,
   resolveReviewClass,
+  selfAttributedDecisionMarker,
   SUMMARY_CONFIRMATION_CHECKPOINT,
+  SUMMARY_CONFIRMATION_HASH_SCOPE,
+  summaryConfirmationAnswer,
+  summaryConfirmationContentHash,
   stateFilePath,
   toPosix,
+  unitSourceFingerprint,
+  UNBINDABLE_FINGERPRINT,
   withAuditLock,
+  workspaceSourceState,
+  writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
+import type { ReviewClass } from "./aidlc-lib.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -137,12 +156,7 @@ function summaryQuestionEvidence(
   }
 
   const body = readFileSync(absolute, "utf-8");
-  const section = extractMarkdownSection(
-    body,
-    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
-  );
-  const answers = [...section.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
-  if (answers.length !== 1 || answers[0][1].trim() !== expectedAnswer) {
+  if (summaryConfirmationAnswer(body) !== expectedAnswer) {
     const rendered = expectedAnswer || "a blank value";
     error(
       `Summary confirmation section in ${supplied} must contain exactly one ` +
@@ -150,9 +164,17 @@ function summaryQuestionEvidence(
     );
   }
 
+  let sha256: string;
+  try {
+    sha256 = summaryConfirmationContentHash(body);
+  } catch (e) {
+    error(
+      `Summary confirmation questions file ${supplied} is invalid: ${errorMessage(e)}.`,
+    );
+  }
   return {
     relativePath: toPosix(relative(pd, absolute)),
-    sha256: createHash("sha256").update(body).digest("hex"),
+    sha256,
   };
 }
 
@@ -271,92 +293,137 @@ function pendingSummaryDecision(
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
-): { pending: boolean; humanAfterDecision: boolean } {
-  const audit = readAllAuditShards(pd);
-  if (audit.length === 0) {
+): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
+  const entries = readAuditShardEvents(pd).filter((entry) => {
+    if (entry.event === "HUMAN_TURN") return true;
+    if (entry.event === "STAGE_COMPLETED") {
+      return (
+        auditBlockField(entry.block, "Stage") === stage &&
+        (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow
+      );
+    }
+    if (
+      entry.event !== "DECISION_RECORDED" &&
+      entry.event !== "SUMMARY_CONFIRMATION_RECORDED"
+    ) {
+      return false;
+    }
+    return (
+      auditBlockField(entry.block, "Stage") === stage &&
+      auditBlockField(entry.block, "Checkpoint") ===
+        SUMMARY_CONFIRMATION_CHECKPOINT &&
+      (auditBlockField(entry.block, "Unit") ?? undefined) === unit &&
+      (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow &&
+      auditBlockField(entry.block, "Questions File") === questionsFile
+    );
+  });
+  if (entries.length === 0) {
     return { pending: false, humanAfterDecision: false };
   }
 
-  const entries = audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position) => ({
-      block,
-      position,
-      event: auditBlockField(block, "Event") ?? "",
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-    }))
-    .filter((entry) =>
-      entry.event === "DECISION_RECORDED" ||
-      entry.event === "SUMMARY_CONFIRMATION_RECORDED" ||
-      entry.event === "STAGE_COMPLETED" ||
-      entry.event === "HUMAN_TURN"
-    )
-    .sort((a, b) =>
-      a.timestamp !== b.timestamp
-        ? (a.timestamp < b.timestamp ? -1 : 1)
-        : a.position - b.position
+  type Entry = (typeof entries)[number];
+  const follows = (candidate: Entry, boundary: Entry): true | false | null => {
+    if (candidate.shard === boundary.shard) {
+      return candidate.pos > boundary.pos;
+    }
+    if (candidate.timestamp !== boundary.timestamp) {
+      return candidate.timestamp > boundary.timestamp;
+    }
+    return null;
+  };
+  const latestFrontier = (candidates: Entry[]): Entry[] => {
+    const byShard = new Map<string, Entry>();
+    for (const entry of candidates) {
+      const previous = byShard.get(entry.shard);
+      if (!previous || entry.pos > previous.pos) byShard.set(entry.shard, entry);
+    }
+    const latestTimestamp = [...byShard.values()].reduce(
+      (latest, entry) =>
+        entry.timestamp > latest ? entry.timestamp : latest,
+      "",
     );
-
-  let decision = -1;
-  let answer = -1;
-  let human = -1;
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (
-      entry.event === "STAGE_COMPLETED" &&
-      auditBlockField(entry.block, "Stage") === stage &&
-      auditBlockField(entry.block, "Workflow") === workflow
-    ) {
-      decision = -1;
-      answer = -1;
-      human = -1;
-      continue;
-    }
-    if (entry.event === "HUMAN_TURN") {
-      human = i;
-      continue;
-    }
-    if (auditBlockField(entry.block, "Stage") !== stage) continue;
-    if (
-      auditBlockField(entry.block, "Checkpoint") !==
-        SUMMARY_CONFIRMATION_CHECKPOINT
-    ) {
-      continue;
-    }
-    if ((auditBlockField(entry.block, "Unit") ?? undefined) !== unit) continue;
-    if (
-      (auditBlockField(entry.block, "Workflow") ?? undefined) !== workflow
-    ) {
-      continue;
-    }
-    if (auditBlockField(entry.block, "Questions File") !== questionsFile) {
-      continue;
-    }
-    if (entry.event === "DECISION_RECORDED") decision = i;
-    if (entry.event === "SUMMARY_CONFIRMATION_RECORDED") answer = i;
+    return [...byShard.values()].filter(
+      (entry) => entry.timestamp === latestTimestamp,
+    );
+  };
+  const floors = latestFrontier(
+    entries.filter((entry) => entry.event === "STAGE_COMPLETED"),
+  );
+  const afterFloor = (entry: Entry): true | false | null => {
+    if (floors.length === 0) return true;
+    const relations = floors.map((floor) => follows(entry, floor));
+    if (relations.every((relation) => relation === true)) return true;
+    if (relations.some((relation) => relation === false)) return false;
+    return null;
+  };
+  const actions = entries.filter((entry) =>
+    entry.event === "DECISION_RECORDED" ||
+    entry.event === "SUMMARY_CONFIRMATION_RECORDED"
+  );
+  const orderedActions = actions.filter((entry) => afterFloor(entry) === true);
+  const latestActions = latestFrontier(orderedActions);
+  const latestActionTimestamp = latestActions[0]?.timestamp;
+  const unorderedActions = actions.filter((entry) => afterFloor(entry) === null);
+  if (
+    unorderedActions.some((entry) =>
+      latestActionTimestamp === undefined ||
+      entry.timestamp >= latestActionTimestamp
+    )
+  ) {
+    return {
+      pending: false,
+      humanAfterDecision: false,
+      ambiguity: floors[0]?.timestamp ?? unorderedActions[0].timestamp,
+    };
+  }
+  if (latestActions.length === 0 || latestActionTimestamp === undefined) {
+    return { pending: false, humanAfterDecision: false };
   }
 
-  return {
-    pending: decision > answer,
-    humanAfterDecision: human > decision && decision >= 0,
-  };
+  const latestKinds = new Set(
+    latestActions.map((entry) => entry.event),
+  );
+  if (latestKinds.size > 1) {
+    return {
+      pending: false,
+      humanAfterDecision: false,
+      ambiguity: latestActionTimestamp,
+    };
+  }
+  if (!latestKinds.has("DECISION_RECORDED")) {
+    return { pending: false, humanAfterDecision: false };
+  }
+
+  const humans = entries.filter((entry) => entry.event === "HUMAN_TURN");
+  const humanRelations = humans.map((human) =>
+    latestActions.map((decision) => follows(human, decision))
+  );
+  if (
+    humanRelations.some((relations) =>
+      relations.every((relation) => relation === true)
+    )
+  ) {
+    return { pending: true, humanAfterDecision: true };
+  }
+  if (
+    humanRelations.some((relations) =>
+      !relations.some((relation) => relation === false) &&
+      relations.some((relation) => relation === null)
+    )
+  ) {
+    return {
+      pending: false,
+      humanAfterDecision: false,
+      ambiguity: latestActionTimestamp,
+    };
+  }
+  return { pending: true, humanAfterDecision: false };
 }
 
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.details) error("Missing --details <text>");
-
-  // A cancelled/dismissed/auto-resolved question widget is not an answer.
-  // Some harnesses return a completed-looking object for a dismissed question.
-  if (isNonAnswer(flags.details)) {
-    error(
-      `Refusing to record "${flags.details.trim() || "(empty)"}" as an answer: it is cancellation ` +
-        "boilerplate, not a human decision. If the user dismissed the question, re-present it and " +
-        "wait for a real answer; do not log the dismissal.",
-    );
-  }
 
   if (
     flags.checkpoint !== undefined &&
@@ -373,7 +440,19 @@ function handleAnswer(args: string[]): void {
     flags.details !== "Request changes"
   ) {
     error(
-      'Summary confirmation --details must be exactly "Looks correct" or "Request changes".',
+      `Refusing to record summary confirmation: received reply ${formatReceivedReply(flags.details)}: ` +
+        'it did not match an offered choice. Valid choices are "Looks correct" or ' +
+        '"Request changes". Re-present those choices and wait for the human to choose one.',
+    );
+  }
+
+  // A cancelled/dismissed/auto-resolved question widget is not an answer.
+  // Some harnesses return a completed-looking object for a dismissed question.
+  if (isNonAnswer(flags.details)) {
+    error(
+      `Refusing to record received reply ${formatReceivedReply(flags.details)} as an answer: ` +
+        "it is cancellation boilerplate, not a human decision. If the user dismissed the " +
+        "question, re-present it and wait for a real answer; do not log the dismissal.",
     );
   }
 
@@ -389,6 +468,7 @@ function handleAnswer(args: string[]): void {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;
     fields["Questions SHA-256"] = summaryEvidence!.sha256;
+    fields["Hash Scope"] = SUMMARY_CONFIRMATION_HASH_SCOPE;
   }
   if (flags.unit) fields.Unit = flags.unit;
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
@@ -409,8 +489,33 @@ function handleAnswer(args: string[]): void {
     const content = existsSync(stateFilePath(pd))
       ? readFileSync(stateFilePath(pd), "utf-8")
       : null;
+    const stageNode = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+    const autonomousDecision = isAutonomousConstructionDecision(content, stageNode?.phase);
     const workflow =
       flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
+
+    // Authorship floor (issue 742): the same interview answer the conductor
+    // wrote for itself. isNonAnswer above rejects a DISMISSED widget; this
+    // rejects a self-attributed one ("A. Nothing to add - CONDUCTOR DEFAULT,
+    // session unattended"), which the presence check below cannot catch because
+    // a human is in the session, just not at this question. Autonomous
+    // Construction is exempt for ordinary answers. Summary confirmation remains
+    // a human-backed checkpoint below: its fresh-turn requirement is not waived
+    // by Construction autonomy even though its text is one of two exact strings.
+    const answerAuthorship =
+      autonomousDecision || humanPresenceGuardDisabled()
+        ? null
+        : selfAttributedDecisionMarker(flags.details, "answer");
+    if (answerAuthorship) {
+      error(
+        `Refusing to record this answer for "${flags.stage}": decision self-attribution blocked ` +
+          `(${answerAuthorship.category}) in --details: "${answerAuthorship.phrase}". ` +
+          "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
+          "A stage question is the human's to " +
+          "answer. Re-present it and wait for their reply; recording your own default here would " +
+          "carry it downstream as a human decision.",
+      );
+    }
 
     if (summaryCheckpoint) {
       const pending = pendingSummaryDecision(
@@ -420,6 +525,15 @@ function handleAnswer(args: string[]): void {
         workflow,
         summaryEvidence!.relativePath,
       );
+      if (pending.ambiguity !== undefined) {
+        error(
+          "Refusing to record summary confirmation: matching prompt, response, " +
+          `or run-boundary events share audit Timestamp "${pending.ambiguity}" ` +
+          "across different shards, so a human response after this prompt cannot " +
+          "be proven. Present a fresh summary prompt after that second, end the " +
+          "turn, and record the human's new response.",
+        );
+      }
       if (!pending.pending) {
         error(
           "Refusing to record summary confirmation: no matching unanswered " +
@@ -429,12 +543,12 @@ function handleAnswer(args: string[]): void {
       }
       if (
         !humanPresenceGuardDisabled() &&
-        !pending.humanAfterDecision
+        (!pending.humanAfterDecision || !humanActedSinceLastAnswer(pd))
       ) {
         error(
           "Refusing to record summary confirmation: a real human has not responded " +
-          "after this summary prompt. End the turn, wait for the human's choice, " +
-          "then record it.",
+          "after this summary prompt, or the turn was already consumed by another " +
+          "decision. End the turn, wait for the human's choice, then record it.",
         );
       }
       try {
@@ -472,7 +586,7 @@ function handleAnswer(args: string[]): void {
       targetAtApprovalGate && hasPendingDecisionAtGate(pd, flags.stage);
     if (targetAtApprovalGate && !pendingDecision) {
       if (
-        !isAutonomousMode(content) &&
+        !autonomousDecision &&
         !humanPresenceGuardDisabled() &&
         !humanActedSinceLastAnswer(pd)
       ) {
@@ -490,7 +604,7 @@ function handleAnswer(args: string[]): void {
       return;
     }
 
-    if (isAutonomousMode(content)) {
+    if (autonomousDecision) {
       // autonomous Construction: no human presence required
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch
@@ -512,6 +626,107 @@ function handleAnswer(args: string[]): void {
   });
 }
 
+// --- Subcommand: link ---
+// Usage:
+//   aidlc-log link --stage <slug> --link <agent> [--repo <repo>] [--single]
+//       → PIPELINE_LINK_COMPLETED
+//
+// The receipt is emitted only after a declared pipeline link returns. Ordering,
+// duplicate prevention, and attempt freshness are checked under the audit lock
+// so two concurrent conductors cannot advance the same chain.
+function handleLink(args: string[]): void {
+  const { flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  if (!flags.link) error("Missing --link <agent>");
+  if (flags.intent || flags.space) {
+    error(
+      "The link command does not accept --intent/--space selectors. Switch to the target workspace first.",
+    );
+  }
+
+  const pd = resolveActiveProjectDir(projectDir);
+  const space = activeSpace(pd);
+  const intent = activeIntent(pd, space);
+  if (!intent) {
+    error("Cannot resolve the active intent for pipeline link logging.");
+  }
+  const singleRun = flags.single === "true";
+
+  try {
+    withAuditLock(pd, () => {
+      const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+      if (node?.mode !== "pipeline") {
+        throw new Error(
+          `Cannot record pipeline link: stage "${flags.stage}" is not mode: pipeline.`,
+        );
+      }
+      const links = pipelineLinks(node);
+      const index = links.indexOf(flags.link);
+      if (index === -1) {
+        throw new Error(
+          `Cannot record pipeline link for "${flags.stage}": "${flags.link}" is not in its declared lead/support chain (${links.join(", ")}).`,
+        );
+      }
+
+      const evidence = pipelineLinkEvidence(pd, node, { singleRun });
+      if (evidence.repos.length > 0) {
+        if (!flags.repo) {
+          throw new Error(
+            `Cannot record pipeline link for "${flags.stage}": this intent has multiple repositories; pass --repo <repo>.`,
+          );
+        }
+        if (!evidence.repos.includes(flags.repo)) {
+          throw new Error(
+            `Cannot record pipeline link for "${flags.stage}": repo "${flags.repo}" is not registered for this intent (${evidence.repos.join(", ")}).`,
+          );
+        }
+      }
+
+      const repo = flags.repo ?? null;
+      if (evidence.receipts.some((receipt) =>
+        receipt.link === flags.link && receipt.repo === repo
+      )) {
+        throw new Error(
+          `Cannot record pipeline link for "${flags.stage}": link "${flags.link}"` +
+            `${repo ? ` for repo "${repo}"` : ""} already completed this attempt.`,
+        );
+      }
+      if (index > 0) {
+        const previous = links[index - 1];
+        const previousCompleted = evidence.receipts.some((receipt) =>
+          receipt.link === previous && receipt.repo === repo
+        );
+        if (!previousCompleted) {
+          throw new Error(
+            `Cannot record pipeline link for "${flags.stage}": "${flags.link}" is out of order; ` +
+              `position ${index + 1}/${links.length} requires current-attempt receipt for "${previous}"` +
+              `${repo ? ` in repo "${repo}"` : ""}.`,
+          );
+        }
+      }
+
+      const fields: Record<string, string> = {
+        Stage: flags.stage,
+        Link: flags.link,
+        Position: `${index + 1}/${links.length}`,
+      };
+      if (repo) fields.Repo = repo;
+      if (singleRun) fields.Workflow = `single-stage:${flags.stage}`;
+      emitAudit(pd, "PIPELINE_LINK_COMPLETED", fields, intent, space);
+    }, intent, space);
+  } catch (e) {
+    error(errorMessage(e));
+  }
+
+  console.log(JSON.stringify({
+    emitted: "PIPELINE_LINK_COMPLETED",
+    stage: flags.stage,
+    link: flags.link,
+    ...(flags.repo ? { repo: flags.repo } : {}),
+    ...(singleRun ? { single: true } : {}),
+  }));
+}
+
 // --- Subcommand: review ---
 // Usage:
 //   aidlc-log review --stage <slug> --reviewer <agent> [--unit <u>] --iteration <n>
@@ -529,7 +744,15 @@ const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
 type ReviewAttemptSummary = {
   requestCount: number;
   boltStarted: boolean;
+  boltBatch: string | null;
+  boltSlug: string | null;
   pendingIterations: Set<number>;
+  pendingFingerprints: Map<number, string | null>;
+  pendingSourceFingerprints: Map<number, string | null>;
+  pendingUnitSourceFingerprints: Map<number, string | null>;
+  recoveryIteration: number | null;
+  recoverySpent: boolean;
+  ambiguity: string | null;
 };
 
 // Count requests in the current stage/unit attempt. The same chronological
@@ -538,13 +761,12 @@ type ReviewAttemptSummary = {
 // per-unit floor because the forked audit inherits the main workflow's prior
 // rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
 function reviewAttemptSummary(
-  audit: string,
+  projectDir: string,
   stateContent: string,
   stage: { slug: string; for_each?: string },
   reviewer: string,
   unit: string | undefined,
   workflow: string | undefined,
-  trackBoltLifecycle: boolean,
 ): ReviewAttemptSummary {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -558,27 +780,30 @@ function reviewAttemptSummary(
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const events: { pos: number; ts: string; event: string; block: string }[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const event = auditBlockField(blocks[i], "Event");
-    if (!event || !relevant.has(event)) continue;
-    events.push({
-      pos: i,
-      ts: auditBlockField(blocks[i], "Timestamp") ?? "",
-      event,
-      block: blocks[i],
+  const events = readAuditShardEvents(projectDir)
+    .filter((row) => relevant.has(row.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shard === b.shard) return a.pos - b.pos;
+      return a.shardIndex - b.shardIndex;
     });
-  }
-  events.sort((a, b) =>
-    a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos
-  );
+  const tiedAcrossShards = (index: number): boolean =>
+    events.some(
+      (row, other) =>
+        other !== index &&
+        row.timestamp === events[index].timestamp &&
+        row.shard !== events[index].shard,
+    );
 
   const unitMajor =
     stage.for_each === "unit-of-work" &&
     getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
   let floor = -1;
   let boltStarted = false;
+  let boltBatch: string | null = null;
+  let boltSlug: string | null = null;
+  const expectedBoltSlug = unit === undefined ? null : boltSlugForUnit(unit);
+  let ambiguity: string | null = null;
   for (let i = 0; i < events.length; i++) {
     const entry = events[i];
     if (workflow !== undefined) {
@@ -592,46 +817,70 @@ function reviewAttemptSummary(
       continue;
     }
     if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
+      if (tiedAcrossShards(i)) ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
       floor = i;
       boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+      if (!tiedAcrossShards(i)) ambiguity = null;
       continue;
     }
     if (
       entry.event === "BOLT_STARTED" &&
-      trackBoltLifecycle &&
       unit !== undefined &&
-      auditBlockField(entry.block, "Bolt slug") === unit
+      auditBlockField(entry.block, "Bolt names") === unit &&
+      auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
     ) {
+      if (tiedAcrossShards(i)) ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
       floor = i;
       boltStarted = true;
+      boltBatch = auditBlockField(entry.block, "Batch number");
+      boltSlug = auditBlockField(entry.block, "Bolt slug");
+      if (!tiedAcrossShards(i)) ambiguity = null;
       continue;
     }
     if (
-      trackBoltLifecycle &&
       (entry.event === "BOLT_COMPLETED" || entry.event === "BOLT_FAILED") &&
-      unit !== undefined &&
-      auditBlockField(entry.block, "Bolt slug") === unit
+      expectedBoltSlug !== null &&
+      auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
     ) {
       floor = i;
       boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
       continue;
     }
     if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
     if (entry.event === "GATE_REJECTED") {
+      const tied = tiedAcrossShards(i);
+      if (tied) ambiguity = `cross-shard gate boundary tie at ${entry.timestamp}`;
+      else ambiguity = null;
       floor = i;
       boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
     } else if (
       entry.event === "STAGE_STARTED" &&
       !unitMajor &&
       !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
     ) {
+      const tied = tiedAcrossShards(i);
+      if (tied) ambiguity = `cross-shard stage boundary tie at ${entry.timestamp}`;
+      else ambiguity = null;
       floor = i;
       boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
     }
   }
 
   let requestCount = 0;
+  let recoveryIteration: number | null = null;
+  let recoverySpent = false;
   const pendingIterations = new Set<number>();
+  const pendingFingerprints = new Map<number, string | null>();
+  const pendingSourceFingerprints = new Map<number, string | null>();
+  const pendingUnitSourceFingerprints = new Map<number, string | null>();
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
     if (
@@ -652,6 +901,10 @@ function reviewAttemptSummary(
     ) {
       continue;
     }
+    if (tiedAcrossShards(i)) {
+      ambiguity = `cross-shard review authority tie at ${entry.timestamp}`;
+      continue;
+    }
     const rawIteration = auditBlockField(entry.block, "Iteration");
     if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
     const iteration = Number(rawIteration);
@@ -659,12 +912,43 @@ function reviewAttemptSummary(
       if (auditBlockField(entry.block, "Retry") !== "pending-request") {
         requestCount++;
       }
+      if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
+        recoveryIteration = iteration;
+        recoverySpent = true;
+      }
       pendingIterations.add(iteration);
+      pendingFingerprints.set(
+        iteration,
+        auditBlockField(entry.block, "Artifact Fingerprint"),
+      );
+      pendingSourceFingerprints.set(
+        iteration,
+        auditBlockField(entry.block, "Source Fingerprint"),
+      );
+      pendingUnitSourceFingerprints.set(
+        iteration,
+        auditBlockField(entry.block, "Unit Source Fingerprint"),
+      );
     } else {
       pendingIterations.delete(iteration);
+      pendingFingerprints.delete(iteration);
+      pendingSourceFingerprints.delete(iteration);
+      pendingUnitSourceFingerprints.delete(iteration);
     }
   }
-  return { requestCount, boltStarted, pendingIterations };
+  return {
+    requestCount,
+    boltStarted,
+    boltBatch,
+    boltSlug,
+    pendingIterations,
+    pendingFingerprints,
+    pendingSourceFingerprints,
+    pendingUnitSourceFingerprints,
+    recoveryIteration,
+    recoverySpent,
+    ambiguity,
+  };
 }
 
 function reviewBudgetMessage(stage: string, ordinal: number, budget: number): string {
@@ -676,6 +960,77 @@ function reviewBudgetMessage(stage: string, ordinal: number, budget: number): st
         "quote its findings at the approval gate for the human to triage."
       : "The review loop is exhausted - present the gate with the unresolved findings " +
         "for the human's decision instead of another review pass.")
+  );
+}
+
+function reviewRecoverySpentMessage(
+  stage: string,
+  guidance: string | null,
+  autonomousBolt?: {
+    unit: string;
+    slug: string | null;
+    batch: string | null;
+  },
+): string {
+  const prefix =
+    `Cannot start another review for "${stage}": the one recovery review was ` +
+    "already used, and this stage's output document changed again afterward. ";
+  if (autonomousBolt) {
+    const slug = autonomousBolt.slug ?? autonomousBolt.unit;
+    const batch = autonomousBolt.batch
+      ? ` batch ${autonomousBolt.batch}`
+      : " the current batch";
+    return (
+      prefix +
+      `Do not put autonomous Unit "${autonomousBolt.unit}" in --claimed and do ` +
+      "not run finalize or merge it. Halt and ask the human whether to restart " +
+      `the Bolt attempt. On an approved retry, return to the main workspace, run ` +
+      `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
+      `--reason "stale review recovery exhausted" --discard\`, then rerun the ` +
+      `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
+      `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
+      "restores one review allowance without claiming convergence. Do not " +
+      "record a Request Changes decision on the human's behalf."
+    );
+  }
+  return (
+    prefix +
+    (guidance ?? "") +
+    " Only a human Request Changes decision resets the review attempt; do not " +
+    "record that rejection on the human's behalf."
+  );
+}
+
+function reviewRecoveryGuidance(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+): string {
+  try {
+    return recoveryGuidance(projectDir, stateContent, stage);
+  } catch {
+    return (
+      `Restart this stage cleanly with /aidlc --stage ${stage}, then confirm ` +
+      "its summary and review the finished output again."
+    );
+  }
+}
+
+function reviewSummaryEvidenceMessage(stage: string, message: string): string {
+  const cause = message.replace(
+    /^Refusing to (?:complete|continue) "[^"]+"(?: for unit "[^"]+")?:\s*/,
+    "",
+  );
+  return `Cannot start review for "${stage}": ${cause}`;
+}
+
+function reviewRecoveryAlreadyRequestedMessage(stage: string, iteration: number): string {
+  return (
+    `Refusing REVIEW_REQUESTED for "${stage}": the one stale-receipt recovery ` +
+    "request already exists in this review attempt. If its dispatch is still " +
+    `unmatched, retry iteration ${iteration} with --retry-pending; if its verdict ` +
+    "was recorded, that recovery receipt is terminal and no further review " +
+    "request is allowed."
   );
 }
 
@@ -709,7 +1064,10 @@ function handleReview(args: string[]): void {
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   const retryPending = flags["retry-pending"] === "true";
 
-  const loadContext = () => {
+  const loadContext = (
+    scanReceipts: boolean,
+    enforceAdmissibility = true,
+  ) => {
     const state = readStateFile(pd, intent, space);
     const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
     if (!node?.reviewer) {
@@ -727,15 +1085,142 @@ function handleReview(args: string[]): void {
     const autonomousCandidate =
       flags.unit !== undefined && isAutonomousSwarmStage(pd, state, node);
     const attempt = reviewAttemptSummary(
-      readAllAuditShards(pd, intent, space),
+      pd,
       state,
       node,
       flags.reviewer,
       flags.unit,
       fields.Workflow,
-      autonomousCandidate,
     );
-    return { state, node, attempt, autonomousCandidate };
+    const unitResolution =
+      node.for_each === "unit-of-work" ? resolveBoltDag(pd, intent, space) : null;
+    if (enforceAdmissibility && flags.unit) {
+      const resolution = unitResolution ?? resolveBoltDag(pd, intent, space);
+      if (resolution.state === "malformed") {
+        refuseReview(
+          `Cannot record review for "${flags.stage}" unit "${flags.unit}": the authoritative ` +
+            `unit DAG is ${resolution.reason} (${resolution.detail}). Fix ` +
+            "unit-of-work-dependency.md before recording a per-unit review.",
+        );
+      }
+      if (resolution.state === "none" && !attempt.boltStarted) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}" unit "${flags.unit}": no authoritative ` +
+            "unit DAG exists and no matching active Bolt attempt was found. Remove --unit " +
+            "for a stage-level no-DAG review, or run swarm prepare before recording the " +
+            "per-unit review.",
+        );
+      }
+      if (resolution.state === "ok" && !resolution.units.includes(flags.unit)) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}" unit "${flags.unit}": it is not present ` +
+            `in the authoritative unit DAG (${resolution.units.join(", ")}).`,
+        );
+      }
+      if (
+        resolution.state === "ok" &&
+        filterProducesByKind(
+          node.produces_kinds,
+          node.produces ?? [],
+          resolution.unitKinds?.get(flags.unit) ?? null,
+        ).length === 0
+      ) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no applicable required outputs for its kind.`,
+        );
+      }
+    }
+    const declared = node.review_class ?? "adversarial";
+    if (attempt.ambiguity !== null) {
+      refuseReview(
+        `Cannot record review for "${flags.stage}": ${attempt.ambiguity} makes the current review attempt chronology ambiguous. Record a fresh stage/jump boundary, then request the review again.`,
+      );
+    }
+    let reviewClass: ReviewClass | null = null;
+    let budget: number | null = null;
+    if (autonomousCandidate && attempt.boltStarted) {
+      reviewClass = declared;
+      budget =
+        reviewClass === "advisory"
+          ? 1
+          : node.reviewer_max_iterations ?? 2;
+    } else {
+      try {
+        reviewClass = resolveReviewClass(
+          declared,
+          getField(state, "Scope") ?? "",
+          state,
+        );
+        if (reviewClass === "none") budget = 0;
+        else if (reviewClass === "advisory") budget = 1;
+        else budget = node.reviewer_max_iterations ?? 2;
+      } catch {
+        // Class resolution fails open; ordinal enforcement remains active.
+      }
+    }
+    // Receipt freshness is needed only while minting REVIEW_REQUESTED (to
+    // classify bounded stale-receipt recovery). REVIEW_COMPLETED consumes only
+    // node + attempt and then performs its one authoritative source-state walk
+    // while stamping; scanning here would double-walk on every re-review.
+    const receipts =
+      !scanReceipts || reviewClass === null
+        ? null
+        : freshReviewReceipts(pd, state, node, { reviewClass });
+    const requireRequiredArtifacts =
+      process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1" &&
+      !(
+        unitResolution !== null &&
+        unitResolution.state !== "ok" &&
+        flags.unit === undefined
+      );
+    return {
+      state,
+      node,
+      attempt,
+      budget,
+      receipts,
+      autonomousCandidate,
+      requireRequiredArtifacts,
+      unitResolution,
+    };
+  };
+
+  const stampRequestedSourceBinding = (
+    node: ReturnType<typeof loadStageGraphAll>[number],
+  ): void => {
+    if (!node.workspace_requires) return;
+    const sourceState = workspaceSourceState(pd, intent, space);
+    fields["Source Fingerprint"] =
+      sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    const bindsUnitSource =
+      flags.unit !== undefined &&
+      node.for_each === "unit-of-work" &&
+      flags.single !== "true";
+    if (!bindsUnitSource) return;
+    const manifest = readUnitSourceManifest(
+      pd,
+      flags.stage as string,
+      flags.unit as string,
+    );
+    if (!manifest.ok) {
+      const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
+      refuseReview(
+        `Cannot record REVIEW_REQUESTED for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
+          `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
+          "the reviewer will inspect, then dispatch the review.",
+      );
+    }
+    fields["Unit Source Fingerprint"] =
+      sourceState === null
+        ? UNBINDABLE_FINGERPRINT
+        : writeUnitSourceSnapshot(
+            pd,
+            flags.stage as string,
+            flags.unit as string,
+            sourceState.listing,
+            manifest,
+            manifest.rawBytesSha256,
+          );
   };
 
   // REVIEW_REQUESTED owns its ordinal: require a positive integer, count prior
@@ -748,48 +1233,155 @@ function handleReview(args: string[]): void {
     const iteration = Number(flags.iteration);
     fields.Iteration = flags.iteration;
     let retried = false;
+    let recovery: "stale-receipt" | undefined;
     try {
       withAuditLock(pd, () => {
-        const { state, node, attempt, autonomousCandidate } = loadContext();
+        const {
+          state,
+          node,
+          attempt,
+          budget,
+          receipts,
+          autonomousCandidate,
+          requireRequiredArtifacts,
+          unitResolution,
+        } = loadContext(true, !retryPending);
+        const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
+          stateContent: state,
+          unit: flags.unit,
+          workflow: fields.Workflow,
+        });
+        if (!summaryEvidence.ok) {
+          refuseReview(
+            reviewSummaryEvidenceMessage(
+              flags.stage,
+              summaryEvidence.message,
+            ),
+          );
+        }
+        const expected = attempt.requestCount + 1;
+        const sameSourceRecoveryScope =
+          receipts?.newestSourceUnit === (flags.unit ?? null);
+        const sourceScopeStale =
+          sameSourceRecoveryScope && receipts?.sourceStale === true;
+        const scopeStale =
+          process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1" &&
+          fields.Workflow === undefined &&
+          receipts !== null &&
+          (sourceScopeStale ||
+            (flags.unit
+              ? receipts.unitStale.has(flags.unit)
+              : receipts.stageStale));
+        const sourceRecoverySpent =
+          sourceScopeStale &&
+          (receipts?.sourceRecoverySpent === true ||
+            receipts?.sourceStaleProgress?.recoverySpent === true);
+        const recoverySpent =
+          attempt.recoverySpent || sourceRecoverySpent;
         if (retryPending) {
           if (!attempt.pendingIterations.has(iteration)) {
+            if (scopeStale) {
+              if (recoverySpent) {
+                refuseReview(
+                  reviewRecoverySpentMessage(
+                    flags.stage,
+                    autonomousCandidate && attempt.boltStarted
+                      ? null
+                      : reviewRecoveryGuidance(pd, state, flags.stage),
+                    autonomousCandidate && attempt.boltStarted && flags.unit
+                      ? {
+                          unit: flags.unit,
+                          slug: attempt.boltSlug,
+                          batch: attempt.boltBatch,
+                        }
+                      : undefined,
+                  ),
+                );
+              }
+              const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
+              refuseReview(
+                `Refusing review retry for "${flags.stage}": the prior review ` +
+                  "completed, but its receipt was invalidated by a later artifact write " +
+                  "or workspace source mismatch, so no unmatched request remains. Start " +
+                  "the one recovery " +
+                  `pass with \`aidlc-log.ts review --stage "${flags.stage}" ` +
+                  `--reviewer "${flags.reviewer}"${unitArg} --iteration ${expected}\`.`,
+              );
+            }
+            if (recoverySpent) {
+              refuseReview(
+                reviewRecoveryAlreadyRequestedMessage(
+                  flags.stage,
+                  attempt.recoveryIteration ?? iteration,
+                ),
+              );
+            }
             refuseReview(
               `Refusing review retry for "${flags.stage}": no unmatched ` +
                 `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
             );
           }
           fields.Retry = "pending-request";
+          const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+            requireRequiredArtifacts,
+            boltDag: unitResolution ?? undefined,
+          });
+          if (fingerprint === null) {
+            refuseReview(
+              `Cannot start review for "${flags.stage}": a required output ` +
+                "document is missing or unreadable. Create every required output " +
+                "document for this stage, then retry the review.",
+            );
+          }
+          fields["Artifact Fingerprint"] = fingerprint;
+          stampRequestedSourceBinding(node);
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           retried = true;
           return;
         }
-        const expected = attempt.requestCount + 1;
-        const declared = node.review_class ?? "adversarial";
-        let budget: number | null = null;
-        if (autonomousCandidate && attempt.boltStarted) {
-          budget =
-            declared === "advisory"
-              ? 1
-              : node.reviewer_max_iterations ?? 2;
-        } else {
-          try {
-            const effective = resolveReviewClass(
-              declared,
-              getField(state, "Scope") ?? "",
-              state,
-            );
-            if (effective === "none") budget = 0;
-            else if (effective === "advisory") budget = 1;
-            else budget = node.reviewer_max_iterations ?? 2;
-          } catch {
-            // Class resolution fails open; ordinal enforcement remains active.
-          }
+        const recoveryEligible =
+          budget !== null &&
+          scopeStale &&
+          attempt.pendingIterations.size === 0 &&
+          !recoverySpent;
+        if (scopeStale && recoverySpent) {
+          refuseReview(
+            reviewRecoverySpentMessage(
+              flags.stage,
+              autonomousCandidate && attempt.boltStarted
+                ? null
+                : reviewRecoveryGuidance(pd, state, flags.stage),
+              autonomousCandidate && attempt.boltStarted && flags.unit
+                ? {
+                    unit: flags.unit,
+                    slug: attempt.boltSlug,
+                    batch: attempt.boltBatch,
+                  }
+                : undefined,
+            ),
+          );
         }
-        if (budget !== null && iteration > budget) {
+        if (recoverySpent) {
+          refuseReview(
+            reviewRecoveryAlreadyRequestedMessage(
+              flags.stage,
+              attempt.recoveryIteration ?? iteration,
+            ),
+          );
+        }
+        if (!recoveryEligible && budget !== null && iteration > budget) {
           refuseReview(reviewBudgetMessage(flags.stage, iteration, budget));
         }
-        if (budget !== null && expected > budget) {
+        if (!recoveryEligible && budget !== null && expected > budget) {
           refuseReview(reviewBudgetMessage(flags.stage, expected, budget));
+        }
+        if (attempt.pendingIterations.size > 0) {
+          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
+          refuseReview(
+            `Refusing REVIEW_REQUESTED for "${flags.stage}": iteration ${pending.join(", ")} ` +
+              "is still unmatched. Complete it, or repeat that exact ordinal with " +
+              "--retry-pending if the dispatch failed.",
+          );
         }
         if (iteration !== expected) {
           refuseReview(
@@ -797,6 +1389,23 @@ function handleReview(args: string[]): void {
               `is out of sequence; expected ${expected} from the current audit attempt.`,
           );
         }
+        if (recoveryEligible) {
+          fields.Recovery = "stale-receipt";
+          recovery = "stale-receipt";
+        }
+        const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+          requireRequiredArtifacts,
+          boltDag: unitResolution ?? undefined,
+        });
+        if (fingerprint === null) {
+          refuseReview(
+            `Cannot start review for "${flags.stage}": a required output document ` +
+              "is missing or unreadable. Create every required output document " +
+              "for this stage, then retry the review.",
+          );
+        }
+        fields["Artifact Fingerprint"] = fingerprint;
+        stampRequestedSourceBinding(node);
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
     } catch (e) {
@@ -807,6 +1416,7 @@ function handleReview(args: string[]): void {
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
       ...(retried ? { retry: "pending-request" } : {}),
+      ...(recovery ? { recovery } : {}),
     }));
     return;
   }
@@ -829,20 +1439,136 @@ function handleReview(args: string[]): void {
 
   try {
     withAuditLock(pd, () => {
-      const { node, attempt } = loadContext();
+      const {
+        node,
+        attempt,
+        requireRequiredArtifacts,
+        unitResolution,
+      } = loadContext(false, false);
       if (!attempt.pendingIterations.has(iteration)) {
         refuseReview(
           `Refusing REVIEW_COMPLETED for "${flags.stage}": no unmatched ` +
             `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
         );
       }
-      const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+      const requestedFingerprint = attempt.pendingFingerprints.get(iteration);
+      if (
+        requestedFingerprint === undefined ||
+        requestedFingerprint === null ||
+        !/^sha256:[0-9a-f]{64}$/.test(requestedFingerprint)
+      ) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+            `iteration ${iteration} has no valid artifact fingerprint. Re-dispatch that exact ` +
+            "iteration with --retry-pending before recording the verdict.",
+        );
+      }
+      const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+        requireRequiredArtifacts,
+        boltDag: unitResolution ?? undefined,
+      });
       if (fingerprint === null) {
         refuseReview(
-          `Cannot record review for "${flags.stage}": the declared artifact set could not be fingerprinted. Resolve the active intent and readable artifact paths, then record the verdict again.`,
+          `Cannot finish review for "${flags.stage}": a required output document ` +
+            "is missing or unreadable. Restore every required output document " +
+            "to the reviewed state, then record the result again.",
+        );
+      }
+      if (fingerprint !== requestedFingerprint) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": declared artifacts changed after ` +
+            `REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact iteration with ` +
+            "--retry-pending so the reviewer inspects the current bytes.",
         );
       }
       fields["Artifact Fingerprint"] = fingerprint;
+
+      const bindsUnitSource =
+        node.workspace_requires === true &&
+        flags.unit !== undefined &&
+        node.for_each === "unit-of-work" &&
+        flags.single !== "true";
+      const manifest = bindsUnitSource
+        ? readUnitSourceManifest(pd, flags.stage, flags.unit as string)
+        : null;
+      if (manifest?.ok === false) {
+        const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
+        refuseReview(
+          `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
+            `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
+            "this unit created or modified — including shell- or generator-written files — then request and " +
+            "record the review again.",
+        );
+      }
+
+      // One temporary-index pass supplies both the compatibility fingerprint
+      // and the per-unit listing. A null state is recorded explicitly so new
+      // receipts fail closed while fieldless legacy evidence keeps migrating.
+      if (node.workspace_requires) {
+        const sourceState = workspaceSourceState(pd, intent, space);
+        const sourceFingerprint =
+          sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+        const requestedSourceFingerprint =
+          attempt.pendingSourceFingerprints.get(iteration);
+        if (
+          requestedSourceFingerprint === undefined ||
+          requestedSourceFingerprint === null
+        ) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+              `iteration ${iteration} has no source fingerprint. Re-dispatch that exact ` +
+              "iteration with --retry-pending before recording the verdict.",
+          );
+        }
+        if (sourceFingerprint !== requestedSourceFingerprint) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
+              `REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact iteration with ` +
+              "--retry-pending so the reviewer inspects the current bytes.",
+          );
+        }
+        fields["Source Fingerprint"] = sourceFingerprint;
+        if (bindsUnitSource) {
+          const unitFingerprint =
+            sourceState === null || manifest?.ok !== true
+              ? UNBINDABLE_FINGERPRINT
+              : unitSourceFingerprint(
+                  sourceState.listing,
+                  manifest,
+                  manifest.rawBytesSha256,
+                );
+          const requestedUnitFingerprint =
+            attempt.pendingUnitSourceFingerprints.get(iteration);
+          if (
+            requestedUnitFingerprint === undefined ||
+            requestedUnitFingerprint === null
+          ) {
+            refuseReview(
+              `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+                `iteration ${iteration} has no unit source fingerprint. Re-dispatch that exact ` +
+                "iteration with --retry-pending before recording the verdict.",
+            );
+          }
+          if (unitFingerprint !== requestedUnitFingerprint) {
+            refuseReview(
+              `Refusing REVIEW_COMPLETED for "${flags.stage}": unit source or source-manifest.json ` +
+                `changed after REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact ` +
+                "iteration with --retry-pending so the reviewer inspects the current bytes.",
+            );
+          }
+          fields["Unit Source Fingerprint"] = unitFingerprint;
+          if (sourceState !== null && manifest?.ok === true) {
+            writeUnitSourceSnapshot(
+              pd,
+              flags.stage,
+              flags.unit as string,
+              sourceState.listing,
+              manifest,
+              manifest.rawBytesSha256,
+            );
+          }
+        }
+      }
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
     }, intent, space);
   } catch (e) {
@@ -881,11 +1607,14 @@ export function main(argv: string[]): void {
       case "answer":
         handleAnswer(filteredArgs.slice(1));
         break;
+      case "link":
+        handleLink(filteredArgs.slice(1));
+        break;
       case "review":
         handleReview(filteredArgs.slice(1));
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, link, review`);
     }
   } catch (e) {
     error(errorMessage(e));

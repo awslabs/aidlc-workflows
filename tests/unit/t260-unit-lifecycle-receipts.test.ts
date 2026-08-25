@@ -44,6 +44,7 @@ import {
 } from "../harness/fixtures.ts";
 import {
   activeUnitCheckpoint,
+  artifactFilename,
   parseBoltDag,
   readAllAuditShards,
   unitCompletedReceipts,
@@ -54,7 +55,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const SLUG = "functional-design"; // inline per-unit stage
-const PRODUCES = ["business-logic-model", "business-rules", "domain-entities"];
+const PRODUCES = ["entities", "rules", "functional-spec", "traceability"];
 
 // A minimal Construction state with functional-design in-flight and the
 // skeleton stance recorded (mirrors t209's constructionState) — so the engine's
@@ -66,7 +67,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 - **Project**: unit lifecycle receipts test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: on
 
 ## Runtime State
@@ -137,7 +138,7 @@ function writeUnitArtifacts(proj: string, unit: string): void {
   const dir = join(seededRecordDir(proj), "construction", unit, SLUG);
   mkdirSync(dir, { recursive: true });
   for (const name of PRODUCES) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name}\nstub\n`, "utf-8");
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name}\nstub\n`, "utf-8");
   }
 }
 
@@ -189,7 +190,7 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
     const dir = join(seededRecordDir(proj), "construction", "unit-a", SLUG);
     mkdirSync(dir, { recursive: true });
     for (const name of PRODUCES) {
-      mkdirSync(join(dir, `${name}.md`));
+      mkdirSync(join(dir, artifactFilename(name)));
     }
 
     expect(runNext(proj).out).toContain('"unit":"unit-a"');
@@ -424,7 +425,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
     const p = unitVerb(proj, "pause", "unit-a", [
       "--reason", "blocked on auth contract",
-      "--next-action", "confirm token flow, then finish business-rules.md",
+      "--next-action", "confirm token flow, then finish rules.md",
     ]);
     expect(p.rc).toBe(0);
   }

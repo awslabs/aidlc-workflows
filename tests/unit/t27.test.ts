@@ -115,6 +115,7 @@ const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
+const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
 
 const tempDirs: string[] = [];
@@ -197,6 +198,13 @@ function spaceKnowledgeOf(p: string): string {
     ? readFileSync(spaceCursor, "utf-8").trim() || "default"
     : "default";
   return join(p, "aidlc", "spaces", space, "knowledge");
+}
+function spaceCodekbOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  return join(p, "aidlc", "spaces", space, "codekb");
 }
 const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
 // The DETERMINISTIC per-clone audit shard a spawned utility resolves (the fixture
@@ -349,6 +357,9 @@ describe("t27 aidlc-utility help (migrated from t27-tool-utility.sh, plan 81)", 
       "refactor",
       "infra",
       "security-patch",
+      "classic",
+      "workshop",
+      "express",
     ]) {
       expect(r.stdout).toContain(scope);
     }
@@ -358,10 +369,10 @@ describe("t27 aidlc-utility help (migrated from t27-tool-utility.sh, plan 81)", 
     expect(util(["help"]).stdout).toContain("--depth");
   });
 
-  test("46-47: help contains --test-strategy and workshop scope", () => {
+  test("46-47: help contains --test-strategy and classic scope", () => {
     const r = util(["help"]);
     expect(r.stdout).toContain("--test-strategy");
-    expect(r.stdout).toContain("workshop");
+    expect(r.stdout).toContain("classic");
   });
 });
 
@@ -406,6 +417,22 @@ describe("t27 aidlc-utility status", () => {
     state(["advance", "workspace-detection"], p);
     state(["advance", "state-init"], p);
     const current = state(["get", "Current Stage"], p).stdout.trim();
+    const reviewArgs = [
+      LOG_TOOL,
+      "review",
+      "--stage",
+      current,
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+      "--project-dir",
+      p,
+    ];
+    spawnSync(BUN, reviewArgs, { encoding: "utf-8" });
+    spawnSync(BUN, [...reviewArgs, "--verdict", "READY"], {
+      encoding: "utf-8",
+    });
     state(["gate-start", current], p);
     const r = util(["status"], p);
     expect(r.stdout).toContain("Awaiting your approval");
@@ -535,10 +562,10 @@ describe("t27 aidlc-utility doctor", () => {
     expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE (unset");
   });
 
-  test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=workshop as valid", () => {
+  test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=classic as valid", () => {
     const p = bareProj();
-    const r = util(["doctor"], p, { AWS_AIDLC_DEFAULT_SCOPE: "workshop" });
-    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE=workshop (valid)");
+    const r = util(["doctor"], p, { AWS_AIDLC_DEFAULT_SCOPE: "classic" });
+    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE=classic (valid)");
   });
 
   test("61: doctor reports AWS_AIDLC_DEFAULT_SCOPE=bogus as invalid", () => {
@@ -553,7 +580,7 @@ describe("t27 aidlc-utility doctor", () => {
 // ============================================================
 
 describe("t27 aidlc-utility init", () => {
-  test("14: init creates aidlc-state.md, audit shard dir, and knowledge/ directory", () => {
+  test("14: init creates state, audit, codekb, and knowledge directories", () => {
     const p = emptyDir();
     util(["intent-create", "--scope", "poc"], p);
     // P4: birth writes a per-intent record (state + audit shards), not the flat
@@ -566,6 +593,9 @@ describe("t27 aidlc-utility init", () => {
     // knowledge/ is SPACE-level (ensureWorkspaceDirs creates
     // aidlc/spaces/<space>/knowledge/ — a sibling of intents, not per-record).
     expect(existsSync(spaceKnowledgeOf(p))).toBe(true);
+    expect(existsSync(spaceCodekbOf(p))).toBe(true);
+    expect(statSync(spaceCodekbOf(p)).isDirectory()).toBe(true);
+    expect(readdirSync(spaceCodekbOf(p))).toEqual([]);
   });
 
   test("15: init output contains birth + state-init summary", () => {
@@ -917,9 +947,9 @@ describe("t27 aidlc-utility resolve-env-scope", () => {
   });
 
   test("63: resolve-env-scope with valid env prints scope= line and exits 0", () => {
-    const r = util(["resolve-env-scope"], undefined, { AWS_AIDLC_DEFAULT_SCOPE: "workshop" });
+    const r = util(["resolve-env-scope"], undefined, { AWS_AIDLC_DEFAULT_SCOPE: "classic" });
     expect(r.status).toBe(0);
-    expect(r.out).toContain("scope=workshop");
+    expect(r.out).toContain("scope=classic");
   });
 
   test("64: resolve-env-scope with invalid env exits 1 with canonical error", () => {

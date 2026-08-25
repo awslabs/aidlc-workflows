@@ -31,10 +31,13 @@ const BUN = process.execPath;
 // safe.directory entries have been copied into the suite's isolated config.
 const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
 const LIVE_MODEL_GATES = [
+  "AIDLC_CLAUDE_SDK_LIVE",
   "AIDLC_TUI_LIVE",
   "AIDLC_KIRO_ACP_LIVE",
   "AIDLC_KIRO_TUI_LIVE",
   "AIDLC_CODEX_EXEC_LIVE",
+  "AIDLC_COPILOT_EXEC_LIVE",
+  "AIDLC_CURSOR_RUN_LIVE",
   "AIDLC_KIRO_IDE_LIVE",
   "AIDLC_OPENCODE_RUN_LIVE",
 ] as const;
@@ -260,8 +263,16 @@ if (existsSync(projectSettings)) {
 let logDir = "";
 let cleanupLogDir = false;
 if (args.verbose) {
-  logDir = join(SCRIPT_DIR, "logs", utcStamp());
-  mkdirSync(logDir, { recursive: true });
+  // The stamp has 1-second resolution, so two concurrent runners (e.g. a
+  // sliced gate next to a smoke run whose t05 spawns child runners) can land
+  // on the same second. Sharing a dir is not benign: both write and MUTUALLY
+  // DELETE _results/*.meta, and one runner's cleanup can rip the dir out from
+  // under the other mid-run. The pid suffix makes the dir per-process; the
+  // non-recursive mkdir below turns any residual collision into a loud error
+  // instead of a silent share.
+  logDir = join(SCRIPT_DIR, "logs", `${utcStamp()}-p${process.pid}`);
+  mkdirSync(join(SCRIPT_DIR, "logs"), { recursive: true });
+  mkdirSync(logDir);
   process.env.AIDLC_TEST_VERBOSE = "true";
   process.env.AIDLC_TEST_LOG_DIR = logDir;
   process.stdout.write(`Verbose mode: logging to ${logDir}\n`);

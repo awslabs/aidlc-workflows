@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiro IDE Hooks Fix — Implementation Plan</title>
+<style>
+  body { font: 15px/1.6 -apple-system, system-ui, sans-serif; max-width: 920px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { border-bottom: 3px solid #e63946; padding-bottom: .3rem; }
+  h2 { margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: .2rem; }
+  h3 { margin-top: 1.4rem; color: #444; }
+  code { background: #f4f4f4; padding: .1rem .3rem; border-radius: 3px; font-size: .9em; }
+  pre { background: #f7f7f7; border: 1px solid #e0e0e0; border-radius: 6px; padding: .8rem 1rem; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #ccc; padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; }
+  .ok { color: #2a9d3f; font-weight: 600; }
+  .no { color: #e63946; font-weight: 600; }
+  .note { background: #fff8e1; border-left: 4px solid #f4a261; padding: .6rem 1rem; margin: 1rem 0; }
+  .scope { background: #e7f5ff; border-left: 4px solid #1971c2; padding: .6rem 1rem; margin: 1rem 0; }
+</style>
+</head>
+<body>
+<h1>Kiro IDE Hooks Fix — Implementation Plan</h1>
+<p><strong>Branch:</strong> <code>fix/kiro-hooks</code> (off <code>v2</code>) &middot;
+<strong>Status:</strong> awaiting approval &middot;
+<strong>Scope:</strong> Kiro IDE harness only (<code>harness/kiro-ide/</code>) + one shared core helper + tests/docs.</p>
+
+<h2>1. Problem (empirically verified)</h2>
+<p>Captured live inside Kiro IDE 0.12-main by registering probe <code>.kiro.hook</code>
+files. Kiro IDE delivers hook context through an <strong>environment variable
+<code>USER_PROMPT</code></strong>, not stdin. The IDE opens stdin but never writes/closes it,
+so the current adapter's <code>Bun.stdin.text()</code> always hits its 2s timeout and proceeds
+with an empty payload — every payload-dependent hook silently no-ops.</p>
+
+<p><code>USER_PROMPT</code> carries JSON shaped like:</p>
+<pre>{ "toolName": "fs_write", "toolArgs": {}, "toolResult": "Created the /abs/path/file.md file.", "toolSuccess": true }</pre>
+
+<p><strong>Critical limitation:</strong> <code>toolArgs</code> is <em>always</em> empty <code>{}</code>.
+The IDE never passes tool inputs. So the file path is only recoverable from the
+<code>toolResult</code> prose, and the shell command is unrecoverable (its <code>toolResult</code>
+is only stdout + exit code).</p>
+
+<div class="scope">
+<strong>Out of scope (CLI):</strong> the Kiro CLI uses a different mechanism (agent-JSON
+<code>hooks</code> block + live stdin with populated <code>tool_input</code>) and works today.
+The CLI adapter (<code>harness/kiro/hooks/aidlc-kiro-adapter.ts</code>) is <strong>not touched</strong>.
+A separate, known CLI issue (conductor self-approves gates in one turn) is NOT a hook-payload
+bug and is tracked separately.
+</div>
+
+<h2>2. Design principle: separate adapters, no runtime branching</h2>
+<p>The two adapters are <strong>already separate authored files</strong>, each shipped into its
+own dist by its manifest:</p>
+<ul>
+  <li><code>harness/kiro/hooks/aidlc-kiro-adapter.ts</code> — CLI (stdin + <code>tool_input</code>)</li>
+  <li><code>harness/kiro-ide/hooks/aidlc-kiro-adapter.ts</code> — IDE (this fix)</li>
+</ul>
+<p>The build substitutes the right adapter per dist. <strong>No <code>if (CLI) … else (IDE)</code>
+forks at runtime.</strong> The fix lives entirely in the IDE adapter's input layer; the
+byte-shared core hook bodies (<code>aidlc-audit-logger.ts</code>, etc.) and their
+Claude-shaped <code>{tool_input:{file_path}}</code> contract are unchanged.</p>
+
+<h2>3. The four issues and their fixes</h2>
+<table>
+<tr><th>#</th><th>Issue</th><th>Fix</th><th>Hooks affected</th></tr>
+<tr>
+  <td>1</td>
+  <td>stdin is dead; context arrives via <code>USER_PROMPT</code> env var</td>
+  <td>IDE adapter reads <code>process.env.USER_PROMPT</code> instead of stdin. Drop the 2s timeout entirely.</td>
+  <td>all payload-dependent</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><code>toolArgs</code> always empty → no file path / command</td>
+  <td>File path: scrape from <code>toolResult</code> prose (Option A, strict, fail-open). Command: unrecoverable → see #3.</td>
+  <td>audit-logger, sensor-fire</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td>runtime-compile's command filter needs the command string</td>
+  <td>Drop the command filter on the IDE; dispatch the core compile, which already self-gates on the audit tail (idempotent + cheap).</td>
+  <td>runtime-compile</td>
+</tr>
+<tr>
+  <td>4</td>
+  <td>sync-statusline needs the task slug from the payload</td>
+  <td>Payload-independent: read the latest <code>STAGE_STARTED</code> slug from the audit tail; update state only if it differs from <code>Current Stage</code>.</td>
+  <td>sync-statusline</td>
+</tr>
+</table>
+
+<h3>Option A — toolResult path-extraction (confirmed wordings)</h3>
+<table>
+<tr><th>toolName</th><th>toolResult</th><th>canonical</th><th>regex</th></tr>
+<tr><td><code>fs_write</code></td><td><code>Created the &lt;PATH&gt; file.</code></td><td>Write</td><td><code>/^Created the (.+) file\.$/</code></td></tr>
+<tr><td><code>str_replace</code></td><td><code>Replaced text in &lt;PATH&gt;</code></td><td>Edit</td><td><code>/^Replaced text in (.+)$/</code></td></tr>
+<tr><td><code>fs_append</code></td><td><code>Appended the text to the &lt;PATH&gt; file.</code></td><td>Edit</td><td><code>/^Appended the text to the (.+) file\.$/</code></td></tr>
+</table>
+<div class="note">
+<strong>Strict + fail-open:</strong> only these three wordings match. No match → exit 0
+(advisory miss, no audit/sensor row for that write). No mtime fallback for now —
+the framework writes several files under the record root every cycle (audit shard,
+health heartbeats, runtime-graph), so "newest mtime" would frequently point at one of
+those, not the artifact. The prose names the exact user-written file with no race.
+Both hooks are advisory; a missed row never corrupts workflow state (the state machine
+drives off transition events, not artifact-write rows).
+</div>
+
+<h2>4. Per-hook status after the fix</h2>
+<table>
+<tr><th>Hook</th><th>Before (IDE)</th><th>After (IDE)</th><th>How</th></tr>
+<tr><td>session-start</td><td class="ok">works</td><td class="ok">works</td><td>no payload needed (unchanged)</td></tr>
+<tr><td>session-end</td><td class="ok">works</td><td class="ok">works</td><td>no payload needed (unchanged)</td></tr>
+<tr><td>stop</td><td class="ok">works</td><td class="ok">works</td><td>no payload needed (unchanged)</td></tr>
+<tr><td>audit-logger</td><td class="no">no-op</td><td class="ok">works</td><td>file path from toolResult prose</td></tr>
+<tr><td>sensor-fire</td><td class="no">no-op</td><td class="ok">works</td><td>file path from toolResult prose</td></tr>
+<tr><td>runtime-compile</td><td class="no">no-op</td><td class="ok">works</td><td>audit-tail gate (no command needed)</td></tr>
+<tr><td>sync-statusline</td><td class="no">no-op</td><td class="ok">works</td><td>latest STAGE_STARTED slug from audit tail</td></tr>
+<tr><td>log-subagent</td><td>partial</td><td class="ok">works</td><td>subagent context via USER_PROMPT (verify wording)</td></tr>
+</table>
+
+<h2>5. Work items</h2>
+<h3>5.1 IDE adapter input layer (issues 1 + 2)</h3>
+<ul>
+  <li>Replace the stdin-read block with a <code>USER_PROMPT</code> env parse. Remove the
+      <code>Promise.race</code> / 2s timeout.</li>
+  <li>Add <code>extractWrittenPath(toolName, toolResult)</code> implementing the three strict
+      patterns; map <code>fs_write→Write</code>, <code>str_replace/fs_append→Edit</code>.</li>
+  <li><code>audit-and-sensors</code> target: build <code>{tool_input:{file_path}}</code> from the
+      scraped path; fail-open (return null) when no path.</li>
+</ul>
+<h3>5.2 runtime-compile IDE target (issue 3)</h3>
+<ul>
+  <li>Drop the <code>tool !== "Bash"</code> / command checks for the IDE; always forward to the
+      core <code>aidlc-runtime-compile.ts</code>, which gates on the audit tail.</li>
+</ul>
+<h3>5.3 sync-statusline payload-independent (issue 4)</h3>
+<ul>
+  <li>New shared core helper in <code>aidlc-lib.ts</code> (or reuse <code>findAllEvents(audit,
+      "STAGE_STARTED")</code>): return the latest <code>STAGE_STARTED</code> slug.</li>
+  <li>IDE <code>state-sync</code> target: read that slug, compare to <code>Current Stage</code> in
+      state, call <code>set-status --stage &lt;slug&gt;</code> only on difference. No payload read.</li>
+</ul>
+<h3>5.4 Tests (no live IDE needed)</h3>
+<ul>
+  <li>Unit: drive the IDE adapter with <code>USER_PROMPT</code> env fixtures — assert path
+      extraction for create/edit/append, fail-open on unknown wording.</li>
+  <li>Unit: <code>state-sync</code> and <code>runtime-compile</code> fire off an audit fixture with
+      no payload.</li>
+  <li>Guard: the two adapters remain distinct (CLI uses stdin, IDE uses env).</li>
+</ul>
+<h3>5.5 Docs + release</h3>
+<ul>
+  <li>Update <code>docs/guide/harnesses/kiro-ide.md</code> "How hooks work" → env-var mechanism.</li>
+  <li><code>bun scripts/package.ts</code> + <code>--check</code>; bump <code>aidlc-version.ts</code>
+      + README badge + CHANGELOG entry.</li>
+</ul>
+
+<h2>6. Sequencing</h2>
+<ol>
+  <li>Core helper for latest-STAGE_STARTED slug (+ unit test).</li>
+  <li>IDE adapter rewrite: input layer, path extractor, three targets (5.1–5.3).</li>
+  <li>Adapter unit tests with env fixtures (5.4).</li>
+  <li>Package + drift check; docs; version + changelog.</li>
+  <li>Commit + push.</li>
+</ol>
+<div class="note"><strong>Verification gap:</strong> unit tests fully cover the parsing/gating
+logic headlessly, but true end-to-end ("does it fire in a real IDE session") needs a manual
+Kiro IDE run — called out as a manual post-merge check, not automatable in CI.</div>
+</body>
+</html>

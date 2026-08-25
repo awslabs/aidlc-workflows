@@ -4,7 +4,7 @@
   "allowed": [
     {
       "file": "docs/reference/14-claude-features.md",
-      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) |",
+      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |",
       "why": "native-include mapping: names the .claude/rules/aidlc.md @-import stub that pulls the relocated memory tree (correct, not stale)"
     },
     {
@@ -24,7 +24,7 @@
     },
     {
       "file": "docs/reference/06-hooks-and-tools.md",
-      "text": "Claude and Codex consume `hookSpecificOutput.updatedInput`; the opencode adapter applies that rewrite to `output.args`. The hook serializes the complete response before writing and refuses an oversized response with repair guidance, so a transport ceiling cannot turn it into truncated JSON. Kiro CLI exposes subagent arguments but has no rewrite channel, so its adapter observes the proposed rewrite and emits an advisory warning while allowing dispatch; its agent-v1 `resources` preload the memory tree. A valid bundle that exceeds the rewrite limit also proceeds through that native preload, while a missing, unreadable, or invalid UTF-8 required rule still blocks with repair guidance. Kiro IDE exposes no tool arguments to hooks and does not register this hook; `.kiro/steering/aidlc-active-memory.md` is always included and uses live file references to preload the active memory tree for the conductor and delegated agents.",
+      "text": "Claude and Codex consume `hookSpecificOutput.updatedInput`; the opencode adapter applies that rewrite to `output.args`. The hook serializes the complete response before writing and refuses an oversized response with repair guidance, so a transport ceiling cannot turn it into truncated JSON. Kiro CLI exposes subagent arguments but has no rewrite channel, so its adapter observes the proposed rewrite and emits an advisory warning while allowing dispatch; its agent-v1 `resources` preload the memory tree. A valid bundle that exceeds the rewrite limit also proceeds through that native preload, while a missing, unreadable, or invalid UTF-8 required rule still blocks with repair guidance. Kiro IDE does not register this hook because tool-argument delivery is not uniform across supported generations; `.kiro/steering/aidlc-active-memory.md` is always included and uses live file references to preload the active memory tree for the conductor and delegated agents.",
       "why": "names Kiro IDE's native always-included steering file that loads the relocated active-space memory tree"
     },
     {
@@ -34,17 +34,17 @@
     },
     {
       "file": "docs/reference/01-architecture.md",
-      "text": "9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or is embedded in SKILL.md/stage-protocol.md. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.",
+      "text": "9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or the static/conditional protocol files. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.",
       "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
     },
     {
       "file": "docs/harness-engineering/06-sensors.md",
-      "text": "`**/{aidlc-docs,intents}/**` \u2014 the per-intent record tree, with the legacy",
+      "text": "`**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy",
       "why": "sensor matches-glob value (the shipped framework glob, post-P9)"
     },
     {
       "file": "docs/harness-engineering/06-sensors.md",
-      "text": "`aidlc-docs/` arm kept for a pre-migration project), the two code-quality checks",
+      "text": "`aidlc-docs/` arm kept for a pre-migration project), traceability scopes to",
       "why": "prose explaining the legacy aidlc-docs arm of the sensor glob"
     },
     {

@@ -1,5 +1,5 @@
 // PreToolUse hook: deterministic enforcement of the per-unit reviewer
-// read-scope bound (stage-protocol 12a).
+// read-scope bound (stage-protocol-reviewer.md §12a).
 //
 // The prose bound says a reviewer dispatched for one unit must not read other
 // units' construction/<other-unit>/ content through any tool - not by opening
@@ -19,7 +19,7 @@
 //
 // How the hook knows a review is in flight: the conductor writes a dispatch
 // record (reviewerDispatchPath, `<record>/.aidlc-reviewer-dispatch.json`) at
-// 12a step 1 before invoking a per-unit reviewer, and deletes it at step 3
+// stage-protocol-reviewer.md §12a step 1 before invoking a per-unit reviewer, and deletes it at step 3
 // when the verdict is read. The record carries {reviewer, stage, unit,
 // exempt[]} - the facts no harness payload delivers. Identity comes from the
 // harness: Claude Code and Codex put the active subagent's name in the
@@ -27,8 +27,11 @@
 // both), and the Kiro CLI adapter asserts scoped registration instead (it
 // wires this hook inside the reviewer agents' own JSON configs, so every
 // call arriving through that registration IS the reviewer's). Kiro IDE
-// ships no registration: its hook payloads carry no tool inputs, so a
-// pre-tool matcher has nothing to inspect there.
+// ships no registration: tool inputs are not uniformly available across its
+// supported generations (captured 0.12 and early-1.x payloads are empty; later
+// 1.x builds populate some PreToolUse and delegation inputs - see
+// docs/reference/kiro-ide-hook-payload.md), and its payloads carry no
+// agent_type, so no stable identity/target contract exists there.
 //
 // Fail-open everywhere: no record, a stale record (mtime beyond
 // REVIEWER_DISPATCH_TTL_MS - janitored like the compose marker), malformed
@@ -67,7 +70,7 @@ const HOOK_NAME = "reviewer-scope";
 // the decision table is unit-testable without a live session. The hook body
 // only wires stdin, the dispatch record, and the exit code around it.
 
-/** The conductor-written dispatch record (12a step 1). */
+/** The conductor-written dispatch record (stage-protocol-reviewer.md §12a step 1). */
 export interface ReviewerDispatch {
   /** Agent name of the dispatched reviewer, e.g. aidlc-architecture-reviewer-agent. */
   reviewer: string;
@@ -700,16 +703,20 @@ export function blockReason(target: string, dispatch: ReviewerDispatch): string 
 
 // The two shipped review-only agents. Used ONLY for the advisory
 // missing-record drop below (when one of these is active with no dispatch
-// record and touches construction/ paths, the conductor likely forgot the 12a
+// record and touches construction/ paths, the conductor likely forgot the stage-protocol-reviewer.md §12a
 // step-1 write); the dispatch record's reviewer field is the authoritative
 // identity during enforcement.
 const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
 
 // --- Main ---------------------------------------------------------------------
 
-if (import.meta.main) {
+/** The dispatchable body (`aidlc hook reviewer-scope` requires an exported
+ *  run(input)). Returns the exit code (0 allow, 2 block with the reason on
+ *  stderr) instead of process.exit so the compiled-binary route can relay the
+ *  block; the CLI entry below preserves the direct-run contract unchanged. */
+export async function run(input: string): Promise<number> {
   // Deterministic off-switch: enforcement disabled entirely.
-  if (process.env.AIDLC_DISABLE_REVIEWER_SCOPE_HOOK === "1") process.exit(0);
+  if (process.env.AIDLC_DISABLE_REVIEWER_SCOPE_HOOK === "1") return 0;
 
   const projectDir = resolveProjectDirFromHook(import.meta.url);
 
@@ -721,29 +728,26 @@ if (import.meta.main) {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
 
-  // A TTY means no harness JSON is coming (test / debug contexts) - allow.
-  if (process.stdin.isTTY) process.exit(0);
-
   let parsed: ClaudeCodeHookInput;
   try {
-    const raw: unknown = JSON.parse(await Bun.stdin.text());
-    if (!isClaudeCodeHookInput(raw)) process.exit(0);
+    const raw: unknown = JSON.parse(input);
+    if (!isClaudeCodeHookInput(raw)) return 0;
     parsed = raw;
   } catch {
-    process.exit(0); // malformed stdin - fail open
+    return 0; // malformed stdin - fail open
   }
 
   const toolName = parsed.tool_name ?? "";
   const toolInput = parsed.tool_input;
   if (!["Read", "NotebookRead", "Edit", "MultiEdit", "Write", "NotebookEdit", "LS", "Glob", "Grep", "Bash"].includes(toolName)) {
-    process.exit(0);
+    return 0;
   }
 
   const recordPath = reviewerDispatchPath(projectDir);
   if (!existsSync(recordPath)) {
     // No review in flight. One advisory: a review-only agent touching
     // construction/ paths with no dispatch record suggests the conductor
-    // skipped the 12a step-1 write - surfaced via the doctor's drop counters,
+    // skipped the stage-protocol-reviewer.md §12a step-1 write - surfaced via the doctor's drop counters,
     // never a block (the record is the only source of unit + exempt, so there
     // is nothing sound to enforce without it). RATE-BOUNDED: a chatty reviewer
     // under a conductor that never writes the record would otherwise append
@@ -763,7 +767,7 @@ if (import.meta.main) {
             recordHookDrop(
               projectDir,
               HOOK_NAME,
-              `${agent} touched construction/ paths with no reviewer dispatch record; enforcement skipped (write the 12a step-1 dispatch record before invoking a per-unit reviewer)`,
+              `${agent} touched construction/ paths with no reviewer dispatch record; enforcement skipped (write the stage-protocol-reviewer.md §12a step-1 dispatch record before invoking a per-unit reviewer)`,
             );
           }
         }
@@ -771,7 +775,7 @@ if (import.meta.main) {
     } catch {
       // Advisory only.
     }
-    process.exit(0);
+    return 0;
   }
 
   let dispatch: ReviewerDispatch | null = null;
@@ -791,16 +795,16 @@ if (import.meta.main) {
         HOOK_NAME,
         "ignoring an orphaned reviewer dispatch record (older than the freshness window); cleaned it up",
       );
-      process.exit(0);
+      return 0;
     }
     dispatch = parseDispatchRecord(await Bun.file(recordPath).text());
   } catch (e) {
     recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
-    process.exit(0); // unreadable record - fail open
+    return 0; // unreadable record - fail open
   }
   if (dispatch === null) {
     recordHookDrop(projectDir, HOOK_NAME, "reviewer dispatch record is malformed; enforcement skipped");
-    process.exit(0);
+    return 0;
   }
 
   // Identity: enforce only for the dispatched reviewer. Claude Code and Codex
@@ -808,14 +812,18 @@ if (import.meta.main) {
   // calls). The Kiro CLI adapter instead asserts scoped_registration - it
   // registers this hook inside the reviewer agents' own JSON configs, so
   // every call arriving through that registration is the reviewer's. (Kiro
-  // IDE ships no registration at all: its hook payloads carry no tool inputs,
-  // so there is nothing to match on there.) Anything else - the conductor's
-  // own calls, other subagents - passes through untouched.
+  // IDE ships no registration at all: tool inputs are not uniformly available
+  // across its supported generations - captured 0.12 and early-1.x payloads
+  // are empty, while later 1.x builds populate some PreToolUse and delegation
+  // inputs (see docs/reference/kiro-ide-hook-payload.md) - and its payloads
+  // carry no agent_type, so no stable identity/target contract exists there.)
+  // Anything else - the conductor's own calls, other subagents - passes
+  // through untouched.
   const agentType = parsed.agent_type ?? "";
   const scopedRegistration = parsed.scoped_registration === true;
   const isDispatchedReviewer =
     agentType.length > 0 ? agentType === dispatch.reviewer : scopedRegistration;
-  if (!isDispatchedReviewer) process.exit(0);
+  if (!isDispatchedReviewer) return 0;
 
   let verdict: ScopeVerdict;
   try {
@@ -826,9 +834,9 @@ if (import.meta.main) {
     });
   } catch (e) {
     recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
-    process.exit(0); // matcher failure - fail open
+    return 0; // matcher failure - fail open
   }
-  if (!verdict.block) process.exit(0);
+  if (!verdict.block) return 0;
 
   // Audit the refusal so the run's record shows when the bound bit.
   // Best-effort: an audit failure never changes the block decision. The lock
@@ -862,5 +870,11 @@ if (import.meta.main) {
   }
 
   process.stderr.write(`${blockReason(verdict.target ?? "", dispatch)}\n`);
-  process.exit(2); // harness PreToolUse reject contract: exit 2 + stderr blocks
+  return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
+}
+
+if (import.meta.main) {
+  // A TTY means no harness JSON is coming (test / debug contexts) - allow.
+  if (process.stdin.isTTY) process.exit(0);
+  process.exit(await run(await Bun.stdin.text()));
 }

@@ -43,7 +43,10 @@ const authoredCoreHooksDir = process.env.AIDLC_T227_HOOKS_DIR;
 const coreHooksDir = authoredCoreHooksDir ?? join(REPO_ROOT, "dist", "claude", ".claude", "hooks");
 let materializedAdapterRoot: string | null = null;
 
-function materializedAdapterPath(harnessName: "kiro" | "kiro-ide" | "codex", fileName: string): string {
+function materializedAdapterPath(
+  harnessName: "kiro" | "kiro-ide" | "codex" | "cursor",
+  fileName: string,
+): string {
   if (materializedAdapterRoot === null) {
     materializedAdapterRoot = mkdtempSync(join(tmpdir(), "aidlc-t228-adapters-"));
   }
@@ -73,6 +76,10 @@ function adapterSubjects(): Subject[] {
         name: "codex adapter",
         path: materializedAdapterPath("codex", "aidlc-codex-adapter.ts"),
       },
+      {
+        name: "cursor adapter",
+        path: materializedAdapterPath("cursor", "aidlc-cursor-adapter.ts"),
+      },
     ];
   }
   return [
@@ -87,6 +94,10 @@ function adapterSubjects(): Subject[] {
     {
       name: "codex adapter",
       path: join(REPO_ROOT, "dist", "codex", ".codex", "hooks", "aidlc-codex-adapter.ts"),
+    },
+    {
+      name: "cursor adapter",
+      path: join(REPO_ROOT, "dist", "cursor", ".cursor", "hooks", "aidlc-cursor-adapter.ts"),
     },
   ];
 }

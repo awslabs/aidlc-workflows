@@ -70,15 +70,17 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
   runOrchestrateNext,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -149,6 +151,30 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
     seedStateFile(proj, BROWNFIELD_INIT_DONE);
     expect(runNext(proj, []).out).toContain('"stage":"reverse-engineering"');
   });
+
+  test("untracked-only completions route normally without a per-turn advisory", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const statePath = seededStateFile(proj);
+    const state = readFileSync(statePath, "utf-8")
+      .replace("- [-] feasibility — EXECUTE", "- [x] feasibility — EXECUTE")
+      .replace("- [ ] scope-definition — EXECUTE", "- [-] scope-definition — EXECUTE")
+      .replace("- **Current Stage**: feasibility", "- **Current Stage**: scope-definition")
+      .replace("- **Next Stage**: scope-definition", "- **Next Stage**: team-formation");
+    writeFileSync(statePath, state, "utf-8");
+    const result = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env },
+    });
+    expect(result.status).toBe(0);
+    const directive = JSON.parse((result.stdout ?? "").trim()) as {
+      kind: string;
+      stage_validity?: unknown;
+    };
+    expect(directive.kind).toBe("load-steering");
+    expect(directive.stage_validity).toBeUndefined();
+  });
 });
 
 // ===========================================================================
@@ -180,7 +206,7 @@ describe("t114 scope precedence + validation", () => {
 
   test("7: env scope beats default (poc resolved, run-stage emitted)", () => {
     // Valid env scope (poc) resolves; --stage surfaces a run-stage directive.
-    // The default (feature) is never reached because env supplied a valid scope.
+    // The default (classic) is never reached because env supplied a valid scope.
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["--stage", "intent-capture"], {
       AWS_AIDLC_DEFAULT_SCOPE: "poc",
@@ -350,6 +376,64 @@ describe("t114 plugin terminal routing", () => {
   });
 });
 
+describe("t114 knowledge (DocumentKB) terminal routing", () => {
+  // The engine parser and the classifier are separate code paths whose comments
+  // require byte-for-byte agreement. These cases assert the ENGINE half: a
+  // knowledge verb must emit a terminal print directive naming
+  // aidlc-knowledge.ts, never a workflow directive and never an intent-birth ask.
+  test("every verb routes to aidlc-knowledge.ts and never enters the workflow funnel", () => {
+    for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"]) {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      const out = runNext(proj, ["knowledge", verb]).out;
+      expect(out, verb).toContain('"kind":"print"');
+      expect(out, verb).toContain(`aidlc-knowledge.ts ${verb}`);
+      expect(out, verb).not.toContain('"kind":"run-stage"');
+      expect(out, verb).not.toContain('"kind":"ask"');
+    }
+  });
+
+  test("a mid-workflow knowledge command does not advance the workflow", () => {
+    // The regression this guards: a terminal noun that reaches the funnel while
+    // a workflow is active reads as intent prose and can advance a stage.
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["knowledge", "list", "--json"]).out;
+    expect(out).toContain("aidlc-knowledge.ts list --json");
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("arguments survive the round trip, including a path with a space", () => {
+    proj = createOrchestrationTestProject();
+    expect(runNext(proj, ["knowledge", "onboard", "docs/policy.pdf"]).out)
+      .toContain("aidlc-knowledge.ts onboard docs/policy.pdf");
+    // shellArg quoting must keep a spaced path as ONE argument.
+    const spaced = runNext(proj, ["knowledge", "onboard", "my docs/policy.pdf"]).out;
+    expect(spaced).toContain("aidlc-knowledge.ts onboard");
+    expect(spaced).toMatch(/'my docs\/policy\.pdf'|"my docs\/policy\.pdf"/);
+  });
+
+  test("knowledge help routes terminally", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["knowledge", "help"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-knowledge.ts help");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("missing and unknown knowledge verbs are deterministic errors", () => {
+    proj = createOrchestrationTestProject();
+    const missing = runNext(proj, ["knowledge"]).out;
+    const unknown = runNext(proj, ["knowledge", "remove"]).out;
+    expect(missing).toContain('"kind":"error"');
+    expect(missing).toContain("missing verb for noun 'knowledge'");
+    expect(unknown).toContain('"kind":"error"');
+    expect(unknown).toContain("unknown verb 'remove' for noun 'knowledge'");
+    // Not an ask: `knowledge remove` must not offer to birth an intent.
+    expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
+  });
+});
+
 // ===========================================================================
 // With-state jump commits via an `execute` print directive (.sh test 12)
 // ===========================================================================
@@ -503,6 +587,27 @@ describe("t114 parked branch (#367)", () => {
     expect(out).toContain("unpark");
   });
 
+  test("--new-intent bypasses the parked terminal and keeps its description guard", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    park(proj);
+
+    const valid = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "bugfix",
+      "fix the unrelated login bug",
+    ]).out;
+    expect(valid).toContain('"kind":"print"');
+    expect(valid).toContain("intent-create --scope bugfix");
+    expect(valid).not.toContain('"kind":"parked"');
+
+    const missing = runNext(proj, ["--new-intent", "--scope", "bugfix"]).out;
+    expect(missing).toContain('"kind":"error"');
+    expect(missing).toContain("requires a nonblank new-work description");
+    expect(missing).not.toContain('"kind":"parked"');
+  });
+
   test("stale parked (Current Stage advanced past Parked At Stage) is ignored", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
@@ -530,5 +635,77 @@ describe("t114 parked branch (#367)", () => {
     const out = runNext(proj, []).out;
     expect(out).not.toContain('"kind":"parked"');
     expect(out).toContain('"kind":"run-stage"');
+  });
+});
+
+// ===========================================================================
+// Branch 9c - mid-flow freeform prose -> routing ask (the offer backstop).
+// Fresh-start prose gets Branch 8's routing ask; mid-flow prose used to fall
+// through to Branch 10 with the typed text silently discarded, which let a
+// conductor skip the continue-vs-new-work judgment and pour new-work prose
+// into the active intent's stage. The engine now surfaces the question.
+// ===========================================================================
+describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
+  test("freeform prose over an active workflow -> ask carrying both texts", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["a completely separate standalone metrics dashboard"]).out;
+    const directive = JSON.parse(out) as {
+      ask_type?: string;
+      response_route?: string;
+      question?: string;
+      new_work_description?: string;
+      proposed_scope?: string;
+    };
+    expect(out).toContain('"kind":"ask"');
+    expect(directive.ask_type).toBe("new-work-routing");
+    expect(directive.response_route).toBe("next");
+    expect(directive.new_work_description).toBe(
+      "a completely separate standalone metrics dashboard",
+    );
+    expect(directive.proposed_scope).toBeTruthy();
+    // The ask names the active work and echoes the typed prose.
+    expect(out).toContain("already in progress");
+    expect(out).toContain("standalone metrics dashboard");
+    // The three routes ride the question; the affirmative leads with Yes.
+    expect(out).toContain("continue");
+    expect(out).toContain("Yes, set it up alongside");
+    expect(out).toContain("plan");
+    expect(directive.question).toContain(
+      `as "${directive.proposed_scope}" work`,
+    );
+  });
+
+  test("keyword-matching prose names the scope a confirmed new intent would get", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["fix the broken login button"]).out;
+    expect(out).toContain('"kind":"ask"');
+    expect(out).toContain('as \\"bugfix\\" work');
+    expect(out).toContain('"proposed_scope":"bugfix"');
+  });
+
+  test("bare next still advances the current stage (no ask without prose)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, []).out;
+    expect(out).toContain('"kind":"run-stage"');
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("prose WITH an explicit --scope stays a scope-change, never the ask", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION); // state scope differs from bugfix
+    const out = runNext(proj, ["--scope", "bugfix", "fix the login flow"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("scope-change --scope bugfix");
+  });
+
+  test("--new-intent with prose still births (Branch 4a precedes the ask)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("intent-create");
   });
 });

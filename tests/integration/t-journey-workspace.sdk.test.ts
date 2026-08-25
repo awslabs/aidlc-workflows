@@ -332,10 +332,11 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
 
         // --- Step 3: birth a SECOND intent alongside active A -----------------
         // The deterministic shared path: the intent-create utility mints
-        // unconditionally (aidlc-utility.ts:1995). The engine has no "offer 2nd
-        // intent" directive on the logic drivers; routed through `next` with A
-        // active it would advance/scope-change A (Branch 10) — so we name the tool
-        // command directly (see birthToolPrompt).
+        // unconditionally (aidlc-utility.ts:1995). Routed through `next` with A
+        // active, freeform prose now surfaces the engine's routing ask (Branch
+        // 9c) — a human turn this deterministic journey deliberately avoids —
+        // so we name the tool command directly (see birthToolPrompt). The
+        // conversational offer arc is t176's subject, not this journey's.
         const r3 = await driveAidlc(
           birthToolPrompt("poc", "build a standalone metrics dashboard"),
           {

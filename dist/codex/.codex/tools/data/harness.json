@@ -1,4 +1,5 @@
 {
+  "name": "codex",
   "harnessDir": ".codex",
   "rulesSubdir": "aidlc-rules"
 }

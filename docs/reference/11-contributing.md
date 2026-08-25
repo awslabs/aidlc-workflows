@@ -27,10 +27,10 @@ bun install --frozen-lockfile
 
 ```
 core/                # Hand-authored, harness-neutral source (tools, stages, agents, rules, knowledge, hooks)
-harness/<name>/      # Per-harness authored surfaces; claude/, kiro/, kiro-ide/, codex/
+harness/<name>/      # Per-harness authored surfaces; claude/, kiro/, kiro-ide/, codex/, opencode/, copilot/
 scripts/package.ts   # The build: regenerates dist/<harness>/ from core/ + harness/ (`--check` drift-guards it)
 scripts/build-binaries.ts # Release-only compiled CLI artifacts in ignored build/binaries/ after package --check
-dist/<harness>/      # GENERATED: dist/claude/, dist/kiro/, dist/kiro-ide/, dist/codex/ — never hand-edit
+dist/<harness>/      # GENERATED: dist/claude/, dist/kiro/, dist/kiro-ide/, dist/codex/, dist/opencode/, dist/copilot/ — never hand-edit
 tests/               # All-TypeScript test suite (t*.test.ts, run via bun)
 docs/                # Documentation
   guide/             # User guide (how to use AI-DLC)
@@ -57,7 +57,7 @@ for the release matrix. The script writes each executable under
 target's `runtime/<harness>/` directory, and writes `build-results.json` at
 `build/binaries/`. The native gates run sensors, graph compilation, validation,
 generated-surface checks, plugin selection/composition, orchestration,
-Bolt/Swarm composition, packaged-runtime immutability, hooks, statusline,
+ordinary Bolt and autonomous swarm composition, packaged-runtime immutability, hooks, statusline,
 adapters, and explicit project routing without a `bun` executable on `PATH`.
 The staged `runtime/<harness>/` trees are read-only fallbacks; mutating commands
 must target an installed project harness. Any failed gate fails the build.
@@ -130,12 +130,12 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 1. **Create `core/scopes/aidlc-hotfix.md`** — the scope's identity. Frontmatter:
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
-   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference.
+   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference.
    - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
-   - `testStrategy` (optional): override test strategy independent of depth (e.g. `Minimal` for workshop). Defaults to matching depth.
+   - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
-   - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`feature`/`poc`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
+   - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 

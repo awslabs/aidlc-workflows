@@ -2,22 +2,24 @@
 
 ## 🚀 **Announcing 2.0 (GA)**
 
-AI-DLC Workflows 2.0 is now **generally available**. The new version makes autonomous software development practical by turning AI agents into verifiable, self-correcting engineering workflows — one harness-neutral core, rendered natively across Claude Code, Kiro IDE, Kiro CLI, Codex CLI, and opencode.
+AI-DLC Workflows 2.0 is now **generally available**. The new version makes autonomous software development practical by turning AI agents into verifiable, self-correcting engineering workflows — one harness-neutral core, rendered natively across Claude Code, Kiro IDE, Kiro CLI, Codex CLI, Cursor, opencode, and GitHub Copilot.
 
 > [!NOTE]
 > Interfaces, stage definitions, the agent roster, and the install model are stable, but we will continue to optimize based on feedback; pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](https://awslabs.github.io/aidlc-workflows/roadmap.html) for what's shipped, in flight, and planned.
 
-A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, Codex CLI, and opencode, and any capable harness you port it to. Run a full software-development lifecycle with a 14-agent roster — 11 domain experts, 2 review-only agents, and the adaptive-workflows composer — working through a 32-stage workflow, with you approving every gate.
+A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, Codex CLI, Cursor, opencode, and GitHub Copilot, and any capable harness you port it to. Run a full software-development lifecycle with a 14-agent roster — 11 domain experts, 2 review-only agents, and the adaptive-workflows composer — working through a 33-stage workflow, with you approving every gate.
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.5.60-blue)
+![version](https://img.shields.io/badge/version-2.6.79-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
 ![Claude Code](https://img.shields.io/badge/harness-Claude%20Code-orange)
 ![Codex CLI](https://img.shields.io/badge/harness-Codex%20CLI-orange)
+![Cursor](https://img.shields.io/badge/harness-Cursor-orange)
 ![opencode](https://img.shields.io/badge/harness-opencode-orange)
+![GitHub Copilot](https://img.shields.io/badge/harness-GitHub%20Copilot-orange)
 
 > [!NOTE]
 > This implementation realizes the autonomous software development vision, the core principles, and the architecture specified in the [AI-DLC Workflows 2.0 Specification](https://github.com/awslabs/aidlc-workflows/blob/v2/assets/AI-DLC-Workflows-2.0-Specification.pdf) whitepaper, rendered natively across multiple CLI harnesses from one source.
@@ -33,21 +35,21 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 ## Key Features
 
-- **[5 phases, 32 stages](docs/guide/04-phases-and-stages.md)** — Initialization, Ideation, Inception, Construction, Operation
+- **[5 phases, 33 stages](docs/guide/04-phases-and-stages.md)** — Initialization, Ideation, Inception, Construction, Operation
 - **[14-agent roster](docs/guide/06-agents.md)** — 11 domain experts, 2 quality-gate reviewers, and the adaptive-workflows composer
-- **[9 adaptive scopes](docs/guide/05-scopes-and-depth.md)** (enterprise through workshop) with auto-detection from freeform intent, plus an **[adaptive composer](docs/guide/05-scopes-and-depth.md#the-adaptive-composer)** (`/aidlc compose`) that proposes a tailored stage plan from your task, a scan report, or the running workflow
+- **[11 adaptive scopes](docs/guide/05-scopes-and-depth.md)** (enterprise through express, with the v1-style classic default — `AWS_AIDLC_DEFAULT_SCOPE` overrides it — the full-lifecycle feature scope, and workshop retained for facilitated sessions) plus an **[adaptive composer](docs/guide/05-scopes-and-depth.md#the-adaptive-composer)** (`/aidlc compose`) that proposes a tailored stage plan from your task, a scan report, or the running workflow
 - **[3 depth levels](docs/guide/05-scopes-and-depth.md#the-3-depth-levels)** (Minimal/Standard/Comprehensive) — control artifact detail per stage
 - **[3 test strategy levels](docs/guide/05-scopes-and-depth.md#the-3-test-strategy-levels)** (Minimal/Standard/Comprehensive) — independent of depth for flexible test coverage
 - **[CLI utilities](docs/guide/12-cli-commands.md)** — jump to any stage or phase, check status, change scope/depth/test strategy mid-workflow
 - **[Approval gates at every stage](docs/guide/07-interaction-modes.md)** — you stay in control of all decisions
 - **[Two-tier knowledge system](docs/guide/08-knowledge.md)** — methodology knowledge ships with the framework; team knowledge is user-managed
 - **[Rules and a learning loop](docs/guide/09-rules-and-the-learning-loop.md)** — human corrections become persistent behavioral rules
-- **[82-event audit trail](docs/guide/10-state-and-audit.md)** - structured logging for enterprise traceability
+- **[87-event audit trail](docs/guide/10-state-and-audit.md)** - structured logging for enterprise traceability
 - **[Session resume](docs/guide/11-session-management.md)** — continue from checkpoint, redo, jump to stage, or start fresh
 
 ## Methodology and implementation
 
-**AI-DLC is a methodology** — a structured, gated approach to AI-driven software development, defined by AWS (see the [blog post](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and [method paper](https://prod.d13rzhkk8cj2z0.amplifyapp.com/) under [References](#references)). **This repository is its native, multi-harness implementation** — the methodology rendered as skills, agents, hooks, and tools from one harness-neutral `core/`, so it runs natively inside Claude Code, Kiro IDE, Kiro CLI, Codex CLI, opencode, or any capable harness you port it to. The methodology is the *what*; each harness distribution is the *how* for one runtime, and every distribution is generated from the same source.
+**AI-DLC is a methodology** — a structured, gated approach to AI-driven software development, defined by AWS (see the [blog post](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and [method paper](https://prod.d13rzhkk8cj2z0.amplifyapp.com/) under [References](#references)). **This repository is its native, multi-harness implementation** — the methodology rendered as skills, agents, hooks, and tools from one harness-neutral `core/`, so it runs natively inside Claude Code, Kiro IDE, Kiro CLI, Codex CLI, Cursor, opencode, GitHub Copilot, or any capable harness you port it to. The methodology is the *what*; each harness distribution is the *how* for one runtime, and every distribution is generated from the same source.
 
 ## Pick your harness
 
@@ -57,7 +59,9 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 | **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` + `dist/kiro/aidlc/` → `<project>/` (+ `dist/kiro/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
 | **Claude Code** | `dist/claude/.claude/` + `dist/claude/aidlc/` → `<project>/` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
 | **Codex CLI** (≥ 0.145.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `aidlc/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
+| **Cursor** | `bun dist/cursor/install.ts <project>` | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on Cursor](docs/guide/harnesses/cursor.md). |
 | **opencode** (≥ 1.17) | `dist/opencode/` → `<project>/` (`.aidlc/` + `.opencode/` + `aidlc/` + `opencode.json` + `AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on opencode](docs/guide/harnesses/opencode.md). |
+| **GitHub Copilot** (CLI ≥ 1.0.74 / VS Code ≥ 1.130) | `dist/copilot/` → `<project>/` (`.aidlc/` + `aidlc/` + `AGENTS.md`; MERGE `.github/`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on GitHub Copilot](docs/guide/harnesses/copilot.md). |
 
 The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
 
@@ -94,7 +98,10 @@ On Windows, use *either* PowerShell *or* CMD, not both — your prompt shows `PS
 > [!TIP]
 > bun has to be on the PATH that *non-interactive* shells see, since that's what a harness uses to run a hook or tool. Those shells read `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc` — but the bun installer writes to `~/.zshrc`. So if `which bun` works in your terminal yet the harness can't find bun, copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (or `~/.bashrc` for bash and Git Bash).
 
-Every harness runs on **AWS Bedrock**, so set Bedrock up before your first run — enable model access in your AWS account and make sure the harness can see working AWS credentials. Each harness section below has the specifics.
+Model-provider setup is harness-specific. The shipped Claude Code configuration
+uses **AWS Bedrock**; GitHub Copilot uses GitHub sign-in or BYOK; Kiro, Cursor,
+Codex, and opencode use the provider and credentials configured in their own
+runtime. Each harness section below has the specifics.
 
 ### Get the code
 
@@ -128,7 +135,7 @@ cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have 
 
 The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
 
-Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill (the bundled `.kiro/settings/cli.json` is a Kiro CLI-only compatibility surface — the IDE ignores it and does not select a default agent from it). The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
+Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill, and `.kiro/agents/aidlc.md` exposes the conductor in the IDE agent selector. Agents are Markdown-only in this distribution; Kiro CLI's agent-v1 JSON files and `settings/cli.json` do not ship. The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
 
 > [!NOTE]
 > AI-DLC on Kiro works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.
@@ -241,6 +248,41 @@ Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a sco
 </details>
 
 <details>
+<summary><b>Cursor</b></summary>
+
+**1. Install Cursor** — the IDE, or the Cursor CLI (`agent`):
+
+```bash
+# Cursor CLI (macOS / Linux) — the IDE is a separate download from cursor.com
+curl https://cursor.com/install -fsS | bash
+```
+
+One install serves both surfaces: the Cursor IDE and the CLI (`agent`) share the same `.cursor/` discovery. Named models (`--model`, per-agent pins) need a paid Cursor plan; Free accounts use `Auto`, and the shipped personas carry no model pins so they inherit your session model either way.
+
+**2. Set up your project**
+
+```bash
+bun dist/cursor/install.ts your-project
+```
+
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
+
+The installer refuses project-owned file collisions, preserves
+`.cursor/.gitignore` and existing method memory, merges `.cursor/hooks.json`
+hook arrays and `.cursor/cli.json` permission arrays, and adds marked AI-DLC
+sections to existing `AGENTS.md` and `.gitignore` files. Re-running it upgrades
+framework-managed files while preserving the active-space pointer.
+Then verify:
+
+```bash
+bun .cursor/tools/aidlc-utility.ts doctor
+```
+
+Open `your-project/` in the Cursor IDE (or start `agent` in it) and invoke the orchestrator with `/aidlc` followed by a scope or description. Cursor-native shortcuts expose `/aidlc-status`, `/aidlc-jump --stage <slug>` (or `--phase <name>`), and `/aidlc-scope <name>` through the same deterministic engine. The [Cursor guide](docs/guide/harnesses/cursor.md) covers the hooks.json adapter, native subagents and skills, and what differs on this harness in full.
+
+</details>
+
+<details>
 <summary><b>opencode</b></summary>
 
 **1. Install opencode** (≥ 1.17):
@@ -273,6 +315,35 @@ Invoke the orchestrator with `/aidlc` followed by a scope or description. The [o
 
 </details>
 
+<details>
+<summary><b>GitHub Copilot</b></summary>
+
+**1. Install GitHub Copilot** (CLI ≥ 1.0.74 and/or VS Code ≥ 1.130):
+
+```bash
+copilot --version   # confirm ≥ 1.0.74 (VS Code agent mode: code --version, confirm ≥ 1.130)
+```
+
+One install serves both surfaces: the standalone Copilot CLI and VS Code agent mode. The shipped tree pins no model - signed-in Copilot works as-is, and BYOK works with no GitHub auth at all.
+
+**2. Set up your project**
+
+```bash
+mkdir -p your-project/.aidlc your-project/aidlc your-project/.github
+cp -R dist/copilot/.aidlc/.  your-project/.aidlc/    # the AIDLC engine (neither surface scans it)
+cp -R dist/copilot/aidlc/.   your-project/aidlc/     # the workspace shell - a sibling of .aidlc/, not inside it
+cp -R dist/copilot/.github/. your-project/.github/   # MERGE - everything aidlc-prefixed
+cp dist/copilot/AGENTS.md    your-project/AGENTS.md  # or merge; keep the @-import block
+```
+
+The engine lives in `.aidlc/`; everything either Copilot surface discovers natively rides `.github/` (hooks, agents, skills), all `aidlc`-prefixed so the merge never overwrites your own `.github/` content.
+
+After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, then trust the folder - add the project's absolute path to `trustedFolders` in `~/.copilot/config.json`, or accept the CLI's interactive trust prompt (untrusted folders silently skip every hook). Headless `copilot -p` runs additionally need `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`.
+
+Run `/aidlc --doctor` to verify, then invoke the orchestrator with `/aidlc` followed by a scope or description - in either surface. The [GitHub Copilot guide](docs/guide/harnesses/copilot.md) covers the two surfaces, folder trust, BYOK setup, and what differs on this harness in full.
+
+</details>
+
 ## Documentation
 
 Three guides, one per reader — pick by what you're trying to change:
@@ -291,8 +362,8 @@ Three zones: what AI-DLC **is**, how each harness **speaks**, and what users **c
 aidlc-claude/
 │  ─────────── HAND-AUTHORED SOURCE — edit here ───────────
 ├── core/                       # ONE harness-neutral source of truth
-│   ├── tools/                  #   25 aidlc-*.ts engine tools (+ data/scaffold/ templates)
-│   ├── aidlc-common/           #   stage protocol + 32 stage files + conductor
+│   ├── tools/                  #   43 aidlc-*.ts engine tools (+ data/scaffold/ templates)
+│   ├── aidlc-common/           #   stage protocol + 33 stage files + conductor
 │   ├── agents/                 #   14 agents: 11 domain + 2 reviewers + composer
 │   ├── knowledge/ memory/ scopes/ sensors/ hooks/
 │   ├── skills/                 #   3 session skills (session-cost, replay, outcomes-pack)
@@ -301,9 +372,12 @@ aidlc-claude/
 │
 ├── harness/                    # thin per-harness authored surfaces — small, divergent by design
 │   ├── claude/                 #   manifest.ts · orchestrator skill · settings.json · onboarding fills
-│   ├── kiro-ide/               #   manifest.ts · orchestrator · agent JSONs · v2 .json + legacy .kiro.hook files · settings · onboarding fills
+│   ├── kiro-ide/               #   manifest.ts · orchestrator · conductor Markdown · v2 .json + legacy .kiro.hook files · onboarding fills
 │   ├── kiro/                   #   manifest.ts · orchestrator · agent JSONs · settings · onboarding fills (CLI — agent-JSON hooks)
-│   └── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
+│   ├── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
+│   ├── cursor/                 #   manifest.ts · orchestrator · hooks adapter · installer · rules · onboarding fills
+│   ├── opencode/               #   manifest.ts · emit.ts · orchestrator · /aidlc command · adapter plugin
+│   └── copilot/                #   manifest.ts · emit.ts · orchestrator skill · hooks adapter
 │
 ├── plugins/                    # optional, owned AIDLC plugins — new stages + the additive contribution seam
 │   └── test-pro/               #   reference fixture: .aidlc-plugin/plugin.json · stages/ · contributions/ · sensors/ · tools/ · tests/
@@ -320,7 +394,10 @@ aidlc-claude/
 │   ├── kiro-ide/{AGENTS.md, .kiro/}          # what Kiro IDE users copy
 │   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI users copy
 │   ├── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
-│   └── plugins/<name>/{claude,codex,kiro,kiro-ide}/  # one real host plugin per harness — install alongside dist/<harness>/
+│   ├── cursor/{AGENTS.md, aidlc/, .cursor/}   # what Cursor IDE/CLI users install
+│   ├── opencode/{AGENTS.md, .aidlc/, .opencode/}  # what opencode users copy
+│   ├── copilot/{AGENTS.md, .aidlc/, .github/}     # what GitHub Copilot users copy
+│   └── plugins/<name>/{claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/  # one real host plugin per harness — install alongside dist/<harness>/
 │
 │  ─────────── SUPPORTING ───────────
 ├── tests/                      # all-TypeScript suite (t*.test.ts) — resolves dist via AIDLC_SRC

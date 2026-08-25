@@ -102,7 +102,13 @@ fields and instance-array fields never coexist.
 
 The optional `bolt_dag` node is the machine-readable unit dependency
 graph the engine reads to compute a parallel build batch — "the DAG is
-the permission" for a swarm fan-out. Its source is the **fenced
+the permission" for a swarm fan-out. It is also an engine input for the
+optional `directive.wave` on the default stage-major walk. Before emitting a
+wave, the engine validates this cache against the authored dependency artifact
+and uses the healed in-memory batches and kinds to resolve every per-Unit entry,
+including build, completion-receipt, paired-review, and Unit-memory paths. The
+conductor consumes only that directive; it never reads this cached node or
+reconstructs sibling paths. Its source is the **fenced
 `yaml` `units:` edge block** that units-generation (2.7) authors on
 `unit-of-work-dependency.md`, beside the human-readable prose:
 
@@ -485,7 +491,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 82-event taxonomy
+- **The audit log this graph is derived from** - the 87-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

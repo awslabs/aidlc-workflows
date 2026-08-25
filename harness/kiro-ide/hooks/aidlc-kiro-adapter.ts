@@ -27,10 +27,11 @@
 //   4. The tool name arrives as the IDE tool name: `fs_write`, `str_replace`,
 //      `fs_append`, `execute_bash`, etc.
 //
-// Payload acquisition is GATED to the two payload-dependent targets
-// (audit-and-sensors, log-subagent). Every other target is payload-independent
-// and never touches stdin — block fires on EVERY PreToolUse, and a 2s stall on
-// a never-closing stdin there would be felt on every tool call.
+// Payload acquisition is GATED to the three tool-payload targets plus the
+// lifecycle boundaries that carry modern session identity (SessionStart and
+// Stop). Every other target is payload-independent and never touches stdin —
+// block fires on EVERY PreToolUse, and a 2s stall on a never-closing stdin
+// there would be felt on every tool call.
 //
 // Consequences, by target:
 //   - audit-and-sensors: scrape the written file path from toolResult prose
@@ -42,8 +43,11 @@
 //     STAGE_STARTED slug from the audit tail (no task payload needed).
 //   - log-subagent: recovers the delegate's identity from the result prose or
 //     the 1.x `subagent_<agent>` tool name, plus the message (#459/#543).
-//   - session-start/session-end/stop: no payload needed; build the same
-//     fixed inputs as before.
+//   - session-start: retain the modern session_id (or the legacy synthetic id)
+//     in workspace-local runtime state.
+//   - stop: prefer the event-local modern session_id; use retained identity for
+//     the legacy channel and broken modern payloads.
+//   - session-end: read retained identity without probing payload.
 //
 // session-start emits {"additionalContext": "..."} — Kiro's context channel is
 // plain stdout at exit 0, so the shim unwraps the JSON and prints the text.
@@ -68,10 +72,11 @@ import {
   markHumanTurn,
   recordHookDrop,
   resolveProjectDirFromHook,
+  sessionsDir,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -81,6 +86,7 @@ const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // captures have empty inputs; later 1.x builds populate some PreToolUse and
 // delegation inputs (#543), so normalization preserves either shape.
 interface IdeHookContext {
+  sessionId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
@@ -92,10 +98,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// The two targets whose forward depends on the tool payload. Every other
+// The three targets whose forward depends on the tool payload. Every other
 // target builds a fixed input (or reads only the filesystem), so it skips
 // payload acquisition entirely and keeps its zero-latency path.
-const PAYLOAD_TARGETS = new Set(["audit-and-sensors", "log-subagent"]);
+const PAYLOAD_TARGETS = new Set([
+  "audit-and-sensors",
+  "log-subagent",
+  "rebuild-stage-graph",
+]);
+const SESSION_ID_TARGETS = new Set(["session-start", "continue-workflow"]);
+const INPUT_TARGETS = new Set([...PAYLOAD_TARGETS, ...SESSION_ID_TARGETS]);
+const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
+const KIRO_IDE_SESSION_FILE = ".kiro-ide-current-session";
 
 export async function run(
   target: string,
@@ -115,7 +129,7 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 // camelCase {toolName, toolArgs, toolResult, toolSuccess}; 1.x snake_case
 // {tool_name, tool_input, tool_response} (no success flag) — accept both.
 let ide: IdeHookContext = {};
-if (PAYLOAD_TARGETS.has(target)) {
+if (INPUT_TARGETS.has(target)) {
   let raw = input;
   if (raw.trim().length === 0) raw = process.env.USER_PROMPT ?? "";
   if (raw.trim().length > 0) {
@@ -128,6 +142,7 @@ if (PAYLOAD_TARGETS.has(target)) {
         const rawArgs = parsed.toolArgs ?? parsed.tool_input;
         const rawResult = parsed.toolResult ?? parsed.tool_response;
         const rawSuccess = parsed.toolSuccess ?? parsed.tool_success;
+        const rawSessionId = parsed.session_id;
         const malformedFields: string[] = [];
         if (rawName !== null && rawName !== undefined && typeof rawName !== "string") {
           malformedFields.push("toolName");
@@ -146,6 +161,7 @@ if (PAYLOAD_TARGETS.has(target)) {
           malformedFields.push("toolSuccess");
         }
         ide = {
+          sessionId: typeof rawSessionId === "string" ? rawSessionId : undefined,
           toolName: typeof rawName === "string" ? rawName : undefined,
           toolArgs: isRecord(rawArgs) ? rawArgs : undefined,
           toolResult: typeof rawResult === "string" ? rawResult : "",
@@ -165,8 +181,37 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   hasStdinPayload: input.trim().length > 0,
   hasUserPrompt: (process.env.USER_PROMPT ?? "").length > 0,
   toolName: ide.toolName ?? "",
+  sessionId: ide.sessionId ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
 });
+
+// Persist the effective SessionStart identity under the existing gitignored
+// runtime dir so separate adapter processes can forward it to payload-free
+// SessionEnd and use it when a legacy or broken-channel Stop has no event-local
+// session_id. A legacy promptSubmit writes the synthetic id, replacing any
+// stale modern value from a prior IDE generation in the same workspace.
+function rememberKiroIdeSessionId(sessionId: string): void {
+  if (!sessionId) return;
+  try {
+    const dir = sessionsDir(projectDir);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, KIRO_IDE_SESSION_FILE), `${sessionId}\n`, "utf-8");
+  } catch {
+    // Per-user runtime state; lifecycle hooks retain the legacy fallback.
+  }
+}
+
+function rememberedKiroIdeSessionId(): string {
+  try {
+    const sessionId = readFileSync(
+      join(sessionsDir(projectDir), KIRO_IDE_SESSION_FILE),
+      "utf-8",
+    ).trim();
+    return sessionId || LEGACY_SESSION_ID;
+  } catch {
+    return LEGACY_SESSION_ID;
+  }
+}
 
 // --- mint: record a HUMAN_TURN event on prompt submit ---
 //
@@ -333,7 +378,7 @@ function extractAgentIdentity(toolResult: string, toolName = ""): string {
 type Forward = { hook: string; input: Record<string, unknown> } | null;
 
 function buildForward(): Forward {
-  if ((ide.malformedFields?.length ?? 0) > 0) {
+  if (PAYLOAD_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) > 0) {
     recordHookDrop(
       projectDir,
       "kiro-adapter",
@@ -343,14 +388,20 @@ function buildForward(): Forward {
   }
 
   switch (target) {
-    case "session-start":
-      // UserPromptSubmit carries no source discrimination — every submit is a
-      // startup from the core hook's perspective; its state-file self-gate
-      // makes this a no-op outside active workflows.
+    case "session-start": {
+      // Modern IDE payloads carry session_id. Legacy promptSubmit does not, so
+      // use one workspace-local synthetic id for its promptSubmit/agentStop pair.
+      const sessionId = ide.sessionId?.trim() || LEGACY_SESSION_ID;
+      rememberKiroIdeSessionId(sessionId);
       return {
         hook: "aidlc-session-start.ts",
-        input: { hook_event_name: "SessionStart", source: "startup" },
+        input: {
+          hook_event_name: "SessionStart",
+          source: "startup",
+          session_id: sessionId,
+        },
       };
+    }
 
     case "audit-and-sensors": {
       // postToolUse(write) → write-audit-log THEN run-sensors (both ship core).
@@ -440,6 +491,8 @@ function buildForward(): Forward {
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
           tool_input: { command: "", source: "ide-audit-sync" },
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
+          tool_response: ide.toolResult ?? "",
         },
       };
     }
@@ -556,15 +609,27 @@ function buildForward(): Forward {
       // former. On this harness that changes which record
       // `continue-workflow.drops` gets and whether the counter advances — not
       // what the human sees.
+      // Modern Stop carries the exact chat identity. Prefer it over the
+      // workspace-global SessionStart marker so concurrent chats cannot consume
+      // one another's post-create handoff receipt; retain the marker for legacy
+      // agentStop and broken modern channels.
       return {
         hook: "aidlc-continue-workflow.ts",
-        input: { hook_event_name: "Stop", stop_hook_active: false },
+        input: {
+          hook_event_name: "Stop",
+          stop_hook_active: false,
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
+        },
       };
 
     case "session-end":
       return {
         hook: "aidlc-session-end.ts",
-        input: { hook_event_name: "SessionEnd", reason: "agent_stop" },
+        input: {
+          hook_event_name: "SessionEnd",
+          reason: "agent_stop",
+          session_id: rememberedKiroIdeSessionId(),
+        },
       };
 
     default:
@@ -655,14 +720,14 @@ async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
 
 if (import.meta.main) {
   const target = process.argv[2] ?? "";
-  // Acquire payload only for payload-dependent targets. A non-empty
+  // Acquire input only for targets that need tool payload or session identity. A non-empty
   // USER_PROMPT identifies the 0.12 channel and is consumed immediately: that
   // IDE leaves stdin open forever, so probing stdin first imposed a mandatory
   // 2s delay on every payload hook. IDE 1.x sends USER_PROMPT empty and writes
   // + closes stdin; retain the timeout only as a defensive broken-channel
   // ceiling. Every other target skips both channels (zero latency).
   let input = "";
-  if (PAYLOAD_TARGETS.has(target)) {
+  if (INPUT_TARGETS.has(target)) {
     const legacyPayload = process.env.USER_PROMPT ?? "";
     if (legacyPayload.trim().length > 0) {
       input = legacyPayload;

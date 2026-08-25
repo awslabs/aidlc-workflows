@@ -10,6 +10,7 @@ nav = [
     { "Getting Started" = [
       "guide/00-introduction.md",
       "guide/01-getting-started.md",
+      "guide/workflow-profiles.md",
       "guide/02-your-first-workflow.md",
     ] },
     { "Core Concepts" = [
@@ -50,6 +51,7 @@ nav = [
       "guide/harnesses/kiro-cli.md",
       "guide/harnesses/kiro-ide.md",
       "guide/harnesses/codex-cli.md",
+      "guide/harnesses/cursor.md",
       "guide/harnesses/opencode.md",
     ] },
     { "Help and Examples" = [

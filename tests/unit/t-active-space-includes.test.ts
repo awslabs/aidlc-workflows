@@ -30,6 +30,7 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -44,6 +45,7 @@ const distSurface = (h: string, ...parts: string[]): string =>
 
 const scratch: string[] = [];
 const savedHarness = process.env.AIDLC_HARNESS_DIR;
+const savedHarnessName = process.env.AIDLC_HARNESS_NAME;
 
 afterEach(() => {
   // AIDLC_HARNESS_DIR is read at call time + cached in lib via _harnessDir; but
@@ -51,6 +53,8 @@ afterEach(() => {
   // before consulting the cache), so restoring the env is sufficient here.
   if (savedHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
   else process.env.AIDLC_HARNESS_DIR = savedHarness;
+  if (savedHarnessName === undefined) delete process.env.AIDLC_HARNESS_NAME;
+  else process.env.AIDLC_HARNESS_NAME = savedHarnessName;
   for (const d of scratch.splice(0)) {
     try {
       rmSync(d, { recursive: true, force: true });
@@ -285,6 +289,7 @@ describe("t-active-space-includes: Codex config.toml AIDLC_RULES_DIR", () => {
 describe("t-active-space-includes: opencode opencode.json instructions glob", () => {
   beforeEach(() => {
     process.env.AIDLC_HARNESS_DIR = ".aidlc";
+    process.env.AIDLC_HARNESS_NAME = "opencode";
   });
 
   function setup(): string {
@@ -371,6 +376,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
   test("re-points explicit inline and native agent memory references with the config", () => {
     const root = setup();
     const agents: string[] = [];
+    const shippedAgents = new Map<string, string>();
     for (const base of [".aidlc", ".opencode"]) {
       const dir = join(root, base, "agents");
       mkdirSync(dir, { recursive: true });
@@ -380,13 +386,28 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
         agent,
       );
       agents.push(agent);
+      shippedAgents.set(agent, readFileSync(agent, "utf-8"));
+      const pluginAgent = join(dir, "test-pro-metrics-agent.md");
+      writeFileSync(
+        pluginAgent,
+        "---\nname: test-pro-metrics-agent\nplugin: test-pro\n---\nRead aidlc/spaces/default/memory/org.md\n",
+        "utf-8",
+      );
+      agents.push(pluginAgent);
+    }
+
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+    for (const [agent, before] of shippedAgents) {
+      expect(readFileSync(agent, "utf-8")).toBe(before);
     }
 
     const written = repointHarnessIncludes(root, "teamB");
     expect(written).toEqual([
       "opencode.json",
       ".aidlc/agents/aidlc-architect-agent.md",
+      ".aidlc/agents/test-pro-metrics-agent.md",
       ".opencode/agents/aidlc-architect-agent.md",
+      ".opencode/agents/test-pro-metrics-agent.md",
     ]);
     for (const agent of agents) {
       const body = readFileSync(agent, "utf-8");
@@ -401,5 +422,133 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
     const written = repointHarnessIncludes(root, "teamB");
     expect(written).toEqual([]);
     expect(readFileSync(join(root, "opencode.json"), "utf-8")).toBe("{ not json");
+  });
+});
+
+describe("t-active-space-includes: Copilot AGENTS.md and persona rosters", () => {
+  beforeEach(() => {
+    process.env.AIDLC_HARNESS_DIR = ".aidlc";
+    process.env.AIDLC_HARNESS_NAME = "copilot";
+  });
+
+  test("re-points core and plugin personas without touching user .github agents", () => {
+    const root = freshRoot();
+    seedSpaces(root);
+    cpSync(distSurface("copilot", "AGENTS.md"), join(root, "AGENTS.md"));
+
+    const shippedAgents = new Map<string, string>();
+    for (const base of [".aidlc", ".github"]) {
+      const dir = join(root, base, "agents");
+      mkdirSync(dir, { recursive: true });
+      const agent = join(dir, "aidlc-architect-agent.md");
+      cpSync(
+        distSurface("copilot", base, "agents", "aidlc-architect-agent.md"),
+        agent,
+      );
+      shippedAgents.set(agent, readFileSync(agent, "utf-8"));
+      writeFileSync(
+        join(dir, "test-pro-metrics-agent.md"),
+        "---\nname: test-pro-metrics-agent\nplugin: test-pro\n---\nRead aidlc/spaces/default/memory/org.md\n",
+        "utf-8",
+      );
+    }
+    const userAgent = join(root, ".github", "agents", "release-manager.md");
+    writeFileSync(
+      userAgent,
+      "---\nname: release-manager\n---\nRead aidlc/spaces/default/memory/org.md\n",
+      "utf-8",
+    );
+
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+    for (const [agent, before] of shippedAgents) {
+      expect(readFileSync(agent, "utf-8")).toBe(before);
+    }
+
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toEqual([
+      "AGENTS.md",
+      ".aidlc/agents/aidlc-architect-agent.md",
+      ".aidlc/agents/test-pro-metrics-agent.md",
+      ".github/agents/aidlc-architect-agent.md",
+      ".github/agents/test-pro-metrics-agent.md",
+    ]);
+    for (const rel of written) {
+      expect(readFileSync(join(root, rel), "utf-8")).toContain("aidlc/spaces/teamB/memory/");
+    }
+    expect(readFileSync(userAgent, "utf-8")).toContain("aidlc/spaces/default/memory/");
+  });
+});
+
+describe("t-active-space-includes: Cursor rules + persona bodies", () => {
+  beforeEach(() => {
+    process.env.AIDLC_HARNESS_DIR = ".cursor";
+  });
+
+  function setup(): string {
+    const root = freshRoot();
+    seedSpaces(root);
+    const rulesSrc = distSurface("cursor", ".cursor", "rules");
+    const rulesDst = join(root, ".cursor", "rules");
+    mkdirSync(rulesDst, { recursive: true });
+    for (const name of readdirSync(rulesSrc).filter((file) => file.endsWith(".mdc")).sort()) {
+      cpSync(join(rulesSrc, name), join(rulesDst, name));
+    }
+    mkdirSync(join(root, ".cursor", "agents"), { recursive: true });
+    cpSync(
+      distSurface("cursor", ".cursor", "agents", "aidlc-architect-agent.md"),
+      join(root, ".cursor", "agents", "aidlc-architect-agent.md"),
+    );
+    return root;
+  }
+
+  test("re-points every standing/phase rule and the persona bodies; idempotent at default", () => {
+    const root = setup();
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toEqual([
+      ".cursor/rules/aidlc-phase-construction.mdc",
+      ".cursor/rules/aidlc-phase-ideation.mdc",
+      ".cursor/rules/aidlc-phase-inception.mdc",
+      ".cursor/rules/aidlc-phase-operation.mdc",
+      ".cursor/rules/aidlc.mdc",
+      ".cursor/agents/aidlc-architect-agent.md",
+    ]);
+    const ruleNames = readdirSync(join(root, ".cursor", "rules"))
+      .filter((file) => file.endsWith(".mdc"))
+      .sort();
+    expect(ruleNames).toHaveLength(5);
+    for (const name of ruleNames) {
+      const rule = readFileSync(join(root, ".cursor", "rules", name), "utf-8");
+      expect(rule, name).toContain("aidlc/spaces/teamB/memory/");
+      expect(rule, name).not.toContain("aidlc/spaces/default/memory/");
+    }
+    const standing = readFileSync(join(root, ".cursor", "rules", "aidlc.mdc"), "utf-8");
+    expect(standing).toContain("aidlc/spaces/teamB/memory/org.md");
+    // The rule frontmatter (alwaysApply) survives the re-point untouched.
+    expect(standing).toMatch(/^alwaysApply: true$/m);
+    const operation = readFileSync(
+      join(root, ".cursor", "rules", "aidlc-phase-operation.mdc"),
+      "utf-8",
+    );
+    expect(operation).toContain("aidlc/spaces/teamB/memory/phases/operation.md");
+    expect(operation).toMatch(/^alwaysApply: false$/m);
+    const agent = readFileSync(join(root, ".cursor", "agents", "aidlc-architect-agent.md"), "utf-8");
+    expect(agent).toContain("aidlc/spaces/teamB/memory/");
+    expect(agent).not.toContain("aidlc/spaces/default/memory/");
+    // Re-pointing back to default restores the committed bytes; a second
+    // default re-point is a clean no-op (nothing written).
+    repointHarnessIncludes(root, "default");
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+    for (const name of ruleNames) {
+      expect(readFileSync(join(root, ".cursor", "rules", name), "utf-8")).toBe(
+        readFileSync(distSurface("cursor", ".cursor", "rules", name), "utf-8"),
+      );
+    }
+  });
+
+  test("a missing rules directory is skipped; personas alone still re-point", () => {
+    const root = setup();
+    rmSync(join(root, ".cursor", "rules"), { recursive: true });
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toEqual([".cursor/agents/aidlc-architect-agent.md"]);
   });
 });

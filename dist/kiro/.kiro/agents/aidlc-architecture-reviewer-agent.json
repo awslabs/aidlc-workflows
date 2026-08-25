@@ -1,13 +1,18 @@
 {
-  "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc-architecture-reviewer-agent",
   "description": "AI-DLC Architecture Reviewer — delegation target for reviewing design artifacts for soundness and implementability.",
   "prompt": "file://aidlc-architecture-reviewer-agent.md",
+  "includeMcpJson": true,
   "tools": [
     "fs_read",
     "fs_write",
     "execute_bash",
-    "thinking"
+    "thinking",
+    "@context7",
+    "@aws-mcp",
+    "@aws-pricing",
+    "@aws-iac",
+    "@aws-serverless"
   ],
   "allowedTools": [
     "fs_read",
@@ -38,6 +43,11 @@
   ],
   "hooks": {
     "preToolUse": [
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard aidlc-architecture-reviewer-agent",
+        "timeout_ms": 15000
+      },
       {
         "matcher": "fs_read",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts reviewer-scope aidlc-architecture-reviewer-agent",

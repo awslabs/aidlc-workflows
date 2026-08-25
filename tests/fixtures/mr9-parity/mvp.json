@@ -75,12 +75,17 @@
     "action": "EXECUTE"
   },
   {
-    "slug": "application-design",
+    "slug": "domain-design",
     "phase": "inception",
     "action": "EXECUTE"
   },
   {
     "slug": "units-generation",
+    "phase": "inception",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "contract-design",
     "phase": "inception",
     "action": "EXECUTE"
   },

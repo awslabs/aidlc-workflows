@@ -233,12 +233,12 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   // its gate, then race approve(requirements-analysis) ∥ skip(code-generation).
   // ---------------------------------------------------------------------------
   test("concurrent approve ∥ skip — both transitions and both audit rows survive", async () => {
-    // Open the gate on the current stage so approve has a valid [?] to act on.
-    expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     // requirements-analysis declares a reviewer; record a terminal review so the
     // §12a gate precondition passes (this test targets the state lock, not the
     // reviewer gate).
     logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
+    // Open the gate on the current stage so approve has a valid [?] to act on.
+    expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
 
     const approvedBefore = eventCount(proj, "GATE_APPROVED");
     const skippedBefore = eventCount(proj, "STAGE_SKIPPED");
@@ -292,10 +292,10 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   // auto-advance lands (requirements-analysis → [x], Current Stage → next).
   // ---------------------------------------------------------------------------
   test("approve nests advance/complete-workflow without deadlock (reentrant lock)", () => {
-    expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     // requirements-analysis declares a reviewer; record a terminal review so the
     // §12a gate precondition passes (this test targets the reentrant lock).
     logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
+    expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     const r = stateSync(["approve", "requirements-analysis"], proj);
     expect(r.status).toBe(0);
     const finalState = readState(proj);
@@ -328,6 +328,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   // ---------------------------------------------------------------------------
   test("concurrent reject on one gate-held stage — exactly one rejection, no lost/duplicated increment", async () => {
     // Put requirements-analysis into the awaiting-approval [?] gate state.
+    logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
     expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     expect(field(proj, "Revision Count")).toBe("0"); // precondition
 
@@ -364,6 +365,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   // complementing test 6's single-cycle mutual exclusion.
   // ---------------------------------------------------------------------------
   test("repeated reject/revise cycles increment Revision Count exactly once per accepted rejection", async () => {
+    logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
     expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     const CYCLES = 3;
     for (let c = 0; c < CYCLES; c++) {
@@ -379,6 +381,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
       );
       expect(codes.filter((x) => x === 0).length).toBe(1);
       // Re-enter the gate ([R] → [?]) so the next cycle has a valid target.
+      logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
       expect(stateSync(["revise", "requirements-analysis"], proj).status).toBe(0);
     }
     // Exactly CYCLES accepted rejections → Revision Count === CYCLES, and exactly

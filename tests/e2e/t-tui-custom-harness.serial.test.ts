@@ -490,9 +490,8 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         }
         expect(waitFor(session, "\\[AIDLC\\].*(ready|INCEPTION)", 45000, 800)).toBe(true);
 
-        // Resume the pre-initialized custom-scope workflow. The first menu is
-        // the resume gate; answer-gate below handles it and the custom-stage
-        // approval gates by keystroke.
+        // Resume the pre-initialized custom-scope workflow. answer-gate below
+        // handles any custom-stage approval gates by keystroke.
         drive([
           "send",
           "--session",

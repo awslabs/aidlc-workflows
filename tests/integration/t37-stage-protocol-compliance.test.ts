@@ -1,4 +1,4 @@
-// covers: doc:aidlc-common/protocols/stage-protocol.md, doc:aidlc-common/conductor.md, doc:aidlc-common/stages, doc:knowledge/aidlc-shared/state-template.md, doc:SKILL.md(routing)
+// covers: doc:aidlc-common/protocols/stage-protocol.md, doc:aidlc-common/protocols/stage-protocol-ensemble.md, doc:aidlc-common/conductor.md, doc:aidlc-common/stages, doc:knowledge/aidlc-shared/state-template.md, doc:SKILL.md(routing)
 //
 // t37 — cross-file stage-protocol compliance. Migrated from the bash TAP test
 // tests/integration/t37-stage-protocol-compliance.sh (plan 75). The subject is a
@@ -78,6 +78,12 @@ import { basename, join } from "node:path";
 import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
 
 const PROTOCOL = join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md");
+const ENSEMBLE = join(
+  AIDLC_SRC,
+  "aidlc-common",
+  "protocols",
+  "stage-protocol-ensemble.md",
+);
 const CONDUCTOR = join(AIDLC_SRC, "aidlc-common", "conductor.md");
 const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
 const AGENTS_DIR = join(AIDLC_SRC, "agents");
@@ -137,8 +143,8 @@ describe("every stage references the stage protocol", () => {
   // — including the 3 init stages — reference stage-protocol, so this is the
   // STRONGER form: every stage must reference it (the .sh's only failing branch
   // was a non-init stage missing the reference).
-  test("the shipped tree has exactly 32 stage files [.sh TOTAL_STAGES]", () => {
-    expect(STAGE_FILES.length).toBe(32);
+  test("the shipped tree has exactly 33 stage files [.sh TOTAL_STAGES]", () => {
+    expect(STAGE_FILES.length).toBe(33);
   });
 
   for (const { slug, path } of STAGE_FILES) {
@@ -214,7 +220,7 @@ describe("mid-ideation fixture conforms to the template section structure", () =
   }
 });
 
-describe("SKILL.md routing mandates all three protocol files", () => {
+describe("SKILL.md routing mandates the static and conditional protocol files", () => {
   // .sh: ROUTING_SECTION = sed -n '/^## Routing/,/^## /p'; assert_contains each.
   const routing = section(read(SKILL), /^## Routing/, /^## /);
   test("routing mandates stage-protocol.md [.sh routing 1]", () => {
@@ -226,6 +232,16 @@ describe("SKILL.md routing mandates all three protocol files", () => {
   test("routing mandates stage-protocol-governance.md [.sh routing 3]", () => {
     expect(routing.includes("stage-protocol-governance.md")).toBe(true);
   });
+  for (const module of [
+    "stage-protocol-reviewer.md",
+    "stage-protocol-swarm.md",
+    "stage-protocol-ensemble.md",
+    "stage-protocol-construction.md",
+  ]) {
+    test(`routing mandates ${module}`, () => {
+      expect(routing.includes(module)).toBe(true);
+    });
+  }
 });
 
 describe("silent-bookkeeping section names every state field the tools write", () => {
@@ -289,27 +305,27 @@ describe("protocol documents the [S] skipped-via-jump notation", () => {
   });
 });
 
-describe("protocol §5 + conductor forbid dispatching inline support agents", () => {
+describe("ensemble protocol §5 + conductor forbid dispatching inline support agents", () => {
   // Originally pinned the pre-2.5.0 "Task is reserved for mode: subagent"
   // literals. Under the ensemble topologies (2.5.0) dispatch is legal on
   // subagent/pipeline/mob stages, so the invariant narrows to: INLINE
   // support agents are voices, never dispatches — and the conductor remains
   // the only delegator on every topology.
   const multiAgent = section(
-    read(PROTOCOL),
-    /^### Multi-agent stages/,
-    /^### /,
+    read(ENSEMBLE),
+    /^## 5\. Multi-agent stages/,
+    /^---$/,
   );
   const conductor = read(CONDUCTOR);
 
-  test("protocol §5 forbids dispatching a support agent on an inline stage [.sh multi-agent 1]", () => {
+  test("ensemble protocol §5 forbids dispatching a support agent on an inline stage [.sh multi-agent 1]", () => {
     expect(
       multiAgent.includes(
         "Do NOT dispatch a support agent on an inline stage",
       ),
     ).toBe(true);
   });
-  test("protocol §5 keeps the conductor the only delegator [.sh multi-agent 2]", () => {
+  test("ensemble protocol §5 keeps the conductor the only delegator [.sh multi-agent 2]", () => {
     expect(
       multiAgent.includes("only the orchestrator delegates"),
     ).toBe(true);

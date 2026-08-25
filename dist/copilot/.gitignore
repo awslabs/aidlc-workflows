@@ -1,0 +1,71 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# AI-DLC — the committed-vs-ignored split (workspace layout, re-rooted under aidlc/).
+# Rule of thumb (vision §5.1): per-user session CURSORS and machine-local
+# runtime/derived state are ignored; everything that is the shared work —
+# method, registry, state, AUDIT (per-clone shards), artifacts — is committed.
+#
+# Per-user session cursors — ignored (two teammates legitimately point at
+# different spaces/intents at once; committing them would dirty the tree on
+# every /aidlc and have teammates fight over the cursor on each switch).
+aidlc/active-space
+aidlc/.aidlc-active-space-*.tmp
+aidlc/spaces/*/intents/active-intent
+#
+# Machine-local runtime / derived — ignored (regenerated per machine).
+# The clone-id token names this clone's audit shard; it MUST stay machine-local
+# (gitignored) or every clone from a commit would share a shard and git-conflict.
+aidlc/.aidlc-clone-id
+# Per-conversation session→intent map (resume rebind, P8): per-user runtime
+# state keyed by the harness session id, never shared truth.
+aidlc/.aidlc-sessions/
+aidlc/spaces/*/intents/.aidlc-*
+# DocumentKB staged-transaction scratch: `onboard` stages a document into
+# `.journal/<txn-id>/` and renames it into place under the audit lock. Per-clone
+# and transient -- a committed journal would be a merge conflict on every
+# concurrent sync, and a crashed run's leftovers would be committed as if they
+# were work. Collected on the next sync; named by txn id, referenced by no index
+# row, so removal is always safe.
+aidlc/spaces/*/knowledge/documentkb/.journal/
+# DocumentKB `linked`-source alias map: alias -> a machine-specific ABSOLUTE
+# root. Committing it would give every clone one developer's directory layout,
+# which is the exact failure the "never an absolute path in committed metadata"
+# rule exists to prevent. The committed side holds only the alias.
+aidlc/spaces/*/knowledge/.sources.local.json
+aidlc/spaces/*/intents/*/runtime-graph.json
+aidlc/spaces/*/intents/*/.aidlc-*
+# Redacted diagnostic reports (/aidlc --doctor --export): regenerated, meant to
+# be shared then deleted — machine-local derived output, never shared truth.
+aidlc/diagnostics/
+#
+# COMMITTED (NOT ignored, listed here for the record — do NOT add ignore rules
+# for these): aidlc/spaces/*/memory/** · aidlc/spaces/*/codekb/** ·
+# aidlc/spaces/*/intents/intents.json · aidlc/spaces/*/intents/*/aidlc-state.md ·
+# aidlc/spaces/*/intents/*/audit/*.md (the audit trail, committed as PER-CLONE
+# SHARDS: each machine appends to audit/<host>-<clone>.md so git never merges
+# concurrent appends — there is intentionally NO .gitattributes merge=union,
+# which was proven to corrupt the multi-line audit blocks) ·
+# aidlc/spaces/*/intents/*/<phase>/<stage>/*.md (artifacts + diary).

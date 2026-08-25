@@ -3,9 +3,9 @@
 AI-DLC's methodology concepts are harness-neutral; each CLI harness expresses
 them through its own native primitives. This chapter maps the AI-DLC concept to
 the primitive each harness uses, then details the **Claude Code** expression in
-depth (it is the most fully documented harness; Kiro CLI, Kiro IDE, Codex, and
-opencode express the same concepts through their own equivalents, summarised per
-chapter in
+depth (it is the most fully documented harness; Kiro CLI, Kiro IDE, Codex,
+opencode, GitHub Copilot, and Cursor express the same concepts through their
+own equivalents, summarised per chapter in
 [Running on other harnesses](../guide/harnesses/README.md), and the source
 contract for adding a harness is [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md)).
 
@@ -18,20 +18,20 @@ For hooks: see [Hooks and Tools](06-hooks-and-tools.md). For knowledge: see [Kno
 The AI-DLC concept is the constant; the primitive that carries it is the
 harness parameter. Add a column when you port to a new harness.
 
-| AI-DLC Concept | Claude Code | Kiro CLI | Kiro IDE | Codex CLI | opencode |
-|----------------|-------------|----------|----------|-----------|----------|
-| **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Command → skill (`/aidlc`; skills from `.aidlc/skills` via `skills.paths`) |
-| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Persona `.md`; delegation targets add IDE `tools:` grants | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` |
-| **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/aidlc-*.json` (v2, IDE >= 1.0) + `.kiro/hooks/aidlc-*.kiro.hook` (legacy, pre-1.0) | Hooks via `.codex/hooks.json` (one adapter) | Adapter plugin (`.opencode/plugin/`) |
-| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) |
-| **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
-| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` frontmatter for delegates | `.codex/config.toml` (+ Starlark `rules/`) | `opencode.json` (project root) |
+| AI-DLC Concept | Claude Code | Kiro CLI | Kiro IDE | Codex CLI | opencode | GitHub Copilot | Cursor |
+|----------------|-------------|----------|----------|-----------|----------|----------------|--------|
+| **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Command → skill (`/aidlc`; skills from `.aidlc/skills` via `skills.paths`) | Skills (`/aidlc`; `.github/skills/`) | Native skills (`/aidlc` plus `/aidlc-status`, `/aidlc-jump`, `/aidlc-scope`; `.cursor/skills/`) |
+| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Conductor `agents/aidlc.md` + 14 persona `.md` files with IDE `tools:`/`permissions.rules` | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` | `.github/agents/*.md` (custom agents) + persona `.md` | `.cursor/agents/*.md` (native subagents) |
+| **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/aidlc-*.json` (v2, IDE >= 1.0) + `.kiro/hooks/aidlc-*.kiro.hook` (legacy, pre-1.0) | Hooks via `.codex/hooks.json` (one adapter) | Adapter plugin (`.opencode/plugin/`) | Hooks via `.github/hooks/aidlc.json` (one adapter) | Hooks via `.cursor/hooks.json` (one adapter) |
+| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |
+| **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
+| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` + `permissions.rules` frontmatter | `.codex/config.toml` (+ Starlark `rules/`) | `opencode.json` (project root) | `trustedFolders` (`~/.copilot/config.json`) + `--allow-tool` flags | `.cursor/cli.json` (permissions) + `.cursor/hooks.json` |
 
 The deterministic engine, state machine, audit log, stage graph, and swarm
 referee underneath are byte-identical across every harness — only the primitives
 that carry them differ. The rest of this chapter documents the **Claude Code**
-expression of each primitive in detail; for the Kiro CLI, Kiro IDE, Codex, and
-opencode
+expression of each primitive in detail; for the Kiro CLI, Kiro IDE, Codex,
+opencode, Copilot, and Cursor
 equivalents see their guide chapters.
 
 ---
@@ -81,10 +81,11 @@ All framework hooks are registered project-wide in `settings.json` (the workflow
 
 ### Companion Files
 
-SKILL.md references two companion file sets in `.claude/skills/aidlc/`:
+SKILL.md references the shared protocol family and stage files:
 
-- **`stage-protocol.md`** -- Mandatory protocol for all 32 stages (approval gates, question formatting, audit logging rules, completion messages, phase-boundary verification).
-- **Stage files** in `stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/` -- 32 individual stage definitions.
+- **`aidlc-common/protocols/stage-protocol.md`** -- Mandatory static protocol for all 33 stages.
+- **Conditional protocol modules** -- reviewer, ensemble, Construction, swarm, recovery, and governance files loaded only when their trigger fires.
+- **Stage files** in `stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/` -- 33 individual stage definitions.
 
 ---
 
@@ -100,7 +101,7 @@ For full agent system documentation, see [Agent System](05-agent-system.md).
 
 The conductor uses two modes of agent activation - persona adoption and Task dispatch - across the four stage topologies:
 
-**Inline execution (28 of 32 stages):**
+**Inline execution (29 of 33 stages):**
 The conductor reads the agent's `.md` file and adopts the persona directly within the main conversation. The user interacts with the agent in real time.
 
 **Dispatched execution (4 stages: 2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent):**
@@ -347,12 +348,12 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 | Rules | `aidlc/spaces/<active-space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |
 | Skill | `.claude/skills/aidlc/SKILL.md` | On `/aidlc` invocation | Orchestrator: session, scope, stage graph, delegation |
 | Workflow-spine hooks | `.claude/settings.json` | Always on; self-gate when no workflow | PostToolUse, PreCompact, SubagentStop, Stop |
-| Agents (inline) | `.claude/agents/*.md` | Persona activation | 28 of 32 stages: conductor adopts agent persona |
+| Agents (inline) | `.claude/agents/*.md` | Persona activation | 29 of 33 stages: conductor adopts agent persona |
 | Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 4 stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent): isolated execution |
 | Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
 | Knowledge (Tier 2) | space-level `aidlc/knowledge/` (sibling of `intents/`) | Persona activation (steps 4-5) | Team-managed customization |
-| Stage protocol | `stage-protocol.md` | Every stage execution | Mandatory behavioral contract |
-| Stage files | `stages/**/*.md` | Engine routing | 32 individual stage definitions |
+| Stage protocol | `stage-protocol.md` + conditional modules | Static core every stage; modules on trigger | Mandatory behavioral contract |
+| Stage files | `stages/**/*.md` | Engine routing | 33 individual stage definitions |
 | State file | `aidlc-state.md` | Session start + throughout | Persistent workflow state |
 | Audit file | `audit.md` | Throughout execution | Append-only audit trail |
 
@@ -388,4 +389,4 @@ Steps 1-2a happen for every conversation, even non-AI-DLC ones — and because e
 - [Hooks and Tools](06-hooks-and-tools.md) -- hook system, audit taxonomy, CLI tools
 - [Knowledge System](10-knowledge-system.md) -- two-tier knowledge, loading order
 - [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md) -- how to add a column to the mapping above: the manifest, hook adapter, and `emit.ts` contract
-- [Running on other harnesses](../guide/harnesses/README.md) -- the Kiro CLI, Kiro IDE, Codex, and opencode expressions of these primitives
+- [Running on other harnesses](../guide/harnesses/README.md) -- the Kiro CLI, Kiro IDE, Codex, Cursor, opencode, and Copilot expressions of these primitives

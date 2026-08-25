@@ -1,19 +1,16 @@
 // t153-engine-directive-harness-seam: a conductor directive string built in
 // core/tools/*.ts (or core/hooks/*.ts) that names the harness tools dir MUST
-// go through harnessDir() — never a hardcoded `.claude/tools/` (or `.kiro/` /
-// `.codex/`) literal.
+// go through harnessDir() — never a hardcoded harness-directory literal.
 //
 // covers: function:harnessDir
 //
 // WHY THIS GUARD EXISTS. The deterministic engine emits `print` directives whose
 // `message` tells the conductor to run a tool, e.g.
 //   `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts init --scope ...\` ...`
-// The .ts tools are BYTE-COPIED into every harness dist (dist/claude/.claude/,
-// dist/kiro/.kiro/, dist/codex/.codex/) — harnessDir() resolves the right tree
-// at RUN time. A directive that hardcodes `bun .claude/tools/aidlc-*.ts` instead
-// would ship verbatim into the Kiro and Codex trees and tell their conductors to
-// run a tool at a path that does not exist there — the workflow-birth /
-// scope-change / config-change / jump directives would fail on 2 of 3 harnesses.
+// The .ts tools are BYTE-COPIED into every harness dist; harnessDir() resolves
+// the right tree at RUN time. A directive that hardcodes one harness directory
+// ships verbatim into the others and tells their conductors to run a tool at a
+// path that does not exist there.
 //
 // This is the exact CRIT-class seam bug the dist-unified review found for the
 // rules dir (rulesSubdir). The merge-endgame re-homed v0.6.8's createPrintDirective
@@ -39,12 +36,12 @@ const SCAN_DIRS = [join(CORE, "tools"), join(CORE, "hooks")];
 
 // A `bun <dir>/tools/` (or /hooks/) shell-command fragment whose <dir> is a
 // HARDCODED harness directory literal rather than a ${harnessDir()} call.
-// Matches `bun .claude/tools/`, `bun .kiro/tools/`, `bun .codex/tools/` and the
-// hooks variants. Does NOT match `bun ${harnessDir()}/tools/` (the seam) nor
+// Matches every shipped harness directory and its tools/hooks variants. Does
+// NOT match `bun ${harnessDir()}/tools/` (the seam) nor
 // `bun dist/claude/.claude/tools/` (an install-instruction path, which names the
 // distributable, not a runtime directive the conductor executes).
 const HARDCODED_DIRECTIVE_RE =
-  /bun\s+\.(claude|kiro|codex)\/(tools|hooks)\//;
+  /bun\s+\.(claude|kiro|codex|aidlc|cursor)\/(tools|hooks)\//;
 
 function* walkTs(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {

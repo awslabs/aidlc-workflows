@@ -33,6 +33,7 @@ sensors:
 scopes:
   - enterprise
   - feature
+  - classic
   - workshop
 inputs: NFR requirements from nfr-requirements stage, NFR design from nfr-design stage, deployed application, observability data from observability-setup stage
 outputs: load-test-plan.md, test-results.md, nfr-validation-matrix.md, performance-validation-questions.md (under this stage's record dir, engine-resolved)

@@ -56,13 +56,14 @@
 //     the exhaustive matrix)
 //       -> seed state-final-stage + the no-progress counter AT the cap (8) with
 //          the project's matching progress signature
-//          (`${Current Stage}::${audit line count}`, aidlc-continue-workflow.ts:137) +
+//          (stage, stable state digest, and directive fingerprint from
+//          aidlc-continue-workflow.ts:247) +
 //          stop_hook_active:true: the hook RELEASES (empty stdout, exit 0) and
 //          appends the drop record "recursion guard released the stop"
 //          (aidlc-continue-workflow.ts:370) to .aidlc-hooks-health/continue-workflow.drops — a stuck loop
 //          can never trap the session even with the directive genuinely pending.
-//          Deterministically confirmed on this fixture (sig
-//          feedback-optimization::2, drop line written).
+//          Deterministically confirmed on this fixture with the real engine
+//          directive and matching composite signature.
 //   7 human-wait carve-out against the REAL engine (NEW — no .sh predecessor;
 //     t121 owns the exhaustive [?]/[R]/[-] matrix)
 //       -> seed state-final-stage but flip the current stage's row from [-] to
@@ -110,7 +111,7 @@
 //   - Stop hook registration:    dist settings.json:110-118 (matcher "", aidlc-continue-workflow.ts)
 //   - heartbeat write:           aidlc-continue-workflow.ts:90 (continue-workflow.last)
 //   - guard file:                aidlc-continue-workflow.ts:130 (block-count.json)
-//   - progress signature:        aidlc-continue-workflow.ts:137 (`${stage}::${auditLines}`)
+//   - progress signature:        aidlc-continue-workflow.ts:247
 //   - resetGuard on done/allow:  aidlc-continue-workflow.ts:241-248 (count 0), invoked :357
 //   - block JSON + reason:       aidlc-continue-workflow.ts:104,298-307
 //   - release + drop record:     aidlc-continue-workflow.ts:364-371 ("recursion guard released the stop")
@@ -125,12 +126,13 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  auditFilePath,
   docsRoot,
   hooksHealthDir,
+  STOP_HOOK_PROBE_ENV,
   stopHookDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { assertToolResultContains } from "../harness/assert.ts";
@@ -193,24 +195,141 @@ function runRealHook(
   return { rc: res.status ?? -1, out: (res.stdout ?? "").trim() };
 }
 
-/** The hook's progress signature for a project — Current Stage + audit.md line
- *  count (aidlc-continue-workflow.ts:137) — so test 6 can seed the counter AT the cap under
- *  the matching key. Mirrors the .sh's progress_sig. */
+interface ProgressDirective {
+  kind: string;
+  stage?: string;
+  unit?: string;
+  continueToken?: string;
+  part?: number;
+  parts?: number;
+  units?: string[];
+  worker?: string;
+  repo?: string;
+  wave?: unknown;
+  rulesContent?: Array<{ path: string; text: string }>;
+}
+
+function runEngineNextDirective(proj: string): ProgressDirective {
+  const result = spawnSync(
+    BUN,
+    [
+      join(proj, ".claude", "tools", "aidlc-orchestrate.ts"),
+      "next",
+      "--project-dir",
+      proj,
+    ],
+    {
+      encoding: "utf-8",
+      timeout: HOOK_SPAWN_TIMEOUT_MS,
+      env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  const parsed = JSON.parse((result.stdout ?? "").trim()) as Record<
+    string,
+    unknown
+  >;
+  const rawUnits = parsed.units;
+  const rawRulesContent = parsed.rules_content;
+  return {
+    kind: String(parsed.kind),
+    ...(typeof parsed.stage === "string" && parsed.stage.trim().length > 0
+      ? { stage: parsed.stage.trim() }
+      : {}),
+    ...(typeof parsed.unit === "string" && parsed.unit.trim().length > 0
+      ? { unit: parsed.unit.trim() }
+      : {}),
+    ...(typeof parsed.continue_token === "string" &&
+    parsed.continue_token.trim().length > 0
+      ? { continueToken: parsed.continue_token.trim() }
+      : {}),
+    ...(typeof parsed.part === "number" && Number.isInteger(parsed.part)
+      ? { part: parsed.part }
+      : {}),
+    ...(typeof parsed.parts === "number" && Number.isInteger(parsed.parts)
+      ? { parts: parsed.parts }
+      : {}),
+    ...(Array.isArray(rawUnits) &&
+    rawUnits.every((entry) => typeof entry === "string")
+      ? {
+          units: rawUnits
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0),
+        }
+      : {}),
+    ...(typeof parsed.worker === "string" && parsed.worker.trim().length > 0
+      ? { worker: parsed.worker.trim() }
+      : {}),
+    ...(typeof parsed.repo === "string" && parsed.repo.trim().length > 0
+      ? { repo: parsed.repo.trim() }
+      : {}),
+    ...("wave" in parsed ? { wave: parsed.wave } : {}),
+    ...(Array.isArray(rawRulesContent) &&
+    rawRulesContent.every(
+      (entry) =>
+        entry !== null &&
+        typeof entry === "object" &&
+        "path" in entry &&
+        typeof (entry as { path?: unknown }).path === "string" &&
+        "text" in entry &&
+        typeof (entry as { text?: unknown }).text === "string",
+    )
+      ? {
+          rulesContent: rawRulesContent as Array<{
+            path: string;
+            text: string;
+          }>,
+        }
+      : {}),
+  };
+}
+
+/** The hook's composite progress signature for a project, using the real
+ *  engine directive so test 6 seeds the counter under the matching key. */
 function progressSig(proj: string): string {
   const s = readFileSync(seededStateFile(proj), "utf-8");
   const m = s.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/);
   const stage = (m?.[1] ?? "").trim();
-  let auditLines = 0;
-  try {
-    // The hook reads its OWN resolved shard (auditFilePath) for the length, not
-    // the glob — resolve the identical shard so the signature matches. (withAudit
-    // seeds a DIFFERENT shard (fixture.md), so this resolved shard is absent →
-    // auditLines 0 on both sides, which is consistent.)
-    auditLines = readFileSync(auditFilePath(proj), "utf-8").split("\n").length;
-  } catch {
-    /* audit absent => 0 */
-  }
-  return `${stage}::${auditLines}`;
+  const stableState = s.replace(
+    /^- \*\*Last Updated\*\*:[^\n]*(?:\n|$)/gm,
+    "",
+  );
+  const stateSha256 = createHash("sha256")
+    .update(stableState, "utf-8")
+    .digest("hex");
+  const directive = runEngineNextDirective(proj);
+  const directiveFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        kind: directive.kind,
+        stage: directive.stage ?? "",
+        unit: directive.unit ?? "",
+        part: directive.part ?? null,
+        parts: directive.parts ?? null,
+        continue_token_sha256: directive.continueToken
+          ? createHash("sha256")
+              .update(directive.continueToken, "utf-8")
+              .digest("hex")
+          : "",
+        rules_content_sha256: directive.rulesContent
+          ? createHash("sha256")
+              .update(JSON.stringify(directive.rulesContent), "utf-8")
+              .digest("hex")
+          : "",
+        units: directive.units ?? [],
+        worker: directive.worker ?? "",
+        repo: directive.repo ?? "",
+        wave_sha256:
+          directive.wave === undefined
+            ? ""
+            : createHash("sha256")
+                .update(JSON.stringify(directive.wave), "utf-8")
+                .digest("hex"),
+      }),
+      "utf-8",
+    )
+    .digest("hex");
+  return `${stage}::${stateSha256}::${directiveFingerprint}`;
 }
 
 describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () => {

@@ -66,6 +66,7 @@ import {
   loadScopeMetadataAll,
   loadStageGraphAll,
   pluginsEnabled,
+  runnerFrontmatterAdditions,
   scopeGridPath,
 } from "./aidlc-lib.ts";
 import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
@@ -119,6 +120,11 @@ function stageSlugs(): string[] {
 // initialization phase via `/aidlc --init`, NOT a single stage.
 const INIT_RUNNER_DIR = "aidlc-init";
 
+function nativeRunnerFrontmatter(): string {
+  const lines = runnerFrontmatterAdditions();
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+}
+
 // Render the ~6-line runner shell for one stage. The body is intentionally thin:
 // it states what the runner does and the one command it drives. It does NOT
 // load the conductor persona (the engine bakes it into the first `next`), and it
@@ -146,6 +152,7 @@ description: >
   stops. The main workflow's Current Stage is never touched.
 argument-hint: ""
 user-invocable: true
+${nativeRunnerFrontmatter()}\
 ---
 
 # AI-DLC Stage Runner — ${node.slug}
@@ -168,7 +175,14 @@ that flag without this skill.
    exactly as the directive describes; do not load the conductor persona by hand,
    the engine delivers it.
 
-2. When the stage's work is done, commit the single-stage record:
+2. Before acting on the directive, read
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\`. Then read every
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol-<module>.md\` named by
+   \`directive.protocol_modules\`. Load every listed module before reading the
+   stage body or running its topology; skip only a module already loaded earlier
+   in this session.
+
+3. When the stage's work is done, commit the single-stage record:
 
    \`\`\`bash
    bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --single --stage ${node.slug} --result completed
@@ -201,6 +215,7 @@ description: >
   packaging over that move. Pass \`--scope <name>\` to seed the initial scope, or a freeform description of what to build.
 argument-hint: "[--scope <name>] [description]"
 user-invocable: true
+${nativeRunnerFrontmatter()}\
 ---
 
 # AI-DLC — start a workflow (birth the first intent)
@@ -229,12 +244,16 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-utility.ts intent-create --arguments "<description>" --label "<2-3 word essence>"
+   bun ${harnessDir()}/tools/aidlc-utility.ts intent-create --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
-   Pass \`--scope <name>\` **only if the user named one**; otherwise omit it and the engine picks the install's default scope. Omit \`--arguments\`
-   and \`--label\` when the user gave no description. Print the tool's output and
-   stop. This does not advance a stage; run \`/aidlc\` afterwards to continue.
+   Pass the user's \`--scope <name>\` when they named one; otherwise omit
+   \`--scope\` — the tool resolves the implicit default itself
+   (\`AWS_AIDLC_DEFAULT_SCOPE\`, else \`classic\`). If the user gave neither a
+   scope nor a description, do not run a bare \`intent-create\`: ask what they
+   want to build or which scope to use. When only a scope was supplied, omit
+   \`--arguments\` and \`--label\`. Print the tool's output and stop. This does
+   not advance a stage; run \`/aidlc\` afterwards to continue.
 `;
 }
 
@@ -264,6 +283,7 @@ description: >
   composer even when a stock scope would match.
 argument-hint: "[description | --report <path> | --new-scope]"
 user-invocable: true
+${nativeRunnerFrontmatter()}\
 ---
 
 # AI-DLC - compose a workflow plan
@@ -295,7 +315,7 @@ conductor runs the same forwarding loop as \`/aidlc\`.
 // emits byte-identical SKILL.md files. Also PRUNES any stale init-phase
 // stage-runner dir (aidlc-state-init, aidlc-workspace-detection,
 // aidlc-workspace-scaffold) left by an earlier generation that emitted runners
-// for all 32 stages. Returns the slugs written.
+// for all 33 stages. Returns the slugs written.
 function handleWrite(): string[] {
   const skillsDir = defaultSkillsDir(true);
   const slugs = stageSlugs();
@@ -571,6 +591,29 @@ function scopeRunnerDirName(scope: string, front: Pick<ScopeFront, "plugin">): s
 export function renderRunner(scope: string, description: string): string {
   const front = discoverScopes()[scope];
   const dir = scopeRunnerDirName(scope, front ?? {});
+  const activeHarnessDir = harnessDir();
+  const harnessName = process.env.AIDLC_HARNESS_NAME?.trim();
+  const entrySkill = activeHarnessDir === ".codex" ? "$aidlc" : "/aidlc";
+  const freshSessionFlow = (() => {
+    if (harnessName === "claude") return "use `/clear` (or restart Claude Code)";
+    if (harnessName === "codex") return "exit or restart Codex CLI and start a new session";
+    if (harnessName === "kiro") return "exit or restart Kiro CLI and start a new session";
+    if (harnessName === "kiro-ide") return "open a new Kiro IDE chat";
+    if (harnessName === "opencode") return "exit or restart OpenCode and start a new session";
+    if (harnessName === "cursor") {
+      return "start a new Cursor chat (IDE) or restart agent (CLI)";
+    }
+    if (harnessName === "copilot") {
+      return "start a new Copilot CLI session or open a new VS Code agent chat";
+    }
+    if (harnessName === "cursor") return "start a new Cursor chat session";
+    if (activeHarnessDir === ".claude") return "use `/clear` (or restart Claude Code)";
+    if (activeHarnessDir === ".codex") return "exit or restart Codex CLI and start a new session";
+    if (activeHarnessDir === ".kiro") {
+      return "start a new Kiro CLI session or open a new Kiro IDE chat";
+    }
+    return "exit or restart the current harness and start a new session";
+  })();
   // Normalise the scope's one-line description into a sentence (trailing period)
   // so it reads cleanly when stitched between the lead-in and the packaging note.
   const raw = (description || `Run the AI-DLC workflow with the ${scope} scope`).trim();
@@ -580,16 +623,17 @@ name: ${dir}
 generated-by: aidlc-runner-gen
 description: >
   Run the AI-DLC workflow with the ${scope} scope baked in — no scope
-  detection. ${desc} Packaging over \`/aidlc --scope ${scope}\`, which works
+  detection. ${desc} Packaging over \`${entrySkill} --scope ${scope}\`, which works
   without this skill.
 argument-hint: "[description | --status | --stage <slug|#> | --phase <name|#>]"
 user-invocable: true
+${nativeRunnerFrontmatter()}\
 ---
 
 # AI-DLC — ${scope} scope
 
 Drive the AI-DLC engine with the **${scope}** scope fixed. This is the same
-deterministic forwarding loop the \`/aidlc\` orchestrator runs, with \`--scope
+deterministic forwarding loop the \`${entrySkill}\` orchestrator runs, with \`--scope
 ${scope}\` baked into the first \`next\` so scope detection is skipped. The
 engine owns all routing; the conductor persona arrives on the first directive's
 \`conductor_persona\` field — adopt it for the whole run.
@@ -597,14 +641,59 @@ engine owns all routing; the conductor persona arrives on the first directive's
 ## The loop
 
 1. \`directive = bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --scope ${scope} $ARGUMENTS\`
-2. Act on \`directive.kind\` exactly as the orchestrator does (run-stage / ask / print / error / done) — see \`aidlc-common/protocols/stage-protocol.md\`.
+2. Before acting on each directive, read
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\` once per session,
+   then read every
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol-<module>.md\` named by
+   \`directive.protocol_modules\`. Load every listed module before acting; skip
+   only a module already loaded earlier in this session. Then act on
+   \`directive.kind\` exactly as the orchestrator does (run-stage / invoke-swarm /
+   ask / print / error / done).
 3. \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` when the directive names a stage; omit \`--stage\` only for non-stage report round-trips.
 4. Repeat from step 1 until \`directive.kind == done\`.
 
 Pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
 any flags (\`--status\`, \`--stage\`, …) and the \`--scope\` from the
 state file always wins on an existing workflow, so re-running a started workflow
-resumes it. To run a different scope, use \`/aidlc --scope <other>\` instead.
+resumes it. To run a different scope, use \`${entrySkill} --scope <other>\` instead.
+
+## Starting unrelated new work?
+
+Before you forward \`$ARGUMENTS\` on step 1, make the SAME recognise-vs-route
+judgment the \`${entrySkill}\` orchestrator makes: does this input **continue** the
+active intent, or does it describe a **genuinely new, unrelated** piece of work?
+This matters most when the active intent is already **complete**: then \`next\`
+correctly returns \`done\` (the engine is read-only and never births alongside a
+live intent), and the loop above would simply stop. New work is NOT a
+continuation; the escape hatch is \`next --new-intent\`.
+
+- **Default to CONTINUATION.** Treat the input as new-work ONLY when it clearly
+  names a distinct feature/bug/unit unrelated to the active intent's subject
+  (\`bun ${harnessDir()}/tools/aidlc-utility.ts intent --json\` gives its \`slug\` and
+  \`status\`). When in doubt, continue: false-positive offers are the main risk.
+- **On genuine new-work, OFFER, never auto-birth.** Surface an
+  \`AskUserQuestion\` showing the active intent and the proposed new one, **including
+  the scope you'd give the new intent**. Default that scope to this runner's baked
+  \`${scope}\` (the new work is likely the same flavour that made the user reach for
+  this command), but if the new work clearly fits a DIFFERENT scope, propose that
+  instead, and name it so the human can correct it. **Lead the affirmative option
+  with "Yes"** (e.g. "Yes, start a second intent"). Starting a workflow is a
+  mutation gated on a human yes.
+- **On CONFIRM**, re-run \`next\` with \`--new-intent\`, the confirmed scope, and the
+  new-work text:
+
+  \`\`\`bash
+  bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --new-intent --scope <the confirmed scope> "<the new-work description>"
+  \`\`\`
+
+  The engine returns a \`print\` directive naming the \`intent-create\` command
+  (with the \`--label "<2-3 word kebab essence>"\` placeholder). Act on it exactly
+  as the loop's \`print\` handling describes: create the intent, then, because this is
+  a NEW, unrelated intent and this session still carries the previous intent's
+  context, **STOP** and follow the directive's hand-off: tell the user to start a
+  fresh session (${freshSessionFlow}) and invoke \`${entrySkill}\` to begin the
+  new intent with a clean slate. Nothing is lost; the intent is saved on disk.
+- **On DECLINE**, proceed with the active intent, the normal loop above.
 `;
 }
 

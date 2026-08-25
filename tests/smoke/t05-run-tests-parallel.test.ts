@@ -426,6 +426,11 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       "";
     const logDir = logLine.replace("Verbose mode: logging to ", "").trim();
     expect(logDir).not.toBe("");
+    // The dir is per-process (stamp + pid): two runners launched in the same
+    // second (this suite's own child runners next to a sliced gate) must never
+    // share a log dir - the sharer's cleanup deletes the other's _results
+    // mid-run. The suffix is the collision guard; pin it.
+    expect(logDir).toMatch(/-p\d+$/);
     createdLogDirs.push(logDir);
     const resultsDir = join(logDir, "_results");
     expect(existsSync(resultsDir)).toBe(true);
@@ -494,10 +499,13 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
   test("--no-llm closes every live-model environment gate", () => {
     const plant = join(TESTS_ROOT, "integration", "tZZ-no-llm-gates-t05.test.ts");
     const gates = [
+      "AIDLC_CLAUDE_SDK_LIVE",
       "AIDLC_TUI_LIVE",
       "AIDLC_KIRO_ACP_LIVE",
       "AIDLC_KIRO_TUI_LIVE",
       "AIDLC_CODEX_EXEC_LIVE",
+      "AIDLC_COPILOT_EXEC_LIVE",
+      "AIDLC_CURSOR_RUN_LIVE",
       "AIDLC_KIRO_IDE_LIVE",
       "AIDLC_OPENCODE_RUN_LIVE",
     ];

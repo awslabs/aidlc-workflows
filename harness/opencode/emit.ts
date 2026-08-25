@@ -25,9 +25,14 @@ import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 
 // Rewrite a core persona .md into its opencode-native subagent twin. The
-// frontmatter tier becomes model/variant plus mode, and the core Task denial
-// becomes opencode's native permission map. Unknown disallowed tools fail the
-// build instead of silently landing in opencode's inert options bag.
+// frontmatter tier becomes model/variant plus mode, the core Task denial
+// becomes opencode's native permission map, and a core `maxTurns:` cap is
+// renamed to opencode's native `steps:` key (per-agent step cap, opencode
+// >= 1.0.134; at the cap opencode forces a final TEXT-ONLY turn - the agent
+// can return a summary but cannot make tool calls, so the persona's Turn
+// Budget prose still carries the write-early instruction). Unknown disallowed
+// tools fail the build instead of silently landing in opencode's inert
+// options bag.
 function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap"]): string {
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
@@ -51,14 +56,25 @@ function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tier
     .split(/\r?\n/)
     .flatMap((line) => {
       if (/^disallowedTools:/.test(line)) return [];
+      // Core's harness-neutral turn cap -> opencode's native per-agent key.
+      const maxTurns = line.match(/^maxTurns:\s*(\d+)\s*$/);
+      if (maxTurns) return [`steps: ${maxTurns[1]}`];
       return /^tier:/.test(line) ? lines : [line];
     })
     .join("\n");
-  return raw.replace(m[0], () => `---\n${newFm}\n---\n`);
+  return (
+    raw
+      .replace(m[0], () => `---\n${newFm}\n---\n`)
+      // Keep persona prose consistent with the renamed frontmatter key: the
+      // harness-neutral body cites its own cap as `maxTurns: <n>`; on this
+      // roster that key is `steps: <n>`.
+      .replace(/`maxTurns: (\d+)`/g, "`steps: $1`")
+  );
 }
 
 function projectActiveMemoryReferences(raw: string): string {
   return raw
+    .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/spaces/default/memory/")
     .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
     .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/spaces/default/memory/team.md")
     .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/spaces/default/memory/project.md")

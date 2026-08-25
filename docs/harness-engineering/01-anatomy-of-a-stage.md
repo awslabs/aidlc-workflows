@@ -17,7 +17,7 @@ Keeping both in one file means you see the graph edges and the execution steps s
 
 This split is the key to knowing what you're editing. Change a frontmatter field and you've changed the *graph* (a dependency edge, the agent that leads, the execution mode). Change the body and you've changed the *work* (what the agent actually does). The two are independent.
 
-A real stage is authored at `core/aidlc-common/stages/<phase>/<slug>.md` — for example `stages/inception/application-design.md`. Open one alongside this chapter; the shape will be familiar by the end.
+A real stage is authored at `core/aidlc-common/stages/<phase>/<slug>.md` — for example `stages/inception/domain-design.md`. Open one alongside this chapter; the shape will be familiar by the end.
 
 ---
 
@@ -48,10 +48,10 @@ This is the orientation, not the contract. For the complete field table with typ
 
 ## The three-compartment body
 
-Below the frontmatter, the body has three compartments, always in this order: `## Steps`, `## Sensors`, `## Learn`. Looking at `application-design.md` shows all three populated.
+Below the frontmatter, the body has three compartments, always in this order: `## Steps`, `## Sensors`, `## Learn`. Looking at `domain-design.md` shows all three populated.
 
 - **`## Steps`** is the imperative prose the agent follows — load personas, read prior context, create the questions file, generate the artifacts, present the approval gate. This is where the stage's domain work lives, and it's the compartment you'll edit most when you change *what a stage does* without touching the graph.
-- **`## Sensors`** documents the deterministic checks bound to the stage's outputs. In `application-design.md` it explains that `required-sections` and `upstream-coverage` fire on the stage's markdown artifacts and what each one verifies. The binding itself is the `sensors:` list up in the frontmatter; this compartment is the human-readable description of what those bindings do. Sensors are covered in full in [Sensors](06-sensors.md).
+- **`## Sensors`** documents the deterministic checks bound to the stage's outputs. In `domain-design.md` it explains that `required-sections` and `upstream-coverage` fire on the stage's markdown artifacts while `traceability` checks its declared JSON coverage table. The binding itself is the `sensors:` list up in the frontmatter; this compartment is the human-readable description of what those bindings do. Sensors are covered in full in [Sensors](06-sensors.md).
 - **`## Learn`** documents the learning-loop ritual — the `memory.md` diary the agent keeps while the stage runs, and how kept observations route into practices and sensors at the approval gate. Crucially, this ritual writes into the *space memory layer* (`aidlc/spaces/<active-space>/memory/`) and the harness's sensor config (`.claude/sensors/`), never back into the stage file itself.
 
 These three compartments were pre-declared so that v0.5.0's additions — the populated Sensors and Learn bindings — slotted in cleanly rather than forcing a body restructure. The full body model and what each compartment may contain is in [Three-compartment body model](../reference/15-stage-definition.md#three-compartment-body-model).

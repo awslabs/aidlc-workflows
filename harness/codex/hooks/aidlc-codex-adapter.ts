@@ -57,7 +57,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-import { stateFilePath } from "../tools/aidlc-lib.ts";
+import { isNonAnswer, sessionsDir, stateFilePath } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -94,6 +94,57 @@ function spawnAgentPrompt(input: CodexSpawnAgentInput): string {
     }
   }
   return parts.join("\n");
+}
+
+function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
+  const offered = new Map<string, Set<string>>();
+  if (toolInput === null || typeof toolInput !== "object") return offered;
+  const questions = (toolInput as Record<string, unknown>).questions;
+  if (!Array.isArray(questions)) return offered;
+  for (const question of questions) {
+    if (question === null || typeof question !== "object") continue;
+    const record = question as Record<string, unknown>;
+    if (typeof record.id !== "string" || !Array.isArray(record.options)) continue;
+    const labels = new Set<string>();
+    for (const option of record.options) {
+      if (typeof option === "string") labels.add(option.trim());
+      else if (option !== null && typeof option === "object") {
+        const candidate = option as Record<string, unknown>;
+        for (const key of ["label", "value", "text"] as const) {
+          if (typeof candidate[key] === "string") labels.add(candidate[key].trim());
+        }
+      }
+    }
+    offered.set(record.id, labels);
+  }
+  return offered;
+}
+
+export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): boolean {
+  if (typeof toolResponse !== "string") return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(toolResponse);
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const response = parsed as Record<string, unknown>;
+  if (Object.keys(response).length !== 1 || !("answers" in response)) return false;
+  const answers = response.answers;
+  if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return false;
+  const selections = Object.entries(answers as Record<string, unknown>);
+  if (selections.length === 0) return false;
+  const offered = offeredOptionLabels(toolInput);
+  return selections.every(([questionId, selection]) => {
+    if (selection === null || typeof selection !== "object" || Array.isArray(selection)) return false;
+    const record = selection as Record<string, unknown>;
+    if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
+    return record.answers.length > 0 && record.answers.every((answer) => {
+      if (typeof answer !== "string" || answer.trim().length === 0) return false;
+      return !isNonAnswer(answer) || offered.get(questionId)?.has(answer.trim()) === true;
+    });
+  });
 }
 
 export async function run(
@@ -276,14 +327,15 @@ function wrapContext(coreStdout: string, eventName: string): string {
 
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
 
-const heartbeatFile = join(projectDir, "aidlc-docs", ".aidlc-hooks-health", "codex-session.json");
+const heartbeatFile = join(sessionsDir(projectDir), "codex-session.json");
 
 function reconcilePriorSession(): void {
-  // Only meaningful inside an active workflow; the heartbeat lives in the
-  // same health dir the core hooks already maintain.
-  if (!existsSync(join(projectDir, "aidlc-docs"))) return;
+  // The heartbeat is recorded even before a workflow exists. If the first turn
+  // births an intent, the utility can then bind this session to that record and
+  // a later Codex session can reconcile its inferred SESSION_ENDED correctly.
+  const hasActiveWorkflow = existsSync(stateFilePath(projectDir));
   try {
-    if (existsSync(heartbeatFile)) {
+    if (hasActiveWorkflow && existsSync(heartbeatFile)) {
       const prior = JSON.parse(readFileSync(heartbeatFile, "utf-8")) as {
         session_id?: string;
         ts?: string;
@@ -295,7 +347,10 @@ function reconcilePriorSession(): void {
         const reason =
           `inferred — Codex has no SessionEnd event (D-4); reconciled at next ` +
           `SessionStart. Prior session ${prior.session_id} last seen ${prior.ts ?? "unknown"}.`;
-        runCore("aidlc-session-end.ts", JSON.stringify({ reason }));
+        runCore(
+          "aidlc-session-end.ts",
+          JSON.stringify({ reason, session_id: prior.session_id }),
+        );
       }
     }
     mkdirSync(dirname(heartbeatFile), { recursive: true });
@@ -583,6 +638,13 @@ switch (target) {
   }
 
   case "record-human-turn": {
+    if (
+      codex.tool_name === "request_user_input" &&
+      !hasExplicitHumanSelection(codex.tool_response, codex.tool_input)
+    ) {
+      persistResponse("", 0);
+      return 0;
+    }
     // UserPromptSubmit: a real human acted this turn — record a HUMAN_TURN event
     // in the active intent's audit shard (human-presence gate). Gated on workflow
     // state existing (same self-gate as the core record-human-turn hook) so a prompt in a

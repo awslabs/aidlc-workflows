@@ -10,6 +10,9 @@
 //   resume  — /resume from a prior session
 //   clear   — /clear used to start anew within an existing session
 //   compact — session resuming after context compaction
+// The Cursor adapter additionally sends `rebind_check: true` with source=resume
+// on beforeSubmitPrompt because Cursor's sessionStart has no resume source.
+// That internal probe emits no session event and returns only a rebind offer.
 //
 // Mapping (SESSION_COMPACTED is emitted by validate-state.ts PreCompact,
 // NOT here — firing it twice would pollute the audit trail):
@@ -18,7 +21,9 @@
 //   clear   → SESSION_STARTED
 //   compact → no emission (PreCompact already fired)
 //
-// With no aidlc-state.md, only cursor/include bootstrap runs; workflow work is a no-op.
+// With no aidlc-state.md the hook emits no workflow event or context, but still
+// bootstraps cursors/includes and records host session identity and transcript
+// metadata so the first intent born later in the turn can bind to it.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -49,40 +54,11 @@ import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
-// Idempotent ensure-step (P0.1 robustness): atomically materialize a clone's
-// missing gitignored cursor, then align the harness-native includes with that
-// space BEFORE the no-workflow early-exit. Cursor creation cannot overwrite a
-// concurrent explicit switch. Best-effort: a failure here must never break
-// session startup.
-ensureActiveSpaceCursor(projectDir);
-try {
-  repointHarnessIncludes(projectDir, activeSpace(projectDir));
-} catch {
-  // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
-}
-
-const stateFile = stateFilePath(projectDir);
-
-// No workflow active — do nothing
-if (!existsSync(stateFile)) return 0;
-
-// Write health heartbeat
-const healthDir = hooksHealthDir(projectDir);
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
-
-// Read stdin. Distinguish four cases so a phantom startup event isn't
-// recorded when the real source was resume/compact but stdin was malformed:
-//   - stdin is a TTY: hook invoked interactively (tests, direct run) →
-//     startup. SKIP stdin read to avoid blocking forever on terminal input.
-//     Claude Code always pipes JSON, never runs the hook with a TTY attached.
-//   - piped but empty: hook invoked outside Claude Code with `</dev/null` or
-//     similar → startup.
-//   - valid JSON with source: use it.
-//   - non-empty stdin that fails JSON.parse: source=malformed (recorded in
-//     the audit, so the operator can see something went wrong instead of
-//     silently mislabelling it).
+// Read stdin before the workflow-state gate. A fresh session commonly starts
+// before the first intent is born; retaining its id lets intent-birth stamp that
+// session to the new record without inventing session ownership in the tool.
 let source = "startup";
+let rebindCheckOnly = false;
 // The conversation id Claude Code stamps on every hook input. Used to key the
 // per-session→intent record (resume rebind below); "" when absent (a TTY/empty
 // invocation) — the rebind logic no-ops without it.
@@ -103,6 +79,7 @@ if (!process.stdin.isTTY) {
           if (typeof rawObj.transcript_path === "string") {
             transcriptPath = rawObj.transcript_path;
           }
+          rebindCheckOnly = rawObj.rebind_check === true;
         } else {
           source = "unknown";
         }
@@ -126,22 +103,39 @@ try {
   // never break session startup on a usage-bookkeeping failure
 }
 
-// Record the live conversation as the "current session" on EVERY fire (startup /
-// resume / clear / compact) — NOT gated on eventType. The hook is the only place
-// that sees session_id; a CLI switch (`/aidlc intent <slug>`) cannot. This marker
-// lets the switch tool re-stamp the live session's record so a deliberate
-// in-conversation switch doesn't fire a FALSE rebind nag on resume (see the
-// re-stamp in handleIntent, aidlc-utility.ts). Separate file from the per-session
-// stamp below; no-op without a session_id.
+// Record the live conversation on EVERY fire, including a pre-workflow start.
+// intent-birth reads this marker and binds an unstamped session to the first
+// intent it creates. Separate from the per-session intent stamp below.
 if (sessionId) writeCurrentSessionId(projectDir, sessionId);
+
+// Atomically materialize a clone's missing gitignored cursor, then align the
+// harness-native includes before the no-workflow early exit.
+ensureActiveSpaceCursor(projectDir);
+try {
+  repointHarnessIncludes(projectDir, activeSpace(projectDir));
+} catch {
+  // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
+}
+
+const stateFile = stateFilePath(projectDir);
+
+// No workflow active — retain only the session identity recorded above.
+if (!existsSync(stateFile)) return 0;
+
+// Write health heartbeat
+const healthDir = hooksHealthDir(projectDir);
+mkdirSync(healthDir, { recursive: true });
+writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
 
 // Emit session event. appendAuditEntry creates audit.md if missing, so no
 // audit-existence guard — the state-file guard above is the sole "workflow
 // is active" check.
 let eventType: string | null = null;
-if (source === "startup" || source === "clear") eventType = "SESSION_STARTED";
-else if (source === "resume") eventType = "SESSION_RESUMED";
-else if (source === "malformed") eventType = "SESSION_STARTED"; // visible via Source field
+if (!rebindCheckOnly) {
+  if (source === "startup" || source === "clear") eventType = "SESSION_STARTED";
+  else if (source === "resume") eventType = "SESSION_RESUMED";
+  else if (source === "malformed") eventType = "SESSION_STARTED"; // visible via Source field
+}
 // compact / unknown: no emission — compact is owned by PreCompact hook
 
 if (eventType) {
@@ -163,19 +157,19 @@ if (eventType) {
 //     session so a later resume can detect a cursor drift.
 //   - On RESUMED, if the stamped UUID differs from the live cursor AND still
 //     names a real intent, OFFER a rebind. The offer is a print directive in
-//     additionalContext — it CORRECTS the per-user cursor on a Yes, it NEVER
-//     rebuilds the session (the session is CLI-owned; the intent is the durable,
-//     harness-neutral record). No session_id (TTY/empty stdin) → no-op.
+//     additionalContext. The stamp follows the live intent by default (the No
+//     path); on Yes, the named intent-switch command moves both cursor and stamp
+//     back together. No session_id (TTY/empty stdin) → no-op.
 const activeSp = activeSpace(projectDir);
 const liveUuid = activeIntentUuid(projectDir, activeSp);
 let rebindOffer = "";
 if (sessionId) {
+  const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
   if (eventType === "SESSION_STARTED") {
     // Stamp the intent this conversation is bound to (only when one resolves —
     // a flat-legacy / pre-birth project has no uuid to stamp).
     if (liveUuid) writeSessionIntentUuid(projectDir, sessionId, liveUuid);
   } else if (source === "resume") {
-    const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
     // Offer ONLY on a real drift: a stamp exists, it differs from the live
     // cursor, and it still resolves to a known intent (a stale stamp from a
     // since-deleted intent names nothing → no offer).
@@ -184,16 +178,17 @@ if (sessionId) {
       if (was) {
         const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
         const liveSlug = live ? live.slug : "(none)";
-        // The cursor verb is `/aidlc intent <slug>` (switches within the active
-        // space). When the stamped intent lives in another space, prefix the
-        // space switch so the rebind command is complete.
-        const switchCmd =
+        const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+        // The cursor verb switches within the active space. When the stamped
+        // intent lives elsewhere, prefix the space switch. Use the harness's
+        // native entry skill so Codex never receives a slash command.
+        const switchInstruction =
           was.space === activeSp
-            ? `/aidlc intent ${was.slug}`
-            : `/aidlc space ${was.space} && /aidlc intent ${was.slug}`;
+            ? `run \`${entrySkill} intent ${was.slug}\``
+            : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${was.slug}\``;
         rebindOffer =
           `INTENT REBIND OFFER: This conversation was working ${was.slug}, but the active intent is ${liveSlug}. ` +
-          `Switch back to ${was.slug}? [Y/n] — on Yes, run \`${switchCmd}\` to move the cursor; ` +
+          `Switch back to ${was.slug}? [Y/n] — on Yes, ${switchInstruction} to move the cursor; ` +
           `on No, keep working ${liveSlug}. This corrects the per-user cursor only; it never rebuilds the conversation.\n`;
         // Until the user accepts the offered switch, this resumed conversation
         // is operating on the live intent. Stamp that ownership now so a
@@ -201,16 +196,31 @@ if (sessionId) {
         // runs the switch command above, whose utility handler re-stamps the
         // session back to `was`.
       }
-      // Whether the previous intent still resolves or was deleted, this resumed
-      // conversation now operates on the live target. Normalize ownership even
-      // when no rebind offer can be shown for a stale/deleted prior UUID.
-      if (liveUuid) {
-        writeSessionIntentUuid(projectDir, sessionId, liveUuid);
-      } else {
-        clearSessionIntentUuid(projectDir, sessionId);
-      }
     }
+
+    // A resume binds to the live intent by default. If the former intent was
+    // deleted and there is no live UUID, clear the stale ownership stamp.
+    if (liveUuid) {
+      writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+    } else if (stampedUuid) {
+      clearSessionIntentUuid(projectDir, sessionId);
+    }
+  } else if (!stampedUuid && liveUuid) {
+    // Compact/unknown session events still need stable SessionEnd attribution.
+    writeSessionIntentUuid(projectDir, sessionId, liveUuid);
   }
+}
+
+// Cursor can only surface this probe through beforeSubmitPrompt's blocking
+// user_message channel. Consume a real drift after returning it so the next
+// submission can either run the named switch command (Yes) or continue on the
+// live intent (No) instead of receiving the same warning forever.
+if (rebindCheckOnly) {
+  if (rebindOffer) {
+    if (liveUuid) writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+    process.stdout.write(`${JSON.stringify({ additionalContext: rebindOffer })}\n`);
+  }
+  return 0;
 }
 
 // Read and parse state file for context injection
@@ -267,7 +277,7 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}On resume: offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Check the active intent's aidlc-state.md for full context.
+${unitLine}${recovery}${driftNote}On BARE /aidlc re-entry, offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Explicit /aidlc --resume already selects Resume: do NOT offer the menu; forward --resume unchanged and continue directly. Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine binary (\`aidlc-orchestrate.ts\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.

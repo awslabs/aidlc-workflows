@@ -15,32 +15,40 @@
 // in-tree generators (aidlc-graph compile); running them as children mirrors how
 // a host's SessionStart hook invokes them and isolates their temp builds.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { delimiter, dirname, join } from "node:path";
 import {
   acquireAuditLock,
   auditLockDir,
   releaseAuditLock,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   HARNESS_MATRIX,
   type ShippedHarnessName,
 } from "../harness/harness-matrix.ts";
+import {
+  assertNonEmptyStageBody,
+  buildPluginProjection,
+  composePluginFixture,
+} from "../harness/plugin-kit.ts";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath; // the bun running this test — robust for hooks
 const TIMEOUT_MS = 60_000;
+setDefaultTimeout(TIMEOUT_MS);
 
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
+const KIRO_IDE_DIST = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
+const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
+const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
@@ -78,17 +86,6 @@ function stageSourcePath(projectDir: string, phase: string, slug: string): strin
 function stageBody(projectDir: string, phase: string, slug: string): string {
   return readFileSync(stageSourcePath(projectDir, phase, slug), "utf-8");
 }
-function bodyAfterFrontmatter(raw: string): string {
-  return raw.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/)?.[1] ?? "";
-}
-function assertNonEmptyStageBody(file: string): void {
-  const body = bodyAfterFrontmatter(readFileSync(file, "utf-8"));
-  if (body.trim().length === 0) {
-    throw new Error(
-      `${file}: stage body is empty - the stage is behaviorally dead; did a transform drop everything after the closing ---?`
-    );
-  }
-}
 function hookDrops(projectDir: string): string {
   let drops = "";
   const hd = join(projectDir, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
@@ -115,43 +112,24 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     //    seam. This exercises the real emitter without mutating committed dist.
     for (const harness of HARNESS_MATRIX) {
       const built = join(tmp, "plugin", harness.name);
-      const build = spawnSync(
-        BUN,
-        [PACKAGE_TS, "plugin", "build", PLUGIN, harness.name, built],
-        {
-          cwd: REPO_ROOT,
-          encoding: "utf-8",
-          timeout: TIMEOUT_MS - 5_000,
-        },
-      );
-      if (build.status !== 0) {
-        throw new Error(`plugin build failed for ${harness.name}: ${build.stderr}`);
-      }
+      buildPluginProjection(PLUGIN, harness.name, built);
       pluginBuilds.set(harness.name, built);
     }
     pluginBuilt = pluginBuilds.get("claude")!;
 
-    // 2. Fresh base project = a copy of dist/claude/.claude (read-only source).
-    project = join(tmp, "proj");
-    cpSync(CLAUDE_DIST, join(project, ".claude"), { recursive: true });
+    // 2. Preserve a core runner before composing the fresh Claude fixture.
     coreRunnerBefore = readFileSync(
-      join(project, ".claude", "skills", "aidlc-code-generation", "SKILL.md"),
+      join(CLAUDE_DIST, "skills", "aidlc-code-generation", "SKILL.md"),
       "utf-8",
     );
 
-    // 3. Run the real compose hook (as a host SessionStart hook would).
-    const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
-      cwd: project,
-      encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
-      env: {
-        ...process.env,
-        CLAUDE_PLUGIN_ROOT: pluginBuilt,
-        CLAUDE_PROJECT_DIR: project,
-        AIDLC_HARNESS_DIR: ".claude",
-      },
-    });
-    if (compose.status !== 0) throw new Error(`compose.ts failed: ${compose.stderr}`);
+    // 3. Compose through the reusable fixture kit.
+    project = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: join(tmp, "proj"),
+      pluginBuilt,
+    }).projectDir;
   }, TIMEOUT_MS);
 
   afterAll(() => {
@@ -178,13 +156,51 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       };
       expect(hostManifest.name, harness.name).toBe(`aidlc-${PLUGIN}`);
       expect(existsSync(join(built, "hooks", "compose.ts"))).toBe(true);
-      const wiring = readFileSync(
-        join(built, harness.capabilities.plugin.wiringFile),
-        "utf-8",
-      );
-      expect(wiring, `${harness.name}: harness dir wiring`).toContain(
-        `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
-      );
+      const inventory = fileInventory(built);
+      if (harness.name === "kiro") {
+        expect(harness.capabilities.plugin.wiringFile).toBeNull();
+        expect(inventory.some((file) => file.endsWith(".kiro.hook"))).toBe(false);
+        expect(existsSync(join(built, "hooks", "hooks.json"))).toBe(false);
+        expect(existsSync(join(built, ".kiro", "hooks"))).toBe(false);
+      } else {
+        const wiringFile = harness.capabilities.plugin.wiringFile;
+        expect(wiringFile, `${harness.name}: wiring file`).not.toBeNull();
+        const wiring = readFileSync(join(built, wiringFile!), "utf-8");
+        if (harness.name === "kiro-ide") {
+          expect(inventory.some((file) => file.endsWith(".kiro.hook"))).toBe(false);
+          const registration = JSON.parse(wiring) as {
+            version?: string;
+            hooks?: Array<{
+              name?: string;
+              trigger?: string;
+              action?: { type?: string; command?: string };
+            }>;
+          };
+          expect(registration.version).toBe("v1");
+          expect(registration.hooks).toHaveLength(1);
+          const hook = registration.hooks?.[0];
+          expect(hook?.name).toBe(`aidlc-${PLUGIN}-compose`);
+          expect(hook?.trigger).toBe("SessionStart");
+          expect(hook?.action?.type).toBe("command");
+          const command = hook?.action?.command ?? "";
+          expect(command).toBe(
+            "bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide",
+          );
+          expect(command).not.toContain("sh -c");
+          expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
+        } else if (harness.name === "cursor") {
+          expect(wiring, `${harness.name}: harness dir argument`).toContain(
+            `aidlc-plugin-compose.ts ${harness.manifest.harnessDir}`,
+          );
+        } else {
+          expect(wiring, `${harness.name}: harness dir wiring`).toContain(
+            `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
+          );
+          expect(wiring, `${harness.name}: harness name wiring`).toContain(
+            `AIDLC_HARNESS_NAME=${harness.name}`,
+          );
+        }
+      }
       expect(existsSync(join(built, "stages", "construction", "test-pro-integration.md"))).toBe(
         true,
       );
@@ -194,7 +210,11 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       // #550 plugin content buckets: scopes, agents, and knowledge must project
       // into EVERY harness (stronger than the pre-matrix Claude-only guard).
       expect(existsSync(join(built, "scopes", "test-pro-validation.md")), `${harness.name}: scope`).toBe(true);
-      expect(existsSync(join(built, "agents", "test-pro-metrics-agent.md")), `${harness.name}: agent`).toBe(true);
+      const agentSource =
+        harness.name === "cursor"
+          ? join(built, "aidlc", "agents", "test-pro-metrics-agent.md")
+          : join(built, "agents", "test-pro-metrics-agent.md");
+      expect(existsSync(agentSource), `${harness.name}: agent`).toBe(true);
       expect(
         existsSync(join(built, "knowledge", "test-pro-metrics-agent", "methodology.md")),
         `${harness.name}: knowledge`,
@@ -202,33 +222,278 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
   });
 
-  test("OpenCode compose emits plugin agents to both inline and native rosters", () => {
-    const pluginOpenCode = join(tmp, "plugin", "opencode");
-    const build = spawnSync(
+  test("Kiro IDE executes its generated compose wiring after a folder-drop", () => {
+    const built = pluginBuilds.get("kiro-ide")!;
+    const kiroProject = join(tmp, "kiro-ide-folder-drop");
+    cpSync(join(REPO_ROOT, "dist", "kiro-ide"), kiroProject, { recursive: true });
+    cpSync(built, kiroProject, { recursive: true });
+
+    const registration = JSON.parse(
+      readFileSync(
+        join(kiroProject, ".kiro", "hooks", `aidlc-${PLUGIN}-compose.json`),
+        "utf-8",
+      ),
+    ) as {
+      hooks?: Array<{ action?: { command?: string } }>;
+    };
+    const command = registration.hooks?.[0]?.action?.command ?? "";
+    const [runtime, script, ...args] = command.split(" ");
+    expect(runtime).toBe("bun");
+    expect(script).toBe("./hooks/aidlc-plugin-compose.ts");
+
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
+    delete env.AIDLC_HARNESS_DIR;
+    delete env.AIDLC_HARNESS_NAME;
+    delete env.AIDLC_PLUGIN_ROOT;
+    delete env.AIDLC_PROJECT_DIR;
+    delete env.CLAUDE_PLUGIN_ROOT;
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.PLUGIN_ROOT;
+    const compose = spawnSync(BUN, [script, ...args], {
+      cwd: kiroProject,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env,
+    });
+    expect(compose.status, compose.stderr).toBe(0);
+
+    const kiroGraph = JSON.parse(
+      readFileSync(
+        join(kiroProject, ".kiro", "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as GraphStage[];
+    expect(kiroGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
+  });
+
+  test("Cursor projection uses Cursor's flat camelCase hook schema", () => {
+    const built = pluginBuilds.get("cursor")!;
+    const wiring = JSON.parse(
+      readFileSync(join(built, "hooks", "hooks.json"), "utf-8"),
+    ) as {
+      version?: number;
+      hooks?: Record<string, Array<Record<string, unknown>>>;
+    };
+    // `version` is REQUIRED, not cosmetic: Cursor's hook loader delivers zero
+    // events for a hooks.json missing it, silently and with rc 0, so a
+    // version-less projection ships an inert plugin that looks installed.
+    expect(Object.keys(wiring)).toEqual(["version", "hooks"]);
+    expect(wiring.version).toBe(1);
+    expect(Object.keys(wiring.hooks ?? {})).toEqual(["sessionStart"]);
+    const entries = wiring.hooks?.sessionStart ?? [];
+    expect(entries).toHaveLength(1);
+    expect(Object.keys(entries[0] ?? {})).toEqual(["command"]);
+    const command = String(entries[0]?.command ?? "");
+    expect(command).toBe("bun ./hooks/aidlc-plugin-compose.ts .cursor");
+    expect(command).not.toContain("sh -c");
+    expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
+  });
+
+  test("Cursor's cross-platform launcher resolves its plugin root from the hook path", () => {
+    const built = pluginBuilds.get("cursor")!;
+    const cursorProject = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "cursor",
+      projectDir: join(tmp, "cursor-compose"),
+      pluginBuilt: built,
+    }).projectDir;
+    const cursorGraph = JSON.parse(
+      readFileSync(join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as GraphStage[];
+    expect(cursorGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
+    expect(existsSync(join(built, "agents"))).toBe(false);
+    const internalAgent = readFileSync(
+      join(built, "aidlc", "agents", "test-pro-metrics-agent.md"),
+      "utf-8",
+    );
+    expect(internalAgent).not.toContain("{{HARNESS_DIR}}");
+    expect(internalAgent).not.toMatch(/^model:/m);
+    const composedAgent = readFileSync(
+      join(cursorProject, ".cursor", "agents", "test-pro-metrics-agent.md"),
+      "utf-8",
+    );
+    expect(composedAgent).not.toContain("{{HARNESS_DIR}}");
+    expect(composedAgent).not.toMatch(/^model:/m);
+    expect(composedAgent).toContain(".cursor/knowledge/test-pro-metrics-agent/");
+
+    const pureCoreStage = join(
+      cursorProject,
+      ".cursor",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "requirements-analysis.md",
+    );
+    const pureCoreBefore = readFileSync(pureCoreStage, "utf-8");
+    writeFileSync(pureCoreStage, `${pureCoreBefore}\n<!-- stale core marker -->\n`);
+    const refusedReinstall = spawnSync(
       BUN,
-      [PACKAGE_TS, "plugin", "build", PLUGIN, "opencode", pluginOpenCode],
+      [join(CURSOR_DIST, "install.ts"), cursorProject],
       {
         cwd: REPO_ROOT,
         encoding: "utf-8",
         timeout: TIMEOUT_MS - 5_000,
       },
     );
-    if (build.status !== 0) throw new Error(`opencode plugin build failed: ${build.stderr}`);
+    expect(refusedReinstall.status).toBe(1);
+    expect(refusedReinstall.stderr).toContain(
+      ".cursor/aidlc-common/stages/inception/requirements-analysis.md",
+    );
+    expect(readFileSync(pureCoreStage, "utf-8")).toContain("stale core marker");
+    writeFileSync(pureCoreStage, pureCoreBefore);
 
-    const opencodeProject = mkdtempSync(join(tmp, "opencode-compose-"));
-    cpSync(OPENCODE_DIST, opencodeProject, { recursive: true });
-    const compose = spawnSync(BUN, [join(pluginOpenCode, "hooks", "compose.ts")], {
-      cwd: opencodeProject,
-      encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+    const pluginModifiedStage = join(
+      cursorProject,
+      ".cursor",
+      "aidlc-common",
+      "stages",
+      "construction",
+      "build-and-test.md",
+    );
+    const pluginModifiedBefore = readFileSync(pluginModifiedStage, "utf-8");
+    const upgradedDist = join(tmp, "cursor-upgrade-dist");
+    cpSync(CURSOR_DIST, upgradedDist, { recursive: true });
+    cpSync(CURSOR_INSTALLER_SOURCE, join(upgradedDist, "install.ts"));
+    const pluginStageRel =
+      ".cursor/aidlc-common/stages/construction/build-and-test.md";
+    const upgradedCoreStage = join(upgradedDist, pluginStageRel);
+    writeFileSync(
+      upgradedCoreStage,
+      `${readFileSync(upgradedCoreStage, "utf-8").trimEnd()}\n\n<!-- upgraded core v2 -->\n`,
+    );
+
+    writeFileSync(
+      pluginModifiedStage,
+      `${pluginModifiedBefore.trimEnd()}\n\n<!-- user-owned stage edit -->\n`,
+    );
+    const refusedComposedUpgrade = spawnSync(
+      BUN,
+      [join(upgradedDist, "install.ts"), cursorProject],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+      },
+    );
+    expect(refusedComposedUpgrade.status).toBe(1);
+    expect(refusedComposedUpgrade.stderr).toContain(pluginStageRel);
+    expect(readFileSync(pluginModifiedStage, "utf-8")).toContain(
+      "user-owned stage edit",
+    );
+    writeFileSync(pluginModifiedStage, pluginModifiedBefore);
+
+    const reinstall = spawnSync(
+      BUN,
+      [join(upgradedDist, "install.ts"), cursorProject],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+      },
+    );
+    expect(reinstall.status, reinstall.stderr).toBe(0);
+    expect(reinstall.stdout).toContain("refreshed plugin routing");
+    const pluginModifiedAfter = readFileSync(pluginModifiedStage, "utf-8");
+    expect(pluginModifiedAfter).toContain("<!-- upgraded core v2 -->");
+    expect(pluginModifiedAfter).toContain(
+      "test-pro-branch-coverage-instructions",
+    );
+    expect(pluginModifiedAfter).toContain("Step 9a (test-pro)");
+    expect(pluginModifiedAfter).not.toBe(pluginModifiedBefore);
+    const graphAfterReinstall = JSON.parse(
+      readFileSync(
+        join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as GraphStage[];
+    expect(
+      graphAfterReinstall.some((item) => item.slug === "test-pro-integration"),
+    ).toBe(true);
+  });
+
+  test("Cursor launcher passes its plugin root through the installed aidlc branch", () => {
+    const built = pluginBuilds.get("cursor")!;
+    const cursorProject = join(tmp, "cursor-compose-installed-aidlc");
+    const binDir = join(tmp, "cursor-fake-bin");
+    mkdirSync(binDir, { recursive: true });
+    const aidlc = join(binDir, "aidlc");
+    writeFileSync(
+      aidlc,
+      [
+        "#!/bin/sh",
+        `exec ${JSON.stringify(BUN)} ${JSON.stringify(
+          join(cursorProject, ".cursor", "tools", "aidlc.ts"),
+        )} "$@"`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(aidlc, 0o755);
+    const composed = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "cursor",
+      projectDir: cursorProject,
+      pluginBuilt: built,
       env: {
-        ...process.env,
-        PLUGIN_ROOT: pluginOpenCode,
-        AIDLC_PROJECT_DIR: opencodeProject,
-        AIDLC_HARNESS_DIR: ".aidlc",
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
       },
     });
-    if (compose.status !== 0) throw new Error(`opencode compose failed: ${compose.stderr}`);
+    expect(composed.composeStdout).toContain("plugin sync complete: 1 plugin(s)");
+    const cursorGraph = JSON.parse(
+      readFileSync(join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as GraphStage[];
+    expect(cursorGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
+    const pluginRunner = readFileSync(
+      join(cursorProject, ".cursor", "skills", "test-pro-integration", "SKILL.md"),
+      "utf-8",
+    );
+    expect(pluginRunner).toMatch(/^disable-model-invocation: true$/m);
+  });
+
+  test("Cursor launcher refuses an ambiguous multi-root workspace", () => {
+    const built = pluginBuilds.get("cursor")!;
+    const first = join(tmp, "cursor-multiroot-a");
+    const second = join(tmp, "cursor-multiroot-b");
+    cpSync(CURSOR_DIST, first, { recursive: true });
+    cpSync(CURSOR_DIST, second, { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: "",
+      AIDLC_HARNESS_DIR: ".cursor",
+    };
+    delete env.CLAUDE_PLUGIN_ROOT;
+    delete env.PLUGIN_ROOT;
+    delete env.AIDLC_PLUGIN_ROOT;
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.CURSOR_PROJECT_DIR;
+    delete env.AIDLC_PROJECT_DIR;
+
+    const compose = spawnSync(
+      BUN,
+      [join(built, "hooks", "aidlc-plugin-compose.ts"), ".cursor"],
+      {
+        cwd: built,
+        input: JSON.stringify({
+          hook_event_name: "sessionStart",
+          workspace_roots: [first, second],
+        }),
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env,
+      },
+    );
+    expect(compose.status).toBe(1);
+    expect(compose.stderr).toContain("multiple Cursor workspace roots");
+    expect(compose.stderr).toContain("AIDLC_PROJECT_DIR");
+  });
+
+  test("OpenCode compose emits plugin agents to both inline and native rosters", () => {
+    const pluginOpenCode = pluginBuilds.get("opencode")!;
+    const opencodeProject = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "opencode",
+      projectDir: mkdtempSync(join(tmp, "opencode-compose-")),
+      pluginBuilt: pluginOpenCode,
+    }).projectDir;
 
     const inline = join(opencodeProject, ".aidlc", "agents", "test-pro-metrics-agent.md");
     const native = join(opencodeProject, ".opencode", "agents", "test-pro-metrics-agent.md");
@@ -243,12 +508,86 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(body).toContain("aidlc/spaces/default/memory/");
   });
 
+  test("Copilot compose and selection use .github agent and skill surfaces", () => {
+    const pluginCopilot = pluginBuilds.get("copilot")!;
+    const copilotProject = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "copilot",
+      projectDir: mkdtempSync(join(tmp, "copilot-compose-")),
+      pluginBuilt: pluginCopilot,
+    }).projectDir;
+    const env = {
+      ...process.env,
+      PLUGIN_ROOT: pluginCopilot,
+      AIDLC_PROJECT_DIR: copilotProject,
+      AIDLC_HARNESS_DIR: ".aidlc",
+      AIDLC_HARNESS_NAME: "copilot",
+    };
+
+    const inline = join(copilotProject, ".aidlc", "agents", "test-pro-metrics-agent.md");
+    const native = join(copilotProject, ".github", "agents", "test-pro-metrics-agent.md");
+    const runner = join(copilotProject, ".github", "skills", "test-pro-integration", "SKILL.md");
+    expect(existsSync(inline)).toBe(true);
+    expect(existsSync(native)).toBe(true);
+    expect(existsSync(join(copilotProject, ".opencode", "agents", "test-pro-metrics-agent.md"))).toBe(
+      false,
+    );
+    expect(existsSync(runner)).toBe(true);
+    const body = readFileSync(native, "utf-8");
+    expect(body).toMatch(/^tools: \["read", "edit", "search", "execute", "web", "todo"\]$/m);
+    expect(body).not.toMatch(/^(model|tier|effort|disallowedTools):/m);
+    expect(body).toContain("aidlc/spaces/default/memory/");
+
+    const unsafePlugin = join(tmp, "plugin", "copilot-missing-disallowed-tools");
+    cpSync(pluginCopilot, unsafePlugin, { recursive: true });
+    const unsafeAgent = join(unsafePlugin, "agents", "test-pro-metrics-agent.md");
+    writeFileSync(
+      unsafeAgent,
+      readFileSync(unsafeAgent, "utf-8").replace(/^disallowedTools:.*\r?\n/m, ""),
+      "utf-8",
+    );
+    const unsafeProject = mkdtempSync(join(tmp, "copilot-unsafe-agent-"));
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "copilot",
+      projectDir: unsafeProject,
+      pluginBuilt: unsafePlugin,
+      env: {
+        ...env,
+        PLUGIN_ROOT: unsafePlugin,
+        AIDLC_PROJECT_DIR: unsafeProject,
+      },
+    });
+    expect(
+      existsSync(join(unsafeProject, ".github", "agents", "test-pro-metrics-agent.md")),
+    ).toBe(false);
+    expect(hookDrops(unsafeProject)).toContain(
+      "must declare disallowedTools: Task for Copilot",
+    );
+
+    const select = spawnSync(
+      BUN,
+      [join(copilotProject, ".aidlc", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"],
+      {
+        cwd: copilotProject,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env,
+      },
+    );
+    expect(select.status, select.stderr).toBe(0);
+    expect(select.stdout).toContain("Enabled plugins: aidlc");
+    expect(existsSync(join(copilotProject, ".aidlc", "skills"))).toBe(false);
+    expect(existsSync(join(copilotProject, ".github", "skills", "aidlc", "SKILL.md"))).toBe(true);
+    expect(existsSync(runner)).toBe(false);
+  });
+
   // --- New stages compose + route ---
   test("new plugin stages are in the compiled graph", () => {
     const slugs = graph(project).map((s) => s.slug);
     expect(slugs).toContain("test-pro-integration");
     expect(slugs).toContain("test-pro-full-suite");
-    expect(graph(project).length).toBe(34); // 32 core + 2 test-pro
+    expect(graph(project).length).toBe(35); // 33 core + 2 test-pro
   });
 
   test("compose refreshes SKILL.md Stage Graph with plugin stages", () => {
@@ -545,6 +884,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(
       join(proj, ".claude", "tools", "data", "plugin-contrib-attacker.json"),
     )).toBe(false);
+  });
+
+  test("a plugin cannot install a doctor script for a foreign plugin identity", () => {
+    const { drops, proj } = composeSynthetic("alpha", {
+      "tools/beta-doctor.ts":
+        'process.stdout.write(JSON.stringify({checks:[{pass:true,label:"foreign"}]}));\n',
+    });
+    expect(existsSync(join(proj, ".claude", "tools", "beta-doctor.ts"))).toBe(false);
+    expect(drops).toContain("[advisory]");
+    expect(drops).toContain('plugin "alpha" doctor script "beta-doctor.ts"');
+    expect(drops).toContain('foreign plugin "beta"');
   });
 
   test("duplicate incoming scope identities are rejected within one plugin tree", () => {
@@ -1125,17 +1475,24 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   function composeSynthetic(
     name: string,
     files: Record<string, string>,
-    harnessLeaf: ".claude" | ".kiro" | ".codex" | ".aidlc" = ".claude",
+    harness: ".claude" | ".kiro" | ".codex" | ".aidlc" | "kiro-ide" = ".claude",
     mutateInstall?: (proj: string, harnessDir: string) => void,
   ): { drops: string; proj: string } {
     const proj = mkdtempSync(join(tmp, `syn-${name}-`));
+    const harnessLeaf = harness === "kiro-ide" ? ".kiro" : harness;
     if (harnessLeaf === ".aidlc") {
       // OpenCode's dist is a whole-project shape (.aidlc + .opencode +
       // opencode.json), unlike the single-dir harness dists.
       cpSync(OPENCODE_DIST, proj, { recursive: true });
     } else {
       const baseDist =
-        harnessLeaf === ".kiro" ? KIRO_DIST : harnessLeaf === ".codex" ? CODEX_DIST : CLAUDE_DIST;
+        harness === "kiro-ide"
+          ? KIRO_IDE_DIST
+          : harnessLeaf === ".kiro"
+            ? KIRO_DIST
+            : harnessLeaf === ".codex"
+              ? CODEX_DIST
+              : CLAUDE_DIST;
       cpSync(baseDist, join(proj, harnessLeaf), { recursive: true });
     }
     const harnessDir = join(proj, harnessLeaf);
@@ -1143,7 +1500,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const root = prepareSyntheticPlugin(proj, name, files);
     const r = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
-      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: harnessLeaf },
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: root,
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_HARNESS_DIR: harnessLeaf,
+        ...(harness === "kiro-ide" ? { AIDLC_HARNESS_NAME: "kiro-ide" } : {}),
+      },
     });
     expect(r.status).toBe(0); // compose is fail-open — never breaks the session
     // Drops files are per-plugin (`plugin-compose-<key>.drops`) — aggregate any
@@ -1188,6 +1551,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "name: syn-kiro-collaborator-agent",
       "display_name: Synthetic Kiro Collaborator",
       "plugin: syn-kiro",
+      "disallowedTools: Task",
       "---",
       "",
       "# Synthetic Kiro Collaborator",
@@ -1216,6 +1580,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "agents",
       "syn-kiro-collaborator-agent.md",
     ))).toBe(true);
+    expect(readFileSync(join(
+      proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-collaborator-agent.md",
+    ), "utf-8")).not.toMatch(/^disallowedTools:/m);
     expect(drops).toContain('stage "syn-kiro-ensemble"');
     expect(drops).toContain('agent "syn-kiro-collaborator-agent"');
     expect(drops).toContain("agent-v1 JSON");
@@ -1224,6 +1594,164 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // The lead is a CORE persona: its shipped agent-v1 JSON is its dispatch
     // surface, so it must never be named as undispatchable.
     expect(drops).not.toContain('agent "aidlc-product-agent"');
+
+    const unsupportedAgent = [
+      "---",
+      "name: syn-kiro-unsupported-agent",
+      "display_name: Synthetic Kiro Unsupported Agent",
+      "plugin: syn-kiro-unsupported",
+      "disallowedTools: WebSearch",
+      "---",
+      "",
+      "# Synthetic Kiro Unsupported Agent",
+      "",
+    ].join("\n");
+    const unsupported = composeSynthetic(
+      "syn-kiro-unsupported",
+      {
+        "agents/syn-kiro-unsupported-agent.md": unsupportedAgent,
+      },
+      ".kiro",
+    );
+    expect(existsSync(join(
+      unsupported.proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-unsupported-agent.md",
+    ))).toBe(false);
+    expect(unsupported.drops).toContain(
+      'cannot project disallowedTools "WebSearch" to Kiro; not copied',
+    );
+
+    const duplicateAgent = unsupportedAgent
+      .replaceAll("syn-kiro-unsupported", "syn-kiro-duplicate")
+      .replace(
+        "disallowedTools: WebSearch",
+        "disallowedTools: Task\ndisallowedTools: WebSearch",
+      );
+    const duplicate = composeSynthetic(
+      "syn-kiro-duplicate",
+      {
+        "agents/syn-kiro-duplicate-agent.md": duplicateAgent,
+      },
+      ".kiro",
+    );
+    expect(existsSync(join(
+      duplicate.proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-duplicate-agent.md",
+    ))).toBe(false);
+    expect(duplicate.drops).toContain(
+      "declares multiple disallowedTools lines",
+    );
+  });
+
+  test("Kiro re-compose migrates only an exact same-plugin legacy persona", () => {
+    const agent = [
+      "---",
+      "name: syn-kiro-upgrade-agent",
+      "display_name: Synthetic Kiro Upgrade Agent",
+      "plugin: syn-kiro-upgrade",
+      "disallowedTools: Task",
+      "---",
+      "",
+      "# Synthetic Kiro Upgrade Agent",
+      "",
+    ].join("\n");
+    const rel = join("agents", "syn-kiro-upgrade-agent.md");
+    const migrated = composeSynthetic(
+      "syn-kiro-upgrade",
+      { "agents/syn-kiro-upgrade-agent.md": agent },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, rel), agent);
+      },
+    );
+    const migratedBody = readFileSync(
+      join(migrated.proj, ".kiro", rel),
+      "utf-8",
+    );
+    expect(migratedBody).not.toMatch(/^disallowedTools:/m);
+    expect(migrated.drops).not.toContain("collides with an existing file");
+
+    const editedAgent = `${agent}\n<!-- user-owned edit -->\n`;
+    const edited = composeSynthetic(
+      "syn-kiro-upgrade",
+      { "agents/syn-kiro-upgrade-agent.md": agent },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, rel), editedAgent);
+      },
+    );
+    const editedBody = readFileSync(join(edited.proj, ".kiro", rel), "utf-8");
+    expect(editedBody).toBe(editedAgent);
+    expect(edited.drops).toContain("collides with an existing file");
+
+    const unsupportedAgent = agent
+      .replaceAll("syn-kiro-upgrade", "syn-kiro-unsupported-upgrade")
+      .replace("disallowedTools: Task", "disallowedTools: WebSearch");
+    const unsupportedRel = join(
+      "agents",
+      "syn-kiro-unsupported-upgrade-agent.md",
+    );
+    const unsupported = composeSynthetic(
+      "syn-kiro-unsupported-upgrade",
+      {
+        "agents/syn-kiro-unsupported-upgrade-agent.md": unsupportedAgent,
+      },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, unsupportedRel), unsupportedAgent);
+      },
+    );
+    expect(readFileSync(
+      join(unsupported.proj, ".kiro", unsupportedRel),
+      "utf-8",
+    )).toBe(unsupportedAgent);
+    expect(unsupported.drops).toContain(
+      'is already composed with unsupported disallowedTools "WebSearch"',
+    );
+    expect(unsupported.drops).toContain(
+      'remove ".kiro/agents/syn-kiro-unsupported-upgrade-agent.md", and re-run compose',
+    );
+    expect(unsupported.drops).not.toContain("collides with an existing file");
+
+    const duplicateAgent = agent
+      .replaceAll("syn-kiro-upgrade", "syn-kiro-duplicate-upgrade")
+      .replace(
+        "disallowedTools: Task",
+        "disallowedTools: Task\ndisallowedTools: WebSearch",
+      );
+    const duplicateRel = join(
+      "agents",
+      "syn-kiro-duplicate-upgrade-agent.md",
+    );
+    const duplicate = composeSynthetic(
+      "syn-kiro-duplicate-upgrade",
+      {
+        "agents/syn-kiro-duplicate-upgrade-agent.md": duplicateAgent,
+      },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, duplicateRel), duplicateAgent);
+      },
+    );
+    expect(readFileSync(
+      join(duplicate.proj, ".kiro", duplicateRel),
+      "utf-8",
+    )).toBe(duplicateAgent);
+    expect(duplicate.drops).toContain(
+      "is already composed with multiple disallowedTools lines",
+    );
+    expect(duplicate.drops).toContain(
+      'remove ".kiro/agents/syn-kiro-duplicate-upgrade-agent.md", and re-run compose',
+    );
+    expect(duplicate.drops).not.toContain("collides with an existing file");
   });
 
   test("Kiro rejects an agent JSON that is missing conductor trust registration", () => {
@@ -1280,6 +1808,134 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain('agent "aidlc-design-agent"');
     expect(drops).toContain("toolsSettings.subagent.trustedAgents");
     expect(drops).not.toContain("aidlc-design-agent.json (agent-v1 JSON)");
+  });
+
+  test("Kiro IDE accepts only installed Markdown agents with complete dispatch grants", () => {
+    const variants = [
+      {
+        label: "valid",
+        grant: [
+          'tools: ["read", "write", "shell"]',
+          "permissions:",
+          "  rules:",
+          "    - capability: shell",
+          "      effect: allow",
+          "      match:",
+          '        - "bun .kiro/tools/aidlc-*"',
+        ],
+        accepted: true,
+      },
+      {
+        label: "reordered-rule",
+        grant: [
+          'tools: ["read", "write", "shell"]',
+          "permissions:",
+          "  rules:",
+          "    - effect: allow",
+          "      match:",
+          '        - "bun .kiro/tools/aidlc-*"',
+          "      capability: shell",
+        ],
+        accepted: true,
+      },
+      {
+        label: "empty-tools",
+        grant: [
+          "tools: []",
+          "permissions:",
+          "  rules:",
+          "    - capability: shell",
+          "      effect: allow",
+          "      match:",
+          '        - "bun .kiro/tools/aidlc-*"',
+        ],
+        accepted: false,
+      },
+      {
+        label: "empty-permissions",
+        grant: ['tools: ["read"]', "permissions: {}"],
+        accepted: false,
+      },
+      {
+        label: "empty-rules",
+        grant: ['tools: ["read"]', "permissions:", "  rules: []"],
+        accepted: false,
+      },
+      {
+        label: "malformed-rule",
+        grant: [
+          'tools: ["read"]',
+          "permissions:",
+          "  rules:",
+          "    - capability: shell",
+          "      effect: allow",
+        ],
+        accepted: false,
+      },
+    ] as const;
+
+    for (const variant of variants) {
+      const plugin = `syn-kiro-ide-${variant.label}`;
+      const agent = `${plugin}-agent`;
+      const stage = [
+        "---",
+        `slug: ${plugin}-stage`,
+        `plugin: ${plugin}`,
+        "phase: inception",
+        "execution: ALWAYS",
+        "condition: always",
+        `lead_agent: ${agent}`,
+        "support_agents: []",
+        "mode: subagent",
+        "produces: []",
+        "consumes: []",
+        "requires_stage: []",
+        "inputs: x",
+        "outputs: y",
+        "---",
+        "",
+        `# ${plugin}`,
+        "",
+      ].join("\n");
+      const composed = composeSynthetic(
+        plugin,
+        { [`stages/inception/${plugin}-stage.md`]: stage },
+        "kiro-ide",
+        (_proj, harnessDir) => {
+          writeFileSync(
+            join(harnessDir, "agents", `${agent}.md`),
+            [
+              "---",
+              `name: ${agent}`,
+              `display_name: ${variant.label}`,
+              "examples: []",
+              ...variant.grant,
+              "---",
+              "",
+              `# ${variant.label}`,
+              "",
+            ].join("\n"),
+          );
+        },
+      );
+      const stagePath = join(
+        composed.proj,
+        ".kiro",
+        "aidlc-common",
+        "stages",
+        "inception",
+        `${plugin}-stage.md`,
+      );
+      expect(existsSync(stagePath), variant.label).toBe(variant.accepted);
+      if (variant.accepted) {
+        expect(composed.drops, variant.label).not.toContain(`agent "${agent}"`);
+      } else {
+        expect(composed.drops, variant.label).toContain(`agent "${agent}"`);
+        expect(composed.drops, variant.label).toContain("permissions.rules");
+        expect(composed.drops, variant.label).toContain("mode to inline");
+        expect(composed.drops, variant.label).not.toContain("trustedAgents");
+      }
+    }
   });
 
   // OpenCode dispatches from the native roster .opencode/agents/<a>.md. A

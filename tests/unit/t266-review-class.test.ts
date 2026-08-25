@@ -127,8 +127,9 @@ describe("t266 review class", () => {
     "requirements-analysis",
     "user-stories",
     "refined-mockups",
-    "application-design",
+    "domain-design",
     "units-generation",
+    "contract-design",
   ];
   const ADVERSARIAL_STAGES = [
     "functional-design",
@@ -145,6 +146,7 @@ describe("t266 review class", () => {
       "dist/kiro-ide/.kiro/tools/data/stage-graph.json",
       "dist/codex/.codex/tools/data/stage-graph.json",
       "dist/opencode/.aidlc/tools/data/stage-graph.json",
+      "dist/cursor/.cursor/tools/data/stage-graph.json",
     ];
     for (const rel of graphs) {
       const graph = JSON.parse(read(rel)) as Array<{
@@ -168,12 +170,13 @@ describe("t266 review class", () => {
     }
   });
 
-  test("scope caps: bugfix, poc, workshop declare review_cap advisory", () => {
-    for (const scope of ["bugfix", "poc", "workshop"]) {
+  test("scope caps: bugfix, poc, classic, workshop are advisory; express is none", () => {
+    for (const scope of ["bugfix", "poc", "classic", "workshop"]) {
       expect(read(`core/scopes/aidlc-${scope}.md`)).toContain(
         "review_cap: advisory"
       );
     }
+    expect(read("core/scopes/aidlc-express.md")).toContain("review_cap: none");
   });
 
   // --- 3. resolution --------------------------------------------------------
@@ -186,8 +189,9 @@ describe("t266 review class", () => {
     // Uncapped scope keeps the declaration.
     expect(resolveReviewClass("adversarial", "feature")).toBe("adversarial");
     expect(resolveReviewClass("advisory", "feature")).toBe("advisory");
-    // Capped scope lowers adversarial to advisory (bugfix/poc/workshop).
+    // Capped scope lowers adversarial to advisory (bugfix/poc/classic).
     expect(resolveReviewClass("adversarial", "bugfix")).toBe("advisory");
+    expect(resolveReviewClass("adversarial", "express")).toBe("none");
     // Override lowers further...
     expect(
       resolveReviewClass("adversarial", "feature", "- **Review Override**: none\n")
@@ -326,12 +330,12 @@ describe("t266 review class", () => {
 
   // --- 4. prose (core + every dist skill) -----------------------------------
   const ADVISORY_TERMINAL =
-    "On `advisory` both verdicts are terminal";
+    "On an `advisory` review, both verdicts are terminal here.";
 
-  test("stage-protocol §12a carries the class branch (core + dist)", () => {
+  test("reviewer protocol module carries the class branch (core + dist)", () => {
     for (const rel of [
-      "core/aidlc-common/protocols/stage-protocol.md",
-      "dist/claude/.claude/aidlc-common/protocols/stage-protocol.md",
+      "core/aidlc-common/protocols/stage-protocol-reviewer.md",
+      "dist/claude/.claude/aidlc-common/protocols/stage-protocol-reviewer.md",
     ]) {
       const src = read(rel);
       expect(src).toContain("`review_class` field");
@@ -341,20 +345,25 @@ describe("t266 review class", () => {
     }
   });
 
-  test("every harness SKILL.md carries the advisory single-pass contract", () => {
+  test("every harness SKILL.md points to the reviewer protocol module", () => {
     const skills = [
       "harness/claude/skills/aidlc/SKILL.md",
       "harness/kiro/skills/aidlc/SKILL.md",
       "harness/kiro-ide/skills/aidlc/SKILL.md",
       "harness/codex/skills/aidlc/SKILL.md",
       "harness/opencode/skills/aidlc/SKILL.md",
+      "harness/cursor/skills/aidlc/SKILL.md",
+      "harness/copilot/skills/aidlc/SKILL.md",
       "dist/claude/.claude/skills/aidlc/SKILL.md",
     ];
     for (const rel of skills) {
       const src = read(rel);
-      expect(src).toContain("directive.review_class");
-      expect(src).toContain(ADVISORY_TERMINAL);
+      expect(src).toContain("stage-protocol-reviewer.md");
+      expect(src).toContain("directive.protocol_modules");
     }
+    expect(
+      read("core/aidlc-common/protocols/stage-protocol-reviewer.md"),
+    ).toContain(ADVISORY_TERMINAL);
   });
 
   test("reviewer personas carry the advisory-dispatch stance (core + dist)", () => {

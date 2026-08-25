@@ -9,8 +9,7 @@
 //
 //   {"pass": <bool>, "errors": [{file, line, column, message}, ...]}
 //
-// Decisions (see tmp/v05-mr9-plan-draft.md § Per-sensor script contracts
-// → aidlc-sensor-type-check.ts):
+// Per-sensor script contract decisions:
 //
 // * Project root resolution: walk up from --file-path to nearest
 //   tsconfig.json. If absent → exit 1 with stderr "no-tsconfig-found".

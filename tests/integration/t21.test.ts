@@ -178,13 +178,13 @@ describe("t21 /aidlc workflow birth (sdk)", () => {
         expect(existsSync(auditDir)).toBe(true);
         expect(readdirSync(auditDir).some((f) => f.endsWith(".md"))).toBe(true);
 
-        // .sh test 3 (State Version.*: 7$): the state file's State Version field
-        // equals exactly "7". Stronger than the .sh's anchored grep — an exact
+        // .sh test 3 (State Version.*: 8$): the state file's State Version field
+        // equals exactly "8". Stronger than the .sh's anchored grep — an exact
         // field-value equality, read off disk via sdk-drive's per-intent state read.
         expect(r.stateFile).toBeDefined();
-        assertStateField(r, "State Version", "7");
+        assertStateField(r, "State Version", "8");
 
-        // .sh test 3 (the 3 new fields present): the State-Version-7 template
+        // .sh test 3 (the 3 new fields present): the State-Version-8 template
         // adds Worktree Path / Bolt Refs / Practices Affirmed Timestamp. The .sh
         // grepped for the field LABELS (they are empty-valued at init), so we
         // assert the fields PARSE (present) rather than asserting an empty value.

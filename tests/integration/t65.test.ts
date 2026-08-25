@@ -413,9 +413,9 @@ beforeAll(() => {
 // ============================================================
 describe("t65 parse + schema validation (in-process)", () => {
   // .sh #1: "all 32 stage files parse via parseStageFrontmatter"
-  test("all 32 stage files parse via parseStageFrontmatter (total=32, no errors)", () => {
+  test("all 33 stage files parse via parseStageFrontmatter (total=33, no errors)", () => {
     expect(agg.parseErrors).toEqual([]);
-    expect(agg.totalParsed).toBe(32);
+    expect(agg.totalParsed).toBe(33);
   });
 
   // .sh #2: "non-init stages validate against milestone 5 schema with ctx.agents"
@@ -442,7 +442,7 @@ describe("t65 per-phase stage counts (in-process)", () => {
   const expected: Array<[string, number]> = [
     ["initialization", 3],
     ["ideation", 7],
-    ["inception", 8],
+    ["inception", 9],
     ["construction", 7],
     ["operation", 7],
   ];
@@ -561,7 +561,7 @@ describe("t65 shape guards (in-process)", () => {
 
   // .sh #20: "round-trip (parse → emit → parse) yields deep-equal object for
   // all 32 stages"
-  test("round-trip (parse -> emit -> parse) deep-equals original for all 32 stages", () => {
+  test("round-trip (parse -> emit -> parse) deep-equals original for all 33 stages", () => {
     expect(agg.roundTripMismatches).toEqual([]);
   });
 

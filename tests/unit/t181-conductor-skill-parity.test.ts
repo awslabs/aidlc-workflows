@@ -59,7 +59,7 @@ const BARE_INIT = /(^|[^-\w])--init\b/;
 // The workspace-anchor conductor vocabulary every shipped SKILL must define.
 const REQUIRED_TOKENS = [
   "intent-create", // run-then-continue birth verb (replaced `init`)
-  "--repo", // multi-repo swarm prepare flag
+  "stage-protocol-swarm.md", // conditional swarm transport + --repo contract
   "offer a second intent", // P4-completion new-work conductor prose
   "intent and space verbs", // frontmatter utilities tail
 ];
@@ -93,11 +93,23 @@ const ENSEMBLE_TOKENS = [
   "directive.single === true",
   "directive.rules_in_context",
   "directive.inline_context_paths",
-  "`subagent` (hub-and-spoke:",
-  "`pipeline` (chain:",
-  "`mob` (mesh",
-  "ensemble's completion evidence",
+  "the first tool calls after receiving `run-stage`",
+  "do not batch those reads with later stage reads",
+  "blocking context-load precondition",
+  "A mob MUST explicitly read its lead persona path first",
+  "path's presence in `inline_context_paths` is not evidence",
+  "stage-protocol-ensemble.md",
+  "directive.protocol_modules",
   '--result skipped --reason "<specific reason>"',
+];
+
+const COMPOSER_ROUTE_TOKENS = [
+  "**Composition-moment authority.**",
+  "apply ONLY to front/report composition",
+  "mode: in-flight",
+  "`nearest_stock` is advisory",
+  "`changes.skip` / `changes.add` arrays",
+  "no stock grid or scope-registry write is allowed",
 ];
 
 const KIRO_TASK_LIST_TOKEN =
@@ -131,6 +143,16 @@ const SUMMARY_STOP_ANNEX_TOKENS = [
   "checkpoint-specific `aidlc-log.ts answer`",
   '**"What should change?"**',
 ];
+
+const FRESH_SESSION_TOKENS: Record<string, string[]> = {
+  claude: ["/clear", "`/aidlc`"],
+  codex: ["restart Codex CLI", "`$aidlc`"],
+  kiro: ["restart Kiro CLI", "`/aidlc`"],
+  "kiro-ide": ["new Kiro IDE chat", "`/aidlc`"],
+  opencode: ["restart OpenCode", "`/aidlc`"],
+  copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
+  cursor: ["new Cursor chat", "`/aidlc`"],
+};
 
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
@@ -178,6 +200,17 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("every shipped conductor SKILL separates in-flight deltas from stock routing", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of COMPOSER_ROUTE_TOKENS) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("every shipped conductor SKILL relays engine-authored narration", () => {
     const missing: string[] = [];
     for (const rel of skills) {
@@ -207,6 +240,42 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
     // One distinct block text => every harness agrees.
     expect([...blocks.values()].map((v) => v.sort())).toHaveLength(1);
+  });
+
+  test("every shipped conductor SKILL stops new-intent births and names its fresh-session flow", () => {
+    const failures: string[] = [];
+    for (const harness of HARNESS_MATRIX) {
+      const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        "**run-then-stop**",
+        "Then **STOP and hand off to a fresh session** rather than re-running `next`",
+        ...(FRESH_SESSION_TOKENS[harness.name] ?? []),
+      ]) {
+        if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
+      }
+      if (body.includes("run it, then re-run `next` to land on the new intent's first stage")) {
+        failures.push(`${rel}  still continues a new intent in the prior session`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  test("Codex conductor guidance uses its native $aidlc invocation", () => {
+    const body = readFileSync(
+      join(REPO_ROOT, "harness/codex/skills/aidlc/SKILL.md"),
+      "utf-8",
+    );
+    for (const stale of [
+      "`/aidlc --resume`",
+      "fresh `/aidlc`",
+      "`/aidlc intent",
+      "`/aidlc space",
+      "on `/aidlc compose",
+      "second `/aidlc` invocation",
+    ]) {
+      expect(body).not.toContain(stale);
+    }
   });
 
   test("every shipped conductor SKILL requires a valid two-option learning question", () => {
@@ -242,18 +311,21 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("autonomous review logging uses the main harness tool with a worktree target", () => {
-    const offenders: string[] = [];
-    for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      if (!body.includes('--project-dir "<worktree>"')) {
-        offenders.push(`${rel}  missing worktree project target`);
-      }
-      if (/bun "<worktree>\/\.[^/]+\/tools\/aidlc-log\.ts"/.test(body)) {
-        offenders.push(`${rel}  resolves the logger inside the worktree`);
-      }
-    }
-    expect(offenders).toEqual([]);
+  test("conditional swarm module keeps autonomous review logging on the main tool", () => {
+    const body = readFileSync(
+      join(
+        REPO_ROOT,
+        "core",
+        "aidlc-common",
+        "protocols",
+        "stage-protocol-swarm.md",
+      ),
+      "utf-8",
+    );
+    expect(body).toContain('--project-dir "<worktree>"');
+    expect(body).not.toMatch(
+      /bun "<worktree>\/\.[^/]+\/tools\/aidlc-log\.ts"/,
+    );
   });
 
   test("every harness Stage Graph table matches the canonical generated table", () => {
@@ -318,9 +390,22 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("Kiro file-backed questions remap source letters to numbered prose", () => {
+  test("Codex routes typed new-work questions through next, not report", () => {
+    const annex = readFileSync(
+      join(
+        REPO_ROOT,
+        "harness/codex/skills/aidlc/question-rendering.md",
+      ),
+      "utf-8",
+    );
+    expect(annex).toContain('ask_type: "new-work-routing"');
+    expect(annex).toContain("routes through `next`");
+    expect(annex).toContain("never through `report`");
+  });
+
+  test("prose renderers remap file-backed source letters to numbered prose", () => {
     const missing: string[] = [];
-    for (const harness of ["kiro", "kiro-ide"]) {
+    for (const harness of ["cursor", "kiro", "kiro-ide"]) {
       const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const annexRel =
         `harness/${harness}/skills/aidlc/question-rendering.md`;
@@ -343,6 +428,31 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       if (!annex.includes("options have no source letters")) {
         missing.push(`${annexRel}  missing file-label exception`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("every prose question renderer starts a fresh local numbering scope", () => {
+    const missing: string[] = [];
+    for (const harness of [
+      "copilot",
+      "codex",
+      "cursor",
+      "kiro",
+      "kiro-ide",
+      "opencode",
+    ]) {
+      const rel = `harness/${harness}/skills/aidlc/question-rendering.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes("start every question at `1`")) {
+        missing.push(`${rel}  missing fresh numbering`);
+      }
+      if (!/Use unordered\s+bullets/.test(body)) {
+        missing.push(`${rel}  missing summary-list separation`);
+      }
+      if (!/Visible `1`\s+maps/.test(body)) {
+        missing.push(`${rel}  missing visible-key mapping`);
       }
     }
     expect(missing).toEqual([]);

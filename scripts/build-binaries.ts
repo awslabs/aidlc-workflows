@@ -78,7 +78,15 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_ENTRY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
 const DEFAULT_OUT_DIR = join(REPO_ROOT, "build", "binaries");
 const RUNTIME_ASSET_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
-const RUNTIME_DISTRIBUTIONS = ["claude", "codex", "kiro", "kiro-ide"] as const;
+const RUNTIME_DISTRIBUTIONS = [
+  "claude",
+  "codex",
+  "cursor",
+  "kiro",
+  "kiro-ide",
+  "copilot",
+  "opencode",
+] as const;
 const MIN_CROSS_BYTES = 10 * 1024 * 1024;
 const DEV_SPAWN_MARKER = "/* dev-mode bun spawn */";
 
@@ -457,7 +465,7 @@ function harnessRuntimeGate(
     sensors.status === 0 &&
       sensors.stdout.includes("required-sections") &&
       runners.status === 0 &&
-      runners.stdout.includes("29 runners") &&
+      runners.stdout.includes("30 runners") &&
       !runtimeCrash(output),
     {
       expected: `${distribution} packaged sensors and generated runners resolve`,
@@ -467,28 +475,39 @@ function harnessRuntimeGate(
   );
 }
 
-function harnessProbeGate(artifact: string): GateResult {
-  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-probe-"));
+function harnessProbeGate(
+  artifact: string,
+  distribution: string,
+  expectedText: string,
+): GateResult {
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-probe-${distribution}-`));
   try {
-    cpSync(join(REPO_ROOT, "dist", "kiro"), project, { recursive: true });
-    const env = pathlessEnv(project);
+    cpSync(join(REPO_ROOT, "dist", distribution), project, { recursive: true });
+    const env = pathlessEnv();
     delete env.AIDLC_HARNESS_DIR;
+    delete env.AIDLC_HARNESS_NAME;
+    delete env.AIDLC_PROJECT_DIR;
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.AIDLC_RUNTIME_HARNESS_ROOT;
+    delete env.AIDLC_RUNTIME_ROOT;
     const result = run(
       artifact,
-      ["sensor", "describe", "linter", "--project-dir", project],
+      ["doctor", "--project-dir", project],
       { cwd: project, env, timeoutMs: 30_000 },
     );
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
-      "harness-probe-kiro",
+      `harness-probe-${distribution}`,
       result,
-      result.status === 0 &&
-        result.stdout.includes(".kiro/tools/aidlc-sensor-linter.ts") &&
+      (result.status === 0 || result.status === 1) &&
+        result.stdout.includes(expectedText) &&
         !runtimeCrash(output),
       {
-        expected: "unset AIDLC_HARNESS_DIR probes the install and reads .kiro data",
+        expected:
+          `unset harness/project/runtime overrides select the ${distribution} doctor checks`,
         actual: output.trim(),
-        detail: "kiro-only install; env harness pin removed so only the probe can resolve it",
+        detail:
+          `${distribution}-only install; --project-dir is the sole routing input`,
       },
     );
   } finally {
@@ -777,6 +796,22 @@ function swarmReentryGate(artifact: string): GateResult {
       artifact,
       ["intent", "create", "--scope", "poc", "--label", "swarm-gate", "--project-dir", projectArg],
       { cwd: invocationCwd, env, timeoutMs: 30_000 },
+    );
+    // `swarm prepare` now accepts authority only for Units in the current DAG.
+    // Seed the minimal one-unit DAG in this binary self-reentry fixture rather
+    // than relying on an arbitrary --units slug to create review authority.
+    const intentsRoot = join(project, "aidlc", "spaces", "default", "intents");
+    const cursor = ["active-intent", ".active-intent"]
+      .map((name) => join(intentsRoot, name))
+      .find((path) => existsSync(path));
+    if (!cursor) throw new Error(`swarm reentry intent cursor missing under ${intentsRoot}`);
+    const activeIntent = readFileSync(cursor, "utf-8").trim();
+    const dagDir = join(intentsRoot, activeIntent, "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: swarm-unit\n    depends_on: []\n```\n",
+      "utf-8",
     );
     const result = run(
       artifact,
@@ -1172,6 +1207,50 @@ function codexAdapterGate(artifact: string): GateResult {
   }
 }
 
+function cursorAdapterGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-cursor-"));
+  try {
+    cpSync(join(REPO_ROOT, "dist", "cursor", ".cursor"), join(project, ".cursor"), {
+      recursive: true,
+    });
+    const input = JSON.stringify({
+      hook_event_name: "preCompact",
+      workspace_roots: [project],
+      conversation_id: `binary-gate-${Date.now()}`,
+      session_id: `binary-gate-${Date.now()}`,
+    });
+    const result = run(artifact, ["adapter", "cursor", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "" },
+      input,
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    const heartbeat = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "validate-state.last",
+    );
+    return commandGate(
+      "adapter-cursor-validate-state",
+      result,
+      result.status === 0 &&
+        existsSync(heartbeat) &&
+        !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
+      {
+        expected: "Cursor adapter invokes validate-state",
+        actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function routedProjectDirGate(artifact: string): GateResult {
   const cwdProject = mkdtempSync(join(tmpdir(), "aidlc-binary-route-cwd-"));
   const targetProject = installedProject("aidlc-binary-route-target-");
@@ -1424,7 +1503,7 @@ function runtimeAssetsGate(artifact: string): GateResult {
     expected: assets.length,
     actual: assets.length - missing.length,
     detail: missing.length === 0
-      ? "complete claude, codex, kiro, and kiro-ide distributions staged"
+      ? `complete ${RUNTIME_DISTRIBUTIONS.join(", ")} distributions staged`
       : `missing destinations: ${missing.join(", ")}`,
   };
 }
@@ -1522,9 +1601,26 @@ function buildTarget(target: TargetConfig): TargetResult {
       ["gen", "scope-table", "--check"],
     ));
     result.gates.push(harnessRuntimeGate(actual.artifact, "codex", ".codex"));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "cursor", ".cursor"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-ide", ".kiro"));
-    result.gates.push(harnessProbeGate(actual.artifact));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "copilot", ".aidlc"));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "opencode", ".aidlc"));
+    result.gates.push(harnessProbeGate(
+      actual.artifact,
+      "kiro",
+      "agents/aidlc.{json,md} present (conductor wiring)",
+    ));
+    result.gates.push(harnessProbeGate(
+      actual.artifact,
+      "copilot",
+      ".github/hooks/aidlc.json present (hook wiring)",
+    ));
+    result.gates.push(harnessProbeGate(
+      actual.artifact,
+      "opencode",
+      "opencode.json or opencode.jsonc present",
+    ));
     result.gates.push(pluginSelectGate(actual.artifact));
     result.gates.push(delegatePluginSyncGate(actual.artifact));
     result.gates.push(realPluginSyncGate(actual.artifact));
@@ -1566,6 +1662,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(codexAdapterGate(actual.artifact));
     result.gates.push(planApprovalAdapterGate(actual.artifact, "codex"));
     result.gates.push(planApprovalAdapterGate(actual.artifact, "kiro"));
+    result.gates.push(cursorAdapterGate(actual.artifact));
     result.gates.push(routedProjectDirGate(actual.artifact));
   } else {
     result.gates.push(sizeGate(result.bytes));

@@ -214,7 +214,7 @@ const V7_STATE = `# AI-DLC State Tracking
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **Start Date**: 2026-05-18T00:00:00Z
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: aidlc-developer-agent
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -531,7 +531,7 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **Start Date**: 2026-05-18T00:00:00Z
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: aidlc-developer-agent
 - **Worktree Path**:
 - **Bolt Refs**: [empty list]

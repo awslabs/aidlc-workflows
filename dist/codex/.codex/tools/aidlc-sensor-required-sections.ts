@@ -122,6 +122,21 @@ export function main(argv: string[]): void {
 		fail(`--output-path not found: ${flags.outputPath}`);
 	}
 
+	// This sensor validates Markdown document shape. Its broad record-tree
+	// manifest glob also matches structured stage artifacts such as
+	// traceability.json, so non-Markdown outputs quiet-pass before any read,
+	// heading, template, or filename-specific logic.
+	if (!flags.outputPath.toLowerCase().endsWith(".md")) {
+		const result: Result = {
+			pass: true,
+			h2_count: 0,
+			headings: [],
+			findings_count: 0,
+		};
+		process.stdout.write(`${JSON.stringify(result)}\n`);
+		return;
+	}
+
 	let body: string;
 	try {
 		body = readFileSync(flags.outputPath, "utf-8");

@@ -24,7 +24,7 @@ consumes:
     required: true
   - artifact: monitoring-design
     required: true
-  - artifact: infrastructure-services
+  - artifact: infrastructure-specification
     required: true
 requires_stage:
   - nfr-design
@@ -37,7 +37,9 @@ scopes:
   - enterprise
   - feature
   - infra
+  - classic
   - workshop
+  - express
 inputs: NFR design from nfr-design stage, infrastructure design from infrastructure-design stage, deployed application
 outputs: dashboards.md, alarms.md, slo-config.md, log-queries.md, tracing-config.md, anomaly-config.md, observability-setup-questions.md (under this stage's record dir, engine-resolved)
 ---
@@ -57,6 +59,14 @@ Load aidlc-operations-agent persona from `agents/aidlc-operations-agent.md` and 
 - Read NFR design (observability strategy) from `<record>/construction/nfr-design/`
 - Read infrastructure design from `<record>/construction/infrastructure-design/`
 - Read deployment execution log from `<record>/operation/deployment-execution/`
+
+`express` skips NFR Design and Infrastructure Design by design. When those
+artifacts are absent, derive the minimum observable surface from approved
+requirements, the deployed application's workspace configuration, Build and
+Test results, and the Deployment Execution evidence. Ask for any SLO, signal,
+retention, or escalation decision that cannot be observed from those sources;
+never invent a missing design artifact. If no deployed target exists, this
+CONDITIONAL stage reports skipped.
 
 ### Step 3: Generate Clarifying Questions
 
@@ -92,7 +102,7 @@ This stage's outputs are markdown artefacts under `<record>/operation/observabil
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `performance-design`, `security-design`, `reliability-design`, `monitoring-design`, `infrastructure-services`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `performance-design`, `security-design`, `reliability-design`, `monitoring-design`, `infrastructure-specification`).
 
 ## Learn
 

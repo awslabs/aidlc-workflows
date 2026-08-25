@@ -1,0 +1,101 @@
+{
+  "sessionStart": {
+    "hook_event_name": "SessionStart",
+    "session_id": "1908a694-fc9d-470a-8b20-a01d01ffe8da",
+    "timestamp": "2026-07-24T23:07:14.077Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "source": "new",
+    "initial_prompt": "Verify the compatibility fixture."
+  },
+  "userPromptSubmit": {
+    "hook_event_name": "UserPromptSubmit",
+    "session_id": "1908a694-fc9d-470a-8b20-a01d01ffe8da",
+    "timestamp": "2026-07-24T23:07:13.973Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "prompt": "Verify the compatibility fixture."
+  },
+  "stop": {
+    "hook_event_name": "Stop",
+    "session_id": "1908a694-fc9d-470a-8b20-a01d01ffe8da",
+    "timestamp": "2026-07-24T23:07:17.637Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "transcript_path": "/workspace/copilot-fixture/session-state/1908a694-fc9d-470a-8b20-a01d01ffe8da/events.jsonl",
+    "stop_reason": "end_turn",
+    "stop_hook_active": false
+  },
+  "sessionEnd": {
+    "hook_event_name": "SessionEnd",
+    "session_id": "82c32fad-4404-40dd-9bcc-d4fde49111ef",
+    "timestamp": "2026-07-24T23:52:52.015Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "reason": "complete"
+  },
+  "subagentStop": {
+    "hook_event_name": "SubagentStop",
+    "session_id": "82c32fad-4404-40dd-9bcc-d4fde49111ef",
+    "timestamp": "2026-07-24T23:52:50.007Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "transcript_path": "/workspace/copilot-fixture/session-state/82c32fad-4404-40dd-9bcc-d4fde49111ef/events.jsonl",
+    "agent_name": "compat-probe",
+    "agent_display_name": "compat-probe",
+    "stop_reason": "end_turn"
+  },
+  "subagentStart": {
+    "sessionId": "0c98c088-dff9-44ae-b6cf-db3af2f1535b",
+    "timestamp": 1784937381583,
+    "cwd": "/workspace/copilot-fixture/proj",
+    "transcriptPath": "/workspace/copilot-fixture/session-state/0c98c088-dff9-44ae-b6cf-db3af2f1535b/events.jsonl",
+    "agentName": "compat-probe",
+    "agentDisplayName": "compat-probe",
+    "agentDescription": "Compatibility probe persona for the AIDLC spike."
+  },
+  "preToolUse_bash": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "70a7069a-6c01-441b-a7a7-e6b97d61ce28",
+    "timestamp": "2026-07-25T00:32:01.748Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo FIXTURE-CAPTURE",
+      "description": "Echo fixture capture string"
+    }
+  },
+  "preToolUse_write": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "0b5bd4e9-efbd-4d9a-af85-e27aac811a30",
+    "timestamp": "2026-07-25T00:14:51.208Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "tool_name": "Write",
+    "tool_input": {
+      "path": "/workspace/copilot-fixture/proj/notes.txt",
+      "file_text": "alpha"
+    }
+  },
+  "preToolUse_edit": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "0b5bd4e9-efbd-4d9a-af85-e27aac811a30",
+    "timestamp": "2026-07-25T00:14:53.507Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "tool_name": "Edit",
+    "tool_input": {
+      "path": "/workspace/copilot-fixture/proj/notes.txt",
+      "old_str": "alpha",
+      "new_str": "beta"
+    }
+  },
+  "postToolUse_bash": {
+    "hook_event_name": "PostToolUse",
+    "session_id": "d0e7296c-f58a-4b06-9a63-d344d439f9c1",
+    "timestamp": "2026-07-24T23:15:36.341Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo POSTTOOL-CHECK",
+      "description": "Echo test string"
+    },
+    "tool_result": {
+      "result_type": "success",
+      "text_result_for_llm": "POSTTOOL-CHECK\n<shellId: 0 completed with exit code 0>"
+    }
+  }
+}

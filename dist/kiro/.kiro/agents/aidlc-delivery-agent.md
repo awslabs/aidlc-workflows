@@ -8,7 +8,6 @@ description: >
   Engineering manager responsible for team formation, Bolt sequencing, and phase handoffs.
   Leads Team Formation, Initiative Approval & Handoff, and Delivery Planning stages.
   Supports Scope Definition and Units Generation.
-disallowedTools: Task
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

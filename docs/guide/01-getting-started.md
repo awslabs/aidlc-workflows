@@ -147,8 +147,10 @@ continues on **Claude Code** (the `dist/claude/` tree, which ships as a
 `.claude/` directory). On another harness, finish the install in its chapter
 instead - [Running on Kiro CLI](harnesses/kiro-cli.md),
 [Running on Kiro IDE](harnesses/kiro-ide.md),
-[Running on Codex CLI](harnesses/codex-cli.md), or
-[AI-DLC on opencode](harnesses/opencode.md) - each covers the prerequisites
+[Running on Codex CLI](harnesses/codex-cli.md),
+[AI-DLC on Cursor](harnesses/cursor.md),
+[AI-DLC on opencode](harnesses/opencode.md), or
+[AI-DLC on GitHub Copilot](harnesses/copilot.md) - each covers the prerequisites
 and post-copy steps that differ.
 
 The `cp` commands below run from a clone of this repository on the `v2`
@@ -215,6 +217,17 @@ cp dist/codex/AGENTS.md   your-project/AGENTS.md   # or merge into yours
 ```
 
 Then continue in [AI-DLC on Codex CLI](harnesses/codex-cli.md): the project must be a **git repository**, and the install is not complete until the `.gitignore` entries and the hook trust pre-seed from that chapter are applied.
+
+</details>
+
+<details markdown="1">
+<summary><strong>Cursor</strong></summary>
+
+```bash
+bun dist/cursor/install.ts your-project
+```
+
+Then continue in [AI-DLC on Cursor](harnesses/cursor.md) for IDE and CLI usage, hook behavior, permissions, and installer refresh rules.
 
 </details>
 
@@ -294,9 +307,10 @@ Run the health check to confirm everything is in place:
 | State file | the active intent's `aidlc-state.md` matches its audit trail (no drift) |
 | Hook heartbeats | `.aidlc-hooks-health/` contains recent timestamps from hook executions |
 | Graph integrity | No cycles in `stage-graph.json`; every slug has a matching stage file |
-| Scope validation | All 9 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
+| Scope validation | All 11 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
 | Schema + references | Every stage's YAML frontmatter validates, and every consumes/requires_stage reference resolves |
 | Keyword overlap | No keyword is claimed by more than one scope across the `.claude/scopes/*.md` files |
+| Plugin checks | Optional `tools/<plugin>-doctor.ts` checks from enabled plugins; error findings fail doctor, advisory findings remain visible without changing the exit code |
 | Pending-compose marker | Reports a present `aidlc/.aidlc-compose-pending` (the in-flight compose gate marker) with its age. Fresh (under 24h, the normal state at an open compose gate) passes as advisory; stale (a crashed compose gate stranded it) fails. Silent when absent. Remediation: delete it if no compose gate is pending, or resolve the gate |
 
 ### Example output
@@ -316,9 +330,9 @@ Run the health check to confirm everything is in place:
 ✓ Hook heartbeats: not yet fired (first workflow stage will populate)
 ✓ State matches last audit event (no drift)
 ✓ Cycle detection: 0 cycles
-✓ Orphan stage files: 32 graph entries all have files
-✓ Scope validation: 9 scopes valid (29 advisories)
-✓ Schema validation: 32/32 stages valid
+✓ Orphan stage files: 33 graph entries all have files
+✓ Scope validation: 11 scopes valid
+✓ Schema validation: 33/33 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
 ✓ Keyword overlap: no conflicts
 ```
@@ -347,11 +361,15 @@ Once `--doctor` passes, you are ready to run:
 Or specify a scope directly:
 
 ```
+/aidlc classic
+/aidlc express
 /aidlc feature
 /aidlc bugfix Fix the login timeout issue
 ```
 
-See [Your First Workflow](02-your-first-workflow.md) for a step-by-step walkthrough of what happens next.
+See [Workflow Profiles](workflow-profiles.md) to choose the right lifecycle, then
+[Your First Workflow](02-your-first-workflow.md) for a step-by-step walkthrough
+of what happens next.
 
 ---
 
@@ -396,6 +414,7 @@ See [Customization](13-customization.md) for details on modifying tool permissio
 ## Next Steps
 
 - [Your First Workflow](02-your-first-workflow.md) — annotated walkthrough of a complete run
+- [Workflow Profiles](workflow-profiles.md) — compare Classic, Express, and every other workflow choice
 - [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — choosing the right scope for your task
 - [Troubleshooting](15-troubleshooting.md) — common issues and fixes
 - [Glossary](glossary.md) — terminology reference

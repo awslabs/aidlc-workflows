@@ -493,6 +493,29 @@ describe("t230 dispatcher global flag translation", () => {
     });
   });
 
+  test("places global --project-dir before the literal task delimiter", () => {
+    expect(
+      resolveAction(["--project-dir", "/tmp/example", "compose", "--", "--scope", "migration"]),
+    ).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: [
+        "next",
+        "compose",
+        "--project-dir",
+        "/tmp/example",
+        "--",
+        "--scope",
+        "migration",
+      ],
+    });
+    expect(resolveAction(["compose", "--", "--project-dir", "/tmp/literal"])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: ["next", "compose", "--", "--project-dir", "/tmp/literal"],
+    });
+  });
+
   test("carries --project-dir into routing-only actions", () => {
     const projectDir = "/tmp/routed-project";
     for (const action of [
@@ -556,6 +579,7 @@ describe("t230 dispatcher route completeness", () => {
       "aidlc-bolt.ts",
       "aidlc-graph.ts",
       "aidlc-jump.ts",
+      "aidlc-knowledge.ts",
       "aidlc-learnings.ts",
       "aidlc-log.ts",
       "aidlc-orchestrate.ts",
@@ -699,6 +723,15 @@ describe("t230 dispatcher hook routing", () => {
       expect(codex.path.endsWith("aidlc-codex-adapter.ts")).toBe(true);
     }
 
+    const cursor = resolveAction(["adapter", "cursor", "validate-state"]);
+    expect(cursor.type).toBe("adapter");
+    if (cursor.type === "adapter") {
+      expect(cursor.harness).toBe("cursor");
+      expect(cursor.target).toBe("validate-state");
+      expect(cursor.extraArgs).toEqual([]);
+      expect(cursor.path.endsWith("aidlc-cursor-adapter.ts")).toBe(true);
+    }
+
     const kiro = resolveAction([
       "adapter",
       "kiro",
@@ -785,7 +818,7 @@ describe("t230 dispatcher hook routing", () => {
     const cwdProject = makeProject();
     const targetProject = makeProject();
     writeMinimalState(cwdProject, "intent-capture");
-    writeMinimalState(targetProject, "application-design");
+    writeMinimalState(targetProject, "domain-design");
 
     const hook = viaDispatcher(
       ["hook", "validate-state", "--project-dir", targetProject],
@@ -814,7 +847,7 @@ describe("t230 dispatcher hook routing", () => {
       }),
     );
     expect(statusline.exitCode).toBe(0);
-    expect(statusline.stdout.toString("utf-8")).toContain("Application Design");
+    expect(statusline.stdout.toString("utf-8")).toContain("Domain Design");
     expect(statusline.stdout.toString("utf-8")).not.toContain("Intent Capture");
 
     rmSync(

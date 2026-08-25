@@ -1,22 +1,22 @@
 // covers: subcommand:aidlc-utility:select-plugins, audit:PLUGIN_SELECTION_CHANGED, function:pluginsEnabled,
 // function:compileStageGraph, function:mergeComposedScopes
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { runOrchestrateNext } from "../harness/fixtures.ts";
 import {
-  AIDLC_MEMORY_SRC,
-  AIDLC_SRC,
-  REPO_ROOT,
-  runOrchestrateNext,
-} from "../harness/fixtures.ts";
+  buildPluginProjection,
+  composePluginFixture,
+  copyHarnessInstall,
+} from "../harness/plugin-kit.ts";
 
-const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath;
 const TIMEOUT_MS = 60_000;
+setDefaultTimeout(TIMEOUT_MS);
 const PLUGIN = "test-pro";
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
@@ -87,29 +87,6 @@ function stageTableRegion(project: string): string {
   return skill.slice(begin, end + STAGE_TABLE_END.length);
 }
 
-function composeTestPro(project: string, pluginBuilt: string): void {
-  const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
-    cwd: project,
-    encoding: "utf-8",
-    timeout: TIMEOUT_MS - 5_000,
-    env: {
-      ...process.env,
-      CLAUDE_PLUGIN_ROOT: pluginBuilt,
-      CLAUDE_PROJECT_DIR: project,
-      AIDLC_HARNESS_DIR: ".claude",
-    },
-  });
-  if (compose.status !== 0) throw new Error(`compose.ts failed: ${compose.stderr}`);
-}
-
-function copyClaudeInstall(project: string): void {
-  mkdirSync(project, { recursive: true });
-  cpSync(AIDLC_SRC, join(project, ".claude"), { recursive: true });
-  if (existsSync(AIDLC_MEMORY_SRC)) {
-    cpSync(AIDLC_MEMORY_SRC, join(project, "aidlc"), { recursive: true });
-  }
-}
-
 function auditField(body: string, ev: string, key: string): string {
   let matched = false;
   for (const line of body.split("\n")) {
@@ -148,17 +125,14 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
   beforeAll(() => {
     tmp = mkdtempSync(join(tmpdir(), "aidlc-t224-"));
     pluginBuilt = join(tmp, "plugin", "claude");
-    const build = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", PLUGIN, "claude", pluginBuilt], {
-      cwd: REPO_ROOT,
-      encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
-    });
-    if (build.status !== 0) throw new Error(`plugin build failed: ${build.stderr}`);
-
-    project = join(tmp, "proj");
-    copyClaudeInstall(project);
-    composeTestPro(project, pluginBuilt);
-  });
+    buildPluginProjection(PLUGIN, "claude", pluginBuilt);
+    project = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: join(tmp, "proj"),
+      pluginBuilt,
+    }).projectDir;
+  }, TIMEOUT_MS);
 
   afterAll(() => {
     if (tmp && existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
@@ -224,8 +198,12 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
   // restores everything.
   test("disabling a plugin strips its merged contributions; recompose restores them", () => {
     const proj = join(tmp, "strip");
-    copyClaudeInstall(proj);
-    composeTestPro(proj, pluginBuilt);
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: proj,
+      pluginBuilt,
+    });
 
     const stagePath = join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
     const sidecar = join(proj, ".claude", "tools", "data", "plugin-contrib-test-pro.json");
@@ -250,7 +228,13 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     // Re-enable + re-compose = byte-identical restoration of the merges.
     const enable = runUtility(proj, ["select-plugins", "aidlc,test-pro"]);
     expect(enable.status).toBe(0);
-    composeTestPro(proj, pluginBuilt);
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: proj,
+      pluginBuilt,
+      copyInstall: false,
+    });
     const restored = readFileSync(stagePath, "utf-8");
     expect(restored).toBe(composed);
     expect(existsSync(sidecar)).toBe(true);
@@ -258,13 +242,19 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
   test("compose does not merge contributions for a plugin the selection disables", () => {
     const proj = join(tmp, "no-merge-disabled");
-    copyClaudeInstall(proj);
+    copyHarnessInstall("claude", proj);
     // Pre-select core only, THEN compose: the plugin's stages copy (filtered
     // at runtime) but its contributions must NOT weld into core stage source.
     const harness = JSON.parse(readFileSync(harnessPath(proj), "utf-8"));
     harness.plugins = ["aidlc"];
     writeFileSync(harnessPath(proj), `${JSON.stringify(harness, null, 2)}\n`);
-    composeTestPro(proj, pluginBuilt);
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: proj,
+      pluginBuilt,
+      copyInstall: false,
+    });
     const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
     expect(body).not.toContain("test-pro-regression-suite");
     expect(body).not.toContain("Step 9a (test-pro)");
@@ -319,8 +309,12 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
   test("select-plugins refuses to strand an active workflow's scope", () => {
     const proj = join(tmp, "strand-scope");
-    copyClaudeInstall(proj);
-    composeTestPro(proj, pluginBuilt);
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: proj,
+      pluginBuilt,
+    });
     const intentDir = seedActiveWorkflow(proj, "test-pro-validation");
 
     const result = runUtility(proj, ["select-plugins", "aidlc"]);
@@ -341,8 +335,12 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
   test("select-plugins refuses to strand a pending plugin-owned EXECUTE stage under a core scope", () => {
     const proj = join(tmp, "strand-stage");
-    copyClaudeInstall(proj);
-    composeTestPro(proj, pluginBuilt);
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: proj,
+      pluginBuilt,
+    });
     seedActiveWorkflow(proj, "feature", `- [ ] test-pro-integration ${"\u2014"} EXECUTE`);
 
     const result = runUtility(proj, ["select-plugins", "aidlc"]);
@@ -353,8 +351,12 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
   test("doctor flags a selection that already strands an active workflow", () => {
     const proj = join(tmp, "strand-doctor");
-    copyClaudeInstall(proj);
-    composeTestPro(proj, pluginBuilt);
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: proj,
+      pluginBuilt,
+    });
     seedActiveWorkflow(proj, "test-pro-validation");
     // Simulate a pre-guard selection: write it directly, then recompile the
     // surfaces the way select-plugins would have.
@@ -369,8 +371,12 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
   test("select-plugins skips runner regeneration when the harness skills dir is absent", () => {
     const noSkillsProj = join(tmp, "no-skills");
-    copyClaudeInstall(noSkillsProj);
-    composeTestPro(noSkillsProj, pluginBuilt);
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: noSkillsProj,
+      pluginBuilt,
+    });
 
     const agentsSkill = join(noSkillsProj, ".agents", "skills", "aidlc", "SKILL.md");
     mkdirSync(dirname(agentsSkill), { recursive: true });
@@ -403,7 +409,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
   test("closure guard names the disabled producer plugin, producer, artifact, and consumer", () => {
     const closureProj = join(tmp, "closure");
-    copyClaudeInstall(closureProj);
+    copyHarnessInstall("claude", closureProj);
     const stageDir = join(closureProj, ".claude", "aidlc-common", "stages", "construction");
     const scopeDir = join(closureProj, ".claude", "scopes");
     mkdirSync(stageDir, { recursive: true });
@@ -466,8 +472,12 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
   test("composed scopes survive plugin selection with intact grid and runner", () => {
     const composedProj = join(tmp, "composed");
-    copyClaudeInstall(composedProj);
-    composeTestPro(composedProj, pluginBuilt);
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: composedProj,
+      pluginBuilt,
+    });
 
     const scopeName = "custom-composed";
     const scopeDir = join(composedProj, ".claude", "scopes");

@@ -25,9 +25,15 @@ import {
   absorbReviewerKnowledge,
   reviewerAgentSet,
 } from "../../scripts/agent-knowledge.ts";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import {
+  stageValidationAuditFields,
+  type StageValidityNode,
+} from "../../core/tools/aidlc-validity.ts";
 import {
   cleanupTestProject,
   REPO_ROOT,
+  seededRecordDir,
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
@@ -53,6 +59,9 @@ type WireDirective = {
   rules_in_context?: string[];
   inline_context_paths?: string[];
   context_warnings?: string[];
+  stage_validity?: {
+    state?: string;
+  };
   message?: string;
 };
 
@@ -81,6 +90,8 @@ function invoke(
   subcommand: "next" | "continue",
   args: string[],
 ): { directive: WireDirective; bytes: number } {
+  cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(proj, ".claude", "tools", "aidlc-lib.ts"));
+  cpSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), join(proj, ".claude", "tools", "aidlc-orchestrate.ts"));
   const res = spawnSync(
     BUN,
     [
@@ -374,6 +385,90 @@ describe("t248 deterministic steering delivery", () => {
       "utf-8",
     ).trim();
     expect(otherKey).not.toBe(encodedKey);
+  });
+
+  test("sessionless continuation consumes the same token exactly once", () => {
+    const proj = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
+    projects.push(proj);
+    const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+    writeFileSync(
+      orgPath,
+      Array.from({ length: 180 }, (_, i) => `## Sessionless ${i}\n\n${"x".repeat(320)}\n\n`).join(""),
+      "utf-8",
+    );
+    const first = invoke(proj, "next", []).directive;
+    expect(first.kind).toBe("load-steering");
+    const token = first.continue_token ?? "";
+    const once = invoke(proj, "continue", [token]).directive;
+    const twice = invoke(proj, "continue", [token]).directive;
+    expect(once.kind).not.toBe("error");
+    expect(twice.kind).toBe("error");
+    expect(twice.message).toContain("no longer current");
+    const marker = JSON.parse(
+      readFileSync(join(seededRecordDir(proj), ".aidlc-active-directive.json"), "utf-8"),
+    ) as { cursor_harness?: string; owner_session?: string };
+    expect(marker.cursor_harness).toBe("claude");
+    expect(marker.owner_session).toStartWith("sessionless:");
+  });
+
+  test("stage validity advisory survives every steering continuation", () => {
+    const proj = setupIntegrationProject({ withState: "state-operation.md" });
+    projects.push(proj);
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const graphRaw = JSON.parse(
+      readFileSync(
+        join(proj, ".claude", "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as StageValidityNode[] | { stages: StageValidityNode[] };
+    const stages = Array.isArray(graphRaw) ? graphRaw : graphRaw.stages;
+    const requirements = stages.find(
+      (stage) => stage.slug === "requirements-analysis",
+    );
+    expect(requirements).toBeDefined();
+    const artifactDir = join(
+      seededRecordDir(proj),
+      "inception",
+      "requirements-analysis",
+    );
+    mkdirSync(artifactDir, { recursive: true });
+    const artifactPath = join(artifactDir, "requirements.md");
+    writeFileSync(artifactPath, "requirements-v1\n", "utf-8");
+    appendAuditEntry(
+      "STAGE_COMPLETED",
+      {
+        Stage: "requirements-analysis",
+        ...stageValidationAuditFields(
+          proj,
+          requirements!,
+          state,
+          stages,
+        ),
+      },
+      proj,
+    );
+    writeFileSync(artifactPath, "requirements-v2\n", "utf-8");
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      Array.from(
+        { length: 180 },
+        (_, i) => `## Validity ${i}\n\n${"x".repeat(320)}\n\n`,
+      ).join(""),
+      "utf-8",
+    );
+
+    let directive = invoke(proj, "next", []).directive;
+    expect(directive.kind).toBe("load-steering");
+    while (directive.kind === "load-steering") {
+      expect(directive.stage_validity?.state).toBe("drifted");
+      directive = invoke(
+        proj,
+        "continue",
+        [directive.continue_token ?? ""],
+      ).directive;
+    }
+    expect(directive.kind).toBe("run-stage");
+    expect(directive.stage_validity?.state).toBe("drifted");
   });
 
   test("the old public-path MAC cannot forge a continuation that skips chunks", () => {

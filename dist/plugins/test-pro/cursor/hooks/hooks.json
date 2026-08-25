@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "bun ./hooks/aidlc-plugin-compose.ts .cursor"
+      }
+    ]
+  }
+}

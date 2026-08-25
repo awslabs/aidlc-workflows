@@ -9,6 +9,7 @@
 //   • Kiro IDE — an always-included steering file with live file references.
 //   • Codex — the AIDLC_RULES_DIR env var in config.toml.
 //   • opencode — the `instructions` glob in the project-root opencode.json.
+//   • Cursor — standing + phase read pointers in <harness>/rules/*.mdc.
 //
 // These surfaces stay COMMITTED (each carries load-bearing engine wiring beyond
 // the include — Kiro's agent JSON holds the conductor prompt + hook block,
@@ -189,6 +190,48 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
     return written;
   }
 
+  if (harness === ".cursor") {
+    // Cursor — every .cursor/rules/*.mdc method pointer lists plain paths
+    // (Cursor rules have no @-import expansion); rewrite the space segment in
+    // each one. The persona files in .cursor/agents/ carry active-space memory
+    // paths in their bodies exactly like opencode's.
+    const rulesDir = join(harnessRoot, "rules");
+    if (existsSync(rulesDir)) {
+      for (const name of readdirSync(rulesDir).sort()) {
+        if (!name.endsWith(".mdc")) continue;
+        const p = join(rulesDir, name);
+        const raw = readSafe(p);
+        if (raw === null) continue;
+        repointFile(
+          p,
+          join(harness, "rules", name),
+          raw,
+          sp,
+          repointOpencodeAgentMemory,
+          written,
+        );
+      }
+    }
+    const agentsDir = join(harnessRoot, "agents");
+    if (existsSync(agentsDir)) {
+      for (const name of readdirSync(agentsDir).sort()) {
+        if (!name.endsWith(".md")) continue;
+        const p = join(agentsDir, name);
+        const raw = readSafe(p);
+        if (raw === null) continue;
+        repointFile(
+          p,
+          join(harness, "agents", name),
+          raw,
+          sp,
+          repointOpencodeAgentMemory,
+          written,
+        );
+      }
+    }
+    return written;
+  }
+
   if (harness === ".kiro") {
     // Kiro CLI compatibility surface: rewrite each agents/*.json memory glob.
     const agentsDir = join(harnessRoot, "agents");
@@ -236,8 +279,19 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
   }
 
   if (harness === ".aidlc") {
-    // opencode (engine dir .aidlc): opencode reads the project-root
-    // opencode.json/jsonc, whose `instructions` glob is the method include.
+    // Two harnesses ship the .aidlc engine dir; both include surfaces are
+    // probed (each rewriter no-ops when its surface carries no method
+    // pointer, so the branches compose without a flavor probe).
+    // Copilot: the project-root AGENTS.md's @-import lines are the method
+    // include (both Copilot surfaces expand @-imports; live-verified).
+    const agentsMdPath = join(projectDir, "AGENTS.md");
+    if (existsSync(agentsMdPath)) {
+      const raw = readSafe(agentsMdPath);
+      if (raw !== null) {
+        repointFile(agentsMdPath, "AGENTS.md", raw, sp, repointClaudeStub, written);
+      }
+    }
+    // opencode: the project-root opencode.json/jsonc `instructions` glob.
     const jsonPath = join(projectDir, "opencode.json");
     const jsoncPath = join(projectDir, "opencode.jsonc");
     for (const [configPath, relPath] of [
@@ -258,15 +312,34 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
       }
     }
     // Inline and native persona bodies carry explicit method paths for
-    // on-demand reads. Keep both aligned with the active-space cursor.
-    for (const relDir of [join(".aidlc", "agents"), join(".opencode", "agents")]) {
+    // on-demand reads. Keep every surface aligned with the active-space
+    // cursor: the inline twins (.aidlc/agents), opencode's native subagents
+    // (.opencode/agents), and Copilot's native custom agents
+    // (.github/agents — the copies dispatched delegations actually load).
+    for (const relDir of [
+      join(".aidlc", "agents"),
+      join(".opencode", "agents"),
+      join(".github", "agents"),
+    ]) {
       const agentsDir = join(projectDir, relDir);
       if (!existsSync(agentsDir)) continue;
+      // .github/ is SHARED with user content on the Copilot harness, so touch
+      // only aidlc-named core personas or plugin-owned personas there. The
+      // AIDLC-owned engine/native dirs may contain plugin agents whose names
+      // intentionally lack the aidlc prefix.
+      const sharedGithubDir = relDir === join(".github", "agents");
       for (const name of readdirSync(agentsDir).sort()) {
         if (!name.endsWith(".md")) continue;
         const p = join(agentsDir, name);
         const raw = readSafe(p);
         if (raw === null) continue;
+        if (
+          sharedGithubDir &&
+          !name.startsWith("aidlc-") &&
+          !/^plugin:\s*[a-z][a-z0-9-]*\s*$/m.test(raw)
+        ) {
+          continue;
+        }
         repointFile(
           p,
           join(relDir, name),

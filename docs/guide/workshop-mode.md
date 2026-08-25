@@ -1,14 +1,19 @@
 # Workshop Mode
 
-The `workshop` scope is the only AI-DLC scope designed for *facilitated group sessions* — typically a workshop or training lab where one person (the facilitator) has decided what the group will build, and N participants drive separate Construction Bolts in parallel against a shared remote.
+Workshop Mode is a manual collaboration recipe layered on the `workshop` scope.
+The scope retains the established `workshop`, `lab`, and `training` routing,
+full Inception-through-Operation lifecycle, and Minimal test-strategy override.
+In this recipe one facilitator decides what the group will build and
+participants drive separate Construction Bolts in parallel against a shared
+remote.
 
 This chapter is a **manual recipe**: it documents the workshop flow using primitives that already ship today (`aidlc-worktree`, `aidlc-bolt`, plus ordinary git). There is no dedicated `--claim-bolt` CLI yet — claim semantics ride on `git push` to the shared remote, and the recipe makes that contract explicit. A future release may automate the moves this chapter describes; for now, the recipe is the contract.
 
-For the scope's depth/test-strategy/skip-list, see [Scopes and Depth § workshop](05-scopes-and-depth.md#workshop). For the per-Bolt worktree mechanics this chapter assumes, see [State and Audit](10-state-and-audit.md) and the orchestrator's [Construction flow](../reference/03-orchestrator.md). New facilitator? Run through [Getting Started](01-getting-started.md) first — bun and your harness's framework copy must already be in place before any workshop step below.
+For the scope's depth/test-strategy/skip-list, see [Scopes and Depth § workshop](05-scopes-and-depth.md#workshop). For the worktree mechanics used to isolate each Bolt in this chapter, see [State and Audit](10-state-and-audit.md) and the orchestrator's [Construction flow](../reference/03-orchestrator.md). New facilitator? Run through [Getting Started](01-getting-started.md) first — bun and your harness's framework copy must already be in place before any workshop step below.
 
 > **Harness note.** This recipe is harness-neutral: it drives the `aidlc-worktree`
 > and `aidlc-bolt` tools (shared across every harness) plus ordinary git. The
-> command examples invoke the orchestrator as `/aidlc` (Claude Code / Kiro); on
+> command examples invoke the orchestrator as `/aidlc` (Claude Code / Kiro / opencode / Copilot); on
 > Codex use `$aidlc`. The claim-and-merge git contract is identical everywhere.
 
 ---
@@ -20,7 +25,7 @@ Workshop mode fits when **all** of the following are true:
 - A facilitator has pre-decided the project scope (the workshop has a topic — participants don't choose what to build)
 - Multiple developers will work on different parts of Construction simultaneously, each on their own clone of a shared repository
 - Mandatory gates at every stage are acceptable (workshop mode keeps the gate ceremony — the point is to teach the methodology, not skip it)
-- Pace matters more than test depth — workshop ships at Standard depth with **Minimal** test strategy specifically to keep the session moving
+- The group accepts the Workshop scope's Minimal teaching test floor
 
 It does **not** fit single-developer work, ad-hoc parallel collaboration, or any situation where a participant might claim a Bolt and then walk away without explicit hand-off. For solo work choose `feature`, `mvp`, or one of the smaller scopes.
 
@@ -44,23 +49,26 @@ Inception runs serially with the facilitator at the keyboard. Construction is wh
 
 ### Before the session
 
-Launch Claude Code in the project (`cd workshop-project && claude`), then birth the first intent with the workshop scope:
+Launch Claude Code in the project (`cd workshop-project && claude`), then birth the first intent with the Workshop scope:
 
 ```
 /aidlc --scope workshop
 ```
 
-Naming the scope on a fresh workspace births the first intent and stamps `Scope: workshop` and `Default Test Strategy: Minimal` into that intent's `aidlc-state.md`. Push the born intent's state to the shared remote so participants clone a project that already knows it's a workshop.
+Naming the scope on a fresh workspace births the first intent and stamps
+`Scope: workshop` and `Default Test Strategy: Minimal` into that intent's
+`aidlc-state.md`. Push the born intent's state to the shared remote so
+participants clone a project that already knows its workflow configuration.
 
-Per-project default scopes can be set via `AWS_AIDLC_DEFAULT_SCOPE=workshop` in `.claude/settings.json`. With this set, every participant who runs `/aidlc` in a clone gets the workshop routing automatically without remembering the flag — see [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
+Per-project default scopes can be set via `AWS_AIDLC_DEFAULT_SCOPE=workshop` in `.claude/settings.json`. With this set, every participant who runs `/aidlc` in a clone gets the Workshop routing automatically without remembering the flag — see [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
 
 ### Run Inception solo
 
-The facilitator drives Inception stages 2.1 through 2.8 in sequence, hitting every gate. The workshop scope skips Ideation entirely (1.1–1.7) — the project is pre-decided, so there's nothing to ideate.
+The facilitator drives Inception stages 2.1 through 2.9 in sequence, hitting every gate. The Workshop scope skips Ideation entirely (1.1–1.7) — the project is pre-decided, so there's nothing to ideate.
 
 **Stage 2.2 (practices-discovery) is load-bearing for workshop mode.** This is where the team affirms branching strategy, walking-skeleton stance, testing posture, and deployment cadence — and Construction reads those affirmations on every per-Bolt decision. Run the affirmation gate with the group, not solo: the answers govern what happens on every participant's machine for the rest of the workshop.
 
-When `delivery-planning` (2.8) emits `bolt-plan.md`, **review it with the group before proceeding to Construction.** The Bolt list determines who claims what — participants need to see it.
+When `delivery-planning` (2.9) emits `bolt-plan.md`, **review it with the group before proceeding to Construction.** The Bolt list determines who claims what — participants need to see it.
 
 Push the approved Inception artifacts to the shared remote. From this point forward, participants pull and claim.
 
@@ -207,7 +215,7 @@ bun .claude/tools/aidlc-worktree.ts create --slug notifications-worker --base ma
 git push origin bolt-notifications-worker # succeeds — different slug, no race
 ```
 
-Both run `/aidlc` in their respective clones. State and audit fork into the per-Bolt worktrees independently. Each participant's Construction work is local until they merge.
+Both run `/aidlc` in their respective clones. State and audit fork independently into the worktree hosting each participant's Bolt. Each participant's Construction work is local until they merge.
 
 ### What happens if Alice and Bob both pick the same slug
 
@@ -271,7 +279,7 @@ Once every Bolt has merged and `bolt-*` branches are deleted, the facilitator sh
 1. **Verify `Bolt Refs` is empty** — `bun .claude/tools/aidlc-utility.ts status` (or read `aidlc-state.md`) should show `Bolt Refs: [empty list]`. Any leftover slug indicates a Bolt that didn't merge cleanly; investigate before closing the workshop.
 2. **Inspect any preserved worktrees** — `bun .claude/tools/aidlc-worktree.ts list` shows every preserved `.aidlc/worktrees/bolt-*/` directory. These survived because a participant chose Skip or Abort during halt-and-ask. Decide whether to discard them (`aidlc-worktree discard --slug <slug>`) or keep them for post-workshop debrief.
 3. **Skim the audit log** — the intent's `audit/` shards carry the audit entries from every participant's worktree (each clone's shard merges in cleanly, no conflicts). `MERGE_DISPATCH_FALLBACK` rows are the breadcrumb for "we silently used trunk defaults instead of the team's affirmed branching" — surface these in debrief.
-4. **Tag a release if appropriate** — workshop scope completes with all Construction Bolts merged; if the workshop's project is going further, this is a natural tag point. Per the team's affirmed deployment cadence in `aidlc/spaces/<active-space>/memory/team.md`, this may auto-trigger a staging deploy.
+4. **Tag a release if appropriate** — Workshop scope completes with all Construction Bolts merged; if the workshop's project is going further, this is a natural tag point. Per the team's affirmed deployment cadence in `aidlc/spaces/<active-space>/memory/team.md`, this may auto-trigger a staging deploy.
 
 The framework handles each participant's per-session resume case — see [Resuming a workshop session](#resuming-a-workshop-session) below — useful when a participant's session was killed mid-batch and they're rejoining the workshop late.
 
@@ -336,7 +344,7 @@ Practices and autonomy mode are explicit committed artifacts in the shared repo 
 
 - **A dedicated `--claim-bolt` CLI utility.** That utility may ship in a future release once a real workshop dogfood surfaces a concrete requirement (better error messages on race, audit-only offline mode, automated stale-claim detection). Until then, the recipe above using `aidlc-worktree create` + `git push` is the contract.
 - **Stale-claim detection.** A participant who claims a Bolt and then drops off without releasing leaves an orphan `bolt-<slug>` branch on origin. The facilitator manually deletes it (`git push origin :bolt-<slug>`). Future `--doctor` extensions in v0.4.0 milestone 15 may flag stale branches automatically.
-- **Audit-only / offline mode.** Without a shared remote, claim coordination falls back to verbal agreement among facilitator and participants. Workshop mode is fundamentally a multi-clone pattern; single-laptop runs of the workshop scope are possible but lose the parallel-claim benefit.
+- **Audit-only / offline mode.** Without a shared remote, claim coordination falls back to verbal agreement among facilitator and participants. Workshop mode is fundamentally a multi-clone pattern; single-laptop runs of the Workshop scope are possible but lose the parallel-claim benefit.
 - **Practices freshness during a multi-clone workshop.** Practices are read **once at Construction start** — the conductor loads `## Walking Skeleton` and `## Way of Working` from `aidlc/spaces/<active-space>/memory/{project,team,org}.md`, and that single read services the entire Construction phase for that participant's session. If the facilitator re-runs practices-discovery while participants have Bolts in flight, in-flight participants will not re-read live active-space memory until they restart their `/aidlc` session (and `git pull` the new affirmation). **Rule for the facilitator:** do not re-run practices-discovery while any Bolt is in flight. Finish every in-flight Bolt's gate first. **Rule for participants:** always run `git fetch --all && git pull` immediately before resuming a session — this catches any practices change that landed while you were away. The same rule covers the `--base` value in step 2 of the participant flow: the value you copy from active-space memory is only fresh as of your last pull.
 
 ---

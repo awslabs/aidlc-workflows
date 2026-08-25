@@ -1,10 +1,10 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
-const KNOWN_HARNESSES = [".claude", ".kiro", ".codex"] as const;
+const KNOWN_HARNESSES = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
 
 export interface HarnessLocation {
   harnessDir?: string;
@@ -56,12 +56,47 @@ export function runtimeHarnessDir(projectDir = runtimeProjectDir()): string {
   return ".claude";
 }
 
-function distributionFor(harnessDir: string): string {
+function readHarnessName(root: string): string | null {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(root, "tools", "data", "harness.json"), "utf-8"),
+    ) as { name?: unknown };
+    return typeof parsed.name === "string" && parsed.name.trim()
+      ? parsed.name.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function runtimeHarnessName(
+  projectDir = runtimeProjectDir(),
+  harnessDir = runtimeHarnessDir(projectDir),
+): string {
   const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
   if (explicit) return explicit;
+
+  const projectRoot =
+    basename(projectDir) === harnessDir && existsSync(join(projectDir, "tools"))
+      ? projectDir
+      : join(projectDir, harnessDir);
+  for (const root of [projectRoot, MODULE_HARNESS_ROOT]) {
+    const name = readHarnessName(root);
+    if (name) return name;
+  }
+
+  // Copilot and OpenCode intentionally share .aidlc. Their harness.json name
+  // above is the authoritative discriminator; retain OpenCode only as the
+  // metadata-unavailable compatibility fallback.
+  if (harnessDir === ".aidlc") return "opencode";
   if (harnessDir === ".codex") return "codex";
   if (harnessDir === ".kiro") return "kiro";
+  if (harnessDir === ".cursor") return "cursor";
   return "claude";
+}
+
+function distributionFor(harnessDir: string, projectDir = runtimeProjectDir()): string {
+  return runtimeHarnessName(projectDir, harnessDir);
 }
 
 function explicitHarnessRoot(harnessDir: string, distribution: string): string | null {
@@ -102,7 +137,7 @@ export function packagedDistributionRoot(
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {
   const projectDir = location.projectDir ?? runtimeProjectDir();
   const harnessDir = location.harnessDir ?? runtimeHarnessDir(projectDir);
-  const distribution = location.distribution ?? distributionFor(harnessDir);
+  const distribution = location.distribution ?? distributionFor(harnessDir, projectDir);
   const projectRoot =
     basename(projectDir) === harnessDir &&
     existsSync(join(projectDir, "tools"))
@@ -148,13 +183,20 @@ export function resolveSkillsPath(
     ...location,
     harnessDir,
   });
-  if (harnessDir !== ".codex" || existsSync(harnessSkills)) return harnessSkills;
-  return join(
-    dirname(resolveHarnessRoot({ ...location, harnessDir })),
-    ".agents",
-    "skills",
-    ...segments,
-  );
+  const distribution = location.distribution ??
+    runtimeHarnessName(projectDir, harnessDir);
+  const distributionRoot = dirname(resolveHarnessRoot({
+    ...location,
+    harnessDir,
+    distribution,
+  }));
+  if (distribution === "copilot") {
+    return join(distributionRoot, ".github", "skills", ...segments);
+  }
+  if (distribution === "codex" && !existsSync(harnessSkills)) {
+    return join(distributionRoot, ".agents", "skills", ...segments);
+  }
+  return harnessSkills;
 }
 
 export function resolveDistributionPath(

@@ -22,7 +22,9 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "none (first stage after session start)",
     "outputs": "the per-intent record tree (one dir per in-scope phase + verification dir) and the space-level knowledge/ dir",
@@ -67,7 +69,9 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "none (scans filesystem)",
     "outputs": "workspace classification (greenfield/brownfield), technology stack detection",
@@ -112,7 +116,9 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "workspace classification from workspace-detection, scope from orchestrator",
     "outputs": "<record>/aidlc-state.md (full populated version, engine-resolved)",
@@ -190,16 +196,25 @@
       {
         "id": "claim-sources",
         "path": ".kiro/sensors/aidlc-claim-sources.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-provenance",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -262,11 +277,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -346,11 +367,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -424,11 +451,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -499,11 +532,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -580,11 +619,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -684,11 +729,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -732,7 +783,9 @@
       "bugfix",
       "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "<record>/aidlc-state.md",
     "outputs": "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)",
@@ -758,11 +811,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -832,6 +891,7 @@
       "feature",
       "mvp",
       "infra",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -859,11 +919,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -928,7 +994,9 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "reviewer": "aidlc-product-lead-agent",
     "reviewer_max_iterations": 2,
@@ -958,11 +1026,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -984,7 +1058,8 @@
     "produces": [
       "stories",
       "personas",
-      "user-stories-assessment"
+      "user-stories-assessment",
+      "traceability"
     ],
     "consumes": [
       {
@@ -1011,12 +1086,14 @@
     ],
     "sensors": [
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-product-lead-agent",
@@ -1024,7 +1101,7 @@
     "review_class": "advisory",
     "summary_confirmation": "required",
     "inputs": "<record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)",
-    "outputs": "stories.md, personas.md, user-stories-assessment.md (under this stage's record dir, engine-resolved)",
+    "outputs": "stories.md, personas.md, user-stories-assessment.md, traceability.json (under this stage's record dir, engine-resolved)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1047,12 +1124,26 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "traceability",
+        "path": ".kiro/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1108,6 +1199,7 @@
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-product-lead-agent",
@@ -1138,22 +1230,28 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
   },
   {
-    "slug": "application-design",
+    "slug": "domain-design",
     "number": "2.6",
-    "name": "Application Design",
+    "name": "Domain Design",
     "phase": "inception",
     "execution": "CONDITIONAL",
-    "condition": "Execute when new components or services are needed, or service layer design is required. Skip when changes are modifications to existing components only.",
+    "condition": "Execute when new components or logical building blocks are needed. Skip when changes are modifications to existing components only.",
     "lead_agent": "aidlc-architect-agent",
     "support_agents": [
       "aidlc-aws-platform-agent",
@@ -1162,10 +1260,8 @@
     "mode": "inline",
     "produces": [
       "components",
-      "component-methods",
-      "services",
-      "component-dependency",
-      "decisions"
+      "decisions",
+      "traceability"
     ],
     "consumes": [
       {
@@ -1197,12 +1293,14 @@
     ],
     "sensors": [
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -1210,7 +1308,7 @@
     "review_class": "advisory",
     "summary_confirmation": "required",
     "inputs": "<record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)",
-    "outputs": "components.md, component-methods.md, services.md, component-dependency.md, decisions.md (under this stage's record dir, engine-resolved)",
+    "outputs": "components.md (fenced ```yaml component catalogue plus a human-readable mermaid diagram and summary table), decisions.md (Architecture Decision Records), and traceability.json — all under this stage's record dir, engine-resolved",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1233,12 +1331,26 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "traceability",
+        "path": ".kiro/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1248,7 +1360,7 @@
     "name": "Units Generation",
     "phase": "inception",
     "execution": "ALWAYS",
-    "condition": "Always executes when in scope. Produces the dependency DAG that Stage 2.8 Delivery Planning consumes for Bolt sequencing. In the compiled scope grid, 2.7 and 2.8 travel together — both EXECUTE or both SKIP per scope.",
+    "condition": "Always executes when in scope. Produces the dependency DAG that Stage 2.9 Delivery Planning consumes for Bolt sequencing. In the compiled scope grid, 2.7 (Units Generation) and 2.9 (Delivery Planning) travel together — both EXECUTE or both SKIP per scope.",
     "lead_agent": "aidlc-architect-agent",
     "support_agents": [
       "aidlc-delivery-agent"
@@ -1257,7 +1369,8 @@
     "produces": [
       "unit-of-work",
       "unit-of-work-dependency",
-      "unit-of-work-story-map"
+      "unit-of-work-story-map",
+      "traceability"
     ],
     "consumes": [
       {
@@ -1265,20 +1378,8 @@
         "required": true
       },
       {
-        "artifact": "component-methods",
-        "required": true
-      },
-      {
-        "artifact": "services",
-        "required": true
-      },
-      {
-        "artifact": "component-dependency",
-        "required": true
-      },
-      {
         "artifact": "decisions",
-        "required": true
+        "required": false
       },
       {
         "artifact": "requirements",
@@ -1290,24 +1391,26 @@
       }
     ],
     "requires_stage": [
-      "application-design"
+      "domain-design"
     ],
     "sensors": [
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
     "review_class": "advisory",
     "summary_confirmation": "required",
-    "inputs": "<record>/inception/application-design/ (all design artifacts), <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)",
-    "outputs": "unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md (under this stage's record dir, engine-resolved)",
+    "inputs": "<record>/inception/domain-design/components.md, <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)",
+    "outputs": "unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md, traceability.json (under this stage's record dir, engine-resolved)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1330,18 +1433,122 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "traceability",
+        "path": ".kiro/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
+        "matches": "**/traceability.json"
+      }
+    ]
+  },
+  {
+    "slug": "contract-design",
+    "number": "2.8",
+    "name": "Contract Design",
+    "phase": "inception",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when the system has any formal contract to pin down — an inter-unit boundary (more than one unit that must integrate) OR a unit that exposes a public/external API consumed outside the system. Skip only for a single self-contained unit with no inter-unit boundaries and no externally consumed API.",
+    "lead_agent": "aidlc-architect-agent",
+    "support_agents": [
+      "aidlc-aws-platform-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "contract-summary"
+    ],
+    "consumes": [
+      {
+        "artifact": "unit-of-work",
+        "required": true
+      },
+      {
+        "artifact": "unit-of-work-dependency",
+        "required": true
+      },
+      {
+        "artifact": "components",
+        "required": false
+      },
+      {
+        "artifact": "requirements",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "units-generation"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "classic",
+      "workshop"
+    ],
+    "reviewer": "aidlc-architecture-reviewer-agent",
+    "reviewer_max_iterations": 2,
+    "review_class": "advisory",
+    "summary_confirmation": "required",
+    "inputs": "<record>/inception/units-generation/unit-of-work.md, <record>/inception/units-generation/unit-of-work-dependency.md, <record>/inception/domain-design/components.md (if produced), <record>/inception/requirements-analysis/requirements.md",
+    "outputs": "contract-summary.md (under this stage's record dir, engine-resolved) — a human-readable overview of every contract (inter-unit boundaries and public/external APIs), each with a fenced spec block (OpenAPI / AsyncAPI / shared schema) inline",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/inception.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
   },
   {
     "slug": "delivery-planning",
-    "number": "2.8",
+    "number": "2.9",
     "name": "Delivery Planning",
     "phase": "inception",
     "execution": "ALWAYS",
@@ -1388,6 +1595,10 @@
         "required": false
       },
       {
+        "artifact": "contract-summary",
+        "required": false
+      },
+      {
         "artifact": "team-practices",
         "required": false
       }
@@ -1403,6 +1614,7 @@
       "enterprise",
       "feature",
       "mvp",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -1430,11 +1642,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -1453,27 +1671,34 @@
     "mode": "inline",
     "for_each": "unit-of-work",
     "produces": [
-      "business-logic-model",
-      "business-rules",
-      "domain-entities"
+      "entities",
+      "rules",
+      "functional-spec",
+      "traceability"
     ],
     "optional_produces": [
       "frontend-components"
     ],
     "produces_kinds": {
-      "business-logic-model": [
+      "entities": [
+        "service",
+        "spec",
+        "library"
+      ],
+      "rules": [
+        "service",
+        "spec",
+        "library"
+      ],
+      "functional-spec": [
         "service",
         "ui",
         "library"
       ],
-      "business-rules": [
+      "traceability": [
         "service",
         "spec",
-        "library"
-      ],
-      "domain-entities": [
-        "service",
-        "spec",
+        "ui",
         "library"
       ],
       "frontend-components": [
@@ -1498,36 +1723,35 @@
         "required": true
       },
       {
-        "artifact": "component-methods",
-        "required": true
-      },
-      {
-        "artifact": "services",
-        "required": true
+        "artifact": "contract-summary",
+        "required": false
       }
     ],
     "requires_stage": [
-      "units-generation"
+      "units-generation",
+      "contract-design"
     ],
     "sensors": [
       "required-sections",
       "upstream-coverage",
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
       "feature",
       "mvp",
       "refactor",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "summary_confirmation": "required",
-    "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts",
-    "outputs": "business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)",
+    "outputs": "entities.md, rules.md, functional-spec.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all). entities.md and rules.md each carry a fenced ```yaml source-of-truth block; functional-spec.md is the source of truth for workflows and state machines and carries derived ER-diagram and rules-summary views.",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1550,22 +1774,42 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".kiro/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1575,7 +1819,7 @@
     "name": "NFR Requirements",
     "phase": "construction",
     "execution": "CONDITIONAL",
-    "condition": "Performance requirements, security considerations, scalability concerns, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined.",
+    "condition": "Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined.",
     "lead_agent": "aidlc-architect-agent",
     "support_agents": [
       "aidlc-devsecops-agent",
@@ -1589,7 +1833,9 @@
       "security-requirements",
       "scalability-requirements",
       "reliability-requirements",
-      "tech-stack-decisions"
+      "observability-requirements",
+      "tech-stack-decisions",
+      "traceability"
     ],
     "produces_kinds": {
       "performance-requirements": [
@@ -1601,20 +1847,27 @@
       ],
       "reliability-requirements": [
         "service"
+      ],
+      "observability-requirements": [
+        "service"
       ]
     },
     "consumes": [
       {
-        "artifact": "business-logic-model",
+        "artifact": "functional-spec",
         "required": true
       },
       {
-        "artifact": "business-rules",
+        "artifact": "rules",
         "required": true
       },
       {
         "artifact": "requirements",
         "required": true
+      },
+      {
+        "artifact": "contract-summary",
+        "required": false
       },
       {
         "artifact": "technology-stack",
@@ -1630,7 +1883,8 @@
       "required-sections",
       "upstream-coverage",
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -1638,6 +1892,7 @@
       "mvp",
       "infra",
       "security-patch",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -1645,7 +1900,7 @@
     "review_class": "adversarial",
     "summary_confirmation": "required",
     "inputs": "functional design artifacts, requirements.md, RE artifacts",
-    "outputs": "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "outputs": "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1668,22 +1923,42 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".kiro/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1705,7 +1980,9 @@
       "security-design",
       "scalability-design",
       "reliability-design",
-      "logical-components"
+      "observability-design",
+      "logical-components",
+      "traceability"
     ],
     "produces_kinds": {
       "performance-design": [
@@ -1716,6 +1993,9 @@
         "service"
       ],
       "reliability-design": [
+        "service"
+      ],
+      "observability-design": [
         "service"
       ],
       "logical-components": [
@@ -1742,12 +2022,20 @@
         "required": true
       },
       {
+        "artifact": "observability-requirements",
+        "required": true
+      },
+      {
         "artifact": "tech-stack-decisions",
         "required": true
       },
       {
-        "artifact": "business-logic-model",
+        "artifact": "functional-spec",
         "required": true
+      },
+      {
+        "artifact": "contract-summary",
+        "required": false
       }
     ],
     "requires_stage": [
@@ -1758,13 +2046,15 @@
       "required-sections",
       "upstream-coverage",
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
       "feature",
       "mvp",
       "infra",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -1772,7 +2062,7 @@
     "review_class": "adversarial",
     "summary_confirmation": "required",
     "inputs": "NFR requirements artifacts, functional design artifacts",
-    "outputs": "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "outputs": "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1795,22 +2085,42 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".kiro/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1829,29 +2139,29 @@
     "mode": "inline",
     "for_each": "unit-of-work",
     "produces": [
-      "deployment-architecture",
-      "infrastructure-services",
+      "infrastructure-specification",
       "monitoring-design",
-      "cicd-pipeline"
-    ],
-    "optional_produces": [
-      "shared-infrastructure"
+      "cicd-pipeline",
+      "traceability"
     ],
     "produces_kinds": {
-      "deployment-architecture": [
+      "infrastructure-specification": [
         "service",
         "ui",
         "packaging"
       ],
-      "infrastructure-services": [
-        "service",
-        "packaging"
-      ],
       "monitoring-design": [
         "service",
+        "ui",
         "packaging"
       ],
       "cicd-pipeline": [
+        "service",
+        "ui",
+        "packaging",
+        "library"
+      ],
+      "traceability": [
         "service",
         "ui",
         "packaging",
@@ -1876,6 +2186,10 @@
         "required": true
       },
       {
+        "artifact": "observability-design",
+        "required": true
+      },
+      {
         "artifact": "logical-components",
         "required": true
       },
@@ -1884,12 +2198,12 @@
         "required": true
       },
       {
-        "artifact": "services",
+        "artifact": "functional-spec",
         "required": true
       },
       {
-        "artifact": "business-logic-model",
-        "required": true
+        "artifact": "contract-summary",
+        "required": false
       }
     ],
     "requires_stage": [
@@ -1900,21 +2214,23 @@
       "required-sections",
       "upstream-coverage",
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
       "feature",
       "mvp",
       "infra",
+      "classic",
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "summary_confirmation": "required",
-    "inputs": "NFR design artifacts, application design, functional design",
-    "outputs": "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "inputs": "NFR design artifacts, domain design components.md, functional design",
+    "outputs": "infrastructure-specification.md (deployment + services + shared, tabular), monitoring-design.md (tabular), cicd-pipeline.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (a spec unit owes none)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1937,22 +2253,42 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".kiro/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1970,19 +2306,25 @@
     "workspace_requires": true,
     "produces": [
       "code-generation-plan",
-      "code-summary"
+      "unit-test-instructions",
+      "code-summary",
+      "traceability"
     ],
     "consumes": [
       {
-        "artifact": "business-logic-model",
+        "artifact": "functional-spec",
         "required": false
       },
       {
-        "artifact": "business-rules",
+        "artifact": "rules",
         "required": false
       },
       {
-        "artifact": "domain-entities",
+        "artifact": "entities",
+        "required": false
+      },
+      {
+        "artifact": "contract-summary",
         "required": false
       },
       {
@@ -1994,7 +2336,7 @@
         "required": false
       },
       {
-        "artifact": "deployment-architecture",
+        "artifact": "infrastructure-specification",
         "required": false
       },
       {
@@ -2014,8 +2356,10 @@
       "infrastructure-design"
     ],
     "sensors": [
+      "required-sections",
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -2025,13 +2369,15 @@
       "bugfix",
       "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "inputs": "ALL prior design artifacts for this unit",
-    "outputs": "application code + code-generation-plan.md, code-generation-questions.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)",
+    "outputs": "application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -2052,14 +2398,36 @@
     ],
     "sensors_applicable": [
       {
+        "id": "required-sections",
+        "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".kiro/sensors/aidlc-traceability.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "document-traceability",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -2077,16 +2445,20 @@
     "mode": "inline",
     "produces": [
       "build-instructions",
-      "unit-test-instructions",
       "integration-test-instructions",
       "performance-test-instructions",
       "security-test-instructions",
       "build-and-test-summary",
-      "build-test-results"
+      "build-test-results",
+      "cross-unit-traceability"
     ],
     "consumes": [
       {
         "artifact": "code-generation-plan",
+        "required": true
+      },
+      {
+        "artifact": "unit-test-instructions",
         "required": true
       },
       {
@@ -2110,10 +2482,12 @@
       "bugfix",
       "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "inputs": "ALL code generation outputs across all units",
-    "outputs": "build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md (under this stage's record dir, engine-resolved)",
+    "outputs": "build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -2136,16 +2510,25 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
       }
     ]
@@ -2193,6 +2576,7 @@
       "feature",
       "mvp",
       "infra",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2220,21 +2604,33 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,js}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
+        "fire_on": "write",
+        "default_severity": "advisory",
+        "category": "code-quality",
         "matches": "**/*.{ts,tsx}"
       }
     ]
@@ -2265,7 +2661,7 @@
         "required": true
       },
       {
-        "artifact": "deployment-architecture",
+        "artifact": "infrastructure-specification",
         "required": true
       },
       {
@@ -2285,8 +2681,12 @@
       "enterprise",
       "feature",
       "infra",
+      "bugfix",
+      "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "summary_confirmation": "required",
     "inputs": "CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage",
@@ -2313,11 +2713,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2342,11 +2748,7 @@
     ],
     "consumes": [
       {
-        "artifact": "deployment-architecture",
-        "required": true
-      },
-      {
-        "artifact": "infrastructure-services",
+        "artifact": "infrastructure-specification",
         "required": true
       },
       {
@@ -2366,6 +2768,7 @@
       "enterprise",
       "feature",
       "infra",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2393,11 +2796,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2450,8 +2859,12 @@
       "enterprise",
       "feature",
       "infra",
+      "bugfix",
+      "refactor",
       "security-patch",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "summary_confirmation": "required",
     "inputs": "CD pipeline config from deployment-pipeline stage, provisioned environments from environment-provisioning stage, built artifacts from Construction",
@@ -2478,11 +2891,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2524,7 +2943,7 @@
         "required": true
       },
       {
-        "artifact": "infrastructure-services",
+        "artifact": "infrastructure-specification",
         "required": true
       }
     ],
@@ -2541,7 +2960,9 @@
       "enterprise",
       "feature",
       "infra",
-      "workshop"
+      "classic",
+      "workshop",
+      "express"
     ],
     "summary_confirmation": "required",
     "inputs": "NFR design from nfr-design stage, infrastructure design from infrastructure-design stage, deployed application",
@@ -2568,11 +2989,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2611,7 +3038,7 @@
         "required": true
       },
       {
-        "artifact": "deployment-architecture",
+        "artifact": "infrastructure-specification",
         "required": true
       }
     ],
@@ -2625,6 +3052,7 @@
     "scopes": [
       "enterprise",
       "feature",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2652,11 +3080,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2711,6 +3145,7 @@
     "scopes": [
       "enterprise",
       "feature",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2738,11 +3173,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
@@ -2805,6 +3246,7 @@
     "scopes": [
       "enterprise",
       "feature",
+      "classic",
       "workshop"
     ],
     "summary_confirmation": "required",
@@ -2832,11 +3274,17 @@
       {
         "id": "required-sections",
         "path": ".kiro/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       },
       {
         "id": "upstream-coverage",
         "path": ".kiro/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
         "matches": "**/{aidlc-docs,intents}/**"
       }
     ]

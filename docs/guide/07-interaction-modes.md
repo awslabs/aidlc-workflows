@@ -2,11 +2,13 @@
 
 AI-DLC provides three ways to interact with agents during stages, plus approval gates that keep you in control at every decision point.
 
-> **Harness note.** Gates and questions render differently per harness: Claude Code
-> uses the `AskUserQuestion` widget; the other harnesses render numbered-prose options
-> (answer with a number or free text), with the questions file the source of truth.
-> The *semantics* — when a gate fires, what it asks, that you stay in control — are
-> identical, since they live in the engine. See [Running on other harnesses](harnesses/README.md).
+> **Harness note.** Gates and questions render differently per harness. Claude
+> Code uses its native question picker; Codex uses its picker when enabled.
+> Kiro, opencode, and GitHub Copilot render numbered-prose options (Copilot's
+> picker results do not fire the trusted human-presence event). The questions
+> file remains the source of truth. The *semantics* — when a gate fires, what
+> it asks, that you stay in control — are identical, since they live in the
+> engine. See [Running on other harnesses](harnesses/README.md).
 
 ---
 
@@ -71,7 +73,10 @@ The default approval gate presents two options:
   `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
-The gate requires a real human acknowledgement: typing a prompt or answering an `AskUserQuestion` widget records a human turn (a `HUMAN_TURN` event) in the audit ledger, and the approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution, so a model running on autopilot cannot fabricate an approval with no human having acted since. On a harness whose gate widget does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
+If your reply does not match a displayed choice, it is acknowledged and the
+valid choices are shown again; nothing is recorded and the gate remains open.
+
+The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
 
 ### Approval Gate Flow
 
@@ -127,7 +132,7 @@ flowchart TD
     style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c
 ```
 
-<!-- Text fallback: Stage work completes, report awaiting-approval opens the gate (the engine records STAGE_AWAITING_APPROVAL), and AskUserQuestion presents the approval gate. Approve: report approved with the exact choice so the engine records GATE_APPROVED, completes, and routes; show progress; proceed. Request Changes: report rejected with the feedback (the engine records GATE_REJECTED), check revision count (if <3, note escape hatch coming, revise, report revised to re-open the gate, and re-present; if >=3, Accept-as-is becomes available). Accept as-is: report approved. Add Skipped Stage (Ideation/Inception only): recompose the plan. The report calls own the gate's audit trail; no separate log entries are added for the gate prompt or choice. -->
+<!-- Text fallback: Stage work completes, report awaiting-approval opens the gate (the engine records STAGE_AWAITING_APPROVAL), and AskUserQuestion presents the approval gate. Approve: report approved with the exact choice so the engine records GATE_APPROVED, completes, and routes; show progress; proceed. Request Changes: report rejected with the exact Request Changes choice and separate feedback (the engine records GATE_REJECTED), check revision count (if <3, note escape hatch coming, revise, report revised to re-open the gate, and re-present; if >=3, Accept-as-is becomes available). Accept as-is: report approved with that exact label. Add Skipped Stage (Ideation/Inception only): recompose the plan. The report calls own the gate's audit trail; no separate log entries are added for the gate prompt or choice. -->
 
 ---
 
@@ -194,7 +199,7 @@ See [Session Management](11-session-management.md) and [CLI Commands](12-cli-com
 After every approval, a progress line appears:
 
 ```
-Progress: 13/32 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff
+Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff
 ```
 
 This shows:

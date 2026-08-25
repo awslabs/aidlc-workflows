@@ -30,6 +30,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,6 +65,13 @@ function makeFixture(harness: string, sourceHarness = harness): string {
   copyDir(join(REPO_ROOT, "scripts"), join(root, "scripts"));
   mkdirSync(join(root, "harness"), { recursive: true });
   copyDir(join(REPO_ROOT, "harness", sourceHarness), join(root, "harness", harness));
+  // Emitter imports (notably smol-toml) resolve from the checkout, not from
+  // Bun's mutable global package cache.
+  symlinkSync(
+    join(REPO_ROOT, "node_modules"),
+    join(root, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
   if (harness === sourceHarness) {
     mkdirSync(join(root, "dist"), { recursive: true });
     copyDir(join(REPO_ROOT, "dist", harness), join(root, "dist", harness));
@@ -129,12 +137,17 @@ describe("t145 packaging parity — dist/ is in sync with core/ + harness/", () 
 });
 
 describe("t145 packager contract regressions", () => {
-  test("a synthetic harness passes its manifest harnessDir to graph and runner tools", () => {
+  test("a synthetic harness uses the default orchestrator path and passes harnessDir to tools", () => {
     const root = makeFixture("foo", "claude");
     try {
       const manifest = join(root, "harness", "foo", "manifest.ts");
       replaceOnce(manifest, 'name: "claude"', 'name: "foo"');
       replaceOnce(manifest, 'harnessDir: ".claude"', 'harnessDir: ".foo"');
+      replaceOnce(
+        manifest,
+        'orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",',
+        "",
+      );
 
       // A first build still needs the harness-neutral stage number/name seed.
       for (const file of ["stage-graph.json", "scope-grid.json"]) {
@@ -160,6 +173,7 @@ describe("t145 packager contract regressions", () => {
         join(generated, "skills", "aidlc-init", "SKILL.md"),
         "utf-8",
       );
+      expect(descriptor.name).toBe("foo");
       expect(descriptor.harnessDir).toBe(".foo");
       expect(graph).toContain('"path": ".foo/sensors/');
       expect(graph).not.toContain('"path": ".claude/sensors/');
@@ -227,6 +241,11 @@ describe("t145 packager contract regressions", () => {
     try {
       const manifest = join(root, "harness", "claude", "manifest.ts");
       replaceOnce(manifest, 'harnessDir: ".claude"', 'harnessDir: ".foo"');
+      replaceOnce(
+        manifest,
+        'orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md"',
+        'orchestratorSkillPath: ".foo/skills/aidlc/SKILL.md"',
+      );
 
       const run = runPackage(root, "claude");
       expect(output(run)).toContain("[claude] regenerated dist/claude/.foo");

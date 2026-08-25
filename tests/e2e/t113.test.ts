@@ -88,6 +88,7 @@ function run(
   const env = { ...process.env, ...extraEnv };
   if (tool === STATE) {
     env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+    env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
   }
   const res = spawnSync(
     process.execPath,
@@ -101,12 +102,11 @@ function run(
   };
 }
 
-// gate-start -> approve a single stage, exactly as t51's walk_stage does.
+// Review (when configured) -> gate-start -> approve a single stage, exactly as
+// the reviewer gate contract requires.
 function walkStage(slug: string, proj: string): void {
-  const gs = run(STATE, ["gate-start", slug], proj);
-  expect(gs.status).toBe(0);
-  // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before approve
-  // commits (§12a gate precondition), recorded by the stage's DECLARED reviewer.
+  // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before gate-start
+  // presents the approval gate (§12a), recorded by the declared reviewer.
   // Record one for the two reviewer-bearing stages this walk crosses; a
   // no-reviewer stage ignores the extra row. This walk drives transitions to
   // accumulate the audit trail, not to test the reviewer gate. Mirrors t51.
@@ -138,6 +138,8 @@ function walkStage(slug: string, proj: string): void {
     ], proj);
     expect(rv.status).toBe(0);
   }
+  const gs = run(STATE, ["gate-start", slug], proj);
+  expect(gs.status).toBe(0);
   const ap = run(STATE, ["approve", slug, "--user-input", "approve"], proj);
   expect(ap.status).toBe(0);
 }
@@ -171,8 +173,8 @@ function countEvent(seq: string[], type: string): number {
 
 // Drive a complete bugfix workflow once; return the project dir (audit is read
 // from the born intent's shards via readAllAuditShards(proj)). Bootstrap via
-// init (emits WORKFLOW_STARTED + init phase + 2x PHASE_SKIPPED and pre-completes
-// the 3 init stages), then walk the remaining EXECUTE stages.
+// init (emits WORKFLOW_STARTED + init phase + PHASE_SKIPPED for Ideation and
+// pre-completes the 3 init stages), then walk the remaining EXECUTE stages.
 function driveBugfixToCompletion(): { proj: string } {
   const proj = createTestProject();
   const init = run(
@@ -187,7 +189,9 @@ function driveBugfixToCompletion(): { proj: string } {
   // SKIP-overridden on greenfield; init pre-completes the 3 init stages).
   walkStage("requirements-analysis", proj);
   walkStage("code-generation", proj);
-  walkStage("build-and-test", proj); // final stage -> handleCompleteWorkflow
+  walkStage("build-and-test", proj);
+  walkStage("deployment-pipeline", proj);
+  walkStage("deployment-execution", proj); // final stage -> handleCompleteWorkflow
 
   return { proj };
 }
@@ -198,10 +202,11 @@ afterAll(() => {
 });
 
 // Each `bun <tool>.ts` cold-start costs ~hundreds of ms and a full bugfix drive
-// is ~9 spawns; driving once per test blows bun:test's default 5s per-test
-// timeout. So drive the workflow ONCE per describe in a beforeAll (the walk is
-// deterministic) and share the resulting audit across the assertions. Generous
-// explicit timeouts on the drives keep this honest on a cold/loaded machine.
+// now includes five post-init stage walks; driving once per test blows
+// bun:test's default 5s per-test timeout. So drive the workflow ONCE per
+// describe in a beforeAll (the walk is deterministic) and share the resulting
+// audit across the assertions. Generous explicit timeouts on the drives keep
+// this honest on a cold/loaded machine.
 const DRIVE_TIMEOUT_MS = 60_000;
 
 describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => {
@@ -247,11 +252,11 @@ describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => 
   });
 
   test("the FINAL phase's closure ordering holds: the last PHASE_VERIFIED is immediately followed by WORKFLOW_COMPLETED, with PHASE_COMPLETED before it", () => {
-    // bugfix crosses 3 phase boundaries -> 3 PHASE_VERIFIED / 3 PHASE_COMPLETED.
+    // bugfix crosses 4 phase boundaries -> 4 PHASE_VERIFIED / 4 PHASE_COMPLETED.
     // We pin the FINAL phase's ordering specifically (the others are mid-stream
     // boundaries emitted by handleAdvance; this one is the terminal handler).
-    expect(countEvent(seq, "PHASE_VERIFIED")).toBe(3);
-    expect(countEvent(seq, "PHASE_COMPLETED")).toBe(3);
+    expect(countEvent(seq, "PHASE_VERIFIED")).toBe(4);
+    expect(countEvent(seq, "PHASE_COMPLETED")).toBe(4);
 
     const lastVerified = seq.lastIndexOf("PHASE_VERIFIED");
     const lastCompletedPhase = seq.lastIndexOf("PHASE_COMPLETED");

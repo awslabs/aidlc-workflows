@@ -1,6 +1,6 @@
 # Your First Workflow
 
-This chapter walks through a complete AI-DLC workflow run, explaining what you see at each step and what decisions you make. The example uses a `feature`-scoped workflow to build a REST API.
+This chapter walks through a complete AI-DLC workflow run, explaining what you see at each step and what decisions you make. The example uses a `feature`-scoped workflow to build a REST API. For a customer-oriented comparison of Classic, Express, Feature, and the other choices, see [Workflow Profiles](workflow-profiles.md).
 
 > **Note**: The transcripts in this chapter show **Claude Code**. On Kiro CLI,
 > Kiro IDE, Codex CLI, and opencode the workflow - stages, agents, gates,
@@ -43,13 +43,14 @@ The three initialization stages run deterministically inside `aidlc-utility inte
 
 ### Stage 0.1: Workspace Scaffold
 
-The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation and Operation, so those folders never appear:
+The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation but retains its deployment stages, so `ideation/` is absent while `operation/` appears:
 
 ```
 Intent created, record dir at aidlc/spaces/default/intents/<YYMMDD>-<label>/
   initialization/
   inception/
   construction/
+  operation/
   verification/
 Space-level dirs ensured:
   aidlc/spaces/default/knowledge/    (team knowledge, empty; you add files)
@@ -69,7 +70,7 @@ The orchestrator writes the intent's `aidlc-state.md` (under its record dir) wit
 
 ```
 ─── Scope Detection ───────────────────────────────────────────────────────────
-Detected scope: feature (Standard depth, Standard test strategy, all 32 stages)
+Detected scope: feature (Standard depth, Standard test strategy, all 33 stages)
 ▸ Approve scope? [Yes / Change scope / Change depth / Change test strategy]
 > Yes
 ```
@@ -131,7 +132,7 @@ Choose **Approve** to continue, or **Request Changes** to provide feedback. See 
 After approval, a progress line appears:
 
 ```
-Progress: 4/32 overall | 1/7 IDEATION stages complete. Next: Market Research
+Progress: 4/33 overall | 1/7 IDEATION stages complete. Next: Market Research
 ```
 
 ### Remaining Ideation Stages
@@ -162,7 +163,7 @@ Remaining Inception stages (Requirements Analysis through Delivery Planning) run
 
 ## Construction Phase
 
-Construction builds the solution **Bolt by Bolt**. A [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Each Bolt ships a reviewable slice; the 2.8 plan decides the sequence and marks the first Bolt as the **walking skeleton** — the smallest end-to-end slice that proves the architecture.
+Construction builds the solution **Bolt by Bolt**. A [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Each Bolt ships a reviewable slice; the 2.9 plan decides the sequence and marks the first Bolt as the **walking skeleton** — the smallest end-to-end slice that proves the architecture.
 
 ```
 ─── Construction: Bolt 1 — notification-core (walking skeleton) ───────────
@@ -186,7 +187,7 @@ After all Bolts complete, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run 
 
 ## Operation Phase
 
-Operation deploys and monitors the solution. All 7 stages are conditional — smaller scopes like `poc` and `bugfix` may skip this entire phase.
+Operation deploys and monitors the solution. All 7 stages are conditional — smaller scopes like `mvp` and `poc` may skip this entire phase.
 
 After the final stage (4.7 Feedback & Optimization), the workflow is complete.
 
@@ -287,7 +288,7 @@ Throughout the workflow on Claude Code, the custom AI-DLC status line shows your
 ## Next Steps
 
 - [Spaces and Intents](03-spaces-and-intents.md) — how the workspace holds many runs, and how to start and switch between them
-- [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 32 stages
+- [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 33 stages
 - [Interaction Modes](07-interaction-modes.md) — Guide Me, Edit File, and Chat explained
 - [Session Management](11-session-management.md) — resuming, redoing, and jumping between stages
 - [Glossary](glossary.md) — terminology reference

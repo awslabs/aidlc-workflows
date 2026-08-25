@@ -59,6 +59,14 @@ export type GateValue = boolean | typeof GATE_UNRESOLVED;
 // never the thing that pushes a directive over transport budget.
 export type NarrationField = string;
 
+export const VALID_PROTOCOL_MODULES = [
+  "reviewer",
+  "ensemble",
+  "construction",
+  "swarm",
+] as const;
+export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
+
 // The 10 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
   | "load-steering"
@@ -89,6 +97,44 @@ export interface LoadSteeringDirective {
   continue_token: string;
 }
 
+export type WaveReviewState =
+  | "outstanding"
+  | "retry-required"
+  | "repair-required"
+  | "recovery-required"
+  | "escalation-required"
+  | "READY"
+  | "NOT-READY"
+  | "not-required";
+
+// One engine-resolved unit in an optional stage-major batch wave. Every path
+// is resolved independently from this unit's kind against the same healed DAG
+// snapshot. The parent run-stage retains stage-level steering, context, and
+// memory; the entry carries only the unit-local execution surface.
+export interface RunStageWaveEntry {
+  unit: string;
+  unit_kind: string | null;
+  build_required: boolean;
+  completion_required: boolean;
+  review_state: WaveReviewState;
+  review_iteration: number | null;
+  unit_memory_path: string;
+  consumes: string[];
+  consumes_absent: Array<{ path: string; expected: boolean }>;
+  produces: string[];
+  required_produces: string[];
+}
+
+export interface RunStageWave {
+  batch_index: number;
+  entries: RunStageWaveEntry[];
+}
+
+export interface RunStagePipeline {
+  links: string[];
+  completed: string[];
+}
+
 // run-stage — load the resolved rules, load lead + support agents, load
 // `consumes` artifacts, run the stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
 // support_agents, mode, gate, sensors_applicable, rules_in_context, stage_file)
@@ -104,6 +150,10 @@ export interface RunStageDirective {
   lead_agent: string;
   support_agents: string[];
   mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
+  // Pipeline recovery surface. links is the declared lead→support chain;
+  // completed contains current-attempt receipts (repo-qualified as
+  // `<repo>:<agent>` when the intent registers multiple repositories).
+  pipeline?: RunStagePipeline;
   // single marks an isolated stage-runner invocation. The conductor branches
   // on this before gate handling, reports with `report --single`, and treats
   // the returned `done` as terminal.
@@ -133,11 +183,12 @@ export interface RunStageDirective {
   // bundle. On dispatched topologies the conductor passes the already-loaded
   // rule text to every agent brief.
   rules_in_context: string[];
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   stage_file: string;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
   // after the stage body completes. Absent (undefined) when no review step is
-  // configured for this stage. See stage-protocol.md §12a.
+  // configured for this stage. See stage-protocol-reviewer.md §12a.
   reviewer?: string;
   // reviewer_max_iterations — how many review cycles before escalating to the
   // human. Default 2 when reviewer is present. Absent when no reviewer.
@@ -150,6 +201,14 @@ export interface RunStageDirective {
   // conductor - the engine omits the whole reviewer block instead. Absent
   // when reviewer is absent.
   review_class?: "adversarial" | "advisory";
+  // protocol_modules — optional deterministic hints naming conditional
+  // protocol files the conductor reads before the stage body. The prose
+  // triggers remain the compatibility fallback when this field is absent.
+  protocol_modules?: ProtocolModule[];
+  // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
+  // converged. Present only as literal true; the conductor must not rerun the
+  // stage body or reviewer.
+  swarm_settled?: true;
   // conductor_persona — set ONLY on the first run-stage of a workflow (decision
   // D-E, SPIKE 6). The engine reads `.claude/aidlc-common/conductor.md` and bakes
   // its contents here so the conductor receives its execution-quality charter
@@ -173,17 +232,26 @@ export interface RunStageDirective {
   // per-unit loop, re-emitting the next uncovered unit on each `next` and
   // suppressing the gate (gate:false) on EVERY not-yet-covered unit. The stage's
   // real gate is presented only once, on the re-entry after the last unit's
-  // artifacts land on disk (no uncovered units remain), so the conductor must
-  // build a gate:false unit and re-run `next` rather than approve it. See
+  // artifacts and review receipts settle, so the conductor must complete a
+  // gate:false unit and re-run `next` rather than approve it. See
   // aidlc-orchestrate.ts emitPerUnitRunStage.
   unit?: string;
+  // wave: optional stage-major parallelization surface for the four inline
+  // per-unit design stages. Entries come from one healed Bolt-DAG snapshot and
+  // are complete per-unit execution records. build_required/review_state make
+  // crash recovery deterministic: covered-but-unreviewed units stay in their
+  // current batch as review-only work instead of allowing a dependent batch or
+  // the stage gate to advance. Absent on unit-major iteration, code-generation,
+  // and the no-DAG degrade path.
+  wave?: RunStageWave;
   // consumes_absent: REQUIRED declared inputs whose resolved file does NOT
   // exist on disk at emit time, each annotated with why. `expected: true` =
-  // the producing stage is not on the active scope's path (the scope
-  // deliberately skipped it — absence is by design; substitute available
-  // context, do not invent the artifact). `expected: false` = a producer IS
-  // on the path but the file is still missing (runtime-skipped conditional
-  // producer, or a real gap worth surfacing per stage-protocol-recovery).
+  // the producing stage is not on the active scope's path or every on-path
+  // producer has audit provenance for a conditional runtime skip (absence is
+  // by design; substitute available context, do not invent the artifact).
+  // `expected: false` = an on-path producer was not skipped but the file is
+  // still missing, including a stage marked [S] by a forward jump, so this is
+  // a real gap worth surfacing per stage-protocol-recovery.
   // Optional (`required: false`) consumes never appear here — missing means
   // dropped, not flagged. Omitted entirely when nothing qualifies, and on
   // the ctx-less emit path (no projectDir to check against). Paths with an
@@ -211,6 +279,7 @@ export interface DispatchSubagentDirective {
   consumes: string[];
   produces: string[];
   rules_in_context: string[];
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   stage_file: string;
   worker: string;
@@ -239,6 +308,7 @@ export interface InvokeSwarmDirective {
   // is the only pre-merge verification inside a Bolt), so unlike run-stage
   // this is not a resolved value.
   review_class?: "adversarial" | "advisory";
+  protocol_modules?: ProtocolModule[];
   // repo — OPTIONAL. The sibling repo NAME this batch targets, present only when
   // the engine can resolve it deterministically: the intent records exactly one
   // repo (the lone sibling). Absent for a legacy/single-projectDir intent (no
@@ -261,16 +331,32 @@ export interface PresentGateDirective {
   memory_path: string;
 }
 
-// ask — render a specific structured question (resume choice, scope
-// confirmation, the autonomy ladder). The engine never calls AskUserQuestion
-// itself; it emits `ask` and stops, the conductor renders it and feeds the
-// answer back via report.
-export interface AskDirective {
+// ask — render a specific structured question. Most asks return through report.
+// The new-work-routing subtype is different: it classifies prose that has not
+// started stage work, so its answer routes through `next` and must never be
+// recorded as a stage report.
+interface AskDirectiveBase {
   kind: "ask";
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   question: string;
 }
+
+export interface ReportAskDirective extends AskDirectiveBase {
+  ask_type?: undefined;
+  response_route?: undefined;
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+}
+
+export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
+  ask_type: "new-work-routing";
+  response_route: "next";
+  new_work_description: string;
+  proposed_scope: string;
+}
+
+export type AskDirective = ReportAskDirective | NewWorkRoutingAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
@@ -312,8 +398,17 @@ export interface ParkedDirective {
   stage: string;
 }
 
+export interface StageValidityAdvisory {
+  state: "drifted" | "untracked" | "unavailable";
+  directly_stale: string[];
+  needs_revalidation: string[];
+  untracked: string[];
+  earliest_affected_stage: string | null;
+  warning: string;
+}
+
 // The Directive union — the engine emits exactly one of these per `next`.
-export type Directive =
+type DirectivePayload =
   | LoadSteeringDirective
   | RunStageDirective
   | DispatchSubagentDirective
@@ -324,6 +419,11 @@ export type Directive =
   | ErrorDirective
   | DoneDirective
   | ParkedDirective;
+
+/** `stage_validity` is universal and advisory; `kind` still owns routing. */
+export type Directive = DirectivePayload & {
+  stage_validity?: StageValidityAdvisory;
+};
 
 export type ValidationResult =
   | { valid: true; data: Directive }
@@ -363,6 +463,7 @@ const RUN_STAGE_FIELDS = [
   "lead_agent",
   "support_agents",
   "mode",
+  "pipeline",
   "single",
   "inline_context_paths",
   "context_warnings",
@@ -376,9 +477,12 @@ const RUN_STAGE_FIELDS = [
   "reviewer",
   "reviewer_max_iterations",
   "review_class",
+  "protocol_modules",
+  "swarm_settled",
   "conductor_persona",
   "next_stage",
   "unit",
+  "wave",
   "consumes_absent",
 ] as const;
 
@@ -395,7 +499,13 @@ const LOAD_STEERING_FIELDS = [
 // dispatch-subagent = shared run-stage fields + `worker`; the isolated-run
 // marker belongs only to the emitted run-stage kind.
 const DISPATCH_SUBAGENT_FIELDS = [
-  ...RUN_STAGE_FIELDS.filter((field) => field !== "single"),
+  ...RUN_STAGE_FIELDS.filter(
+    (field) =>
+      field !== "single" &&
+      field !== "wave" &&
+      field !== "protocol_modules" &&
+      field !== "swarm_settled",
+  ),
   "worker",
 ] as const;
 
@@ -407,10 +517,18 @@ const INVOKE_SWARM_FIELDS = [
   "reviewer",
   "reviewer_max_iterations",
   "review_class",
+  "protocol_modules",
   "repo",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
-const ASK_FIELDS = ["kind", "question"] as const;
+const ASK_FIELDS = [
+  "kind",
+  "question",
+  "ask_type",
+  "response_route",
+  "new_work_description",
+  "proposed_scope",
+] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason"] as const;
@@ -422,11 +540,12 @@ const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
 // absent, on any kind. Folding it here also means a future emission point can
 // attach a line without touching this file.
 const NARRATION_FIELD = "narration" as const;
+const STAGE_VALIDITY_FIELD = "stage_validity" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the
 // record of what is kind-SPECIFIC and this one helper adds what is universal.
 function withNarration(fields: readonly string[]): readonly string[] {
-  return [...fields, NARRATION_FIELD];
+  return [...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD];
 }
 
 const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> = {
@@ -488,6 +607,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   // case and never an error; present-but-not-a-string is, because the conductor
   // would otherwise be handed a non-sentence to speak.
   checkOptionalString(o, NARRATION_FIELD, kind, errors);
+  checkOptionalStageValidity(o, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
@@ -512,6 +632,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "run-stage":
       checkRunStageShared(o, kind, errors);
       checkOptionalBoolean(o, "single", kind, errors);
+      checkOptionalWave(o, "wave", kind, errors);
       break;
     case "dispatch-subagent":
       checkRunStageShared(o, kind, errors);
@@ -528,6 +649,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       if ("review_class" in o && typeof o.reviewer !== "string") {
         errors.push(`${kind}: review_class requires reviewer`);
       }
+      checkOptionalProtocolModules(o, kind, errors);
       checkOptionalString(o, "repo", kind, errors);
       break;
     case "present-gate":
@@ -537,6 +659,34 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "ask":
       checkString(o, "question", kind, errors);
+      checkOptionalString(o, "ask_type", kind, errors);
+      checkOptionalString(o, "response_route", kind, errors);
+      checkOptionalString(o, "new_work_description", kind, errors);
+      checkOptionalString(o, "proposed_scope", kind, errors);
+      if ("ask_type" in o && o.ask_type !== "new-work-routing") {
+        errors.push(
+          `${kind}: ask_type must be one of new-work-routing, got ${String(o.ask_type)}`,
+        );
+      }
+      if (o.ask_type === "new-work-routing") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: new-work-routing response_route must be "next"`);
+        }
+        checkString(o, "new_work_description", kind, errors);
+        checkString(o, "proposed_scope", kind, errors);
+      } else {
+        for (const field of [
+          "response_route",
+          "new_work_description",
+          "proposed_scope",
+        ] as const) {
+          if (field in o) {
+            errors.push(
+              `${kind}: ${field} requires ask_type "new-work-routing"`,
+            );
+          }
+        }
+      }
       break;
     case "print":
       checkString(o, "message", kind, errors);
@@ -583,6 +733,7 @@ function checkRunStageShared(
   checkStringArray(o, "support_agents", kind, errors);
   checkString(o, "mode", kind, errors);
   checkEnum(o, "mode", VALID_MODES, kind, errors);
+  checkOptionalPipeline(o, kind, errors);
   checkStringArray(o, "inline_context_paths", kind, errors);
   checkOptionalStringArray(o, "context_warnings", kind, errors);
   checkGate(o, "gate", kind, errors);
@@ -608,6 +759,10 @@ function checkRunStageShared(
   if ("review_class" in o && typeof o.reviewer !== "string") {
     errors.push(`${kind}: review_class requires reviewer`);
   }
+  if (kind === "run-stage") {
+    checkOptionalProtocolModules(o, kind, errors);
+    checkOptionalTrue(o, "swarm_settled", kind, errors);
+  }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
   // value must be a string; absent is valid.
@@ -623,6 +778,58 @@ function describe(v: unknown): string {
   if (v === null) return "null";
   if (Array.isArray(v)) return "array";
   return typeof v;
+}
+
+function checkOptionalStageValidity(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(STAGE_VALIDITY_FIELD in o)) return;
+  const raw = o[STAGE_VALIDITY_FIELD];
+  if (!isPlainObject(raw)) {
+    errors.push(`${kind}: ${STAGE_VALIDITY_FIELD} must be object, got ${describe(raw)}`);
+    return;
+  }
+  const allowed = new Set([
+    "state",
+    "directly_stale",
+    "needs_revalidation",
+    "untracked",
+    "earliest_affected_stage",
+    "warning",
+  ]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      errors.push(`${kind}: ${STAGE_VALIDITY_FIELD} unknown key: ${key}`);
+    }
+  }
+  if (!(["drifted", "untracked", "unavailable"] as unknown[]).includes(raw.state)) {
+    errors.push(
+      `${kind}: ${STAGE_VALIDITY_FIELD}.state must be drifted, untracked, or unavailable`,
+    );
+  }
+  for (const field of [
+    "directly_stale",
+    "needs_revalidation",
+    "untracked",
+  ] as const) {
+    const value = raw[field];
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+      errors.push(`${kind}: ${STAGE_VALIDITY_FIELD}.${field} must be string array`);
+    }
+  }
+  if (
+    raw.earliest_affected_stage !== null &&
+    typeof raw.earliest_affected_stage !== "string"
+  ) {
+    errors.push(
+      `${kind}: ${STAGE_VALIDITY_FIELD}.earliest_affected_stage must be string or null`,
+    );
+  }
+  if (typeof raw.warning !== "string") {
+    errors.push(`${kind}: ${STAGE_VALIDITY_FIELD}.warning must be string`);
+  }
 }
 
 function checkString(
@@ -690,6 +897,39 @@ function checkOptionalBoolean(
   }
 }
 
+function checkOptionalPipeline(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("pipeline" in o)) return;
+  const value = o.pipeline;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: pipeline must be object, got ${describe(value)}`);
+    return;
+  }
+  const keys = Object.keys(value);
+  for (const key of keys) {
+    if (key !== "links" && key !== "completed") {
+      errors.push(`${kind}: pipeline unknown key: ${key}`);
+    }
+  }
+  checkStringArray(value, "links", kind, errors);
+  checkStringArray(value, "completed", kind, errors);
+}
+
+function checkOptionalTrue(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  if (o[field] !== true) {
+    errors.push(`${kind}: ${field} must be true when present, got ${describe(o[field])}`);
+  }
+}
+
 // checkOptionalNullableString - a field that may be absent, but if present must
 // be a string OR null (e.g. next_stage, where null is the meaningful "final
 // in-scope stage" signal, distinct from absent).
@@ -754,6 +994,32 @@ function checkOptionalStringArray(
 ): void {
   if (!(field in o)) return;
   checkStringArray(o, field, kind, errors);
+}
+
+function checkOptionalProtocolModules(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("protocol_modules" in o)) return;
+  const value = o.protocol_modules;
+  if (!Array.isArray(value)) {
+    errors.push(
+      `${kind}: protocol_modules must be array, got ${describe(value)}`,
+    );
+    return;
+  }
+  for (let i = 0; i < value.length; i++) {
+    const moduleName = value[i];
+    if (
+      typeof moduleName !== "string" ||
+      !(VALID_PROTOCOL_MODULES as readonly string[]).includes(moduleName)
+    ) {
+      errors.push(
+        `${kind}: protocol_modules[${i}] must be one of ${VALID_PROTOCOL_MODULES.join(" | ")}`,
+      );
+    }
+  }
 }
 
 // checkPathTextArray - a required array of {path: string, text: string}
@@ -831,6 +1097,178 @@ function checkOptionalConsumesAbsent(
   });
 }
 
+function checkOptionalWave(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  const value: unknown = o[field];
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: ${field} must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "batch_index" && key !== "entries") {
+      errors.push(`${kind}: ${field}: unknown key: ${key}`);
+    }
+  }
+  if (
+    typeof value.batch_index !== "number" ||
+    !Number.isInteger(value.batch_index) ||
+    value.batch_index < 0
+  ) {
+    errors.push(
+      `${kind}: ${field}.batch_index must be a non-negative integer, got ${describe(value.batch_index)}`,
+    );
+  }
+  if (!Array.isArray(value.entries)) {
+    errors.push(
+      `${kind}: ${field}.entries must be array, got ${describe(value.entries)}`,
+    );
+    return;
+  }
+  if (value.entries.length === 0) {
+    errors.push(`${kind}: ${field}.entries must contain at least one entry`);
+    return;
+  }
+
+  const known = new Set([
+    "unit",
+    "unit_kind",
+    "build_required",
+    "completion_required",
+    "review_state",
+    "review_iteration",
+    "unit_memory_path",
+    "consumes",
+    "consumes_absent",
+    "produces",
+    "required_produces",
+  ]);
+  const units = new Set<string>();
+  value.entries.forEach((item: unknown, i: number) => {
+    const prefix = `${kind}: ${field}.entries[${i}]`;
+    if (!isPlainObject(item)) {
+      errors.push(`${prefix} must be object, got ${describe(item)}`);
+      return;
+    }
+    for (const key of Object.keys(item)) {
+      if (!known.has(key)) errors.push(`${prefix}: unknown key: ${key}`);
+    }
+    if (typeof item.unit !== "string") {
+      errors.push(`${prefix}.unit must be string, got ${describe(item.unit)}`);
+    } else if (units.has(item.unit)) {
+      errors.push(`${prefix}.unit duplicates "${item.unit}"`);
+    } else {
+      units.add(item.unit);
+    }
+    if (item.unit_kind !== null && typeof item.unit_kind !== "string") {
+      errors.push(
+        `${prefix}.unit_kind must be string or null, got ${describe(item.unit_kind)}`,
+      );
+    }
+    if (typeof item.build_required !== "boolean") {
+      errors.push(
+        `${prefix}.build_required must be boolean, got ${describe(item.build_required)}`,
+      );
+    }
+    if (typeof item.completion_required !== "boolean") {
+      errors.push(
+        `${prefix}.completion_required must be boolean, got ${describe(item.completion_required)}`,
+      );
+    }
+    if (
+      item.review_state !== "outstanding" &&
+      item.review_state !== "retry-required" &&
+      item.review_state !== "repair-required" &&
+      item.review_state !== "recovery-required" &&
+      item.review_state !== "escalation-required" &&
+      item.review_state !== "READY" &&
+      item.review_state !== "NOT-READY" &&
+      item.review_state !== "not-required"
+    ) {
+      errors.push(
+        `${prefix}.review_state must be one of outstanding | retry-required | repair-required | recovery-required | escalation-required | READY | NOT-READY | not-required, got ${JSON.stringify(item.review_state)}`,
+      );
+    }
+    if (
+      item.review_iteration !== null &&
+      (
+        typeof item.review_iteration !== "number" ||
+        !Number.isInteger(item.review_iteration) ||
+        item.review_iteration < 1
+      )
+    ) {
+      errors.push(
+        `${prefix}.review_iteration must be a positive integer or null, got ${describe(item.review_iteration)}`,
+      );
+    }
+    for (const key of ["unit_memory_path"] as const) {
+      if (typeof item[key] !== "string") {
+        errors.push(`${prefix}.${key} must be string, got ${describe(item[key])}`);
+      }
+    }
+    for (const key of ["consumes", "produces", "required_produces"] as const) {
+      const nested = item[key];
+      if (!Array.isArray(nested)) {
+        errors.push(`${prefix}.${key} must be array, got ${describe(nested)}`);
+        continue;
+      }
+      nested.forEach((entry: unknown, j: number) => {
+        if (typeof entry !== "string") {
+          errors.push(
+            `${prefix}.${key}[${j}] must be string, got ${describe(entry)}`,
+          );
+        }
+      });
+    }
+    if (
+      Array.isArray(item.required_produces) &&
+      item.required_produces.length === 0
+    ) {
+      errors.push(
+        `${prefix}.required_produces must contain at least one kind-applicable required path`,
+      );
+    }
+    if (Array.isArray(item.produces) && Array.isArray(item.required_produces)) {
+      const produces = new Set(item.produces);
+      item.required_produces.forEach((path: unknown, j: number) => {
+        if (typeof path === "string" && !produces.has(path)) {
+          errors.push(
+            `${prefix}.required_produces[${j}] must also appear in produces`,
+          );
+        }
+      });
+    }
+    if (!Array.isArray(item.consumes_absent)) {
+      errors.push(
+        `${prefix}.consumes_absent must be array, got ${describe(item.consumes_absent)}`,
+      );
+    } else {
+      item.consumes_absent.forEach((entry: unknown, j: number) => {
+        if (!isPlainObject(entry)) {
+          errors.push(
+            `${prefix}.consumes_absent[${j}] must be object, got ${describe(entry)}`,
+          );
+          return;
+        }
+        if (typeof entry.path !== "string") {
+          errors.push(
+            `${prefix}.consumes_absent[${j}].path must be string, got ${describe(entry.path)}`,
+          );
+        }
+        if (typeof entry.expected !== "boolean") {
+          errors.push(
+            `${prefix}.consumes_absent[${j}].expected must be boolean, got ${describe(entry.expected)}`,
+          );
+        }
+      });
+    }
+  });
+}
+
 function checkStringArray(
   o: Record<string, unknown>,
   field: string,
@@ -877,11 +1315,11 @@ function checkEnum(
 // "bun .../aidlc-directive.ts validates the 10 kinds".
 if (import.meta.main) {
   // One well-formed example per kind. run-stage mirrors the engine design's example
-  // directive verbatim (application-design); the others follow the same catalogue table.
+  // directive verbatim (domain-design); the others follow the same catalogue table.
   const examples: Directive[] = [
     {
       kind: "load-steering",
-      stage: "application-design",
+      stage: "domain-design",
       bundle: "sha256:0123456789abcdef",
       part: 1,
       parts: 2,
@@ -892,7 +1330,7 @@ if (import.meta.main) {
     },
     {
       kind: "run-stage",
-      stage: "application-design",
+      stage: "domain-design",
       phase: "inception",
       lead_agent: "aidlc-architect-agent",
       support_agents: ["aidlc-aws-platform-agent", "aidlc-design-agent"],
@@ -903,9 +1341,9 @@ if (import.meta.main) {
         ".claude/agents/aidlc-design-agent.md",
       ],
       gate: true,
-      memory_path: "aidlc-docs/inception/application-design/memory.md",
+      memory_path: "aidlc-docs/inception/domain-design/memory.md",
       consumes: ["aidlc-docs/inception/requirements/requirements.md"],
-      produces: ["aidlc-docs/inception/application-design/decisions.md"],
+      produces: ["aidlc-docs/inception/domain-design/components.md"],
       rules_in_context: [
         "aidlc-org.md",
         "aidlc-team.md",
@@ -916,7 +1354,7 @@ if (import.meta.main) {
         "Could not read optional knowledge file example.md; fix its permissions.",
       ],
       sensors_applicable: ["required-sections", "upstream-coverage"],
-      stage_file: ".claude/aidlc-common/stages/inception/application-design.md",
+      stage_file: ".claude/aidlc-common/stages/inception/domain-design.md",
       next_stage: "Units Generation",
     },
     {
@@ -948,9 +1386,9 @@ if (import.meta.main) {
     },
     {
       kind: "present-gate",
-      stage: "application-design",
+      stage: "domain-design",
       phase: "inception",
-      memory_path: "aidlc-docs/inception/application-design/memory.md",
+      memory_path: "aidlc-docs/inception/domain-design/memory.md",
     },
     { kind: "ask", question: "Resume from the last checkpoint, or start fresh?" },
     { kind: "print", message: "AIDLC framework version 0.0.0" },
@@ -973,7 +1411,7 @@ if (import.meta.main) {
       gate: GATE_UNRESOLVED,
       memory_path: "aidlc-docs/construction/{unit-name}/functional-design/memory.md",
       consumes: [],
-      produces: ["aidlc-docs/construction/{unit-name}/functional-design/business-logic-model.md"],
+      produces: ["aidlc-docs/construction/{unit-name}/functional-design/functional-spec.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["required-sections"],
       stage_file: ".claude/aidlc-common/stages/construction/functional-design.md",

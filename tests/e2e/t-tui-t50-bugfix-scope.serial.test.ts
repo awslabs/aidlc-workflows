@@ -230,12 +230,12 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // --- submit the bugfix workflow command --------------------------------
         // Use the EXPLICIT `--scope bugfix` flag, not the bare freeform `bugfix`
         // keyword. The shipped distributable settings.json pins
-        // AWS_AIDLC_DEFAULT_SCOPE=workshop, so a bare freeform `/aidlc bugfix ...`
+        // AWS_AIDLC_DEFAULT_SCOPE=classic, so a bare freeform `/aidlc bugfix ...`
         // is a freeform-vs-env CONFLICT: SKILL.md step 0 (:105) only skips env
         // substitution when `$ARGUMENTS` already contains the literal `--scope`
         // token, so the bare keyword triggers a 3-way scope disambiguation gate at
-        // workflow START (bugfix vs the workshop env-default vs keyword-autodetect's
-        // feature) — verified live 2026-06-06: the run stalled on that gate before
+        // workflow START (bugfix vs the classic env-default vs keyword-autodetect's
+        // bugfix) — verified live 2026-06-06 (then feature): the run stalled on that gate before
         // any phase, failing the phase-wait below. (That conflict is t29 case 3's
         // job, not t50's.) The explicit `--scope bugfix` flag WINS silently and
         // gatelessly (SKILL.md:105 "explicit CLI flag wins" + :170a auto-confirm;
@@ -326,7 +326,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // .sh test 16: state classifies the project as brownfield.
         expect(stateMd).toMatch(/brownfield/i);
         // .sh test 12: State Version is 7.
-        expect(stateMd).toMatch(/State Version\*\*:[ \t]*7\b/);
+        expect(stateMd).toMatch(/State Version\*\*:[ \t]*8\b/);
 
         // .sh tests 4-6: all 3 Initialization stages marked completed `[x]`.
         for (const stage of ["workspace-scaffold", "workspace-detection", "state-init"]) {

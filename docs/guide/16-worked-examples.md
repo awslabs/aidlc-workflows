@@ -12,7 +12,7 @@ Two complete walkthroughs showing AI-DLC in action: a bugfix and a feature. Each
 
 ## Bugfix Walkthrough
 
-This example fixes a null pointer exception in a user profile API. The **bugfix** scope runs 7 stages (3 Initialization + 4 domain) at Minimal depth.
+This example fixes a null pointer exception in a user profile API. The **bugfix** scope runs 9 stages (3 Initialization + 6 domain) at Minimal depth.
 
 ### Invocation
 
@@ -39,6 +39,8 @@ You respond:
 | 2.3 | Requirements Analysis | Inception | aidlc-product-agent | inline |
 | 3.5 | Code Generation | Construction | aidlc-developer-agent | subagent |
 | 3.6 | Build and Test | Construction | aidlc-quality-agent | inline |
+| 4.1 | Deployment Pipeline | Operation | aidlc-pipeline-deploy-agent | inline |
+| 4.3 | Deployment Execution | Operation | aidlc-pipeline-deploy-agent + aidlc-developer-agent | inline |
 
 ### Initialization (stages 0.1-0.3) — auto-proceed
 
@@ -48,7 +50,7 @@ The 3 Initialization stages run as a single deterministic tool call (`aidlc-util
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
 - **0.3 State Init** — Initializes `aidlc-state.md` with scope `bugfix`, depth `Minimal`, and the domain stages marked for execution
 
-> Progress: 3/7 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
+> Progress: 3/9 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
 
 ### Stage 2.1 — Reverse Engineering
 
@@ -138,7 +140,18 @@ mvn verify               # Integration tests pass
 
 Results captured in `<record>/construction/build-and-test/test-results.md`: 89 tests passed, 0 failures, coverage increased from 62% to 64%.
 
-**Approval gate:** You select **Approve**. Workflow complete.
+**Approval gate:** You select **Approve**.
+
+### Stages 4.1 and 4.3 — Deploy
+
+Deployment Pipeline inspects the existing delivery configuration and records
+the deployment strategy, CD configuration, and rollback runbook. Environment
+Provisioning remains skipped because this bugfix uses the existing target
+environment.
+
+After approval, Deployment Execution deploys the tested artifact through that
+pipeline, runs smoke tests and health checks, and records the deployment log.
+You approve the final gate and the workflow completes.
 
 ### End state
 
@@ -147,7 +160,7 @@ aidlc/spaces/default/
   codekb/
     user-service/             # 9 space-level RE artifacts
   intents/260624-null-display-fix/
-    aidlc-state.md            # All 7 stages marked [x]
+    aidlc-state.md            # All 9 stages marked [x]
     audit/                    # Full decision trail (per-clone shards)
     inception/
       requirements-analysis/ # requirements.md + questions
@@ -155,6 +168,9 @@ aidlc/spaces/default/
       bugfix-null-display-name/
         code-generation/     # plan + summary
       build-and-test/        # instructions + test results
+    operation/
+      deployment-pipeline/   # CD config + strategy + rollback runbook
+      deployment-execution/  # deployment log + smoke tests + health checks
 ```
 
 Application code in workspace root:
@@ -175,7 +191,7 @@ Application code in workspace root:
 
 ## Feature Walkthrough
 
-This example builds a notification service for a task management application. The **feature** scope runs all 32 stages at Standard depth. This walkthrough highlights key stages across all phases.
+This example builds a notification service for a task management application. The **feature** scope runs all 33 stages at Standard depth. This walkthrough highlights key stages across all phases.
 
 ### Invocation
 
@@ -191,7 +207,7 @@ This example builds a notification service for a task management application. Th
 
 The 3 Initialization stages run automatically inside `aidlc-utility intent-create`. Workspace Detection identifies: TypeScript, Node.js 20, Express, PostgreSQL, brownfield project with existing task and user services.
 
-> Progress: 3/32 overall | Scope: feature, Depth: Standard
+> Progress: 3/33 overall | Scope: feature, Depth: Standard
 
 ### Ideation Phase (stages 1.1-1.7)
 
@@ -248,9 +264,9 @@ Defines scope boundaries: in-scope (3 trigger types, user preferences, email dig
 
 Compiles the initiative brief aggregating all Ideation outputs. Phase boundary verification confirms intent-to-scope traceability.
 
-> Progress: 10/32 overall | IDEATION complete. Verification Gate passed.
+> Progress: 10/33 overall | IDEATION complete. Verification Gate passed.
 
-### Inception Phase (stages 2.1-2.8)
+### Inception Phase (stages 2.1-2.9)
 
 **Stage 2.1 — Reverse Engineering** (pipeline)
 
@@ -268,15 +284,15 @@ Produces 12 functional requirements (notification triggers, preference CRUD, ema
 
 The aidlc-product-agent first drafts the personas and stories. The aidlc-design-agent, aidlc-developer-agent, and aidlc-quality-agent then inspect that draft as mutually blind collaborators, each writing an identity-marked contribution file. The aidlc-product-agent lead integrates all three contributions into `personas.md` and `stories.md` before presenting the **Approve** / **Request Changes** gate.
 
-**Stage 2.6 — Application Design** (aidlc-architect-agent)
+**Stage 2.6 — Domain Design** (aidlc-architect-agent)
 
 The aidlc-architect-agent designs the notification service architecture:
 
-- **Components**: NotificationService, PreferenceService, EmailRenderer, DigestScheduler
-- **API contracts**: REST endpoints for preference management, internal event handlers for triggers
-- **ADRs**: Event-driven trigger pattern (vs. polling), SQS for email queue (vs. direct send)
+- **Components**: NotificationService, PreferenceService, EmailRenderer, DigestScheduler — each with behaviour, dependencies/dependents, and owned entities
+- **Entity ownership**: NotificationService owns Notification + NotificationEvent; PreferenceService owns Preference
+- **Rationale**: event-driven trigger pattern (vs. polling), SQS for email queue (vs. direct send) recorded in the Rationale section
 
-Produces `components.md`, `services.md`, `decisions.md`.
+Produces the consolidated `components.md` (fenced `yaml` catalogue + mermaid diagram, summary, ownership, and rationale tables) plus `decisions.md` (the ADR log).
 
 **Stage 2.7 — Units Generation** (aidlc-architect-agent)
 
@@ -288,15 +304,19 @@ Decomposes into 3 units of work:
 
 Produces `unit-of-work.md` with dependency map: notification-core first, then preferences and email in parallel.
 
-**Stage 2.8 — Delivery Planning** (aidlc-delivery-agent)
+**Stage 2.8 — Contract Design** (aidlc-architect-agent)
+
+Because the system splits into three integrating units, Contract Design formalises the inter-unit boundaries: the internal event contract notification-core exposes to its callers, and the preference-lookup contract notification-email consumes from notification-preferences. Produces `contract-summary.md` (one row per boundary, each with an inline spec block).
+
+**Stage 2.9 — Delivery Planning** (aidlc-delivery-agent)
 
 Bolt sequence: Bolt 1 ships notification-core (walking skeleton — proves the event-handler pipeline end-to-end). Bolt 2 ships notification-preferences and notification-email in parallel. Per-Bolt DoDs captured in `bolt-plan.md`; WSJF-style rationale in `risk-and-sequencing-rationale.md`; external SES/SQS dependencies mapped in `external-dependency-map.md`. Phase boundary verification confirms requirements-to-architecture alignment.
 
-> Progress: 18/32 overall | INCEPTION complete. Verification Gate passed.
+> Progress: 19/33 overall | INCEPTION complete. Verification Gate passed.
 
 ### Construction Phase (stages 3.1-3.7)
 
-Construction runs **Bolt by Bolt** per the 2.8 plan. The first Bolt is the walking skeleton; the ladder prompt after it decides autonomy for the rest. Bolts with shared dependencies run in parallel.
+Construction runs **Bolt by Bolt** per the 2.9 plan. The first Bolt is the walking skeleton; the ladder prompt after it decides autonomy for the rest. Bolts with shared dependencies run in parallel.
 
 **Bolt 1: notification-core** — walking skeleton (always gated)
 
@@ -321,7 +341,7 @@ You've seen the shape work, so you pick **Continue autonomously**. The conductor
 
 **Bolt 2: notification-preferences + notification-email** — parallel batch
 
-Both depend only on notification-core and don't depend on each other, so 2.8's plan schedules them in a single batch. The conductor collects questions and generates design artifacts per Bolt, then dispatches **both code-generation stages concurrently** by issuing two `Task` calls in a single turn.
+Both depend only on notification-core and don't depend on each other, so 2.9's plan schedules them in a single batch. The conductor collects questions and generates design artifacts per Bolt, then dispatches **both code-generation stages concurrently** by issuing two `Task` calls in a single turn.
 
 - **notification-preferences — 3.1 Functional Design** — Preference entity, default values, channel toggles
 - **notification-preferences — 3.5 Code Generation** — CRUD API endpoints, preference repository, validation. 2 source files, 3 test files.
@@ -353,7 +373,7 @@ Generates build instructions, runs the full test suite across all 3 Units: 47 te
 
 Configures CI pipeline with lint, build, test, and security scan stages. Quality gates: coverage >= 75%, no critical vulnerabilities.
 
-> Progress: 25/32 overall | CONSTRUCTION complete. Verification Gate passed.
+> Progress: 26/33 overall | CONSTRUCTION complete. Verification Gate passed.
 
 ### Operation Phase (stages 4.1-4.7)
 
@@ -365,19 +385,19 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 
 **Stage 4.7 — Feedback & Optimization** — SLO targets (99.9% in-app delivery, 99% email delivery within 30s), cost analysis, feedback loop document.
 
-> Progress: 32/32 overall | OPERATION complete. Feature workflow complete.
+> Progress: 33/33 overall | OPERATION complete. Feature workflow complete.
 
 ### Key differences from bugfix
 
 | Aspect | Bugfix | Feature |
 |--------|--------|---------|
-| Stages executed | 7 | 32 |
+| Stages executed | 9 | 33 |
 | Depth | Minimal | Standard |
-| Phases | Initialization + Inception + Construction | All 5 |
+| Phases | Initialization + Inception + Construction + Operation | All 5 |
 | Units of work | 1 | 3 |
 | Bolt-by-Bolt Construction | No (bugfix runs a single Bolt) | Yes — 2 Bolts (walking skeleton + 1 parallel batch) |
 | Conditional stages | Most skipped | Most executed |
-| Approval gates | 4 | Walking skeleton + ladder prompt; remaining Bolts per autonomy mode |
+| Approval gates | 6 | Walking skeleton + ladder prompt; remaining Bolts per autonomy mode |
 
 ---
 

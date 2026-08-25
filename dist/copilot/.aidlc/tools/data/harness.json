@@ -1,0 +1,5 @@
+{
+  "name": "copilot",
+  "harnessDir": ".aidlc",
+  "rulesSubdir": "rules"
+}

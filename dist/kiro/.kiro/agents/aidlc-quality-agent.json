@@ -1,13 +1,18 @@
 {
-  "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc-quality-agent",
   "description": "AI-DLC Quality Agent - delegation target for ensemble stages (test strategy, testability, quality-gate perspective).",
   "prompt": "file://aidlc-quality-agent.md",
+  "includeMcpJson": true,
   "tools": [
     "fs_read",
     "fs_write",
     "execute_bash",
-    "thinking"
+    "thinking",
+    "@context7",
+    "@aws-mcp",
+    "@aws-pricing",
+    "@aws-iac",
+    "@aws-serverless"
   ],
   "allowedTools": [
     "fs_read",
@@ -39,6 +44,11 @@
   ],
   "hooks": {
     "preToolUse": [
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard aidlc-quality-agent",
+        "timeout_ms": 15000
+      },
       {
         "matcher": "fs_write",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",

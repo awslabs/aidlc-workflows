@@ -48,6 +48,19 @@ aidlc/.aidlc-readonly-latch
 # Per-conversation session→intent map (resume rebind, P8): per-user runtime
 # state keyed by Claude Code session_id, never shared truth.
 aidlc/.aidlc-sessions/
+aidlc/spaces/*/intents/.aidlc-*
+# DocumentKB staged-transaction scratch: `onboard` stages a document into
+# `.journal/<txn-id>/` and renames it into place under the audit lock. Per-clone
+# and transient -- a committed journal would be a merge conflict on every
+# concurrent sync, and a crashed run's leftovers would be committed as if they
+# were work. Collected on the next sync; named by txn id, referenced by no index
+# row, so removal is always safe.
+aidlc/spaces/*/knowledge/documentkb/.journal/
+# DocumentKB `linked`-source alias map: alias -> a machine-specific ABSOLUTE
+# root. Committing it would give every clone one developer's directory layout,
+# which is the exact failure the "never an absolute path in committed metadata"
+# rule exists to prevent. The committed side holds only the alias.
+aidlc/spaces/*/knowledge/.sources.local.json
 aidlc/spaces/*/intents/*/runtime-graph.json
 aidlc/spaces/*/intents/*/.aidlc-*
 # Redacted diagnostic reports (/aidlc --doctor --export): regenerated, meant to

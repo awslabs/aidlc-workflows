@@ -4,15 +4,14 @@
 //   - IDE 1.x: JSON on STDIN, snake_case { tool_name, tool_input,
 //     tool_response } — no success flag; USER_PROMPT arrives empty. PostToolUse
 //     write/shell captures have empty tool_input, while later builds populate
-//     some PreToolUse/delegation inputs. Read only for the two payload-dependent
-//     targets (audit-and-sensors, log-subagent), raced against a 2s ceiling.
+//     some PreToolUse/delegation inputs. Read only for the three payload targets
+//     plus SessionStart/Stop identity, raced against a 2s ceiling.
 //   - IDE 0.12: JSON in the USER_PROMPT env var, camelCase { toolName,
 //     toolArgs, toolResult, toolSuccess }; stdin was opened but never
 //     written/closed. A non-empty USER_PROMPT is consumed immediately, without
 //     probing stdin.
 // Either way the adapter scrapes the written file path out of the result prose
-// and drives the payload-free hooks (runtime-compile, sync-statusline) off the
-// audit tail.
+// and drives the audit-tail hooks (rebuild-stage-graph, sync-workflow-state).
 //
 // covers: file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-rebuild-stage-graph.ts
 //
@@ -37,6 +36,9 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  readIntentRegistry,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -178,9 +180,14 @@ function ctx(toolName: string, toolResult: string): string {
 /** The 1.x PostToolUse payload shape, field-verbatim from the live 1.0.165
  *  capture: snake_case, empty tool_input for write/shell, no success flag,
  *  session/cwd metadata. Later builds populate some other event inputs. */
-function ctx1x(toolName: string, toolResponse: string, eventName = "PostToolUse"): string {
+function ctx1x(
+  toolName: string,
+  toolResponse: string,
+  eventName = "PostToolUse",
+  sessionId = "sess_t218",
+): string {
   return JSON.stringify({
-    session_id: "sess_t218",
+    session_id: sessionId,
     hook_event_name: eventName,
     cwd: "/tmp/t218",
     tool_name: toolName,
@@ -278,7 +285,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("7: runtime-compile dispatches off the audit tail with no command", () => {
+  test("7: rebuild-stage-graph dispatches off the audit tail with no command", () => {
     const dir = scratchProject(true);
     try {
       // A transition in the tail makes the core hook recompile; with no
@@ -290,7 +297,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("7b: runtime-compile actually compiles when the audit tail has a transition (no command needed)", () => {
+  test("7b: rebuild-stage-graph actually compiles when the audit tail has a transition (no command needed)", () => {
     const dir = scratchProject(true);
     try {
       // Seed a STAGE_STARTED transition in the tail. The IDE never surfaces the
@@ -308,6 +315,242 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  test("7c: modern session identity survives second-intent handoff into payload-free Stop and SessionEnd", () => {
+    const dir = scratchProject(true);
+    try {
+      const sessionId = "sess_t218";
+      const originalUuid = readIntentRegistry(dir)[0]?.uuid;
+      const start = runIdeStdin(
+        dir,
+        "session-start",
+        ctx1x("", "", "SessionStart"),
+      );
+      expect(start.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
+          "utf-8",
+        ).trim(),
+      ).toBe(sessionId);
+
+      expect(originalUuid).toBeDefined();
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          "utf-8",
+        ).trim(),
+      ).toBe(originalUuid);
+
+      const create = spawnSync(
+        "bun",
+        [
+          join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+          "intent-create",
+          "--scope",
+          "bugfix",
+          "--arguments",
+          "new handoff work",
+          "--project-dir",
+          dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        },
+      );
+      expect(create.status).toBe(0);
+      const result = `Output:\n${create.stdout}\n\nExit Code: 0`;
+      const bind = runIdeDispatcherStdin(
+        dir,
+        "rebuild-stage-graph",
+        ctx1x("execute_bash", result),
+      );
+      expect(bind.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          "utf-8",
+        ).trim(),
+      ).toBe(originalUuid);
+
+      const createdUuid = readIntentRegistry(dir).find(
+        (intent) => intent.uuid !== originalUuid,
+      )?.uuid;
+      expect(createdUuid).toBeDefined();
+      const handoffPath = join(
+        dir,
+        "aidlc",
+        ".aidlc-sessions",
+        `${sessionId}.handoff.json`,
+      );
+      expect(JSON.parse(readFileSync(handoffPath, "utf-8"))).toMatchObject({
+        fromIntentUuid: originalUuid,
+        toIntentUuid: createdUuid,
+      });
+
+      const stop = runIde(dir, "continue-workflow", null);
+      expect(stop.code).toBe(0);
+      expect(stop.stdout.trim()).toBe("");
+      expect(existsSync(handoffPath)).toBe(false);
+
+      const before = readAudit(dir).split("SESSION_ENDED").length - 1;
+      const end = runIde(dir, "session-end", null);
+      expect(end.code).toBe(0);
+      const after = readAudit(dir).split("SESSION_ENDED").length - 1;
+      expect(after - before).toBe(1);
+      expect(
+        existsSync(join(seededRecordDir(dir), ".aidlc-hooks-health", "session-end.last")),
+      ).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("7d: legacy intent creation binds through the remembered synthetic session identity", () => {
+    const dir = scratchProject(false);
+    try {
+      rmSync(intentsDirOf(dir, DEFAULT_SPACE), { recursive: true, force: true });
+      const sessionId = "kiro-ide-legacy-current";
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+
+      const create = spawnSync(
+        "bun",
+        [
+          join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+          "intent-create",
+          "--scope",
+          "bugfix",
+          "--arguments",
+          "legacy create work",
+          "--project-dir",
+          dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        },
+      );
+      expect(create.status).toBe(0);
+      const bind = runIde(
+        dir,
+        "rebuild-stage-graph",
+        ctx("execute_bash", `Output:\n${create.stdout}\n\nExit Code: 0`),
+      );
+      expect(bind.code).toBe(0);
+
+      const createdUuid = readIntentRegistry(dir)[0]?.uuid;
+      expect(createdUuid).toBeDefined();
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          "utf-8",
+        ).trim(),
+      ).toBe(createdUuid);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("7e: Stop prefers its event session identity over the latest SessionStart", () => {
+    for (const entry of [
+      { label: "direct", run: runIdeStdin },
+      { label: "dispatcher", run: runIdeDispatcherStdin },
+    ]) {
+      const dir = scratchProject(true);
+      try {
+        const sessionOne = "sess_t218_one";
+        const sessionTwo = "sess_t218_two";
+        const originalUuid = readIntentRegistry(dir)[0]?.uuid;
+        expect(originalUuid, entry.label).toBeDefined();
+        expect(
+          runIdeStdin(
+            dir,
+            "session-start",
+            ctx1x("", "", "SessionStart", sessionOne),
+          ).code,
+          entry.label,
+        ).toBe(0);
+
+        const create = spawnSync(
+          "bun",
+          [
+            join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+            "intent-create",
+            "--scope",
+            "bugfix",
+            "--arguments",
+            "session one handoff",
+            "--project-dir",
+            dir,
+          ],
+          {
+            cwd: dir,
+            encoding: "utf-8",
+            env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+            timeout: 30_000,
+          },
+        );
+        expect(create.status, entry.label).toBe(0);
+        expect(
+          runIdeStdin(
+            dir,
+            "rebuild-stage-graph",
+            ctx1x(
+              "execute_bash",
+              `Output:\n${create.stdout}\n\nExit Code: 0`,
+              "PostToolUse",
+              sessionOne,
+            ),
+          ).code,
+          entry.label,
+        ).toBe(0);
+
+        const handoffPath = join(
+          dir,
+          "aidlc",
+          ".aidlc-sessions",
+          `${sessionOne}.handoff.json`,
+        );
+        expect(existsSync(handoffPath), entry.label).toBe(true);
+
+        expect(
+          runIdeStdin(
+            dir,
+            "session-start",
+            ctx1x("", "", "SessionStart", sessionTwo),
+          ).code,
+          entry.label,
+        ).toBe(0);
+        expect(
+          readFileSync(
+            join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
+            "utf-8",
+          ).trim(),
+          entry.label,
+        ).toBe(sessionTwo);
+
+        const stop = entry.run(
+          dir,
+          "continue-workflow",
+          JSON.stringify({
+            session_id: sessionOne,
+            hook_event_name: "Stop",
+            cwd: dir,
+          }),
+        );
+        expect(stop.code, entry.label).toBe(0);
+        expect(stop.stdout.trim(), entry.label).toBe("");
+        expect(existsSync(handoffPath), entry.label).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("8: session-start emits plain-text context, not the JSON wrapper", () => {
     const dir = scratchProject(true);
     try {
@@ -315,6 +558,49 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("AIDLC WORKFLOW ACTIVE");
       expect(r.stdout).not.toContain("additionalContext");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8b: session-start forwards modern session_id and uses a legacy fallback id", () => {
+    const dir = scratchProject(true);
+    try {
+      const modern = runIdeStdin(
+        dir,
+        "session-start",
+        ctx1x("", "", "SessionStart"),
+      );
+      expect(modern.code).toBe(0);
+      expect(
+        readFileSync(join(dir, "aidlc", ".aidlc-sessions", "sess_t218"), "utf-8").trim(),
+      ).toBe("00000000-0000-7000-8000-000000000001");
+
+      const dispatcherPayload = JSON.stringify({
+        session_id: "sess_t218_dispatcher",
+        hook_event_name: "SessionStart",
+      });
+      const dispatcher = runIdeDispatcherStdin(
+        dir,
+        "session-start",
+        dispatcherPayload,
+      );
+      expect(dispatcher.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", "sess_t218_dispatcher"),
+          "utf-8",
+        ).trim(),
+      ).toBe("00000000-0000-7000-8000-000000000001");
+
+      const legacy = runIde(dir, "session-start", null);
+      expect(legacy.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", "kiro-ide-legacy-current"),
+          "utf-8",
+        ).trim(),
+      ).toBe("00000000-0000-7000-8000-000000000001");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -781,10 +1067,17 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     // Restores the coverage deleted with 12b. The live IDE agentStop shape is a
     // ZERO-LENGTH USER_PROMPT plus an open-but-never-written stdin, which hung
     // stop and session-end forever. Each variant is asserted on its own effect
-    // so one cannot silently no-op behind the other.
-    const dir = scratchProject(true);
-    try {
-      for (const userPrompt of ["", null] as const) {
+    // so one cannot silently no-op behind the other. Use a fresh project per
+    // variant: SESSION_ENDED is audit-only traffic and intentionally no longer
+    // resets the shared Stop-hook no-progress streak.
+    for (const userPrompt of ["", null] as const) {
+      const dir = scratchProject(true);
+      // The payload-free legacy agentStop path uses one synthetic session id.
+      // Seed its ownership through the matching legacy SessionStart first;
+      // UUID-backed SessionEnd intentionally refuses an unstamped cursor
+      // fallback because another concurrent session may own that cursor.
+      try {
+        expect(runIde(dir, "session-start", null).code).toBe(0);
         const label = userPrompt === null ? "absent" : "empty";
         const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, 30_000);
         expect(`stop/${label}:timedOut=${stop.timedOut}`).toBe(`stop/${label}:timedOut=false`);
@@ -798,9 +1091,9 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         expect(`end/${label}:code=${end.code}`).toBe(`end/${label}:code=0`);
         const after = readAudit(dir).split("SESSION_ENDED").length - 1;
         expect(`end/${label}:delta=${after - before}`).toBe(`end/${label}:delta=1`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
     }
   }, 90_000);
 

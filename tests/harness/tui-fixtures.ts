@@ -85,7 +85,10 @@ export interface KiroNumberedProseAnswerState {
   answeredFollowUps: Set<number>;
   /** Ad-hoc lettered clarification menus already answered, keyed by option text. */
   answeredClarifications: Set<string>;
-  summaryConfirmed: boolean;
+  /** Consolidated-summary confirmations already answered, keyed by the
+   *  prompt's distinct "before I ..." tail (one checkpoint per stage that ran
+   *  a Q&A, so a multi-stage journey presents several). */
+  confirmedSummaries: Set<string>;
   learningsAnswered: number;
   approvalsAnswered: number;
 }
@@ -97,7 +100,7 @@ export function createKiroNumberedProseAnswerState(): KiroNumberedProseAnswerSta
     confirmedQuestions: new Set(),
     answeredFollowUps: new Set(),
     answeredClarifications: new Set(),
-    summaryConfirmed: false,
+    confirmedSummaries: new Set(),
     learningsAnswered: 0,
     approvalsAnswered: 0,
   };
@@ -170,12 +173,32 @@ export function nextKiroNumberedProseAnswer(
     return pendingFollowUps.map((id) => `F${id}: 1`).join(", ");
   }
 
-  if (
-    !state.summaryConfirmed &&
-    /Looks correct[\s\S]*Request changes/i.test(screen)
-  ) {
-    state.summaryConfirmed = true;
-    return "Looks correct";
+  // Consolidated-summary confirmation: one PER checkpoint-bearing stage, so a
+  // multi-stage journey presents several (e.g. reverse-engineering "before I
+  // finalize", then requirements-analysis "before I generate the requirements
+  // artifact"). Key on the newest prompt's distinct "before I ..." tail - the
+  // retained viewport still shows earlier answered prompts, so a bare boolean
+  // (the pre-fix shape) answered only the first and stranded every later one.
+  if (/Looks correct[\s\S]*Request changes/i.test(screen)) {
+    const summaryPrompts = [
+      ...screen.matchAll(/look correct before I ([^?]{1,120})\?/gi),
+    ];
+    if (summaryPrompts.length > 0) {
+      const key = summaryPrompts
+        .at(-1)![1]
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      if (!state.confirmedSummaries.has(key)) {
+        state.confirmedSummaries.add(key);
+        return "Looks correct";
+      }
+    } else if (state.confirmedSummaries.size === 0) {
+      // Prompt without the "before I ..." sentence (looser conductor
+      // phrasing): answer it once, as the pre-fix recognizer did.
+      state.confirmedSummaries.add("");
+      return "Looks correct";
+    }
   }
   if (learningPromptIndex > approvalPromptIndex) {
     state.learningsAnswered += 1;

@@ -11,9 +11,9 @@ observability, incident response, performance validation, and feedback
 collection.
 
 All seven Operation stages are **CONDITIONAL** -- they execute based on the
-scope and execution plan. For example, mvp, poc, bugfix, and refactor scopes skip Operation
-entirely. The infra and security-patch scopes run a subset (deployment and
-environment stages).
+scope and execution plan. For example, mvp and poc skip Operation entirely.
+Bugfix, refactor, infra, security-patch, and express run deployment-focused
+subsets.
 
 All stages run **inline** (no subagents in the Operation phase). All stages
 follow `stage-protocol.md` for approval gates, question format, completion
@@ -286,10 +286,12 @@ This reflects the cyclical nature of the AI-DLC lifecycle.
 - 4.7 Feedback & Optimization -- SLO compliance, cost analysis, drift detection, feedback loop
 
 **Scope applicability:**
-- enterprise / feature / workshop: All 7 stages
+- enterprise / feature / classic / workshop: All 7 stages
 - infra: Stages 4.1-4.4 (deployment-pipeline, environment-provisioning, deployment-execution, observability-setup)
+- bugfix / refactor: Stages 4.1, 4.3 (deployment-pipeline, deployment-execution)
 - security-patch: Stages 4.1, 4.3 (deployment-pipeline, deployment-execution)
-- mvp / poc / bugfix / refactor: Operation phase skipped entirely
+- express: Stages 4.1, 4.3, 4.4 (deployment-pipeline, deployment-execution, observability-setup)
+- mvp / poc: Operation phase skipped entirely
 
 ## Cross-References
 

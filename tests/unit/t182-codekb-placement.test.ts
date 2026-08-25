@@ -203,10 +203,13 @@ interface RunStageDirective {
   produces: string[];
 }
 
-function emitReverseEngineering(): { dir: RunStageDirective; proj: string } {
+function emitReverseEngineering(
+  repos: string[] = [],
+): { dir: RunStageDirective; proj: string } {
   const proj = freshProject();
   seedAidlcMemory(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-brownfield-feature.md"));
+  if (repos.length > 0) rewriteIntentRepos(proj, repos);
   const state = seededStateFile(proj);
   sedReplaceInFile(
     state,
@@ -253,6 +256,23 @@ describe("t182 isCodekb resolver — reverse-engineering artifacts land under sp
     for (const stem of ["architecture", "component-inventory", "reverse-engineering-timestamp"]) {
       expect(dir.produces).toContain(`${codekbPrefix}${stem}.md`);
     }
+  });
+
+  test("multi-repo reverse-engineering enumerates the full produces set under every registered repo", () => {
+    const repos = ["repo-a", "repo-b"];
+    const { dir, proj } = emitReverseEngineering(repos);
+    expect(dir.produces).toHaveLength(18);
+    for (const repo of repos) {
+      const prefix = `${relativeCodekbDir(proj, repo, DEFAULT_SPACE)}/`;
+      expect(dir.produces.filter((path) => path.startsWith(prefix))).toHaveLength(9);
+      expect(dir.produces).toContain(`${prefix}architecture.md`);
+      expect(dir.produces).toContain(`${prefix}reverse-engineering-timestamp.md`);
+    }
+    expect(
+      dir.produces.some((path) =>
+        path.includes(`/codekb/${basename(proj)}/`)
+      ),
+    ).toBe(false);
   });
 });
 

@@ -45,6 +45,7 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   // No matcher: the plan-approval-guard target self-filters (spawn_agent
   // naming the developer agent; everything else exits 0 instantly).
   { event: "PreToolUse", target: "plan-approval-guard" },
+  { event: "PostToolUse", matcher: "request_user_input", target: "record-human-turn" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "sync-workflow-state" },
   { event: "PostToolUse", matcher: "Bash", target: "rebuild-stage-graph" },
@@ -75,7 +76,7 @@ function emitConfigToml(): string {
 #
 # Model: these session defaults are what judgment-tier agent roles inherit
 # (their TOMLs omit model/model_reasoning_effort by design - see the tier
-# projection); balanced/templated roles pin gpt-5.4 per the tier table.
+# projection); balanced/templated roles pin gpt-5.6-terra per the tier table.
 # D-9: Amazon Bedrock is the shipped default provider (web_search is
 # unavailable there; the market-research stage degrades gracefully). For
 # OpenAI-auth setups, comment out model_provider and the [model_providers]
@@ -327,7 +328,21 @@ export default function emit(ctx: EmitContext): void {
     const tier = fm.tier?.trim();
     if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
     const proj = projectTier(tier, "codex", tierCap); // throws on unknown tier
-    const instructions = rewriteProse(absorbedBody);
+    // The harness-neutral reviewer persona cites its own turn cap as "the
+    // `maxTurns: <n>` frontmatter above - keep the two numbers in sync". That
+    // citation assumes a YAML frontmatter block sits above the body - true on
+    // every other harness surface, but Codex TOML personas have no
+    // frontmatter at all (Codex agent discovery reads only the TOML; this
+    // `developer_instructions` string IS the whole persona) and no native
+    // per-agent cap key ships in the emitted TOML. Rewrite the citation for
+    // this surface instead of shipping a dangling pointer, mirroring the
+    // opencode emitter's own prose rename for its `steps:` key.
+    const instructions = rewriteProse(absorbedBody).replace(
+      /the `maxTurns: (\d+)` frontmatter above - keep the two numbers in sync/g,
+      "the core persona's `maxTurns: $1` cap - Codex TOML personas carry no " +
+        "frontmatter and no native per-agent cap key, so this number is " +
+        "prose-only here; update it by hand if the authored cap changes",
+    );
     const modelLines =
       (proj.model !== null ? `model = "${proj.model}"\n` : "") +
       (proj.effort !== null ? `model_reasoning_effort = "${proj.effort}"\n` : "");
@@ -347,6 +362,7 @@ export default function emit(ctx: EmitContext): void {
   // carries no compiled JSON, so requiring it from coreRoot would fail.)
   const IMPLICIT_GUARD = "policy:\n  allow_implicit_invocation: false\n";
   process.env.AIDLC_HARNESS_DIR = harnessDir;
+  process.env.AIDLC_HARNESS_NAME = "codex";
   const gen = require(join(CODEX_ROOT, "tools", "aidlc-runner-gen.ts")) as {
     runnableStages: () => Array<{ slug: string }>;
     renderStageRunner: (node: { slug: string }) => string;
@@ -415,8 +431,11 @@ export default function emit(ctx: EmitContext): void {
     emissions.push({ path: join(dir, "SKILL.md"), content: () => rewriteProse(gen.renderRunner(scope, scopes[scope].description)) });
     emissions.push({ path: join(dir, "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
   }
-  // (d) session skills — byte-copy + prose rewrite from core/skills/
-  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+  // (d) standalone core skills — byte-copy + prose rewrite from core/skills/.
+  // Codex alone does NOT enumerate core/skills/, so this list is the only thing
+  // that ships them here: a skill missing from it silently reaches every OTHER
+  // harness and not this one.
+  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {

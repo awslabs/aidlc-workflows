@@ -36,7 +36,9 @@ CONDITIONAL stages that do not apply to the current scope.
 | refactor         | None (Ideation skipped entirely)            |
 | infra            | None (Ideation skipped entirely)            |
 | security-patch   | None (Ideation skipped entirely)            |
+| classic          | None (Ideation skipped entirely)            |
 | workshop         | None (Ideation skipped entirely)            |
+| express          | None (Ideation skipped entirely)            |
 
 ---
 
@@ -265,7 +267,7 @@ Assesses team availability, maps skills, identifies gaps, and produces mob compo
 ### Notes
 
 - Skip conditions: solo developer projects, small teams, poc, bugfix, refactor scopes.
-- Feeds into Stage 2.8 Delivery Planning.
+- Feeds into Stage 2.9 Delivery Planning.
 
 ---
 

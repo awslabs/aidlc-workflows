@@ -9,6 +9,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import {
   BLOCKED_STATE_TRANSITIONS,
+  DELEGATED_STATE_MUTATIONS,
+  delegatedLifecycleCommand,
   directStateTransition,
   isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
@@ -158,6 +160,306 @@ describe("t242 state-transition ownership guard", () => {
         `result="$(bun .claude/tools/aidlc-orchestrate.ts report --stage feasibility --result completed)"`,
       ),
     ).toBe(true);
+  });
+
+  test("delegated agents cannot invoke workflow lifecycle or routing entrypoints", () => {
+    for (const [command, expected] of [
+      ["bun .claude/tools/aidlc-orchestrate.ts next --resume", "aidlc-orchestrate.ts next"],
+      [
+        "bun .claude/tools/aidlc-orchestrate.ts report --result resumed --user-input 1",
+        "aidlc-orchestrate.ts report",
+      ],
+      ["bun .claude/tools/aidlc-orchestrate.ts park", "aidlc-orchestrate.ts park"],
+      [
+        "bun .claude/tools/aidlc-orchestrate.ts continue steering-token",
+        "aidlc-orchestrate.ts continue",
+      ],
+      ["bun .claude/tools/aidlc-state.ts unpark", "aidlc-state.ts unpark"],
+      [
+        "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis",
+        "aidlc-jump.ts execute",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts recompose --add user-stories",
+        "aidlc-utility.ts recompose",
+      ],
+      [
+        'bash -lc "bun .claude/tools/aidlc-orchestrate.ts next --resume"',
+        "aidlc-orchestrate.ts next",
+      ],
+      [
+        'sh -c "bun .claude/tools/aidlc-state.ts unpark"',
+        "aidlc-state.ts unpark",
+      ],
+      [
+        'bash --noprofile -e -c "bun .claude/tools/aidlc-orchestrate.ts next --resume"',
+        "aidlc-orchestrate.ts next",
+      ],
+      [
+        'zsh -o NO_RCS -c "bun .claude/tools/aidlc-state.ts unpark"',
+        "aidlc-state.ts unpark",
+      ],
+      [
+        'dash -c "bun .claude/tools/aidlc-orchestrate.ts continue steering-token"',
+        "aidlc-orchestrate.ts continue",
+      ],
+      [
+        "bun .claude/tools/aidlc-orchestrate.ts --project-dir /tmp next --resume",
+        "aidlc-orchestrate.ts next",
+      ],
+      [
+        "bun .claude/tools/aidlc-state.ts --project-dir /tmp unpark",
+        "aidlc-state.ts unpark",
+      ],
+      [">/tmp/aidlc-output aidlc next --resume", "aidlc next"],
+      ["AIDLC_TEST=1 >/tmp/aidlc-output aidlc next --resume", "aidlc next"],
+      ["if aidlc next --resume; then :; fi", "aidlc next"],
+      [
+        "while bun .claude/tools/aidlc-state.ts unpark; do :; done",
+        "aidlc-state.ts unpark",
+      ],
+      [
+        "bun --silent .claude/tools/aidlc-state.ts unpark",
+        "aidlc-state.ts unpark",
+      ],
+      ["f(){ aidlc next --resume; }; f", "aidlc next"],
+      ['eval "aidlc next --resume"', "aidlc next"],
+      ['env -S "aidlc next --resume"', "aidlc next"],
+      ['env -S"aidlc next --resume"', "aidlc next"],
+      ['env --split-string="aidlc next --resume"', "aidlc next"],
+      ["env env aidlc next --resume", "aidlc next"],
+      ["command env env aidlc next --resume", "aidlc next"],
+      ["env --block-signal env aidlc next --resume", "aidlc next"],
+      ["env --list-signal-handling aidlc next --resume", "aidlc next"],
+      ["env -P >out /usr/bin aidlc next --resume", "aidlc next"],
+      ["nice aidlc next --resume", "aidlc next"],
+      ["nohup aidlc next --resume", "aidlc next"],
+      ["env >out aidlc next --resume", "aidlc next"],
+      ["env -u >out PATH aidlc next --resume", "aidlc next"],
+      ['env -S >out "aidlc next --resume"', "aidlc next"],
+      ["nice >out aidlc next --resume", "aidlc next"],
+      ["nice -n >out 5 aidlc next --resume", "aidlc next"],
+      ["nohup 2>/dev/null aidlc next --resume", "aidlc next"],
+      ["exec -a >out aidlc-alias aidlc next --resume", "aidlc next"],
+      ['eval -- "aidlc next --resume"', "aidlc next"],
+      ["time -p aidlc next --resume", "aidlc next"],
+      ["bash -c $'aidlc next --resume'", "aidlc next"],
+      ["aidlc \\\nnext --resume", "aidlc next"],
+      ["bun .claude/tools/aidlc.ts --resume", "aidlc.ts --resume"],
+      [
+        "bun .claude/tools/aidlc.ts --project-dir /tmp next --resume",
+        "aidlc.ts next",
+      ],
+      [
+        "bun .claude/tools/aidlc.ts intent other-intent",
+        "aidlc.ts intent other-intent",
+      ],
+      [
+        "bun .claude/tools/aidlc.ts space other-space",
+        "aidlc.ts space other-space",
+      ],
+      [
+        "bun .claude/tools/aidlc.ts intent switch other-intent",
+        "aidlc.ts intent switch",
+      ],
+      ["bun .claude/tools/aidlc.ts intent create", "aidlc.ts intent create"],
+      [
+        "bun .claude/tools/aidlc.ts space create other-space",
+        "aidlc.ts space create",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts intent other-intent",
+        "aidlc-utility.ts intent other-intent",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts space other-space",
+        "aidlc-utility.ts space other-space",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts --project-dir /tmp space-create other-space",
+        "aidlc-utility.ts space-create",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts intent-create --scope feature",
+        "aidlc-utility.ts intent-create",
+      ],
+      ["aidlc next --resume", "aidlc next"],
+      ["aidlc continue steering-token", "aidlc continue"],
+      ["aidlc report --result resumed --user-input 1", "aidlc report"],
+      ["aidlc state unpark", "aidlc state unpark"],
+      ["aidlc scope change --scope mvp", "aidlc scope change"],
+      ["aidlc config-change --depth comprehensive", "aidlc config-change"],
+      ["aidlc intent other-intent", "aidlc intent other-intent"],
+      ["aidlc space other-space", "aidlc space other-space"],
+      ["aidlc --project-dir /tmp space-create other-space", "aidlc space-create"],
+      [
+        "cd project && aidlc jump execute --target requirements-analysis",
+        "aidlc jump execute",
+      ],
+      ["env AIDLC_TEST=1 aidlc config set --depth comprehensive", "aidlc config set"],
+      [
+        'echo "$(bun .claude/tools/aidlc-state.ts unpark)"',
+        "aidlc-state.ts unpark",
+      ],
+      ["result=`aidlc next --resume`", "aidlc next"],
+      ["cat <<EOF\n$(aidlc next --resume)\nEOF", "aidlc next"],
+      ['sh -c -- "aidlc next --resume"', "aidlc next"],
+      ['cmd="aidlc next --resume"; bash -c "$cmd"', "aidlc next"],
+      ['cmd=aidlc; "$cmd" next --resume', "aidlc next"],
+      [`cmd=aidlc; \${cmd} next --resume`, "aidlc next"],
+      [`"\${cmd:-aidlc}" next --resume`, "dynamic executable beyond guard inspection"],
+      [
+        `bash -c "\${cmd:-aidlc next --resume}"`,
+        "dynamic shell command beyond guard inspection",
+      ],
+      ['c=aidlc; d=$c; "$d" next --resume', "dynamic executable beyond guard inspection"],
+    ] as const) {
+      expect(delegatedLifecycleCommand(command), command).toBe(expected);
+    }
+    let nested = "aidlc next --resume";
+    for (let i = 0; i < 9; i++) nested = `bash -c ${JSON.stringify(nested)}`;
+    expect(delegatedLifecycleCommand(nested)).not.toBeNull();
+    expect(DELEGATED_STATE_MUTATIONS.has("unpark")).toBe(true);
+    expect(
+      delegatedLifecycleCommand("bun .claude/tools/aidlc-state.ts get 'Current Stage'"),
+    ).toBeNull();
+    expect(
+      delegatedLifecycleCommand("bun .claude/tools/aidlc-orchestrate.ts --help"),
+    ).toBeNull();
+    for (const command of [
+      "bun .claude/tools/aidlc.ts intent",
+      "bun .claude/tools/aidlc.ts intent list",
+      "bun .claude/tools/aidlc.ts intent --json",
+      "bun .claude/tools/aidlc.ts space",
+      "bun .claude/tools/aidlc.ts space list",
+      "bun .claude/tools/aidlc.ts space help",
+      "bun .claude/tools/aidlc-utility.ts intent",
+      "bun .claude/tools/aidlc-utility.ts intent list",
+      "bun .claude/tools/aidlc-utility.ts intent --json",
+      "bun .claude/tools/aidlc-utility.ts space",
+      "bun .claude/tools/aidlc-utility.ts space list",
+      "bun .claude/tools/aidlc-utility.ts space help",
+      "bun .claude/tools/aidlc-utility.ts --project-dir /tmp space list",
+      "aidlc intent",
+      "aidlc intent list",
+      "aidlc intent --json",
+      "aidlc space",
+      "aidlc space list",
+      "aidlc space help",
+      "aidlc --project-dir /tmp intent list",
+      "echo ok # ; aidlc next --resume",
+      "cat <<'EOF'\n$(aidlc next --resume)\nEOF",
+      "command -v aidlc next --resume",
+      "eval true",
+      'eval "echo ok"',
+      "env -0 aidlc next --resume",
+      "nice --adjustment=bogus aidlc next --resume",
+      "nice --help",
+      "nohup --version",
+    ]) {
+      expect(delegatedLifecycleCommand(command), command).toBeNull();
+    }
+    expect(delegatedLifecycleCommand('bash -c "$unresolved"')).toBe(
+      "dynamic shell command beyond guard inspection",
+    );
+    expect(delegatedLifecycleCommand('"$unresolved" --version')).toBe(
+      "dynamic executable beyond guard inspection",
+    );
+    expect(delegatedLifecycleCommand('eval "$command"')).toBe(
+      "dynamic eval shell command beyond guard inspection",
+    );
+    expect(delegatedLifecycleCommand(String.raw`eval 'printf %s \$HOME'`)).toBe(
+      "dynamic eval shell command beyond guard inspection",
+    );
+    expect(
+      delegatedLifecycleCommand("eval \"$(printf 'aidlc next --resume')\""),
+    ).toBe(
+      "dynamic eval shell command beyond guard inspection",
+    );
+    expect(delegatedLifecycleCommand(String.raw`env -S 'aidlc\_next --resume'`)).toBe(
+      "execution wrapper beyond guard inspection",
+    );
+    expect(
+      delegatedLifecycleCommand(
+        "echo 'bun .claude/tools/aidlc-orchestrate.ts next --resume'",
+      ),
+    ).toBeNull();
+    expect(
+      delegatedLifecycleCommand(
+        'printf %s \'bash -lc "bun .claude/tools/aidlc-orchestrate.ts next --resume"\'',
+      ),
+    ).toBeNull();
+    expect(
+      delegatedLifecycleCommand(
+        "printf %s '$(aidlc next --resume)'",
+      ),
+    ).toBeNull();
+    expect(
+      delegatedLifecycleCommand(
+        "echo '`aidlc space other-space`'",
+      ),
+    ).toBeNull();
+  });
+
+  test("the hook blocks delegated lifecycle commands but permits the conductor", () => {
+    const command = "bun .claude/tools/aidlc-orchestrate.ts next --resume";
+    const delegated = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command },
+        agent_type: "aidlc-product-lead-agent",
+      }),
+      encoding: "utf-8",
+      env: unownedEnv(),
+    });
+    expect(delegated.status).toBe(2);
+    expect(delegated.stderr).toContain("workflow lifecycle and routing are conductor-owned");
+
+    const conductor = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command },
+      }),
+      encoding: "utf-8",
+      env: unownedEnv(),
+    });
+    expect(conductor.status).toBe(0);
+    expect(conductor.stderr).toBe("");
+  });
+
+  test("the hook blocks delegated lifecycle commands behind wrappers and literal variables", () => {
+    for (const command of [
+      "env env aidlc next --resume",
+      "command env env aidlc next --resume",
+      "nice aidlc next --resume",
+      "nohup aidlc next --resume",
+      "aidlc scope change --scope mvp",
+      "aidlc config-change --depth comprehensive",
+      'sh -c -- "aidlc next --resume"',
+      'cmd="aidlc next --resume"; bash -c "$cmd"',
+      'cmd=aidlc; "$cmd" next --resume',
+      `cmd=aidlc; \${cmd} next --resume`,
+      `"\${cmd:-aidlc}" next --resume`,
+      `bash -c "\${cmd:-aidlc next --resume}"`,
+      'c=aidlc; d=$c; "$d" next --resume',
+    ]) {
+      const delegated = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          agent_type: "aidlc-product-lead-agent",
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(delegated.status, command).toBe(2);
+      expect(delegated.stderr, command).toContain(
+        "workflow lifecycle and routing are conductor-owned",
+      );
+    }
   });
 
   test("large heredoc writes stay fast (whitespace-quadratic regression pin)", () => {
@@ -316,9 +618,8 @@ describe("t242 state-transition ownership guard", () => {
       );
       expect(r.status, `${result}: ${r.stdout}${r.stderr}`).toBe(0);
       expect(r.stdout, result).toContain('"kind":"error"');
-      expect(r.stdout, result).toMatch(
-        result === "approved" ? /requires --user-input/ : /requires nonblank/,
-      );
+      expect(r.stdout, result).toContain("did not match an offered choice");
+      expect(r.stdout, result).toContain("original held gate with every offered choice");
       expect(readFileSync(seededStateFile(project), "utf-8"), result).toContain(
         "- [-] feasibility",
       );
@@ -369,7 +670,7 @@ describe("t242 state-transition ownership guard", () => {
   });
 
   test("non-initialization stages delegate lifecycle transitions and owned Learn writes", () => {
-    expect(NON_INITIALIZATION_STAGES).toHaveLength(29);
+    expect(NON_INITIALIZATION_STAGES).toHaveLength(30);
     for (const path of NON_INITIALIZATION_STAGES) {
       const body = readFileSync(path, "utf-8");
       const label = relative(REPO_ROOT, path);
@@ -417,7 +718,7 @@ describe("t242 state-transition ownership guard", () => {
     expect(stage("inception", "requirements-analysis")).toContain(
       "bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add user-stories",
     );
-    expect(stage("inception", "application-design")).toContain(
+    expect(stage("inception", "domain-design")).toContain(
       "bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add units-generation",
     );
   });

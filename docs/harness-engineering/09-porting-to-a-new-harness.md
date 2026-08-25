@@ -1,7 +1,7 @@
 # Porting AI-DLC to a New Harness
 
 AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro CLI, Kiro IDE,
-Codex CLI, and opencode, and the set is open. The hand-authored source is a
+Codex CLI, Cursor, opencode, and GitHub Copilot, and the set is open. The hand-authored source is a
 harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
 packager (`scripts/package.ts`) regenerates each committed `dist/<harness>/`
 tree. Adding another harness is **one directory and one manifest row** — the
@@ -22,6 +22,8 @@ harness/
   claude/  manifest.ts · skills/aidlc/ · CLAUDE.md · settings.json
   kiro/    manifest.ts · skills/aidlc/ · agents/*.json · hooks/aidlc-kiro-adapter.ts · settings/cli.json · AGENTS.md
   codex/   manifest.ts · emit.ts · skills/aidlc/ · hooks/aidlc-codex-adapter.ts
+  opencode/ manifest.ts · emit.ts · skills/aidlc/ · command/ · plugin/
+  copilot/ manifest.ts · emit.ts · skills/aidlc/ · hooks/aidlc-copilot-adapter.ts
 scripts/
   package.ts               # bun scripts/package.ts [<name>] [--check]
   manifest-types.ts        # the HarnessManifest contract every manifest implements
@@ -55,6 +57,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
   `harness/<name>/<src>` into the dist (`.md` get token substitution).
   `projectRoot: true` lands a file beside the harness dir (e.g. `AGENTS.md`).
+- `orchestratorSkillPath` (optional) — project-root-relative path to the
+  assembled orchestrator `SKILL.md`. It defaults to
+  `<harnessDir>/skills/aidlc/SKILL.md`; declare it for emit-owned layouts outside
+  that tree, such as `.agents/skills/aidlc/SKILL.md`.
 - `frontmatterAdditions` (optional) - per-file YAML lines appended to a
   core-projected `.md`'s frontmatter during projection, for a harness-NATIVE
   field that must not ship to other harnesses (kiro-ide injects
@@ -66,8 +72,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   The packager applies it to the copied dir AND to in-prose `<harnessDir>/rules/`
   references AND to the compiled stage-graph rule paths (it sets
   `AIDLC_RULES_DIR` at compile so `loadRules` finds the renamed dir) AND emits it
-  into a generated `tools/data/harness.json` that the runtime `rulesSubdir()`
-  seam reads — so a real install resolves the renamed dir with no hardcoded map.
+  into a generated `tools/data/harness.json` that records both the manifest
+  name and rules directory. Runtime path resolution uses the name to
+  disambiguate harnesses that share an engine directory, while `rulesSubdir()`
+  reads the rename — so a real install resolves both facts without hardcoding.
   This is the seam that makes `rulesRename` purely manifest data: set it here and
   every layer (build prose, compiled paths, runtime) follows, with no `core/` edit.
 - `skipRunnerGen` — set when the harness ships no `<harnessDir>/skills/` (Codex
@@ -100,7 +108,7 @@ answer with exit 2 + a reason on stderr (the tool call must be refused when
 the adapter relays that exit code). If the new harness cannot hard-block a
 tool call from its pre-tool seam, leave the reviewer-scope and review-freeze
 registrations out and document the gap rather than wiring dead hooks - the
-prose bounds in stage-protocol §12a still govern there. When the harness's
+prose bounds in stage-protocol-reviewer.md §12a still govern there. When the harness's
 payloads carry no subagent identity, scope reviewer-scope registration to the
 reviewer agents themselves where the harness supports per-agent hooks (the
 Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of

@@ -27,10 +27,11 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 1.x channel, raced against a broken-channel timeout. The production default is
 2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
 milliseconds for diagnostics and deterministic latency tests. Both field
-spellings are accepted. Acquisition is gated to the two payload-dependent
-targets (`audit-and-sensors`, `log-subagent`); every other target (including
-the per-tool-call `block` floor) touches neither channel and keeps its
-zero-latency path.
+spellings are accepted. Acquisition is gated to the three payload-dependent
+targets (`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus
+`session-start` and `continue-workflow` for their modern `session_id`; every
+other target (including the per-tool-call `block` floor) touches neither
+channel and keeps its zero-latency path.
 
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
 CLI), but the adapter keys off the payload channels above.
@@ -52,8 +53,13 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 1. **PostToolUse write/shell captures have empty tool inputs** on both
    channels. Their written path must therefore be parsed from the result prose,
    and the shell command is absent (only stdout + exit code is present). This is
-   not a universal IDE rule: later 1.x builds populate some PreToolUse inputs
-   and delegation inputs (#543).
+   not a universal IDE rule, and delivery is not uniform across generations:
+   later 1.x builds populate some PreToolUse and delegation inputs (#543).
+   Issue #763 reports that Kiro IDE 1.0.309 populated PreToolUse subagent
+   dispatch with `prompt` and `explanation`, shell/write matchers with
+   `command`, `cwd`, `run_in_background`, and `timeout`, and PostToolUse inputs
+   as well. That 1.0.309 observation was reported, not measured in this
+   repository; the measured base remains the 0.12 and 1.0.165 captures above.
 2. **1.x carries no success flag.** Only the 0.12 channel's explicit boolean
    `toolSuccess: false` drops a well-formed write from the audit (#417); a 1.x
    payload with the field absent falls through to the path check. Because that
@@ -87,7 +93,11 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 - **rebuild-stage-graph** — the shell command is unrecoverable, so the IDE path
   drops the command filter and gates purely on the audit tail (with an mtime
   idempotency guard so a lingering transition — e.g. after `WORKFLOW_COMPLETED`
-  — does not recompile on every subsequent shell command).
+  — does not recompile on every subsequent shell command). The shell result and
+  session identity are still forwarded: modern events use their exact
+  `session_id`, while the legacy channel uses the synthetic identity retained by
+  SessionStart. When the result names a successful `intent-create`, the shared
+  hook binds that session to the created record.
 - **sync-workflow-state** — the IDE gives no task payload, so it derives the current
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or
@@ -105,8 +115,16 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
-- **session-start / session-end / stop / mint / block** — need no payload;
-  they never read stdin.
+- **session-start** — reads the modern `session_id` and persists it under the
+  gitignored runtime session directory; the legacy channel records its stable
+  synthetic ID instead.
+- **stop** — reads the modern Stop event's `session_id` and prefers it over the
+  workspace-global SessionStart marker, so concurrent chats consume only their
+  own post-create handoff receipts. Legacy agentStop and broken modern channels
+  fall back to the retained identity.
+- **session-end / mint / block** — need no payload and never read stdin.
+  Session-end reuses the identity persisted by SessionStart, with the legacy
+  synthetic ID as the fallback.
 
 ## toolResult path-extraction patterns
 

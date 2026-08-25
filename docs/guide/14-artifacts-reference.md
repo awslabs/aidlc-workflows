@@ -49,8 +49,9 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
     requirements-analysis/
     user-stories/                   (conditional)
     refined-mockups/                (conditional)
-    application-design/             (conditional)
+    domain-design/             (conditional)
     units-generation/
+    contract-design/           (conditional)
     delivery-planning/
 
   construction/                     # Phase 3 artifacts
@@ -87,8 +88,9 @@ or focused scan overwrites those nine files
 (`reverse-engineering-timestamp.md` records when the last scan ran and what
 it covered). Intents therefore read the newest scan of the repo, not the one
 taken when their own record dir was created. What the record dir does get is
-the stage's own `memory.md` diary — created on demand when the stage runs
-(see **Per-stage memory diary** below) — so an `inception/reverse-engineering/`
+the stage's own `memory.md` diary — created by the engine when it emits the
+run-stage directive (see **Per-stage memory diary** below) — so an
+`inception/reverse-engineering/`
 directory can appear there, holding the diary and nothing else. Codekb writes
 are audit-logged with a `codekb > <repo> > <name>` breadcrumb, so the
 per-intent trail still records what changed and when.
@@ -103,11 +105,11 @@ under an optional `aidlc-shared/` and per-agent subdirectories. See
 **Per-stage memory diary.** Each executed stage also keeps a committed
 `memory.md` alongside its artifacts (e.g.
 `<record>/inception/requirements-analysis/memory.md`). It is the
-stage's observation diary — auto-created from a template at stage start,
-maintained by the orchestrator during the stage, and read by the §13
-Learnings Ritual at the approval gate. It is never hand-edited. See
-[Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how
-the diary feeds the learning loop.
+stage's observation diary — created by the engine from a template when it emits
+the run-stage directive, maintained by the orchestrator during the stage, and
+read by the §13 Learnings Ritual at the approval gate. It is never hand-edited.
+See [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how the
+diary feeds the learning loop.
 
 **Code lives in sibling repos, not the record dir.** The `aidlc/` tree holds only
 method, state, audit, and artifacts — never application code. Generated code lands
@@ -174,7 +176,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 | 1.6 Rough Mockups | `wireframes.md`, `user-flow.md` | Conditional |
 | 1.7 Approval & Handoff | `initiative-brief.md`, `decision-log.md` | Always |
 
-### Inception (stages 2.1-2.8)
+### Inception (stages 2.1-2.9)
 
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
@@ -183,23 +185,26 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 | 2.3 Requirements Analysis | `requirements.md` | Always |
 | 2.4 User Stories | `stories.md`, `personas.md` | User-facing features |
 | 2.5 Refined Mockups | `mockups.md`, `interaction-spec.md`, `accessibility-checklist.md` | UI projects |
-| 2.6 Application Design | `components.md`, `services.md`, `decisions.md` | When new components needed |
+| 2.6 Domain Design | `components.md` (consolidated component catalogue), `decisions.md` (ADR log) | When new components needed |
 | 2.7 Units Generation | `unit-of-work.md`, `unit-of-work-dependency.md`, `unit-of-work-story-map.md` | Always |
-| 2.8 Delivery Planning | `bolt-plan.md`, `team-allocation.md`, `risk-and-sequencing-rationale.md`, `external-dependency-map.md` | Always |
+| 2.8 Contract Design | `contract-summary.md` (inter-unit contracts) | Multi-unit systems |
+| 2.9 Delivery Planning | `bolt-plan.md`, `team-allocation.md`, `risk-and-sequencing-rationale.md`, `external-dependency-map.md` | Always |
 
 ### Construction (stages 3.1-3.7)
 
 Stages 3.1-3.5 repeat per unit of work. Artifacts go in `construction/{unit-name}/{stage-name}/`. Stages 3.6-3.7 run once after all units.
 
-The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (tagged in 2.7's edge block: `service`, `spec`, `ui`, `packaging`, or `library`). A `spec` unit owes no scalability doc, a `packaging` unit no business-logic model; a unit left untagged receives the full matrix below. Which artifact applies to which kind is stage frontmatter data (`produces_kinds`, see [Stage definition](../reference/15-stage-definition.md)). A unit for which none of a stage's artifacts apply is complete for that stage with zero files.
+The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (tagged in 2.7's edge block: `service`, `spec`, `ui`, `packaging`, or `library`). A `spec` unit owes no scalability doc, a `packaging` unit no functional spec; a unit left untagged receives the full matrix below. Which artifact applies to which kind is stage frontmatter data (`produces_kinds`, see [Stage definition](../reference/15-stage-definition.md)). A unit for which none of a stage's artifacts apply is complete for that stage with zero files.
 
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
-| 3.1 Functional Design | `business-logic-model.md`, `business-rules.md` | Per plan, per unit (by kind) |
+| 3.1 Functional Design | `entities.md`, `rules.md`, `functional-spec.md` | Per plan, per unit (by kind) |
 | 3.2 NFR Requirements | `security-requirements.md`, `performance-requirements.md` | Per plan, per unit (by kind) |
+| 3.2 NFR Requirements | `observability-requirements.md` | Per plan, service units only |
 | 3.3 NFR Design | `security-design.md`, `performance-design.md` | Per plan, per unit (by kind) |
-| 3.4 Infrastructure Design | `deployment-architecture.md`, `infrastructure-services.md` | Per plan, per unit (by kind) |
-| 3.5 Code Generation | `code-generation-plan.md`, `code-generation-questions.md`, `code-summary.md` (code goes to workspace root) | Always, per unit |
+| 3.3 NFR Design | `observability-design.md` | Per plan, service units only |
+| 3.4 Infrastructure Design | `infrastructure-specification.md`, `monitoring-design.md`, `cicd-pipeline.md` | Per plan, per unit (by kind) |
+| 3.5 Code Generation | `code-generation-plan.md`, `code-generation-questions.md`, `unit-test-instructions.md`, `code-summary.md`, `traceability.json`, plus engine-required `source-manifest.json` (code goes to workspace root) | Always, per unit |
 | 3.6 Build and Test | `build-instructions.md`, `test-results.md` | Always, after all units |
 | 3.7 CI Pipeline | `ci-config.md`, `quality-gates.md` | Conditional, after all units |
 
@@ -255,8 +260,8 @@ cursors and machine-local derived state are ignored.
 Each stage reads artifacts from prior stages as input. Key dependency chains:
 
 - **Intent Capture** artifacts flow into Market Research, Feasibility, Scope Definition, and Rough Mockups
-- **Requirements Analysis** artifacts flow into User Stories, Application Design, and all Construction stages
-- **Application Design** and **Units Generation** artifacts flow into all per-unit Construction stages
+- **Requirements Analysis** artifacts flow into User Stories, Domain Design, and all Construction stages
+- **Domain Design** and **Units Generation** artifacts flow into all per-unit Construction stages
 - **All Construction artifacts** flow into Build and Test and CI Pipeline
 - **Infrastructure Design** artifacts flow into Operation stages
 

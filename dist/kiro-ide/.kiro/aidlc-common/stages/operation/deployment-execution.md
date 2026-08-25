@@ -32,8 +32,12 @@ scopes:
   - enterprise
   - feature
   - infra
+  - bugfix
+  - refactor
   - security-patch
+  - classic
   - workshop
+  - express
 inputs: CD pipeline config from deployment-pipeline stage, provisioned environments from environment-provisioning stage, built artifacts from Construction
 outputs: deployment-log.md, smoke-test-results.md, health-check-report.md, deployment-execution-questions.md (under this stage's record dir, engine-resolved)
 ---
@@ -55,7 +59,19 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 - Read build/test results from `<record>/construction/build-and-test/` (if exists)
 - Read rollback runbook (if exists)
 
-Incremental scopes (security-patch, infra) skip environment-provisioning or build-and-test by design; a brownfield production system already has environments and a deploy path. When those inputs are absent, inventory the actual environments from the workspace's existing configuration and deploy through the pipeline that exists — never invent the content of a missing artifact.
+Incremental scopes (`bugfix`, `refactor`, `security-patch`, and `infra`) plus
+`express` may skip Environment Provisioning or Build and Test by design.
+`bugfix`, `refactor`, `security-patch`, and `express` retain Build and Test but
+skip Environment Provisioning; `infra` retains Environment Provisioning but
+skips Build and Test. Deployment Pipeline may also report skipped when the
+workspace's existing pipeline is already adequate; in that case its absent
+`cd-config` and `deployment-strategy` artifacts are expected, and this stage
+must inspect and use the real pipeline configuration in the workspace instead
+of invoking missing-artifact recovery. Inventory actual target environments
+from that workspace configuration and any approved Deployment Pipeline
+artifacts. For Express greenfield, deployment proceeds only when those files
+identify a real target; otherwise this CONDITIONAL stage reports skipped.
+Never invent an environment inventory or deployment path.
 
 ### Step 3: Pre-Deployment Checks
 

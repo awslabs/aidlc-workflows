@@ -291,7 +291,9 @@ beforeAll(() => {
   const sp = statePath(proj);
   stateAfterInit = readFileSync(sp, "utf-8");
 
-  // Step 1: gate-start [-] -> [?]
+  // Step 1: reviewer receipt, then gate-start [-] -> [?]
+  run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"], proj);
+  run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"], proj);
   expect(run(STATE, ["gate-start", "requirements-analysis"], proj).status).toBe(0);
   stateAfterGateStart = readFileSync(sp, "utf-8");
   // Step 2: reject [?] -> [R], increments Revision Count
@@ -303,14 +305,14 @@ beforeAll(() => {
     ).status,
   ).toBe(0);
   stateAfterReject = readFileSync(sp, "utf-8");
-  // Step 3: revise [R] -> [?]
-  expect(run(STATE, ["revise", "requirements-analysis"], proj).status).toBe(0);
-  stateAfterRevise = readFileSync(sp, "utf-8");
   // requirements-analysis declares a reviewer; record a fresh terminal review
-  // (after the revise) so the §12a gate precondition passes. This test targets
+  // before revise so the §12a gate precondition passes. This test targets
   // the reject/revise transition trail, not the reviewer gate.
   run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"], proj);
   run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"], proj);
+  // Step 3: revise [R] -> [?]
+  expect(run(STATE, ["revise", "requirements-analysis"], proj).status).toBe(0);
+  stateAfterRevise = readFileSync(sp, "utf-8");
   // Step 4: approve [?] -> [x] (auto-advances to the next in-scope stage).
   approveAck = run(
     STATE,

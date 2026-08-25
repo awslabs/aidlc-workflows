@@ -22,7 +22,9 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 | refactor | All 0.1-0.3 |
 | infra | All 0.1-0.3 |
 | security-patch | All 0.1-0.3 |
+| classic | All 0.1-0.3 |
 | workshop | All 0.1-0.3 |
+| express | All 0.1-0.3 |
 
 ## Stage Summary
 
@@ -57,7 +59,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 - None (entry point)
 
 ### Outputs
-- one artifact directory per phase the scope runs: `<record>/initialization/`, plus each of `ideation/`, `inception/`, `construction/`, `operation/` holding at least one EXECUTE stage. A phase the scope excludes gets no directory (a bugfix record has no `ideation/` or `operation/`), and per-stage subdirectories are not created here: a stage's directory appears when it first writes an artifact
+- one artifact directory per phase the scope runs: `<record>/initialization/`, plus each of `ideation/`, `inception/`, `construction/`, `operation/` holding at least one EXECUTE stage. A phase the scope excludes gets no directory (a bugfix record has no `ideation/`), and per-stage subdirectories are not created here: a stage's directory appears when it first writes an artifact
 - `<record>/verification/` (created for every scope)
 - the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`)
 - the intent's `audit/` shard dir (header + session + scaffold events)
@@ -127,7 +129,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 
 ### Inputs
 - Workspace classification from workspace-detection (same tool call)
-- Scope configuration (from `--scope` flag or `poc` default)
+- Scope configuration (from `--scope` flag, `AWS_AIDLC_DEFAULT_SCOPE`, or the `classic` default)
 - Depth / test-strategy overrides if passed
 - State contract from `.claude/knowledge/aidlc-shared/state-template.md`
 - Compiled `tools/data/stage-graph.json` and `tools/data/scope-grid.json`
@@ -138,7 +140,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 
 ### Notes
 - Brownfield projects route to reverse-engineering (Stage 2.1)
-- Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor; practices-discovery for workshop, since workshop skips all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
+- Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor/express; practices-discovery for classic/workshop, since both skip all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
 - When invoked from `/aidlc-init` (the explicit birth packaging), the orchestrator stops after this stage
 - When invoked from workflow start (`/aidlc <scope>` or describing what to build), the orchestrator continues into the first post-init stage
 

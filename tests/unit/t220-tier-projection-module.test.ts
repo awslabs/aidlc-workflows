@@ -14,7 +14,14 @@
 // echoing the table; a deliberate retune must edit both, which is the point.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -42,6 +49,7 @@ const EXPECTED: Record<
   {
     claude: { model: string; effort: "medium" | null };
     codex: { model: string | null; effort: "medium" | null };
+    cursor: { model: string | null };
     kiro: { model: string | null };
     opencode: { model: string | null; variant: "medium" | null };
   }
@@ -49,6 +57,7 @@ const EXPECTED: Record<
   judgment: {
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
+    cursor: { model: null },
     kiro: { model: null },
     opencode: { model: null, variant: null },
   },
@@ -58,7 +67,10 @@ const EXPECTED: Record<
     // with no finding-quality loss (an xhigh session pin was silently
     // doubling every review's cost via inherit).
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.4", effort: "medium" },
+    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    // Cursor never pins a model either: model availability is Cursor-plan-
+    // dependent (Free rejects every named id), so all tiers inherit.
+    cursor: { model: null },
     // Kiro never pins a model (#601): shipped IDs resolve only when that
     // model is enabled on the user's install, so every Kiro tier inherits
     // the session model.
@@ -67,7 +79,8 @@ const EXPECTED: Record<
   },
   templated: {
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.4", effort: "medium" },
+    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    cursor: { model: null },
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
   },
@@ -109,7 +122,7 @@ describe("t220 tier projection module", () => {
 
   // --- projectTier: every tier x every projection flavor ---------------------
   for (const tier of TIERS) {
-    for (const flavor of ["claude", "codex", "kiro", "opencode"] as const) {
+    for (const flavor of ["claude", "codex", "cursor", "kiro", "opencode"] as const) {
       test(`projectTier(${tier}, ${flavor}) matches the pinned policy`, () => {
         expect(projectTier(tier, flavor)).toEqual(EXPECTED[tier][flavor]);
       });
@@ -283,15 +296,18 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     expect(/^model\s*=/m.test(arch), "judgment TOML must omit model").toBe(false);
     expect(/^model_reasoning_effort\s*=/m.test(arch), "judgment TOML must omit effort").toBe(false);
     const lead = readFileSync(dist("codex", ".codex", "agents", "aidlc-product-lead-agent.toml"), "utf-8");
-    expect(lead).toContain('model = "openai.gpt-5.4"');
+    expect(lead).toContain('model = "openai.gpt-5.6-terra"');
     expect(lead).toContain('model_reasoning_effort = "medium"');
     const delivery = readFileSync(dist("codex", ".codex", "agents", "aidlc-delivery-agent.toml"), "utf-8");
-    expect(delivery).toContain('model = "openai.gpt-5.4"');
+    expect(delivery).toContain('model = "openai.gpt-5.6-terra"');
     expect(delivery).toContain('model_reasoning_effort = "medium"');
   });
 
   const kiroHarnesses = HARNESS_MATRIX.filter(
     (harness) => harness.capabilities.kiroAgentJson,
+  );
+  const kiroFamilyHarnesses = HARNESS_MATRIX.filter(
+    (harness) => harness.name === "kiro" || harness.name === "kiro-ide",
   );
   test("matrix exposes at least one kiroAgentJson harness (floor guard)", () => {
     expect(kiroHarnesses.length).toBeGreaterThan(0);
@@ -328,7 +344,7 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
       if (!m) throw new Error("no frontmatter");
       return m[1];
     };
-    for (const harness of kiroHarnesses) {
+    for (const harness of kiroFamilyHarnesses) {
       const dir = join(harness.engineRoot, "agents");
       for (const f of readdirSync(dir).filter((n) => n.endsWith("-agent.md"))) {
         const fm = fmOf(readFileSync(join(dir, f), "utf-8"));
@@ -340,18 +356,16 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     }
   });
 
-  test("kiro cli.json modelDefaults: authored conditional entries only, no tier-derived pins", () => {
-    for (const harness of ["kiro", "kiro-ide"]) {
-      const s = JSON.parse(
-        readFileSync(dist(harness, ".kiro", "settings", "cli.json"), "utf-8"),
-      ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
-      const defaults = s["chat.modelDefaults"];
-      // The authored orchestrator entry survives: conditional (applies only
-      // when the session runs that model), inert for spawns.
-      expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
-      // No tier-derived entry ships while no tier pins a Kiro model.
-      expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
-    }
+  test("Kiro CLI cli.json keeps authored defaults; Kiro IDE ships no CLI settings", () => {
+    const s = JSON.parse(
+      readFileSync(dist("kiro", ".kiro", "settings", "cli.json"), "utf-8"),
+    ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
+    const defaults = s["chat.modelDefaults"];
+    expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
+    expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
+    expect(
+      existsSync(dist("kiro-ide", ".kiro", "settings", "cli.json")),
+    ).toBe(false);
   });
 
   // Full-roster completeness: raw `tier:` must never leak into ANY shipped

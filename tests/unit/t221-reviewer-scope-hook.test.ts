@@ -1,7 +1,7 @@
 // t221-reviewer-scope-hook: the deterministic PreToolUse enforcement of the
-// per-unit reviewer read-scope bound (stage-protocol 12a).
+// per-unit reviewer read-scope bound (stage-protocol-reviewer.md §12a).
 //
-// covers: hook:aidlc-reviewer-scope, file:aidlc-common/protocols/stage-protocol.md §12a,
+// covers: hook:aidlc-reviewer-scope, file:aidlc-common/protocols/stage-protocol-reviewer.md §12a,
 // file:harness/kiro/hooks/aidlc-kiro-adapter.ts, file:skills/aidlc/SKILL.md reviewer bullet
 //
 // Three layers, matching the hook's structure:
@@ -53,7 +53,7 @@ const CURRENT_UNIT_CONTEXT: ScopeContext = {
 const DISPATCH: Pick<ReviewerDispatch, "unit" | "exempt"> = {
   unit: "U03-scoring",
   exempt: [
-    "aidlc/spaces/default/intents/x/inception/application-design/components.md",
+    "aidlc/spaces/default/intents/x/inception/domain-design/components.md",
     "aidlc/spaces/default/intents/x/construction/U01-infra/functional-design/design.md",
   ],
 };
@@ -89,7 +89,7 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "shared inception contract allowed (no construction/ component)",
       tool: "Read",
-      input: { file_path: "aidlc/spaces/default/intents/x/inception/application-design/components.md" },
+      input: { file_path: "aidlc/spaces/default/intents/x/inception/domain-design/components.md" },
       block: false,
     },
     {
@@ -375,7 +375,12 @@ function scratchProject(): string {
   mkdirSync(join(dir, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(dir, ".claude", "tools"), { recursive: true });
   cpSync(join(AIDLC_SRC, "hooks", "aidlc-reviewer-scope.ts"), join(dir, ".claude", "hooks", "aidlc-reviewer-scope.ts"));
-  for (const t of ["aidlc-lib.ts", "aidlc-runtime-paths.ts", "aidlc-audit.ts"]) {
+  for (const t of [
+    "aidlc-lib.ts",
+    "aidlc-artifact-vocabulary.ts",
+    "aidlc-runtime-paths.ts",
+    "aidlc-audit.ts",
+  ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
   mkdirSync(join(dir, "aidlc", "spaces", "default", "intents"), { recursive: true });
@@ -563,15 +568,23 @@ describe("t221 (c) harness registration and protocol prose", () => {
           readFileSync(join(harness.engineRoot, "agents", `${agent}.json`), "utf-8"),
         ) as { hooks?: { preToolUse?: Array<{ matcher?: string; command?: string }> } };
         const entries = a.hooks?.preToolUse ?? [];
-        const scopeEntries = entries.filter((e) => e.command?.includes("reviewer-scope"));
-        expect(scopeEntries.length, `${harness.name}/${agent}`).toBe(3);
-        const matchers = scopeEntries.map((e) => e.matcher).sort();
+        const reviewerEntries = entries.filter((entry) =>
+          entry.command?.includes("aidlc-kiro-adapter.ts reviewer-scope")
+        );
+        expect(reviewerEntries.length, `${harness.name}/${agent}`).toBe(3);
+        const matchers = reviewerEntries.map((e) => e.matcher).sort();
         expect(matchers).toEqual(["execute_bash", "fs_read", "fs_write"]);
-        for (const e of scopeEntries) {
+        for (const e of reviewerEntries) {
           // The registration passes its own agent name so the adapter forwards
           // a real identity instead of a bare scoped_registration.
           expect(e.command).toContain(`aidlc-kiro-adapter.ts reviewer-scope ${agent}`);
         }
+        expect(
+          entries.some((entry) =>
+            entry.command?.includes(`aidlc-kiro-adapter.ts state-transition-guard ${agent}`)
+          ),
+          `${harness.name}/${agent}`,
+        ).toBe(true);
       }
     }
   });
@@ -599,6 +612,29 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
+  test("Copilot .github/hooks/aidlc.json wires the adapter's guard-tool-call target on PreToolUse", () => {
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "copilot-hooks",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      const wiring = JSON.parse(
+        readFileSync(join(harness.distRoot, ".github", "hooks", "aidlc.json"), "utf-8"),
+      ) as { hooks: Record<string, Array<{ bash?: string; matcher?: string }>> };
+      const pre = wiring.hooks.PreToolUse ?? [];
+      // ONE matcher-free guard-tool-call registration serves both guards (the
+      // adapter runs state-transition-guard then reviewer-scope): VS Code
+      // parses but IGNORES matchers, so the target self-filters instead.
+      expect(
+        pre.some((h) =>
+          (h.bash ?? "").endsWith("aidlc-copilot-adapter.ts guard-tool-call")
+        ),
+        harness.name,
+      ).toBe(true);
+      for (const h of pre) expect(h.matcher, harness.name).toBeUndefined();
+    }
+  });
+
   test("Codex hooks.json wires the adapter's reviewer-scope target on PreToolUse", () => {
     const harnesses = HARNESS_MATRIX.filter(
       (harness) => harness.capabilities.reviewerScopeRegistration === "codex-hooks",
@@ -621,9 +657,43 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("stage-protocol 12a carries the dispatch-record write (step 1) and delete (step 3)", () => {
+  test("Cursor hooks.json wires the adapter's guards target on preToolUse", () => {
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "cursor-hooks",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      // Cursor's schema is camelCase and matcher-free; the single "guards"
+      // target runs the state-transition guard AND the reviewer-scope bound
+      // (adapter-ordered, mirroring the Claude settings.json registration).
+      const wiring = JSON.parse(
+        readFileSync(join(harness.engineRoot, "hooks.json"), "utf-8"),
+      ) as { hooks: Record<string, Array<{ command: string }>> };
+      const pre = wiring.hooks.preToolUse ?? [];
+      expect(
+        pre.some(
+          (h) =>
+            h.command ===
+            `bun ${harness.manifest.harnessDir}/hooks/aidlc-cursor-adapter.ts guards`,
+        ),
+      ).toBe(true);
+      const adapter = readFileSync(
+        join(harness.engineRoot, "hooks", "aidlc-cursor-adapter.ts"),
+        "utf-8",
+      );
+      expect(adapter).toContain("aidlc-reviewer-scope.ts");
+      expect(adapter).toContain("aidlc-state-transition-guard.ts");
+    }
+  });
+
+  test("reviewer protocol module carries the dispatch-record write and delete", () => {
     const body = readFileSync(
-      join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md"),
+      join(
+        AIDLC_SRC,
+        "aidlc-common",
+        "protocols",
+        "stage-protocol-reviewer.md",
+      ),
       "utf-8",
     );
     expect(body).toContain(".aidlc-reviewer-dispatch.json");
@@ -636,14 +706,13 @@ describe("t221 (c) harness registration and protocol prose", () => {
     expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`/s);
   });
 
-  test("harnesses with reviewer-scope enforcement carry the dispatch-record instruction", () => {
+  test("harnesses with reviewer-scope enforcement point at the shared module", () => {
     for (const harness of HARNESS_MATRIX.filter(
       (entry) => entry.capabilities.reviewerScopeRegistration !== "unsupported",
     )) {
       const body = readFileSync(join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"), "utf-8");
       const labelled = `harness ${harness.name}: ${body}`;
-      expect(labelled).toContain(".aidlc-reviewer-dispatch.json");
-      expect(labelled).toContain("Delete the dispatch record");
+      expect(labelled).toContain("stage-protocol-reviewer.md");
     }
   });
 
@@ -652,9 +721,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
       join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),
       "utf-8",
     );
-    expect(body).toContain("read-scope bound is prose-only on this harness");
-    expect(body).toContain("no IDE reviewer-scope hook consumes that record");
-    expect(body).toContain("shared protocol makes its dispatch-record steps conditional");
+    expect(body).toContain("stage-protocol-reviewer.md");
     expect(body).not.toContain(".aidlc-reviewer-dispatch.json");
     expect(body).not.toContain("reviewer-scope PreToolUse hook enforces");
   });

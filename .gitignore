@@ -34,6 +34,7 @@ tests/logs/
 # Anchored to repo root; distinct from .claude/worktrees above which is
 # the framework-development worktree convention.
 /.aidlc/
+/aidlc/spaces/*/intents/.aidlc-*
 
 # Local scratch — explainers, throwaway HTML, etc. (claude writes explainers here)
 tmp/

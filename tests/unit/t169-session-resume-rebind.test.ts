@@ -118,6 +118,25 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");
   });
 
+  test("cross-space rebind emits two sequential skill invocations", () => {
+    const a = createIntent(proj, "billing", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    setActiveSpaceCursor(proj, "default");
+    fire(proj, "startup", "S-CROSS");
+
+    const b = createIntent(proj, "search", "team-b", "feature");
+    setActiveIntentCursor(proj, b.dirName, "team-b");
+    setActiveSpaceCursor(proj, "team-b");
+
+    const resumed = fire(proj, "resume", "S-CROSS");
+    expect(resumed.exitCode).toBe(0);
+    expect(resumed.context).toContain("first run `/aidlc space default`");
+    expect(resumed.context).toContain(
+      "after it completes, run `/aidlc intent billing`",
+    );
+    expect(resumed.context).not.toContain("&&");
+  });
+
   test("resume with NO prior stamp (fresh session id) offers nothing", () => {
     const a = createIntent(proj, "search", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
@@ -125,6 +144,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "NEVER-STAMPED");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");
+    expect(readSessionIntentUuid(proj, "NEVER-STAMPED")).toBe(a.uuid);
   });
 
   test("flat-legacy project (no per-intent record) never offers a rebind", () => {

@@ -69,7 +69,7 @@ You are a senior QA engineer and performance specialist responsible for all test
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Testing Posture` for TDD/BDD cadence, tests-after policy, and coverage stance when designing test plans and quality gates.
+1. `aidlc/spaces/default/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Testing Posture` for TDD/BDD cadence, tests-after policy, and coverage stance when designing test plans and quality gates.
 2. `.aidlc/knowledge/aidlc-shared/` — methodology principles
 3. `.aidlc/knowledge/aidlc-quality-agent/` — agent-specific methodology
 4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)

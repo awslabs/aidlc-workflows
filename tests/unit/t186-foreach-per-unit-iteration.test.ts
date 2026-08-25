@@ -58,12 +58,14 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
 const BUN = process.execPath; // the bun running this test
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 
 // The record-relative prefix every resolved per-unit path is rooted at, the
 // active intent's record dir (relativeRecordDir over the seeded default intent).
@@ -74,9 +76,10 @@ const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 // declared under optional_produces and is exempt from per-unit coverage, so it
 // is deliberately NOT in this set.
 const FD_REQUIRED_PRODUCES = [
-  "business-logic-model",
-  "business-rules",
-  "domain-entities",
+  "entities",
+  "rules",
+  "functional-spec",
+  "traceability",
 ];
 
 const tempDirs: string[] = [];
@@ -107,12 +110,43 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
   }
 }
 
+function completeWave(proj: string, stage: string, unit: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      "complete",
+      "--wave",
+      "--stage",
+      stage,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
+  }
+}
+
 interface Directive {
   kind?: string;
   stage?: string;
   unit?: string;
   gate?: unknown;
   produces?: string[];
+  wave?: {
+    batch_index: number;
+    entries: Array<{
+      unit: string;
+      build_required: boolean;
+      review_state: string;
+      required_produces: string[];
+    }>;
+  };
   message?: string;
   [k: string]: unknown;
 }
@@ -135,7 +169,7 @@ function constructionState(current: string, skeletonStance?: string): string {
 - **Project**: per-unit iteration test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 ${stanceLine}
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -154,7 +188,7 @@ ${stanceLine}
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -186,7 +220,7 @@ function coverUnit(
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of producesNames) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
   }
 }
 
@@ -246,10 +280,15 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("alpha");
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/functional-design/business-logic-model.md`,
+      `${RP}/construction/alpha/functional-design/functional-spec.md`,
     );
     // The literal placeholder is gone, the real unit was substituted.
     expect(d.produces?.some((p) => p.includes("{unit-name}"))).toBe(false);
+    expect(d.wave?.entries.map((entry) => entry.unit)).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    expect(d.wave?.entries.every((entry) => entry.build_required)).toBe(true);
   }, 30000);
 
   // 2: gate suppressed on a non-last unit, alpha + beta both uncovered, so
@@ -262,18 +301,20 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.gate).toBe(false);
   }, 30000);
 
-  // 3: iteration advance, cover alpha's full produces[] on disk -> next emits
-  // unit=beta (the engine walks to the next uncovered unit).
-  test("3: covering the first unit advances the iteration to the next unit", () => {
+  // 3: artifact coverage alone does not cross the wave's review boundary.
+  test("3: covering the first unit keeps it active until its fresh review receipt", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
-    expect(d.unit).toBe("beta");
-    expect(d.produces).toContain(
-      `${RP}/construction/beta/functional-design/business-logic-model.md`,
-    );
+    expect(d.unit).toBe("alpha");
+    expect(d.gate).toBe(false);
+    expect(d.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      build_required: false,
+      review_state: "outstanding",
+    });
   }, 30000);
 
   // 4: gate STILL suppressed on the LAST uncovered unit. alpha covered, beta the
@@ -285,6 +326,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
+    logReviewReady(proj, "functional-design", "alpha");
+    completeWave(proj, "functional-design", "alpha");
     const d = runNext(proj);
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(false);
@@ -301,7 +344,48 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBeUndefined();
     expect(d.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/business-logic-model.md`,
+      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
+    );
+  }, 30000);
+
+  test("5b: a composed plan that skips Units Generation ignores a stale valid DAG", () => {
+    const proj = seedProject("functional-design", "on");
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        "- [-] domain-design — EXECUTE",
+        "- [S] units-generation — SKIP\n- [-] domain-design — EXECUTE",
+      ),
+    );
+    seedBoltDag(proj, ["stale-alpha"]);
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("functional-design");
+    expect(d.unit).toBeUndefined();
+    expect(d.produces).toContain(
+      `${RP}/construction/functional-design/functional-spec.md`,
+    );
+    expect(d.produces?.some((path) => path.includes("{unit-name}"))).toBe(false);
+
+    const unitStart = spawnSync(
+      BUN,
+      [
+        STATE,
+        "unit",
+        "start",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "stale-alpha",
+        "--project-dir",
+        proj,
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(unitStart.status).not.toBe(0);
+    expect(`${unitStart.stdout ?? ""}${unitStart.stderr ?? ""}`).toContain(
+      "runs once at stage level",
     );
   }, 30000);
 
@@ -341,15 +425,15 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.message).not.toContain("alpha"); // alpha is covered, not named
   }, 30000);
 
-  // 7: single-row case, a NON-per-unit stage (application-design) still emits
+  // 7: single-row case, a NON-per-unit stage (domain-design) still emits
   // with NO `unit` field and its normal gate, even with a bolt_dag present (the
   // per-unit path must not perturb the non-per-unit single-directive case).
   test("7: a non-per-unit stage emits no unit field and its normal gate", () => {
-    const proj = seedProject("application-design", "on");
+    const proj = seedProject("domain-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
-    expect(d.stage).toBe("application-design");
+    expect(d.stage).toBe("domain-design");
     expect(d.unit).toBeUndefined();
     expect(d.produces?.some((p) => p.includes("/construction/"))).toBe(false);
   }, 30000);
@@ -366,10 +450,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.gate).toBe(false);
   }, 30000);
 
-  // 9: all-covered settle. Both units covered on disk but the checkbox is still
-  // in-flight -> next emits the LAST unit with the stage's REAL gate (true), so
-  // the single human approval is presented only after every unit is built.
-  test("9: with every unit covered, next presents the real gate on the last unit", () => {
+  // 9: all-covered is not all-settled until the review receipts are fresh.
+  test("9: with every unit covered, next keeps the wave active for review", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
@@ -377,8 +459,12 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
-    expect(d.unit).toBe("beta"); // the last unit in topo order
-    expect(d.gate).toBe(true);
+    expect(d.unit).toBe("alpha");
+    expect(d.gate).toBe(false);
+    expect(d.wave?.entries.every((entry) => !entry.build_required)).toBe(true);
+    expect(
+      d.wave?.entries.every((entry) => entry.review_state === "outstanding"),
+    ).toBe(true);
   }, 30000);
 
   test("9a: a covered gate:false unit without confirmation stops per-unit progression", () => {
@@ -400,6 +486,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     coverUnit(proj, "beta", "functional-design", FD_REQUIRED_PRODUCES);
     logReviewReady(proj, "functional-design", "alpha");
     logReviewReady(proj, "functional-design", "beta");
+    completeWave(proj, "functional-design", "alpha");
+    completeWave(proj, "functional-design", "beta");
     const d = runReport(proj, [
       "--stage",
       "functional-design",
@@ -407,6 +495,22 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       "approved",
     ]);
     expect(d.kind).toBe("done");
+  }, 30000);
+
+  test("9c: every fresh terminal review settles the wave and presents the gate", () => {
+    const proj = seedProject("functional-design", "on");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_REQUIRED_PRODUCES);
+    logReviewReady(proj, "functional-design", "alpha");
+    logReviewReady(proj, "functional-design", "beta");
+    completeWave(proj, "functional-design", "alpha");
+    completeWave(proj, "functional-design", "beta");
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.unit).toBe("beta");
+    expect(d.gate).toBe(true);
+    expect(d.wave).toBeUndefined();
   }, 30000);
 
   // 10: re-reporting an ALREADY-completed ([x]) per-unit stage with a DAG present
@@ -438,7 +542,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     ]);
     // The guard must not fire on a completed stage; report commits the forward
     // transition (a done directive), never a per-unit coverage error.
-    expect(d.kind).not.toBe("error");
+    expect(d.kind).toBe("done");
   }, 30000);
 
   // 11: skeleton-gate precedence. functional-design is the FIRST construction
@@ -455,7 +559,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.gate).toBe("unresolved");
     expect(d.unit).toBeUndefined();
     expect(d.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/business-logic-model.md`,
+      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
     );
   }, 30000);
 
@@ -480,7 +584,12 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   // 13: a report arriving at an autonomous swarm's batch boundary must not
   // complete the whole stage. Only a valid DAG with current-run convergence
   // rows for every unit can receive the report-side disk-coverage exemption.
-  const CG_PRODUCES = ["code-generation-plan", "code-summary"];
+  const CG_PRODUCES = [
+    "code-generation-plan",
+    "unit-test-instructions",
+    "code-summary",
+    "traceability",
+  ];
   test("13: autonomous multi-batch swarm refuses approval before every batch converges", () => {
     const proj = seedProject("code-generation", "on");
     // code-generation must be in-flight (not pending) for an approve to be valid;

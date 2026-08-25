@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts session-start" }
+    ],
+    "sessionEnd": [
+      { "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts session-end" }
+    ],
+    "beforeSubmitPrompt": [
+      { "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts mint" }
+    ],
+    "preToolUse": [
+      {
+        "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts guards",
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      { "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts audit-and-sensors" },
+      { "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts runtime-compile" }
+    ],
+    "postToolUseFailure": [
+      { "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts task-failure" }
+    ],
+    "preCompact": [
+      { "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts validate-state" }
+    ],
+    "stop": [
+      {
+        "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts stop",
+        "loop_limit": 10
+      }
+    ]
+  }
+}

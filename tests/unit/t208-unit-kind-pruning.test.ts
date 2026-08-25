@@ -34,28 +34,33 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // nfr-requirements produces[] and their per-kind applicability (verified against
-// the stage frontmatter): performance/scalability/reliability are kind-gated;
-// security-requirements + tech-stack-decisions are unannotated = all kinds.
+// the stage frontmatter): performance/scalability/reliability/observability are
+// kind-gated; security-requirements + tech-stack-decisions are unannotated =
+// all kinds.
 const NFR_REQ_ALL = [
   "performance-requirements",
   "security-requirements",
   "scalability-requirements",
   "reliability-requirements",
+  "observability-requirements",
   "tech-stack-decisions",
+  "traceability",
 ];
 // A spec unit keeps only the two unannotated ones.
-const NFR_REQ_SPEC = ["security-requirements", "tech-stack-decisions"];
+const NFR_REQ_SPEC = ["security-requirements", "tech-stack-decisions", "traceability"];
 
-const FD_PRODUCES = ["business-logic-model", "business-rules", "domain-entities", "frontend-components"];
+const FD_PRODUCES = ["entities", "rules", "functional-spec", "traceability", "frontend-components"];
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -79,7 +84,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - **Project**: unit-kind pruning test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: ${skeletonStance}
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -98,7 +103,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -110,7 +115,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 function coverUnit(proj: string, unit: string, slug: string, names: string[]): void {
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
-  for (const name of names) writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+  for (const name of names) writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
 }
 
 function seedProject(current: string): string {
@@ -140,11 +145,19 @@ function runNext(proj: string): Directive {
  * var deleted), while the human-presence guard stays disabled so only the
  * artifact-guard behaviour is under test (mirrors t185's per-guard isolation).
  */
-function runReport(proj: string, args: string[], enforceGuard = false): Directive {
+function runReport(
+  proj: string,
+  args: string[],
+  enforceGuard = false,
+  skipReviewerGateGuard = false,
+): Directive {
   const env = envNoScope();
   if (enforceGuard) {
     delete env.AIDLC_SKIP_ARTIFACT_GUARD;
     env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+  }
+  if (skipReviewerGateGuard) {
+    env.AIDLC_SKIP_REVIEWER_GATE_GUARD = "1";
   }
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], { encoding: "utf-8", env });
   try {
@@ -154,12 +167,17 @@ function runReport(proj: string, args: string[], enforceGuard = false): Directiv
   }
 }
 
-function logReviewReady(proj: string, unit: string, iteration = 1): void {
+function logReviewReady(
+  proj: string,
+  unit: string,
+  iteration = 1,
+  stage = "functional-design",
+): void {
   const args = [
     LOG,
     "review",
     "--stage",
-    "functional-design",
+    stage,
     "--reviewer",
     "aidlc-architecture-reviewer-agent",
     "--unit",
@@ -177,18 +195,68 @@ function logReviewReady(proj: string, unit: string, iteration = 1): void {
   }
 }
 
+function logStageReviewReady(
+  proj: string,
+  stage = "functional-design",
+): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    stage,
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    proj,
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const result = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+    });
+    if ((result.status ?? -1) !== 0) {
+      throw new Error(
+        `stage review log failed: ${result.stdout ?? ""}${result.stderr ?? ""}`,
+      );
+    }
+  }
+}
+
+function completeWave(proj: string, unit: string, stage: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      "complete",
+      "--wave",
+      "--stage",
+      stage,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
+  }
+}
+
 function logArtifactUpdated(proj: string, unit: string): void {
   const file = join(
     seededRecordDir(proj),
     "construction",
     unit,
     "functional-design",
-    "business-rules.md",
+    "rules.md",
   );
   appendAuditEntry("ARTIFACT_UPDATED", {
     Tool: "Edit",
     File: file,
-    Context: `construction > ${unit} > functional-design > business-rules.md`,
+    Context: `construction > ${unit} > functional-design > rules.md`,
   }, proj);
 }
 
@@ -210,7 +278,7 @@ function seedDependencyArtifact(
 
 describe("t208 engine unit-kind pruning", () => {
   // 1: a spec unit's nfr-requirements directive carries only the unannotated
-  // (all-kinds) artifacts; the three service-gated ones are pruned out.
+  // (all-kinds) artifacts; the four service-gated ones are pruned out.
   test("1: a spec unit's directive prunes the kind-gated produces paths", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "api", kind: "spec" }]);
@@ -218,9 +286,14 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.stage).toBe("nfr-requirements");
     expect(d.unit).toBe("api");
     for (const keep of NFR_REQ_SPEC) {
-      expect(d.produces).toContain(`${RP}/construction/api/nfr-requirements/${keep}.md`);
+      expect(d.produces).toContain(`${RP}/construction/api/nfr-requirements/${artifactFilename(keep)}`);
     }
-    for (const gone of ["performance-requirements", "scalability-requirements", "reliability-requirements"]) {
+    for (const gone of [
+      "performance-requirements",
+      "scalability-requirements",
+      "reliability-requirements",
+      "observability-requirements",
+    ]) {
       expect(d.produces?.some((p) => p.includes(`/${gone}.md`))).toBe(false);
     }
   }, 30000);
@@ -231,20 +304,22 @@ describe("t208 engine unit-kind pruning", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "api", kind: "spec" }, { name: "svc" }]);
     coverUnit(proj, "api", "nfr-requirements", NFR_REQ_SPEC);
+    logReviewReady(proj, "api", 1, "nfr-requirements");
+    completeWave(proj, "api", "nfr-requirements");
     const d = runNext(proj);
     // api is covered by its two-artifact pruned set; the engine moves to svc.
     expect(d.unit).toBe("svc");
   }, 30000);
 
   // 3: an untagged unit in the SAME dag still owes the FULL matrix (per-unit
-  // conservatism). svc (no kind) must still produce all five paths.
+  // conservatism). svc (no kind) must still produce all six paths.
   test("3: an untagged unit still requires the full matrix", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "svc" }]);
     const d = runNext(proj);
     expect(d.unit).toBe("svc");
     for (const name of NFR_REQ_ALL) {
-      expect(d.produces).toContain(`${RP}/construction/svc/nfr-requirements/${name}.md`);
+      expect(d.produces).toContain(`${RP}/construction/svc/nfr-requirements/${artifactFilename(name)}`);
     }
   }, 30000);
 
@@ -269,7 +344,12 @@ describe("t208 engine unit-kind pruning", () => {
   test("5: an all-vacuous per-unit stage approves (guard's vacuous branch)", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "pack1", kind: "packaging" }, { name: "pack2", kind: "packaging" }]);
-    const d = runReport(proj, ["--stage", "functional-design", "--result", "approved"], true);
+    const d = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+      true,
+    );
     expect(d.kind).toBe("done");
   }, 30000);
 
@@ -301,6 +381,23 @@ describe("t208 engine unit-kind pruning", () => {
       true,
     );
     expect(d.kind).toBe("done");
+  }, 30000);
+
+  test("5c2: a stage-level receipt cannot satisfy per-unit reviews when a DAG exists", () => {
+    const proj = seedProject("functional-design");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    logStageReviewReady(proj);
+
+    const refused = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("2 of 2 applicable units");
+    expect(refused.message).toContain("Never reviewed: alpha, beta");
   }, 30000);
 
   test("5d: stale DAG healing keeps per-unit review enforcement complete", () => {
@@ -397,6 +494,28 @@ describe("t208 engine unit-kind pruning", () => {
     expect(accepted.kind).toBe("done");
   }, 30000);
 
+  test("5g: mixed stale and never-reviewed units get both remedies", () => {
+    const proj = seedProject("functional-design");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    logReviewReady(proj, "alpha");
+    logArtifactUpdated(proj, "alpha");
+
+    const refused = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("Invalidated receipts: alpha");
+    expect(refused.message).toContain("Never reviewed: beta");
+    expect(refused.message).toContain(
+      "For invalidated units with recovery available (alpha)",
+    );
+    expect(refused.message).toContain("For never-reviewed units (beta)");
+  }, 30000);
+
   // 6: a stage with NO produces_kinds (code-generation) ignores kinds entirely -
   // even a spec unit gets the full produces set.
   test("6: a stage without produces_kinds ignores kinds (full produces)", () => {
@@ -418,7 +537,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
     for (const name of FD_PRODUCES) {
-      expect(d.produces).toContain(`${RP}/construction/alpha/functional-design/${name}.md`);
+      expect(d.produces).toContain(`${RP}/construction/alpha/functional-design/${artifactFilename(name)}`);
     }
   }, 30000);
 
@@ -432,29 +551,32 @@ describe("t208 engine unit-kind pruning", () => {
     const d = runNext(proj);
     expect(d.unit).toBe("web");
     expect(d.produces).toContain(`${RP}/construction/web/functional-design/frontend-components.md`);
-    // ui's REQUIRED set is business-logic-model only (business-rules and
-    // domain-entities are mapped [service, spec, library]).
-    expect(d.produces).toContain(`${RP}/construction/web/functional-design/business-logic-model.md`);
-    expect(d.produces?.some((p) => p.includes("/business-rules.md"))).toBe(false);
+    // ui's REQUIRED set is functional-spec only (rules and
+    // entities are mapped [service, spec, library]).
+    expect(d.produces).toContain(`${RP}/construction/web/functional-design/functional-spec.md`);
+    expect(d.produces?.some((p) => p.includes("/rules.md"))).toBe(false);
 
     const proj2 = seedProject("functional-design");
     seedBoltDag(proj2, [{ name: "api", kind: "service" }]);
     const d2 = runNext(proj2);
     expect(d2.unit).toBe("api");
     expect(d2.produces?.some((p) => p.includes("/frontend-components.md"))).toBe(false);
-    for (const name of ["business-logic-model", "business-rules", "domain-entities"]) {
+    for (const name of ["functional-spec", "rules", "entities"]) {
       expect(d2.produces).toContain(`${RP}/construction/api/functional-design/${name}.md`);
     }
   }, 30000);
 
   // 8b: optional stays coverage-EXEMPT even for the kind it applies to. A ui
-  // unit that wrote only its required artifact (business-logic-model) is
+  // unit that wrote only its required artifacts (functional-spec and
+  // traceability) is
   // covered without frontend-components on disk - the per-unit iteration
   // advances to the next unit.
   test("8b: a ui unit is covered without its optional artifact on disk", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
-    coverUnit(proj, "web", "functional-design", ["business-logic-model"]);
+    coverUnit(proj, "web", "functional-design", ["functional-spec", "traceability"]);
+    logReviewReady(proj, "web");
+    completeWave(proj, "web", "functional-design");
     const d = runNext(proj);
     expect(d.unit).toBe("svc");
   }, 30000);

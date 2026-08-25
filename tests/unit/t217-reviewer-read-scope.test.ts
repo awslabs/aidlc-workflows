@@ -1,4 +1,4 @@
-// covers: file:aidlc-common/protocols/stage-protocol.md §12a,
+// covers: file:aidlc-common/protocols/stage-protocol-reviewer.md §12a,
 // file:agents/aidlc-architecture-reviewer-agent.md,
 // file:knowledge/aidlc-architecture-reviewer-agent/reviewing.md,
 // file:skills/aidlc/SKILL.md reviewer bullet
@@ -17,13 +17,13 @@ import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
-const PROTOCOL = "aidlc-common/protocols/stage-protocol.md";
+const PROTOCOL = "aidlc-common/protocols/stage-protocol-reviewer.md";
 const PERSONA = "agents/aidlc-architecture-reviewer-agent.md";
 const KNOWLEDGE = "knowledge/aidlc-architecture-reviewer-agent/reviewing.md";
 const SKILL = "skills/aidlc/SKILL.md";
 
 describe("t217 reviewer read-scope bound is stated on every surface", () => {
-  test("stage-protocol §12a step 1 names directive.consumes as a per-unit pass-list entry", () => {
+  test("stage-protocol-reviewer.md §12a step 1 names directive.consumes as a per-unit pass-list entry", () => {
     const body = readFileSync(join(AIDLC_SRC, PROTOCOL), "utf-8");
     // §12a section exists.
     expect(body).toContain("## 12a. Reviewer Invocation");
@@ -53,24 +53,35 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
     expect(body).toMatch(/Your scope is.*artifacts.*shared contracts/i);
     // Checklist item is rewritten to name the shared contracts, not a sibling-directory sweep.
     expect(body).toContain("components.md");
-    expect(body).toContain("component-methods.md");
-    expect(body).toContain("services.md");
+    expect(body).toContain("contract-summary.md");
     expect(body).toContain("unit-of-work.md");
     // Old bare checklist line is gone.
     expect(body).not.toMatch(/^- Cross-unit contract boundaries respected\?$/m);
   });
 
-  test("orchestrator SKILL.md reviewer bullet names directive.consumes and the read-scope bound", () => {
+  test("orchestrator SKILL.md points reviewer work at the conditional module", () => {
     for (const harness of HARNESS_MATRIX) {
       const path = join(harness.authoredRoot, SKILL);
       const body = readFileSync(path, "utf-8");
       const labelledBody = `harness ${harness.name}: ${path}\n${body}`;
-      // Reviewer step bullet exists and now carries both parts of the bound.
-      expect(labelledBody).toMatch(/Reviewer step \(§12a\)/);
-      expect(labelledBody).toMatch(/directive\.consumes/);
-      expect(labelledBody).toMatch(/must not read other units'? .*construction/i);
-      // The bound is tool-agnostic on every harness surface.
-      expect(labelledBody).toMatch(/grep, glob, and shell patterns/);
+      expect(labelledBody).toContain("stage-protocol-reviewer.md");
+      expect(labelledBody).toContain("directive.protocol_modules");
+    }
+  });
+
+  // PR #711 finding (apackeer, round 2): a workflow-level reviewer stage such as
+  // contract-design (no directive.unit) must ALSO receive directive.consumes, so
+  // its reviewer gets the unit DAG / components / requirements evidence — not
+  // only per-unit stages. The protocol and every harness skill must say so.
+  test("workflow-level reviewer stages also receive directive.consumes (protocol + every harness)", () => {
+    const protocol = readFileSync(join(AIDLC_SRC, PROTOCOL), "utf-8");
+    // §12a extends the pass-list to non-per-unit stages, naming contract-design.
+    expect(protocol.toLowerCase()).toContain("workflow-level");
+    expect(protocol).toMatch(/workflow-level[\s\S]*contract-design/i);
+    for (const harness of HARNESS_MATRIX) {
+      const body = readFileSync(join(harness.authoredRoot, SKILL), "utf-8");
+      const labelled = `harness ${harness.name}`;
+      expect(body, labelled).toContain("stage-protocol-reviewer.md");
     }
   });
 });

@@ -8,7 +8,8 @@
 // whose FIRST line is `**Collaborator:** <agent-slug>` verbatim. handleReport
 // refuses `--result approved` while any is missing or malformed, naming the
 // gap and the remediation; AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 is the escape
-// hatch; inline and pipeline stages carry no requirement; an already-[x]
+// hatch; inline stages carry no requirement (pipeline receipts are covered by
+// t304); an already-[x]
 // stage is an idempotent replay and is never blocked.
 //
 // SOURCE UNDER TEST: the ensemble-evidence guard in handleReport
@@ -85,7 +86,7 @@ function inceptionState(checkbox = "[?]"): string {
 - **Project**: ensemble evidence test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -117,7 +118,7 @@ function practicesState(
 - **Project**: practices ensemble evidence test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Practices Affirmed Timestamp**: ${affirmedTimestamp}
 
 ## Scope Configuration
@@ -308,7 +309,10 @@ function recordReview(proj: string, unit?: string, graphPath?: string): void {
     proj,
     "REVIEW_REQUESTED",
     "2026-07-19T00:00:00.000Z",
-    identity,
+    {
+      ...identity,
+      "Artifact Fingerprint": fingerprint,
+    },
   );
   appendAuditEvent(
     proj,
@@ -462,6 +466,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
   test("awaiting-approval opens only after all contribution evidence exists", () => {
     const proj = seedProject("[-]");
     for (const agent of MOB_SUPPORTS) writeContribution(proj, agent);
+    recordReview(proj);
     const d = runReport(proj, [
       "--stage",
       "user-stories",

@@ -20,10 +20,10 @@ graph LR
         I1 -.->|"7 stages"| I7
     end
 
-    subgraph INCEPTION["INCEPTION (2.1-2.8)"]
+    subgraph INCEPTION["INCEPTION (2.1-2.9)"]
         N1["Reverse Engineering"]
         N7["Delivery Planning"]
-        N1 -.->|"8 stages"| N7
+        N1 -.->|"9 stages"| N7
     end
 
     subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.7)"]
@@ -55,13 +55,13 @@ graph LR
 
 **Rules** (`rules/`) -- Organization and project guardrails. Self-learning: human corrections become persistent behavioral rules. Only ~35 lines total -- kept minimal to avoid context bloat in non-AI-DLC conversations.
 
-**Agents** (`agents/*.md`) -- Fourteen flat agent files: 11 domain-expert personas, 2 review-only agents, and the adaptive-workflows composer. Each defines its role, responsibilities, collaboration pattern, tools, and knowledge loading order. All have `disallowedTools: Task` -- only the conductor delegates.
+**Agents** (`agents/*.md`) -- Fourteen flat agent files: 11 domain-expert personas, 2 review-only agents, and the adaptive-workflows composer. Each defines its role, responsibilities, collaboration pattern, tools, and knowledge loading order. Authored core personas carry `disallowedTools: Task`; the packager keeps that native denial where supported and projects the same no-nested-delegation boundary to each harness's tool policy. Kiro agent Markdown omits the unsupported key, while Kiro CLI agent JSON and Kiro IDE `tools:` grants exclude the `subagent` tool from delegates.
 
 **Knowledge** (`knowledge/`) -- Two-tier methodology reference:
 - `aidlc-shared/` -- Principles, verification, brownfield safeguards, **audit event taxonomy** (canonical event registry), state template
 - `aidlc-<agent>-agent/` -- Per-agent methodology files (architecture patterns, testing strategies, etc.)
 
-**Skills** (`skills/aidlc/`) -- The orchestrator entry point (`SKILL.md`), stage protocol files (`stage-protocol.md`, `stage-protocol-recovery.md`, `stage-protocol-governance.md`), and 32 stage files across 5 phase directories (`stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/`).
+**Skills** (`skills/aidlc/`) -- The orchestrator entry point (`SKILL.md`), the static/recovery/governance protocol files plus four conditionally loaded reviewer/ensemble/Construction/swarm modules under `aidlc-common/protocols/`, and 33 stage files across 5 phase directories (`stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/`).
 
 **Hooks** (`hooks/`) -- Framework hooks for audit emission (PostToolUse on Write/Edit), session lifecycle (SessionStart, SessionEnd), state sync (PostToolUse on TaskUpdate), state validation (PreCompact), subagent tracking (SubagentStop), and statusline rendering. All framework files prefixed `aidlc-*.ts`.
 
@@ -109,7 +109,7 @@ Worked examples:
 - *"Trunk-based development is the recommended branching strategy"* — same for every project (framework opinion) and loaded continuously (read at delivery-planning). Goes to `aidlc/spaces/<active-space>/memory/org.md`.
 - *"The 5 common branching strategies and their trade-offs"* — same for every project (framework reference) and loaded continuously (aidlc-pipeline-deploy-agent reads when discovering branching strategy). Goes to `.claude/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md`.
 - *"This run's requirements analysis"* — project-specific and per-workflow (each run produces fresh analysis). Goes to `<record>/inception/requirements-analysis/`.
-- *"Bolt-1's worktree state mid-Construction"* — project-specific and per-workflow (regenerated each Bolt). Goes to the Bolt worktree's copy of the record dir, `.aidlc/worktrees/bolt-1/<record>/aidlc-state.md`.
+- *"State in the worktree hosting Bolt-1 mid-Construction"* — project-specific and per-workflow (regenerated for each swarm-mode Bolt). Goes to that worktree's copy of the record dir, `.aidlc/worktrees/bolt-1/<record>/aidlc-state.md`.
 
 ### Sub-categories of harness config (top row)
 
@@ -160,11 +160,11 @@ If any of the three is false, default to per-workflow-only.
 
 **Inline stages** -- The conductor reads the lead agent's flat file (e.g., `agents/aidlc-architect-agent.md`) and knowledge from `knowledge/[agent]/` for persona framing, then executes the stage directly in conversation. This allows real-time user interaction: asking questions, resolving ambiguity, and iterating on artifacts before approval.
 
-Twenty-eight stages use inline execution, including all three Initialization stages (Workspace Scaffold, Workspace Detection, State Init — all run deterministically inside `aidlc-utility intent-create`), all Ideation stages, five Inception stages (Requirements Analysis, Refined Mockups, Application Design, Units Generation, Delivery Planning), six Construction stages (Functional Design, NFR Requirements, NFR Design, Infrastructure Design, Build and Test, CI Pipeline), and all Operation stages. Note: Build and Test (3.6) runs once after all units are complete, not per-unit.
+Twenty-nine stages use inline execution, including all three Initialization stages (Workspace Scaffold, Workspace Detection, State Init — all run deterministically inside `aidlc-utility intent-create`), all Ideation stages, six Inception stages (Requirements Analysis, Refined Mockups, Domain Design, Units Generation, Contract Design, Delivery Planning), six Construction stages (Functional Design, NFR Requirements, NFR Design, Infrastructure Design, Build and Test, CI Pipeline), and all Operation stages. Note: Build and Test (3.6) runs once after all units are complete, not per-unit.
 
 **Subagent stages** -- The conductor prepares context (prior artifacts, project description, workspace findings) and delegates to a Claude Code Task tool subagent. The subagent executes autonomously and returns a structured summary. This is used for stages that benefit from focused, independent work without user interaction during execution. If a subagent call fails, the conductor retries once with a reduced-context prompt, then offers the user inline execution or skip-and-revisit as fallback options.
 
-Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent). The complete topology is 28 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-create`, not as a subagent.
+Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent). The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-create`, not as a subagent.
 
 ```mermaid
 flowchart LR
@@ -252,8 +252,8 @@ sequenceDiagram
 ## Source vs distribution (one core, many harnesses)
 
 The framework is **authored once and generated per harness** — today Claude
-Code, Kiro CLI, Kiro IDE, Codex CLI, and opencode, and any capable CLI you port
-it to. The
+Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and
+any capable CLI you port it to. The
 hand-authored source is a harness-neutral `core/` plus a thin `harness/<name>/`
 surface per CLI; `bun scripts/package.ts` regenerates the committed,
 drift-guarded `dist/<harness>/` trees:
@@ -271,15 +271,17 @@ scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/
 dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
-                       #   kiro-ide/.kiro, codex/{.codex,.agents} — never hand-edited
+                       #   kiro-ide/.kiro, codex/{.codex,.agents},
+                       #   opencode/{.aidlc,.opencode}, copilot/{.aidlc,.github} — never hand-edited
 ```
 
 `core/` `.ts` is byte-copied untransformed; the runtime `harnessDir()` seam
 (`core/tools/aidlc-lib.ts`) derives the harness dir from the shipped layout at
 execution time — open-set, from the tool's own path rather than a hardcoded
-list, so a new harness needs no edit here — and its rules-dir rename ships
-per-tree in a generated `tools/data/harness.json` the `rulesSubdir()` seam
-reads. One set of tool sources runs in every harness. See
+list, so a new harness needs no edit here. Its manifest name and rules-dir
+rename ship per-tree in generated `tools/data/harness.json`; runtime path
+resolution uses the name to distinguish shared engine directories and
+`rulesSubdir()` reads the rename. One set of tool sources runs in every harness. See
 [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md).
 
 ## Directory Structure
@@ -350,6 +352,10 @@ dist/claude/.claude/
         +-- stage-protocol.md
         +-- stage-protocol-recovery.md
         +-- stage-protocol-governance.md
+        +-- stage-protocol-reviewer.md
+        +-- stage-protocol-ensemble.md
+        +-- stage-protocol-construction.md
+        +-- stage-protocol-swarm.md
         +-- stages/
             +-- initialization/
             |   +-- workspace-scaffold.md
@@ -369,8 +375,9 @@ dist/claude/.claude/
             |   +-- requirements-analysis.md
             |   +-- user-stories.md
             |   +-- refined-mockups.md
-            |   +-- application-design.md
+            |   +-- domain-design.md
             |   +-- units-generation.md
+            |   +-- contract-design.md
             |   +-- delivery-planning.md
             +-- construction/
             |   +-- functional-design.md
@@ -434,7 +441,8 @@ and `memoryDirFor` (`aidlc-graph.ts:234`) — all default their space argument t
 `activeSpace(projectDir)`, so AI-DLC's own resolvers follow the cursor; switching
 spaces with `/aidlc space <name>` also
 re-points each harness-native rule include (the Claude `@`-import stub described
-above, Kiro CLI resources or IDE steering, Codex's rules dir) at the switched space's
+above, Kiro CLI resources or IDE steering, Codex's rules dir, opencode's
+`instructions` glob, and Copilot's `AGENTS.md` `@`-imports) at the switched space's
 `memory/`. At `default` the re-point is a byte-identical no-op, so a single-team
 committed tree never churns.
 
@@ -452,27 +460,27 @@ appends — there is intentionally no `merge=union` attribute.
 
 1. **Hybrid execution model (inline + dispatched topologies)** -- Stages requiring user interaction (questions, clarifications, approval iteration) run inline where the conductor has direct conversation access. Stages performing focused, autonomous work (code scanning, code generation) or genuine multi-agent collaboration (the mob) dispatch to subagents per the stage's `mode` topology. A pure-subagent model would prevent mid-stage user interaction; a pure-inline model would not benefit from focused agent specialization or independent perspectives.
 
-2. **Agent personas for inline stages** -- For inline stages, the conductor loads the agent's flat file as context to frame its perspective, rather than delegating to a subagent. This gives the benefits of domain-expert framing (the conductor thinks like an architect during Application Design) without the costs of subagent context transfer and loss of user interaction.
+2. **Agent personas for inline stages** -- For inline stages, the conductor loads the agent's flat file as context to frame its perspective, rather than delegating to a subagent. This gives the benefits of domain-expert framing (the conductor thinks like an architect during Domain Design) without the costs of subagent context transfer and loss of user interaction.
 
 3. **Two-link Reverse Engineering pipeline** -- Reverse Engineering (`mode: pipeline`) uses a developer subagent for code scanning, then an architect subagent for synthesis and the artifact writes. The conductor acts as the bus (subagents cannot spawn subagents in Claude Code), passing the developer's code scan results to the architect - the chain topology working as designed.
 
 4. **State tracking via aidlc-state.md** -- A single markdown state file tracks stage completion, current status, workspace context, scope configuration, execution plan, and runtime state (revision counts). Stages report outcomes to the orchestration engine; its internal state transition updates the file, emits lifecycle audit rows, and routes atomically. Stage prose never edits lifecycle checkboxes directly. A PostToolUse hook validates the state file structure after each write. Stage-level task IDs are resolved at runtime via `TaskList` (matching by subject like "Inception - Requirements Analysis") rather than stored in the state file -- this is more robust after context compaction since it reflects actual task system state.
 
-5. **Stage protocol as shared contract** -- All 32 stages follow `stage-protocol.md` for approval gates, question format (tri-mode: Guide Me / Edit File / Chat), completion messages, state tracking, error recovery, change handling, the §13 Learnings Ritual, and phase boundary verification. This ensures consistent behavior across all stages without repeating instructions in each stage file.
+5. **Stage protocol as shared contract** -- All 33 stages load `stage-protocol.md` for approval gates, question format (tri-mode: Guide Me / Edit File / Chat), completion messages, state tracking, and the §13 Learnings Ritual. Recovery and phase governance remain conditional files; reviewer, ensemble, Construction, and swarm machinery live in four additional conditional modules selected by `directive.protocol_modules`. This preserves consistent behavior without paying the rare-path context cost on every stage.
 
 6. **Two-tier knowledge architecture** -- Methodology knowledge ships with the framework in `knowledge/` (shared principles + per-agent methodology). User-managed team knowledge lives at the space level in `aidlc/knowledge/` (a sibling of the space's `intents/`), created empty by the engine and populated by the team. This separates framework upgrades from team customization.
 
 7. **Flat agent files** -- Each agent is a single `.md` file in `agents/` (not a subdirectory with `agent.md` + `knowledge/`). This simplifies the structure and makes agents discoverable. Methodology knowledge lives separately in `knowledge/[agent]/`.
 
-8. **Scope-driven adaptive depth** -- Nine named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop) plus auto-detect determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in SKILL.md (informational). NL keyword→scope inference reads each scope's `keywords` from its `.md` frontmatter. The user can override at any approval gate.
+8. **Scope-driven adaptive depth** -- Eleven named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) plus auto-detect determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in SKILL.md (informational). NL keyword→scope inference reads each scope's `keywords` from its `.md` frontmatter. The user can override at any approval gate.
 
-9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or is embedded in SKILL.md/stage-protocol.md. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.
+9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or the static/conditional protocol files. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.
 
 10. **Self-learning loop** -- When a human corrects agent behavior, the correction can become a persistent Rule. The §13 Learnings Ritual (tool-as-actor: `aidlc-learnings.ts` surfaces and persists; the user confirms) writes each confirmed learning as a practice into the active space memory layer — `aidlc/spaces/<active-space>/memory/project.md` (default), one-click promote to `memory/team.md` — or scaffolds a Sensor, applying on the next workflow's compile. See [Rule System](08-rule-system.md).
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 82-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 87-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

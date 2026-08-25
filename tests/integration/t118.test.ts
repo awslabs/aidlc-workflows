@@ -37,7 +37,7 @@
 //   SP2 jump backward (2): mirror of SP1 with feasibility / "backward".
 //   SP3 jump redo   (2): --stage == current; run-stage(code-generation) +
 //       resolve `.direction` === "redo".
-//   SP4 resume (2): kind==="ask"; out contains "existing workflow was found".
+//   SP4 resume (2): direct routing reaches run-stage(code-generation).
 //   SP5 birth (P4: --init retired, engine names intent-create):
 //     - (a) named scope on a clean workspace -> kind==="print" naming
 //       intent-create + NO aidlc-state.md created by next (read-only — mutation
@@ -82,7 +82,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -96,6 +96,7 @@ import {
   seedStateFile,
   resetAidlcEnv,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -118,8 +119,12 @@ interface CliResult {
   stdout: string;
 }
 
-function run(tool: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8" });
+function run(
+  tool: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): CliResult {
+  const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8", env });
   const stdout = res.stdout ?? "";
   return {
     status: res.status ?? -1,
@@ -306,13 +311,13 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   });
 
   // ============================================================
-  // Special path 4: RESUME — engine emits ask + stops (never calls AskUserQuestion).
+  // Special path 4: RESUME — explicit intent continues through normal routing.
   // ============================================================
-  test("SP4: resume -> ask directive carrying the resume-choice question", () => {
+  test("SP4: resume -> run-stage(code-generation) through steering-aware routing", () => {
     const p = projWithState("state-jumped.md");
-    const r = run(ORCHESTRATE, ["next", "--resume", "--project-dir", p]);
-    expect(directive(r).kind).toBe("ask");
-    expect(r.out).toContain("existing workflow was found");
+    const d = nextDirective(p, ["--resume"]);
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("code-generation");
   });
 
   test("SP4b: resume answer -> read-only print that continues through next", () => {
@@ -368,6 +373,31 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
+  test("SP4d: exact numbered resume-menu answers map to the four semantic choices", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (answer: string) =>
+      directive(run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "resumed",
+        "--user-input",
+        answer,
+        "--project-dir",
+        p,
+      ]));
+
+    expect(report("1").message).toContain("Re-run `next`");
+    expect(report("2").message).toContain("--direction redo");
+    expect(report("3").message).toContain("next --stage");
+    expect(report("4").message).toContain("--new-intent");
+
+    const outOfRange = report("5");
+    expect(outOfRange.kind).toBe("error");
+    expect(outOfRange.message).toContain("Accepted choices: 1/resume");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
   // ============================================================
   // Special path 5: BIRTH (P4: --init retired) — (a) named scope on a clean
   // workspace prints the intent-create move + creates NO state; (b) a named scope
@@ -404,7 +434,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent-create --scope bugfix");
     expect(d.message).toContain(
-      '--arguments "Fix duplicate todo persistence"',
+      "--arguments='Fix duplicate todo persistence'",
     );
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
@@ -449,11 +479,150 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       "--result",
       "approved",
       "--user-input",
-      "human ok",
+      "Approve",
       "--project-dir",
       p,
     ]);
     expect(directive(r).kind).toBe("done");
+  }, 30000);
+
+  test("SP7-invalid: an unmatched gate reply is acknowledged, leaves the gate open, and does not consume the retry", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const guardedEnv = { ...process.env };
+    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+
+    const invalid = directive(
+      run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "approved",
+        "--user-input",
+        "go ahead",
+        "--project-dir",
+        p,
+      ], guardedEnv),
+    );
+    expect(invalid.kind).toBe("error");
+    expect(invalid.message).toContain('received reply "go ahead"');
+    expect(invalid.message).toContain("original held gate with every offered choice");
+    expect(invalid.message).not.toContain("Valid choices are");
+    expect(readFileSync(statePath(p), "utf-8")).toContain("- [?] feasibility");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(0);
+
+    const accepted = directive(
+      run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "approved",
+        "--user-input",
+        "Approve",
+        "--project-dir",
+        p,
+      ], guardedEnv),
+    );
+    expect(accepted.kind).toBe("done");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(1);
+  }, 30000);
+
+  test("SP7-reject: the exact Request Changes decision is separate from feedback", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const guardedEnv = { ...process.env };
+    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+
+    const mixed = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "rejected",
+      "--user-input",
+      "Request Changes: tighten the schema",
+      "--reason",
+      "tighten the schema",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(mixed.kind).toBe("error");
+    expect(eventCount(p, "GATE_REJECTED")).toBe(0);
+
+    const accepted = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "rejected",
+      "--user-input",
+      "Request Changes",
+      "--reason",
+      "tighten the schema",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(accepted.kind).toBe("print");
+    expect(eventCount(p, "GATE_REJECTED")).toBe(1);
+  }, 30000);
+
+  test("SP7-escape: Accept as-is is accepted only after three revision cycles", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const guardedEnv = { ...process.env };
+    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+
+    const premature = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "approved",
+      "--user-input",
+      "Accept as-is",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(premature.kind).toBe("error");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(0);
+
+    writeFileSync(
+      statePath(p),
+      readFileSync(statePath(p), "utf-8").replace(
+        "- **Revision Count**: 0",
+        "- **Revision Count**: 3",
+      ),
+    );
+    const accepted = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "approved",
+      "--user-input",
+      "Accept as-is",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(accepted.kind).toBe("done");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(1);
   }, 30000);
 
   // ============================================================

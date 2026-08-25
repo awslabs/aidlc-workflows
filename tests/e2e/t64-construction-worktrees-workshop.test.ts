@@ -1,7 +1,7 @@
 // covers: data:scope-grid.json, subcommand:aidlc-bolt:dispatch-event, doc:knowledge/aidlc-shared/state-template.md
 //
 // Construction worktrees per scope — WORKSHOP. Migrated from
-// tests/e2e/t64-construction-worktrees-workshop.sh (TAP plan 3).
+// tests/e2e/t64-construction-worktrees-classic.sh (TAP plan 3).
 // Mechanism: mixed.
 //   - The scope-grid.json read (.sh test 1, assert_scope_codegen_mode) is a
 //     pure structural read of a shipped JSON data file — done in-process (no
@@ -15,7 +15,7 @@
 //     assert_dispatch_event_runs_for_scope.
 //
 // The four shared SKILL.md prose-presence checks AND the two inline §8
-// workshop-resume / resume-mid-batch carve-out greps were RETIRED at the engine
+// classic-resume / resume-mid-batch carve-out greps were RETIRED at the engine
 // cutover: that SKILL.md
 // prose was deleted, and the surviving behaviour lives in the engine +
 // stage-protocol.md resume handling + the worktree tools (t09/t10/t11). What the
@@ -25,7 +25,7 @@
 // Source under test:
 //   dist/claude/.claude/tools/data/scope-grid.json
 //     - the compiled {scope:{stages:{slug:MODE}}} grid (milestone 12 transpose of the
-//       per-stage `scopes:` frontmatter; replaced scope-mapping.json). workshop
+//       per-stage `scopes:` frontmatter; replaced scope-mapping.json). classic
 //       is a skeleton-on greenfield scope that runs code-generation = EXECUTE.
 //   dist/claude/.claude/tools/aidlc-bolt.ts :660 handleDispatchEvent
 //     - MERGE_DISPATCH_INVOKED -> emits audit with fields "Bolt slug" +
@@ -36,21 +36,21 @@
 //       fields `- **Worktree Path**:` (:2057) and `- **Bolt Refs**:` (:2058).
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh test 1  assert_scope_codegen_mode workshop EXECUTE      -> "1: scope-grid workshop code-generation = EXECUTE"
-//   .sh test 2  assert_dispatch_event_runs_for_scope workshop   -> "2: dispatch-event MERGE_DISPATCH_INVOKED emits cleanly for workshop"
+//   .sh test 1  assert_scope_codegen_mode classic EXECUTE      -> "1: scope-grid classic code-generation = EXECUTE"
+//   .sh test 2  assert_dispatch_event_runs_for_scope classic   -> "2: dispatch-event MERGE_DISPATCH_INVOKED emits cleanly for classic"
 //   .sh test 3  state has Worktree Path AND Bolt Refs           -> "3: v7 init state carries the v0.4.0 worktree fields"
 //
 // STRONGER than the .sh where it costs nothing:
 //   - test 2 is block-scoped: it reads the "Bolt slug" field off the
 //     MERGE_DISPATCH_INVOKED audit entry specifically (the .sh grepped the
-//     whole file for "Bolt slug.*t-workshop-bolt-1"), counts exactly one such
+//     whole file for "Bolt slug.*t-classic-bolt-1"), counts exactly one such
 //     entry, AND asserts the tool's JSON ack on stdout + a clean exit.
 //   - test 3 asserts both fields land as proper `- **<field>**:` state lines
 //     (not a bare substring anywhere in the file), and pins State Version 7 —
 //     the template that introduced them.
 //
 // FIXTURE DISCIPLINE (mirrors setup_construction_project: setupIntegrationProject
-// --with-greenfield-stub, then `aidlc-utility init --force --scope workshop`):
+// --with-greenfield-stub, then `aidlc-utility init --force --scope classic`):
 // one shared WORKSHOP construction sandbox is built once in beforeAll and torn
 // down in afterAll — the same project the .sh threaded through all 3 asserts.
 // NOTHING is written under tests/fixtures/**; the temp dir is cleaned up.
@@ -76,7 +76,7 @@ const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const SCOPE_GRID = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
 
-const SCOPE = "workshop";
+const SCOPE = "classic";
 
 interface Grid {
   [scope: string]: { stages: Record<string, string> };
@@ -84,7 +84,7 @@ interface Grid {
 
 let proj = "";
 
-/** setup_construction_project("workshop"): greenfield integration sandbox + real init. */
+/** setup_construction_project("classic"): greenfield integration sandbox + real init. */
 beforeAll(() => {
   proj = setupIntegrationProject({ withGreenfieldStub: true });
   const r = spawnSync(
@@ -170,16 +170,16 @@ function auditEventCount(ev: string): number {
     .filter((l) => l === `**Event**: ${ev}`).length;
 }
 
-describe("t64 construction worktrees — workshop (migrated from t64-construction-worktrees-workshop.sh, plan 3)", () => {
-  // --- Test 1: scope-grid.json workshop code-generation = EXECUTE ---
-  test("1: scope-grid workshop code-generation = EXECUTE", () => {
+describe("t64 construction worktrees — classic (migrated from t64-construction-worktrees-classic.sh, plan 3)", () => {
+  // --- Test 1: scope-grid.json classic code-generation = EXECUTE ---
+  test("1: scope-grid classic code-generation = EXECUTE", () => {
     const grid = JSON.parse(readFileSync(SCOPE_GRID, "utf-8")) as Grid;
     expect(grid[SCOPE]).toBeDefined();
     expect(grid[SCOPE].stages["code-generation"]).toBe("EXECUTE");
   });
 
   // --- Test 2: dispatch-event MERGE_DISPATCH_INVOKED emits cleanly ---
-  test("2: dispatch-event MERGE_DISPATCH_INVOKED emits cleanly for workshop", () => {
+  test("2: dispatch-event MERGE_DISPATCH_INVOKED emits cleanly for classic", () => {
     const slug = `t-${SCOPE}-bolt-1`;
     const r = bolt([
       "dispatch-event",
@@ -191,7 +191,7 @@ describe("t64 construction worktrees — workshop (migrated from t64-constructio
       `scope=${SCOPE}`,
     ]);
     expect(r.status).toBe(0);
-    // .sh: grep MERGE_DISPATCH_INVOKED + "Bolt slug.*t-workshop-bolt-1".
+    // .sh: grep MERGE_DISPATCH_INVOKED + "Bolt slug.*t-classic-bolt-1".
     // STRONGER: exactly one INVOKED block, and the slug is read off THAT block.
     expect(auditEventCount("MERGE_DISPATCH_INVOKED")).toBe(1);
     expect(auditField("MERGE_DISPATCH_INVOKED", "Bolt slug")).toBe(slug);
@@ -209,6 +209,6 @@ describe("t64 construction worktrees — workshop (migrated from t64-constructio
     expect(lines.some((l) => l.startsWith("- **Worktree Path**:"))).toBe(true);
     expect(lines.some((l) => l.startsWith("- **Bolt Refs**:"))).toBe(true);
     // State Version 7 is the template that introduced these fields.
-    expect(lines).toContain("- **State Version**: 7");
+    expect(lines).toContain("- **State Version**: 8");
   });
 });

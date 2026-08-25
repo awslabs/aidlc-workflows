@@ -385,12 +385,22 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         const auditMd = readAllAuditShards(sandbox);
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");
-        const summaryConfirmedAt = auditMd.lastIndexOf(
+        // The FIRST confirmation receipt must precede the first GENERATED
+        // deliverable. The audit hook logs every net-new record-tree file, so
+        // the stage diary (memory.md) and the pre-Q&A questions file both
+        // legitimately emit ARTIFACT_CREATED before the checkpoint - the pin
+        // is on the produces[] deliverables the checkpoint actually gates
+        // (intent-statement / stakeholder-map), and indexOf (not lastIndexOf)
+        // on the receipt so a request-changes re-confirm loop cannot mask a
+        // pre-confirmation write.
+        const summaryConfirmedAt = auditMd.indexOf(
           "**Event**: SUMMARY_CONFIRMATION_RECORDED",
         );
-        const firstArtifactAt = auditMd.indexOf("**Event**: ARTIFACT_CREATED");
+        const generatedArtifactAt = auditMd.search(
+          /\*\*Event\*\*: ARTIFACT_CREATED\n(?:\*\*[^\n]+\n)*?\*\*File\*\*: [^\n]*(?:intent-statement|stakeholder-map)/,
+        );
         expect(summaryConfirmedAt).toBeGreaterThan(-1);
-        expect(firstArtifactAt).toBeGreaterThan(summaryConfirmedAt);
+        expect(generatedArtifactAt).toBeGreaterThan(summaryConfirmedAt);
 
         // --- learnings-before-gate ordering (guards the §13 turn binding) ------
         // The learnings ritual is its own logged human interaction BEFORE the
@@ -407,16 +417,23 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         expect(questionAnsweredAt).toBeGreaterThan(-1);
         expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
         // Interview answers also emit QUESTION_ANSWERED, so the ordering pin
-        // alone passes when the ritual is skipped outright. Require a
-        // learnings-flavored answer (§13 pins the option labels verbatim)
-        // before the last gate open.
-        const learningsAnswers = [
-          ...auditMd.matchAll(
-            /\*\*Event\*\*: QUESTION_ANSWERED\n(?:\*\*[^\n]+\n)*?\*\*Details\*\*: [^\n]*(?:Nothing to add|Add a note)/g,
-          ),
-        ];
-        expect(learningsAnswers.length).toBeGreaterThanOrEqual(1);
-        expect(gateOpenedAt).toBeGreaterThan(learningsAnswers.at(-1)!.index);
+        // alone passes when the ritual is skipped outright. The ANSWER's
+        // Details is free conductor paraphrase (live-observed: "Keep the note
+        // (c1: ...)" - no pinned token survives), but the ritual's DECISION
+        // row is deterministic: §13 mandates the structured question ship the
+        // verbatim "Nothing to add" / "Add a note" labels in its --options.
+        // Pin the ritual on that row, then require an answer row after it and
+        // before the gate - the §3 logging pair, wording-free.
+        const learningsDecisionAt = auditMd.search(
+          /\*\*Event\*\*: DECISION_RECORDED\n(?:\*\*[^\n]+\n)*?\*\*Options\*\*: [^\n]*Nothing to add[^\n]*Add a note/,
+        );
+        expect(learningsDecisionAt).toBeGreaterThan(-1);
+        const learningsAnswerAt = auditMd.indexOf(
+          "**Event**: QUESTION_ANSWERED",
+          learningsDecisionAt,
+        );
+        expect(learningsAnswerAt).toBeGreaterThan(learningsDecisionAt);
+        expect(gateOpenedAt).toBeGreaterThan(learningsAnswerAt);
 
         // --- render assertion (the tui-only value-add) -----------------------
         // The captured grid showed the AUQ select footer and/or the multi-tab

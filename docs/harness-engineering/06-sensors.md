@@ -1,14 +1,14 @@
 # Sensors
 
-A sensor is a deterministic, advisory check that fires automatically when an
-agent writes a stage's output. Where a rule is prose the agent reads
+A sensor is a deterministic check that fires automatically on matching writes
+or at the stage's approval gate. Where a rule is prose the agent reads
 ([Rules and the Learning Loop](05-rules-and-the-loop.md)), a sensor is code
 that runs — the feedback half of the control loop to the rules' feedforward half. A
 rule says "user stories follow Given/When/Then"; a sensor verifies, byte for
 byte, that the required headings are present in the file the agent just wrote.
 
 This chapter narrates the work a harness engineer actually does with sensors:
-understand the five that ship, author a new manifest, and bind it to the stages
+understand the six that ship, author a new manifest, and bind it to the stages
 that should run it. The full field-by-field contract lives in
 [Sensor System](../reference/07-sensor-system.md) in the Developer Reference —
 this chapter points down to it at each schema decision rather than restating it.
@@ -23,22 +23,24 @@ says what the check is and how to invoke it. It says nothing about which stages
 use it. That binding lives on the stage side, which is the central idea of this
 chapter and the reason a manifest and a stage stay loosely coupled.
 
-Two properties define the runtime behavior, and both are worth internalizing
+Three properties define the runtime behavior, and all are worth internalizing
 before you author anything:
 
-- **It fires on Write and Edit, during a stage.** When an agent writes or edits
-  an output file, the `PostToolUse` hook checks which sensors apply to the
-  active stage and runs each matching one. You never invoke a sensor by hand
-  during a workflow; it rides along on every file write. (The manifest's
-  `command:` is also human-runnable for debugging — see the reference — but the
-  workflow path is the hook.)
-- **It is advisory — it never blocks.** A sensor result in this release is
-  telemetry, not a gate. A failing sensor produces an audit row plus a detail
-  file pointing at exactly what is missing, but it does not stop the stage's
-  approval gate or your workflow. You see the signal and decide what to do with
-  it. (`default_severity` is fixed at `advisory` today; a `blocking` value is
-  reserved for a future release — see [`default_severity`](#judgment-calls-matches-and-default_severity)
-  below.)
+- **`fire_on: write` runs during authoring.** The `PostToolUse` hook runs each
+  matching sensor after a Write or Edit. This is the default when `fire_on` is
+  omitted.
+- **`fire_on: gate` runs once per deliverable.** Immediately before
+  `gate-start` opens its state transaction, the state tool fires each gate-bound
+  sensor once for every existing declared deliverable path. The dispatch stays
+  outside the transaction because the sensor dispatcher takes the audit lock.
+- **Severity controls gate enforcement.** `advisory` outcomes are recorded and
+  the gate still opens. A `blocking` binding requires a verified pass: findings,
+  unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts
+  stop gate entry. An override is a separate logged human decision, not a bare
+  flag, and is forbidden in autonomous mode; a successful override records ids,
+  optional detail paths, and reasons on `STAGE_AWAITING_APPROVAL`. Blocking
+  enforcement applies only to `fire_on: gate` in this release. A write-fired
+  sensor may declare `blocking`, but its result remains advisory.
 
 Each fire leaves a row in the intent's `audit/` shards. The event names — exact casing
 matters when you grep the log — are **`SENSOR_FIRED`** when a sensor starts,
@@ -52,25 +54,27 @@ User Guide.
 
 ---
 
-## The five sensors that ship
+## The six sensors that ship
 
-Five manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
+Six manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
 
-| Manifest | Fires on | Checks |
+| Manifest | Dispatch | Checks |
 |----------|----------|--------|
-| `aidlc-claim-sources.md` | Intent Capture record-dir output | Every Intent Capture claim carries a resolvable source tag; registered description, scope, and memory values match authoritative inputs; retained assumptions exactly match explicit human confirmation |
-| `aidlc-required-sections.md` | record-dir markdown output | The output carries the required H2 headings — a generic content-shape check |
-| `aidlc-upstream-coverage.md` | record-dir markdown output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
-| `aidlc-linter.md` | `.ts` / `.js` code output | Wraps your configured linter (ESLint by default) |
-| `aidlc-type-check.md` | `.ts` / `.tsx` code output | Wraps your configured type-checker (`tsc` by default) |
+| `aidlc-claim-sources.md` | Gate | Every Intent Capture claim carries a resolvable source tag; registered description, scope, and memory values match authoritative inputs; retained assumptions exactly match explicit human confirmation |
+| `aidlc-required-sections.md` | Gate | The output carries the required H2 headings — a generic content-shape check |
+| `aidlc-upstream-coverage.md` | Gate | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
+| `aidlc-traceability.md` | Write: `**/traceability.json` | Validates stable upstream IDs, statuses, deterministic targets, and derived business-rule orphans |
+| `aidlc-linter.md` | Write: `.ts` / `.js` | Wraps your configured linter (ESLint by default) |
+| `aidlc-type-check.md` | Write: `.ts` / `.tsx` | Wraps your configured type-checker (`tsc` by default) |
 
-All five are gated by a `matches:` glob (more on that below): the provenance
+All six are gated by a `matches:` glob (more on that below): the provenance
 check and two document-shape checks scope to the artifact tree (the shipped manifests carry
 `**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy
-`aidlc-docs/` arm kept for a pre-migration project), the two code-quality checks
-to their language globs (`**/*.{ts,js}`, `**/*.{ts,tsx}`).
+`aidlc-docs/` arm kept for a pre-migration project), traceability scopes to
+`**/traceability.json`, and the two code-quality checks to their language globs
+(`**/*.{ts,js}`, `**/*.{ts,tsx}`).
 Read `aidlc-required-sections.md` end to end before authoring your own — it is
-the smallest of the five and shows the whole shape, frontmatter plus prose body.
+the smallest of the six and shows the whole shape, frontmatter plus prose body.
 
 ---
 
@@ -88,6 +92,7 @@ phase: construction
 sensors:
   - linter
   - type-check
+  - traceability
 ---
 ```
 
@@ -129,10 +134,11 @@ short — five required fields and a handful of optional ones:
 | `id` | yes | kebab-case; equals the filename stem minus `aidlc-` |
 | `kind` | yes | `deterministic` is the only accepted value today |
 | `command` | yes | the canonical invocation prefix the dispatcher runs |
-| `default_severity` | yes | `advisory` is the only accepted value today |
+| `default_severity` | yes | `advisory` or `blocking`; blocking is enforced only for gate dispatch |
 | `description` | yes | one-line human description |
 | `category` | no | free-form label (the shipped manifests use `document-shape`, `code-quality`) |
-| `matches` | no | a glob narrowing which file writes the sensor fires on |
+| `fire_on` | no | `write` or `gate`; defaults to `write` |
+| `matches` | no | write-path filter; for gate dispatch, an omitted glob accepts every declared deliverable |
 
 The `command:` is a **prefix**, not the full argv. The dispatcher appends the
 runtime context at fire time — always `--stage <slug>`, then the file flag that
@@ -162,31 +168,40 @@ filename-to-id rule applies to the stem after the prefix.
 
 ---
 
-## Judgment calls: `matches` and `default_severity`
+## Judgment calls: `fire_on`, `matches`, and `default_severity`
 
 Most of the manifest is mechanical. Two fields carry the real authoring
 judgment.
 
-**`matches` — what shape of file should this analyze?** This glob is the fire
-filter, and it is effectively required: the hook fires the sensor only when the
-path being written matches it, and an entry with **no** `matches` never fires at
-all. The code-quality sensors set it to code globs (`aidlc-linter.md` uses
+**`fire_on` — when is the useful checking boundary?** Use `write` for fast,
+incremental feedback where repeated checks are useful. Use `gate` for
+whole-deliverable or cross-file checks that should run once against the final
+stage output. Omission means `write`.
+
+**`matches` — what shape of file should this analyze?** For `fire_on: write`,
+this glob is the fire filter and is effectively required: the hook fires only
+when the written path matches, and an entry with no `matches` never fires.
+For `fire_on: gate`, the state tool applies the same capability check to each
+existing declared deliverable and dispatches only matching files; omitting
+`matches` accepts every one. The
+code-quality sensors set it to code globs (`aidlc-linter.md` uses
 `**/*.{ts,js}`; `aidlc-type-check.md` uses `**/*.{ts,tsx}`) so they fire only on
 code writes and stay quiet on prose; the document-shape sensors scope to the
 artifact tree so they fire on any markdown artifact a stage writes.
 Decide the file shape your check is meaningful for, and write the narrowest glob
-that covers it. An empty `matches: ""` is rejected at parse time; and since an
-absent glob means the sensor never runs, there is no "fires on everything" mode —
-you must name the shape. The hook compares the path being written against this
-glob at fire time. Full behavior is in
+that covers it. An empty `matches: ""` is rejected at parse time. A write-fired
+sensor must name the shape; a gate-fired sensor may omit the field to accept
+every declared deliverable. Full behavior is in
 [`matches` filter](../reference/07-sensor-system.md#matches-filter).
 
-**`default_severity` — advisory only, for now.** The single accepted value today
-is `advisory`, so this is a fixed choice rather than a free one. It is worth
-naming because it defines the contract you are buying into: the sensor informs,
-it does not enforce. A `blocking` value that halts the gate is reserved for a
-future release; until then, every sensor is a second opinion the human reads,
-never a wall. The reserved-value policy is in
+**`default_severity` — signal or enforcement.** `advisory` records outcomes and
+continues. `blocking` stops a gate-fired sensor unless the dispatcher returns a
+verified pass; findings, unavailable evaluation, malformed output, and timeout
+all refuse. The operator may fix the issue or explicitly select
+`Override blocking sensors` from the logged two-choice prompt, then retry with
+the flag and exact `--user-input`. Autonomous mode cannot override. Blocking on
+write-fired sensors is accepted by the schema but remains advisory in this
+release. The policy is in
 [`default_severity`](../reference/07-sensor-system.md#default_severity).
 
 ---

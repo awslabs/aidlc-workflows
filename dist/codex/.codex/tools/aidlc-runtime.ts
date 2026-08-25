@@ -41,6 +41,7 @@ import {
   readStateFile,
   relativeMemoryPath,
   relativeRecordDir,
+  resolveAuditWorktreePath,
   resolveProjectDir,
   runtimeGraphPath,
   stateFilePath,
@@ -480,7 +481,8 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       const wt = fieldFromBlock(ev.block, "Worktree path");
       if (!slug) continue;
       slugsInWindow.set(slug, {
-        worktree: wt ?? "",
+        worktree:
+          wt === null ? "" : resolveAuditWorktreePath(projectDir, wt),
         started_at: ev.timestamp,
       });
     }
@@ -646,7 +648,13 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       if (fieldFromBlock(ev.block, "Stage slug") !== slug) continue;
       if (outputUnderWorktree !== null) {
         const out = fieldFromBlock(ev.block, "Output path") ?? "";
-        if (!outputUnderWorktree(out)) continue;
+        if (
+          !outputUnderWorktree(
+            resolveAuditWorktreePath(projectDir, out),
+          )
+        ) {
+          continue;
+        }
       }
       const fireId = fieldFromBlock(ev.block, "Fire id");
       const sensorId = fieldFromBlock(ev.block, "Sensor ID");

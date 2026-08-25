@@ -2,7 +2,7 @@
 slug: nfr-requirements
 phase: construction
 execution: CONDITIONAL
-condition: Performance requirements, security considerations, scalability concerns, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined.
+condition: Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined.
 lead_agent: aidlc-architect-agent
 support_agents:
   - aidlc-devsecops-agent
@@ -18,18 +18,23 @@ produces:
   - security-requirements
   - scalability-requirements
   - reliability-requirements
+  - observability-requirements
   - tech-stack-decisions
+  - traceability
 produces_kinds:
   performance-requirements: [service, ui]
   scalability-requirements: [service]
   reliability-requirements: [service]
+  observability-requirements: [service]
 consumes:
-  - artifact: business-logic-model
+  - artifact: functional-spec
     required: true
-  - artifact: business-rules
+  - artifact: rules
     required: true
   - artifact: requirements
     required: true
+  - artifact: contract-summary
+    required: false
   - artifact: technology-stack
     required: false
     conditional_on: brownfield
@@ -41,15 +46,17 @@ sensors:
   - upstream-coverage
   - linter
   - type-check
+  - traceability
 scopes:
   - enterprise
   - feature
   - mvp
   - infra
   - security-patch
+  - classic
   - workshop
 inputs: functional design artifacts, requirements.md, RE artifacts
-outputs: "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
+outputs: "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # NFR Requirements
@@ -80,7 +87,7 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Prior Artifacts
 
-Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists) and any reverse engineering artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints). Incremental scopes (infra) skip functional-design by design; when its artifacts are absent, derive the NFR context from the requirements and the code knowledge base instead — never invent the content of a missing artifact.
+Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists), the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced — its SLAs, retry/timeout, and integration-mechanism decisions constrain this unit's NFR targets), and any reverse engineering artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints). Incremental scopes (infra) skip functional-design by design; when its artifacts are absent, derive the NFR context from the requirements and the code knowledge base instead — never invent the content of a missing artifact.
 
 ### Step 3: Assess NFR Categories
 
@@ -112,7 +119,29 @@ Generate the following in `<record>/construction/{unit-name}/nfr-requirements/`:
 - **security-requirements.md**: Authentication requirements, authorization model, data protection, compliance, threat considerations
 - **scalability-requirements.md**: Load projections, scaling triggers, capacity planning, data growth, concurrency targets
 - **reliability-requirements.md**: Availability targets (SLA/SLO), fault tolerance requirements, backup/recovery, graceful degradation
+- **observability-requirements.md**: Monitoring requirements, logging standards, distributed tracing needs, alerting thresholds, dashboard requirements, SLI/SLO definitions
 - **tech-stack-decisions.md**: Technology selections and rationale — languages, frameworks, databases, infrastructure tools, and justification for each choice
+
+Every detailed requirement inherits its inception NFR ID and appends a
+sub-number, such as `NFR4.1` and `NFR4.2`. Carry these IDs on every requirement
+row.
+
+Create
+`<record>/construction/{unit-name}/nfr-requirements/traceability.json`.
+Enumerate every inception `NFR{n}` applicable to this Unit and target the
+derived `NFRx.y` IDs. `N/A` requires a justification:
+
+```json
+{
+  "stage": "nfr-requirements",
+  "unit": "u1-auth",
+  "upstream_ids": ["NFR1", "NFR4"],
+  "coverage": [
+    { "id": "NFR1", "status": "OK", "target": "NFR1.1, NFR1.2" },
+    { "id": "NFR4", "status": "N/A", "target": "no persistent data in this Unit" }
+  ]
+}
+```
 
 ### Step 7: Completion Handoff
 
@@ -143,9 +172,10 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `business-logic-model`, `business-rules`, `requirements`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `functional-spec`, `rules`, `requirements`, `contract-summary`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
+- **`traceability`** validates that inception NFR IDs are declared and covered by per-Unit `NFRx.y` requirements.
 
 Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 

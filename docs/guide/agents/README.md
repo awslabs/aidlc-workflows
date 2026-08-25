@@ -17,7 +17,7 @@ Reference's [Agent Reference](../../reference/agents/README.md).
 | 1 | [aidlc-product-agent](product-agent.md) | Requirements, scope, user stories, market research |
 | 2 | [aidlc-design-agent](design-agent.md) | UX/UI, wireframes, interaction design, accessibility |
 | 3 | [aidlc-delivery-agent](delivery-agent.md) | Team formation, capacity planning, delivery sequencing |
-| 4 | [aidlc-architect-agent](architect-agent.md) | Application design, domain modelling, NFRs, decomposition |
+| 4 | [aidlc-architect-agent](architect-agent.md) | Domain design, domain modelling, NFRs, decomposition |
 | 5 | [aidlc-aws-platform-agent](aws-platform-agent.md) | AWS infrastructure, IaC, FinOps, environment provisioning |
 | 6 | [aidlc-compliance-agent](compliance-agent.md) | GRC, regulatory mapping, data classification, risk |
 | 7 | [aidlc-devsecops-agent](devsecops-agent.md) | Threat modelling, security pipeline, secure design review |

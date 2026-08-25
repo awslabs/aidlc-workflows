@@ -50,7 +50,7 @@ demands. The shipped default lives in the org rule you author at
 (`org.md:28-42`). Read it as the framework's stance:
 
 - The **walking-skeleton Bolt runs first** for greenfield scopes — `mvp`,
-  `enterprise`, `feature`, `poc`, `workshop`, `infra`. Bolt 1 is solo and gated,
+  `enterprise`, `feature`, `poc`, `classic`, `workshop`, `infra`. Bolt 1 is solo and gated,
   and the user approves it before the remaining Bolts run.
 - The **skeleton ceremony is skipped** for incremental scopes — `bugfix`,
   `refactor`, `security-patch`. There is nothing to bootstrap on an existing
@@ -143,8 +143,8 @@ functional-design with zero files. An untagged Unit keeps the full matrix.
 once at the end across everything, so they are not part of the per-Unit fan-out.)
 
 **This parallel surface exists only for the scopes where `units-generation`
-runs** — `enterprise`, `feature`, `mvp`, and `workshop`. The incremental scopes
-(`bugfix`, `refactor`, `security-patch`) and `poc`/`infra` never run
+runs** — `enterprise`, `feature`, `mvp`, `classic`, and `workshop`. The incremental scopes
+(`bugfix`, `refactor`, `security-patch`) and `poc`/`infra`/`express` never run
 `units-generation`, so they produce no edge block, carry no `bolt_dag`, and run
 Construction single-pass with nothing for the swarm to fan out across. Shape the
 swarm where the work is genuinely multi-Unit, and treat hands-off Construction as
@@ -167,6 +167,14 @@ something you author. Shaping that parser is a code change → see the
 
 ## Wiring convergence — your project's own check is the trusted signal
 
+A Code Generation swarm does not bypass planning. Before `prepare`, every
+emitted Unit must have a current human-approved plan containing the structured
+Testing Contract, unit-scoped test instructions, and matching approval
+fingerprint. `prepare` verifies that evidence before forking worktrees, and
+every worker brief carries the approved Unit marker, contract hash, plan, and
+instructions. This keeps the autonomous path on the same methodology and Plan
+Approval contract as normal Code Generation.
+
 A swarm worker can claim its Unit converged. The framework never takes that claim
 on faith. The authoritative signal is your project's **own check command**, run by
 the referee: exit `0` means genuinely converged, any other exit means not yet.
@@ -187,10 +195,10 @@ Two surfaces carry the signal:
 
 Your harness contribution is making both real and meaningful. A check that always
 passes, or a spec that is empty, hands the swarm a rubber stamp. The
-`## Testing Posture` rule in `org.md:44-58` already sets per-scope test
-floors (for example, `mvp`/`feature` get tests-alongside-code at 80% coverage);
-authoring a stricter posture at `team.md` is how you raise the bar the
-check enforces.
+`## Testing Posture` rule in `org.md` already combines the selected Test
+Strategy with additive per-scope floors (for example, `mvp`/`feature` add 80%
+coverage); authoring a stricter structured methodology/order at `team.md` is
+how you change execution cadence without discarding those floors.
 
 A sensor complements the check on the prose side. The `required-sections` and
 `upstream-coverage` sensors that `units-generation` already imports verify the
@@ -230,7 +238,7 @@ driver seam contract is in
 
 One judgment never moves with the driver: a failure **always halts and
 re-engages the human**, regardless of autonomy mode, per
-`aidlc-common/protocols/stage-protocol.md:125` ("Halt-and-ask on failure"). When
+`aidlc-common/protocols/stage-protocol-construction.md` ("Halt-and-ask on failure"). When
 the referee's `finalize` returns its exit-2 envelope, the conductor takes the
 baton back to a human. Hands-off mode removes the happy-path gates while keeping
 the failure halt loud.
@@ -248,9 +256,11 @@ The swarm's machinery is code, and shaping it is the Developer Reference's
 territory:
 
 - **The referee** `aidlc-swarm.ts` — the stateless `prepare` / `check` /
-  `finalize` subcommands that fork worktrees, run the verdict, re-verify every
-  claimed Unit before merge (the lying-conductor guard), serialise the
-  merge-back, and emit the six `SWARM_*` audit events.
+  `finalize` subcommands. On autonomous Code Generation, `prepare` first
+  verifies each Unit's approved Testing Contract and fingerprint; it then forks
+  worktrees. The remaining commands run the verdict, re-verify every claimed
+  Unit before merge (the lying-conductor guard), serialise merge-back, and emit
+  the six `SWARM_*` audit events.
 - **The engine** `aidlc-orchestrate.ts` — the deterministic router with exactly
   four subcommands: `next`, `continue`, `report`, and `park`; `continue` is
   internal steering transport. It decides when a Construction batch is

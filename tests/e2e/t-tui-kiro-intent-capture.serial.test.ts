@@ -258,7 +258,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(terminated).toBe(true);
         expect(answerState.guideModeChosen).toBe(true);
         expect(answerState.answeredQuestions.size).toBeGreaterThan(0);
-        expect(answerState.summaryConfirmed).toBe(true);
+        expect(answerState.confirmedSummaries.size).toBeGreaterThanOrEqual(1);
         expect(answerState.learningsAnswered).toBeGreaterThanOrEqual(1);
         expect(answerState.approvalsAnswered).toBeGreaterThanOrEqual(1);
 

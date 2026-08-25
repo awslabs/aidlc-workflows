@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:finalize, audit:REVIEW_COMPLETED, audit:SWARM_STARTED, audit:SWARM_COMPLETED, audit:SWARM_BATON_RETURNED
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:finalize, function:terminalReviewVerdict, audit:REVIEW_COMPLETED, audit:SWARM_STARTED, audit:SWARM_COMPLETED, audit:SWARM_BATON_RETURNED
 //
 // CLI-contract port of tests/integration/t135-invoke-swarm.sh (TAP plan 8),
 // mechanism = cli. The .sh proves invoke-swarm end-to-end across TWO real
@@ -76,12 +76,19 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedBoltDag,
   seedStateFile,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  renderTestingContract,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 resetAidlcEnv();
 
@@ -182,6 +189,8 @@ let wtproj: string | undefined;
 let reviewRefusalProj: string | undefined;
 let staleReviewProj: string | undefined;
 let missingArtifactsProj: string | undefined;
+const notReadyProjects: string[] = [];
+const approvalProjects: string[] = [];
 let finalizeStatus = -1;
 let finalizeOut = "";
 let auditBody = "";
@@ -195,7 +204,22 @@ let missingArtifactsStatus = -1;
 let missingArtifactsOut = "";
 let missingArtifactsAudit = "";
 
-function seedRefereeProject(): string {
+function identityFreeGitEnv(proj: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: proj,
+    XDG_CONFIG_HOME: join(proj, ".identity-free-git"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  };
+  delete env.GIT_AUTHOR_NAME;
+  delete env.GIT_AUTHOR_EMAIL;
+  delete env.GIT_COMMITTER_NAME;
+  delete env.GIT_COMMITTER_EMAIL;
+  return env;
+}
+
+function seedRefereeProject(units: string[]): string {
   const proj = setupWorktreeFixture();
   // The fixture already seeded the per-intent workspace shell + default record +
   // a seed commit (README only) on main. Write the construction state into the
@@ -224,6 +248,7 @@ function seedRefereeProject(): string {
       "",
     ].join("\n"),
   );
+  seedBoltDag(proj, units);
   spawnSync("git", ["add", "-A"], { cwd: proj });
   spawnSync(
     "git",
@@ -233,16 +258,106 @@ function seedRefereeProject(): string {
   return proj;
 }
 
-function logWorktreeReview(proj: string, unit: string, seedArtifacts = true): void {
+function prepareRefereeProject(proj: string, units: string): void {
+  const prepared = spawnSync(
+    BUN,
+    [
+      SWARM_TOOL,
+      "--project-dir",
+      proj,
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      units,
+      "--base",
+      "main",
+    ],
+    { encoding: "utf-8" },
+  );
+  if (prepared.status !== 0) {
+    throw new Error(`swarm prepare failed: ${prepared.stdout ?? ""}${prepared.stderr ?? ""}`);
+  }
+}
+
+function setAutonomous(proj: string): void {
+  const statePath = seededStateFile(proj);
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^(- \*\*Scope\*\*: .*)$/m,
+    "$1\n- **Construction Autonomy Mode**: autonomous",
+  );
+  writeFileSync(statePath, state);
+}
+
+function seedApprovedCodeGenerationPlan(proj: string, unit: string): void {
+  const contract = resolveTestingPosture(proj);
+  const dir = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "code-generation",
+  );
+  mkdirSync(dir, { recursive: true });
+  const plan = `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Implement\n`;
+  const instructions =
+    "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n";
+  writeFileSync(join(dir, "code-generation-plan.md"), plan);
+  writeFileSync(join(dir, "unit-test-instructions.md"), instructions);
+  const fingerprint = approvalFingerprint(
+    plan,
+    instructions,
+    contract.contract_sha256,
+  );
+  writeFileSync(
+    join(dir, "code-generation-questions.md"),
+    [
+      "## Plan Approval",
+      `[Approval Fingerprint]: ${fingerprint}`,
+      "A. Approve Plan",
+      "B. Request Changes",
+      "[Answer]: A. Approve Plan",
+      "",
+    ].join("\n"),
+  );
+}
+
+function logWorktreeReview(
+  proj: string,
+  unit: string,
+  seedArtifacts = true,
+  verdict: "READY" | "NOT-READY" = "READY",
+  iteration = 1,
+): void {
   const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
   if (seedArtifacts) {
-    const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
     mkdirSync(dir, { recursive: true });
-    for (const name of ["code-generation-plan", "code-summary"]) {
-      const artifact = join(dir, `${name}.md`);
-      if (!existsSync(artifact)) writeFileSync(artifact, `# ${name}\n`);
+    for (const name of [
+      "code-generation-plan",
+      "unit-test-instructions",
+      "code-summary",
+      "traceability",
+    ]) {
+      const artifact = join(dir, artifactFilename(name));
+      const body =
+        name === "traceability"
+          ? '{"stage":"code-generation","upstream_ids":[],"coverage":[]}\n'
+          : `# ${name}\n`;
+      if (!existsSync(artifact)) writeFileSync(artifact, body);
     }
   }
+  // The engine-required source manifest is independent of declared produces[];
+  // keep it present even in the test that deliberately omits required artifacts.
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "source-manifest.json"),
+    `${JSON.stringify({
+      stage: "code-generation",
+      unit,
+      version: 1,
+      writes: [{ path: `${unit}.txt` }],
+    }, null, 2)}\n`,
+  );
   for (const terminal of [false, true]) {
     const args = [
       LOG_TOOL,
@@ -254,28 +369,78 @@ function logWorktreeReview(proj: string, unit: string, seedArtifacts = true): vo
       "--reviewer",
       "aidlc-architecture-reviewer-agent",
       "--iteration",
-      "1",
+      String(iteration),
     ];
-    if (terminal) args.push("--verdict", "READY");
+    if (terminal) args.push("--verdict", verdict);
     args.push("--project-dir", wt);
-    const logged = spawnSync(BUN, args, { encoding: "utf-8" });
+    const logged = spawnSync(BUN, args, {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+      },
+    });
     if (logged.status !== 0) {
       throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
     }
   }
 }
 
+function finalizeWithNotReady(iteration: number): {
+  status: number;
+  out: string;
+} {
+  const unit = `not-ready-${iteration}`;
+  const proj = seedRefereeProject([unit]);
+  notReadyProjects.push(proj);
+  prepareRefereeProject(proj, unit);
+  const worktree = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  writeFileSync(join(worktree, `${unit}.txt`), "done\n");
+  if (iteration > 1) {
+    logWorktreeReview(proj, unit, true, "NOT-READY", 1);
+    writeFileSync(
+      join(
+        seededRecordDir(worktree),
+        "construction",
+        unit,
+        "code-generation",
+        "code-summary.md",
+      ),
+      "# repaired after iteration 1\n",
+    );
+  }
+  logWorktreeReview(proj, unit, true, "NOT-READY", iteration);
+  const result = spawnSync(
+    BUN,
+    [
+      SWARM_TOOL,
+      "--project-dir",
+      proj,
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      "true",
+    ],
+    { encoding: "utf-8", env: identityFreeGitEnv(proj) },
+  );
+  return {
+    status: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
 function setupReferee(): void {
   if (wtproj !== undefined) return; // build once; cases 3-6 read the result
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["win", "lose"]);
   wtproj = proj;
 
   // Conductor step 1: prepare forks a worktree per unit + emits SWARM_STARTED.
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "win,lose", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "win,lose");
 
   // Conductor step 2: the worker for `win` converged (writes win.txt); `lose`
   // did not. This test stages win's impl directly — no model.
@@ -294,7 +459,7 @@ function setupReferee(): void {
       "--batch", "1", "--units", "win,lose", "--claimed", "win,lose",
       "--check-cmd", "test -f win.txt",
     ],
-    { encoding: "utf-8" },
+    { encoding: "utf-8", env: identityFreeGitEnv(proj) },
   );
   finalizeStatus = fin.status ?? -1;
   finalizeOut = fin.stdout ?? "";
@@ -306,13 +471,9 @@ function setupReferee(): void {
 
 function setupReviewRefusal(): void {
   if (reviewRefusalProj !== undefined) return;
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["unreviewed"]);
   reviewRefusalProj = proj;
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "unreviewed", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "unreviewed");
   const fin = spawnSync(
     BUN,
     [
@@ -329,13 +490,9 @@ function setupReviewRefusal(): void {
 
 function setupStaleReviewRefusal(): void {
   if (staleReviewProj !== undefined) return;
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["stale"]);
   staleReviewProj = proj;
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "stale", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "stale");
   const wt = join(proj, ".aidlc", "worktrees", "bolt-stale");
   const artifact = join(
     seededRecordDir(wt),
@@ -365,13 +522,9 @@ function setupStaleReviewRefusal(): void {
 
 function setupMissingArtifactsRefusal(): void {
   if (missingArtifactsProj !== undefined) return;
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["missing"]);
   missingArtifactsProj = proj;
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "missing", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "missing");
   logWorktreeReview(proj, "missing", false);
   const fin = spawnSync(
     BUN,
@@ -415,6 +568,14 @@ afterAll(() => {
   if (missingArtifactsProj !== undefined) {
     spawnSync("chmod", ["-R", "u+w", missingArtifactsProj]);
     cleanupWorktreeFixture(missingArtifactsProj);
+  }
+  for (const project of notReadyProjects) {
+    spawnSync("chmod", ["-R", "u+w", project]);
+    cleanupWorktreeFixture(project);
+  }
+  for (const project of approvalProjects) {
+    spawnSync("chmod", ["-R", "u+w", project]);
+    cleanupWorktreeFixture(project);
   }
 });
 
@@ -509,9 +670,60 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(review).toContain("**Unit**: win");
     expect(review).toContain("**Reviewer**: aidlc-architecture-reviewer-agent");
   }, 60000);
+
+  test("6c: the immutable reviewed-source commit needs no user Git identity", () => {
+    setupReferee();
+    expect(finalizeOut).not.toContain("cannot create the immutable reviewed-source commit");
+    expect(finalizeOut).toContain('"converged": 1');
+  }, 60000);
 });
 
 describe("t135 referee - autonomous reviewer receipt is a finalize precondition", () => {
+  test("7b: autonomous prepare requires a current approved testing contract for every unit", () => {
+    const proj = seedRefereeProject(["planned"]);
+    approvalProjects.push(proj);
+    setAutonomous(proj);
+    const refused = spawnSync(
+      BUN,
+      [
+        SWARM_TOOL,
+        "--project-dir",
+        proj,
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        "planned",
+        "--base",
+        "main",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      "requires a current, explicitly approved Code Generation plan",
+    );
+
+    seedApprovedCodeGenerationPlan(proj, "planned");
+    const accepted = spawnSync(
+      BUN,
+      [
+        SWARM_TOOL,
+        "--project-dir",
+        proj,
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        "planned",
+        "--base",
+        "main",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(accepted.status).toBe(0);
+  }, 60000);
+
   test("8: a green claimed unit without a worktree review is refused before merge", () => {
     setupReviewRefusal();
     expect(reviewRefusalStatus).toBe(2);
@@ -537,5 +749,19 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
     expect(missingArtifactsOut).toContain('"converged": 0');
     expect(missingArtifactsOut).toContain('"failed": 1');
     expect(missingArtifactsAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
+  }, 60000);
+
+  test("11: a below-cap NOT-READY receipt cannot satisfy swarm finalize", () => {
+    const result = finalizeWithNotReady(1);
+    expect(result.status).toBe(2);
+    expect(result.out).toContain("no terminal REVIEW_COMPLETED");
+    expect(result.out).toContain('"converged": 0');
+  }, 60000);
+
+  test("12: a NOT-READY receipt at the configured cap satisfies swarm finalize", () => {
+    const result = finalizeWithNotReady(2);
+    expect(result.status).toBe(0);
+    expect(result.out).toContain('"converged": 1');
+    expect(result.out).toContain('"failed": 0');
   }, 60000);
 });

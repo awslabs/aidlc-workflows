@@ -12,11 +12,11 @@ Rather than dozens of narrow specialists (which recreates waterfall handoff chai
 
 In human software teams, a mob of 3-5 people covers an entire feature from requirements through deployment. Each person brings a broad skill set spanning several specialties. AI-DLC mirrors this model:
 
-- **Each agent covers a whole domain across many tasks.** The aidlc-architect-agent handles feasibility, application design, units generation, functional design, NFR requirements, and NFR design — six stages across three phases. A narrow specialist model would require six separate agents with nearly identical knowledge bases.
+- **Each agent covers a whole domain across many tasks.** The aidlc-architect-agent handles feasibility, domain design, units generation, contract design, functional design, NFR requirements, and NFR design — seven stages across three phases. A narrow specialist model would require seven separate agents with nearly identical knowledge bases.
 
-- **Fewer agents means fewer handoffs.** Every agent boundary is a potential information loss point. When the same aidlc-architect-agent leads both Application Design and Functional Design, it retains context naturally instead of requiring an explicit handoff artifact.
+- **Fewer agents means fewer handoffs.** Every agent boundary is a potential information loss point. When the same aidlc-architect-agent leads both Domain Design and Functional Design, it retains context naturally instead of requiring an explicit handoff artifact.
 
-- **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. HOW they participate is the stage's `mode` — its communication topology: on an `inline` stage the conductor adopts each support agent as a persona in its own context; on `subagent` (hub-and-spoke) and `mob` (mesh) stages each support agent is dispatched as a real, independent collaborator that writes its own contribution file for the lead to integrate (everyone writes, the lead owns the final artifacts; user-stories ships as the mob showcase), and on `pipeline` (chain) stages the links advance the artifacts directly in sequence (reverse-engineering is the shipped chain). On every topology the conductor performs every delegation — agents never invoke each other.
+- **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. HOW they participate is the stage's `mode` — its communication topology: on an `inline` stage the conductor adopts each support agent as a persona in its own context; on `subagent` (hub-and-spoke) and `mob` (mesh) stages each support agent is dispatched as a real, independent collaborator that writes its own contribution file for the lead to integrate (everyone writes, the lead owns the final artifacts; user-stories ships as the mob showcase), and on `pipeline` (chain) stages the links advance the artifacts directly in sequence and each return is recorded as ordered completion evidence (reverse-engineering is the shipped chain). On every topology the conductor performs every delegation — agents never invoke each other.
 
 - **Knowledge loading is per-agent.** Each agent loads methodology knowledge from `.claude/knowledge/<agent-name>/` and team knowledge from the space-level `aidlc/knowledge/<agent-name>/` (if the team created it). Fewer agents means fewer knowledge directories to manage and fewer opportunities for contradictory guidance.
 
@@ -106,7 +106,7 @@ The aidlc-product-agent acts as the product manager and business analyst. It cap
 The aidlc-design-agent creates wireframes, mockups, and interaction specifications. It works closely with the aidlc-product-agent on user-facing features and with the aidlc-developer-agent to ensure designs are implementable.
 
 - **Leads:** rough-mockups, refined-mockups
-- **Supports:** user-stories, application-design
+- **Supports:** user-stories, domain-design
 - **Special tools:** WebSearch (for design research)
 
 ### [aidlc-delivery-agent](agents/delivery-agent.md)
@@ -121,11 +121,11 @@ The aidlc-delivery-agent acts as the engineering manager. It assesses team capac
 
 ### [aidlc-architect-agent](agents/architect-agent.md)
 
-**Domain:** Application design, domain modelling, NFRs, component decomposition
+**Domain:** Domain design, domain modelling, NFRs, component decomposition
 
-The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (9 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). A judgment agent inherits your session's own model and effort, so it is never downgraded below what you chose. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort on Claude Code, Codex, and opencode; on Kiro all tiers inherit the session model and effort), because their output is dominantly templated planning, CI/CD YAML, and runbook scaffolding.
+The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (10 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). A judgment agent inherits your session's own model and effort, so it is never downgraded below what you chose. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit the session model and effort), because their output is dominantly templated planning, CI/CD YAML, and runbook scaffolding.
 
-- **Leads:** feasibility, application-design, units-generation, functional-design, nfr-requirements, nfr-design
+- **Leads:** feasibility, domain-design, units-generation, contract-design, functional-design, nfr-requirements, nfr-design
 - **Supports:** intent-capture, reverse-engineering (synthesis), delivery-planning
 
 ### [aidlc-aws-platform-agent](agents/aws-platform-agent.md)
@@ -135,7 +135,7 @@ The aidlc-architect-agent is the central design authority. It has the broadest s
 The aidlc-aws-platform-agent designs infrastructure, provisions environments, and optimizes costs. It has Bash access for running AWS CLI and CDK commands.
 
 - **Leads:** infrastructure-design, environment-provisioning
-- **Supports:** feasibility, application-design, nfr-design, feedback-optimization
+- **Supports:** feasibility, domain-design, contract-design, nfr-design, feedback-optimization
 - **Special tools:** Bash (for `aws`, `cdk` commands)
 
 ### [aidlc-compliance-agent](agents/compliance-agent.md)
@@ -209,10 +209,10 @@ This table shows which agents are active in which phases, and whether they serve
 | Agent | Phase 0 | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
 |-------|---------|---------|---------|---------|---------|
 | aidlc-product-agent | — | L (intent-capture, market-research, scope-definition), S (rough-mockups, approval-handoff) | L (requirements-analysis, user-stories), S (refined-mockups) | — | — |
-| aidlc-design-agent | — | L (rough-mockups) | L (refined-mockups), S (user-stories, application-design) | — | — |
+| aidlc-design-agent | — | L (rough-mockups) | L (refined-mockups), S (user-stories, domain-design) | — | — |
 | aidlc-delivery-agent | — | L (team-formation, approval-handoff), S (scope-definition) | L (delivery-planning), S (units-generation) | — | — |
-| aidlc-architect-agent | — | L (feasibility), S (intent-capture) | L (application-design, units-generation), S (reverse-engineering, delivery-planning) | L (functional-design, nfr-requirements, nfr-design) | — |
-| aidlc-aws-platform-agent | — | S (feasibility) | S (application-design) | L (infrastructure-design), S (nfr-design) | L (environment-provisioning), S (feedback-optimization) |
+| aidlc-architect-agent | — | L (feasibility), S (intent-capture) | L (domain-design, units-generation, contract-design), S (reverse-engineering, delivery-planning) | L (functional-design, nfr-requirements, nfr-design) | — |
+| aidlc-aws-platform-agent | — | S (feasibility) | S (domain-design, contract-design) | L (infrastructure-design), S (nfr-design) | L (environment-provisioning), S (feedback-optimization) |
 | aidlc-compliance-agent | — | S (feasibility) | — | S (nfr-requirements, infrastructure-design) | S (environment-provisioning) |
 | aidlc-devsecops-agent | — | — | S (practices-discovery) | S (nfr-requirements, infrastructure-design, build-and-test) | S (environment-provisioning) |
 | aidlc-developer-agent | — | — | L (reverse-engineering), S (practices-discovery, user-stories) | L (code-generation), S (functional-design) | S (deployment-execution) |
@@ -222,7 +222,7 @@ This table shows which agents are active in which phases, and whether they serve
 
 ### Observations
 
-- The **aidlc-architect-agent** has the broadest involvement (9 stages across 3 phases). It carries the `judgment` tier (inherits your session's model and effort), as do seven other high-judgment agents; only **aidlc-delivery-agent**, **aidlc-pipeline-deploy-agent**, and **aidlc-operations-agent** carry the `templated` tier
+- The **aidlc-architect-agent** has the broadest involvement (10 stages across 3 phases). It carries the `judgment` tier (inherits your session's model and effort), as do seven other high-judgment agents; only **aidlc-delivery-agent**, **aidlc-pipeline-deploy-agent**, and **aidlc-operations-agent** carry the `templated` tier
 - The **aidlc-developer-agent** spans 3 phases: Inception, Construction, and Operation
 - The **aidlc-compliance-agent** and **aidlc-devsecops-agent** operate purely in support roles, participating in stages led by others
 - The **aidlc-operations-agent** closes the lifecycle loop by feeding insights back to the aidlc-product-agent
@@ -231,16 +231,16 @@ This table shows which agents are active in which phases, and whether they serve
 
 ## Agent Tool Access
 
-Every agent inherits the **full session toolset** — all of Claude Code's built-in tools plus any MCP tools provisioned to the session. The one shipped restriction is `disallowedTools: Task` (only the conductor spawns subagents); none of the 14 agents declare a `tools:` allowlist. So the table below is not a set of per-agent grants — it records which tools each persona is *expected* to exercise in its work.
+On Claude Code, every agent inherits the **full session toolset** plus provisioned MCP tools, with `disallowedTools: Task` blocking nested delegation. Other harnesses use native tool policy for the same boundary; Kiro delegate allowlists omit `subagent`, and its projected agent Markdown does not carry the unsupported Claude key. The table below records which tools each persona is *expected* to exercise in its work, not a per-agent grant.
 
 | Tool | Expected to exercise it |
 |------|-------------|
 | Read, Edit, Write, Glob, Grep, AskUserQuestion | All 14 agents |
 | Bash | aidlc-aws-platform-agent, aidlc-devsecops-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 | WebSearch | aidlc-product-agent, aidlc-design-agent, aidlc-compliance-agent |
-| Task | None (blocked on every agent via `disallowedTools: Task`) |
+| Task / native delegation tool | None (blocked by each harness's projected agent policy) |
 
-To genuinely narrow a persona, add an optional `tools:` allowlist to its frontmatter — but doing so drops inherited MCP access unless the fully-qualified `mcp__<server>__<tool>` ids are also listed. This implementation ships no such restrictions today.
+To narrow a Claude persona, add an optional `tools:` allowlist to its frontmatter — but doing so drops inherited MCP access unless the fully-qualified `mcp__<server>__<tool>` ids are also listed. Other harnesses use their native agent configuration.
 
 ### MCP servers are shared, not per-agent
 
@@ -267,7 +267,7 @@ One more agent sits outside both groups: `aidlc-composer-agent`, the adaptive-wo
 
 A reviewer fires only when a stage declares a `reviewer:` field. Today the product
 lead reviews `rough-mockups`, `refined-mockups`, `requirements-analysis`, and
-`user-stories`; the architecture reviewer reviews `application-design`,
+`user-stories`; the architecture reviewer reviews `domain-design`,
 `units-generation`, `functional-design`, `nfr-requirements`, `nfr-design`,
 `infrastructure-design`, and `code-generation`.
 
@@ -278,19 +278,34 @@ artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then appends a `## Review` section with a verdict: **READY** or
 **NOT-READY**. How the verdict is handled depends on the stage's review class:
 
-- **Advisory** (the human-gated ideation/inception prose stages): one review
-  pass, whatever the verdict. The findings are quoted verbatim at the approval
-  gate, ranked by severity, as decision support — you triage them, and a
-  Request Changes at the gate is how a finding becomes a revision.
+- **Advisory** (the human-gated ideation/inception prose stages): one normal-flow
+  review pass, whatever the verdict. The findings are quoted verbatim at the
+  approval gate, ranked by severity, as decision support — you triage them, and a
+  Request Changes at the gate is how a finding becomes a revision. If a later
+  output write invalidates the terminal receipt, one bounded recovery request
+  runs at the next ordinal.
 - **Adversarial** (the Construction design/build stages): on NOT-READY the
   builder re-runs to address the findings and the reviewer re-checks, looping
   up to `reviewer_max_iterations` times (default 2, engine-enforced). If
   findings remain after the cap, the workflow proceeds to the approval gate
   with the unresolved findings noted.
 
-The scope can cap the class (`bugfix`, `poc`, and `workshop` cap every stage to
-advisory) and `/aidlc --review <class>` caps it per run. Either way the
-reviewer never blocks — the human always has final say.
+The reviewers also run under a hard turn budget - `maxTurns: 60`, authored in
+the persona frontmatter, enforced natively on Claude Code and projected to
+opencode's per-agent `steps: 60`; elsewhere it ships as persona prose. If a
+review comes back without a usable verdict - no `## Review` section, or no
+single canonical READY / NOT-READY line (a capped, crashed, or cut-off
+reviewer) - the conductor re-dispatches that same review once, and a second
+incomplete attempt is recorded as NOT-READY with the finding "review did not
+complete within its turn budget", so a silent cutoff becomes a visible finding
+at the gate instead of a missing verdict. Before every dispatch the conductor
+deletes any leftover `## Review` section, so a stale pre-revision verdict can
+never be misread as covering new work.
+
+The scope can cap the class (`bugfix`, `poc`, `classic`, and `workshop` cap
+every stage to advisory; `express` caps reviews to none) and
+`/aidlc --review <class>` caps it per run. Either way the reviewer never blocks
+— the human always has final say.
 
 (IMPORTANT: use plain agent names in backticks as shown — do NOT make them markdown links; per-agent reviewer doc pages do not exist yet.)
 

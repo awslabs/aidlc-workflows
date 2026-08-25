@@ -109,7 +109,7 @@ const PROJECT_TYPE = "Brownfield"; // scan.projectType, birth state write / stdo
 const LANGUAGES = "TypeScript"; // scan.languages,  birth state write / stdout :2378
 const FRAMEWORKS = "Vite, React"; // scan.frameworks, birth state write / stdout :2379
 const BUILD_SYSTEM = "npm (package.json)"; // scan.buildSystem, birth state write / stdout :2380
-const STATE_VERSION = "7"; // birth state template
+const STATE_VERSION = "8"; // birth state template
 const WORKSPACE_SCANNED = "WORKSPACE_SCANNED"; // handleIntentCreate:2144
 // Verbatim birth stdout block lines (utility.ts:2377-2380) — the deterministic
 // surface that proves the birth dispatch ran.

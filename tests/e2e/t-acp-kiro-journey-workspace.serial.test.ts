@@ -8,10 +8,11 @@
 // SEQUENCE of single-turn driveKiroAcp invocations against one shared on-disk
 // workspace root, each bounded by stopAfterToolTitle at a tool boundary.
 //
-// The assertable surfaces are the verbatim tool output (tool_call_update text) +
-// the on-disk record state read straight off the workspace root. NEVER the prose,
-// and NEVER the inferred scope (the conductor infers a new intent's scope from the
-// new-work text — non-deterministic; the invariants below do not depend on it).
+// The assertable surfaces are primarily verbatim tool output (tool_call_update
+// text) + on-disk state. Beat 3a additionally checks the assistant's rendered
+// routing question because that user-visible offer is the behavior under test;
+// it uses broad semantic clauses and never pins exact wording. The inferred
+// scope remains outside the invariant.
 //
 // ALL FIVE beats drive through the PRODUCTION `aidlc` conductor (live-verified on
 // this branch, kiro-cli 2.7.0):
@@ -164,9 +165,10 @@ function greenfieldReSkip(recordDir: string): boolean {
  *  verify (`cd …/codekb/<repo>`) right after EACH repo, so a `codekb/repo-X` title
  *  can fire after only ONE repo's artifacts exist — leaving the other repo's
  *  codekbFiles() at 0 (live-observed flake: repo-b verified + stopped before repo-a
- *  was ever written). On ACP the conductor's IN-TURN forwarding loop also does NOT
- *  voluntarily end after the stage work (kiro-acp-drive.ts hazard), so we cannot
- *  just await a natural turn-end. Instead: own the session, poll the workspace for
+ *  was ever written). On ACP the conductor's IN-TURN forwarding loop can also end
+ *  the turn early on its own (e.g. at a question stop) or keep forwarding past the
+ *  stage work (kiro-acp-drive.ts hazard), so a natural turn-end is not a reliable
+ *  completion signal either way. Instead: own the session, poll the workspace for
  *  both repos' codekb (tolerant of the root OR space-scoped store — see
  *  codekbFiles), and `session/cancel` once both are present. The driver's awaited
  *  session/prompt then resolves with stopReason=cancelled. Falls through on the
@@ -319,33 +321,68 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // --- Beat 3: a SECOND isolated intent alongside A, via the conductor's
         //     AUTHORIZED offer→confirm routing (the production flow) -----------
         // On the FRESH `offer` session (see above). Turn 3a: genuine new-work prose.
-        // The conductor reads the active intent (it may first emit a Branch-10
-        // run-stage for A and read its stage file), recognises the topic change, and
-        // runs `intent --json` to compare against the active intent (the offer's
-        // compare-read, SKILL.md), then renders the offer as numbered prose. Stop at
-        // the compare-read — the dependable offer-render boundary (spike-verified).
+        // TWO legitimate routes produce the offer, and the pin accepts either:
+        // (a) the conductor classifies the topic change itself and runs the
+        //     `intent --json` compare-read before rendering the offer (the
+        //     SKILL-prescribed judgment path), or
+        // (b) the conductor forwards the prose to `next` and the engine's
+        //     Branch 9c answers with the deterministic routing ASK ("Work is
+        //     already in progress on ..."), the backstop that made the
+        //     classification unskippable (live-observed pre-backstop: the prose
+        //     was poured into A's stage, then report-rejected/park/hand-edit
+        //     recoveries followed).
+        // Drive to NATURAL end_turn (no mid-seam cancel): the backstop made
+        // this turn terminal — an ask carries no stage work to overrun into,
+        // so the conductor renders the question and stops. Cancelling at the
+        // seam (the pre-backstop shape) left the conductor without its own
+        // rendered question, so the next turn's "Yes" answered a question the
+        // conductor never asked (live-observed: it re-forwarded the prose and
+        // re-rendered the ask instead of birthing).
+        // `/aidlc`-prefixed like every other beat: the prefix is what
+        // deterministically enters the forwarding loop, whose first `next`
+        // carries the prose into Branch 9c. A bare-prose prompt left loop
+        // entry to conductor initiative, and live conductors variously ran a
+        // bare `next` (prose never forwarded), hand-called intent-create
+        // (an unoffered auto-birth), or tried park (hook-blocked).
         const offerR1 = await driveKiroAcp({
           projectDir: root,
           session: offer,
           prompt:
-            "a completely separate, unrelated standalone metrics dashboard — a brand " +
-            "new project, nothing to do with the auth work",
+            "/aidlc a completely separate, unrelated standalone metrics dashboard — a " +
+            "brand new project, nothing to do with the auth work",
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts intent --json/,
           keepAlive: true,
         });
         expect(offerR1.toolCallIssues).toEqual([]);
-        // PIN the compare-read itself: the offer flow's documented first move is
-        // `intent --json` (SKILL.md; the spike-verified offer-render boundary).
-        // A live run was observed reaching a natural end_turn via --help /
-        // `intent list` exploration WITHOUT ever running the compare-read, and
-        // nothing failed — the offer path was silently not exercised. Assert the
-        // tool actually ran so that divergence reds instead of passing dark.
+        expect(offerR1.stopReason).toBe("end_turn");
+        const renderedOffer = offerR1.assistantText.toLowerCase();
         expect(
-          offerR1.toolCalls.some((tc) =>
-            /aidlc-utility\.ts intent --json/.test(tc.title),
-          ),
-        ).toBe(true);
+          renderedOffer,
+          `new-work turn did not render a continuation route: ${offerR1.assistantText}`,
+        ).toMatch(/part of|continue/);
+        expect(
+          renderedOffer,
+          `new-work turn did not render a separate-work route: ${offerR1.assistantText}`,
+        ).toMatch(/separate|second intent|new (?:piece of )?work/);
+        expect(
+          renderedOffer,
+          `new-work turn did not render a reshape route: ${offerR1.assistantText}`,
+        ).toMatch(/reshape|re-shape|remaining plan|change.*plan/);
+        // OUTCOME pins, not tool-surface pins: live conductors compare via
+        // `intent --json`, a registry read, or the engine ask - all legitimate.
+        // What the offer turn must NOT do is deterministic: no birth (never
+        // auto-birth; the engine's Branch 9c also refuses to birth from bare
+        // prose, so a dark offer can no longer stumble into one) and no stage
+        // work on A (state byte-identical). The dark-offer hazard the old
+        // compare-read pin guarded is now caught downstream: without a rendered
+        // offer the confirm turn cannot birth, and beat 3b's registry pin reds.
+        expect(
+          offerR1.toolCalls.some((tc) => /intent-create/.test(tc.title)),
+        ).toBe(false);
+        expect(readIntentRegistry(root).length).toBe(1);
+        expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(
+          stateABefore,
+        );
         // Turn 3b: confirm. The conductor routes through `next --new-intent`,
         // then acts on the engine's intent-create print. The inferred scope is
         // non-deterministic; assert only the registry shape and A's integrity.
@@ -363,8 +400,10 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(new Set(reg3.map((e) => e.uuid)).size).toBe(2);
         for (const e of reg3) expect(e.uuid).toMatch(UUIDV7_RE);
         // A's substantive workflow state is untouched + B's birth did not
-        // bleed into A's shard. The conductor may park A while handling the
-        // new-work offer, which legitimately refreshes only Last Updated.
+        // bleed into A's shard. The birth's cursor move may legitimately
+        // refresh only A's Last Updated timestamp; the offer path itself
+        // mutates nothing (SKILL.md pins this - park/report to "make room"
+        // are forbidden and hook-blocked).
         expect(
           withoutLastUpdated(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")),
         ).toBe(withoutLastUpdated(stateABefore));

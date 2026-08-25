@@ -8,7 +8,7 @@ This chapter is the user-facing tour. It covers where rules live, how the five l
 
 ## Rules at a glance
 
-Rules live as Markdown files in the active space memory layer at `aidlc/spaces/<active-space>/memory/` — a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro CLI resources or IDE steering, Codex `AIDLC_RULES_DIR`). Each file is named for its scope:
+Rules live as Markdown files in the active space memory layer at `aidlc/spaces/<active-space>/memory/` — a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro CLI resources or IDE steering, Codex `AIDLC_RULES_DIR`, opencode `instructions` glob, Copilot `AGENTS.md` `@`-imports). Each file is named for its scope:
 
 ```
 aidlc/spaces/<active-space>/memory/
@@ -54,7 +54,7 @@ The loop has four user-visible moments: the agent keeps a diary while the stage 
 
 ### The memory.md diary
 
-While a stage runs, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` — under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. It is created automatically at stage start and maintained for you — never hand-edited. Entries land under four standard headings:
+While a stage runs, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` — under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. The engine creates it from the shipped template when it emits the run-stage directive, and the orchestrator maintains it for you — never hand-edited. Entries land under four standard headings:
 
 - **Interpretations** — choices the agent made where the stage prose was ambiguous
 - **Deviations** — places the agent intentionally departed from the stage prose, and why
@@ -143,15 +143,16 @@ A sensor result is **advisory** in this release. A failing sensor produces an au
 
 Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap — the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](10-state-and-audit.md).
 
-### The five framework sensors
+### The six framework sensors
 
-Five sensors ship with the framework:
+Six sensors ship with the framework:
 
 | Sensor | Fires on | Checks |
 |--------|----------|--------|
 | `claim-sources` | Intent Capture record-dir outputs | Every claim has a visible source tag; registered description, workflow scope, and memory text match authoritative inputs; retained assumptions exactly match explicit confirmation |
 | `required-sections` | Any record-dir markdown output | The output contains the required H2 headings (a generic content-shape check) |
 | `upstream-coverage` | Any record-dir markdown output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
+| `traceability` | `traceability.json` stage artifacts | Stable upstream IDs are declared and covered, statuses and targets are valid, and deterministic downstream targets exist |
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |
 | `type-check` | `.ts` / `.tsx` code outputs | Wraps your configured type-checker (`tsc` by default) |
 

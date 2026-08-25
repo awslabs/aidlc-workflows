@@ -2,12 +2,13 @@
 // PreToolUse hook: make required active-stage rules deterministic across the
 // conductor-to-subagent boundary.
 //
-// Claude and Codex consume the emitted updatedInput directly. OpenCode's
-// adapter consumes the same output and mutates output.args. Kiro CLI has no
-// input-rewrite channel, so its adapter observes the proposed rewrite and
-// relies on native agent resource preload. Kiro IDE cannot expose tool arguments
-// and instead preloads active memory through always-included workspace steering
-// with live file references.
+// Claude, Codex, and Copilot consume the emitted updatedInput directly.
+// OpenCode's adapter consumes the same output and mutates output.args. Kiro CLI
+// has no input-rewrite channel, so its adapter observes the proposed rewrite
+// and relies on native agent resource preload. Kiro IDE does not register this
+// hook because tool-argument delivery is not uniform across supported
+// generations; it instead preloads active memory through always-included
+// workspace steering with live file references.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";

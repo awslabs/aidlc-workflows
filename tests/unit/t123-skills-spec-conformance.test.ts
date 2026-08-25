@@ -3,8 +3,8 @@
 // t123 (unit) — Agent-Skills-spec conformance over every shipped harness's
 // declared skill root, asserted with the complete frontmatter
 // parser (the unit-tier sibling of the smoke-tier structural sweep). Migrated
-// from tests/unit/t123-skills-spec-conformance.sh (TAP plan: 1 dir-count guard
-// + 3 conformance assertions per skill = 1 + 3×38 = 115 assertions).
+// from tests/unit/t123-skills-spec-conformance.sh (one dir-count guard plus
+// three conformance assertions per skill; Cursor adds three native utilities).
 //
 // Mechanism: none. There is no tool / process / argv / exit-code seam under
 // test — the subject IS the on-disk shape of each shipped skill set and the
@@ -32,6 +32,7 @@
 // Subject under test (each shipped skill set + each SKILL.md's frontmatter):
 //   dist/<harness>/<skill-root>/<skill>/SKILL.md, for the DERIVED expected set:
 //     - 4 base skills (orchestrator + 3 read-only session skills)
+//     - 3 Cursor-only utility shortcuts on the Cursor harness
 //     - the generator's default-batch scope-runners (imported here, not
 //       hardcoded)
 //     - one aidlc-<slug> per RUNNABLE compiled stage (every stage whose
@@ -51,8 +52,8 @@
 // shipped set EQUALS that derived set.
 //
 // Old TAP -> new test parity (1:1, no guarantee dropped; several STRONGER):
-//   .sh test 1 (dir-count: discovered shipped dirs == base 4 + 4 scope-runners
-//       + 29 stage-runners + aidlc-init, sorted assert_eq)
+//   .sh test 1 (dir-count: discovered shipped dirs == the common
+//       generated/base set plus any harness-native skills, sorted assert_eq)
 //         -> "shipped skill set == derived expected set (sorted, exact)"
 //            STRONGER: element-by-element toEqual on the sorted arrays, not just
 //            the joined string the .sh compared — proves count AND membership.
@@ -83,9 +84,13 @@ import { defaultScopeBatch } from "../../dist/claude/.claude/tools/aidlc-runner-
 
 const STAGE_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
-// --- The four base skills (orchestrator + the three read-only session skills).
+// --- The base skills: the orchestrator plus the standalone skills that sit
+// OUTSIDE the lifecycle graph (the three read-only session skills, and
+// aidlc-knowledge, which manages the document catalog). None is a generated
+// runner, so each is named here rather than derived.
 const BASE_SKILLS = [
   "aidlc",
+  "aidlc-knowledge",
   "aidlc-outcomes-pack",
   "aidlc-replay",
   "aidlc-session-cost",
@@ -115,13 +120,22 @@ const INIT_RUNNER_SKILL = "aidlc-init";
 // `/aidlc compose ...` (the adaptive composer's typeable entry).
 const COMPOSE_RUNNER_SKILL = "aidlc-compose";
 
-const EXPECTED_SKILLS = [
+const COMMON_EXPECTED_SKILLS = [
   ...BASE_SKILLS,
   ...SCOPE_RUNNER_SKILLS,
   ...RUNNER_SKILLS,
   INIT_RUNNER_SKILL,
   COMPOSE_RUNNER_SKILL,
 ].sort();
+
+const CURSOR_SHORTCUT_SKILLS = ["aidlc-jump", "aidlc-scope", "aidlc-status"];
+
+function expectedSkills(harnessName: string): string[] {
+  return [
+    ...COMMON_EXPECTED_SKILLS,
+    ...(harnessName === "cursor" ? CURSOR_SHORTCUT_SKILLS : []),
+  ].sort();
+}
 
 /**
  * Discover the shipped skill set: every directory under the skills dir that
@@ -194,7 +208,7 @@ function parseFrontmatter(text: string): FrontmatterParse {
 describe("t123 (unit) skills-spec conformance — every shipped skill set", () => {
   for (const harness of HARNESS_MATRIX) {
     test(`${harness.name}: shipped skill set == derived expected set (sorted, exact)`, () => {
-      expect(discoveredSkills(harness.skillsRoot)).toEqual(EXPECTED_SKILLS);
+      expect(discoveredSkills(harness.skillsRoot)).toEqual(expectedSkills(harness.name));
     });
   }
 });
@@ -205,7 +219,7 @@ describe("t123 (unit) skills-spec conformance — every shipped skill set", () =
 // .sh's `for skill in $(echo "$EXPECTED_SKILLS" | tr ' ' '\n' | sort)`.
 describe("t123 (unit) skills-spec conformance — per-skill SKILL.md invariants", () => {
   for (const harness of HARNESS_MATRIX) {
-    for (const skill of EXPECTED_SKILLS) {
+    for (const skill of expectedSkills(harness.name)) {
       const file = join(harness.skillsRoot, skill, "SKILL.md");
 
       test(`${harness.name}/${skill}: frontmatter name == dir`, () => {

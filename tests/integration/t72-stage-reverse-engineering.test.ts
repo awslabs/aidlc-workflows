@@ -15,8 +15,9 @@
 // RENDERS (stopAfterAskUserQuestion), the moment the deterministic artifacts + state
 // have landed (RE stage steps 3-4 write the 9 artifacts + update state BEFORE step 5
 // presents the gate, reverse-engineering.md:78-101). We assert that LANDED surface —
-// the §5-A1 land pattern applied to sdk — never the post-approval advance (a moving
-// LLM-paced target, the t26/t101 lesson). Known LLM-tier flake (memory) — re-run alone.
+// the §5-A1 land pattern applied to sdk — while tolerating the live conductor
+// reporting completion and advancing before the driver's gate-render stop lands.
+// Known LLM-tier flake (memory) — re-run alone.
 //
 // THE JOURNEY (verified against the SHIPPED stage). Seed state-brownfield-init-done
 // (Lifecycle Phase=INCEPTION, Current Stage=reverse-engineering [-] in-progress,
@@ -38,10 +39,10 @@
 //   7 RE artifacts have markdown headings
 //       -> >= 1 artifact matches /^#/m (the .sh's grep -l "^#").
 //   8/9/13 RE completion + advance + completed count
-//       -> NOT asserted post-approval (those depend on the auto-advance the .sh's
-//          headless mode forced - the racy surface). Instead we assert the DETERMINISTIC landed
-//          state at the gate: Current Stage === reverse-engineering (the stage is
-//          active, jump/stage set it) — the stable pre-approval truth.
+//       -> while Current Stage is RE, its checkbox is [-], [?], or [x]. If the
+//          cursor advanced beyond RE, the checkbox must be [x] AND the audit
+//          trail must contain RE's STAGE_COMPLETED event. This pins a coherent
+//          durable journey outcome without racing the live cursor.
 //   10 RE mentions component/module structure (3, 4, 5, 11 domain-word probes)
 //       -> NOT a hard word grep (LLM-authored RE output varies; the .sh tied these
 //          to the todo stub with assert_gt 0 / skip-on-miss). The faithful
@@ -78,7 +79,10 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
-import { activeSpace } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  activeSpace,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The space-level per-repo codekb dir the RE stage now writes into
 // (aidlc/spaces/<space>/codekb/<repo>/ — the codekb-determinism placement fix).
@@ -112,6 +116,28 @@ const RE_STEMS = [
   "reverse-engineering-timestamp",
 ];
 
+type StateStageRow = {
+  marker: string;
+  slug: string;
+};
+
+function stateStageRows(state: string): StateStageRow[] {
+  const rows: StateStageRow[] = [];
+  for (const line of state.split("\n")) {
+    const match = line.match(/^- \[([^\]]+)\] ([a-z0-9-]+)(?:\s|$)/);
+    if (match) rows.push({ marker: match[1], slug: match[2] });
+  }
+  return rows;
+}
+
+function auditHasStageEvent(audit: string, event: string, slug: string): boolean {
+  return audit.split(/\n---\n/).some(
+    (block) =>
+      block.split("\n").includes(`**Event**: ${event}`) &&
+      block.split("\n").includes(`**Stage**: ${slug}`),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Timeout budget — the .sh set AIDLC_TEST_TIMEOUT=900 (RE is a HEAVY multi-agent
 // stage). Honour it. The driver aborts ~15s before bun's per-test cap so a stuck
@@ -132,8 +158,8 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
   // -------------------------------------------------------------------------
   // Brownfield project seeded at init-done with RE next. Drive the RE stage and
   // STOP when its approval gate renders — the moment the 9 artifacts + the state
-  // update have landed. Assert the deterministic artifact scaffold + state, with
-  // no auto-advance and no racy post-approval read.
+  // update have landed. The live conductor may already have reported completion
+  // and advanced, so assert the durable artifact + ordered state/audit outcome.
   // -------------------------------------------------------------------------
   test(
     "reverse-engineering produces the artifact scaffold and lands at its approval gate (phase INCEPTION)",
@@ -154,9 +180,10 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
 
         const r = await driveAidlc("/aidlc", {
           projectDir: proj,
-          // Stop the instant the RE approval gate renders — the artifacts + state
-          // update precede it (reverse-engineering.md steps 3-4 before step 5), so
-          // the deterministic landed surface is captured without auto-advancing.
+          // Request a stop when the RE approval gate renders. The artifacts +
+          // state update precede it (reverse-engineering.md steps 3-4 before step
+          // 5), but a fast live conductor may report and auto-advance before the
+          // AskUserQuestion stop callback lands.
           stopAfterAskUserQuestion: true,
           timeoutMs: DRIVE_TIMEOUT_MS,
         });
@@ -203,11 +230,30 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
         const state = r.stateFile as string;
         expect(readStateField(state, "Lifecycle Phase")).toBe(TARGET_PHASE);
 
-        // .sh tests 8/9 re-expressed as the DETERMINISTIC pre-approval truth: the
-        // RE stage is the active Current Stage (set by the stage/jump). We do NOT
-        // assert the post-approval [x]/advance — that is the racy auto-advance the
-        // .sh's headless mode forced (the flake root); it is the tui tier's surface.
-        expect(readStateField(state, "Current Stage")).toBe(TARGET_SLUG);
+        // .sh tests 8/9 re-expressed as durable journey evidence. The live
+        // conductor may clear RE's gate and advance before the driver's
+        // AskUserQuestion stop lands, so Current Stage is allowed to be RE or any
+        // later stage in this state file's own compiled checkbox order. RE itself
+        // must have started and must not have been skipped.
+        const rows = stateStageRows(state);
+        const targetIndex = rows.findIndex((row) => row.slug === TARGET_SLUG);
+        const currentStage = readStateField(state, "Current Stage");
+        const currentIndex = rows.findIndex((row) => row.slug === currentStage);
+        expect(targetIndex).toBeGreaterThanOrEqual(0);
+        expect(currentIndex).toBeGreaterThanOrEqual(targetIndex);
+
+        // A cursor still on RE may be in progress, awaiting approval, or
+        // completed. A cursor beyond RE proves advancement and therefore
+        // requires both the completed marker and the terminal audit event.
+        if (currentIndex > targetIndex) {
+          const audit = readAllAuditShards(proj);
+          expect(rows[targetIndex]?.marker).toBe("x");
+          expect(auditHasStageEvent(audit, "STAGE_COMPLETED", TARGET_SLUG)).toBe(
+            true,
+          );
+        } else {
+          expect(["-", "?", "x"]).toContain(rows[targetIndex]?.marker);
+        }
       } finally {
         cleanupTestProject(proj);
       }

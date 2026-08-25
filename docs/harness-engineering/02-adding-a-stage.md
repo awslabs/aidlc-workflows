@@ -111,6 +111,10 @@ wiring, and they must agree with each other:
 - **`produces`** lists the forward edges. When a downstream stage asks "who
   produces artifact Z?", the graph answers via `producersOf()` — so the stage
   that declares `produces: [Z]` is the one that gets wired in upstream of it.
+  Every consumed artifact must resolve to exactly one producer across
+  `produces` and `optional_produces`; `aidlc-graph compile` rejects duplicates
+  and names both producer files. Reusing an artifact name is valid only when no
+  stage consumes it.
 
 Get these three consistent and the compiler places the stage automatically;
 you never edit `stage-graph.json` by hand to position it. The nuances of
@@ -203,7 +207,7 @@ run, so running one stage on its own can never derail an in-flight workflow.
 ### The runner skill is optional packaging
 
 Every shipped runnable stage also gets a thin runner skill at `skills/aidlc-<slug>/SKILL.md`
-so it is typeable as `/aidlc-<slug>` (e.g. `/aidlc-application-design`). These are
+so it is typeable as `/aidlc-<slug>` (e.g. `/aidlc-domain-design`). These are
 **opt-in sugar over the `--single` flag** — a ~6-line shell that drives
 `next --stage <slug> --single`. They are not hand-written: a generator emits one
 per runnable compiled stage slug, so the set of runners can never drift from the

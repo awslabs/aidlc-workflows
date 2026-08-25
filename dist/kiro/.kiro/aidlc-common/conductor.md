@@ -17,79 +17,19 @@ it for the whole run.
 For an `inline` stage, load the lead agent's flat file (e.g.
 `agents/aidlc-architect-agent.md`) and adopt its voice for the stage body — you
 are speaking as that domain expert. Load knowledge per `stage-protocol.md` §5
-knowledge-loading order. For a `subagent` stage, the `Task` boundary loads the
-persona and enforces the agent's `disallowedTools`/`model` - pass
-context in the prompt (subagents cannot see conversation history), never inject
-the persona text yourself.
+knowledge-loading order. For a `subagent` stage, the harness's native dispatch
+boundary loads the persona and enforces its projected model/tool policy
+(`disallowedTools: Task` on Claude; delegate allowlists without `subagent` on
+Kiro). Pass context in the prompt (subagents cannot see conversation history);
+never inject the persona text yourself.
 
-For a multi-agent stage (a stage with `support_agents`), how you bring each
-support agent in is governed by `directive.mode` — the stage's communication
-topology (who talks to whom) — never by the presence of `support_agents`.
-You are the bus on every topology: every message between participants is a
-dispatch you make and a return you carry. Agents never invoke each other —
-only you, the conductor, delegate. The writing model mirrors a real working
-session: **everyone writes their own work; the owner collates and edits.**
-Dispatched support agents write contribution files
-(`<record>/<phase>/<stage>/contributions/<agent-slug>.md`, identity-marker
-first line, per `stage-protocol.md` §11); the lead alone edits the stage's
-`produces[]` artifacts.
-
-- **`mode: inline`** (most multi-agent stages in the shipped graph) — load
-  each support agent's flat file and knowledge into *your own* context,
-  exactly as you loaded the lead, and write its perspective inline. Produce
-  the lead's primary artifacts first, then layer in each support perspective,
-  then synthesise. Do **not** dispatch a support agent on an inline stage —
-  the support agent is a voice you adopt, not a subagent you dispatch. (A
-  missing subagent-type registration is expected here and is not an error to
-  route around.) No contribution files.
-- **`mode: subagent`** — hub-and-spoke. The lead runs behind a dispatch
-  boundary that loads the persona for you. When the stage also declares
-  `support_agents`, each support agent is a real spoke: after the lead's
-  draft returns, dispatch every support agent against the draft (artifacts
-  by path, rules as the accumulated steering bundle; they are
-  mutually blind: no spoke's brief contains another's contribution); each
-  spoke writes its contribution file; then dispatch the lead once more to
-  integrate the contributions into the artifacts.
-  Practices Discovery is the shipped hub-and-spoke example on both greenfield
-  and brownfield work: the pipeline-deploy lead drafts first; quality,
-  developer, and devsecops inspect that draft as mutually blind spokes; the
-  human interview follows; then the lead integrates the answers and all three
-  contributions.
-- **`mode: pipeline`** — chain. The chain collectively authors the
-  artifacts: dispatch the lead first, then each support agent one at a time
-  in declared `support_agents` order, each link seeing everything upstream
-  and advancing the work product directly — editing the evolving artifacts
-  in place (serialized, so no conflict) or handing results down for the next
-  link to build on, as the stage body directs. The FINAL link leaves the
-  `produces[]` artifacts complete. Order is the point.
-- **`mode: mob`** — mesh, run as bounded rounds with the human in the room.
-  Round 1: the lead drafts; dispatch ALL support agents in parallel against
-  the draft (mutually blind); each writes its contribution file
-  (Contribution + Positions). Integrate as the lead, then TRIAGE unresolved
-  objections: a **judgment call** (both positions legitimate — scope, risk,
-  priority) goes to the HUMAN mid-stage as a structured question per §3
-  (write it to the stage's questions file first, blank `[Answer]:` tag);
-  a **knowledge dispute** goes to round 2 — re-dispatch each objecting agent
-  with the revised draft AND the other participants' recorded positions, to
-  confirm or maintain in its own file. Two rounds maximum. Maintained
-  dissent goes verbatim into the completion summary at the gate — never
-  silently averaged away.
-
-On every topology the reviewer (§12a) runs after the body, from outside the
-room, unchanged — and on a NOT-READY the fix cycle re-invokes the LEAD alone
-(the room or chain convenes once; repair is lead-reviewer ping-pong). Under
-autonomous Construction the mid-stage human turn is skipped: unresolved
-dissent is recorded in the artifact and audit and surfaces at the
-final-batch gate; it never halts the run (halt-and-ask stays reserved for
-failure). The contribution files are the ensemble's completion evidence —
-the engine refuses the stage's approval while a declared collaborator's
-file is missing (stage-protocol.md §5).
-
-On resume, preserve work already returned by a dispatched topology. In
-particular, Practices Discovery resumes by dispatching only support spokes
-whose contribution files are missing; it does not repeat the lead draft or a
-completed quality, developer, or devsecops spoke. Once all three contributions
-exist, continue with the human interview and lead integration.
+For a multi-agent stage, load `stage-protocol-ensemble.md` when the directive
+names that module. It is the single contract for topology behavior,
+contribution evidence, resume rules, objection triage, and lead-only reviewer
+repairs. The irreducible persona rules: you are the bus, and the lead owns the
+final `produces[]` artifacts.
+Do **not** dispatch a support agent on an inline stage. Agents never invoke
+each other — only you, the conductor, delegate.
 
 The engine owns lifecycle bookkeeping. Open, reject, revise, approve, complete,
 or skip a stage only through `aidlc-orchestrate.ts report`; never call lifecycle
@@ -119,9 +59,13 @@ stage that does not apply reports
 Every stage keeps an observation diary at the `memory_path` the `run-stage`
 directive carries (`<record>/<phase>/<stage>/memory.md`):
 
-1. At stage start, if `memory.md` does not exist at that path, copy
-   `.kiro/knowledge/aidlc-shared/memory-template.md` to it. Idempotent —
-   never overwrite; re-entry or resume must keep accumulated entries.
+1. The engine creates `memory.md` from
+   `.kiro/knowledge/aidlc-shared/memory-template.md` when it emits the
+   directive. NEVER probe for `memory.md`, or any other maybe-absent file, with a
+   read tool: reading an absent path is a failed tool call. In the rare case an
+   append finds the diary missing, bootstrap it with exactly one idempotent POSIX
+   command: `mkdir -p "$(dirname "<memory_path>")" && { [ -f "<memory_path>" ] || cp ".kiro/knowledge/aidlc-shared/memory-template.md" "<memory_path>"; }`.
+   Never overwrite; re-entry or resume must keep accumulated entries.
 2. During the stage, append timestamped bullets under the matching canonical
    heading as observations arise — Interpretation, Deviation, Tradeoff, or Open
    question. This is your diary-keeping (see `stage-protocol.md` §13); the four
@@ -148,8 +92,9 @@ vs *within* a stage (you loop on your own). Inside one stage you still own:
   with them whether to keep the artifact as-is, modify it in place, or redo the
   stage from scratch (discard partial artifacts), then re-run the relevant part
   and re-present the gate. The loop stays within the current stage but reports
-  through the engine at each turn: `report --result rejected` records the
-  feedback, and after the revision (re-running the §12a reviewer first when a
+  through the engine at each turn: `report --result rejected --user-input
+  "Request Changes" --reason "<feedback>"` records the
+  feedback, and after the revision (re-running the `stage-protocol-reviewer.md` §12a reviewer first when a
   `produces[]` artifact changed and the directive carries a reviewer)
   `report --result revised` reopens the gate — never route around those calls.
 

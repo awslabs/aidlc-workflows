@@ -47,9 +47,11 @@ test-pro/
   sensors/aidlc-requirement-coverage.md
   tools/aidlc-sensor-coverage-threshold.ts            # the sensor scripts
   tools/aidlc-sensor-requirement-coverage.ts
+  tools/test-pro-doctor.ts                             # optional /aidlc --doctor checks
   scopes/test-pro-validation.md                       # NEW plugin scope
   agents/test-pro-metrics-agent.md                    # NEW support persona
   knowledge/test-pro-metrics-agent/methodology.md     # plugin methodology knowledge
+  tests/plugin.test.ts                                # plugin content and compose tests
 ```
 
 `.aidlc-plugin/plugin.json` is a **declarative** manifest. Its top level mirrors
@@ -72,7 +74,7 @@ block:
       "scopes": "scopes/",            // NEW scope identities
       "knowledge": "knowledge/",      // methodology knowledge for agents
       "sensors": "sensors/",          // sensor manifests
-      "tools": "tools/"               // sensor scripts (so a sensor can run)
+      "tools": "tools/"               // runnable sensor + doctor scripts
     }
   }
 }
@@ -81,7 +83,8 @@ block:
 `contributes` keys map to core subtrees (`stages`, `agents`, `scopes`, `memory`,
 `sensors`, `knowledge`, `tools`) — those are merged alongside core at compose.
 `tools` lands CLI scripts in the harness `tools/` dir so a plugin can ship a
-**runnable sensor** (its manifest in `sensors/` + its script in `tools/`).
+**runnable sensor** (its manifest in `sensors/` + its script in `tools/`) and an
+optional doctor check.
 `memory` merges into the default-space method seed, **not** a `rules/` dir (that
 directory is no longer read — see §4). `overlays` is special: it is **not**
 copied; it holds the per-stage contributions consumed by the merge (§3).
@@ -269,18 +272,55 @@ projection remains deferred (doc 18 §8 Status).
   filename prefix, and the filename stem must equal frontmatter `name` (for
   example, `scopes/test-pro-validation.md` has `name: test-pro-validation`).
   Set `freeform_default: true` to nominate a plugin scope as the fallback when
-  the core `feature`/`poc` default is disabled; at most one enabled scope across
+  the core `classic` default is disabled; at most one enabled scope across
   the selected core/plugin set may claim it, and graph compilation rejects an
   ambiguous set. Membership for plugin-authored stages is their `scopes:`
   frontmatter list; a contribution's `adds.scopes` (§3) adds YOUR scope to an
   existing core stage. See [Scopes](04-scopes.md).
 
+### Ship a doctor check
+
+Add `tools/<plugin>-doctor.ts` when your plugin has install prerequisites or
+composed files that `/aidlc --doctor` should verify. The script is optional and
+runs only while the plugin is enabled. It receives `AIDLC_PROJECT_DIR`,
+`AIDLC_HARNESS_DIR`, and `AIDLC_PLUGIN_NAME`, and must print the JSON contract
+without other stdout:
+
+Doctor discovery derives installed plugin identities from owned stage and scope
+metadata. A plugin must therefore own at least one stage or scope for its doctor
+script to be discoverable; a tools-, sensors-, or knowledge-only plugin is not
+enough on its own.
+
+```typescript
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+const root = join(
+  process.env.AIDLC_PROJECT_DIR ?? process.cwd(),
+  process.env.AIDLC_HARNESS_DIR ?? ".claude",
+);
+
+console.log(JSON.stringify({
+  checks: [{
+    pass: existsSync(join(root, "tools", "my-plugin-helper.ts")),
+    label: "my-plugin helper installed",
+    fix: "Run `bun <harness-dir>/tools/aidlc-utility.ts plugin-sync` or re-run hooks/compose.ts.",
+    severity: "error",
+  }],
+}));
+```
+
+Omit `severity` for the default `error` behavior. Use `advisory` for a visible
+finding that must not fail doctor. Keep the script read-only and dependency-free;
+doctor bounds its runtime/output and turns script failures into diagnostic rows.
+
 ## 5. Distribution + install
 
 The packager emits your plugin as **a real host plugin** (one projection target
-per harness: `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, plus a
-Kiro folder projection). You publish the output to a git repo with semver tags
-and a `marketplace.json`, and teams install through the host's native commands.
+per harness, including `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
+Copilot's `.plugin/plugin.json`, and Kiro's folder projection). You publish the
+output to a git repo with semver tags and a `marketplace.json`, and teams install
+through the host's native commands.
 
 ### Claude / Codex (host store)
 
@@ -314,9 +354,12 @@ AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-> **Kiro note.** The emitted `.kiro.hook` still depends on host support for
-> plugin-root env vars. Use `aidlc plugin sync` with `AIDLC_PLUGIN_ROOT` when the binary is available, or
-> the explicit `bun compose.ts` invocation above as the fallback.
+> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE >= 1.0; its folder-drop
+> includes a v2 `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
+> that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
+> the workspace root. The `kiro` projection for Kiro CLI emits no hook registration,
+> so run one of the explicit composer commands above. Neither projection emits the
+> retired `.kiro.hook` plugin registration.
 
 ### Trust
 
@@ -330,6 +373,76 @@ Trust is **host-native** — you don't build anything:
 > [`examples/test-pro/`](../reference/examples/test-pro/). See also
 > [Plugin Mechanism §8](../reference/18-plugin-mechanism.md) for the full
 > platform-team worked example.
+
+## Testing your plugin
+
+Use three tiers, from cheapest to most realistic:
+
+1. **Content validation** is the always-on baseline. Call
+   `validatePluginContent()` against the authored plugin root. It runs pure,
+   deterministic checks for manifest identity, stage schema and ownership,
+   artifact namespacing, contribution targets, scope and agent filenames, and
+   non-empty stage bodies. It is fast and gives precise authoring findings, but
+   it does not prove that packaging or composition succeeds.
+2. **Compose integration** is the default CI check. Call
+   `composePluginFixture()` to build the real harness projection, copy a shipped
+   install into scratch space, run the emitted compose hook, and inspect the
+   compiled graph and installed surfaces. It is deterministic and exercises the
+   actual packager and composer, but it does not launch a model-backed harness.
+3. **Live harness e2e** is opt-in compatibility evidence. Call
+   `invokeHarness()` only behind the gate returned by `liveGateFor()`. The live
+   gates are `AIDLC_CLAUDE_SDK_LIVE`, `AIDLC_KIRO_ACP_LIVE`,
+   `AIDLC_CODEX_EXEC_LIVE`, `AIDLC_COPILOT_EXEC_LIVE`,
+   `AIDLC_OPENCODE_RUN_LIVE`, and `AIDLC_CURSOR_RUN_LIVE`. Live runs prove the
+   host can discover and invoke the composed plugin, but they need installed
+   CLIs, credentials, and more time. An unset gate returns a skipped result, so
+   a green test run can mean the live check did not run.
+
+Plugin tests under `plugins/<name>/tests/*.test.ts` are discovered
+automatically and join the integration tier. Run one plugin's tests with:
+
+```bash
+bash tests/run-tests.sh --integration --filter "plugin-<name>"
+```
+
+This content test is the minimum copyable shape:
+
+```ts
+import { expect, test } from "bun:test";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { validatePluginContent } from "../../../tests/harness/plugin-kit.ts";
+
+const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+test("plugin content is valid", () => {
+  expect(validatePluginContent(pluginRoot)).toEqual([]);
+});
+```
+
+Add a deterministic compose test when the plugin ships stages, contributions,
+agents, scopes, sensors, or tools:
+
+```ts
+import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { composePluginFixture } from "../../../tests/harness/plugin-kit.ts";
+
+test("plugin composes into a Claude install", () => {
+  const fixture = composePluginFixture({
+    plugin: "your-plugin",
+    harness: "claude",
+  });
+  const graph = JSON.parse(
+    readFileSync(
+      join(fixture.projectDir, ".claude", "tools", "data", "stage-graph.json"),
+      "utf-8",
+    ),
+  ) as Array<{ slug?: string }>;
+  expect(graph.some((stage) => stage.slug === "your-plugin-stage")).toBe(true);
+});
+```
 
 ## Rules of the road
 

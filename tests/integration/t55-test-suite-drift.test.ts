@@ -3,7 +3,8 @@
 // t55 — drift guard for test-suite metadata + the framework path/version-marker
 // drift sweeps + the closed-harness-framing anti-rot guard. Migrated from
 // tests/integration/t55-test-suite-drift.sh (TAP plan 7); test 8 added by the
-// docs re-architecture (du/unit-7), so this twin now carries 8 test() cases.
+// docs re-architecture (du/unit-7), plus the DocumentKB skill existence pairing,
+// so this twin now carries 9 test() cases.
 // Mechanism: none (pure file reads/parsing over tests/, tests/README.md, and
 // docs/ — readFileSync/readdirSync only; zero spawn, zero LLM, zero tokens).
 // Born suffix-free.
@@ -94,7 +95,7 @@
 // checks 6/7. The suite now has 8 test() cases.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -224,7 +225,7 @@ const readmeBody = readFileSync(README, "utf-8");
 const readmeRows = parseReadmeRows(readmeBody);
 const shFiles = discoverShFiles();
 
-describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.sh, plan 7; +1 framing guard = 8)", () => {
+describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.sh, plan 7; +2 guards = 9)", () => {
   // ───────────────────────────────────────────────────────────────────────────
   // Check 1 — header drift. Surviving `.sh` only: if a header has (N tests) and
   // the file has a literal `plan N`, they must agree. `.test.ts` carry no plan N.
@@ -380,7 +381,6 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
 
     // --- Stale path strings across the three roots ---
     const PATH_PATTERNS = [
-      "aidlc-knowledge/",
       ".claude/practices/",
       "rules/aidlc/",
       "practices/team.md",
@@ -431,11 +431,11 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
         join(REPO_ROOT, "tests"),
         join(REPO_ROOT, "docs"),
       ],
-      (line: string) => PATH_PATTERNS.some((p) => line.includes(p)),
+      (line: string) => PATH_PATTERNS.some((p) => line.includes(p)) || STALE_KNOWLEDGE_DIR_RE.test(line),
     ).filter((h: string) => !pathHitCarvedOut(h));
     if (pathHits.length > 0) {
       pathDrift.push(
-        "stale path strings (aidlc-knowledge/, .claude/practices/, rules/aidlc/, practices/{team,org,project}.md, aidlc-docs/.sensors/, aidlc-{team,project}-learnings.md):",
+        "stale path strings (<any-root>/aidlc-knowledge/ not preceded by skills/, .claude/practices/, rules/aidlc/, practices/{team,org,project}.md, aidlc-docs/.sensors/, aidlc-{team,project}-learnings.md):",
       );
       pathDrift.push(...pathHits);
     }
@@ -457,6 +457,26 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
     }
 
     expect(pathDrift).toEqual([]);
+  });
+
+  test("6b: references to the DocumentKB skill require its authored source directory", () => {
+    const roots = [
+      join(REPO_ROOT, "core"),
+      join(REPO_ROOT, "harness"),
+      join(REPO_ROOT, "dist", "claude", ".claude"),
+      join(REPO_ROOT, "tests"),
+      join(REPO_ROOT, "docs"),
+    ];
+    const references = grepHits(
+      roots,
+      (line: string) => line.includes("skills/aidlc-knowledge"),
+    ).filter((hit: string) => !commonExcluded(hit));
+    if (references.length > 0) {
+      expect(
+        existsSync(join(REPO_ROOT, "core", "skills", "aidlc-knowledge")),
+        `skills/aidlc-knowledge is referenced but core/skills/aidlc-knowledge is missing:\n${references.join("\n")}`,
+      ).toBe(true);
+    }
   });
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -592,6 +612,31 @@ function legacyRootCarvedOut(hit: string): boolean {
  */
 const CLOSED_FRAMING_RE =
   /one core,?\s+three\s+harnesses|three\s+(?:cli\s+)?harnesses|three\s+harness\s+distributions?|generated\s+three\s+ways|(?:add|adding)\s+a\s+fourth/i;
+
+/**
+ * The retired KNOWLEDGE DIRECTORY `<any-root>/aidlc-knowledge/`, renamed to
+ * `knowledge/` in milestone 2.
+ *
+ * This was a plain `"aidlc-knowledge/"` substring in PATH_PATTERNS until
+ * 2026-08-08, when the DocumentKB SKILL landed at `skills/aidlc-knowledge/` and
+ * made the bare token ambiguous — it flagged every legitimate reference to the
+ * new skill. Two fixes were rejected before this one:
+ *
+ *   per-file carve-out   the six S1-14 doc files that reference the skill would
+ *                        each need their own STEM carve, so the carve-out list,
+ *                        not the pattern, becomes the maintained artefact.
+ *   prefix allowlist     enumerating `.claude/`, `.kiro/`, `.codex/`,
+ *                        `{{HARNESS_DIR}}/` MISSED four real spellings, measured:
+ *                        `.agents/` (codex's actual skill root), `.aidlc/`
+ *                        (opencode's), the workspace-relative `aidlc/`, and the
+ *                        bare relative `aidlc-knowledge/shared/`. An allowlist of
+ *                        prefixes fails open on the prefix nobody thought of.
+ *
+ * So the discriminator is the ONE thing that actually separates the two path
+ * shapes: the retired directory is never preceded by `skills/`, and the skill
+ * always is. That holds for every root, including roots not invented yet.
+ */
+const STALE_KNOWLEDGE_DIR_RE = /(?<!skills\/)\baidlc-knowledge\//;
 
 /**
  * Check-8 carve-outs. Two permanent allowlist entries:

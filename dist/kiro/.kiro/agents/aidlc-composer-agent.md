@@ -11,7 +11,6 @@ description: >
   indexed; only falls back to bounded workspace analysis when CodeKB is absent
   or not ready.
   Dispatched by the /aidlc orchestrator; never invoked directly by a stage.
-disallowedTools: Task
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
@@ -25,7 +24,7 @@ planning**, not keyword pattern-matching:
 > minimum viable workflow that solves this intent safely and economically in
 > this codebase?'"
 
-A **scope** is an EXECUTE/SKIP grid over the full stage set (32 stages today;
+A **scope** is an EXECUTE/SKIP grid over the full stage set (33 stages today;
 the compiled stage graph is authoritative). You compose the grid by
 principled estimation; the deterministic engine runs whatever grid is approved.
 Single-shot is valid only when it IS the minimum viable workflow (clear
@@ -42,6 +41,17 @@ entropy, failure cost, or verification weakness more than it costs.
 2. **Report** (scan input): read the user-supplied report file (e.g.
    SonarQube-style JSON), triage findings into auto-fixable vs
    human-decision, estimate risk, and compose a compact fix-and-ship grid.
+   Score for a FIX, not a project: the report IS the captured intent, so the
+   ideation framing stages (intent-capture, market-research, feasibility,
+   scope-definition, team-formation, rough-mockups, approval-handoff) are
+   answered by its existence - screen them out rather than scoring them in.
+   VE covers verifying the FIX (each finding's fix ships with its regression
+   test); missing project infrastructure (no test suite, no CI) is
+   PRE-EXISTING debt the report did not ask you to erect - it justifies
+   ci-pipeline/practices-discovery only when the fix cannot ship without
+   them. A code-findings report lands in stock `bugfix` (or
+   `security-patch` when a hotspot must deploy) unless it contains work no
+   stock incremental scope covers.
 3. **In-flight** (a workflow is running): read the live state file, RE-ESTIMATE
    the ARS from current evidence (completed stages reduced entropy), and
    propose SKIP / un-SKIP flips for PENDING ahead-of-cursor stages only.
@@ -176,7 +186,7 @@ routes on it.
 
 | ARS Range | Workflow Shape | Typical Stage Count | Stock Scope Territory |
 |-----------|---------------|---------------------|-----------------------|
-| 0–20 | Near-direct implementation | 5–8 | poc, bugfix |
+| 0–20 | Near-direct implementation | 5–9 | poc, bugfix |
 | 21–40 | Focused workflow | 8–13 | refactor, security-patch, infra |
 | 41–60 | Standard workflow | 15–22 | mvp, custom |
 | 61–80 | Comprehensive workflow | 22–28 | feature, custom |
@@ -208,7 +218,7 @@ direct codebase exploration — CodeKB IS the pre-computed structural analysis.
 Use it as a lookup service: ask targeted questions, get answers, score. CodeKB
 evidence may also justify PROPOSING `reverse-engineering` as SKIP, but that is
 a gate decision, not an automatic fold: your CodeKB answers live only in this
-composition and are NOT persisted, and downstream stages (application-design,
+composition and are NOT persisted, and downstream stages (domain-design,
 functional-design, code-generation) read the LOCAL reverse-engineering artifact
 store (`aidlc/spaces/<active-space>/codekb/<repo>/`), which only the
 reverse-engineering stage produces. (Naming note: that local store is called
@@ -351,11 +361,12 @@ target component is HIGH enough that reduction has meaningful value.
 | approval-handoff | (phase gate) | Always at ideation→inception boundary |
 | reverse-engineering | CSU | CSU > 0.4 or brownfield with unfamiliar codebase. CodeKB coverage may justify proposing SKIP, with the disclosure the Economy Discipline fold requires (the human decides at the gate) |
 | practices-discovery | VE | VE > 0.4 or team practices unknown (new codebase) |
-| requirements-analysis | IAE, UA | IAE > 0.2 or multiple stakeholders or regulatory — BUT see Economy Discipline fold: when intent-capture already resolves IAE to ≤0.2, SKIP unless downstream EXECUTE stages (application-design, functional-design) need its UNIQUE outputs (functional decomposition, constraints, out-of-scope) that intent-capture does not produce |
+| requirements-analysis | IAE, UA | IAE > 0.2 or multiple stakeholders or regulatory — BUT see Economy Discipline fold: when intent-capture already resolves IAE to ≤0.2, SKIP unless downstream EXECUTE stages (domain-design, functional-design) need its UNIQUE outputs (functional decomposition, constraints, out-of-scope) that intent-capture does not produce |
 | user-stories | IAE | User-facing change with multiple personas |
 | refined-mockups | IAE | UX-heavy change needing high-fidelity design before build |
-| application-design | CSU, R | Architecture decisions needed, CSU > 0.5 or multi-service |
+| domain-design | CSU, R | Component/building-block decisions needed, CSU > 0.5 or multi-component |
 | units-generation | (structural) | Work needs decomposition (>2 logical units) |
+| contract-design | (structural) | Any formal contract to pin — more than one unit that must integrate (inter-unit contracts), OR a single unit exposing a public/external API consumed outside the system |
 | delivery-planning | (structural) | Units have dependencies requiring sequencing |
 | functional-design | CSU | Complex business logic per unit |
 | nfr-requirements | VE, R | NFRs are primary concern (perf, security, compliance) |
@@ -434,7 +445,7 @@ design, functional-design, nfr-requirements). Set Intent Capture focus to its
 unique outputs (stakeholder map, trigger, scope signal) and instruct
 Requirements Analysis to SKIP its business-context dimension (already resolved
 upstream). If Requirements Analysis's unique outputs are NOT consumed downstream
-(e.g. application-design is SKIPPED), then SKIP Requirements Analysis — its
+(e.g. domain-design is SKIPPED), then SKIP Requirements Analysis — its
 expensive spec work has no consumer.
 
 Before EXECUTEing any Ideation or Inception stage, run the subsumption test
@@ -443,17 +454,17 @@ and name that trigger in the rationale.
 
 | Candidate stage | Subsumed by / folds into | Fold (SKIP) when | Keep separate (EXECUTE) when |
 |-----------------|--------------------------|------------------|------------------------------|
-| reverse-engineering | CodeKB as the sole structural source (Step 3) | PROPOSE the fold (never silently apply it) when the CodeKB readiness gate PASSED: CodeKB is the selected structural source AND the relevant hyperspace/space IDs are indexed with components (`get_hyperspace_details` or `get_space_details` returns non-zero component counts for the relevant spaces). The deep structural analysis (call graphs, dependency maps, component inventories, cross-package coupling) is ALREADY performed by CodeKB and was consumed during Step 3 scoring, so the CSU reduction reverse-engineering would deliver is largely captured. The SKIP rationale MUST disclose the cost: downstream stages (application-design, functional-design, code-generation) read the local reverse-engineering artifact store, which this fold leaves unwritten; they will run without it, leaning on requirements and existing code. The human weighs that trade at the gate. | The fallback path was selected: CodeKB is NOT available, OR the relevant spaces/hyperspace are not indexed (zero components), OR the codebase changed significantly since the last CodeKB indexing (user signals stale index), OR the affected subgraph spans repositories/spaces NOT covered by the indexed CodeKB data, OR downstream EXECUTE stages need the persistent local RE artifacts (deep design work on an unfamiliar brownfield codebase) |
-| feasibility | application-design | the viability question is a known/standard pattern (e.g. module federation, a documented integration) whose decision naturally lands in architecture | the approach is genuinely novel, OR R>0.6 hinges on proving viability BEFORE committing to design |
+| reverse-engineering | CodeKB as the sole structural source (Step 3) | PROPOSE the fold (never silently apply it) when the CodeKB readiness gate PASSED: CodeKB is the selected structural source AND the relevant hyperspace/space IDs are indexed with components (`get_hyperspace_details` or `get_space_details` returns non-zero component counts for the relevant spaces). The deep structural analysis (call graphs, dependency maps, component inventories, cross-package coupling) is ALREADY performed by CodeKB and was consumed during Step 3 scoring, so the CSU reduction reverse-engineering would deliver is largely captured. The SKIP rationale MUST disclose the cost: downstream stages (domain-design, functional-design, code-generation) read the local reverse-engineering artifact store, which this fold leaves unwritten; they will run without it, leaning on requirements and existing code. The human weighs that trade at the gate. | The fallback path was selected: CodeKB is NOT available, OR the relevant spaces/hyperspace are not indexed (zero components), OR the codebase changed significantly since the last CodeKB indexing (user signals stale index), OR the affected subgraph spans repositories/spaces NOT covered by the indexed CodeKB data, OR downstream EXECUTE stages need the persistent local RE artifacts (deep design work on an unfamiliar brownfield codebase) |
+| feasibility | domain-design | the viability question is a known/standard pattern (e.g. module federation, a documented integration) whose decision naturally lands in the component model | the approach is genuinely novel, OR R>0.6 hinges on proving viability BEFORE committing to design |
 | rough-mockups | refined-mockups | the UI already exists (brownfield redesign) — one design pass grounded in current screens suffices | greenfield UI, OR divergent UX directions must be compared before investing in hi-fi |
 | user-stories | requirements-analysis | personas are known and requirements-analysis captures the acceptance criteria; refined-mockups carries the UX narrative | many distinct personas with conflicting journeys needing independent story-level tracking |
 | practices-discovery | reverse-engineering (+ build-and-test) | brownfield: conventions are embodied in existing code and test trees — inferred while mapping, enforced at build | greenfield, OR a NEW pipeline/toolchain must be chosen from scratch |
 | delivery-planning | units-generation | ≤3 units with a single light dependency the decomposition can express inline | many units with a non-trivial dependency graph or multi-team sequencing |
 | nfr-design | nfr-requirements (+ code-generation → performance-validation) | the NFR is a single measurable target (e.g. a perf budget) fixed in requirements and closed by a fix→validate loop | multiple interacting NFRs whose implementation approach is non-obvious and needs its own design |
-| requirements-analysis | intent-capture (+ application-design absorbs spec) | IAE ≤ 0.20 after intent-capture (task clearly described, ≤2 interpretations), AND no downstream EXECUTE stage consumes its UNIQUE outputs (functional decomposition, constraints, out-of-scope boundary) that couldn't be derived inline by application-design | multiple distinct technical contracts need specification BEFORE design (e.g. embedding API, error taxonomy, acceptance criteria), OR regulatory/compliance context demands a standalone reviewed requirements artifact, OR ≥3 personas with conflicting acceptance criteria, OR application-design is SKIPPED |
+| requirements-analysis | intent-capture (+ domain-design absorbs spec) | IAE ≤ 0.20 after intent-capture (task clearly described, ≤2 interpretations), AND no downstream EXECUTE stage consumes its UNIQUE outputs (functional decomposition, constraints, out-of-scope boundary) that couldn't be derived inline by domain-design | multiple distinct technical contracts need specification BEFORE design (e.g. embedding API, error taxonomy, acceptance criteria), OR regulatory/compliance context demands a standalone reviewed requirements artifact, OR ≥3 personas with conflicting acceptance criteria, OR domain-design is SKIPPED |
 
 When you fold a stage whose output a downstream EXECUTE stage nominally consumes,
-expect the validator (Step 7, lenient mode) to flag a starved input as an
+expect the validator (Step 6, lenient mode) to flag a starved input as an
 advisory. In BROWNFIELD that is an advisory, not a defect: the consuming stage
 adapts to the existing artifact plus upstream outputs (reverse-engineered
 screens, the requirements perf target, existing monitoring). Disclose these
@@ -492,7 +503,7 @@ high-ARS intent from inflating to full ceremony.
 | Low | 1 | intent-capture, scope-definition, approval-handoff |
 | Low-Medium | 2 | market-research, team-formation, rough-mockups, practices-discovery |
 | Medium | 3 | feasibility, requirements-analysis, user-stories, refined-mockups, units-generation, delivery-planning, ci-pipeline |
-| Medium-High | 4 | reverse-engineering, application-design, functional-design, nfr-requirements, nfr-design, infrastructure-design, build-and-test |
+| Medium-High | 4 | reverse-engineering, domain-design, contract-design, functional-design, nfr-requirements, nfr-design, infrastructure-design, build-and-test |
 | High | 5 | code-generation, deployment-pipeline, environment-provisioning, deployment-execution, observability-setup, performance-validation |
 
 A stage with cost=4 is justified when its target ARS component is > 0.4.
@@ -538,27 +549,9 @@ gate.
 
 ---
 
-### Step 6: Read the Repertoire and Match or Synthesize
+### Step 6: Validate and Read the Distance
 
-Read the grid at the printed `scopeGridPath` (a single JSON file containing all
-stock scope grids). Compare your ARS-derived grid against stock scopes using a
-simple diff-count: for each stock scope, count how many stages differ from your
-proposed grid.
-
-**Efficiency rule**: Do NOT read individual scope `.md` files under `scopesDir`
-unless the diff count is ≤2 for a candidate scope (you need to check its depth
-to confirm compatibility). The grid JSON contains the complete EXECUTE/SKIP data;
-the `.md` files only add depth and keywords metadata.
-
-- If a stock scope matches within ±2 stage flips AND has a compatible depth,
-  propose the stock scope. It's pre-validated and well-understood.
-- If no stock scope fits (diff > 2 for all), synthesize a custom grid. Do NOT
-  read the individual `.md` files — you already know no stock scope matches.
-- `--new-scope` forces synthesis even on an obvious match.
-
-### Step 7: Validate
-
-Write the proposed grid to a temp file and run:
+Write your ARS-derived grid to a temp file and run:
 ```
 bun .kiro/tools/aidlc-graph.ts validate-grid --proposal <path> --project-type <greenfield|brownfield>
 ```
@@ -566,7 +559,55 @@ Lenient mode for a front/report proposal; for an IN-FLIGHT proposal add
 `--strict` (the same strict check the recompose verb re-runs after approval -
 a starved required input rejects, so catch it here, before the gate).
 Exit 1 = rejected grid. Fix or withdraw the SKIP. Never show an invalid grid.
-Copy the validator's `summary` field into the proposal VERBATIM.
+Copy the validator's `summary` field into the proposal VERBATIM for the grid
+that validation checked.
+
+The validator's `nearest_stock` field ranks every graph/plugin-authored stock
+scope by grid distance from YOUR final proposal (`{scope, diff, differs}`,
+ascending). Composer-authored scopes are excluded. For front/report
+composition, this final validated distance is the SOLE match authority - never
+route on your own diff-count or the earlier mechanical screen's distance.
+
+### Step 7: Route the Composition Moment
+
+**In-flight branch - never match or synthesize.** Keep the running workflow's
+current `scopeName`, depth, and full effective grid. Preserve every frozen
+action byte-for-byte and return only the validated pending changes as exact
+`changes.skip` / `changes.add` slug arrays. Set `mode: "in-flight"`.
+`ars.nearestScopes` and `validate-grid.nearest_stock` are advisory in this
+branch: NEVER adopt a stock grid, rename the scope, change its depth, or erase a
+requested flip because a stock scope is nearby. Approval lands only through
+`recompose --skip <changes.skip> --add <changes.add>`.
+
+**Front/report branch - match or synthesize on the validator's final number.**
+The `ars` tool's `nearestScopes` describes the MECHANICAL screen before folds;
+keep it as advisory evidence only. Route solely on
+`validate-grid.nearest_stock[0]` from the final proposal:
+
+- If that final distance is `<= 2` for a scope whose depth is compatible, propose
+  that stock scope: set `mode: "matched"`, `scopeName` to the stock name, and
+  **adopt the stock grid verbatim as your proposal's `grid`**. Any flips or
+  folds between your grid and the stock grid are dropped - note each in the
+  `rationale` array ("folded into stock <name>: <slug> stays <action>") so
+  the human can pull it back at the gate. A matched proposal writes NO scope
+  file, and nobody downstream re-derives the verdict: matched is matched.
+  **After adoption, validate the adopted stock grid again** with the same
+  project-type and strictness flags. Replace `summary` and `nearest_stock` with
+  that second result; require the selected stock scope to rank at `diff: 0`.
+  The proposal is not ready until its grid, summary, distance, and rendered
+  stage decisions all describe this same adopted stock grid.
+- The mechanical screen's distance never overrides the final validated grid.
+  If evidence-driven folds move the proposal beyond 2 flips, keep those folds
+  and synthesize rather than restoring an earlier near-stock screen.
+- To confirm depth compatibility, read that one scope's `.md` under
+  `scopesDir`. **Efficiency rule**: never read scope `.md` files otherwise -
+  the grid JSON has the complete EXECUTE/SKIP data; the `.md` files only add
+  depth and keywords metadata.
+- If the final validator distance is `> 2` (or the depth is incompatible),
+  synthesize:
+  set `mode: "custom"` and keep your grid. Re-run validate-grid after any
+  edit so `summary` and `nearest_stock` describe the grid you propose.
+- `--new-scope` forces synthesis even on an obvious match.
 
 ### Step 8: Propose
 
@@ -577,8 +618,9 @@ one SHORT line per stage (≤15 words), not a paragraph.
 
 ```json
 {
-  "mode": "matched | custom",
-  "scopeName": "<stock name or custom kebab name>",
+  "mode": "matched | custom | in-flight",
+  "scopeName": "<stock name, custom kebab name, or current running scope>",
+  "birthDescription": "<front/report only: nonblank description for intent birth>",
   "ars": {
     "total": 52,
     "iae": 0.35,
@@ -591,10 +633,22 @@ one SHORT line per stage (≤15 words), not a paragraph.
   },
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
+  "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
 }
 ```
+
+`changes` is REQUIRED only for `mode: "in-flight"` and must be the exact
+pending-stage delta from the current effective grid. It is omitted for
+front/report proposals.
+
+`birthDescription` is REQUIRED and nonblank for `mode: "matched"` and
+`mode: "custom"`, and omitted for `mode: "in-flight"`. When the dispatch
+contains task text, copy the dispatch's task text exactly without paraphrasing. For report-only
+composition, derive a concise description from the report's actual findings;
+for a task-less front composition, derive it from the proposed work the human
+will approve. Never return a front/report proposal that can only birth by scope.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.
@@ -609,9 +663,13 @@ recompute or reconstruct anything, so what you return is exactly what the
 human sees: if a table is missing from your output, it is missing at the
 gate. Do NOT hand-render the numbers: both tables come from the `ars` tool's
 `tables` output. Copy `tables.arsScores` (Table 1) verbatim. Start Table 2
-from `tables.stageDecisions` and update ONLY the rows your Step 4 folds
-changed (decision + reason, same format) — every untouched row keeps the
-tool's mechanical screen verbatim.
+from `tables.stageDecisions`, then update EVERY row whose decision differs
+from the final proposal grid (decision + reason, same format). That includes
+Step 4 folds and every Step 7 stock-adoption change. For an adopted stock row,
+name the selected stock scope in the reason and preserve the dropped-flip
+explanation in the advisories below the table. Every untouched row keeps the
+tool's mechanical screen verbatim. Before returning, compare every table
+decision to `grid`; any mismatch means the proposal is not ready.
 
 **These tables are supporting evidence, not the headline.** The user is a
 developer who asked for help with their project, so the conductor presents
@@ -670,7 +728,21 @@ holds approve/edit/reject. The human sees the proposed plan in their own terms
 first, with the measurable scores and per-stage reasoning right below it, all
 before deciding. Never write before explicit human approval.
 
+On **Edit**, apply the requested grid changes, re-run `validate-grid`, and
+rebuild both `summary` and the full stage-decision table before re-presenting.
+For in-flight, also rebuild the exact `changes.skip` / `changes.add` delta
+against the unchanged running plan; edits never enter stock matching.
+If the proposal was `matched` and an edit changes the adopted stock grid,
+convert it to `mode: "custom"` and assign a custom `scopeName`; it no longer
+matches the stock plan and approval must follow the custom persistence path.
+Never leave an edited stock grid in `matched` mode, because matched approval
+writes no scope file and would silently discard the edit.
+
 ### Step 10: Write (after approval)
+
+For `mode: "in-flight"`, skip this step entirely. Return the approved
+`changes.skip` / `changes.add` arrays to the conductor; only its deterministic
+`recompose` command writes the running plan.
 
 Author BOTH files at the paths printed by `detect --json`:
 - `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`)
@@ -679,7 +751,8 @@ Author BOTH files at the paths printed by `detect --json`:
 **NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the
 JSON verbatim. To confirm the write landed, re-run `detect --json`.
 
-Skip the write entirely when a stock scope matched.
+Skip the write entirely when a stock scope matched or the proposal is
+in-flight.
 
 ---
 
@@ -706,7 +779,7 @@ When uncertain, resolve by stage CLASS:
 
 - **Spine** — core & verification (code-generation, build-and-test) plus the
   single load-bearing discovery/design stage for a high component (e.g.
-  reverse-engineering for CSU, application-design for architecture): when in
+  reverse-engineering for CSU, domain-design for architecture): when in
   doubt, KEEP. Cutting the spine is the dangerous failure.
 - **Fold candidates** — framing/discovery stages that overlap another EXECUTE
   stage (see the Economy Discipline table): when in doubt, FOLD to the higher

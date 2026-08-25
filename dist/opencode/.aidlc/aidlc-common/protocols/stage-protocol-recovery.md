@@ -49,6 +49,22 @@ If `aidlc-state.md` exists, read it to determine:
 
 Offer to resume from the last incomplete stage.
 
+**Build-and-Test failure loop-back, logged-but-not-jumped detection**: if
+`<record>/construction/build-and-test/test-results.md` contains a
+`## Loop-Back Log` whose latest entry has a planned fix but the audit shows
+no matching `STAGE_JUMPED` (Target: code-generation) after it, the session
+died between logging and jumping — re-execute the jump per the construction
+protocol module (`aidlc-common/protocols/stage-protocol-construction.md`),
+"Build-and-Test failure loop-back", rather than re-diagnosing. On any resume,
+the loop-back count is the ledger's entry count, never zero. If the matching
+jump already exists, resume the settlement-aware re-entry instead:
+receipt-mode continues from the first unsettled unit, artifact-only mode
+resumes the pre-gate override, and a replay that re-emits `invoke-swarm`
+(autonomous stage-major) follows that section's "Swarm interaction" procedure:
+discard stale worktrees/branches, run a fresh `prepare`, check every unit
+first, record fresh reviewer receipts, and `finalize`. None of the three paths
+may treat preserved artifacts or prior receipts as current-attempt evidence.
+
 ### Session resume context loading
 When resuming, load context appropriate to the current phase and stage type:
 
@@ -91,7 +107,7 @@ When resuming, load context appropriate to the current phase and stage type:
 **INCEPTION — Design stages (App Design, Refined Mockups, Units Generation):**
 - Load requirements artifacts
 - Load user stories
-- Load `<record>/inception/application-design/` (app design, component designs)
+- Load `<record>/inception/domain-design/` (component catalogue) and `<record>/inception/contract-design/` (inter-unit contracts)
 
 **INCEPTION — Delivery Planning:**
 - Load all inception artifacts (requirements, design, units)
@@ -123,6 +139,11 @@ If a stage needs to be re-run (user requested changes after approval):
 - Execute the stage again, overwriting previous artifacts
 - Present new completion message
 
+(This is the "user requested changes after approval" scenario. A build-and-test
+loop-back left mid-jump by a crash is a different scenario — a deliberately
+in-flight failed stage, not an approved one being redone — and is handled
+under "Session resume" above.)
+
 If a resumed active or revising CONDITIONAL stage proves inapplicable, route
 the outcome through `aidlc-orchestrate.ts report --stage <slug> --result
 skipped --reason "<reason>"`. Never call `aidlc-state.ts skip` directly and
@@ -141,7 +162,7 @@ If `aidlc-state.md` exists but cannot be parsed (missing required sections, inva
 3. Rebuild `aidlc-state.md` from artifact evidence:
    - If `aidlc/spaces/<active-space>/codekb/<repo>/` has analysis files for the intent's repositories, mark RE stages complete
    - If `<record>/inception/requirements-analysis/` has requirement docs, mark requirements stages complete
-   - If `<record>/inception/application-design/` has design docs, mark design stages complete
+   - If `<record>/inception/domain-design/` has design docs, mark design stages complete
    - If application code exists matching story designs, mark code gen stages complete
 4. Set "Current Status" to the first stage that lacks artifact evidence
 5. Tell the user: "The file tracking this workflow's progress was damaged, so I rebuilt it from the documents already on disk. Please check that the recovered progress looks right before we continue."

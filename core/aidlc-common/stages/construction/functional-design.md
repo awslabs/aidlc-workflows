@@ -12,15 +12,17 @@ reviewer: aidlc-architecture-reviewer-agent
 reviewer_max_iterations: 2
 for_each: unit-of-work
 produces:
-  - business-logic-model
-  - business-rules
-  - domain-entities
+  - entities
+  - rules
+  - functional-spec
+  - traceability
 optional_produces:
   - frontend-components
 produces_kinds:
-  business-logic-model: [service, ui, library]
-  business-rules: [service, spec, library]
-  domain-entities: [service, spec, library]
+  entities: [service, spec, library]
+  rules: [service, spec, library]
+  functional-spec: [service, ui, library]
+  traceability: [service, spec, ui, library]
   frontend-components: [ui]
 consumes:
   - artifact: unit-of-work
@@ -31,30 +33,35 @@ consumes:
     required: true
   - artifact: components
     required: true
-  - artifact: component-methods
-    required: true
-  - artifact: services
-    required: true
+  - artifact: contract-summary
+    required: false
 requires_stage:
   - units-generation
+  - contract-design
 sensors:
   - required-sections
   - upstream-coverage
   - linter
   - type-check
+  - traceability
 scopes:
   - enterprise
   - feature
   - mvp
   - refactor
+  - classic
   - workshop
-inputs: unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts
-outputs: "business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
+inputs: unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)
+outputs: "entities.md, rules.md, functional-spec.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all). entities.md and rules.md each carry a fenced ```yaml source-of-truth block; functional-spec.md is the source of truth for workflows and state machines and carries derived ER-diagram and rules-summary views."
 ---
 
 # Functional Design
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
+
+## Constraints
+
+This is a design stage — artifacts describe business logic, domain models, and rules at an architectural level, not implementation-ready code. Complete function bodies, class implementations, and framework-specific code belong in code-generation. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
 
 ## Steps
 
@@ -80,9 +87,9 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Unit Context
 
-Read the unit definition from `<record>/inception/units-generation/unit-of-work.md` and assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists) and any application design artifacts from `<record>/inception/application-design/` (if they exist).
+Read the unit definition from `<record>/inception/units-generation/unit-of-work.md` and assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists), the component catalogue from `<record>/inception/domain-design/components.md` (if it exists), and the contracts for this unit's boundaries from `<record>/inception/contract-design/contract-summary.md` (if it exists).
 
-Incremental scopes (refactor) deliberately skip units-generation and application-design, so those inputs are absent by design there. When an input is absent, work from what the scope does provide — the requirements and, on a brownfield workspace, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints) — and treat the existing code structure as the de-facto application design. Never invent the content of a missing artifact.
+Incremental scopes (refactor) deliberately skip units-generation and domain-design, so those inputs are absent by design there. When an input is absent, work from what the scope does provide — the requirements and, on a brownfield workspace, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints) — and treat the existing code structure as the de-facto domain design. Never invent the content of a missing artifact.
 
 ### Step 3: Create Functional Design Plan
 
@@ -109,12 +116,34 @@ If ANY ambiguity found: create follow-up questions and resolve before proceeding
 
 ### Step 5: Generate Artifacts
 
-Generate the following in `<record>/construction/{unit-name}/functional-design/`:
+Generate the following in `<record>/construction/{unit-name}/functional-design/`. Technology-agnostic — implementable in any language. No code, no SQL, no framework references.
 
-- **business-logic-model.md**: Detailed algorithms, workflows, data transformations, processing sequences, and decision trees for the unit's business logic
-- **business-rules.md**: Decision rules, validation logic, constraints, policies, conditional behavior, and business invariants
-- **domain-entities.md**: Entities, relationships, data structures, attributes, lifecycle states, and entity interaction patterns
+- **entities.md**: The entity model. Carries a fenced ```yaml source-of-truth block listing each entity with its description, attributes (name, logical type, required/unique, references, allowed values, defaults, min/max, constraints), entity-level constraints, and relationships (cardinality + direction). Follow the block with a short human-readable summary of the entity set.
+- **rules.md**: The business rules. Carries a fenced ```yaml source-of-truth block listing each numbered rule (`id: BRx.y`, e.g. `BR1.1` — the `BR{group}.{seq}` format the traceability sensor recognizes) with its statement, category (validation/authorization/constraint/calculation/policy), what it applies to, trigger, logic (IF…THEN in plain language), violation behaviour, and source (FR-n/NFR-n). Follow the block with a short human-readable rules summary table.
+- **functional-spec.md**: The behavioural specification. It is the **source of truth for workflows and state machines** — the numbered step sequences a use case follows and the lifecycle-entity state transitions — because `entities.md` (data shape) and `rules.md` (decision logic) do not capture ordered behaviour or transitions. It also carries two **derived** views for readability: an entity-relationship `mermaid` diagram (derived from `entities.md` — the YAML there is source of truth) and a rules summary (derived from `rules.md`). For a UI-only unit that produces `functional-spec.md` without `entities.md`/`rules.md`, this file is self-contained: it authoritatively specifies the interaction workflows and screen/state transitions from the unit definition and requirements, with no entity/rule dependency.
 - **frontend-components.md** (CONDITIONAL — only if unit includes frontend/UI): Component hierarchy, props/state design, interaction flows, form validation rules, API integration points
+
+Create
+`<record>/construction/{unit-name}/functional-design/traceability.json`.
+Enumerate every acceptance criterion assigned to this Unit. Each `OK` target
+must name one or more `BRx.y` IDs that exist in `rules.md`. Use the
+optional `reverse` array to explain rules that intentionally have no AC; any
+unexplained rule is mechanically derived as an orphan:
+
+```json
+{
+  "stage": "functional-design",
+  "unit": "u1-auth",
+  "upstream_ids": ["AC1.1.1", "AC1.1.2"],
+  "coverage": [
+    { "id": "AC1.1.1", "status": "OK", "target": "BR1.1" },
+    { "id": "AC1.1.2", "status": "GAP" }
+  ],
+  "reverse": [
+    { "id": "BR1.3", "status": "N/A", "target": "technical validation rule" }
+  ]
+}
+```
 
 ### Step 6: Completion Handoff
 
@@ -145,9 +174,10 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `unit-of-work`, `unit-of-work-story-map`, `requirements`, `components`, `component-methods`, `services`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `unit-of-work`, `unit-of-work-story-map`, `requirements`, `components`, `contract-summary`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
+- **`traceability`** validates per-Unit AC coverage, verifies `BRx.y` targets against `rules.md`, and derives unexplained business-rule orphans.
 
 Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 

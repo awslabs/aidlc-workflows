@@ -36,14 +36,14 @@ const CLAUDE_LIB = join(CLAUDE_TOOLS, "aidlc-lib.ts");
 // Materialize a minimal <root>/<harness>/tools/ tree carrying the real lib
 // (plus its sibling imports) so script-path derivation sees the genuine shipped
 // layout for that harness dir. The packager emits tools/data/harness.json per
-// tree ({"rulesSubdir": ...}); we mirror that here so rulesSubdir() reads the
+// tree (manifest name + rulesSubdir); we mirror the fields needed here so rulesSubdir() reads the
 // open-set descriptor exactly as it would in a real install. Pass a rulesSubdir
 // to drive ANY harness — including a synthetic 4th (e.g. .gemini) — proving the
 // runtime needs zero edits to support a new harness.
 function libInHarnessTree(root: string, harness: string, rulesSubdir?: string): string {
   const toolsDir = join(root, harness, "tools");
   mkdirSync(join(toolsDir, "data"), { recursive: true });
-  for (const sibling of ["aidlc-lib.ts", "aidlc-graph.ts", "aidlc-runtime-paths.ts", "aidlc-stage-schema.ts", "aidlc-version.ts"]) {
+  for (const sibling of ["aidlc-lib.ts", "aidlc-artifact-vocabulary.ts", "aidlc-graph.ts", "aidlc-runtime-paths.ts", "aidlc-stage-schema.ts", "aidlc-version.ts"]) {
     cpSync(join(CLAUDE_TOOLS, sibling), join(toolsDir, sibling));
   }
   // Seed the compiled-data files (stage-graph/scope-grid) from claude — they are
@@ -105,7 +105,7 @@ describe("t144 codex harness seam — harnessDir + resolveProjectDir ladder ×3 
     try {
       // Lib copied OUTSIDE any harness tree → derivation misses → CWD probe.
       const libCopy = join(tmp, "aidlc-lib.ts");
-      for (const sibling of ["aidlc-lib.ts", "aidlc-graph.ts", "aidlc-runtime-paths.ts", "aidlc-stage-schema.ts", "aidlc-version.ts"]) {
+      for (const sibling of ["aidlc-lib.ts", "aidlc-artifact-vocabulary.ts", "aidlc-graph.ts", "aidlc-runtime-paths.ts", "aidlc-stage-schema.ts", "aidlc-version.ts"]) {
         cpSync(join(CLAUDE_TOOLS, sibling), join(tmp, sibling));
       }
       cpSync(join(CLAUDE_TOOLS, "data"), join(tmp, "data"), { recursive: true });
@@ -137,7 +137,7 @@ describe("t144 codex harness seam — harnessDir + resolveProjectDir ladder ×3 
     try {
       // Lib outside any harness tree → suffix strip misses → CWD marker rung.
       const libCopy = join(tmp, "aidlc-lib.ts");
-      for (const sibling of ["aidlc-lib.ts", "aidlc-graph.ts", "aidlc-runtime-paths.ts", "aidlc-stage-schema.ts", "aidlc-version.ts"]) {
+      for (const sibling of ["aidlc-lib.ts", "aidlc-artifact-vocabulary.ts", "aidlc-graph.ts", "aidlc-runtime-paths.ts", "aidlc-stage-schema.ts", "aidlc-version.ts"]) {
         cpSync(join(CLAUDE_TOOLS, sibling), join(tmp, sibling));
       }
       cpSync(join(CLAUDE_TOOLS, "data"), join(tmp, "data"), { recursive: true });

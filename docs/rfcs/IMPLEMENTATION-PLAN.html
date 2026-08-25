@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFC 0001 — Implementation Plan</title>
+<style>
+  :root {
+    --fg: #1b1f24; --muted: #57606a; --accent: #0969da; --border: #d0d7de;
+    --bg: #ffffff; --code-bg: #f6f8fa; --table-stripe: #f6f8fa;
+    --tag-bg: #ddf4ff; --tag-fg: #0a3069; --warn-bg: #fff8c5; --warn-border: #d4a72c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #e6edf3; --muted: #9198a1; --accent: #4493f8; --border: #30363d;
+      --bg: #0d1117; --code-bg: #161b22; --table-stripe: #161b22;
+      --tag-bg: #15314b; --tag-fg: #cae8ff; --warn-bg: #2d2611; --warn-border: #9e7b0e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--fg); background: var(--bg); line-height: 1.6;
+    max-width: 880px; margin: 0 auto; padding: 48px 24px 96px; font-size: 16px;
+  }
+  h1 { font-size: 1.85rem; line-height: 1.25; border-bottom: 2px solid var(--border); padding-bottom: .4em; margin-top: 0; }
+  h2 { font-size: 1.35rem; margin-top: 2.2em; border-bottom: 1px solid var(--border); padding-bottom: .3em; }
+  h3 { font-size: 1.1rem; margin-top: 1.5em; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--code-bg); padding: .15em .4em; border-radius: 5px; font-size: .86em;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; line-height: 1.45;
+  }
+  pre code { background: none; padding: 0; font-size: .84rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1.1em 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--table-stripe); }
+  blockquote { margin: 1em 0; padding: .4em 1em; border-left: 4px solid var(--border); color: var(--muted); background: var(--code-bg); border-radius: 0 6px 6px 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2.2em 0; }
+  ul, ol { padding-left: 1.4em; }
+  li { margin: .25em 0; }
+  .task {
+    border: 1px solid var(--border); border-radius: 10px; padding: 4px 20px 16px;
+    margin: 1.2em 0; background: var(--code-bg);
+  }
+  .task h3 { margin-top: .9em; }
+  .task .steps { font-size: .92rem; }
+  .pill {
+    display: inline-block; background: var(--tag-bg); color: var(--tag-fg);
+    border-radius: 999px; padding: 2px 11px; font-size: .8rem; font-weight: 600; margin-left: 6px;
+  }
+  .warn {
+    background: var(--warn-bg); border: 1px solid var(--warn-border);
+    border-radius: 8px; padding: 12px 16px; margin: 1.2em 0;
+  }
+  .confirm { font-weight: 600; color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>RFC 0001 — Implementation Plan<br><small style="font-size:1rem;color:var(--muted);font-weight:400;">Design-Stage Rework · task-by-task execution plan</small></h1>
+
+<blockquote>Working plan for your review. Each task runs five steps:
+(1) read &amp; understand context, (2) implement, (3) add/update test, (4) compile +
+build all dists + <code>--check</code>, (5) commit with a specific message + push.</blockquote>
+
+<h2>Decisions locked (from review)</h2>
+<ul>
+  <li><strong>Q1</strong> — contract-design is a NEW stage right after units-generation; delivery-planning stays the inception capstone. Contracts are NOT folded into delivery-planning (contracts = inter-unit API/event/schema specs by the architect; delivery-planning = Bolt sequencing/team allocation by the delivery agent).</li>
+  <li><strong>Q2</strong> — full renumbering is fine. <strong>Impact beyond numbers</strong>: stage numbers appear in prose (knowledge files, stage NOTEs, the stage-protocol Bolt glossary "stages 3.1–3.7") — those references are updated as explicit steps.</li>
+  <li><strong>Q3</strong> — first commit = branch create + RFC (html only; md deleted).</li>
+  <li><strong>Q4</strong> — each task runs the FULL build (<code>bun scripts/package.ts</code>) + <code>--check</code> across all four harnesses (claude, kiro, kiro-ide, codex).</li>
+  <li><strong>Q5</strong> — <code>blueprint-shape</code> sensor: full implementation.</li>
+  <li><strong>Q6 — Option C</strong> — stable <code>cmp-NNN</code>/<code>ent-NNN</code>/<code>rule-NNN</code> IDs produced by the owning stage; downstream stages REFERENCE those IDs (no file re-emission, no literal carry-forward). The <code>blueprint-shape</code> sensor validates shape + cross-stage ID references. Stage bodies get light prose updates to emit/reference IDs — NOT full carry-forward rewrites.</li>
+  <li><strong>Q7</strong> — push per task.</li>
+</ul>
+
+<h2>Target numbering (after rework)</h2>
+<p><strong>Inception</strong></p>
+<pre><code>2.6 domain-design        (was application-design — renamed)
+2.7 units-generation     (unchanged)
+2.8 contract-design      (NEW — CONDITIONAL, auto-skip single-unit)
+2.9 delivery-planning    (was 2.8 — capstone, shifts +1)</code></pre>
+<p><strong>Construction</strong></p>
+<pre><code>3.1 functional-design     (unchanged number, reworked outputs)
+3.2 nfr-design            (was 3.3 — absorbs nfr-requirements; nfr-requirements 3.2 REMOVED)
+3.3 infrastructure-design (was 3.4)
+3.4 code-generation       (was 3.5)
+3.5 build-and-test        (was 3.6)
+3.6 ci-pipeline           (was 3.7)</code></pre>
+<p>Net: inception 8→9 stages, construction 7→6 stages, total stays <strong>32</strong>.</p>
+
+<h2>Permissions requested up front</h2>
+<p>Grant once; used across all tasks:</p>
+<ol>
+  <li><code>git checkout -b feature/v2-design-stage-rework v2</code> (create branch off v2)</li>
+  <li><code>git rm docs/rfcs/0001-design-stage-rework.md</code> (delete the md, keep html)</li>
+  <li><code>git add</code> + <code>git commit</code> — once per task with the task-specific message</li>
+  <li><code>git push -u origin feature/v2-design-stage-rework</code> (first push) and <code>git push</code> (per task thereafter)</li>
+  <li><code>bun scripts/package.ts</code> and <code>bun scripts/package.ts --check</code> (per task)</li>
+  <li><code>bun test &lt;file&gt;</code> and <code>bash tests/run-tests.sh --smoke</code>/<code>--unit</code> (per task)</li>
+  <li>Edit/create/delete files under <code>core/</code>, <code>harness/</code>, <code>tests/</code>, <code>docs/</code>, and the generated <code>dist/</code> (regenerated, committed)</li>
+</ol>
+
+<hr>
+
+<h2>Task list <span class="pill">order: T0 → T1 → T2 → T3(sensor) → T4 → T5 → T6 → T7</span></h2>
+
+<div class="task">
+<h3>T0 — Branch + RFC</h3>
+<div class="steps">
+<ul>
+  <li>Create <code>feature/v2-design-stage-rework</code> off <code>v2</code>.</li>
+  <li><code>git rm</code> the RFC markdown; keep <code>0001-design-stage-rework.html</code>.</li>
+  <li><strong>Test</strong>: none (docs only). <strong>Build</strong>: none.</li>
+  <li><strong>Commit</strong>: <code>chore: branch + RFC 0001 (html) for design-stage rework</code>. Push <code>-u</code>.</li>
+</ul>
+</div>
+</div>
+
+<div class="task">
+<h3>T1 — Rename application-design → domain-design</h3>
+<div class="steps">
+<ul>
+  <li><strong>Context</strong>: application-design.md, stage-graph numbering, consumers of its artifacts (<code>components</code>, <code>component-methods</code>, <code>services</code>, <code>component-dependency</code>, <code>decisions</code>), prose references.</li>
+  <li><strong>Implement</strong>: rename file → <code>domain-design.md</code>; update slug + title. Outputs (Option C): <code>produces: [components, domain-design-questions]</code> — <code>components</code> is yaml-in-md, each component a stable <code>cmp-NNN</code> ID + behaviour + dependencies + owned entities (fold methods/services/dependency/decisions in; component = code, not infra; no topology). Add a step that assigns <code>cmp-NNN</code> IDs. Pre-seed <code>domain-design</code> 2.6 in stage-graph; remove application-design row. Update consumers' <code>consumes[]</code> + prose refs. Runner skill auto-renames via runner-gen.</li>
+  <li><strong>Test</strong>: t01, t30, t32, artifact-vocab; domain-design presence test.</li>
+  <li><strong>Commit</strong>: <code>feat: rename application-design to domain-design (component model)</code>.</li>
+</ul>
+</div>
+</div>
+
+<div class="task">
+<h3>T2 — Add contract-design (inception 2.8)</h3>
+<div class="steps">
+<ul>
+  <li><strong>Context</strong>: units-generation outputs (<code>unit-of-work</code>, <code>unit-of-work-dependency</code>), delivery-planning (shifts to 2.9), CONDITIONAL skip mechanics, rework branch's contract-design.</li>
+  <li><strong>Implement</strong>: new <code>contract-design.md</code> — <code>phase: inception</code>, <code>execution: CONDITIONAL</code> (skip single-unit), <code>reviewer: aidlc-architecture-reviewer-agent</code>, <code>requires_stage: [units-generation]</code>, <code>produces: [contracts, contract-summary, contract-design-questions]</code>, <code>consumes</code>: units-generation outputs + components/requirements, <code>scopes: [enterprise, feature, mvp, classic, workshop]</code>. Renumber delivery-planning 2.8 → 2.9; pre-seed contract-design 2.8. Add contract-design to functional-design.requires_stage.</li>
+  <li><strong>Test</strong>: t01/t30/t32; contract-design presence + scope test.</li>
+  <li><strong>Commit</strong>: <code>feat: add contract-design stage (inter-unit contracts, inception)</code>.</li>
+</ul>
+</div>
+</div>
+
+<div class="task">
+<h3>T3 — blueprint-shape sensor (full) <span class="pill">moved earlier</span></h3>
+<div class="steps">
+<ul>
+  <li><strong>Context</strong>: an existing sensor manifest (<code>core/sensors/aidlc-*.md</code>), the sensor dispatch/checker model (<code>aidlc-sensor.ts</code>), the embedded-YAML shape.</li>
+  <li><strong>Implement</strong>: new <code>core/sensors/aidlc-blueprint-shape.md</code> manifest. Two checks: (1) <strong>shape</strong> — fenced <code>```yaml</code> blocks in components/entities/rules have required keys; (2) <strong>ID-reference</strong> — every <code>cmp-NNN</code> referenced by entities/rules/nfr-specification/infrastructure-specification/contracts resolves to a component in the upstream <code>components</code> artifact (orphan → <code>SENSOR_FAILED</code> with offending id). Wire into <code>sensors:</code> on domain-design (exists by now); later stages add it as reworked.</li>
+  <li><strong>Test</strong>: sensor unit test — valid passes; malformed shape fails; orphan <code>cmp-NNN</code> fails with the right detail.</li>
+  <li><strong>Commit</strong>: <code>feat: add blueprint-shape sensor (shape + cmp-NNN ID references)</code>.</li>
+</ul>
+</div>
+</div>
+
+<div class="task">
+<h3>T4 — Rework functional-design outputs</h3>
+<div class="steps">
+<ul>
+  <li><strong>Context</strong>: functional-design.md, its consumers (nfr, code-generation), rework branch version.</li>
+  <li><strong>Implement</strong> (Option C): <code>produces: [entities, rules, api-specification, functional-spec, functional-design-questions]</code>; add <code>contracts</code> + <code>components</code> to consumes; step prose for the new artifacts (entities + rules as embedded YAML with stable <code>ent-NNN</code>/<code>rule-NNN</code> IDs that <strong>reference <code>cmp-NNN</code></strong>; provider api-specification; functional-spec human view). Add <code>blueprint-shape</code> to its <code>sensors:</code> list (sensor exists from T3).</li>
+  <li><strong>Test</strong>: t01/vocab; functional-design produces test.</li>
+  <li><strong>Commit</strong>: <code>feat: rework functional-design outputs (entities, rules, api spec)</code>.</li>
+</ul>
+</div>
+</div>
+
+<div class="task">
+<h3>T5 — Merge nfr-requirements + nfr-design → nfr-design</h3>
+<div class="steps">
+<ul>
+  <li><strong>Context</strong>: both stage files, consumers of their artifacts, prose references ("stages 3.1–3.7", nfr-requirements mentions).</li>
+  <li><strong>Implement</strong>: delete <code>nfr-requirements.md</code>. Rewrite <code>nfr-design.md</code> self-sufficient (O-5): <code>produces: [nfr-specification, nfr-design-questions]</code>; consumes drops nfr-requirements artifacts, keeps requirements + functional-design + components; <code>requires_stage: [units-generation, functional-design]</code>; scopes = union incl. security-patch; add a question step eliciting missing NFR targets. Renumber construction 3.3→3.2 … 3.7→3.6 (remove nfr-requirements 3.2). Update prose: Bolt glossary "3.1–3.7" → "3.1–3.6", knowledge-file refs. Remove <code>/aidlc-nfr-requirements</code> runner.</li>
+  <li><strong>Test</strong>: t01, t30, t32, vocab; nfr-design merged-produces test; stale-number grep guard if one exists.</li>
+  <li><strong>Commit</strong>: <code>feat: merge nfr-requirements into nfr-design (self-sufficient)</code>.</li>
+</ul>
+</div>
+</div>
+
+<div class="task">
+<h3>T6 — Consolidate infrastructure-design</h3>
+<div class="steps">
+<ul>
+  <li><strong>Context</strong>: infrastructure-design.md + consumers; rework branch version.</li>
+  <li><strong>Implement</strong>: <code>produces: [infrastructure-specification, infrastructure-design-questions]</code> (fold 5 infra artifacts into one spec); consumes → <code>nfr-specification</code> + <code>components</code> (+ optional contracts/functional); infra mappings reference <code>cmp-NNN</code>; add <code>blueprint-shape</code> to sensors; renumber handled in T5; step prose for the consolidated spec.</li>
+  <li><strong>Test</strong>: t01/vocab; infra produces test.</li>
+  <li><strong>Commit</strong>: <code>feat: consolidate infrastructure-design to one specification</code>.</li>
+</ul>
+</div>
+</div>
+
+<div class="task">
+<h3>T7 — Docs + scope table + changelog/version</h3>
+<div class="steps">
+<ul>
+  <li><strong>Context</strong>: stage/phase/scope docs (<code>docs/reference/04-stages/*</code>, <code>docs/guide/03-phases-and-stages.md</code>, artifact-vocabulary, glossary), README/SKILL scope table.</li>
+  <li><strong>Implement</strong>: update stage docs for the renamed/new/merged stages; regenerate scope table; bump version + CHANGELOG with the breaking-change upgrade note.</li>
+  <li><strong>Test</strong>: version/changelog sync (t68); doc-reference guard.</li>
+  <li><strong>Commit</strong>: <code>docs: update stage docs, scope table, changelog for design rework</code>.</li>
+</ul>
+</div>
+</div>
+
+<hr>
+
+<h2>Sequencing (decided)</h2>
+<div class="warn">
+<code>aidlc-graph compile</code> throws on unknown sensor ids, so the <code>blueprint-shape</code>
+sensor manifest MUST exist before any stage frontmatter references it. The sensor
+task (T3) therefore runs <strong>before</strong> the functional-design rework (T4) so every
+task's build stays green. Final order: <strong>T0 → T1 → T2 → T3 → T4 → T5 → T6 → T7</strong>.
+</div>
+
+<h2>Open confirmations before I start</h2>
+<ul>
+  <li><strong>C-1</strong> — contract-design as its own 2.8 stage (NOT merged into delivery-planning). <em>Confirmed in discussion — keeping separate.</em></li>
+  <li><strong>C-2</strong> — sensor task moved before the functional-design rework so compile stays green. <em>Resolved — see Sequencing.</em></li>
+  <li><strong class="confirm">C-3</strong> — <span class="confirm">Need your OK</span>: update the pinned test counts (t01/t30/t32/vocab) as part of each task, same pattern as the earlier 11→13 agent fix.</li>
+</ul>
+
+</body>
+</html>

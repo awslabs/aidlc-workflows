@@ -30,6 +30,7 @@ scopes:
   - feature
   - mvp
   - infra
+  - classic
   - workshop
 inputs: Code generation output from code-generation stage, build/test results from build-and-test stage
 outputs: ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this stage's record dir, engine-resolved)
@@ -75,10 +76,19 @@ Create CI pipeline configuration (buildspec.yml, workflow YAML, or equivalent), 
 ### Step 6: Phase Boundary Verification
 
 Run Construction → Operation verification check:
-- Architecture → Code → Tests alignment
-- All code traces to design
-- Test coverage against acceptance criteria
-- Write results to `<record>/verification/phase-check-construction.md`
+- Read
+  `<record>/construction/build-and-test/cross-unit-traceability.md`.
+- Read every
+  `<record>/construction/*/code-generation/traceability.json`.
+- Confirm all Units built and tested, all code-generation tables have no
+  unresolved findings, and the cross-Unit FR/NFR/AC gate passed.
+- Confirm the CI quality gates enforce the build and test commands recorded by
+  Build and Test.
+- Write the boundary verdict to
+  `<record>/verification/phase-check-construction.md`.
+
+If any traceability file is missing or any unresolved finding remains, stop
+the Construction → Operation transition and revisit the owning stage.
 
 ### Step 7: Completion Handoff
 

@@ -52,6 +52,11 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  artifactFilename,
+  latestMainWorkflowStageRunFloorForProject,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -65,33 +70,42 @@ const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 // Each per-unit construction stage's produces[] (verified frontmatter).
 const PRODUCES: Record<string, string[]> = {
   "functional-design": [
-    "business-logic-model",
-    "business-rules",
-    "domain-entities",
+    "entities",
+    "rules",
+    "functional-spec",
     "frontend-components",
+    "traceability",
   ],
   "nfr-requirements": [
     "performance-requirements",
     "security-requirements",
     "scalability-requirements",
     "reliability-requirements",
+    "observability-requirements",
     "tech-stack-decisions",
+    "traceability",
   ],
   "nfr-design": [
     "performance-design",
     "security-design",
     "scalability-design",
     "reliability-design",
+    "observability-design",
     "logical-components",
+    "traceability",
   ],
   "infrastructure-design": [
-    "deployment-architecture",
-    "infrastructure-services",
+    "infrastructure-specification",
     "monitoring-design",
     "cicd-pipeline",
-    "shared-infrastructure",
+    "traceability",
   ],
-  "code-generation": ["code-generation-plan", "code-summary"],
+  "code-generation": [
+    "code-generation-plan",
+    "unit-test-instructions",
+    "code-summary",
+    "traceability",
+  ],
 };
 // The widened walk block, graph order: design stages then code-generation.
 const BLOCK = [
@@ -140,7 +154,7 @@ function constructionState(opts: {
 - **Project**: unit-major code-gen test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: on
 
 ## Runtime State
@@ -159,7 +173,7 @@ function constructionState(opts: {
 ${checkboxes}
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -172,7 +186,7 @@ function coverUnit(proj: string, unit: string, slug: string): void {
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of PRODUCES[slug]) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
   }
 }
 
@@ -213,7 +227,13 @@ function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env: (() => {
-      const e = { ...process.env };
+      const e: NodeJS.ProcessEnv = {
+        ...process.env,
+        // This routing fixture is intentionally not a Git checkout. Source
+        // freshness is exercised end to end by t304; keep this test scoped to
+        // the unit-major cascade instead of minting unbindable review receipts.
+        AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+      };
       delete e.AWS_AIDLC_DEFAULT_SCOPE;
       return e;
     })(),
@@ -245,6 +265,13 @@ function runStatusSync(proj: string, stage: string): void {
 }
 
 function logReviewReady(proj: string, stage: string, unit: string): void {
+  if (stage === "code-generation") {
+    const dir = join(seededRecordDir(proj), "construction", unit, stage);
+    writeFileSync(
+      join(dir, "source-manifest.json"),
+      `${JSON.stringify({ stage, unit, version: 1, writes: [] }, null, 2)}\n`,
+    );
+  }
   const args = [
     LOG,
     "review",
@@ -255,7 +282,13 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     "--project-dir", proj,
   ];
   for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const r = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+      },
+    });
     if ((r.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
     }
@@ -315,6 +348,22 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(last.stage).toBe("code-generation");
     expect(last.gate).toBe(true);
     expect(last.unit).toBe("beta");
+    const floor = latestMainWorkflowStageRunFloorForProject(
+      proj,
+      "code-generation",
+    );
+    for (const unit of ["alpha", "beta"]) {
+      appendAuditEntry(
+        "SWARM_UNIT_CONVERGED",
+        {
+          "Batch number": "1",
+          "Unit name": unit,
+          Stage: "code-generation",
+          "Run floor": floor,
+        },
+        proj,
+      );
+    }
     const settled = runReport(proj, [
       "--stage", "code-generation", "--result", "approved",
     ]);
@@ -387,11 +436,16 @@ describe("t272 code-generation joins the unit-major walk", () => {
     );
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).toContain("- **Current Stage**: functional-design");
-    expect(activeDirectiveMarker(proj)).toEqual({
-      version: 1,
+    expect(activeDirectiveMarker(proj)).toMatchObject({
+      version: 2,
+      kind: "run-stage",
       stage: "code-generation",
       unit: "alpha",
       state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+      delivery: "issued",
+      needs_rehydrate: false,
+      context_epoch: 0,
+      stop_count: 0,
     });
   }, 30000);
 });

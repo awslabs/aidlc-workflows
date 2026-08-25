@@ -21,7 +21,7 @@ caution nor default economy is acceptable.
   exists (reverse-engineering on brownfield, or CodeKB evidence where indexed),
   state what "done" means, and change-plus-verify (code-generation,
   build-and-test). They do not need market-research, user-stories, or
-  application-design - those discover and shape a product that already exists.
+  domain-design - those discover and shape a product that already exists.
 - **Net-new surface.** A new feature, product, or service needs the discovery
   arc: intent-capture, scope-definition, then the inception design stages in
   proportion to how much NEW structure it introduces.
@@ -47,9 +47,19 @@ caution nor default economy is acceptable.
   (core, verification, and the single load-bearing discovery/design stage for
   a high component); fold framing/discovery stages whose output another
   EXECUTE stage already delivers, and name the un-SKIP trigger.
-- Prefer a stock scope when it matches within a couple of stage flips; a
-  custom scope is maintenance surface the user owns forever. When no stock
-  scope fits, synthesize - do not force a bad match.
+- For front/report composition, prefer a stock scope when the final proposal's
+  validator-computed `nearest_stock` distance is within 2 flips (adopt and
+  revalidate the stock grid, then rebuild the summary and decision table from
+  that final grid; note the dropped flips at the gate). The earlier mechanical
+  screen's distance is advisory and never overrides evidence-driven folds. A
+  custom scope is maintenance surface the user owns forever. A human edit to an
+  adopted stock grid converts it to custom so the edit has a persistence path.
+  When no stock scope fits the final proposal, synthesize - do not force a bad
+  match.
+- In-flight recomposition never adopts a stock scope. Preserve the running
+  workflow's scope, depth, and frozen actions, then return only the strict-
+  validated pending delta as exact `changes.skip` / `changes.add` arrays for
+  the conductor's `recompose` command.
 
 ## Rationale quality
 

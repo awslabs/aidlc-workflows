@@ -20,7 +20,7 @@ deployment + observability set in operation.
 ## Why these stages, why skip those
 
 Infrastructure work is not about product features, so ideation,
-user-stories, application-design, units-generation, and code-generation
+user-stories, domain-design, units-generation, and code-generation
 are skipped. It is about how the system is provisioned and run, so the
 operation stages (deployment-pipeline, environment-provisioning,
 deployment-execution, observability-setup) plus the NFR and

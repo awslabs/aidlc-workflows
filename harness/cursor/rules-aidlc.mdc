@@ -1,0 +1,32 @@
+---
+description: AI-DLC standing practices for this workspace
+alwaysApply: true
+---
+
+<!--
+  .cursor/rules/aidlc.mdc — the always-applied AIDLC standing-practice rule (a
+  READ instruction, not a copy). The AI-DLC method is authored ONCE at the
+  workspace root under
+  aidlc/spaces/default/memory/ — the single hand-editable source of truth,
+  identical on every harness.
+
+  Cursor rules do not expand @-import lines (live-verified), so unlike the
+  Claude harness stub this rule cannot inline the method files by reference.
+  Instead it instructs the agent to read the standing org/team/project layers.
+  The four phase pointers beside this file are agent-decided rules, so phase
+  guidance is loaded when relevant instead of on every Cursor turn. The file
+  paths ship pointed at the always-present `default` space; `/aidlc space
+  <name>` re-points all five rule files IN PLACE so the next session follows
+  the active space. At `default` the re-point is a byte-identical no-op.
+
+  Edit the METHOD at aidlc/spaces/default/memory/*, never here.
+-->
+
+This workspace uses the AI-DLC method. Its standing practices are the layered
+files listed below (org -> team -> project; strict-additive). Read them before
+acting on AIDLC work, and honour them in casual chat that touches process,
+practices, or workflow questions:
+
+- aidlc/spaces/default/memory/org.md
+- aidlc/spaces/default/memory/team.md
+- aidlc/spaces/default/memory/project.md

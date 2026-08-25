@@ -36,9 +36,13 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    ```bash
-   bun .claude/tools/aidlc-utility.ts intent-create --arguments "<description>" --label "<2-3 word essence>"
+   bun .claude/tools/aidlc-utility.ts intent-create --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
    ```
 
-   Pass `--scope <name>` **only if the user named one**; otherwise omit it and the engine picks the install's default scope. Omit `--arguments`
-   and `--label` when the user gave no description. Print the tool's output and
-   stop. This does not advance a stage; run `/aidlc` afterwards to continue.
+   Pass the user's `--scope <name>` when they named one; otherwise omit
+   `--scope` — the tool resolves the implicit default itself
+   (`AWS_AIDLC_DEFAULT_SCOPE`, else `classic`). If the user gave neither a
+   scope nor a description, do not run a bare `intent-create`: ask what they
+   want to build or which scope to use. When only a scope was supplied, omit
+   `--arguments` and `--label`. Print the tool's output and stop. This does
+   not advance a stage; run `/aidlc` afterwards to continue.

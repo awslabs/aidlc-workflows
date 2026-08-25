@@ -67,15 +67,22 @@ export type OnboardingSpec = {
 export type HarnessManifest = {
   /** Harness name; matches the dist/<name>/ and harness/<name>/ dir. */
   name: string;
-  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc"). */
+  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
+  /**
+   * Project-root-relative path to the emitted orchestrator SKILL.md. Defaults
+   * to <harnessDir>/skills/aidlc/SKILL.md; emit-owned harnesses that place
+   * skills elsewhere declare their emitted location explicitly (for example
+   * Codex under .agents/skills/).
+   */
+  orchestratorSkillPath?: string;
   /**
    * Which tier-projection flavor this harness's agent surfaces use
    * (core/tools/aidlc-tiers.ts TIER_PROJECTIONS column). Declared here so a
    * new harness picks its projection shape in its manifest - the packager
    * never infers it from the harness name.
    */
-  tierFlavor: "claude" | "codex" | "kiro" | "opencode";
+  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
@@ -95,12 +102,35 @@ export type HarnessManifest = {
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
   /**
+   * Harness-native YAML fields appended to every generated stage/scope runner
+   * skill. The packager persists these in tools/data/harness.json so runner
+   * regeneration during plugin composition applies the same host contract.
+   */
+  runnerFrontmatterAdditions?: string[];
+  /**
    * How to render this harness's onboarding doc from core/templates/onboarding.md.
    * null when the harness generates it elsewhere (codex, via emit) or ships none.
    */
   onboarding?: OnboardingSpec | null;
   /** Rename core's rules/ dir to this (kiro: "steering", codex: "aidlc-rules", claude: null). */
   rulesRename: string | null;
+  /**
+   * DocumentKB text extractors, keyed by MIME type, emitted into
+   * <harnessDir>/tools/data/harness.json. ABSENT by default in every harness —
+   * with no entry the tool probes `pdftotext` on PATH and degrades to
+   * `extractor_unavailable`, so this is an override, never a requirement.
+   *
+   * It has to be PACKAGER-owned rather than hand-edited: writeHarnessData()
+   * builds a FRESH object, and harness.json is committed and byte-diffed by
+   * `--check`, so a hand-added field both fails the drift guard and is erased on
+   * the next build. And a team needs its extractor choice COMMITTED so it travels
+   * to every clone, which rules out the runtime-written path too — that one
+   * targets a different, install-local file.
+   *
+   * `argv` is an array, never a shell string: the value becomes a process
+   * invocation, and `$IN` is the only substitution.
+   */
+  documentExtractors?: Record<string, { argv: string[]; timeoutMs?: number }> | null;
   /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside
@@ -122,12 +152,15 @@ export type HarnessManifest = {
    * `harnessDir` (manifestDir = "<harnessDir>-plugin", kind = "store"), so a
    * NEW harness added per the one-core-many-harnesses promise automatically
    * gets a plugin projection instead of being silently skipped. A harness with
-   * no host plugin store (folder-drop + hook, like Kiro) sets kind "kiro".
+   * no host plugin store uses a folder-drop projection: Kiro CLI sets kind
+   * "kiro" and relies on the explicit composer, while Kiro IDE sets kind
+   * "kiro-ide" for its v2 SessionStart registration. Cursor sets kind "cursor"
+   * for its flat camelCase hook schema.
    */
   plugin?: {
-    /** Host plugin-manifest dir name (".claude-plugin", ".codex-plugin", ".kiro-plugin"). */
+    /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
     manifestDir: string;
-    /** "store" = host plugin store (Claude/Codex); "kiro" = folder-drop + .kiro.hook. */
-    kind: "store" | "kiro";
+    /** Host-specific plugin hook projection shape. */
+    kind: "store" | "kiro" | "kiro-ide" | "cursor";
   };
 };

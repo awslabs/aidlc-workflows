@@ -64,7 +64,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -76,6 +76,10 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  SUMMARY_CONFIRMATION_HASH_SCOPE,
+  summaryConfirmationContentHash,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -555,9 +559,9 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       ]).status,
     ).toBe(0);
     for (const name of [
-      "business-logic-model",
-      "business-rules",
-      "domain-entities",
+      "entities",
+      "rules",
+      "functional-spec",
     ]) {
       const artifact = join(stageDir, `${name}.md`);
       writeFileSync(artifact, `# ${name}\n`);
@@ -579,6 +583,66 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       proj,
     ]);
     expect(result.out).toContain('"kind":"done"');
+  });
+
+  test("12f: isolated hash recovery stays on the --single workflow", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const stageDir = join(
+      seededRecordDir(proj),
+      "inception",
+      "requirements-analysis",
+    );
+    mkdirSync(stageDir, { recursive: true });
+    const questions = join(stageDir, "requirements-analysis-questions.md");
+    const confirmed =
+      "# Questions\n\n## Consolidated Summary Confirmation\n\n" +
+      "- Keep the confirmed requirement.\n\n[Answer]: Looks correct\n";
+    writeFileSync(questions, confirmed);
+    appendAuditEntry(
+      "SUMMARY_CONFIRMATION_RECORDED",
+      {
+        Stage: "requirements-analysis",
+        Details: "Looks correct",
+        Checkpoint: "Consolidated Summary Confirmation",
+        Workflow: "single-stage:requirements-analysis",
+        "Questions File": relative(proj, questions).replaceAll("\\", "/"),
+        "Questions SHA-256": summaryConfirmationContentHash(confirmed),
+        "Hash Scope": SUMMARY_CONFIRMATION_HASH_SCOPE,
+      },
+      proj,
+    );
+    writeFileSync(
+      questions,
+      confirmed.replace("confirmed requirement", "modified requirement"),
+    );
+    const artifact = join(stageDir, "requirements.md");
+    writeFileSync(artifact, "# Requirements\n");
+    appendAuditEntry(
+      "ARTIFACT_CREATED",
+      { File: artifact, Tool: "Write" },
+      proj,
+    );
+
+    const result = runSummaryGuarded(TOOL, [
+      "report",
+      "--single",
+      "--stage",
+      "requirements-analysis",
+      "--result",
+      "completed",
+      "--project-dir",
+      proj,
+    ]);
+    expect(result.out).toContain('"kind":"error"');
+    expect(result.out).toContain("aidlc-log.ts decision");
+    expect(result.out).toContain("aidlc-log.ts answer");
+    expect(result.out).toContain("--single");
+    expect(result.out).toContain("report --single");
+    expect(result.out).toContain("--result completed");
+    expect(result.out).not.toContain("--result rejected");
+    expect(result.out).not.toContain("--result revised");
   });
 
   // =========================================================================

@@ -28,11 +28,11 @@
 //     pin (2), rules_in_context / sensors_applicable array + FIELD_ORDER shape,
 //     resolveSensorsForStage declared-order, withAuditLock reentrancy (2).
 //   MUST STAY SPAWN (process.exit / module-load env read / CLI stdout / parallel-process):
-//     plan-identity parity (9 scopes via `state lookup stages-in-scope` byte-exact),
-//     AIDLC_GRAPH_RESOLVE=1 `resolve <scope> --stdout` cutover parity (9 scopes byte-exact
+//     plan-identity parity (11 scopes via `state lookup stages-in-scope` byte-exact),
+//     AIDLC_GRAPH_RESOLVE=1 `resolve <scope> --stdout` cutover parity (11 scopes byte-exact
 //       vs mr9-parity fixtures) + the gate (no flag -> exit 1, stderr), env-seam read,
-//     nextInScopeStage walk parity (9 scopes via `lookup next-stage`),
-//     firstInScopeStageOfPhase parity (9 scopes x 5 phases via `lookup first-in-phase`),
+//     nextInScopeStage walk parity (11 scopes via `lookup next-stage`),
+//     firstInScopeStageOfPhase parity (11 scopes x 5 phases via `lookup first-in-phase`),
 //     AIDLC_STAGE_GRAPH env-override-honoured-by-rewired-stagesInScope,
 //     compile --check drift (clean->0 / mutated->1 / restore->0),
 //     AIDLC_RULES_DIR populate-from-disk + --check drift, AIDLC_SENSORS_DIR populate +
@@ -100,7 +100,9 @@ const SCOPES = [
   "refactor",
   "infra",
   "security-patch",
+  "classic",
   "workshop",
+  "express",
 ] as const;
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"] as const;
 
@@ -198,9 +200,9 @@ describe("t66 producersOf / consumersOf (in-process)", () => {
 
 describe("t66 topoSort (in-process)", () => {
   // .sh:79-84
-  test("topoSort(loadGraph()) returns 32 stages starting with workspace-scaffold", () => {
+  test("topoSort(loadGraph()) returns 33 stages starting with workspace-scaffold", () => {
     const order = topoSort(loadGraph());
-    expect(`${order.length}:${order[0]}`).toBe("32:workspace-scaffold");
+    expect(`${order.length}:${order[0]}`).toBe("33:workspace-scaffold");
   });
   // .sh:86-95
   test("topoSort throws on cycle input", () => {
@@ -267,8 +269,8 @@ describe("t66 subgraphForScope (in-process)", () => {
     const sorted = [...nums].sort(numericOrder);
     expect(nums).toEqual(sorted);
   });
-  // .sh:176-189 — per-scope sizes match EXECUTE count for all 9 scopes
-  test("subgraphForScope size matches EXECUTE count for all 9 scopes", () => {
+  // .sh:176-189 — per-scope sizes match EXECUTE count for all 11 scopes
+  test("subgraphForScope size matches EXECUTE count for all 11 scopes", () => {
     const mapping = loadScopeMapping();
     const mismatches: string[] = [];
     for (const scope of SCOPES) {
@@ -431,13 +433,13 @@ describe("t66 graph traversal — per-scope sub-DAG (in-process)", () => {
 });
 
 // =============================================================================
-// Plan-identity parity — byte-exact for 9 scopes (.sh:381-390, 9 assertions)
+// Plan-identity parity — byte-exact for 11 scopes
 // MUST STAY SPAWN: asserts the CLI `state lookup stages-in-scope` stdout matches the
 // golden fixtures byte-for-byte (process-boundary stdout contract). The .sh re-pretty-
 // prints the CLI's single-line JSON with JSON.stringify(parse, null, 2); reproduced here.
 // =============================================================================
 
-describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
+describe("t66 plan-identity parity (spawnSync CLI-boundary: 11 scopes)", () => {
   for (const scope of SCOPES) {
     test(`plan-identity parity: ${scope} byte-exact`, () => {
       const res = spawnSync(BUN, [STATE_TS, "lookup", "stages-in-scope", scope], {
@@ -453,8 +455,8 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
 });
 
 // =============================================================================
-// AIDLC_GRAPH_RESOLVE=1 resolve cutover parity — byte-exact for 9 scopes
-// (.sh:407-415, 9 assertions). MUST STAY SPAWN: this is an ENV-GATED CLI
+// AIDLC_GRAPH_RESOLVE=1 resolve cutover parity — byte-exact for 11 scopes
+// (.sh:407-415, 10 assertions). MUST STAY SPAWN: this is an ENV-GATED CLI
 // subcommand whose entire subject is a process-boundary seam — a FRESH process
 // must (a) read AIDLC_GRAPH_RESOLVE at module/handler time to lift the gate and
 // (b) emit the {slug, phase, action} plan to stdout. resolvePlanForScope() is
@@ -521,13 +523,13 @@ describe("t66 AIDLC_GRAPH_RESOLVE=1 resolve cutover parity (spawnSync env-gated 
 });
 
 // =============================================================================
-// nextInScopeStage walk parity — 9 scopes (.sh:396-423, 1 grouped assertion)
+// nextInScopeStage walk parity — 11 scopes
 // MUST STAY SPAWN: drives the CLI `state lookup next-stage <slug> <scope>` walk loop
 // (process-boundary; each step is a fresh process emitting next or "none").
 // =============================================================================
 
-describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 9 scopes)", () => {
-  test("nextInScopeStage walk parity byte-exact for 9 scopes", () => {
+describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 11 scopes)", () => {
+  test("nextInScopeStage walk parity byte-exact for 11 scopes", () => {
     const fails: string[] = [];
     for (const scope of SCOPES) {
       const scopeRows = JSON.parse(
@@ -551,16 +553,16 @@ describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 9 scopes)", 
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // many sequential CLI spawns across 9 scopes (workshop ~25 steps)
+  }, 120000); // many sequential CLI spawns across 11 scopes (classic/workshop ~26 steps)
 });
 
 // =============================================================================
-// firstInScopeStageOfPhase parity — 9 scopes x 5 phases (.sh:430-458, 1 grouped assertion)
+// firstInScopeStageOfPhase parity — 11 scopes x 5 phases
 // MUST STAY SPAWN: drives the CLI `state lookup first-in-phase <phase> <scope>` per cell.
 // =============================================================================
 
 describe("t66 firstInScopeStageOfPhase parity (spawnSync CLI-boundary)", () => {
-  test("firstInScopeStageOfPhase parity byte-exact for 9 scopes x 5 phases", () => {
+  test("firstInScopeStageOfPhase parity byte-exact for 11 scopes x 5 phases", () => {
     const fails: string[] = [];
     for (const scope of SCOPES) {
       const obj: Record<string, string> = {};
@@ -575,7 +577,7 @@ describe("t66 firstInScopeStageOfPhase parity (spawnSync CLI-boundary)", () => {
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // 9 scopes x 5 phases = 45 sequential CLI spawns
+  }, 120000); // 11 scopes x 5 phases
 });
 
 // =============================================================================
@@ -757,7 +759,14 @@ describe("t66 validateScope (in-process)", () => {
   // baseline is updated consciously in the same commit.
   test("validateScope: the per-scope advisory edge sets are exactly the accepted baseline", () => {
     const EXPECTED: Record<string, string[]> = {
-      bugfix: ["code-generation->unit-of-work"],
+      bugfix: [
+        "code-generation->unit-of-work",
+        "deployment-execution->environment-inventory",
+        "deployment-pipeline->ci-config",
+        "deployment-pipeline->cicd-pipeline",
+        "deployment-pipeline->infrastructure-specification",
+        "deployment-pipeline->quality-gates",
+      ],
       enterprise: [],
       feature: [],
       infra: [
@@ -765,20 +774,22 @@ describe("t66 validateScope (in-process)", () => {
         "ci-pipeline->build-test-results",
         "ci-pipeline->code-summary",
         "deployment-execution->build-test-results",
-        "infrastructure-design->business-logic-model",
         "infrastructure-design->components",
-        "infrastructure-design->services",
-        "nfr-design->business-logic-model",
-        "nfr-requirements->business-logic-model",
-        "nfr-requirements->business-rules",
+        "infrastructure-design->functional-spec",
+        "nfr-design->functional-spec",
+        "nfr-requirements->functional-spec",
+        "nfr-requirements->rules",
       ],
       mvp: [],
       poc: ["code-generation->unit-of-work"],
       refactor: [
         "code-generation->unit-of-work",
-        "functional-design->component-methods",
+        "deployment-execution->environment-inventory",
+        "deployment-pipeline->ci-config",
+        "deployment-pipeline->cicd-pipeline",
+        "deployment-pipeline->infrastructure-specification",
+        "deployment-pipeline->quality-gates",
         "functional-design->components",
-        "functional-design->services",
         "functional-design->unit-of-work",
       ],
       "security-patch": [
@@ -786,12 +797,26 @@ describe("t66 validateScope (in-process)", () => {
         "deployment-execution->environment-inventory",
         "deployment-pipeline->ci-config",
         "deployment-pipeline->cicd-pipeline",
-        "deployment-pipeline->deployment-architecture",
+        "deployment-pipeline->infrastructure-specification",
         "deployment-pipeline->quality-gates",
-        "nfr-requirements->business-logic-model",
-        "nfr-requirements->business-rules",
+        "nfr-requirements->functional-spec",
+        "nfr-requirements->rules",
       ],
+      classic: ["refined-mockups->user-flow", "refined-mockups->wireframes"],
       workshop: ["refined-mockups->user-flow", "refined-mockups->wireframes"],
+      express: [
+        "code-generation->unit-of-work",
+        "deployment-execution->environment-inventory",
+        "deployment-pipeline->ci-config",
+        "deployment-pipeline->cicd-pipeline",
+        "deployment-pipeline->infrastructure-specification",
+        "deployment-pipeline->quality-gates",
+        "observability-setup->infrastructure-specification",
+        "observability-setup->monitoring-design",
+        "observability-setup->performance-design",
+        "observability-setup->reliability-design",
+        "observability-setup->security-design",
+      ],
     };
     const actual: Record<string, string[]> = {};
     for (const scope of Object.keys(EXPECTED)) {
@@ -987,7 +1012,7 @@ describe("t66 canonical emitter pin (in-process)", () => {
 });
 
 // =============================================================================
-// Designer export (.sh:885-955, 9 assertions)
+// Designer export (.sh:885-955, 10 assertions)
 // MUST STAY SPAWN: the strongest assertion compares the CLI `export` stdout to the
 // golden fixture byte-for-byte (process-boundary stdout contract); the env-seam group
 // proves a FRESH process reads AIDLC_STAGE_GRAPH + AIDLC_SCOPE_MAPPING at module load;
@@ -1006,7 +1031,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
   });
 
   // .sh:892-900 — Group B: element counts match live sources (4 assertions)
-  test("export element counts: stages=32, scopes=9, artifacts=122, agents=14", () => {
+  test("export element counts: stages=33, scopes=11, artifacts=122, agents=14", () => {
     const res = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" });
     const out = JSON.parse(res.stdout) as {
       stages: unknown[];
@@ -1014,8 +1039,8 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
       artifacts: unknown[];
       agents: unknown[];
     };
-    expect(out.stages.length).toBe(32);
-    expect(Object.keys(out.scopes).length).toBe(9);
+    expect(out.stages.length).toBe(33);
+    expect(Object.keys(out.scopes).length).toBe(11);
     expect(out.artifacts.length).toBe(122);
     expect(out.agents.length).toBe(14);
   });

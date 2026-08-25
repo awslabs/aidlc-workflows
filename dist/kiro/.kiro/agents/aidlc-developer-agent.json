@@ -1,13 +1,18 @@
 {
-  "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc-developer-agent",
   "description": "AI-DLC Developer Agent - delegation target for reverse-engineering (2.1), user-stories mob collaboration (2.4), code-generation (3.5), and swarm units. Use for delegated implementation tasks.",
   "prompt": "file://aidlc-developer-agent.md",
+  "includeMcpJson": true,
   "tools": [
     "fs_read",
     "fs_write",
     "execute_bash",
-    "thinking"
+    "thinking",
+    "@context7",
+    "@aws-mcp",
+    "@aws-pricing",
+    "@aws-iac",
+    "@aws-serverless"
   ],
   "allowedTools": [
     "fs_read",
@@ -39,6 +44,11 @@
   ],
   "hooks": {
     "preToolUse": [
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard aidlc-developer-agent",
+        "timeout_ms": 15000
+      },
       {
         "matcher": "fs_write",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",

@@ -45,6 +45,7 @@ const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_ROOT = join(REPO_ROOT, "dist", "opencode");
 const ENGINE = join(OPENCODE_ROOT, ".aidlc");
 const SHELL = join(OPENCODE_ROOT, ".opencode");
+const ADAPTER_ENTRYPOINT_TIMEOUT_MS = 60_000;
 const OPENCODE_INTENTS = join(
   OPENCODE_ROOT,
   "aidlc",
@@ -187,6 +188,9 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md"))) {
         const raw = readFileSync(join(agentsDir, f), "utf-8");
         expect(raw, `${f}: no nonexistent rules path`).not.toContain(".aidlc/rules/");
+        expect(raw, `${f}: concrete default memory pointer`).not.toContain(
+          "aidlc/spaces/<active-space>/memory/",
+        );
         if (
           raw.includes("organization and project guardrails") ||
           raw.includes("execution guardrails")
@@ -225,6 +229,9 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(cfg.permission?.edit?.[".aidlc/hooks/**"]).toBe("ask");
   });
 
+  // Each allowed bash call continues through two real core-hook subprocesses.
+  // Under cross-runner load the full shipped-entrypoint sweep can exceed Bun's
+  // 5s default even though every boundary assertion succeeds.
   test("9: the adapter embeds exactly the shipped tool and hook entrypoints", async () => {
     const moduleExports = await import(
       "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts"
@@ -271,7 +278,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     ).rejects.toThrow(
       "shipped tool or hook",
     );
-  });
+  }, ADAPTER_ENTRYPOINT_TIMEOUT_MS);
 
   test("10: doctor accepts an opencode.jsonc-only install", () => {
     const root = mkdtempSync(join(tmpdir(), "t240-opencode-doctor-"));

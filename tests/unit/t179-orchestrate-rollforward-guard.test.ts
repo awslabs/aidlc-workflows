@@ -125,6 +125,31 @@ describe("t179 Branch 0: fresh latch -> done", () => {
     expect(out).toContain("(`plugin list --json`)");
     expect(out).not.toContain("--plugin list --json");
   });
+
+  test("1c: knowledge latch renders the noun command without a leading --", () => {
+    // The label branch tests `source` against a closed list of noun families. A
+    // new family missing from it renders as `--knowledge list`, inventing a flag
+    // that does not exist -- in the user-visible short-circuit message.
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedLatch(proj, 3, 3, "knowledge list --json", "knowledge-verb");
+    const out = runNext(proj, []).out;
+    expect(out).toContain("(`knowledge list --json`)");
+    expect(out).not.toContain("--knowledge list --json");
+  });
+
+  test("1d: a knowledge command is not swallowed by a same-turn latch", () => {
+    // Site 7: handleNext's guard early-exit chain. If `knowledgeCommand` is
+    // missing from that chain, a knowledge verb typed in the same turn as a
+    // latch is reported as "already ran" instead of dispatching -- the command
+    // silently does nothing.
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedLatch(proj, 3, 3, "knowledge list", "knowledge-verb");
+    const out = runNext(proj, ["knowledge", "sync"]).out;
+    expect(out).toContain("aidlc-knowledge.ts sync");
+    expect(out).not.toContain('"kind":"done"');
+  });
 });
 
 // ===========================================================================

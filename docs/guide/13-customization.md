@@ -6,13 +6,19 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 > configuration, stage depth, knowledge, and rules — apply on every harness. The
 > mechanism-level config in this chapter (`settings.json` / `settings.local.json`,
 > the statusline command, `$CLAUDE_PROJECT_DIR`, tool-permission blocks) is
-> **Claude Code-specific**. Kiro configures the equivalents in
-> `.kiro/settings/cli.json` + its agent config, Codex in `.codex/config.toml`
-> + Starlark rules, and opencode in the project-root `opencode.json` — see
+> **Claude Code-specific**. Kiro CLI configures the equivalents in
+> `.kiro/settings/cli.json` + its agent config; Kiro IDE uses agent Markdown
+> `tools:` and `permissions.rules`. Codex uses `.codex/config.toml`
+> + Starlark rules, Cursor in `.cursor/hooks.json` + `.cursor/cli.json`
+> (permissions only), opencode in the project-root `opencode.json`, and Copilot
+> in `.github/hooks/aidlc.json` (hook wiring) + `~/.copilot/config.json`
+> (folder trust) — see
 > [Running on Kiro CLI](harnesses/kiro-cli.md),
 > [Running on Kiro IDE](harnesses/kiro-ide.md),
-> [Running on Codex CLI](harnesses/codex-cli.md), and
-> [AI-DLC on opencode](harnesses/opencode.md) for each harness's surfaces.
+> [Running on Codex CLI](harnesses/codex-cli.md),
+> [AI-DLC on Cursor](harnesses/cursor.md),
+> [AI-DLC on opencode](harnesses/opencode.md), and
+> [AI-DLC on GitHub Copilot](harnesses/copilot.md) for each harness's surfaces.
 
 ---
 
@@ -34,7 +40,7 @@ This file is listed in `.gitignore` so your personal changes are never committed
 
 ## Agent Models and Effort (Tiers)
 
-Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, balanced agents pin a mid-size model (on Claude Code, Codex, and opencode; on Kiro all tiers inherit the session model), and templated agents additionally reduce effort on those same non-Kiro harnesses. See [Agent System](../reference/05-agent-system.md) for the full projection table.
+Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, balanced agents pin a mid-size model (on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit the session model), and templated agents additionally reduce effort on those same model-pinning harnesses. See [Agent System](../reference/05-agent-system.md) for the full projection table.
 
 To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter. On Kiro the surface depends on the harness: on Kiro CLI add a `"model"` field to the agent's `.kiro/agents/aidlc-*-agent.json`, and on Kiro IDE set a `model:` line in the agent's `.kiro/agents/aidlc-*-agent.md` frontmatter (the agent JSON files are CLI-only — the IDE reads the `.md` frontmatter when spawning). In both cases use a model ID enabled on your install; Kiro agents ship without a model pin so they inherit the session model by default. The edit survives until you re-copy the `dist/<harness>/` shell. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
@@ -42,38 +48,41 @@ To change ONE agent's behavior in your installed copy, edit the projected value 
 
 ## Per-Project Default Scope
 
-When every workflow in a project should start at the same scope — for example, a workshop where all participants should run `workshop` — set `AWS_AIDLC_DEFAULT_SCOPE` in the `env` block of `.claude/settings.json` (the shipped file already has this set to `workshop`):
+When every workflow in a project should start at the same scope, set `AWS_AIDLC_DEFAULT_SCOPE` in the `env` block of `.claude/settings.json` (the shipped file already has this set to `classic`, matching the framework's hard-coded fallback — set it to `feature` to run the full lifecycle by default):
 
 ```json
 {
   "env": {
-    "AWS_AIDLC_DEFAULT_SCOPE": "workshop"
+    "AWS_AIDLC_DEFAULT_SCOPE": "feature"
   }
 }
 ```
 
 > The shipped `env` block also contains Bedrock model IDs (`CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, etc.). Those are listed separately — the example above only shows the scope key for clarity.
 
-With this set, bare `/aidlc` invocations use `workshop` as the default scope. Participants don't need to remember `/aidlc workshop` on every run. The env var is read at workflow initialization only; once the intent's `aidlc-state.md` exists (under its record dir), the state file is authoritative and env changes don't affect an in-flight workflow.
+With this set, bare `/aidlc` invocations use `feature` as the default scope. The env var is read at workflow initialization only; once the intent's `aidlc-state.md` exists (under its record dir), the state file is authoritative and env changes don't affect an in-flight workflow.
 
 **Precedence (highest to lowest):**
 
 1. Explicit CLI flag: `/aidlc feature` or `/aidlc --scope bugfix` wins.
 2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`. Users can override the detected scope at the existing confirmation prompt.
 3. `AWS_AIDLC_DEFAULT_SCOPE` env var from `.claude/settings.json`.
-4. Hard-coded fallback (`poc` at intent birth, `feature` for unmatched freeform).
+4. Hard-coded fallback: `classic` — the single framework default, used by
+   unmatched-freeform resolution, `/aidlc-init`, and a direct low-level
+   `intent-create` call without `--scope`. Nothing else controls the implicit
+   default.
 
-**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `workshop`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
+**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
 **Verifying the config:** run `/aidlc --doctor` to confirm the env var is set and valid:
 
 ```
-✓  AWS_AIDLC_DEFAULT_SCOPE=workshop (valid)
+✓  AWS_AIDLC_DEFAULT_SCOPE=classic (valid)
 ```
 
 **Init notice:** when the env default is applied, the orchestrator prints a one-line notice at workflow start (`Using scope=<value> from AWS_AIDLC_DEFAULT_SCOPE (.claude/settings.json)`) so the scope source is visible at the moment it takes effect.
 
-Why only scope and not depth or test-strategy? Each scope already declares its own depth and test-strategy defaults (workshop → Standard depth, Minimal test strategy). Setting the scope cascades those automatically. If you need to override either, pass `--depth` or `--test-strategy` on the CLI.
+Why only scope and not depth or test-strategy? Each scope declares a depth, and test strategy inherits that depth unless the scope overrides it. `classic` therefore starts at Standard/Standard, `workshop` at Standard/Minimal, and `express` at Minimal/Minimal. If you need to override either, pass `--depth` or `--test-strategy` on the CLI.
 
 **Sensitive values:** `.claude/settings.json` is committed to version control. Don't put secrets, credentials, or personal overrides here — use `.claude/settings.local.json` (gitignored) for anything sensitive.
 
@@ -81,7 +90,7 @@ Why only scope and not depth or test-strategy? Each scope already declares its o
 
 ## Scope Configuration
 
-Scopes control which stages execute and at what depth and test strategy. AI-DLC provides 9 named scopes; the full table (EXECUTE/total stage counts, default depth, test strategy, and use case for each) is the single source in [Scopes, Depth, and Test Strategy § The 9 Scopes](05-scopes-and-depth.md#the-9-core-scopes). This section covers *configuring* and overriding them.
+Scopes control which stages execute and at what depth and test strategy. AI-DLC provides 11 named scopes; the full table (EXECUTE/total stage counts, default depth, test strategy, and use case for each) is the single source in [Scopes, Depth, and Test Strategy § The 11 Core Scopes](05-scopes-and-depth.md#the-11-core-scopes). This section covers *configuring* and overriding them.
 
 ### Choosing a scope
 
@@ -89,7 +98,7 @@ Specify explicitly or let the orchestrator auto-detect:
 
 ```
 /aidlc enterprise       # Explicit scope
-/aidlc Build a payments API  # Auto-detects "feature"
+/aidlc Build a payments API  # No keyword: offers composition; resolver fallback is "classic"
 /aidlc Fix the login bug     # Auto-detects "bugfix"
 ```
 
@@ -131,7 +140,7 @@ You can override depth at any approval gate by requesting a different level.
 
 ## Statusline (Claude Code only)
 
-On **Claude Code**, this implementation displays a statusline in the terminal status bar showing workflow progress. The other harnesses have no statusline — they surface workflow position through `/aidlc --status` (Kiro, opencode) and the `update_plan` task-progress item plus `$aidlc --status` (Codex):
+On **Claude Code**, this implementation displays a statusline in the terminal status bar showing workflow progress. The other harnesses have no statusline — they surface workflow position through `/aidlc --status` (Kiro, Cursor, opencode) and the `update_plan` task-progress item plus `$aidlc --status` (Codex):
 
 ```
 [AIDLC] IDEATION [▓▓▓▓▓░░░░░] 4/7 > Intent Capture -- Product Agent
@@ -179,7 +188,7 @@ The scoped `Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)` entry sits ahead of
 ### How permissions work
 
 - **Project-wide ceiling**: The `settings.json` allow list is the maximum set of tools available
-- **Agents inherit the full session toolset** by default; the only shipped restriction is `disallowedTools: Task`, which blocks nested subagent spawning
+- **Claude Code agents inherit the full session toolset** by default; `disallowedTools: Task` blocks nested subagent spawning on this harness
 - **Optional per-agent narrowing**: An agent can be narrowed by adding a `tools:` allowlist to its frontmatter — omit it to inherit everything. Listing `tools:` drops inherited MCP tools unless the fully-qualified `mcp__<server>__<tool>` ids are also listed
 
 ### Expanding permissions

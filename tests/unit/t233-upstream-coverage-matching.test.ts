@@ -122,7 +122,7 @@ describe("t233 producer-directory citation (fix A)", () => {
 		const r = run(
 			dir,
 			"performance-design.md",
-			"performance-requirements:nfr-requirements,security-requirements:nfr-requirements,scalability-requirements:nfr-requirements,reliability-requirements:nfr-requirements",
+			"performance-requirements:nfr-requirements,security-requirements:nfr-requirements,scalability-requirements:nfr-requirements,reliability-requirements:nfr-requirements,observability-requirements:nfr-requirements",
 			"performance-design",
 		);
 		expect(r.pass).toBe(true);

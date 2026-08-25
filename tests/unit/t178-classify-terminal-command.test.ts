@@ -1,4 +1,4 @@
-// covers: function:classifyTerminalCommand function:parsePluginCommand function:RESERVED_RECORD_NAMES
+// covers: function:classifyTerminalCommand function:parsePluginCommand function:parseKnowledgeCommand function:RESERVED_RECORD_NAMES
 // covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS
 //
 // t178 — classifyTerminalCommand() in aidlc-lib.ts, plus the two exported sets
@@ -34,6 +34,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   classifyTerminalCommand,
+  KNOWLEDGE_VERBS,
+  parseKnowledgeCommand,
   READ_ONLY_FLAGS,
   RESERVED_RECORD_NAMES,
   WORKSPACE_VERBS,
@@ -260,6 +262,85 @@ describe("classifyTerminalCommand() - plugin utilities", () => {
   });
 });
 
+describe("classifyTerminalCommand() - knowledge (DocumentKB) verbs", () => {
+  // Unlike `plugin`, the verb IS the subcommand -- there is no translation
+  // table -- so the table below is the whole grammar. Driven off the exported
+  // KNOWLEDGE_VERBS so a verb added to the tool without a routing decision
+  // cannot slip through as freeform prompt text.
+  test("every KNOWLEDGE_VERBS member classifies as a terminal knowledge-verb", () => {
+    expect([...KNOWLEDGE_VERBS]).toEqual([
+      "onboard",
+      "sync",
+      "list",
+      "show",
+      "associate",
+      "dissociate",
+      "rebind",
+    ]);
+    for (const verb of KNOWLEDGE_VERBS) {
+      expect(classifyTerminalCommand(["knowledge", verb]), verb).toEqual({
+        subcommand: verb,
+        display: `knowledge ${verb}`,
+        source: "knowledge-verb",
+      });
+    }
+  });
+
+  test("trailing args ride through as argv, not as a mode switch", () => {
+    expect(classifyTerminalCommand(["knowledge", "onboard", "security/policy.pdf"])).toEqual({
+      subcommand: "onboard",
+      args: ["security/policy.pdf"],
+      display: "knowledge onboard security/policy.pdf",
+      source: "knowledge-verb",
+    });
+    expect(classifyTerminalCommand(["knowledge", "show", "abc-123", "--json"])).toEqual({
+      subcommand: "show",
+      args: ["abc-123", "--json"],
+      display: "knowledge show abc-123 --json",
+      source: "knowledge-verb",
+    });
+  });
+
+  test("help and malformed forms stay TERMINAL rather than falling through", () => {
+    for (const form of [["knowledge", "help"], ["knowledge", "-h"], ["knowledge", "--help"]]) {
+      expect(classifyTerminalCommand(form), form.join(" ")).toEqual({
+        subcommand: "help",
+        display: form.join(" "),
+        source: "knowledge-verb",
+      });
+    }
+    // The whole point of the noun: an unrecognized verb must NOT become prompt
+    // text. A null here would silently hand `knowledge remove` to the conductor
+    // as a request to birth an intent.
+    for (const form of [["knowledge"], ["knowledge", "remove"], ["knowledge", "delete"]]) {
+      expect(classifyTerminalCommand(form), form.join(" ")).toMatchObject({
+        subcommand: "error",
+        display: form.join(" "),
+        source: "knowledge-verb",
+      });
+    }
+  });
+
+  test("the noun binds at index 0 only, and does not shadow freeform prose", () => {
+    expect(parseKnowledgeCommand(["build", "a", "knowledge", "base"]).kind).toBe("not-knowledge");
+    expect(classifyTerminalCommand(["build", "a", "knowledge", "base"])).toBeNull();
+    expect(classifyTerminalCommand(["add", "knowledge", "list", "to", "the", "docs"])).toBeNull();
+  });
+
+  test("`remove` is deliberately absent from the surface", () => {
+    // Deletion stays "delete the original, then sync" so the tool never holds a
+    // destructive verb over user-owned files. If this ever passes, the decision
+    // changed and Q3's removal policy needs revisiting.
+    expect(KNOWLEDGE_VERBS).not.toContain("remove");
+  });
+
+  test("sibling nouns are unaffected", () => {
+    expect(classifyTerminalCommand(["plugin", "list"])?.source).toBe("plugin-verb");
+    expect(classifyTerminalCommand(["intent", "list"])?.source).toBe("workspace-verb");
+    expect(parseKnowledgeCommand(["plugin", "list"]).kind).toBe("not-knowledge");
+  });
+});
+
 describe("classifyTerminalCommand() - marker-led shapes stay freeform", () => {
   // The engine does NOT repair a conductor that echoes the whole invocation
   // line (`/aidlc ...` as one blob or with the marker as a leading token):
@@ -287,5 +368,18 @@ describe("classifyTerminalCommand() — non-terminal inputs return null", () => 
     // --scope is neither a read-only flag nor a workspace verb; it carries
     // workflow work and must go through the engine, so it classifies as null.
     expect(classifyTerminalCommand(["--scope", "mvp"])).toBeNull();
+  });
+
+  test("intent create stays on the engine/conductor shell path", () => {
+    expect(
+      classifyTerminalCommand([
+        "intent",
+        "create",
+        "--scope",
+        "poc",
+        "--arguments",
+        "build auth",
+      ]),
+    ).toBeNull();
   });
 });

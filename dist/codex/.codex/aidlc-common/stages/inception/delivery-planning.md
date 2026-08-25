@@ -29,6 +29,8 @@ consumes:
     required: true
   - artifact: unit-of-work-story-map
     required: false
+  - artifact: contract-summary
+    required: false
   - artifact: team-practices
     required: false
 requires_stage:
@@ -40,6 +42,7 @@ scopes:
   - enterprise
   - feature
   - mvp
+  - classic
   - workshop
 inputs: All Inception artifacts (requirements, stories, mockups, architecture, units)
 outputs: bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)
@@ -61,8 +64,9 @@ Load aidlc-architect-agent for build order validation.
 Read all Inception phase artifacts:
 - Requirements from `<record>/inception/requirements-analysis/`
 - User stories from `<record>/inception/user-stories/`
-- Application design from `<record>/inception/application-design/`
+- Domain design (component catalogue) from `<record>/inception/domain-design/components.md`
 - Units from `<record>/inception/units-generation/`
+- Inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — contract ownership and open contract questions map onto Bolt sequencing and the walking skeleton
 - Team formation from `<record>/ideation/team-formation/` (if exists)
 
 **If practices-discovery executed**, resolve three sections from
@@ -78,7 +82,7 @@ active space's `memory/org.md` defaults.
 
 ### Step 3: Generate Clarifying Questions
 
-This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); 2.8 chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
+This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); this stage (2.9) chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
 
 **Definitions for this stage:**
 - **Bolt** — per `stage-protocol.md` Glossary: "a deployable unit of work within Construction — one pass through stages 3.1–3.7." A Bolt wraps one or more Units of Work and runs once through the Construction stages.
@@ -113,7 +117,7 @@ Per-Bolt questions (the aidlc-delivery-agent loops these during artifact generat
 - Is this Bolt the thin end-to-end slice (the walking skeleton)? If yes, which parts of the architecture does it prove out?
 - What has to be true for this Bolt to count as done?
 - What will shipping this Bolt tell us that we do not know yet?
-- Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, workshop — default to aidlc-developer-agent for all Bolts.)
+- Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, classic — default to aidlc-developer-agent for all Bolts.)
 
 NOTE: Bolt sequencing is economic, not topological. Bolt order may deviate from 2.7's topological order when a risk-first or walking-skeleton-first argument justifies it. The deviation must be captured in `risk-and-sequencing-rationale.md`.
 
@@ -137,17 +141,26 @@ initials all qualify. Gloss and move on; do not restructure the artifact around
 the explanation.
 
 - `bolt-plan.md` — the ordered sequence of Bolts. Each Bolt entry: included Unit(s) of Work, walking-skeleton marker if applicable, Definition of Done for that Bolt, confidence hypothesis ("what will shipping this Bolt prove?"), expected demo.
-- `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, workshop), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
+- `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, classic), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
 - `risk-and-sequencing-rationale.md` — the why behind the Bolt ordering: WSJF-style scoring, risk-first argument, walking-skeleton-first argument, or value-first argument. References the heuristic used (Cohn, Reinertsen CD3, or SAFe WSJF).
 - `external-dependency-map.md` — gated items (external APIs, data availability windows, approval lead times, external-team hand-offs) mapped to the Bolts that consume them. Lightweight or empty when fully AI-contained.
 
 ### Step 6: Phase Boundary Verification
 
-Run Inception → Construction verification check:
-- Requirements → Stories → Architecture alignment
-- All stories trace to requirements
-- Architecture covers all stories
-- Write results to `<record>/verification/phase-check-inception.md`
+Run the Inception → Construction completeness audit. Read every
+`traceability.json` produced by the Inception stages that executed:
+
+- `<record>/inception/user-stories/traceability.json`
+- `<record>/inception/domain-design/traceability.json`
+- `<record>/inception/units-generation/traceability.json`
+
+(Contract Design produces no `traceability.json` — it owns formal contracts,
+not requirement coverage — so it does not contribute to this phase-boundary
+check.) Confirm there are no unresolved findings, including `GAP`, `ORPHAN`, invalid
+targets, or missing upstream IDs. Consolidate the tables into
+`<record>/verification/phase-check-inception.md` with a pass/fail verdict at
+the top. If any finding remains, stop the transition and revisit the owning
+stage before Construction begins.
 
 ### Step 7: Completion Handoff
 
@@ -186,7 +199,7 @@ This stage's outputs are markdown artefacts under `<record>/inception/delivery-p
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `team-practices`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `contract-summary`, `team-practices`).
 
 ## Learn
 

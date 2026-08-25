@@ -18,7 +18,7 @@ how that works and where everything lives.
 
 When you install AI-DLC you copy its engine into your project — a single
 harness-specific directory (`.claude/` on Claude Code, `.kiro/` on Kiro,
-`.codex/` on Codex). That directory is the *only* part of the layout that
+`.codex/` on Codex, `.aidlc/` on opencode and GitHub Copilot). That directory is the *only* part of the layout that
 differs by harness. From then on, everything AI-DLC produces lives under one
 neutral `aidlc/` directory at your project root — organized by *what you're
 working on*, not by which harness you happen to run. You browse `aidlc/`; you
@@ -48,7 +48,12 @@ my-project/
 │       │   │   └── templates/      your output-format overrides, one per artifact
 │       │   │
 │       │   ├── knowledge/        DOMAIN KNOWLEDGE — standards an agent reads (committed)
-│       │   │                       free-form; empty until you add files
+│       │   │   │                   free-form; empty until you add files
+│       │   │   ├── documents/      YOUR ORIGINALS — PDFs, Word, Markdown (you own this)
+│       │   │   │                     nest them however you like; never reorganised
+│       │   │   └── documentkb/     THE CATALOG — derived from documents/ (tool-owned)
+│       │   │       ├── index.json     every indexed document, with its state
+│       │   │       └── <doc-id>/      metadata.json + extracted content.md
 │       │   ├── codekb/           CODE KNOWLEDGE — what each repo is (committed, per-repo)
 │       │   │   └── <repo>/          architecture, component inventory, freshness marker
 │       │   │
@@ -279,11 +284,26 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 |---|---|
 | `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent births and cursor switches. |
 | `…/intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state. |
+| `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
+| `…/knowledge/.sources.local.json` | Where *this machine* resolves documents linked from outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. |
 
 Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
 `intents.json`, each record's `aidlc-state.md`, `audit/` shards, and artifacts — is
 committed. The rule of thumb: **cursors and runtime scratch are local; the shared
 work is committed.**
+
+`knowledge/documents/` and `knowledge/documentkb/` are both committed, but they are
+owned by different parties and that difference is the whole design. `documents/`
+holds your originals: you add, move, and delete files there, and the framework never
+reorganises them. `documentkb/` is the catalog the tool derives, written
+transactionally under the workspace lock. Its **index** is reconstructible: delete
+`documentkb/index.json` alone and `/aidlc knowledge sync` rebuilds it from the
+surviving per-document `metadata.json` files, tombstones included. Deleting the
+whole `documentkb/` tree is a different, non-recoverable operation — it destroys
+every `metadata.json` too, so document ids and tombstones are lost; `sync` then
+re-onboards the surviving originals as new rows with new ids. That is also why
+hand-editing `documentkb/` is a mistake rather than a shortcut: the next `sync`
+reconciles it back to what `documents/` actually contains.
 
 ---
 

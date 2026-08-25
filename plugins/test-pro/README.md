@@ -16,9 +16,12 @@ test coverage** rather than the baseline unit/integration tests core ships. It:
   full-suite execution stage (operation) that runs the regression + edge + API
   suite against the deployed system;
 - **ships two advisory sensors** that read the machine-readable results and report
-  coverage-threshold and requirement-coverage gaps.
+  coverage-threshold and requirement-coverage gaps; and
+- **ships a read-only doctor check** that verifies its composed sensors, scope,
+  and support agent are installed.
 
-It reuses the framework's `aidlc-quality-agent` as the test lead — no new agent.
+It reuses the framework's `aidlc-quality-agent` as the test lead and ships
+`test-pro-metrics-agent` as a support persona.
 
 ## 2. How to use it
 
@@ -28,7 +31,7 @@ the way each host installs plugins (the hybrid model — see
 
 **Author / build** (from the repo):
 ```bash
-bun scripts/package.ts          # emits dist/plugins/test-pro/{claude,codex,kiro,kiro-ide}/
+bun scripts/package.ts          # emits all seven dist/plugins/test-pro/<harness>/ projections
 ```
 
 **Claude Code** (host store):
@@ -53,7 +56,7 @@ AIDLC_PLUGIN_ROOT=<…>/kiro AIDLC_PROJECT_DIR=<project> AIDLC_HARNESS_DIR=.kiro
 
 Then confirm and run:
 ```
-/aidlc --doctor                 # expect 34 stages, 0 failures
+/aidlc --doctor                 # expect 34 stages + Plugin check (test-pro): rows, 0 failures
 /aidlc --scope enterprise       # the test-pro stages route under enterprise/feature
 ```
 
@@ -77,7 +80,7 @@ its `contributions/<phase>/<slug>.md` files are merged at compose time.
 
 | Stage | Phase | # | Activation | Produces |
 |---|---|---|---|---|
-| **`test-pro-integration`** (Cross-Unit Integration Testing) | construction | 3.85 | scopes: enterprise, feature, mvp, workshop; CONDITIONAL (runs once after build-and-test when the build spans >1 unit) | `test-pro-integration-test-plan`, `test-pro-integration-test-results`, `test-pro-cross-unit-contract-matrix` |
+| **`test-pro-integration`** (Cross-Unit Integration Testing) | construction | 3.85 | scopes: enterprise, feature, mvp, classic, workshop; CONDITIONAL (runs once after build-and-test when the build spans >1 unit) | `test-pro-integration-test-plan`, `test-pro-integration-test-results`, `test-pro-cross-unit-contract-matrix` |
 | **`test-pro-full-suite`** (Full Test Suite Execution) | operation | 4.45 | scopes: enterprise; declares `when: {producer-in-plan: test-pro-regression-suite}` (not evaluated yet — see Activation below; gates on scope today) | `test-pro-full-suite-results`, `test-pro-edge-api-report` |
 
 Both are led by `aidlc-quality-agent`, `mode: inline`.
@@ -92,6 +95,7 @@ plugins/test-pro/
   contributions/<phase>/<slug>.md    # the 4 stage MODIFICATIONS (contribution seam)
   sensors/aidlc-<id>.md              # 2 advisory sensor manifests
   tools/aidlc-sensor-*.ts            # the 2 sensor scripts (self-contained)
+  tools/test-pro-doctor.ts            # read-only composed-install checks
   tests/plugin.test.ts               # the plugin's own content validation
   README.md
 ```

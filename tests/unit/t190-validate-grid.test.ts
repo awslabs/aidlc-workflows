@@ -106,6 +106,17 @@ function writeFixture(): { graphPath: string; dir: string } {
   return { graphPath, dir: tmp };
 }
 
+function fixtureGrid(
+  overrides: Record<string, "EXECUTE" | "SKIP"> = {},
+): Record<string, "EXECUTE" | "SKIP"> {
+  return {
+    alpha: "SKIP",
+    beta: "SKIP",
+    gamma: "SKIP",
+    ...overrides,
+  };
+}
+
 // Spawn the CLI against an optional fixture graph (fresh process per call, so
 // the module-level graph cache never leaks between cases).
 function runValidateGrid(
@@ -199,7 +210,11 @@ describe("t190 validate-grid CLI - fixture graph (TRUE orphan, conditional_on)",
   test("TRUE orphan rejects in BOTH modes (exit 1 + the no-producer error)", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
-    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE", beta: "EXECUTE" }), "utf-8");
+    writeFileSync(
+      proposal,
+      JSON.stringify(fixtureGrid({ alpha: "EXECUTE", beta: "EXECUTE" })),
+      "utf-8",
+    );
     for (const extra of [[], ["--strict"]]) {
       const r = runValidateGrid(proposal, extra, { AIDLC_STAGE_GRAPH: graphPath });
       expect(r.rc).toBe(1);
@@ -214,7 +229,7 @@ describe("t190 validate-grid CLI - fixture graph (TRUE orphan, conditional_on)",
     const proposal = join(dir, "p.json");
     writeFileSync(
       proposal,
-      JSON.stringify({ alpha: "SKIP", beta: "SKIP", gamma: "EXECUTE" }),
+      JSON.stringify(fixtureGrid({ gamma: "EXECUTE" })),
       "utf-8",
     );
     const green = runValidateGrid(
@@ -237,7 +252,7 @@ describe("t190 validate-grid CLI - fixture graph (TRUE orphan, conditional_on)",
     const proposal = join(dir, "p.json");
     writeFileSync(
       proposal,
-      JSON.stringify({ stages: { alpha: "EXECUTE", gamma: "SKIP" } }),
+      JSON.stringify({ stages: fixtureGrid({ alpha: "EXECUTE" }) }),
       "utf-8",
     );
     const r = runValidateGrid(proposal, [], { AIDLC_STAGE_GRAPH: graphPath });
@@ -280,7 +295,11 @@ describe("t190 validate-grid --keywords - collision check", () => {
   test("a colliding keyword is a hard error naming both the keyword and the incumbent scope", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
-    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    writeFileSync(
+      proposal,
+      JSON.stringify(fixtureGrid({ alpha: "EXECUTE" })),
+      "utf-8",
+    );
     const r = runValidateGrid(proposal, ["--keywords", "fix,tune-up"], {
       AIDLC_STAGE_GRAPH: graphPath,
       ...seamEnv(dir),
@@ -298,7 +317,11 @@ describe("t190 validate-grid --keywords - collision check", () => {
   test("collision matching is case-insensitive (matches findScopeByKeyword)", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
-    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    writeFileSync(
+      proposal,
+      JSON.stringify(fixtureGrid({ alpha: "EXECUTE" })),
+      "utf-8",
+    );
     const r = runValidateGrid(proposal, ["--keywords", "FIX"], {
       AIDLC_STAGE_GRAPH: graphPath,
       ...seamEnv(dir),
@@ -310,7 +333,11 @@ describe("t190 validate-grid --keywords - collision check", () => {
   test("non-colliding keywords pass (exit 0, valid:true, no errors)", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
-    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    writeFileSync(
+      proposal,
+      JSON.stringify(fixtureGrid({ alpha: "EXECUTE" })),
+      "utf-8",
+    );
     const r = runValidateGrid(proposal, ["--keywords", "pipeline,observability"], {
       AIDLC_STAGE_GRAPH: graphPath,
       ...seamEnv(dir),
@@ -324,7 +351,11 @@ describe("t190 validate-grid --keywords - collision check", () => {
   test("omitted flag = today's behavior byte-for-byte (same grid, same JSON)", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
-    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    writeFileSync(
+      proposal,
+      JSON.stringify(fixtureGrid({ alpha: "EXECUTE" })),
+      "utf-8",
+    );
     const env = { AIDLC_STAGE_GRAPH: graphPath, ...seamEnv(dir) };
     const without = runValidateGrid(proposal, [], env);
     const withEmptyGrant = runValidateGrid(proposal, ["--keywords", ""], env);
@@ -337,7 +368,11 @@ describe("t190 validate-grid --keywords - collision check", () => {
   test("--keywords with a missing value is a legible usage error", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
-    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    writeFileSync(
+      proposal,
+      JSON.stringify(fixtureGrid({ alpha: "EXECUTE" })),
+      "utf-8",
+    );
     const r = runValidateGrid(proposal, ["--keywords"], {
       AIDLC_STAGE_GRAPH: graphPath,
       ...seamEnv(dir),
@@ -350,7 +385,11 @@ describe("t190 validate-grid --keywords - collision check", () => {
     const { graphPath, dir } = writeFixture();
     // beta requires ghost-artifact (TRUE orphan) AND the grant collides.
     const proposal = join(dir, "p.json");
-    writeFileSync(proposal, JSON.stringify({ beta: "EXECUTE" }), "utf-8");
+    writeFileSync(
+      proposal,
+      JSON.stringify(fixtureGrid({ beta: "EXECUTE" })),
+      "utf-8",
+    );
     const r = runValidateGrid(proposal, ["--keywords", "bug"], {
       AIDLC_STAGE_GRAPH: graphPath,
       ...seamEnv(dir),

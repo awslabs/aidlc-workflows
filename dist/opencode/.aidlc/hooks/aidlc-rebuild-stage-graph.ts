@@ -34,12 +34,67 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  listIntents,
   readAllAuditShards,
+  readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
   runtimeGraphPath,
   harnessDir,
+  writeSessionIntentHandoff,
+  writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
+
+// intent-create runs before a workflow exists, so SessionStart cannot stamp that
+// conversation yet. PostToolUse is the first boundary that carries both the
+// exact host session_id and the successful birth result. Bind from that pair,
+// never from the workspace-global `.current-session` marker: another
+// pre-workflow conversation may have started more recently. Existing stamps
+// are immutable here so a second, unrelated birth keeps the ending session
+// owned by its original intent.
+function bindCreatedIntentToInvokingSession(
+  projectDir: string,
+  parsed: ClaudeCodeHookInput,
+): void {
+  const sessionId = parsed.session_id;
+  if (!sessionId) return;
+  const command = parsed.tool_input?.command ?? "";
+  const ideAuditMode = (parsed.tool_input?.source ?? "") === "ide-audit-sync";
+  if (!ideAuditMode && !/(?:intent-create|intent\s+create)/.test(command)) return;
+
+  let response = "";
+  try {
+    response =
+      typeof parsed.tool_response === "string"
+        ? parsed.tool_response
+        : JSON.stringify(parsed.tool_response ?? "");
+  } catch {
+    return;
+  }
+  const match = response.match(
+    /(?:Intent created:|Migrated flat workspace into intent:)\s*([A-Za-z0-9._-]+)\s+\(space:\s*([A-Za-z0-9._-]+)\)/,
+  );
+  if (!match) return;
+
+  const [, dirName, space] = match;
+  const created = listIntents(projectDir, space).find(
+    (intent) => intent.dirName === dirName,
+  );
+  const existingUuid = readSessionIntentUuid(projectDir, sessionId);
+  hookDebug(projectDir, "rebuild-stage-graph", "session-bind", {
+    sessionId,
+    dirName,
+    space,
+    resolvedUuid: created?.uuid ?? "",
+    existingUuid: existingUuid ?? "",
+  });
+  if (!created?.uuid) return;
+  if (existingUuid) {
+    writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
+    return;
+  }
+  writeSessionIntentUuid(projectDir, sessionId, created.uuid);
+}
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -59,6 +114,11 @@ try {
   return 0;
 }
 const command: string = parsed.tool_input?.command ?? "";
+
+// Session ownership is independent of runtime-graph compilation and must run
+// before the command/audit filters below. Most intent-create calls are not
+// transition-class commands, so they intentionally exit at the next gate.
+bindCreatedIntentToInvokingSession(projectDir, parsed);
 
 // 3. Command filter - only dispatch on the audit-emit-side seam for both
 //    legacy tool-file commands and the new `aidlc ...` grammar.

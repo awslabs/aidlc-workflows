@@ -75,12 +75,17 @@
     "action": "SKIP"
   },
   {
-    "slug": "application-design",
+    "slug": "domain-design",
     "phase": "inception",
     "action": "SKIP"
   },
   {
     "slug": "units-generation",
+    "phase": "inception",
+    "action": "SKIP"
+  },
+  {
+    "slug": "contract-design",
     "phase": "inception",
     "action": "SKIP"
   },
@@ -127,7 +132,7 @@
   {
     "slug": "deployment-pipeline",
     "phase": "operation",
-    "action": "SKIP"
+    "action": "EXECUTE"
   },
   {
     "slug": "environment-provisioning",
@@ -137,7 +142,7 @@
   {
     "slug": "deployment-execution",
     "phase": "operation",
-    "action": "SKIP"
+    "action": "EXECUTE"
   },
   {
     "slug": "observability-setup",

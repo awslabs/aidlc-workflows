@@ -33,7 +33,7 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - There is **no statusline** and **no welcome message**; use \`/aidlc --status\` and the progress lines at gates.
 - Construction swarm runs as **subagent fan-out only** (\`AIDLC_USE_SWARM=1\` is a loud no-op).
 - Session-end and pre-compaction audit events (\`SESSION_ENDED\`, \`SESSION_COMPACTED\`) are not emitted — Kiro has no hooks for those moments.
-- **MCP servers**: none ship, and the Kiro MCP config mechanism is not configured here (the Claude distribution ships five; Kiro ships zero today).
+- **MCP servers**: five ship in \`.kiro/settings/mcp.json\`, all disabled by default. Flip \`"disabled": false\` on each server you want to enable. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. All 14 delegated personas opt in through \`includeMcpJson: true\` plus \`@<server>\` tool grants; the conductor gets none.
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between Claude Code and Kiro CLI installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
 `,
 

@@ -17,7 +17,7 @@ never hand-edit it (the drift guard fails CI).
 - **bun** — same requirement as the Claude harness; every tool and hook runs
   via bun.
 - **A model provider** — the shipped `config.toml` defaults to **Amazon
-  Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.4`). Set the AWS
+  Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.6-terra`). Set the AWS
   profile/region in `[model_providers.amazon-bedrock.aws]`. For OpenAI auth,
   comment out the provider lines. Note: `web_search` is unavailable on
   Bedrock; the market-research stage degrades gracefully.
@@ -90,6 +90,10 @@ git checkout v2
    do not append a second copy because duplicate TOML tables invalidate the
    entire config.
 
+   Re-run this trust command whenever an AI-DLC upgrade changes `.codex/hooks.json`,
+   including upgrades that add a new matcher. Replace the old tables before
+   opening a fresh Codex session; otherwise Codex silently skips the new hook.
+
 4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), merge
    the shipped `.codex/config.toml` into your `~/.codex/config.toml` (or keep
    it project-level — trusted projects read it). Verify with:
@@ -104,7 +108,7 @@ git checkout v2
 Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a
 scope or description — same commands as the Claude harness (`$aidlc --status`,
 `$aidlc --help`, …). Stage runners are explicit-only:
-`$aidlc-application-design`, `$aidlc-bugfix`, etc. (they are excluded from
+`$aidlc-domain-design`, `$aidlc-bugfix`, etc. (they are excluded from
 implicit skill matching so 37 runner descriptions don't pollute the index).
 
 ## Harness differences vs Claude Code
@@ -122,7 +126,8 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   `config.toml` (linked worktrees resolve into `<main>/.git/worktrees/*`,
   so it must be the main repo's `.git`).
 - **Swarm floor = `codex exec` workers** — one headless worker per
-  Construction unit in its Bolt worktree (always `< /dev/null`), with the
+  emitted Construction Unit in the isolated worktree for that Unit's Bolt
+  (always `< /dev/null`), with the
   same deterministic referee. `AIDLC_USE_SWARM=1` has no Workflow tool here
   and loud-degrades (`SWARM_DEGRADED` is audited).
 - **Session lifecycle**: Codex has no SessionEnd event; an unclosed session
@@ -164,8 +169,8 @@ Installed and trusted? The methodology is the same on every harness — keep goi
 with the neutral chapters:
 
 - [Your First Workflow](../02-your-first-workflow.md) — an annotated end-to-end run.
-- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 32 stages.
+- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 33 stages.
 - [Scopes, Depth, and Test Strategy](../05-scopes-and-depth.md) — right-sizing a run.
 - [Glossary](../glossary.md) — every term defined.
 
-Other harnesses: [Running AI-DLC on Kiro IDE](kiro-ide.md) · [the harness family index](README.md).
+Other harnesses: [Running AI-DLC on Kiro IDE](kiro-ide.md) · [AI-DLC on Cursor](cursor.md) · [the harness family index](README.md).

@@ -16,11 +16,14 @@ produces:
   - security-design
   - scalability-design
   - reliability-design
+  - observability-design
   - logical-components
+  - traceability
 produces_kinds:
   performance-design: [service, ui]
   scalability-design: [service]
   reliability-design: [service]
+  observability-design: [service]
   logical-components: [service, ui, library]
 consumes:
   - artifact: performance-requirements
@@ -31,10 +34,14 @@ consumes:
     required: true
   - artifact: reliability-requirements
     required: true
+  - artifact: observability-requirements
+    required: true
   - artifact: tech-stack-decisions
     required: true
-  - artifact: business-logic-model
+  - artifact: functional-spec
     required: true
+  - artifact: contract-summary
+    required: false
 requires_stage:
   - units-generation
   - nfr-requirements
@@ -43,19 +50,25 @@ sensors:
   - upstream-coverage
   - linter
   - type-check
+  - traceability
 scopes:
   - enterprise
   - feature
   - mvp
   - infra
+  - classic
   - workshop
 inputs: NFR requirements artifacts, functional design artifacts
-outputs: "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
+outputs: "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # NFR Design
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
+
+## Constraints
+
+This is a design stage — artifacts describe architectural patterns, strategies, and decisions, not implementation-ready code. Complete implementations (middleware, interceptors, retry libraries, encryption routines) belong in code-generation. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
 
 ## Steps
 
@@ -81,7 +94,7 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Prior Artifacts
 
-Read NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`. Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read application design from `<record>/inception/application-design/` (if exists) for architectural context; when the scope skipped those design stages, derive the architectural context from the NFR requirements and, on brownfield, the code knowledge base — never invent the content of a missing artifact.
+Read NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`. Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — the integration mechanism and failure behaviour at each boundary drive the resilience and scalability patterns designed here. Read the domain-design component catalogue from `<record>/inception/domain-design/components.md` (if exists) for architectural context; when the scope skipped those design stages, derive the architectural context from the NFR requirements and, on brownfield, the code knowledge base — never invent the content of a missing artifact.
 
 ### Step 3: Generate Design Questions
 
@@ -92,6 +105,7 @@ Focus areas:
 - Scalability patterns (horizontal vs vertical, data partitioning, caching tiers)
 - Performance optimization (latency budgets, throughput targets, resource pooling)
 - Security approach (defense in depth, zero trust, encryption standards)
+- Observability approach (metrics and SLI/SLO targets, structured logging, tracing depth, alerting philosophy, dashboard needs)
 - Logical component boundaries (service isolation, failure domains, blast radius)
 
 ### Step 4: Collect and Analyze Answers
@@ -111,6 +125,7 @@ Design concrete solutions for each NFR category:
 - **Security**: Authentication flows, authorization model, encryption (at rest and in transit), input validation, CSRF/XSS protection, secrets management, audit logging
 - **Scalability**: Horizontal/vertical scaling approach, load balancing, data partitioning/sharding, queue-based decoupling, stateless design
 - **Reliability**: Circuit breakers, retry policies with backoff, health checks, graceful degradation, failover strategies, data replication
+- **Observability**: Metrics collection strategy, structured logging design, distributed tracing architecture, alerting rules, dashboard specifications, SLI/SLO tracking, correlation ID propagation
 
 ### Step 6: Generate Artifacts
 
@@ -120,7 +135,24 @@ Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 - **security-design.md**: Authentication/authorization architecture, encryption design, input validation strategy, security headers, compliance controls
 - **scalability-design.md**: Scaling architecture, load distribution, data partitioning strategy, capacity thresholds, auto-scaling rules
 - **reliability-design.md**: Resilience patterns, circuit breaker configuration, retry policies, health check design, failover procedures, backup strategy
+- **observability-design.md**: Metrics collection architecture, structured logging design, distributed tracing strategy, alerting rules and escalation, dashboard specifications, SLI/SLO definitions, correlation ID propagation
 - **logical-components.md**: Logical infrastructure component inventory — service boundaries, failure domains, blast radius mapping, component isolation strategy, shared resource identification. Bridges NFR design decisions with Infrastructure Design by providing a component-level view of where NFR patterns apply.
+
+Create `<record>/construction/{unit-name}/nfr-design/traceability.json`.
+Enumerate every `NFRx.y` from this Unit's NFR requirements and map it to the
+concrete design solution:
+
+```json
+{
+  "stage": "nfr-design",
+  "unit": "u1-auth",
+  "upstream_ids": ["NFR1.1", "NFR1.2"],
+  "coverage": [
+    { "id": "NFR1.1", "status": "OK", "target": "Redis cache with connection pooling" },
+    { "id": "NFR1.2", "status": "GAP" }
+  ]
+}
+```
 
 ### Step 7: Completion Handoff
 
@@ -151,9 +183,10 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-requirements`, `security-requirements`, `scalability-requirements`, `reliability-requirements`, `tech-stack-decisions`, `business-logic-model`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-requirements`, `security-requirements`, `scalability-requirements`, `reliability-requirements`, `observability-requirements`, `tech-stack-decisions`, `functional-spec`, `contract-summary`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
+- **`traceability`** validates that every detailed NFR requirement is declared and covered by a design solution.
 
 Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 

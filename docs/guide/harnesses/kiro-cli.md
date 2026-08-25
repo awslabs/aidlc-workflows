@@ -9,7 +9,7 @@
 
 One of the framework's harnesses: `dist/kiro/` runs the same AI-DLC
 methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core
-— the tools, 32 stage files, protocols, knowledge, sensors, scopes, and rules
+— the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules
 — is byte-shared across every harness; only the shell (skills, agent
 configs, hook wiring, activation) differs.
 
@@ -73,7 +73,7 @@ Start `kiro-cli chat` in the project, then invoke the conductor with
 `/aidlc <description>`. `/aidlc --status` reports position; `/aidlc --doctor`,
 `--stage`, `--phase`, `--depth`, and `--test-strategy` all work. Workspace
 navigation uses `/aidlc intent [name]`, `/aidlc space [name]`, and
-`/aidlc space-create <name>`. The per-stage (`/aidlc-application-design`) and
+`/aidlc space-create <name>`. The per-stage (`/aidlc-domain-design`) and
 per-scope (`/aidlc-feature`) runner skills are installed too.
 
 **Start the session from the project root.** The conductor's engine calls are
@@ -107,7 +107,7 @@ inside a disposable sandbox where blanket shell access is acceptable.
 | Forwarding-loop enforcement (Stop hook) | Interactive + headless | Interactive sessions only — `--no-interactive` runs do not honor the stop-hook block |
 | Permissions | `settings.json` allowlist | `aidlc` agent config: only project-relative framework `bun .kiro/tools/<tool>.ts` calls and `date -u` are pre-approved; other shell commands prompt |
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |
-| MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped, and the Kiro MCP config mechanism is not yet documented here — Claude-only today in practice |
+| MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | Ships the same 5 in `.kiro/settings/mcp.json`, all disabled by default; flip `"disabled": false` per server to enable it. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. All 14 delegated personas opt in through `includeMcpJson: true` plus `@<server>` tool grants; the conductor gets none. |
 
 Everything else — state machine, audit trail, artifacts under the intent
 record dirs (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), the learnings
@@ -126,7 +126,7 @@ substituted to `.kiro` and the `rules/` → `steering/` rename). `bun
 scripts/package.ts --check` is the drift guard and runs in CI (t145). The
 authored Kiro surfaces live in `harness/kiro/`: the orchestrator skill
 (`skills/aidlc/`), the agent JSONs (`agents/`), the hook adapter
-(`hooks/aidlc-kiro-adapter.ts`), `settings/cli.json`, and `AGENTS.md` — edit
+(`hooks/aidlc-kiro-adapter.ts`), `settings/cli.json`, `settings/mcp.json`, and `AGENTS.md` — edit
 those (or `core/`), never the generated `dist/kiro`. See
 [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 
@@ -143,8 +143,8 @@ Installed and activated? The methodology is the same on every harness — keep
 going with the neutral chapters:
 
 - [Your First Workflow](../02-your-first-workflow.md) — an annotated end-to-end run.
-- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 32 stages.
+- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 33 stages.
 - [Scopes, Depth, and Test Strategy](../05-scopes-and-depth.md) — right-sizing a run.
 - [Glossary](../glossary.md) — every term defined.
 
-Other harnesses: [AI-DLC on Codex CLI](codex-cli.md) · [the harness family index](README.md).
+Other harnesses: [AI-DLC on Codex CLI](codex-cli.md) · [AI-DLC on Cursor](cursor.md) · [the harness family index](README.md).

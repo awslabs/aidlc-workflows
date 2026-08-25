@@ -130,6 +130,7 @@ export function withEnvAndFreshCaches<T>(
  */
 export function resetAidlcEnv(): void {
   delete process.env.AWS_AIDLC_DEFAULT_SCOPE;
+  delete process.env.AIDLC_SKIP_SOURCE_FRESHNESS;
 }
 
 /**
@@ -206,7 +207,7 @@ export function runOrchestrateNext(
     env?: Record<string, string | undefined>;
   } = {},
 ): OrchestrateTestResult {
-  let command = ["next", ...args, "--project-dir", proj];
+  let command = ["next", "--project-dir", proj, ...args];
   let stderr = "";
   const steering: Record<string, unknown>[] = [];
 
@@ -511,9 +512,11 @@ export function setupWorktreeFixture(): string {
   };
   git(["init", "-q"]);
   git(["symbolic-ref", "HEAD", "refs/heads/main"]);
+  git(["config", "user.email", "t@x"]);
+  git(["config", "user.name", "t"]);
   writeFileSync(join(proj, "README.md"), "seed\n");
   git(["add", "README.md"]);
-  git(["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "init"]);
+  git(["commit", "-qm", "init"]);
   // Seed the per-intent workspace shell + default record so the data-path
   // helpers (and the worktree-mirror resolution that threads relativeRecordDir)
   // anchor under aidlc/spaces/default/intents/<record>/ instead of a flat
@@ -667,21 +670,15 @@ export function setupIntegrationProject(
 
   if (opts.withInceptionArtifacts) {
     const ra = join(seededRecordDir(proj), "inception", "requirements-analysis");
-    const ad = join(seededRecordDir(proj), "inception", "application-design");
+    const ad = join(seededRecordDir(proj), "inception", "domain-design");
     const ug = join(seededRecordDir(proj), "inception", "units-generation");
     mkdirSync(ra, { recursive: true });
     mkdirSync(ad, { recursive: true });
     mkdirSync(ug, { recursive: true });
     const ia = join(FIXTURES_DIR, "inception-artifacts");
     copyFileSync(join(ia, "requirements.md"), join(ra, "requirements.md"));
-    for (const f of [
-      "components.md",
-      "component-methods.md",
-      "services.md",
-      "component-dependency.md",
-    ]) {
-      copyFileSync(join(ia, f), join(ad, f));
-    }
+    // domain-design collapses to a single consolidated `components.md` catalogue.
+    copyFileSync(join(ia, "components.md"), join(ad, "components.md"));
     for (const f of ["unit-of-work.md", "unit-of-work-story-map.md"]) {
       copyFileSync(join(ia, f), join(ug, f));
     }

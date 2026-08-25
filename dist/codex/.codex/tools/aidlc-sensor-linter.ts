@@ -8,8 +8,7 @@
 //   {"pass": <bool>, "errorCount": <n>, "warningCount": <n>,
 //    "violations": [{file, line, column, rule, severity, message}, ...]}
 //
-// Decisions (see tmp/v05-mr9-plan-draft.md § Per-sensor script contracts
-// → aidlc-sensor-linter.ts):
+// Per-sensor script contract decisions:
 //
 // * Project root resolution: walk up from --file-path to the nearest
 //   package.json. We DO NOT pre-locate the eslint config — eslint's own

@@ -93,6 +93,22 @@ export type TierProjection = {
    *  session's opencode.json defaults — same inherit-by-omission contract
    *  as codex. */
   opencode: { model: string | null; variant: OpencodeVariant | null };
+  /** Copilot CLI + VS Code agent mode share one dist (one .github/ tree), and
+   *  the model slot is model-only AND always omitted BY DESIGN, like kiro:
+   *  the two surfaces disagree on `model:` value syntax (the CLI forwards the
+   *  frontmatter string verbatim to the BYOK provider - an IDE display name
+   *  like "Claude Sonnet 5" is a live-verified 400 there - while the IDE
+   *  silently skips CLI catalog ids), so there is no safe pinnable value.
+   *  Agents inherit the session model (BYOK env on the CLI, the model picker
+   *  on the IDE); the type makes a model leak structurally impossible. */
+  copilot: { model: null };
+  /** Cursor agent .md frontmatter: `model:` (Cursor model id, e.g.
+   *  "claude-opus-5-medium"). Model-only BY DESIGN, like kiro: Cursor has no
+   *  effort key in agent frontmatter (effort rides the model id suffix). All
+   *  tiers ship null — model availability is Cursor-plan-dependent (Free
+   *  accounts reject every named model), so a pinned id would hard-fail
+   *  installs on lower plans; agents inherit the session model instead. */
+  cursor: { model: string | null };
 };
 
 export type Harness = keyof TierProjection;
@@ -107,6 +123,8 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     codex: { model: null, effort: null },
     kiro: { model: null },
     opencode: { model: null, variant: null },
+    copilot: { model: null },
+    cursor: { model: null },
   },
   balanced: {
     // Effort pinned to medium (was: inherit the session effort). Balanced is
@@ -115,17 +133,21 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     // of an xhigh-inheriting one with no verdict/finding quality loss. A
     // session pinned to xhigh was silently doubling every review's cost.
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.4", effort: "medium" },
+    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    cursor: { model: null },
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    copilot: { model: null },
   },
   templated: {
     // The one deliberate downgrade: a smaller model at reduced effort for
     // pattern-following output.
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.4", effort: "medium" },
+    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    copilot: { model: null },
+    cursor: { model: null },
   },
 };
 
