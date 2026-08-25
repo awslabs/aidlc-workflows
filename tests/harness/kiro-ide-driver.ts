@@ -76,6 +76,7 @@ export interface KiroIdeDomSnapshot {
     text: string;
     ariaLabel: string;
   }>;
+  orderedLists: string[][];
 }
 
 export interface KiroIdeBlockingOverlay {
@@ -990,13 +991,21 @@ const SNAPSHOT_DOM_EXPR = `(() => {
       ariaLabel: norm(e.getAttribute("aria-label")).slice(0, 240)
     }))
     .slice(-20);
+  const orderedLists = [...document.querySelectorAll("ol")]
+    .filter(visible)
+    .map((list) => [...list.querySelectorAll(":scope > li")]
+      .filter(visible)
+      .map((item) => norm(item.innerText||item.textContent).slice(0, 2000)))
+    .filter((items) => items.length > 0)
+    .slice(-20);
   const bodyText = norm(document.body && document.body.innerText);
   return {
     href: String(location.href),
     title: String(document.title||""),
     text: bodyText.slice(-12000),
     controls,
-    editors
+    editors,
+    orderedLists
   };
 })()`;
 

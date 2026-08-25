@@ -27,6 +27,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -52,6 +53,42 @@ afterAll(() => {
 function makeProject(): string {
   const project = createTestProject();
   tempProjects.add(project);
+  return project;
+}
+
+function makeUnselectedKiroProject(): string {
+  const project = setupTuiProject({
+    harness: "kiro",
+    withState: "state-mid-ideation.md",
+  });
+  tempProjects.add(project);
+  const utility = join(project, ".kiro", "tools", "aidlc-utility.ts");
+  const created = run(
+    [
+      BUN,
+      utility,
+      "intent-create",
+      "--scope",
+      "poc",
+      "--label",
+      "second fixture",
+      "--project-dir",
+      project,
+    ],
+    project,
+  );
+  expect(created.exitCode, created.stderr.toString()).toBe(0);
+  rmSync(
+    join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "active-intent",
+    ),
+    { force: true },
+  );
   return project;
 }
 
@@ -567,6 +604,29 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       expectSameRun(compiled, dev, item.name);
     });
   }
+
+  test("compiled main pins the Kiro harness name before unselected routing", () => {
+    const projectDir = makeUnselectedKiroProject();
+    const compiled = viaImportedCompiledMain(
+      [
+        "next",
+        "poc",
+        "Create a tiny TypeScript command-line program that prints Hello World.",
+        "--project-dir",
+        projectDir,
+      ],
+      projectDir,
+    );
+    expect(compiled.exitCode, compiled.stderr.toString()).toBe(0);
+    const directive = JSON.parse(compiled.stdout.toString()) as {
+      kind?: string;
+      ask_type?: string;
+      available_intents?: string[];
+    };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).toBe("new-work-routing");
+    expect(directive.available_intents).toHaveLength(2);
+  });
 });
 
 describe("t230 dispatcher route completeness", () => {

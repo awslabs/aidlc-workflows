@@ -166,6 +166,7 @@ describe("t238 build-binaries release builder", () => {
       "harness-probe-kiro",
       "harness-probe-copilot",
       "harness-probe-opencode",
+      "compiled-kiro-new-work-routing",
       "plugin-select",
       "real-plugin-sync",
       "conductor-persona",

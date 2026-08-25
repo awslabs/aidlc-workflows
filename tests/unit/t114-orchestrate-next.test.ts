@@ -656,6 +656,7 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
       question?: string;
       new_work_description?: string;
       proposed_scope?: string;
+      numbered_prose_question?: string;
     };
     expect(out).toContain('"kind":"ask"');
     expect(directive.ask_type).toBe("new-work-routing");
@@ -671,6 +672,13 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(out).toContain("continue");
     expect(out).toContain("Yes, set it up alongside");
     expect(out).toContain("plan");
+    expect(directive.question).toContain("(1)");
+    expect(directive.question).toContain("(2)");
+    expect(directive.question).toContain("(3)");
+    expect(directive.numbered_prose_question).toContain(
+      "1. **Part of the active work**",
+    );
+    expect(directive.numbered_prose_question).toContain("4. **Other**");
     expect(directive.question).toContain(
       `as "${directive.proposed_scope}" work`,
     );

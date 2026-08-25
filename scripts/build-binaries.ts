@@ -515,6 +515,99 @@ function harnessProbeGate(
   }
 }
 
+function compiledKiroNewWorkRoutingGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-kiro-routing-"));
+  try {
+    cpSync(join(REPO_ROOT, "dist", "kiro"), project, { recursive: true });
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
+    delete env.AIDLC_HARNESS_DIR;
+    delete env.AIDLC_HARNESS_NAME;
+    delete env.AIDLC_PROJECT_DIR;
+    delete env.CLAUDE_PROJECT_DIR;
+    const create = (scope: string, label: string) =>
+      run(
+        artifact,
+        [
+          "intent",
+          "create",
+          "--scope",
+          scope,
+          "--label",
+          label,
+          "--project-dir",
+          project,
+        ],
+        { cwd: project, env, timeoutMs: 30_000 },
+      );
+    const first = create("feature", "fixture");
+    const second = create("poc", "second fixture");
+    rmSync(
+      join(
+        project,
+        "aidlc",
+        "spaces",
+        "default",
+        "intents",
+        "active-intent",
+      ),
+      { force: true },
+    );
+    const routed = run(
+      artifact,
+      [
+        "next",
+        "poc",
+        "Create a tiny TypeScript command-line program that prints Hello World.",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, env, timeoutMs: 30_000 },
+    );
+    let kind = "";
+    let askType = "";
+    let selectors = 0;
+    try {
+      const directive = JSON.parse(routed.stdout) as {
+        kind?: string;
+        ask_type?: string;
+        available_intents?: string[];
+      };
+      kind = directive.kind ?? "";
+      askType = directive.ask_type ?? "";
+      selectors = directive.available_intents?.length ?? 0;
+    } catch {
+      /* reported below */
+    }
+    const output = [
+      first.stdout,
+      first.stderr,
+      second.stdout,
+      second.stderr,
+      routed.stdout,
+      routed.stderr,
+    ].join("\n");
+    return commandGate(
+      "compiled-kiro-new-work-routing",
+      routed,
+      first.status === 0 &&
+        second.status === 0 &&
+        routed.status === 0 &&
+        kind === "ask" &&
+        askType === "new-work-routing" &&
+        selectors === 2 &&
+        !runtimeCrash(output),
+      {
+        expected: "compiled Kiro next emits typed routing with two record selectors",
+        actual:
+          `${kind || "<no-kind>"}:${askType || "<no-ask-type>"} selectors=${selectors}`,
+        detail: `createStatuses=${first.status},${second.status}`,
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function pluginSelectGate(artifact: string): GateResult {
   const project = installedProject("aidlc-binary-select-");
   try {
@@ -1630,6 +1723,7 @@ function buildTarget(target: TargetConfig): TargetResult {
       "opencode",
       "opencode.json or opencode.jsonc present",
     ));
+    result.gates.push(compiledKiroNewWorkRoutingGate(actual.artifact));
     result.gates.push(pluginSelectGate(actual.artifact));
     result.gates.push(delegatePluginSyncGate(actual.artifact));
     result.gates.push(realPluginSyncGate(actual.artifact));

@@ -368,6 +368,19 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           renderedOffer,
           `new-work turn did not render a reshape route: ${offerR1.assistantText}`,
         ).toMatch(/reshape|re-shape|remaining plan|change.*plan/);
+        const typedAskIndex = offerR1.toolCalls.findIndex((call) =>
+          call.output.join("").includes('"ask_type":"new-work-routing"')
+        );
+        if (typedAskIndex >= 0) {
+          expect(
+            offerR1.toolCalls.slice(typedAskIndex + 1),
+            "a typed new-work ask must end tool use for the turn",
+          ).toEqual([]);
+          expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*1\./m);
+          expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*2\./m);
+          expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*3\./m);
+          expect(offerR1.assistantText).toMatch(/(?:^|\n)\s*4\.\s*\*{0,2}Other/i);
+        }
         // OUTCOME pins, not tool-surface pins: live conductors compare via
         // `intent --json`, a registry read, or the engine ask - all legitimate.
         // What the offer turn must NOT do is deterministic: no creation (never
