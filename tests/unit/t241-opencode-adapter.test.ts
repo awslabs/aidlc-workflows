@@ -8,6 +8,7 @@ import {
   appendFileSync,
   cpSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -29,6 +30,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import {
+  inspectSubagentInflight,
+  subagentInflightMarkerPath,
   writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -374,6 +377,7 @@ describe("t241 OpenCode adapter dispatch rules", () => {
   test("task input is rewritten with exact active-stage rules", async () => {
     const root = freshInstalledProject();
     seedAidlcMemory(root);
+    seedStateFile(root, "state-mid-inception.md");
     const { client } = fakeClient();
     const adapter = await createAdapter({ client, directory: root });
     const output = {
@@ -381,6 +385,7 @@ describe("t241 OpenCode adapter dispatch rules", () => {
         subagent_type: "aidlc-product-agent",
         prompt:
           "Run .aidlc/aidlc-common/stages/inception/user-stories.md.",
+        run_in_background: true,
       },
     };
 
@@ -393,6 +398,15 @@ describe("t241 OpenCode adapter dispatch rules", () => {
     expect(prompt).toContain("first-class");
     expect(prompt).toContain("Given/When/Then");
     expect(prompt).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+    expect(inspectSubagentInflight(root).freshCount).toBe(1);
+
+    await adapter["tool.execute.after"]({
+      tool: "task",
+      sessionID: "main",
+      callID: "rules",
+      args: output.args,
+    });
+    expect(existsSync(subagentInflightMarkerPath(root))).toBe(false);
   });
 });
 

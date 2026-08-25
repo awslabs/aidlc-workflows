@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 667,
+    "total": 672,
     "enumeratedByClass": {
-      "function": 402,
+      "function": 407,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 211,
+      "function": 216,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -1584,6 +1584,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:completeSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:COMPOSE_MARKER_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2376,6 +2388,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:inspectSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:INTENT_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2891,6 +2915,30 @@
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:markSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:matchSubagentInflight",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4475,7 +4523,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4487,7 +4535,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5167,7 +5215,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5187,7 +5235,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5223,7 +5271,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
+          "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
           "mechanism": "cli"
         },
         {

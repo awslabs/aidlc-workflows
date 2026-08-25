@@ -11,13 +11,16 @@
 // workspace steering with live file references.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
   agentsDir,
   getField,
+  markSubagentInflight,
+  resolveWorkflowSelection,
   stateFilePath,
-  subagentInflightMarkerPath,
+  stateFilePathForSelection,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import {
   type GraphStage,
@@ -30,6 +33,7 @@ import {
 
 type HookInput = {
   cwd?: string;
+  session_id?: unknown;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
 };
@@ -264,6 +268,40 @@ export function dispatchHookOutput(
   );
 }
 
+function recordAcceptedBackgroundDispatch(
+  parsed: HookInput,
+  projectDir: string,
+): void {
+  try {
+    const toolName = (parsed.tool_name ?? "").toLowerCase();
+    if (
+      !DISPATCH_TOOLS.has(toolName) ||
+      parsed.tool_input?.run_in_background !== true
+    ) {
+      return;
+    }
+    const rawSessionId = parsed.session_id;
+    if (
+      rawSessionId !== undefined &&
+      rawSessionId !== "" &&
+      (typeof rawSessionId !== "string" ||
+        validSessionId(rawSessionId) === null)
+    ) {
+      return;
+    }
+    const sessionId =
+      typeof rawSessionId === "string" && rawSessionId.length > 0
+        ? rawSessionId
+        : undefined;
+    const selection = resolveWorkflowSelection(projectDir, { sessionId });
+    if (!existsSync(stateFilePathForSelection(projectDir, selection))) return;
+    markSubagentInflight(projectDir, rawSessionId);
+  } catch {
+    // In-flight evidence is advisory. Its write must never alter dispatch
+    // acceptance, rule-delivery output, or the hook's established exit codes.
+  }
+}
+
 export async function run(input: string): Promise<number> {
   let parsed: HookInput;
   try {
@@ -279,29 +317,15 @@ export async function run(input: string): Promise<number> {
   const projectDir = isAbsolute(rawProjectDir)
     ? rawProjectDir
     : resolve(process.cwd(), rawProjectDir);
-  try {
-    const toolName = (parsed.tool_name ?? "").toLowerCase();
-    if (
-      DISPATCH_TOOLS.has(toolName) &&
-      parsed.tool_input?.run_in_background === true &&
-      existsSync(stateFilePath(projectDir))
-    ) {
-      writeFileSync(
-        subagentInflightMarkerPath(projectDir),
-        "in-flight\n",
-        "utf-8",
-      );
-    }
-  } catch {
-    // The marker is advisory Stop-hook evidence. Its write must never alter
-    // rule delivery, dispatch output, or the hook's established exit codes.
-  }
   const result = dispatchHookOutput(parsed, projectDir);
   if (result.error) {
     process.stderr.write(`${result.error}\n`);
     return 2;
   }
-  if (!result.changed || !result.updatedInput) return 0;
+  if (!result.changed || !result.updatedInput) {
+    recordAcceptedBackgroundDispatch(parsed, projectDir);
+    return 0;
+  }
   const output = `${JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
@@ -317,6 +341,7 @@ export async function run(input: string): Promise<number> {
           "Nothing partial was written. This harness loads the same rule files itself, through " +
           "its own active-memory preload fallback, so the work continues without them attached.\n",
       );
+      recordAcceptedBackgroundDispatch(parsed, projectDir);
       return 3;
     }
     process.stderr.write(
@@ -327,6 +352,7 @@ export async function run(input: string): Promise<number> {
     );
     return 2;
   }
+  recordAcceptedBackgroundDispatch(parsed, projectDir);
   process.stdout.write(output);
   return 0;
 }

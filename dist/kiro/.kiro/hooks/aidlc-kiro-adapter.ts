@@ -915,6 +915,7 @@ function buildForward(): Forward {
         hook: "aidlc-log-subagent.ts",
         input: {
           hook_event_name: "SubagentStop",
+          ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
           agent_type: roles || "unknown",
           agent_id: kiro.session_id ?? "",
         },

@@ -209,6 +209,7 @@ export async function run(
     try {
       const parsed = JSON.parse(input) as Record<string, unknown>;
       parsed.tool_name = toolName;
+      if (sessionId) parsed.session_id = sessionId;
       if (nativeToolInput) parsed.tool_input = nativeToolInput;
       const result = copilot.tool_result ?? copilot.toolResult;
       if (result && typeof result === "object" && !Array.isArray(result)) {
@@ -1256,6 +1257,7 @@ export async function run(
         "aidlc-log-subagent.ts",
         JSON.stringify({
           hook_event_name: "SubagentStop",
+          ...(sessionId ? { session_id: sessionId } : {}),
           agent_type: subagentName || "unknown",
           agent_id: subagentId,
         }),

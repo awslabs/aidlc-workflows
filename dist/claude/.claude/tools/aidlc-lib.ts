@@ -9501,21 +9501,254 @@ export function composeMarkerPath(projectDir: string): string {
 // open gate while still catching a stranded marker.
 export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 
-// `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level marker
-// written before a background subagent dispatch and deleted when any subagent
-// completes. The Stop hook honours a fresh marker as a turn-stop signal while
-// the conductor waits for the background result; doctor reports an orphaned
-// one. Hoisted here so every writer, reader, and test shares one spelling.
+// `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
+// dispatch ledger. Entries are session-scoped and reference-counted so
+// overlapping workers cannot clear or authorize each other. The file remains
+// workspace-level because dispatch and completion hooks can run outside an
+// intent record, while each entry carries the session identity needed by Stop.
 export function subagentInflightMarkerPath(projectDir: string): string {
   return join(projectDir, "aidlc", ".aidlc-subagent-inflight");
 }
 
-// Freshness window for the background-subagent marker. The Stop hook honours
-// the carve-out only while the marker's mtime is younger than this; an older
-// marker is an orphan (a dispatch that never reached SubagentStop) and is
-// ignored plus best-effort cleaned up. 2h covers long-running agents while
-// bounding how long a crashed dispatch can relax forwarding-loop enforcement.
+// Freshness window for each background-subagent entry. The Stop hook honours
+// only matching fresh entries; older entries are orphaned dispatches and are
+// pruned under the workspace lock. 2h covers long-running agents while bounding
+// how long a crashed dispatch can relax forwarding-loop enforcement.
 export const SUBAGENT_INFLIGHT_TTL_MS = 2 * 60 * 60 * 1000;
+
+interface SubagentInflightEntry {
+  sessionId: string | null;
+  startedAtMs: number;
+}
+
+interface SubagentInflightLedger {
+  version: 1;
+  entries: SubagentInflightEntry[];
+}
+
+interface SubagentInflightRead {
+  exists: boolean;
+  malformed: boolean;
+  entries: SubagentInflightEntry[];
+}
+
+export interface SubagentInflightSummary {
+  exists: boolean;
+  malformed: boolean;
+  freshCount: number;
+  staleCount: number;
+  oldestAgeMs: number | null;
+}
+
+export interface SubagentInflightMatch {
+  active: boolean;
+  staleRemoved: number;
+  malformed: boolean;
+  invalidSession: boolean;
+}
+
+function subagentSessionIdentity(
+  sessionId: unknown,
+): { valid: true; sessionId: string | null } | { valid: false } {
+  if (sessionId === undefined || sessionId === "") {
+    return { valid: true, sessionId: null };
+  }
+  if (typeof sessionId !== "string") return { valid: false };
+  const valid = validSessionId(sessionId);
+  return valid ? { valid: true, sessionId: valid } : { valid: false };
+}
+
+function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
+  const path = subagentInflightMarkerPath(projectDir);
+  if (!existsSync(path)) return { exists: false, malformed: false, entries: [] };
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") {
+      return { exists: true, malformed: true, entries: [] };
+    }
+    const candidate = parsed as Partial<SubagentInflightLedger>;
+    if (candidate.version !== 1 || !Array.isArray(candidate.entries)) {
+      return { exists: true, malformed: true, entries: [] };
+    }
+    const entries: SubagentInflightEntry[] = [];
+    for (const value of candidate.entries) {
+      if (value === null || typeof value !== "object") {
+        return { exists: true, malformed: true, entries: [] };
+      }
+      const entry = value as Partial<SubagentInflightEntry>;
+      const validIdentity =
+        entry.sessionId === null ||
+        (typeof entry.sessionId === "string" &&
+          validSessionId(entry.sessionId) === entry.sessionId);
+      if (
+        !validIdentity ||
+        typeof entry.startedAtMs !== "number" ||
+        !Number.isFinite(entry.startedAtMs) ||
+        entry.startedAtMs <= 0
+      ) {
+        return { exists: true, malformed: true, entries: [] };
+      }
+      entries.push({
+        sessionId: entry.sessionId ?? null,
+        startedAtMs: entry.startedAtMs,
+      });
+    }
+    return { exists: true, malformed: false, entries };
+  } catch {
+    return existsSync(path)
+      ? { exists: true, malformed: true, entries: [] }
+      : { exists: false, malformed: false, entries: [] };
+  }
+}
+
+function writeSubagentInflightLedger(
+  projectDir: string,
+  entries: SubagentInflightEntry[],
+): void {
+  const path = subagentInflightMarkerPath(projectDir);
+  if (entries.length === 0) {
+    try {
+      unlinkSync(path);
+    } catch {
+      // Already absent or unreadable: callers retain fail-closed behavior.
+    }
+    return;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  const ledger: SubagentInflightLedger = { version: 1, entries };
+  writeFileAtomic(path, `${JSON.stringify(ledger)}\n`);
+}
+
+function freshSubagentEntries(
+  entries: SubagentInflightEntry[],
+  nowMs: number,
+): SubagentInflightEntry[] {
+  return entries.filter(
+    (entry) => nowMs - entry.startedAtMs <= SUBAGENT_INFLIGHT_TTL_MS,
+  );
+}
+
+export function markSubagentInflight(
+  projectDir: string,
+  sessionId?: unknown,
+): boolean {
+  const identity = subagentSessionIdentity(sessionId);
+  if (!identity.valid) return false;
+  return withAuditLock(projectDir, () => {
+    const current = readSubagentInflightLedger(projectDir);
+    if (current.malformed) {
+      throw new Error(
+        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+      );
+    }
+    const nowMs = Date.now();
+    const entries = freshSubagentEntries(current.entries, nowMs);
+    entries.push({ sessionId: identity.sessionId, startedAtMs: nowMs });
+    writeSubagentInflightLedger(projectDir, entries);
+    return true;
+  });
+}
+
+export function completeSubagentInflight(
+  projectDir: string,
+  sessionId?: unknown,
+): boolean {
+  const identity = subagentSessionIdentity(sessionId);
+  if (!identity.valid) return false;
+  return withAuditLock(projectDir, () => {
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.exists) return false;
+    if (current.malformed) {
+      throw new Error(
+        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+      );
+    }
+    const entries = freshSubagentEntries(current.entries, Date.now());
+    const index = entries.findIndex(
+      (entry) => entry.sessionId === identity.sessionId,
+    );
+    if (index >= 0) entries.splice(index, 1);
+    writeSubagentInflightLedger(projectDir, entries);
+    return index >= 0;
+  });
+}
+
+export function matchSubagentInflight(
+  projectDir: string,
+  sessionId?: unknown,
+): SubagentInflightMatch {
+  const identity = subagentSessionIdentity(sessionId);
+  if (!identity.valid) {
+    return {
+      active: false,
+      staleRemoved: 0,
+      malformed: false,
+      invalidSession: true,
+    };
+  }
+  return withAuditLock(projectDir, () => {
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.exists) {
+      return {
+        active: false,
+        staleRemoved: 0,
+        malformed: false,
+        invalidSession: false,
+      };
+    }
+    if (current.malformed) {
+      return {
+        active: false,
+        staleRemoved: 0,
+        malformed: true,
+        invalidSession: false,
+      };
+    }
+    const entries = freshSubagentEntries(current.entries, Date.now());
+    const staleRemoved = current.entries.length - entries.length;
+    if (staleRemoved > 0) writeSubagentInflightLedger(projectDir, entries);
+    return {
+      active: entries.some(
+        (entry) => entry.sessionId === identity.sessionId,
+      ),
+      staleRemoved,
+      malformed: false,
+      invalidSession: false,
+    };
+  });
+}
+
+export function inspectSubagentInflight(
+  projectDir: string,
+): SubagentInflightSummary {
+  const current = readSubagentInflightLedger(projectDir);
+  if (!current.exists || current.malformed) {
+    return {
+      exists: current.exists,
+      malformed: current.malformed,
+      freshCount: 0,
+      staleCount: 0,
+      oldestAgeMs: null,
+    };
+  }
+  const nowMs = Date.now();
+  let freshCount = 0;
+  let staleCount = 0;
+  let oldestAgeMs: number | null = null;
+  for (const entry of current.entries) {
+    const ageMs = Math.max(0, nowMs - entry.startedAtMs);
+    oldestAgeMs = Math.max(oldestAgeMs ?? 0, ageMs);
+    if (ageMs <= SUBAGENT_INFLIGHT_TTL_MS) freshCount++;
+    else staleCount++;
+  }
+  return {
+    exists: true,
+    malformed: false,
+    freshCount,
+    staleCount,
+    oldestAgeMs,
+  };
+}
 
 // `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
 // `baseDir` is the project dir for current dispatcher and type-check callers;

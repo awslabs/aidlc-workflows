@@ -369,6 +369,7 @@ export default async ({
           "aidlc-deliver-stage-rules.ts",
           {
             hook_event_name: "PreToolUse",
+            session_id: input.sessionID,
             tool_name: "task",
             tool_input: args,
             cwd: directory,
@@ -598,6 +599,7 @@ export default async ({
           "aidlc-log-subagent.ts",
           {
             hook_event_name: "SubagentStop",
+            session_id: input.sessionID,
             agent_type:
               (args.subagent_type as string) ?? (args.agent as string) ?? "unknown",
             agent_id: input.callID,

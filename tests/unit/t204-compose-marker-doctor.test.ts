@@ -18,7 +18,13 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -28,6 +34,7 @@ import {
 import {
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
+  markSubagentInflight,
   subagentInflightMarkerPath,
   SUBAGENT_INFLIGHT_TTL_MS,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -57,14 +64,16 @@ function seedMarker(proj: string, ageSec?: number): void {
   }
 }
 
-/** Write the background-subagent marker, optionally backdating its mtime. */
-function seedSubagentMarker(proj: string, ageSec?: number): string {
+/** Write one background-subagent ledger entry, optionally backdating it. */
+function seedSubagentLedger(proj: string, ageSec?: number): string {
   const path = subagentInflightMarkerPath(proj);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, "in-flight\n", "utf-8");
+  expect(markSubagentInflight(proj, "doctor-session")).toBe(true);
   if (ageSec !== undefined) {
-    const when = Date.now() / 1000 - ageSec;
-    utimesSync(path, when, when);
+    const ledger = JSON.parse(readFileSync(path, "utf-8")) as {
+      entries: Array<{ startedAtMs: number }>;
+    };
+    ledger.entries[0].startedAtMs = Date.now() - ageSec * 1000;
+    writeFileSync(path, `${JSON.stringify(ledger)}\n`, "utf-8");
   }
   return path;
 }
@@ -91,7 +100,7 @@ describe("t204 doctor transient-marker probes", () => {
     const { out } = runDoctor(proj);
     expect(out).not.toContain("Compose marker present");
     expect(out).not.toContain(".aidlc-compose-pending");
-    expect(out).not.toContain("Background-subagent marker present");
+    expect(out).not.toContain("Background-subagent ledger present");
     expect(out).not.toContain(".aidlc-subagent-inflight");
   });
 
@@ -129,30 +138,30 @@ describe("t204 doctor transient-marker probes", () => {
     expect(out).toMatch(/\u2713\s+Compose marker present \(.*3h old, fresh\)/);
   });
 
-  test("a FRESH background-subagent marker renders as an advisory PASS row and is not deleted", () => {
+  test("a FRESH background-subagent ledger renders as an advisory PASS row and is not deleted", () => {
     const proj = freshProject();
-    const marker = seedSubagentMarker(proj);
+    const marker = seedSubagentLedger(proj);
     const { out } = runDoctor(proj);
-    expect(out).toContain("Background-subagent marker present");
+    expect(out).toContain("Background-subagent ledger present");
     expect(out).toContain("aidlc/.aidlc-subagent-inflight");
     expect(out).toMatch(
-      /\u2713\s+Background-subagent marker present \(.*fresh\)/,
+      /\u2713\s+Background-subagent ledger present \(.*1 fresh, 0 stale/,
     );
     expect(out).not.toMatch(
-      /\u2717\s+Background-subagent marker present/,
+      /\u2717\s+Background-subagent ledger present/,
     );
     expect(existsSync(marker)).toBe(true);
   });
 
-  test("a STALE background-subagent marker renders as a FAIL row with rm remediation and is not deleted", () => {
+  test("a STALE background-subagent entry renders as a FAIL row with rm remediation and is not deleted", () => {
     const proj = freshProject();
-    const marker = seedSubagentMarker(
+    const marker = seedSubagentLedger(
       proj,
       SUBAGENT_INFLIGHT_TTL_MS / 1000 + 60 * 60,
     );
     const { out, status } = runDoctor(proj);
     expect(out).toMatch(
-      /\u2717\s+Background-subagent marker present \(.*stale\)/,
+      /\u2717\s+Background-subagent ledger present \(.*0 fresh, 1 stale/,
     );
     expect(out).toContain("rm aidlc/.aidlc-subagent-inflight");
     expect(status).toBe(1);

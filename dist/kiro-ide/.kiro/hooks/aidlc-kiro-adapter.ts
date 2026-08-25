@@ -905,6 +905,7 @@ function buildForward(): Forward {
         hook: "aidlc-log-subagent.ts",
         input: {
           hook_event_name: "SubagentStop",
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
           agent_type: extractAgentIdentity(result, toolName),
           agent_id: "",
           last_assistant_message: result,

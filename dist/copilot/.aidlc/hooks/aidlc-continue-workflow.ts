@@ -78,8 +78,9 @@
 //      workspace-level compose marker and is suppressed under autonomous
 //      Construction.
 //   6. An IN-FLIGHT BACKGROUND SUBAGENT is positively signalled by a fresh
-//      workspace-level marker written on background dispatch and cleared on
-//      SubagentStop. Autonomous Construction remains guarded.
+//      session-scoped ledger entry added after background dispatch acceptance
+//      and removed one-at-a-time on SubagentStop. Autonomous Construction
+//      remains guarded.
 //   7. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
 //      workflow-engine engagement (the conductor ran neither aidlc-orchestrate
 //      nor aidlc-state since that prompt). Issue #365's broader reading: a human
@@ -138,6 +139,7 @@ import {
   isEngineToolCall,
   hooksHealthDir,
   isoTimestamp,
+  matchSubagentInflight,
   parseCheckboxes,
   readActiveDirectiveMarker,
   readSessionIntentHandoff,
@@ -149,8 +151,6 @@ import {
   stateFilePathForSelection,
   stopHookDir,
   STOP_HOOK_PROBE_ENV,
-  subagentInflightMarkerPath,
-  SUBAGENT_INFLIGHT_TTL_MS,
   turnMarkersShowConversational,
   validSessionId,
   updateCopilotStopCount,
@@ -644,38 +644,42 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
 // A background Agent/Task dispatch legitimately ends the conductor's turn
 // while the worker remains in flight. The stage stays pending, so the bare
 // `next` probe would otherwise inject a forwarding-loop nudge before the
-// background result arrives. POSITIVE-CONFIRMATION: the dispatch hook writes
-// `aidlc/.aidlc-subagent-inflight` only for `run_in_background: true`, and the
-// SubagentStop hook deletes it on completion. AUTONOMY GUARD: never fires under
-// autonomous Construction, where the unattended loop must remain enforced.
+// background result arrives. POSITIVE-CONFIRMATION: the dispatch hook adds one
+// session-scoped ledger entry only for an accepted `run_in_background: true`
+// call, and SubagentStop removes one entry for that same session. AUTONOMY
+// GUARD: never fires under autonomous Construction, where the unattended loop
+// must remain enforced.
 //
-// STALENESS BOUND. A denied dispatch, crashed session, or missing SubagentStop
-// can strand the marker. Honour it only while fresh; stale markers are ignored,
-// best-effort deleted, and recorded before falling through to the cap-bounded
-// block. Any read/stat error also falls through.
-function isPendingSubagentStop(projectDir: string, stateContent: string): boolean {
+// STALENESS BOUND. A crashed session or missing SubagentStop can strand an
+// entry. The shared ledger helper prunes stale entries under the workspace lock
+// and matches only the current payload session. Malformed or foreign-session
+// evidence fails closed and falls through to the cap-bounded block.
+function isPendingSubagentStop(
+  projectDir: string,
+  stateContent: string,
+  sessionId: unknown,
+): boolean {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false; // autonomy guard - keep the loop alive
     }
-    const marker = subagentInflightMarkerPath(projectDir);
-    if (!existsSync(marker)) return false;
-    const ageMs = Date.now() - statSync(marker).mtimeMs;
-    if (ageMs <= SUBAGENT_INFLIGHT_TTL_MS) return true; // fresh - honour the carve-out
-    // Orphaned marker: do not honour it, and best-effort clean it up so it
-    // cannot disable the enforcement loop indefinitely.
-    try {
-      unlinkSync(marker);
-    } catch {
-      // Unlink failure is non-fatal - the staleness check above already refused
-      // to honour the marker, so the loop stays enforced regardless.
+    const match = matchSubagentInflight(projectDir, sessionId);
+    if (match.malformed) {
+      recordHookDrop(
+        projectDir,
+        HOOK_NAME,
+        "background-subagent in-flight ledger is malformed; refusing the pending-subagent carve-out",
+      );
+      return false;
     }
-    recordHookDrop(
-      projectDir,
-      HOOK_NAME,
-      "ignoring an orphaned background-subagent marker (aidlc/.aidlc-subagent-inflight older than the freshness window); cleaned it up and falling through to the cap-bounded block",
-    );
-    return false;
+    if (match.staleRemoved > 0) {
+      recordHookDrop(
+        projectDir,
+        HOOK_NAME,
+        `pruned ${match.staleRemoved} orphaned background-subagent in-flight ${match.staleRemoved === 1 ? "entry" : "entries"} before evaluating the pending-subagent carve-out`,
+      );
+    }
+    return match.active;
   } catch {
     return false;
   }
@@ -1145,8 +1149,10 @@ function continuationReason(
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 let earlySessionId = "";
+let earlyRawSessionId: unknown;
 try {
   const early = JSON.parse(input) as { session_id?: unknown };
+  earlyRawSessionId = early.session_id;
   if (typeof early.session_id === "string") {
     earlySessionId = validSessionId(early.session_id) ?? "";
   }
@@ -1198,6 +1204,7 @@ let transcriptPath: string | null = null;
 // (a TTY/empty invocation or a host that omits it); writeCurrentTranscriptPath
 // still writes the unscoped `current.transcript` fallback in that case.
 let sessionId = earlySessionId;
+let rawSessionId = earlyRawSessionId;
 // Transcript format: Codex's rollout JSONL lives under a `.../sessions/<date>/
 // rollout-*.jsonl` path and uses a {type,payload} shape; Claude's is message-
 // shaped JSONL. Default to Claude; switch to Codex when the path looks like a
@@ -1209,6 +1216,7 @@ try {
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if ("stop_hook_active" in obj) stopHookActive = obj.stop_hook_active === true;
+    if ("session_id" in obj) rawSessionId = obj.session_id;
     if (typeof obj.session_id === "string") {
       sessionId = validSessionId(obj.session_id) ?? "";
     }
@@ -1439,13 +1447,14 @@ if (isPendingComposeStop(projectDir, stateContent)) {
 
 // Pending-background-subagent carve-out (tier 2c): a background Agent/Task is
 // still running, so the conductor is correctly parked until its result arrives.
-// Positive-confirmation only (the marker), autonomy-guarded, freshness-bounded,
-// and fail-open (see isPendingSubagentStop).
-if (isPendingSubagentStop(projectDir, stateContent)) {
+// Positive-confirmation only (a matching ledger entry), session-isolated,
+// autonomy-guarded, freshness-bounded, and fail-open (see
+// isPendingSubagentStop).
+if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
   recordHookDrop(
     projectDir,
     HOOK_NAME,
-    "a background subagent is still in flight (aidlc/.aidlc-subagent-inflight present); allowing the stop (pending-subagent carve-out)",
+    "a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)",
   );
   return allowStop();
 }

@@ -37,9 +37,11 @@ import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createIntent,
+  markSubagentInflight,
   readIntentRegistry,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
+  subagentInflightMarkerPath,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
 } from "../../core/tools/aidlc-lib.ts";
@@ -995,8 +997,14 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("6: log-subagent emits SUBAGENT_COMPLETED to the audit", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "log-subagent", FIXTURES.postToolUse_subagent);
+      const sessionId = "kiro-log-session";
+      expect(markSubagentInflight(dir, sessionId)).toBe(true);
+      const r = runAdapter(dir, "log-subagent", {
+        ...(FIXTURES.postToolUse_subagent as Record<string, unknown>),
+        session_id: sessionId,
+      });
       expect(r.code).toBe(0);
+      expect(existsSync(subagentInflightMarkerPath(dir))).toBe(false);
       const audit = readAudit(dir);
       expect(audit).toContain("SUBAGENT_COMPLETED");
       expect(audit).toContain("aidlc-developer-agent");

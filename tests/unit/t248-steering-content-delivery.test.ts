@@ -31,6 +31,9 @@ import {
   type StageValidityNode,
 } from "../../core/tools/aidlc-validity.ts";
 import {
+  subagentInflightMarkerPath,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
   cleanupTestProject,
   REPO_ROOT,
   seededRecordDir,
@@ -147,6 +150,7 @@ function runDispatchHook(
   proj: string,
   toolName: string,
   toolInput: Record<string, unknown>,
+  sessionId?: string,
 ): { code: number; stdout: string; stderr: string } {
   const result = spawnSync(
     BUN,
@@ -155,6 +159,7 @@ function runDispatchHook(
       cwd: proj,
       input: JSON.stringify({
         hook_event_name: "PreToolUse",
+        ...(sessionId ? { session_id: sessionId } : {}),
         tool_name: toolName,
         tool_input: toolInput,
         cwd: proj,
@@ -605,6 +610,26 @@ describe("t248 deterministic steering delivery", () => {
     expect(result.message).toContain("run `next` again");
   });
 
+  test("rejected background dispatch leaves no in-flight ledger", () => {
+    const proj = project();
+    rmSync(join(proj, "aidlc", "spaces", "default", "memory", "org.md"));
+    const result = runDispatchHook(
+      proj,
+      "Task",
+      {
+        subagent_type: "aidlc-product-agent",
+        prompt:
+          "Run .claude/aidlc-common/stages/inception/user-stories.md.",
+        run_in_background: true,
+      },
+      "session-rejected",
+    );
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("Cannot load required stage rule");
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+  });
+
   test("invalid UTF-8 required rules block before stage work", () => {
     const proj = project();
     writeFileSync(
@@ -868,17 +893,24 @@ describe("t248 deterministic steering delivery", () => {
       `# Organization\n\n${"x".repeat(1_190_000)}\n`,
       "utf-8",
     );
-    const result = runDispatchHook(proj, "Task", {
-      subagent_type: "aidlc-product-agent",
-      prompt:
-        "Run .claude/aidlc-common/stages/inception/user-stories.md.",
-    });
+    const result = runDispatchHook(
+      proj,
+      "Task",
+      {
+        subagent_type: "aidlc-product-agent",
+        prompt:
+          "Run .claude/aidlc-common/stages/inception/user-stories.md.",
+        run_in_background: true,
+      },
+      "session-oversized",
+    );
 
     expect(result.code).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("attaching them to a subagent");
     expect(result.stderr).toContain("output limit");
     expect(result.stderr).toContain("nothing partial was written");
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
   });
 
   test("dispatch stage resolution: Current Stage outranks an incidental slug mention", () => {

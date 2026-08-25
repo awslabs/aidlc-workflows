@@ -317,7 +317,7 @@ Run the health check to confirm everything is in place:
 | Keyword overlap | No keyword is claimed by more than one scope across the `.claude/scopes/*.md` files |
 | Plugin checks | Optional `tools/<plugin>-doctor.ts` checks from enabled plugins; error findings fail doctor, advisory findings remain visible without changing the exit code |
 | Pending-compose marker | Reports a present `aidlc/.aidlc-compose-pending` (the in-flight compose gate marker) with its age. Fresh (under 24h, the normal state at an open compose gate) passes as advisory; stale (a crashed compose gate stranded it) fails. Silent when absent. Remediation: delete it if no compose gate is pending, or resolve the gate |
-| Background-subagent marker | Reports a present `aidlc/.aidlc-subagent-inflight` with its age. Fresh (under 2h, the normal state while a background Agent/Task runs) passes as advisory; stale (the dispatch never reached SubagentStop) fails. Silent when absent. Remediation: delete it if no background subagent is running |
+| Background-subagent ledger | Reports the fresh and stale entry counts in `aidlc/.aidlc-subagent-inflight`. Each accepted background dispatch adds one session-scoped entry and each completion removes one matching entry. Fresh entries (under 2h) pass as advisory; stale or malformed entries fail. Silent when absent. Remediation: delete it if no background subagent is running |
 
 ### Example output
 

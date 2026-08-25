@@ -52,6 +52,10 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  markSubagentInflight,
+  subagentInflightMarkerPath,
+} from "../../core/tools/aidlc-lib.ts";
+import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
@@ -621,8 +625,15 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("8: log-subagent lands SUBAGENT_COMPLETED from the snake_case capture", () => {
     const dir = scratchProject(true);
-    const r = runAdapter(dir, "log-subagent", withCwd(FIXTURES.subagentStop, dir));
+    const sessionId = String(FIXTURES.subagentStop.session_id);
+    expect(markSubagentInflight(dir, sessionId)).toBe(true);
+    const r = runAdapter(
+      dir,
+      "log-subagent",
+      withCwd(FIXTURES.subagentStop, dir),
+    );
     expect(r.code).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(dir))).toBe(false);
     const audit = readAudit(dir);
     expect(audit).toContain("SUBAGENT_COMPLETED");
     expect(audit).toContain(String(FIXTURES.subagentStop.agent_name));
