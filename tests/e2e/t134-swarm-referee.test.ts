@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, function:boltSlugForUnit, function:reviewArtifactSnapshot, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
+// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, function:boltSlugForUnit, function:reviewArtifactBytesSnapshot, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
 //
 // CLI-contract port of tests/e2e/t134-swarm-referee.sh (TAP plan 13),
 // mechanism = cli. The .sh exercises aidlc-swarm.ts — the STATELESS convergence
@@ -79,7 +79,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -207,25 +207,50 @@ function logWorktreeReview(proj: string, unit: string): void {
   }
   const traceability = join(dir, "traceability.json");
   if (!existsSync(traceability)) writeFileSync(traceability, "{}\n");
-  for (const terminal of [false, true]) {
-    const args = [
-      LOG_TOOL,
-      "review",
-      "--stage",
-      "functional-design",
-      "--unit",
-      unit,
-      "--reviewer",
-      "aidlc-architecture-reviewer-agent",
-      "--iteration",
-      "1",
-    ];
-    if (terminal) args.push("--verdict", "READY");
-    args.push("--project-dir", worktree);
-    const logged = spawnSync(BUN, args, { cwd: worktree, encoding: "utf-8" });
-    if (logged.status !== 0) {
-      throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
-    }
+  const args = [
+    LOG_TOOL,
+    "review",
+    "--stage",
+    "functional-design",
+    "--unit",
+    unit,
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    worktree,
+  ];
+  const requested = spawnSync(BUN, args, {
+    cwd: worktree,
+    encoding: "utf-8",
+  });
+  if (requested.status !== 0) {
+    throw new Error(
+      `worktree review request failed: ${requested.stdout}${requested.stderr}`,
+    );
+  }
+  appendFileSync(
+    join(dir, "functional-spec.md"),
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-architecture-reviewer-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    cwd: worktree,
+    encoding: "utf-8",
+  });
+  if (completed.status !== 0) {
+    throw new Error(
+      `worktree review verdict failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 

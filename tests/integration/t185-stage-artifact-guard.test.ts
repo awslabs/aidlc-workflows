@@ -43,6 +43,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -79,6 +80,34 @@ function reviewStage(
   reviewer: string,
   unit?: string,
 ): void {
+  const artifact =
+    stage === "intent-capture"
+      ? join(
+          seededRecordDir(proj),
+          "ideation",
+          stage,
+          "intent-statement.md",
+        )
+      : join(
+          seededRecordDir(proj),
+          "construction",
+          ...(unit ? [unit] : []),
+          stage,
+          "code-generation-plan.md",
+        );
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : `# ${basename(artifact)}\n`;
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
   if (stage === "code-generation" && unit) {
     let unitIsResolved = false;
     try {
@@ -131,11 +160,33 @@ function reviewStage(
   // documented switches keep Plan Approval and summary confirmation out of it.
   env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD = "1";
   env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env });
-    if ((result.status ?? -1) !== 0) {
-      throw new Error(`reviewStage failed: ${result.stdout}${result.stderr}`);
-    }
+  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  if ((requested.status ?? -1) !== 0) {
+    throw new Error(
+      `reviewStage request failed: ${requested.stdout}${requested.stderr}`,
+    );
+  }
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      `**Reviewer:** ${reviewer}`,
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+    env,
+  });
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(
+      `reviewStage verdict failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 

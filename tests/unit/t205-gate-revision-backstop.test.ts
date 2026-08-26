@@ -50,6 +50,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -146,8 +147,10 @@ function recordStageStarted(proj: string, slug: string): void {
 }
 
 function recordReview(proj: string, slug: string, iteration: number): void {
+  const reviewer = "aidlc-product-lead-agent";
+  const dir = join(seededRecordDir(proj), "inception", slug);
+  const artifact = join(dir, "requirements.md");
   if (slug === "requirements-analysis") {
-    const dir = join(seededRecordDir(proj), "inception", slug);
     mkdirSync(dir, { recursive: true });
     for (const name of [
       "requirements.md",
@@ -163,17 +166,40 @@ function recordReview(proj: string, slug: string, iteration: number): void {
     "--stage",
     slug,
     "--reviewer",
-    "aidlc-product-lead-agent",
+    reviewer,
     "--iteration",
     String(iteration),
     "--project-dir",
     proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env: process.env });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-    }
+  const request = spawnSync(BUN, args, { encoding: "utf-8", env: process.env });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`recordReview request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
+  }
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart !== -1) {
+    writeFileSync(
+      artifact,
+      `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+      "utf-8",
+    );
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+    env: process.env,
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`recordReview verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
   }
 }
 

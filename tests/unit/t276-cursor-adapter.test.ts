@@ -31,6 +31,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -197,11 +198,24 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     "--project-dir",
     project,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const review = spawnSync("bun", [...args, ...suffix], { encoding: "utf-8" });
-    if (review.status !== 0) {
-      throw new Error(`review log failed: ${review.stdout}${review.stderr}`);
-    }
+  const request = spawnSync("bun", args, { encoding: "utf-8" });
+  if (request.status !== 0) {
+    throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      "**Reviewer:** aidlc-product-lead-agent\n" +
+      "**Iteration:** 1\n\n" +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const verdict = spawnSync("bun", [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  if (verdict.status !== 0) {
+    throw new Error(`review verdict failed: ${verdict.stdout}${verdict.stderr}`);
   }
   const gate = spawnSync(
     "bun",

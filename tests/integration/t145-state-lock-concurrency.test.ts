@@ -41,8 +41,16 @@
 // Nothing is written under tests/fixtures/**.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmdirSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -134,14 +142,44 @@ function stateSync(args: string[], p: string): { status: number; stdout: string;
 /** Record a terminal READY review so a reviewer-bearing stage passes the §12a
  *  gate precondition (these tests target the state lock, not the reviewer gate). */
 function logReview(slug: string, reviewer: string, p: string): void {
+  const artifact = join(recordDirOf(p), "inception", slug, "requirements.md");
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : "# Requirements\n";
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
   const args = [BUN, LOG_TOOL, "review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1", "--project-dir", p];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    Bun.spawnSync({
-      cmd: [...args, ...suffix],
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  }
+  Bun.spawnSync({
+    cmd: args,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      `**Reviewer:** ${reviewer}`,
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  Bun.spawnSync({
+    cmd: [...args, "--verdict", "READY"],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 }
 
 /**

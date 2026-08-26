@@ -36,8 +36,14 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -125,20 +131,39 @@ function runIntentCreate(proj: string, scope: string): RunResult {
 
 function recordRequiredReview(proj: string, slug: string): void {
   if (slug !== "intent-capture" && slug !== "rough-mockups") return;
+  const reviewer = "aidlc-product-lead-agent";
+  const iteration = 1;
+  const reviewArtifact =
+    slug === "intent-capture" ? "intent-statement.md" : "wireframes.md";
+  const dir = join(dirname(statePath(proj)), "ideation", slug);
+  const artifact = join(dir, reviewArtifact);
+  mkdirSync(dir, { recursive: true });
+  if (!existsSync(artifact)) writeFileSync(artifact, `# ${reviewArtifact}\n`);
   const args = [
     "review",
     "--stage",
     slug,
     "--reviewer",
-    "aidlc-product-lead-agent",
+    reviewer,
     "--iteration",
-    "1",
+    String(iteration),
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const reviewed = run(LOG_TOOL, proj, [...args, ...suffix]);
-    if (reviewed.rc !== 0) {
-      throw new Error(`failed to record ${slug} review: ${reviewed.combined}`);
-    }
+  const request = run(LOG_TOOL, proj, args);
+  if (request.rc !== 0) {
+    throw new Error(`failed to request ${slug} review: ${request.combined}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const verdict = run(LOG_TOOL, proj, [...args, "--verdict", "READY"]);
+  if (verdict.rc !== 0) {
+    throw new Error(`failed to complete ${slug} review: ${verdict.combined}`);
   }
 }
 

@@ -1464,14 +1464,16 @@ function handleReview(args: string[]): void {
           receipts?.newestSourceUnit === (flags.unit ?? null);
         const sourceScopeStale =
           sameSourceRecoveryScope && receipts?.sourceStale === true;
+        const artifactScopeStale =
+          receipts !== null &&
+          (flags.unit
+            ? receipts.unitStale.has(flags.unit)
+            : receipts.stageStale);
         const scopeStale =
           process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1" &&
           fields.Workflow === undefined &&
           receipts !== null &&
-          (sourceScopeStale ||
-            (flags.unit
-              ? receipts.unitStale.has(flags.unit)
-              : receipts.stageStale));
+          (sourceScopeStale || artifactScopeStale);
         const sourceRecoverySpent =
           sourceScopeStale &&
           (receipts?.sourceRecoverySpent === true ||
@@ -1621,6 +1623,9 @@ function handleReview(args: string[]): void {
             fields["Unit Source Fingerprint"] =
               requestBinding.unitSourceFingerprint;
           }
+          if (requestBinding.recoveryCause !== null) {
+            fields["Recovery Cause"] = requestBinding.recoveryCause;
+          }
           if (legacyUpgrade) {
             fields.Upgrade = "legacy-request";
             upgraded = true;
@@ -1682,6 +1687,12 @@ function handleReview(args: string[]): void {
         }
         if (recoveryEligible) {
           fields.Recovery = "stale-receipt";
+          fields["Recovery Cause"] =
+            artifactScopeStale && sourceScopeStale
+              ? "artifact+source"
+              : artifactScopeStale
+                ? "artifact"
+                : "source";
           recovery = "stale-receipt";
         }
         const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {

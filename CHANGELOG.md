@@ -7,7 +7,7 @@ Reviewer receipts now bind one explicit review artifact, every dispatched artifa
 
 * Reviewer-bearing stages declare `review_artifact`, a required Markdown output that remains applicable across the stage's Unit kinds; plugin-added outputs and no-DAG directory order cannot silently redefine ownership.
 * `REVIEW_REQUESTED` captures stable single-link file identities, exact artifact bytes, the append boundary, and request-time workspace source. Symlinks, hardlinks, and paths escaping the active record or CodeKB root fail closed.
-* `--retry-pending` reuses the original artifact and source binding instead of rebaselining current bytes. Valid field-light legacy chains get one audited `Upgrade: legacy-request`; malformed request or completion rows carry no authority.
+* `--retry-pending` reuses the original artifact and source binding instead of rebaselining current bytes. Recovery requests record whether artifact, source, or both kinds of staleness opened the scoped write suspension, so restoring that cause closes the window. Valid field-light legacy chains get one audited `Upgrade: legacy-request`; malformed request or completion rows carry no authority.
 * `REVIEW_COMPLETED` accepts only blank separators plus one terminal canonical `## Review` section whose rendered Verdict, Reviewer, and Iteration fields match the request.
 
 ## [2.6.116] - 2026-08-27

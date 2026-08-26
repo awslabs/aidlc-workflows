@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -190,6 +190,11 @@ describe("t322 fix-round hardening", () => {
     ];
 
     expect(runReview(proj, [...review, "--iteration", "1"]).status).toBe(0);
+    appendFileSync(
+      artifact,
+      "\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n",
+      "utf-8",
+    );
     expect(
       runReview(proj, [
         ...review,

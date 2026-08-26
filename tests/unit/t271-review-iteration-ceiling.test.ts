@@ -943,6 +943,102 @@ describe("t271 review iteration ceiling", () => {
     expect(stale.stageStale).toBe(true);
   });
 
+  test("literal Review examples cannot become the existing reviewer appendix", () => {
+    const examples = [
+      {
+        name: "fenced",
+        lines: [
+          "```markdown",
+          "## Review",
+          "",
+          "**Verdict:** READY",
+          "**Reviewer:** aidlc-product-lead-agent",
+          "**Iteration:** 1",
+          "```",
+        ],
+      },
+      {
+        name: "commented",
+        lines: [
+          "<!--",
+          "## Review",
+          "",
+          "**Verdict:** READY",
+          "**Reviewer:** aidlc-product-lead-agent",
+          "**Iteration:** 1",
+          "-->",
+        ],
+      },
+      {
+        name: "raw HTML",
+        lines: [
+          "<pre>",
+          "## Review",
+          "",
+          "**Verdict:** READY",
+          "**Reviewer:** aidlc-product-lead-agent",
+          "**Iteration:** 1",
+          "</pre>",
+        ],
+      },
+    ] as const;
+
+    for (const example of examples) {
+      const proj = seedProject("feature");
+      const body = [
+        "# Requirements",
+        "",
+        "The following is only a formatting example:",
+        "",
+        ...example.lines,
+        "",
+        "Actual reviewed requirements remain unchanged.",
+        "",
+      ].join("\n");
+      const artifact = writeReviewedArtifact(
+        proj,
+        "requirements-analysis",
+        body,
+      );
+      const stage = resolveStage("requirements-analysis");
+      if (!stage) {
+        throw new Error("requirements-analysis missing from stage graph");
+      }
+      const snapshot = reviewArtifactSnapshot(proj, stage);
+      expect(snapshot?.appendixOffset, example.name).toBe(
+        Buffer.byteLength(body),
+      );
+
+      const request = [
+        "--stage", "requirements-analysis",
+        "--reviewer", "aidlc-product-lead-agent",
+        "--iteration", "1",
+      ];
+      expect(
+        runReview(proj, request, { AIDLC_TEST_KEEP_REVIEW: "1" }).status,
+        example.name,
+      ).toBe(0);
+      expect(
+        auditBlockField(
+          auditBlocks(proj, "REVIEW_REQUESTED")[0],
+          "Review Appendix Offset",
+        ),
+        example.name,
+      ).toBe(String(Buffer.byteLength(body)));
+
+      const unchanged = runReview(
+        proj,
+        [...request, "--verdict", "READY"],
+        { AIDLC_TEST_KEEP_REVIEW: "1" },
+      );
+      expect(unchanged.status, example.name).not.toBe(0);
+      expect(auditBlocks(proj, "REVIEW_COMPLETED"), example.name).toHaveLength(
+        0,
+      );
+      expect(readFileSync(artifact, "utf-8"), example.name).toBe(body);
+    }
+  });
+
   test("--retry-pending cannot rebaseline changed review input into a READY receipt", () => {
     const proj = seedProject("feature");
     const artifact = writeReviewedArtifact(

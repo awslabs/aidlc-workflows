@@ -81,6 +81,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -227,6 +228,25 @@ function state(
 }
 
 function recordRequirementsReview(p: string): void {
+  const artifact = join(
+    recordDirOf(p),
+    "inception",
+    "requirements-analysis",
+    "requirements.md",
+  );
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : "# Requirements\n";
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
   const args = [
     LOG,
     "review",
@@ -239,11 +259,28 @@ function recordRequirementsReview(p: string): void {
     "--project-dir",
     p,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout}${r.stderr}`);
-    }
+  const requested = spawnSync(BUN, args, { encoding: "utf-8" });
+  if ((requested.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
+  }
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${completed.stdout}${completed.stderr}`);
   }
 }
 

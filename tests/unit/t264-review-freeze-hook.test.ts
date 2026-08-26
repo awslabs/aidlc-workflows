@@ -25,7 +25,13 @@
 // Mechanism = mixed: (a) is in-process import; (b) spawns the real hook and
 // real CLI tools at the process boundary; (c) is text/JSON invariants.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -59,6 +65,8 @@ const DIST_CLAUDE = join(REPO_ROOT, "dist", "claude", ".claude");
 const HOOK = join(DIST_CLAUDE, "hooks", "aidlc-review-freeze.ts");
 const LOG_TOOL = join(DIST_CLAUDE, "tools", "aidlc-log.ts");
 const STATE_TOOL = join(DIST_CLAUDE, "tools", "aidlc-state.ts");
+
+setDefaultTimeout(30_000);
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -143,6 +151,32 @@ describe("t264 (a) judgeFreeze decision table", () => {
         stagePending: { recovery: true, suspensionActive: true },
       }).block,
     ).toBe(true);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        sourceStale: false,
+        newestSourceUnit: null,
+        stagePending: {
+          recovery: true,
+          suspensionActive: true,
+          recoveryCause: "source",
+        },
+      }).block,
+    ).toBe(true);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        ...ready,
+        stageStale: true,
+        sourceStale: true,
+        newestSourceUnit: null,
+        stagePending: {
+          recovery: true,
+          suspensionActive: true,
+          recoveryCause: "source",
+        },
+      }).block,
+    ).toBe(false);
     expect(
       judgeFreeze(RA, raFile, NONE, {
         ...ready,

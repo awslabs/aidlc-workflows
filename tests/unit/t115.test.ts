@@ -1089,6 +1089,14 @@ function log(args: string[], p: string): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
+function reviewAppendix(
+  reviewer: string,
+  iteration: string,
+  verdict: string,
+): string {
+  return `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`;
+}
+
 function completeReview(args: string[], p: string): CliResult {
   const verdictIndex = args.indexOf("--verdict");
   if (verdictIndex === -1) throw new Error("completeReview requires --verdict");
@@ -1134,7 +1142,7 @@ function completeReview(args: string[], p: string): CliResult {
   if (requested.status !== 0) return requested;
   appendFileSync(
     artifact,
-    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
+    reviewAppendix(reviewer, iteration, verdict),
     "utf-8",
   );
   return log(args, p);
@@ -1665,7 +1673,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       "code-generation",
     );
     mkdirSync(outputDir, { recursive: true });
+    const plan = join(outputDir, "code-generation-plan.md");
     const summary = join(outputDir, "code-summary.md");
+    writeFileSync(plan, "# Reviewed code generation plan\n", "utf-8");
     writeFileSync(summary, "# Reviewed code summary\n", "utf-8");
 
     const request = log(
@@ -1682,6 +1692,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     );
     expect(request.status, request.out).toBe(0);
 
+    appendFileSync(
+      plan,
+      reviewAppendix("aidlc-architecture-reviewer-agent", "1", "READY"),
+      "utf-8",
+    );
     writeFileSync(summary, "# Changed after dispatch\n", "utf-8");
     const verdict = log(
       [
@@ -1698,9 +1713,8 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       p,
     );
     expect(verdict.status).not.toBe(0);
-    expect(verdict.out).toContain(
-      "output documents changed after review iteration 1 started",
-    );
+    expect(verdict.out).toContain("declared artifacts changed");
+    expect(verdict.out).toContain("after REVIEW_REQUESTED");
     expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
   }, 30000);
 });

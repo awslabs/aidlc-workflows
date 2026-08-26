@@ -9,7 +9,12 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -261,34 +266,54 @@ function logReview(
   verdict: "READY" | "NOT-READY" = "READY",
   iteration = 1,
 ): void {
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const artifact = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "functional-design",
+    artifactFilename("functional-spec"),
+  );
   const args = [
     LOG,
     "review",
     "--stage",
     "functional-design",
     "--reviewer",
-    "aidlc-architecture-reviewer-agent",
+    reviewer,
     "--unit",
     unit,
     "--iteration",
     String(iteration),
   ];
-  for (const suffix of [[], ["--verdict", verdict]]) {
-    const result = spawnSync(
-      BUN,
-      [...args, ...suffix, "--project-dir", proj],
-      {
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
-          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
-        },
-      },
-    );
-    if ((result.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${result.stdout}${result.stderr}`);
-    }
+  const reviewEnv = {
+    ...process.env,
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+  };
+  const request = spawnSync(BUN, [...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    env: reviewEnv,
+  });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      `**Verdict:** ${verdict}\n` +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const completed = spawnSync(
+    BUN,
+    [...args, "--verdict", verdict, "--project-dir", proj],
+    { encoding: "utf-8", env: reviewEnv },
+  );
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${completed.stdout}${completed.stderr}`);
   }
 }
 

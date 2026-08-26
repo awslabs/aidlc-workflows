@@ -74,8 +74,15 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -172,6 +179,25 @@ function state(p: string, ...args: string[]): CliResult {
 }
 
 function recordReview(p: string): void {
+  const artifact = join(
+    recordDirOf(p),
+    "inception",
+    SLUG,
+    "requirements.md",
+  );
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : "# Requirements\n";
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
   const args = [
     LOG_TS,
     "review",
@@ -184,10 +210,31 @@ function recordReview(p: string): void {
     "--project-dir",
     p,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    expect(r.status, `review log failed: ${r.stdout}${r.stderr}`).toBe(0);
-  }
+  const requested = spawnSync(BUN, args, { encoding: "utf-8" });
+  expect(
+    requested.status,
+    `review request failed: ${requested.stdout}${requested.stderr}`,
+  ).toBe(0);
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  expect(
+    completed.status,
+    `review verdict failed: ${completed.stdout}${completed.stderr}`,
+  ).toBe(0);
 }
 
 /**

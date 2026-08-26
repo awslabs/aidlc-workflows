@@ -6335,6 +6335,7 @@ export function producesArtifactUnit(
 }
 
 export type ReviewVerdict = "READY" | "NOT-READY";
+export type ReviewRecoveryCause = "artifact" | "source" | "artifact+source";
 
 export function terminalReviewVerdict(
   verdict: string | null,
@@ -6360,6 +6361,7 @@ export interface PendingReviewProgress {
   iteration: number;
   recovery: boolean;
   suspensionActive: boolean;
+  recoveryCause?: ReviewRecoveryCause | null;
 }
 
 export interface StaleReviewProgress {
@@ -6876,10 +6878,75 @@ function existingReviewAppendixOffset(body: Buffer): number | null {
   } catch {
     return null;
   }
-  const headings = [...text.matchAll(/^## Review[ \t]*$/gm)];
-  const heading = headings.at(-1);
-  if (heading?.index === undefined) return null;
-  const prefix = text.slice(0, heading.index);
+  const lineStarts = [0];
+  for (let offset = 0; offset < text.length; offset++) {
+    if (text[offset] === "\r") {
+      if (text[offset + 1] === "\n") offset++;
+      lineStarts.push(offset + 1);
+    } else if (text[offset] === "\n") {
+      lineStarts.push(offset + 1);
+    }
+  }
+
+  const candidates: Array<{ start: number; end: number }> = [];
+  for (let line = 0; line < lineStarts.length; line++) {
+    const start = lineStarts[line];
+    const lineEnd = lineStarts[line + 1] ?? text.length;
+    const rawLine = text
+      .slice(start, lineEnd)
+      .replace(/(?:\r\n|\n|\r)$/, "");
+    if (/^## Review[ \t]*$/.test(rawLine)) {
+      candidates.push({ start, end: start + rawLine.length });
+    }
+  }
+  if (candidates.length === 0 || typeof Bun.markdown?.render !== "function") {
+    return null;
+  }
+
+  let marker = "AIDLCREVIEWAPPENDIXBOUNDARY";
+  while (text.includes(marker)) marker += "X";
+  let marked = text;
+  for (let index = candidates.length - 1; index >= 0; index--) {
+    const candidate = candidates[index];
+    const rawLine = marked.slice(candidate.start, candidate.end);
+    marked =
+      marked.slice(0, candidate.start) +
+      `## ${marker}${index}${rawLine.slice("## Review".length)}` +
+      marked.slice(candidate.end);
+  }
+
+  let sawRenderedH1H2 = false;
+  let terminalCandidate: number | null = null;
+  try {
+    Bun.markdown.render(marked, {
+      heading: (children, { level }) => {
+        if (level <= 2) {
+          sawRenderedH1H2 = true;
+          const match =
+            level === 2
+              ? new RegExp(`^${marker}([0-9]+)$`).exec(children)
+              : null;
+          terminalCandidate = match ? Number(match[1]) : null;
+        }
+        return "";
+      },
+      html: (children) => {
+        if (renderedHtmlCarriesH1H2(children)) {
+          sawRenderedH1H2 = true;
+          terminalCandidate = null;
+        }
+        return "";
+      },
+    });
+  } catch {
+    return null;
+  }
+  if (!sawRenderedH1H2 || terminalCandidate === null) return null;
+
+  const headingStart = candidates[terminalCandidate]?.start;
+  if (headingStart === undefined) return null;
+
+  const prefix = text.slice(0, headingStart);
   const trailing = /\s+$/.exec(prefix);
   if (!trailing) return Buffer.byteLength(prefix, "utf-8");
   const contentEnd = prefix.length - trailing[0].length;
@@ -7174,6 +7241,7 @@ export interface ReviewRequestBinding {
   appendixOffset: number | null;
   sourceFingerprint: string | null;
   unitSourceFingerprint: string | null;
+  recoveryCause: ReviewRecoveryCause | null;
 }
 
 export function reviewRequestBindingFromBlock(
@@ -7215,12 +7283,21 @@ export function reviewRequestBindingFromBlock(
   ) {
     return null;
   }
+  const rawRecoveryCause = auditBlockField(block, "Recovery Cause");
+  const recoveryCause =
+    rawRecoveryCause === "artifact" ||
+      rawRecoveryCause === "source" ||
+      rawRecoveryCause === "artifact+source"
+      ? rawRecoveryCause
+      : null;
+  if (rawRecoveryCause !== null && recoveryCause === null) return null;
   return {
     artifactFingerprint,
     appendixArtifact,
     appendixOffset,
     sourceFingerprint,
     unitSourceFingerprint,
+    recoveryCause,
   };
 }
 
@@ -7827,6 +7904,7 @@ export function freshReviewReceipts(
     phase: string;
     for_each?: string;
     reviewer?: string;
+    review_artifact?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
     workspace_requires?: boolean;
@@ -8259,12 +8337,14 @@ export function freshReviewReceipts(
             iteration,
             recovery: request.recovery,
             suspensionActive: false,
+            recoveryCause: request.binding?.recoveryCause ?? null,
           }
         : {
             state: "outstanding",
             iteration: iteration + 1,
             recovery: request.recovery,
             suspensionActive: false,
+            recoveryCause: request.binding?.recoveryCause ?? null,
           };
       if (unit) {
         unitVerdicts.delete(unit);
@@ -8328,6 +8408,7 @@ export function freshReviewReceipts(
       iteration: request.iteration,
       recovery: request.recovery,
       suspensionActive: request.suspensionActive,
+      recoveryCause: request.binding?.recoveryCause ?? null,
     };
     if (request.unit) {
       if (!request.recovery) unitVerdicts.delete(request.unit);

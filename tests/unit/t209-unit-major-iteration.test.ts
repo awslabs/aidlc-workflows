@@ -40,7 +40,12 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -107,6 +112,10 @@ const PRODUCES: Record<string, string[]> = {
     "code-summary",
     "traceability",
   ],
+};
+const REVIEW_ARTIFACTS: Record<string, string> = {
+  "functional-design": "functional-spec",
+  "nfr-requirements": "security-requirements",
 };
 // The walk's inner list in graph order: the four inline design stages, then
 // code-generation (mode: subagent, in the walk since the block filter was
@@ -313,25 +322,49 @@ function unitVerb(
 }
 
 function logReviewReady(proj: string, stage: string, unit: string): void {
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const iteration = 1;
+  const reviewArtifact = REVIEW_ARTIFACTS[stage];
+  if (!reviewArtifact) throw new Error(`no review artifact fixture for ${stage}`);
+  const artifact = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    stage,
+    artifactFilename(reviewArtifact),
+  );
   const args = [
     LOG,
     "review",
     "--stage",
     stage,
     "--reviewer",
-    "aidlc-architecture-reviewer-agent",
+    reviewer,
     "--unit",
     unit,
     "--iteration",
-    "1",
+    String(iteration),
     "--project-dir",
     proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-    }
+  const request = spawnSync(BUN, args, { encoding: "utf-8" });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
   }
 }
 
@@ -523,16 +556,16 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.unit).toBe("contract");
     expect(d.gate).toBe(false);
 
-    // A spec unit owes rules and entities, but not the
-    // service/ui-only functional-design artifacts. The kind comes from the
-    // dependency artifact because the cached graph deliberately has no DAG.
+    // A spec unit owes rules, entities, and the behavioral functional spec, but
+    // not the UI-only frontend artifact. The kind comes from the dependency
+    // artifact because the cached graph deliberately has no DAG.
     expect(d.produces).toContain(
       `${RP}/construction/contract/functional-design/rules.md`,
     );
     expect(d.produces).toContain(
       `${RP}/construction/contract/functional-design/entities.md`,
     );
-    expect(d.produces?.some((path) => path.endsWith("/functional-spec.md"))).toBe(false);
+    expect(d.produces?.some((path) => path.endsWith("/functional-spec.md"))).toBe(true);
     expect(d.produces?.some((path) => path.endsWith("/frontend-components.md"))).toBe(false);
 
     const warning =

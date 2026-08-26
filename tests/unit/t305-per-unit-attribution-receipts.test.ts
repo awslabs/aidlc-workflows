@@ -19,7 +19,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -920,6 +920,36 @@ function seedArtifacts(record: string, unit: string): string {
   return dir;
 }
 
+function reviewArtifact(record: string, unit?: string): string {
+  const dir = unit
+    ? join(record, "construction", unit, "code-generation")
+    : join(record, "construction", "code-generation");
+  return join(dir, "code-generation-plan.md");
+}
+
+function stripReviewAppendix(artifact: string): void {
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart === -1) return;
+  writeFileSync(
+    artifact,
+    `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+    "utf-8",
+  );
+}
+
+function appendReviewAppendix(
+  artifact: string,
+  iteration: string,
+  verdict: "READY" | "NOT-READY" = "READY",
+): void {
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${REVIEWER}\n**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`,
+    "utf-8",
+  );
+}
+
 function writeManifest(record: string, unit: string, writes: Array<{ path: string; repo?: string }>): void {
   const dir = seedArtifacts(record, unit);
   writeFileSync(join(dir, "source-manifest.json"), `${JSON.stringify({ stage: "code-generation", unit, version: 1, writes }, null, 2)}\n`);
@@ -941,8 +971,12 @@ function review(
 ): { request: {rc:number;out:string}; verdict: {rc:number;out:string} } {
   writeManifest(record, unit, writes);
   const prior = (readAllAuditShards(project).match(new RegExp(`\\*\\*Event\\*\\*: REVIEW_REQUESTED[\\s\\S]*?\\*\\*Unit\\*\\*: ${unit}`, "g")) ?? []).length;
-  const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", unit, "--iteration", iteration ?? String(prior + 1)];
+  const reviewIteration = iteration ?? String(prior + 1);
+  const artifact = reviewArtifact(record, unit);
+  stripReviewAppendix(artifact);
+  const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", unit, "--iteration", reviewIteration];
   const request = cli(LOG, args, project, env);
+  if (request.rc === 0) appendReviewAppendix(artifact, reviewIteration);
   const verdict = request.rc === 0 ? cli(LOG, [...args, "--verdict", "READY"], project, env) : { rc: request.rc, out: request.out };
   return { request, verdict };
 }
@@ -1173,16 +1207,27 @@ describe("t305 real receipt and guard flows", () => {
     expect(readAllAuditShards(project)).not.toContain("**Event**: REVIEW_REQUESTED");
   }, 30000);
 
-  test("REVIEW_COMPLETED refuses source edited after dispatch and retry-pending refreshes the binding", () => {
+  test("REVIEW_COMPLETED and retry-pending refuse source edited after dispatch", () => {
     const { project, record } = runtimeFixture();
     writeManifest(record, "alpha", [{ path: "app.ts" }]);
     const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"];
     expect(cli(LOG, args, project).rc).toBe(0);
+    appendReviewAppendix(reviewArtifact(record, "alpha"), "1");
     writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
 
     const refused = cli(LOG, [...args, "--verdict", "READY"], project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("workspace source changed after REVIEW_REQUESTED");
+    const retryWhileChanged = cli(
+      LOG,
+      [...args, "--retry-pending"],
+      project,
+    );
+    expect(retryWhileChanged.rc).toBe(1);
+    expect(retryWhileChanged.out).toContain(
+      "cannot rebaseline source changed while review was pending",
+    );
+    writeFileSync(join(project, "app.ts"), "export const app = 1;\n");
     expect(cli(LOG, [...args, "--retry-pending"], project).rc).toBe(0);
     expect(cli(LOG, [...args, "--verdict", "READY"], project).rc).toBe(0);
   }, 30000);
@@ -1192,6 +1237,7 @@ describe("t305 real receipt and guard flows", () => {
     writeManifest(record, "alpha", [{ path: "app.ts" }]);
     const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"];
     expect(cli(LOG, args, project).rc).toBe(0);
+    appendReviewAppendix(reviewArtifact(record, "alpha"), "1");
     const path = join(
       record,
       "construction",
@@ -1292,7 +1338,7 @@ describe("t305 real receipt and guard flows", () => {
     const fail = runtimeFixture(); writeFileSync(join(fail.project, "shared.ts"), "export const s=1\n");
     review(fail.project, fail.record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(fail.project, "shared.ts"), "export const s=2\n"); review(fail.project, fail.record, "beta", [{ path: "shared.ts" }]); writeFileSync(join(fail.project, "shared.ts"), "export const s=3\n");
     const r=approve(fail.project); expect(r.rc).toBe(1); expect(r.out).toContain("project source changed after aidlc-architecture-reviewer-agent reviewed it");
-    const state=readFileSync(join(fail.record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(fail.project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect([...receipts.unitStale].sort()).toEqual(["alpha","beta"]);
+    const state=readFileSync(join(fail.record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(fail.project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect([...receipts.unitStale].sort()).toEqual(["alpha","beta"]);
   }, 30000);
 
   test("5 unclaimed add refuses; claim+recovery and revert both clear", () => {
@@ -1331,7 +1377,7 @@ describe("t305 real receipt and guard flows", () => {
     writeFileSync(join(late.project,"late.ts"),"export const late=1\n");
     const now=workspaceSourceListing(late.project)!; appendAuditEntry("STAGE_STARTED",{Workflow:"single-stage:code-generation",Stage:"code-generation",Agent:"aidlc-developer-agent","Source Baseline":writeBaselineSourceSnapshot(late.project,"code-generation",now)},late.project);
     const syntheticSecond=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===syntheticSecond){}
-    review(late.project,late.record,"alpha",[{path:"app.ts"}]); review(late.project,late.record,"beta",[]); const lateState=readFileSync(state,"utf-8"); const lateReceipts=freshReviewReceipts(late.project,lateState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(lateReceipts.sourceBaseline.state).toBe("ready"); if (lateReceipts.sourceBaseline.state === "ready") expect(lateReceipts.sourceBaseline.listing.has("\0late.ts")).toBe(false); expect(approve(late.project).out).toContain("late.ts");
+    review(late.project,late.record,"alpha",[{path:"app.ts"}]); review(late.project,late.record,"beta",[]); const lateState=readFileSync(state,"utf-8"); const lateReceipts=freshReviewReceipts(late.project,lateState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(lateReceipts.sourceBaseline.state).toBe("ready"); if (lateReceipts.sourceBaseline.state === "ready") expect(lateReceipts.sourceBaseline.listing.has("\0late.ts")).toBe(false); expect(approve(late.project).out).toContain("late.ts");
     const destroyed=runtimeFixture(); review(destroyed.project,destroyed.record,"alpha",[{path:"app.ts"}]); review(destroyed.project,destroyed.record,"beta",[]);
     const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("baseline snapshot is missing");
   }, 30000);
@@ -1344,7 +1390,8 @@ describe("t305 real receipt and guard flows", () => {
   test("9 fieldless per-unit bindings preserve legacy global policy and 11 zero-unit stays manifest-free", () => {
     const legacy=runtimeFixture(); review(legacy.project,legacy.record,"alpha",[{path:"app.ts"}]); review(legacy.project,legacy.record,"beta",[]); stripUnitBindings(legacy.project); expect(approve(legacy.project).rc).toBe(0);
     const zero=runtimeFixture(); rmSync(join(zero.record,"inception"),{recursive:true,force:true});
-    const args=["review","--stage","code-generation","--reviewer",REVIEWER,"--iteration","1"]; expect(cli(LOG,args,zero.project).rc).toBe(0); expect(cli(LOG,[...args,"--verdict","READY"],zero.project).rc).toBe(0); expect(approve(zero.project).rc).toBe(0);
+    const zeroArtifact=reviewArtifact(zero.record); mkdirSync(join(zeroArtifact,".."),{recursive:true}); writeFileSync(zeroArtifact,"# code-generation-plan.md\n");
+    const args=["review","--stage","code-generation","--reviewer",REVIEWER,"--iteration","1"]; expect(cli(LOG,args,zero.project).rc).toBe(0); appendReviewAppendix(zeroArtifact,"1"); expect(cli(LOG,[...args,"--verdict","READY"],zero.project).rc).toBe(0); expect(approve(zero.project).rc).toBe(0);
   }, 30000);
 
   test("missing baseline fields fail closed after modern evidence but pure legacy stays open", () => {
@@ -1363,6 +1410,7 @@ describe("t305 real receipt and guard flows", () => {
         phase: "construction",
         for_each: "unit-of-work",
         reviewer: REVIEWER,
+        review_artifact: "code-generation-plan",
         reviewer_max_iterations: 2,
         workspace_requires: true,
         produces: [
@@ -1418,6 +1466,7 @@ describe("t305 real receipt and guard flows", () => {
         phase: "construction",
         for_each: "unit-of-work",
         reviewer: REVIEWER,
+        review_artifact: "code-generation-plan",
         reviewer_max_iterations: 2,
         workspace_requires: true,
         produces: [
@@ -1536,6 +1585,7 @@ describe("t305 real receipt and guard flows", () => {
       phase: "construction",
       for_each: "unit-of-work",
       reviewer: REVIEWER,
+      review_artifact: "code-generation-plan",
       reviewer_max_iterations: 2,
       workspace_requires: true,
       produces: [
@@ -2082,7 +2132,7 @@ describe("t305 real receipt and guard flows", () => {
     const ghost=cli(LOG,["review","--stage","code-generation","--reviewer",REVIEWER,"--unit","ghost","--iteration","1"],project);
     expect(ghost.rc).toBe(1); expect(ghost.out).toContain("not present in the authoritative unit DAG");
     const forgedState=readFileSync(join(record,"aidlc-state.md"),"utf-8");
-    const receipts=freshReviewReceipts(project,forgedState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]});
+    const receipts=freshReviewReceipts(project,forgedState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]});
     expect(receipts.freshUnitClaims.has("ghost")).toBe(false);
   }, 30000);
 
@@ -2135,7 +2185,7 @@ describe("t305 real receipt and guard flows", () => {
   }, 30000);
 
   test("calls freshReviewReceipts directly for a modern unit chain", () => {
-    const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"app.ts"}]); review(project,record,"beta",[]); const state=readFileSync(join(record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(receipts.unitVerdicts.size).toBe(2);
+    const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"app.ts"}]); review(project,record,"beta",[]); const state=readFileSync(join(record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(receipts.unitVerdicts.size).toBe(2);
   }, 30000);
 });
 

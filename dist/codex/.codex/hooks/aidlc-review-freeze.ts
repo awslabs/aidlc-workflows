@@ -113,23 +113,44 @@ export function judgeFreeze(
     stagePending?: {
       recovery: boolean;
       suspensionActive?: boolean;
+      recoveryCause?: "artifact" | "source" | "artifact+source" | null;
     } | null;
     unitPending?: ReadonlyMap<
       string,
-      { recovery: boolean; suspensionActive?: boolean }
+      {
+        recovery: boolean;
+        suspensionActive?: boolean;
+        recoveryCause?: "artifact" | "source" | "artifact+source" | null;
+      }
     >;
   },
 ): FreezeVerdict {
+  const recoveryStillStale = (
+    pending: {
+      recoveryCause?: "artifact" | "source" | "artifact+source" | null;
+    },
+    artifactStale: boolean,
+    sourceStale: boolean,
+  ): boolean => {
+    if (pending.recoveryCause === "artifact") return artifactStale;
+    if (pending.recoveryCause === "source") return sourceStale;
+    if (pending.recoveryCause === "artifact+source") {
+      return artifactStale || sourceStale;
+    }
+    return artifactStale || sourceStale;
+  };
   const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
   if (targetUnit === undefined) return { block: false }; // not this stage's artifact
   if (stage.for_each === "unit-of-work") {
     if (targetUnit !== null) {
       const pending = receipts.unitPending?.get(targetUnit);
       if (pending?.recovery === true) {
-        const stillStale =
-          receipts.unitStale?.has(targetUnit) === true ||
-          (receipts.sourceStale === true &&
-            receipts.newestSourceUnit === targetUnit);
+        const stillStale = recoveryStillStale(
+          pending,
+          receipts.unitStale?.has(targetUnit) === true,
+          receipts.sourceStale === true &&
+            receipts.newestSourceUnit === targetUnit,
+        );
         if (pending.suspensionActive === true && stillStale) {
           return { block: false };
         }
@@ -142,10 +163,12 @@ export function judgeFreeze(
       return { block: false };
     }
     if (receipts.stagePending?.recovery === true) {
-      const stillStale =
-        receipts.stageStale === true ||
-        (receipts.sourceStale === true &&
-          receipts.newestSourceUnit === null);
+      const stillStale = recoveryStillStale(
+        receipts.stagePending,
+        receipts.stageStale === true,
+        receipts.sourceStale === true &&
+          receipts.newestSourceUnit === null,
+      );
       if (
         receipts.stagePending.suspensionActive === true &&
         stillStale
@@ -169,10 +192,12 @@ export function judgeFreeze(
     return { block: false };
   }
   if (receipts.stagePending?.recovery === true) {
-    const stillStale =
-      receipts.stageStale === true ||
-      (receipts.sourceStale === true &&
-        receipts.newestSourceUnit === null);
+    const stillStale = recoveryStillStale(
+      receipts.stagePending,
+      receipts.stageStale === true,
+      receipts.sourceStale === true &&
+        receipts.newestSourceUnit === null,
+    );
     if (
       receipts.stagePending.suspensionActive === true &&
       stillStale

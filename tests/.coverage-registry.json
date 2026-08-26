@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 767,
+    "total": 771,
     "enumeratedByClass": {
-      "function": 472,
+      "function": 476,
       "audit": 90,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 275,
+      "function": 279,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -4448,6 +4448,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewArtifactBytesSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/e2e/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewArtifactEntries",
       "minMechanism": "none",
       "coveredBy": [
@@ -4480,7 +4492,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/e2e/t134-swarm-referee.test.ts",
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4493,6 +4505,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewCompletionMatchesRequest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4532,6 +4556,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewRequestBindingFromBlock",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5569,6 +5605,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:validateReviewAppendix",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
         }
       ],

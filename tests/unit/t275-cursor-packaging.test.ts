@@ -806,6 +806,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         content.replace(
           "  - entities\n",
           `  - entities\n  - ${artifact}\n`,
+        ).replace(
+          "produces_kinds:\n",
+          `produces_kinds:\n  ${artifact}: [service, spec, ui, library]\n`,
         );
       writeFileSync(stagePath, addArtifact(readFileSync(stagePath, "utf-8")));
       const sidecarPath = join(

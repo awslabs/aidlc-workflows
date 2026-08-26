@@ -89,13 +89,16 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -417,22 +420,43 @@ describe("t27 aidlc-utility status", () => {
     state(["advance", "workspace-detection"], p);
     state(["advance", "state-init"], p);
     const current = state(["get", "Current Stage"], p).stdout.trim();
+    const reviewer = "aidlc-product-lead-agent";
+    const iteration = 1;
+    const dir = join(recordDirOf(p), "inception", current);
+    const artifact = join(dir, "requirements.md");
+    mkdirSync(dir, { recursive: true });
+    if (!existsSync(artifact)) writeFileSync(artifact, "# Requirements\n");
     const reviewArgs = [
       LOG_TOOL,
       "review",
       "--stage",
       current,
       "--reviewer",
-      "aidlc-product-lead-agent",
+      reviewer,
       "--iteration",
-      "1",
+      String(iteration),
       "--project-dir",
       p,
     ];
-    spawnSync(BUN, reviewArgs, { encoding: "utf-8" });
-    spawnSync(BUN, [...reviewArgs, "--verdict", "READY"], {
+    const request = spawnSync(BUN, reviewArgs, { encoding: "utf-8" });
+    if ((request.status ?? -1) !== 0) {
+      throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
+    }
+    appendFileSync(
+      artifact,
+      "\n## Review\n\n" +
+        "**Verdict:** READY\n" +
+        `**Reviewer:** ${reviewer}\n` +
+        `**Iteration:** ${iteration}\n\n` +
+        "### Findings\n\nNo blocking findings.\n",
+      "utf-8",
+    );
+    const verdict = spawnSync(BUN, [...reviewArgs, "--verdict", "READY"], {
       encoding: "utf-8",
     });
+    if ((verdict.status ?? -1) !== 0) {
+      throw new Error(`review verdict failed: ${verdict.stdout}${verdict.stderr}`);
+    }
     state(["gate-start", current], p);
     const r = util(["status"], p);
     expect(r.stdout).toContain("Awaiting your approval");

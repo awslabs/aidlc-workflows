@@ -293,11 +293,13 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain("**On an incomplete attempt:**");
       expect(labelled).toMatch(/re-dispatch it exactly once/);
       expect(labelled).toContain("has not already spent its retry");
-      expect(labelled).toMatch(/original artifact and source bytes are restored/);
-      expect(labelled).toMatch(/never mints a new fingerprint/);
+      expect(labelled).toMatch(
+        /original artifact and\s+source bytes are restored/,
+      );
+      expect(labelled).toMatch(/never mints a\s+new fingerprint/);
       expect(labelled).toContain("`Upgrade: legacy-request`");
-      expect(labelled).toContain(
-        "A field-light historical `Retry: pending-request` marker is not a modern binding",
+      expect(labelled).toMatch(
+        /A field-light historical `Retry: pending-request` marker is not\s+a modern binding/,
       );
       expect(labelled).toContain(
         "A structurally malformed request row has no authority and is ignored",
@@ -311,7 +313,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toMatch(/on `advisory` it is terminal/);
       expect(labelled).toMatch(/skip the lead re-invoke/);
       expect(labelled).toMatch(
-        /never presented on a silently missing verdict, and never deadlocks/,
+        /never presented on a\s+silently missing verdict, and never deadlocks/,
       );
       // The turn cap is named as the reachable cause of a missing section.
       expect(labelled).toMatch(/hard turn cap/);
@@ -399,7 +401,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toMatch(/no\s+current `## Review` section/);
       expect(labelled).toContain("`--retry-pending`");
       expect(labelled).toMatch(/re-dispatch it\s+exactly once/);
-      expect(labelled).toContain("never mints a new fingerprint");
+      expect(labelled).toMatch(/never mints a\s+new fingerprint/);
       expect(labelled).toContain("`Upgrade: legacy-request`");
       expect(labelled).toContain(
         "A structurally malformed request row has no authority and is ignored",

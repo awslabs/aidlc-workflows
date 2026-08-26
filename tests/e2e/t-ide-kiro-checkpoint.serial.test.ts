@@ -277,6 +277,24 @@ function seedGateFor(sandbox: string, slug: string): void {
     "1",
   ];
   runSetupTool(sandbox, "aidlc-log.ts", reviewArgs);
+  appendFileSync(
+    join(
+      stageDir,
+      slug === COMMITTED_SLUG
+        ? "requirements.md"
+        : "code-generation-plan.md",
+    ),
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      `**Reviewer:** ${reviewer}`,
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
   runSetupTool(sandbox, "aidlc-log.ts", [...reviewArgs, "--verdict", "READY"]);
   runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", slug]);
 }

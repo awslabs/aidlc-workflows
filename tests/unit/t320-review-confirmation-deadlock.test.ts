@@ -2,7 +2,7 @@
 // subcommand:aidlc-log:review, hook:aidlc-review-freeze
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -163,6 +163,13 @@ function writeArtifact(
 }
 
 function review(proj: string, verdict?: "READY" | "NOT-READY") {
+  if (verdict) {
+    appendFileSync(
+      requirementsPaths(proj).artifact,
+      `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+      "utf-8",
+    );
+  }
   return run(
     LOG,
     [
@@ -467,6 +474,16 @@ describe("t320 review/summary deadlock prevention", () => {
     expect(postMerge.stdout).toContain('"emitted":"REVIEW_REQUESTED"');
 
     const stageLevelProj = project("state-construction-with-worktree.md");
+    const stageLevelDir = join(
+      seededRecordDir(stageLevelProj),
+      "construction",
+      "code-generation",
+    );
+    mkdirSync(stageLevelDir, { recursive: true });
+    writeFileSync(
+      join(stageLevelDir, "code-generation-plan.md"),
+      "# Code generation plan\n",
+    );
     const stageLevel = run(
       LOG,
       [

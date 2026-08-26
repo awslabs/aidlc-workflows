@@ -61,8 +61,15 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -211,7 +218,28 @@ beforeAll(() => {
     "--project-dir",
     proj,
   ];
+  const reviewArtifact = join(
+    recordDirOf(proj),
+    "inception",
+    firstStage,
+    "requirements.md",
+  );
+  mkdirSync(dirname(reviewArtifact), { recursive: true });
+  writeFileSync(reviewArtifact, "# Requirements\n");
   run(LOG, reviewArgs);
+  appendFileSync(
+    reviewArtifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
   run(LOG, [
     ...reviewArgs,
     "--verdict",

@@ -102,13 +102,17 @@ describe("t323 review verdict closure", () => {
     const staleVerdict = runReview(proj, [...args, "--verdict", "READY"]);
     expect(staleVerdict.status).not.toBe(0);
     expect(staleVerdict.stderr).toContain(
-      "output documents changed after review iteration 1 started",
+      "exactly one canonical verdict line matching --verdict",
     );
 
     const rebound = runReview(proj, [...args, "--retry-pending"]);
     expect(rebound.status).toBe(0);
     expect(rebound.stdout).toContain('"retry":"pending-request"');
 
+    writeFileSync(
+      primary,
+      "# functional-spec.md\n\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n",
+    );
     const completed = runReview(proj, [...args, "--verdict", "READY"]);
     expect(completed.status).toBe(0);
     expect(completed.stdout).toContain('"emitted":"REVIEW_COMPLETED"');

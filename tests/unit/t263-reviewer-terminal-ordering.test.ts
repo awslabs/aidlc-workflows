@@ -31,6 +31,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -114,6 +115,8 @@ function recordReview(
   p: string,
   verdict: "READY" | "NOT-READY",
 ): void {
+  const reviewer = "aidlc-product-lead-agent";
+  const iteration = 1;
   const dir = join(
     seededRecordDir(p),
     "inception",
@@ -132,11 +135,20 @@ function recordReview(
     "--stage",
     "requirements-analysis",
     "--reviewer",
-    "aidlc-product-lead-agent",
+    reviewer,
     "--iteration",
-    "1",
+    String(iteration),
   ];
   expect(run(LOG_TOOL, base, p, TEST_ENV).status).toBe(0);
+  appendFileSync(
+    join(dir, "requirements.md"),
+    "\n## Review\n\n" +
+      `**Verdict:** ${verdict}\n` +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
   expect(
     run(LOG_TOOL, [...base, "--verdict", verdict], p, TEST_ENV).status,
   ).toBe(0);
