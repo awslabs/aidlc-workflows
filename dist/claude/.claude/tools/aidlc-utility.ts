@@ -23,6 +23,8 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
+import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
   adaptLegacyResult,
   buildBundle,
@@ -349,6 +351,8 @@ Utilities:
   plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
   plugin sync       Compose installed plugins into the current install
+  plugin validate [path]  Validate authored plugin content (--json for structured output)
+  plugin build <harness> [outDir]  Build a host plugin projection (--plugin-root <path>)
   knowledge onboard [path]  Index customer documents into the space DocumentKB
   knowledge sync    Reconcile the catalog with disk; retries extractor_unavailable rows
   knowledge list    The DocumentKB catalog (--json for structured output)
@@ -377,6 +381,8 @@ Examples:
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
   /aidlc config list                         Show depth, test strategy, and review override
   /aidlc plugin list                         Show installed plugin selection
+  /aidlc plugin validate                     Validate the plugin in the current directory
+  /aidlc plugin build claude                 Build its Claude projection
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope
@@ -993,6 +999,70 @@ function handlePluginList(flags: Record<string, string>): void {
       rows.map((row) => `${row.name} ${row.enabled ? "enabled" : "disabled"}`).join("\n") +
       (rows.length > 0 ? "\n" : ""),
   );
+}
+
+function pluginAuthorCommandCode(code: number): void {
+  if (code !== 0) process.exitCode = code;
+}
+
+function handlePluginValidate(
+  positional: string[],
+  flags: Record<string, string>,
+): void {
+  const unknown = Object.keys(flags).filter(
+    (key) => key !== "json" && key !== "help",
+  );
+  if (unknown.length > 0 || positional.length > 2) {
+    pluginAuthorCommandCode(pluginValidateMain([]));
+    return;
+  }
+  if (
+    flags.help === "true" ||
+    positional[1] === "-h" ||
+    positional[1] === "--help"
+  ) {
+    pluginAuthorCommandCode(pluginValidateMain(["--help"]));
+    return;
+  }
+  const args = [positional[1] ?? process.cwd()];
+  if (flags.json === "true") args.push("--json");
+  pluginAuthorCommandCode(pluginValidateMain(args));
+}
+
+function handlePluginBuild(
+  positional: string[],
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+): void {
+  const unknown = Object.keys(flags).filter(
+    (key) =>
+      key !== "json" &&
+      key !== "help" &&
+      key !== "plugin-root",
+  );
+  if (
+    unknown.length > 0 ||
+    positional.length > 3 ||
+    missingValueFlags.has("plugin-root")
+  ) {
+    pluginAuthorCommandCode(pluginBuildMain([]));
+    return;
+  }
+  if (
+    flags.help === "true" ||
+    positional[1] === "-h" ||
+    positional[1] === "--help"
+  ) {
+    pluginAuthorCommandCode(pluginBuildMain(["--help"]));
+    return;
+  }
+  const args = [
+    flags["plugin-root"] ?? process.cwd(),
+    ...(positional[1] ? [positional[1]] : []),
+    ...(positional[2] ? [positional[2]] : []),
+  ];
+  if (flags.json === "true") args.push("--json");
+  pluginAuthorCommandCode(pluginBuildMain(args));
 }
 
 function pluginRootCandidatesFromEnv(): string[] {
@@ -7119,6 +7189,12 @@ export async function main(argv: string[]): Promise<void> {
     case "plugin-sync":
       await handlePluginSync(projectDir);
       break;
+    case "plugin-validate":
+      handlePluginValidate(positional, flags);
+      break;
+    case "plugin-build":
+      handlePluginBuild(positional, flags, missingValueFlags);
+      break;
     // init / state-init are transition-only and intentionally absent from help.
     // Stale init callers get a loud error for this release; workflow start is
     // still intent-create through the orchestrator.
@@ -7176,7 +7252,7 @@ export async function main(argv: string[]): Promise<void> {
       die(
         `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
           "Available commands: help, version, status, doctor, intent-create, intent, space, " +
-          "space-create, codekb-path, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, " +
+          "space-create, codekb-path, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
           "recompose, scope-change, config-change, config-get, config-list, set-status, " +
           "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
           "Common options: [--project-dir <path>] [--scope <scope>] [--json]"

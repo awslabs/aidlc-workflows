@@ -357,15 +357,22 @@ export const ROUTES: readonly Route[] = [
     group: "plugin",
     kind: "custom",
     classification: "translation",
-    verbs: ["select", "sync", "list"],
+    verbs: ["select", "sync", "list", "validate", "build"],
     custom: "plugin",
-    targets: { select: "select-plugins", sync: "plugin-sync", list: "plugin-list" },
+    targets: {
+      select: "select-plugins",
+      sync: "plugin-sync",
+      list: "plugin-list",
+      validate: "plugin-validate",
+      build: "plugin-build",
+    },
     human: [
-      { command: "plugin select [names]", summary: "set enabled plugins" },
-      { command: "plugin list", summary: "list installed plugin enablement" },
-      { command: "plugin sync", summary: "compose installed plugins" },
+      {
+        command: "plugin <select|list|sync|validate|build> [args]",
+        summary: "manage installed and authored plugins",
+      },
     ],
-    all: ["select [names]", "sync", "list"],
+    all: ["select [names]", "sync", "list", "validate [path]", "build <harness> [outDir]"],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these

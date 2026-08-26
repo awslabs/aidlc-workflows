@@ -980,6 +980,10 @@ export function parsePluginCommand(args: string[]): PluginCommand {
       ? "plugin-list"
       : verb === "sync"
         ? "plugin-sync"
+        : verb === "validate"
+          ? "plugin-validate"
+          : verb === "build"
+            ? "plugin-build"
         : undefined;
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };

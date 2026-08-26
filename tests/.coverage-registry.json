@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 675,
+    "total": 677,
     "enumeratedByClass": {
       "function": 410,
       "audit": 87,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 109,
+      "subcommand": 111,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -7827,6 +7827,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-utility plugin-build",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-plugin-author-routes.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "UNDER-MECHANISM"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-utility plugin-list",
       "minMechanism": "cli",
       "coveredBy": [
@@ -7852,6 +7864,18 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility plugin-validate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t327-plugin-author-routes.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "UNDER-MECHANISM"
     },
     {
       "unitClass": "subcommand",

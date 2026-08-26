@@ -441,6 +441,9 @@ Validation checks:
 - agents use `<plugin>-<role>-agent.md` and match their frontmatter identity;
 - no two plugin stages produce the same artifact across `produces` and
   `optional_produces`, even when no stage consumes it;
+- produced artifacts use the plugin-name prefix, stage bodies are non-empty,
+  stage agent references resolve against the bundled core plus plugin roster,
+  and contribution targets resolve to bundled core stage slugs;
 - authored plugin content uses regular files and directories; symlinks under
   stages, scopes, agents, contributions, sensors, knowledge, tools, or hooks
   are rejected instead of being silently omitted or followed;
@@ -450,15 +453,14 @@ Validation checks:
   template bundled with the validator. Absence is valid because plugin build
   injects the current template.
 
-The user-facing `aidlc plugin create`, `aidlc plugin validate`,
-`aidlc plugin build`, and `aidlc plugin test` verbs are not part of these
-toolchain phases. They arrive with the Plugins RFC route table in
-[RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723); until then,
-invoke the shipped Bun tools directly.
+The user-facing `aidlc plugin validate` and `aidlc plugin build` verbs delegate
+to these same shipped tools. `aidlc plugin create` and `aidlc plugin test`
+remain deferred to
+[RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723); invoke
+their shipped Bun tools directly.
 
 The repository test helper's `validatePluginContent()` delegates these shared
-rules to the same tool and adds checkout-aware checks such as resolving
-contribution targets against core.
+rules to the same tool and retains checkout-aware fixture integration.
 
 ### Building your plugin
 

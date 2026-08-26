@@ -381,6 +381,8 @@ if (target === "verb-intercept") {
         if (cmd.subcommand === "plugin-list") return ["plugin", "list", ...forwarded];
         if (cmd.subcommand === "plugin-sync") return ["plugin", "sync", ...forwarded];
         if (cmd.subcommand === "select-plugins") return ["plugin", "select", ...forwarded];
+        if (cmd.subcommand === "plugin-validate") return ["plugin", "validate", ...forwarded];
+        if (cmd.subcommand === "plugin-build") return ["plugin", "build", ...forwarded];
         if (cmd.subcommand === "help") return ["plugin", "help"];
       }
       if (cmd.source === "knowledge-verb") {

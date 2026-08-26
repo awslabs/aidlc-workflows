@@ -26,11 +26,29 @@ const USAGE =
   "Usage: bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir] [--json]";
 
 export function bundledPluginTargetsPath(): string {
-  return join(import.meta.dir, "data", "plugin-targets.json");
+  const candidates = [
+    join(import.meta.dir, "data", "plugin-targets.json"),
+    join(
+      import.meta.dir,
+      "..",
+      "..",
+      "dist",
+      "claude",
+      ".claude",
+      "tools",
+      "data",
+      "plugin-targets.json",
+    ),
+  ];
+  return candidates.find(existsSync) ?? candidates[0];
 }
 
 export function bundledPluginHookTemplatesDir(): string {
-  return join(import.meta.dir, "data", "plugin-hooks-template");
+  const candidates = [
+    join(import.meta.dir, "data", "plugin-hooks-template"),
+    join(import.meta.dir, "..", "..", "scripts", "plugin-hooks-template"),
+  ];
+  return candidates.find(existsSync) ?? candidates[0];
 }
 
 function withBuildError(

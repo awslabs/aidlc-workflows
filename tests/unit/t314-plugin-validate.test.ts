@@ -261,6 +261,49 @@ describe("t314 standalone plugin validator", () => {
     expect(rules).toContain("stage-frontmatter");
   });
 
+  test("stages enforce agent references, artifact namespaces, and non-empty bodies", () => {
+    const root = fixture();
+    const stage = join(
+      root,
+      "stages",
+      "construction",
+      "fixture-plugin-stage.md",
+    );
+    writeFileSync(
+      stage,
+      readFileSync(stage, "utf-8")
+        .replace("lead_agent: aidlc-quality-agent", "lead_agent: missing-agent")
+        .replace(
+          "  - fixture-plugin-shared-output",
+          "  - unnamespaced-output",
+        )
+        .replace(/\n# fixture-plugin-stage\n$/, "\n"),
+      "utf-8",
+    );
+    const rules = validatePluginRoot(root).errors.map((finding) => finding.rule);
+    expect(rules).toContain("stage-schema");
+    expect(rules).toContain("artifact-namespace");
+    expect(rules).toContain("stage-body");
+  });
+
+  test("contributions enforce core targets and artifact namespaces", () => {
+    const root = fixture();
+    write(
+      join(root, "contributions", "construction", "bad-target.md"),
+      `---
+target: no-such-core-stage
+plugin: fixture-plugin
+adds:
+  produces:
+    - unnamespaced-output
+---
+`,
+    );
+    const rules = validatePluginRoot(root).errors.map((finding) => finding.rule);
+    expect(rules).toContain("contribution-target");
+    expect(rules).toContain("artifact-namespace");
+  });
+
   test("c: scope naming, depth, and empty declared keywords fail", () => {
     const root = fixture();
     const scope = join(root, "scopes", "fixture-plugin-validation.md");

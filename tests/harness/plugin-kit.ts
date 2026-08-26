@@ -13,11 +13,6 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
-  frontmatterBlock,
-  parseStageFrontmatter,
-  scalarField,
-} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import {
   type PluginValidationRule,
   validatePluginRoot,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-validate.ts";
@@ -244,34 +239,6 @@ export function pluginAgentRoster(
   return [...new Set([...coreSlugs, ...pluginSlugs, "orchestrator"])].sort();
 }
 
-function nestedListField(
-  frontmatter: string,
-  parent: string,
-  key: string,
-): string[] {
-  const lines = frontmatter.split(/\r?\n/);
-  const parentIndex = lines.indexOf(`${parent}:`);
-  if (parentIndex < 0) return [];
-  for (let index = parentIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\S/.test(line)) break;
-    if (line === `  ${key}:`) {
-      const values: string[] = [];
-      for (let item = index + 1; item < lines.length; item += 1) {
-        const itemLine = lines[item];
-        const match = itemLine.match(/^\s{4}-\s+(.+?)\s*$/);
-        if (match) {
-          values.push(match[1].replace(/^["']|["']$/g, ""));
-          continue;
-        }
-        if (itemLine.trim() !== "") break;
-      }
-      return values;
-    }
-  }
-  return [];
-}
-
 function sharedFindingCode(rule: PluginValidationRule): PluginFindingCode {
   if (rule === "manifest-missing") return "manifest-missing";
   if (rule === "manifest-json") return "manifest-json";
@@ -307,6 +274,9 @@ function sharedFindingCode(rule: PluginValidationRule): PluginFindingCode {
   if (rule === "duplicate-artifact-producer") {
     return "duplicate-artifact-producer";
   }
+  if (rule === "artifact-namespace") return "artifact-namespace";
+  if (rule === "contribution-target") return "contribution-target";
+  if (rule === "stage-body") return "stage-body";
   if (rule === "tools-payload") return "tools-payload";
   if (
     rule === "compose-hook-stale" ||
@@ -322,7 +292,6 @@ export function validatePluginContent(
   options: PluginValidationOptions = {},
 ): PluginContentFinding[] {
   const root = resolve(pluginRoot);
-  const pluginName = basename(root);
   const findings: PluginContentFinding[] = [];
 
   const coreStagesDir =
@@ -340,6 +309,7 @@ export function validatePluginContent(
   );
   const shared = validatePluginRoot(root, {
     stageContext: { agents: pluginAgentRoster(root, options) },
+    coreStageSlugs: coreStages,
   });
   for (const finding of shared.errors) {
     addFinding(
@@ -350,77 +320,6 @@ export function validatePluginContent(
     );
   }
 
-  for (const file of walkMarkdownFiles(join(root, "stages"))) {
-    const raw = readFileSync(file, "utf-8");
-    let parsed: Record<string, unknown> | null = null;
-    try {
-      parsed = parseStageFrontmatter(raw);
-    } catch {
-      // The shared validator already reports parse/schema failures.
-    }
-    const artifacts = parsed
-      ? [
-          ...(Array.isArray(parsed.produces) ? parsed.produces : []),
-          ...(Array.isArray(parsed.optional_produces)
-            ? parsed.optional_produces
-            : []),
-        ]
-      : [];
-    for (const artifact of artifacts) {
-      if (
-        typeof artifact === "string" &&
-        !artifact.startsWith(`${pluginName}-`)
-      ) {
-        addFinding(
-          findings,
-          "artifact-namespace",
-          file,
-          `produced artifact "${artifact}" must start with "${pluginName}-"`,
-        );
-      }
-    }
-    try {
-      assertNonEmptyStageBody(file);
-    } catch (error) {
-      addFinding(findings, "stage-body", file, String(error));
-    }
-  }
-
-  for (const file of walkMarkdownFiles(join(root, "contributions"))) {
-    const raw = readFileSync(file, "utf-8");
-    const frontmatter = frontmatterBlock(raw) ?? "";
-    const target = scalarField(frontmatter, "target");
-    if (!target || !coreStages.has(target)) {
-      addFinding(
-        findings,
-        "contribution-target",
-        file,
-        `target "${target}" does not resolve to a core stage slug`,
-      );
-    }
-    if (scalarField(frontmatter, "plugin") !== pluginName) {
-      addFinding(
-        findings,
-        "plugin-owner",
-        file,
-        `plugin field must equal "${pluginName}"`,
-      );
-    }
-    for (const artifact of nestedListField(
-      frontmatter,
-      "adds",
-      "produces",
-    )) {
-      if (!artifact.startsWith(`${pluginName}-`)) {
-        addFinding(
-          findings,
-          "artifact-namespace",
-          file,
-          `produced artifact "${artifact}" must start with "${pluginName}-"`,
-        );
-      }
-    }
-  }
   return findings;
 }
 

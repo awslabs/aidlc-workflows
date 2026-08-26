@@ -223,7 +223,7 @@ describe("classifyTerminalCommand() - sole bare help tokens are terminal", () =>
 });
 
 describe("classifyTerminalCommand() - plugin utilities", () => {
-  test("list, sync, and select map to their utility subcommands", () => {
+  test("list, sync, select, validate, and build map to their utility subcommands", () => {
     expect(classifyTerminalCommand(["plugin", "list", "--json"])).toEqual({
       subcommand: "plugin-list",
       args: ["--json"],
@@ -239,6 +239,27 @@ describe("classifyTerminalCommand() - plugin utilities", () => {
       subcommand: "select-plugins",
       args: ["aidlc,test-pro"],
       display: "plugin select aidlc,test-pro",
+      source: "plugin-verb",
+    });
+    expect(classifyTerminalCommand(["plugin", "validate", ".", "--json"])).toEqual({
+      subcommand: "plugin-validate",
+      args: [".", "--json"],
+      display: "plugin validate . --json",
+      source: "plugin-verb",
+    });
+    expect(
+      classifyTerminalCommand([
+        "plugin",
+        "build",
+        "claude",
+        "out",
+        "--plugin-root",
+        ".",
+      ]),
+    ).toEqual({
+      subcommand: "plugin-build",
+      args: ["claude", "out", "--plugin-root", "."],
+      display: "plugin build claude out --plugin-root .",
       source: "plugin-verb",
     });
   });

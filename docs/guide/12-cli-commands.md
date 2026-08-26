@@ -49,6 +49,8 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
+| `/aidlc plugin validate [path]` | Validate an authored plugin (`--json` for structured findings) |
+| `/aidlc plugin build <harness> [outDir]` | Build a host plugin projection (`--plugin-root <path>` selects the source) |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
@@ -837,6 +839,12 @@ repeatedly; when no plugin roots are configured it exits 0 with
 `no installed plugins; nothing to sync`. If configured roots have no
 `hooks/compose.ts`, the command exits 1 and names each root and reason. With a
 mixed set, it warns for each skipped root, composes the valid roots, and exits 0.
+
+`/aidlc plugin validate [path]` and
+`/aidlc plugin build <harness> [outDir]` expose the shipped standalone
+authoring tools through the top-level CLI. Validation defaults to the current
+directory. Build also defaults its plugin root to the current directory; pass
+`--plugin-root <path>` when invoking it elsewhere. Both accept `--json`.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 

@@ -341,6 +341,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
       if (command.subcommand === "select-plugins") {
         return ["plugin", "select", ...forwarded];
       }
+      if (command.subcommand === "plugin-validate") {
+        return ["plugin", "validate", ...forwarded];
+      }
+      if (command.subcommand === "plugin-build") {
+        return ["plugin", "build", ...forwarded];
+      }
       if (command.subcommand === "help") return ["plugin", "help"];
     }
     if (command.source === "knowledge-verb") {

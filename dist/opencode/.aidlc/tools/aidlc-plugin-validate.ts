@@ -53,6 +53,9 @@ export type PluginValidationRule =
   | "agent-name"
   | "agent-owner"
   | "duplicate-artifact-producer"
+  | "artifact-namespace"
+  | "contribution-target"
+  | "stage-body"
   | "tools-payload"
   | "compose-template-missing"
   | "compose-hook-stale"
@@ -93,6 +96,7 @@ export interface PluginValidationResult {
 export interface PluginValidationOptions {
   stageContext?: ValidationContext;
   composeTemplatePath?: string;
+  coreStageSlugs?: Iterable<string>;
 }
 
 type MutableFindings = {
@@ -140,6 +144,11 @@ const PLUGIN_SYMLINK_SCAN_DIRS = [
   "knowledge",
   "hooks",
 ] as const;
+
+type PluginAuthoringContext = {
+  agents: string[];
+  stages: string[];
+};
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return (
@@ -389,6 +398,86 @@ export function bundledPluginComposeTemplatePath(): string {
   return candidates.find(existsSync) ?? candidates[0];
 }
 
+function pluginAuthoringContext(): PluginAuthoringContext {
+  const bundled = join(
+    import.meta.dir,
+    "data",
+    "plugin-authoring-context.json",
+  );
+  try {
+    const parsed = JSON.parse(readFileSync(bundled, "utf-8")) as unknown;
+    if (
+      isPlainRecord(parsed) &&
+      Array.isArray(parsed.agents) &&
+      parsed.agents.every((value) => typeof value === "string") &&
+      Array.isArray(parsed.stages) &&
+      parsed.stages.every((value) => typeof value === "string")
+    ) {
+      return {
+        agents: [...parsed.agents],
+        stages: [...parsed.stages],
+      };
+    }
+  } catch {
+    // Source-tree fallback below.
+  }
+  return {
+    agents: walkPluginFiles(join(import.meta.dir, "..", "agents"))
+      .filter((file) => file.endsWith("-agent.md"))
+      .map((file) => basename(file, ".md"))
+      .sort(),
+    stages: walkPluginFiles(
+      join(import.meta.dir, "..", "aidlc-common", "stages"),
+    )
+      .filter((file) => file.endsWith(".md"))
+      .map((file) => basename(file, ".md"))
+      .sort(),
+  };
+}
+
+function pluginAgentRoster(root: string): string[] {
+  const pluginAgents = scanPluginFiles(join(root, "agents")).files
+    .filter((file) => file.endsWith("-agent.md"))
+    .map((file) => basename(file, ".md"));
+  return [
+    ...new Set([
+      ...pluginAuthoringContext().agents,
+      ...pluginAgents,
+      "orchestrator",
+    ]),
+  ].sort();
+}
+
+function stageBodyAfterFrontmatter(raw: string): string {
+  return raw.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/)?.[1] ?? "";
+}
+
+function nestedListField(
+  frontmatter: string,
+  parent: string,
+  key: string,
+): string[] {
+  const lines = frontmatter.split(/\r?\n/);
+  const parentIndex = lines.indexOf(`${parent}:`);
+  if (parentIndex < 0) return [];
+  for (let index = parentIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\S/.test(line)) break;
+    if (line !== `  ${key}:`) continue;
+    const values: string[] = [];
+    for (let item = index + 1; item < lines.length; item += 1) {
+      const match = lines[item].match(/^\s{4}-\s+(.+?)\s*$/);
+      if (match) {
+        values.push(match[1].replace(/^["']|["']$/g, ""));
+        continue;
+      }
+      if (lines[item].trim() !== "") break;
+    }
+    return values;
+  }
+  return [];
+}
+
 function validateManifest(
   root: string,
   findings: MutableFindings,
@@ -602,6 +691,16 @@ function validateStages(
       );
     }
 
+    if (stageBodyAfterFrontmatter(readFileSync(file, "utf-8")).trim() === "") {
+      addError(
+        findings,
+        displayFile,
+        "stage-body",
+        "stage body is empty",
+        "Add substantive stage instructions after the closing frontmatter delimiter.",
+      );
+    }
+
     const stage = validation.valid
       ? validation.data
       : (parsed as Partial<StageFrontmatter>);
@@ -619,6 +718,15 @@ function validateStages(
         : []),
     ]);
     for (const artifact of produced) {
+      if (!artifact.startsWith(`${pluginName}-`)) {
+        addError(
+          findings,
+          displayFile,
+          "artifact-namespace",
+          `produced artifact "${artifact}" must start with "${pluginName}-"`,
+          `Rename the artifact with the "${pluginName}-" prefix.`,
+        );
+      }
       const producers = artifactProducers.get(artifact) ?? [];
       producers.push({ file: displayFile, slug });
       artifactProducers.set(artifact, producers);
@@ -637,6 +745,52 @@ function validateStages(
       `artifact "${artifact}" has multiple producers within this plugin: ${producerList}`,
       "Rename the artifact in all but one producing stage; produces and optional_produces share one namespace.",
     );
+  }
+}
+
+function validateContributions(
+  root: string,
+  pluginName: string,
+  findings: MutableFindings,
+  coreStageSlugs?: Iterable<string>,
+): void {
+  const coreStages = new Set(
+    coreStageSlugs ?? pluginAuthoringContext().stages,
+  );
+  for (const file of scanPluginFiles(join(root, "contributions")).files.filter(
+    (path) => path.endsWith(".md"),
+  )) {
+    const displayFile = posixRelative(root, file);
+    const frontmatter = frontmatterBlock(readFileSync(file, "utf-8")) ?? "";
+    const target = scalarField(frontmatter, "target");
+    if (!target || !coreStages.has(target)) {
+      addError(
+        findings,
+        displayFile,
+        "contribution-target",
+        `target "${target}" does not resolve to a core stage slug`,
+        "Name an existing core stage slug in target:.",
+      );
+    }
+    if (scalarField(frontmatter, "plugin") !== pluginName) {
+      addError(
+        findings,
+        displayFile,
+        "stage-owner",
+        `contribution plugin must equal manifest name "${pluginName}"`,
+        `Set plugin: ${pluginName}.`,
+      );
+    }
+    for (const artifact of nestedListField(frontmatter, "adds", "produces")) {
+      if (artifact.startsWith(`${pluginName}-`)) continue;
+      addError(
+        findings,
+        displayFile,
+        "artifact-namespace",
+        `produced artifact "${artifact}" must start with "${pluginName}-"`,
+        `Rename the artifact with the "${pluginName}-" prefix.`,
+      );
+    }
   }
 }
 
@@ -891,8 +1045,9 @@ export function validatePluginRoot(
     root,
     pluginName,
     findings,
-    options.stageContext,
+    options.stageContext ?? { agents: pluginAgentRoster(root) },
   );
+  validateContributions(root, pluginName, findings, options.coreStageSlugs);
   validateScopes(root, pluginName, findings);
   validateAgents(root, pluginName, findings);
   validateTools(root, findings);

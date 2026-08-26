@@ -47,7 +47,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, posix, relative, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
@@ -443,6 +451,11 @@ const PLUGIN_HOOKS_TEMPLATE_DST = join(
   "plugin-hooks-template",
 );
 const PLUGIN_TARGETS_DST = join("tools", "data", "plugin-targets.json");
+const PLUGIN_AUTHORING_CONTEXT_DST = join(
+  "tools",
+  "data",
+  "plugin-authoring-context.json",
+);
 
 // The active-space CURSOR shipped as part of the workspace shell (SEED). It
 // lives at aidlc/active-space (ABOVE spaces/, not inside memory/) and holds the
@@ -544,6 +557,19 @@ function emitPluginAuthoringData(treeRoot: string): void {
   writeFileSync(
     targetsPath,
     `${JSON.stringify(pluginTargets(), null, 2)}\n`,
+  );
+  const contextPath = join(treeRoot, PLUGIN_AUTHORING_CONTEXT_DST);
+  const agents = [...walk(join(CORE_ROOT, "agents"))]
+    .filter((file) => file.endsWith("-agent.md"))
+    .map((file) => basename(file, ".md"))
+    .sort();
+  const stages = [...walk(join(CORE_ROOT, "aidlc-common", "stages"))]
+    .filter((file) => file.endsWith(".md"))
+    .map((file) => basename(file, ".md"))
+    .sort();
+  writeFileSync(
+    contextPath,
+    `${JSON.stringify({ agents, stages }, null, 2)}\n`,
   );
 }
 
