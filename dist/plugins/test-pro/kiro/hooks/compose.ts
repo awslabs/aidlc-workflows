@@ -22,6 +22,7 @@
 
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -225,15 +226,24 @@ async function flushDrops(): Promise<void> {
   _drops.length = 0;
 }
 
-// Installed test/fixture payloads are a property of the shared harness tools
-// tree, not of whichever plugin happens to compose next. Legacy compose versions
-// recorded no tool-file provenance, so audit them in one ownership-neutral file
-// instead of blaming every current plugin through its per-plugin drops record.
+// Installed test/fixture payloads are a property of ONE harness's installed
+// tools tree, not of whichever plugin happens to compose next. Legacy compose
+// versions recorded no tool-file provenance, so audit them in an ownership-
+// neutral file instead of blaming every current plugin through its per-plugin
+// drops record. The record is keyed by the harness leaf: each compose scans
+// only its own HARNESS_DIR/tools, so a clean compose on one harness (e.g.
+// .codex) must never erase the advisory another harness (.claude) still needs.
+// --doctor scans every *.drops file in the health dir, so scoped names stay
+// visible.
+const HARNESS_KEY = HARNESS_LEAF.replace(/^\./, "").replace(/[^\w.-]/g, "_") || "harness";
 async function flushInstalledToolPayloadDrops(): Promise<void> {
   if (!installedToolPayloadAuditRan) return;
   try {
     const healthDir = await resolveHealthDir();
-    const dropFile = join(healthDir, "plugin-compose-installed-tool-payloads.drops");
+    const dropFile = join(
+      healthDir,
+      `plugin-compose-installed-tool-payloads-${HARNESS_KEY}.drops`,
+    );
     if (_installedToolPayloadDrops.length === 0) {
       if (existsSync(dropFile)) rmSync(dropFile, { force: true });
     } else {
@@ -491,6 +501,32 @@ function walk(dir: string): string[] {
   return out;
 }
 
+// Destination-tree walk for the installed-tools audit. Unlike walk(), which
+// only ever traverses trusted projection sources, this walks the USER-writable
+// installed tree, which can contain legacy junk including symlinks: lstat every
+// entry and never follow a link, so a circular directory link cannot ELOOP and
+// an external directory link cannot pull unrelated trees into the audit or
+// escape the tools root. A symlink is returned as a leaf so name-based payload
+// matching still sees a linked "tests" dir or "*.test.ts" file. An entry that
+// vanishes mid-scan is skipped; a readdir failure propagates to the caller,
+// which degrades the audit rather than aborting composition.
+function walkInstalledNoFollow(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const e of readdirSync(dir)) {
+    const p = join(dir, e);
+    let st: ReturnType<typeof lstatSync>;
+    try {
+      st = lstatSync(p);
+    } catch {
+      continue; // vanished mid-scan
+    }
+    if (st.isDirectory()) out.push(...walkInstalledNoFollow(p));
+    else out.push(p);
+  }
+  return out;
+}
+
 type CopyContext = { file: string; rel: string; content: string };
 type CopyPrecheck = (ctx: CopyContext & { dest: string }) => boolean;
 type CopyTransform = (ctx: CopyContext) => string;
@@ -681,15 +717,27 @@ function toolsTestPayloadPrecheck(): CopyPrecheck {
   // Audit the INSTALLED tree independently of the current source projection.
   // Older compose versions recorded no owning plugin for arbitrary tool files,
   // so these diagnostics deliberately do not attribute the path to PLUGIN_NAME.
+  // The tree is user-writable: traversal never follows symlinks, and a failed
+  // scan must neither abort composition nor let a partial (hence possibly
+  // clean-looking) result erase the previous record for this harness.
   installedToolPayloadAuditRan = true;
-  for (const file of walk(targetRoot)) {
-    const relPosix = relative(targetRoot, file).replace(/\\/g, "/");
-    const why = payloadReason(relPosix);
-    if (why) {
-      recordInstalledToolPayloadDrop(
-        `installed tool file "${relPosix}" is a test/fixture payload: ${why}; originating plugin is not recorded in legacy installs, so ownership is not attributed; remove the file and re-run compose`,
-      );
+  try {
+    for (const file of walkInstalledNoFollow(targetRoot)) {
+      const relPosix = relative(targetRoot, file).replace(/\\/g, "/");
+      const why = payloadReason(relPosix);
+      if (why) {
+        recordInstalledToolPayloadDrop(
+          `installed tool file "${relPosix}" is a test/fixture payload: ${why}; originating plugin is not recorded in legacy installs, so ownership is not attributed; remove the file and re-run compose`,
+        );
+      }
     }
+  } catch (e) {
+    installedToolPayloadAuditRan = false;
+    _installedToolPayloadDrops.length = 0;
+    recordDrop(
+      `installed tools audit under "${HARNESS_LEAF}/tools" failed (${String(e)}); keeping the previous installed-payload record for this harness - fix the unreadable path and re-run compose`,
+      "degraded",
+    );
   }
   return ({ rel }) => {
     const relPosix = rel.replace(/\\/g, "/");
