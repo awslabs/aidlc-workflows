@@ -285,6 +285,23 @@ export function validateStageFrontmatter(
       errors.push(`mode "${o.mode}" requires a non-empty support_agents`);
     }
   }
+  if (
+    o.mode === "pipeline" &&
+    typeof o.lead_agent === "string" &&
+    Array.isArray(o.support_agents)
+  ) {
+    const seen = new Set([o.lead_agent]);
+    for (const agent of o.support_agents) {
+      if (typeof agent !== "string") continue;
+      if (seen.has(agent)) {
+        errors.push(
+          `mode "pipeline" requires unique lead/support chain entries; duplicate agent "${agent}"`,
+        );
+        break;
+      }
+      seen.add(agent);
+    }
+  }
 
   // for_each — optional. Absent → valid. Present → must be string.
   // Explicit `null` falls through the typeof check and is rejected as

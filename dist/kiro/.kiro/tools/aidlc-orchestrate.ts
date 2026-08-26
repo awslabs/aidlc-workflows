@@ -2284,6 +2284,7 @@ function buildRunStageDirective(
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
   forcePersona = false,
+  singleRun = false,
 ): RunStageDirective {
   const artifactUnit =
     unit === UNIT_NAME_PLACEHOLDER &&
@@ -2338,7 +2339,9 @@ function buildRunStageDirective(
     stage_file: stageFileFor(node.phase, node.slug),
   };
   if (node.mode === "pipeline" && codekbCtx) {
-    const evidence = pipelineLinkEvidence(codekbCtx.projectDir, node);
+    const evidence = pipelineLinkEvidence(codekbCtx.projectDir, node, {
+      singleRun,
+    });
     directive.pipeline = {
       links: evidence.links,
       completed: evidence.completed,
@@ -4737,6 +4740,7 @@ function emitSingleRunStage(
     codekbCtx,
     null,
     true, // forcePersona: the single run's first (and only) directive
+    true, // singleRun: resume only from isolated pipeline receipts
   );
   directive.single = true;
   directive.gate = false;
@@ -5363,6 +5367,37 @@ function checkEnsembleEvidence(
   };
 }
 
+function checkPipelineLinkEvidence(
+  node: GraphStage,
+  slug: string,
+  pd: string,
+  options: { singleRun?: boolean } = {},
+): EnsembleEvidenceResult {
+  if (
+    node.mode !== "pipeline" ||
+    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
+  ) {
+    return { ok: true };
+  }
+  const singleRun = options.singleRun === true;
+  const evidence = pipelineLinkEvidence(pd, node, { singleRun });
+  if (evidence.missing.length === 0) return { ok: true };
+  const missing = evidence.missing.map(({ link, repo }) =>
+    repo ? `${repo}:${link}` : link
+  );
+  return {
+    ok: false,
+    message:
+      `Stage "${slug}" is mode: pipeline and cannot ` +
+      `${singleRun ? "complete an isolated run" : "enter or complete approval"} until every ` +
+      `declared link has a current-attempt PIPELINE_LINK_COMPLETED receipt. Missing: ${missing.join(", ")}. ` +
+      `After each link returns, run \`bun ${harnessDir()}/tools/aidlc-log.ts link --stage ${slug} ` +
+      `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}` +
+      `${singleRun ? " --single" : ""}\`. ` +
+      `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
+  };
+}
+
 // The evidence required before a gated stage may either enter [?] or resolve
 // approval. Sharing this check prevents gate-start, revised, and approved from
 // disagreeing about whether per-unit work and collaborator dispatch completed.
@@ -5388,26 +5423,8 @@ function checkStageCompletionEvidence(
     boltResolution ?? undefined,
   );
 
-  if (
-    node.mode === "pipeline" &&
-    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE !== "1"
-  ) {
-    const evidence = pipelineLinkEvidence(pd, node);
-    if (evidence.missing.length > 0) {
-      const missing = evidence.missing.map(({ link, repo }) =>
-        repo ? `${repo}:${link}` : link
-      );
-      return {
-        ok: false,
-        message:
-          `Stage "${slug}" is mode: pipeline and cannot enter or complete approval until every ` +
-          `declared link has a current-attempt PIPELINE_LINK_COMPLETED receipt. Missing: ${missing.join(", ")}. ` +
-          `After each link returns, run \`bun ${harnessDir()}/tools/aidlc-log.ts link --stage ${slug} ` +
-          `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}\`. ` +
-          `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
-      };
-    }
-  }
+  const pipelineEvidence = checkPipelineLinkEvidence(node, slug, pd);
+  if (!pipelineEvidence.ok) return pipelineEvidence;
 
   if (isPerUnit(node) && !stageLevelPerUnit && !settledSwarm) {
     const resolution = boltResolution ?? resolveBoltBatches(pd);
@@ -5557,6 +5574,13 @@ function handleSingleReport(
   // Isolated reports never inherit the main workflow's scope, autonomy, or DAG.
   // Only an ensemble stage needs its record prefix for contribution evidence;
   // ordinary stages go straight to the synthetic audit pair.
+  const pipelineEvidence = checkPipelineLinkEvidence(node, node.slug, pd, {
+    singleRun: true,
+  });
+  if (!pipelineEvidence.ok) {
+    emit(errorDirective(pipelineEvidence.message));
+    return;
+  }
   const recordPrefix = requiresEnsembleEvidence(node) ? engineRelativeRecordDir(pd) : null;
   const evidence = checkEnsembleEvidence(
     node,
@@ -6333,6 +6357,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     codekbCtxFor(pd),
     payload.k,
     payload.f,
+    payload.x,
   );
   directive.gate = payload.g;
   if (payload.p && payload.u !== null) directive.unit = payload.u;

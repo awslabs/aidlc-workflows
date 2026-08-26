@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.98] - 2026-08-26
+
+Isolated pipeline stage runs now resume and complete only from their own ordered receipt chain, and stage compilation rejects repeated agents whose receipt identity would be ambiguous. **Upgrade:** refresh your `dist/<harness>/` shell; existing valid stage definitions and main-workflow pipeline receipts need no migration.
+
+* `aidlc-orchestrate.ts next --stage <slug> --single` reports only `PIPELINE_LINK_COMPLETED` rows tagged for that isolated run, and `report --single` refuses completion until every isolated link receipt exists.
+* Pipeline stage frontmatter must declare a unique agent at every lead/support chain position; `aidlc-graph.ts compile` rejects duplicate support agents and a lead repeated in `support_agents`.
+
 ## [2.6.97] - 2026-08-26
 
 The Stop hook now recognizes background Agent/Task work per session, so a conductor can end its turn to await a still-running worker without weakening another session's forwarding loop. **Upgrade:** refresh your `dist/<harness>/` shell so dispatch, completion, Stop, and doctor hooks share the new in-flight ledger.

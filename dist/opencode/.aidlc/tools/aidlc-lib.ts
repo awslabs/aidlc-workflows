@@ -11569,48 +11569,32 @@ export function pipelineLinks(
   return [stage.lead_agent, ...(stage.support_agents ?? [])];
 }
 
-interface OrderedPipelineEvidenceEvent {
-  block: string;
-  position: number;
-  event: string;
-  timestamp: string;
-}
+type OrderedPipelineEvidenceEvent = AuditShardEvent;
 
 function orderedPipelineEvidenceEvents(
   projectDir: string,
 ): OrderedPipelineEvidenceEvent[] {
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return [];
-  return audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position): OrderedPipelineEvidenceEvent | null => {
-      const event = auditBlockField(block, "Event");
-      if (!event) return null;
-      return {
-        block,
-        position,
-        event,
-        timestamp: auditBlockField(block, "Timestamp") ?? "",
-      };
-    })
-    .filter((entry): entry is OrderedPipelineEvidenceEvent => entry !== null)
-    .sort((a, b) =>
-      a.timestamp !== b.timestamp
-        ? (a.timestamp < b.timestamp ? -1 : 1)
-        : a.position - b.position
-    );
+  return readAuditShardEvents(projectDir).sort((a, b) => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp < b.timestamp ? -1 : 1;
+    }
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+}
+
+interface PipelineAttemptFloor {
+  timestamp: string;
+  rows: OrderedPipelineEvidenceEvent[];
 }
 
 function pipelineAttemptFloor(
   events: OrderedPipelineEvidenceEvent[],
   stageSlug: string,
   singleRun: boolean,
-): number {
+): PipelineAttemptFloor | null {
   const workflow = `single-stage:${stageSlug}`;
-  let floor = -1;
-  for (let i = 0; i < events.length; i++) {
-    const entry = events[i];
+  const boundaries = events.filter((entry) => {
     const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (
       !singleRun &&
@@ -11624,10 +11608,9 @@ function pipelineAttemptFloor(
       ) &&
       !eventWorkflow?.startsWith("single-stage:")
     ) {
-      floor = i;
-      continue;
+      return true;
     }
-    if (
+    return (
       entry.event === "STAGE_STARTED" &&
       auditBlockField(entry.block, "Stage") === stageSlug &&
       (
@@ -11635,17 +11618,37 @@ function pipelineAttemptFloor(
           ? eventWorkflow === workflow
           : !eventWorkflow?.startsWith("single-stage:")
       )
-    ) {
-      floor = i;
-    }
+    );
+  });
+  if (boundaries.length === 0) return null;
+  const timestamp = boundaries[boundaries.length - 1].timestamp;
+  return {
+    timestamp,
+    rows: boundaries.filter((entry) => entry.timestamp === timestamp),
+  };
+}
+
+function pipelineEventAfterFloor(
+  entry: OrderedPipelineEvidenceEvent,
+  floor: PipelineAttemptFloor | null,
+): boolean {
+  if (floor === null) return true;
+  if (entry.timestamp !== floor.timestamp) {
+    return entry.timestamp > floor.timestamp;
   }
-  return floor;
+  const shards = new Set(floor.rows.map((row) => row.shard));
+  if (shards.size !== 1) return false;
+  const shard = floor.rows[0].shard;
+  if (entry.shard !== shard) return false;
+  const maxPos = Math.max(...floor.rows.map((row) => row.pos));
+  return entry.pos > maxPos;
 }
 
 // Current-attempt pipeline receipts are scoped to either the main workflow or
 // one isolated `--single` stream. A later matching STAGE_STARTED resets that
-// scope; rows from the other scope never participate in order or duplicate
-// checks and can never satisfy its completion guard.
+// scope; main runs also reset on workflow starts, jumps, and gate rejection.
+// Same-shard timestamp ties retain append order, while cross-shard ties fail
+// closed because their causal order cannot be proven.
 export function currentPipelineLinkReceipts(
   projectDir: string,
   stageSlug: string,
@@ -11656,8 +11659,8 @@ export function currentPipelineLinkReceipts(
   const workflow = `single-stage:${stageSlug}`;
   const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
   const receipts: PipelineLinkReceipt[] = [];
-  for (let i = floor + 1; i < events.length; i++) {
-    const entry = events[i];
+  for (const entry of events) {
+    if (!pipelineEventAfterFloor(entry, floor)) continue;
     const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (
       entry.event !== "PIPELINE_LINK_COMPLETED" ||
@@ -11689,8 +11692,8 @@ function currentPipelineReusedRepos(
   const events = orderedPipelineEvidenceEvents(projectDir);
   const floor = pipelineAttemptFloor(events, stageSlug, false);
   const reused = new Set<string>();
-  for (let i = floor + 1; i < events.length; i++) {
-    const entry = events[i];
+  for (const entry of events) {
+    if (!pipelineEventAfterFloor(entry, floor)) continue;
     if (
       entry.event !== "ARTIFACT_REUSED" ||
       auditBlockField(entry.block, "Stage") !== stageSlug ||

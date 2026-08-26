@@ -1,6 +1,7 @@
 // covers: aidlc-stage-schema.ts:validateStageFrontmatter (the pipeline/mob
-//   topology values + the ensemble-requires-support_agents coupling, plus the
-//   ENSEMBLE_MODES export), aidlc-directive.ts:validateDirective (mode enum
+//   topology values + the ensemble-requires-support_agents coupling and unique
+//   pipeline chain entries, plus the ENSEMBLE_MODES export),
+//   aidlc-directive.ts:validateDirective (mode enum
 //   carry-through for the new values), and the aidlc-graph compile advisory
 //   for the swarm-trigger trap (a per-unit Construction build stage whose
 //   mode is not subagent silently leaves the autonomous swarm path).
@@ -86,6 +87,21 @@ describe("t235 ensemble modes — schema", () => {
 
   test("mode=subagent with empty support_agents stays VALID (hub with no spokes = today's single worker)", () => {
     expect(errs(stage("subagent", []))).toBe("VALID");
+  });
+
+  test("mode=pipeline rejects a repeated support agent", () => {
+    expect(errs(stage("pipeline", [
+      "aidlc-developer-agent",
+      "aidlc-developer-agent",
+    ]))).toContain(
+      'mode "pipeline" requires unique lead/support chain entries; duplicate agent "aidlc-developer-agent"',
+    );
+  });
+
+  test("mode=pipeline rejects the lead repeated as a support agent", () => {
+    expect(errs(stage("pipeline", ["aidlc-architect-agent"]))).toContain(
+      'mode "pipeline" requires unique lead/support chain entries; duplicate agent "aidlc-architect-agent"',
+    );
   });
 
   test("unknown mode still rejected with the full enum in the message", () => {

@@ -348,7 +348,8 @@ runs. Five values, four active:
   more to integrate.
 - `pipeline` — chain. The lead drafts; each support agent enriches in
   declared order, every link seeing the draft plus all earlier
-  contributions. Order is the point. Requires non-empty `support_agents`.
+  contributions. Order is the point. Requires non-empty `support_agents`, and
+  every agent across the lead plus support chain must be unique.
 - `mob` — mesh, run as bounded rounds: all support agents contribute in
   parallel against the lead's draft (mutually blind), the lead integrates,
   and unresolved objectors get one confirm-or-maintain round with the other
@@ -404,6 +405,9 @@ no agent file by design. No hardcoded enum in the schema — adding an agent
 means dropping its `.md` file in `.claude/agents/` with the required
 frontmatter. See
 [Contributing: Adding an Agent](11-contributing.md#adding-an-agent).
+Pipeline stages additionally reject a support agent repeated elsewhere in the
+chain, including the lead repeated as support, because link receipts identify
+one declared position by its unique agent.
 
 ### `reviewer`, `reviewer_max_iterations`, and `review_class`
 

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks
+// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:checkPipelineLinkEvidence
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete
@@ -15,6 +15,7 @@ import {
   DEFAULT_SPACE,
   runOrchestrateNext,
   seedAidlcMemory,
+  seededAuditDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -111,6 +112,21 @@ function state(
   };
 }
 
+function orchestrate(
+  proj: string,
+  args: string[],
+): { rc: number; out: string } {
+  const result = spawnSync(
+    BUN,
+    [ORCH, ...args, "--project-dir", proj],
+    { encoding: "utf-8", env: childEnv() },
+  );
+  return {
+    rc: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
 function writeAllCodekbArtifacts(proj: string, repo = basename(proj)): void {
   const dir = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", repo);
   mkdirSync(dir, { recursive: true });
@@ -133,6 +149,22 @@ function rewriteIntentRepos(proj: string, repos: string[]): void {
   >;
   rows[0].repos = repos;
   writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+}
+
+function auditBlock(
+  event: string,
+  timestamp: string,
+  fields: Record<string, string>,
+): string {
+  return [
+    `## ${event}`,
+    `**Timestamp**: ${timestamp}`,
+    `**Event**: ${event}`,
+    ...Object.entries(fields).map(([key, value]) => `**${key}**: ${value}`),
+    "",
+    "---",
+    "",
+  ].join("\n");
 }
 
 describe("t315 pipeline link receipts", () => {
@@ -210,6 +242,74 @@ describe("t315 pipeline link receipts", () => {
       expect(runLog(proj, FINAL).out).toContain("out of order");
     }
   });
+
+  for (const [evidenceFile, boundaryFile] of [
+    ["aaaa-evidence.md", "zzzz-boundary.md"],
+    ["zzzz-evidence.md", "aaaa-boundary.md"],
+  ]) {
+    test(`same-second cross-shard boundaries invalidate receipts and reuse (${evidenceFile})`, () => {
+      const proj = pipelineProject();
+      rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
+      const auditDir = seededAuditDir(proj);
+      mkdirSync(auditDir, { recursive: true });
+      const prior = "2026-08-25T19:59:59Z";
+      const tied = "2026-08-25T20:00:00Z";
+      writeFileSync(
+        join(auditDir, evidenceFile),
+        [
+          "# AI-DLC Audit Log\n",
+          auditBlock("STAGE_STARTED", prior, {
+            Stage: RE_STAGE,
+            Agent: LEAD,
+          }),
+          auditBlock("ARTIFACT_REUSED", tied, {
+            Stage: RE_STAGE,
+            Decision: "keep",
+            Artifacts: `aidlc/spaces/${DEFAULT_SPACE}/codekb/repo-a/`,
+            Repo: "repo-a",
+          }),
+          auditBlock("PIPELINE_LINK_COMPLETED", tied, {
+            Stage: RE_STAGE,
+            Link: LEAD,
+            Position: "1/2",
+            Repo: "repo-b",
+          }),
+          auditBlock("PIPELINE_LINK_COMPLETED", tied, {
+            Stage: RE_STAGE,
+            Link: FINAL,
+            Position: "2/2",
+            Repo: "repo-b",
+          }),
+        ].join(""),
+        "utf-8",
+      );
+      writeFileSync(
+        join(auditDir, boundaryFile),
+        [
+          "# AI-DLC Audit Log\n",
+          auditBlock("GATE_REJECTED", tied, {
+            Stage: RE_STAGE,
+            Feedback: "Revise every repository",
+          }),
+        ].join(""),
+        "utf-8",
+      );
+
+      const evidence = pipelineLinkEvidence(proj, {
+        slug: RE_STAGE,
+        lead_agent: LEAD,
+        support_agents: [FINAL],
+      });
+      expect(evidence.receipts).toEqual([]);
+      expect(evidence.reusedRepos).toEqual([]);
+      expect(evidence.missing).toEqual([
+        { link: LEAD, repo: "repo-a" },
+        { link: FINAL, repo: "repo-a" },
+        { link: LEAD, repo: "repo-b" },
+        { link: FINAL, repo: "repo-b" },
+      ]);
+    });
+  }
 
   test("gate-start and approve refuse conductor-written artifacts without the final receipt", () => {
     const proj = pipelineProject();
@@ -366,5 +466,70 @@ describe("t315 pipeline link receipts", () => {
     expect(runLog(proj, FINAL).rc).toBe(0);
     const audit = readAllAuditShards(proj);
     expect(audit).toContain(`**Workflow**: single-stage:${RE_STAGE}`);
+  });
+
+  test("--single directives resume isolated receipts and reports require the full isolated chain", () => {
+    const proj = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+
+    const initial = runOrchestrateNext(
+      ORCH,
+      proj,
+      ["--stage", RE_STAGE, "--single"],
+      { env: childEnv() },
+    );
+    expect(initial.directive?.pipeline).toEqual({
+      links: [LEAD, FINAL],
+      completed: [],
+    });
+
+    const noReceipts = orchestrate(proj, [
+      "report",
+      "--single",
+      "--stage",
+      RE_STAGE,
+      "--result",
+      "completed",
+    ]);
+    expect(noReceipts.out).toContain('"kind":"error"');
+    expect(noReceipts.out).toContain("complete an isolated run");
+    expect(noReceipts.out).toContain(LEAD);
+    expect(noReceipts.out).toContain(FINAL);
+
+    expect(runLog(proj, LEAD, undefined, true).rc).toBe(0);
+    const resumed = runOrchestrateNext(
+      ORCH,
+      proj,
+      ["--stage", RE_STAGE, "--single"],
+      { env: childEnv() },
+    );
+    expect(resumed.directive?.pipeline).toEqual({
+      links: [LEAD, FINAL],
+      completed: [LEAD],
+    });
+
+    const partial = orchestrate(proj, [
+      "report",
+      "--single",
+      "--stage",
+      RE_STAGE,
+      "--result",
+      "completed",
+    ]);
+    expect(partial.out).toContain('"kind":"error"');
+    expect(partial.out).toContain(FINAL);
+
+    expect(runLog(proj, FINAL, undefined, true).rc).toBe(0);
+    const complete = orchestrate(proj, [
+      "report",
+      "--single",
+      "--stage",
+      RE_STAGE,
+      "--result",
+      "completed",
+    ]);
+    expect(complete.rc).toBe(0);
+    expect(complete.out).toContain('"kind":"done"');
   });
 });

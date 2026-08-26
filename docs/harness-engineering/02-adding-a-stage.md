@@ -81,7 +81,7 @@ fields that carry the structural weight:
 | `consumes` | The artifacts this stage reads, each with a `required` boolean |
 | `produces` | The artifacts this stage writes (its forward edges) |
 | `lead_agent` | The persona that owns the stage |
-| `support_agents` | Optional perspectives the conductor loads after the lead |
+| `support_agents` | Optional perspectives the conductor loads after the lead; pipeline chains require unique agents |
 | `mode` | `inline`, `subagent`, `pipeline`, `mob`, or the reserved `agent-team` |
 | `for_each` | Optional — names an artifact whose instances drive iteration |
 | `summary_confirmation` | Optional — `required` for stages that always collect file-backed answers, `if-present` for conditional question flows |
@@ -258,7 +258,8 @@ the Developer Reference.
   compile (`lead_agent "<name>" has no matching .claude/agents/*.md`), so a
   typo can't ship a graph that 404s at run time. The reserved `orchestrator`
   slug (the conductor itself, used on the bootstrap initialization stages) is
-  exempt — it has no agent file.
+  exempt — it has no agent file. Pipeline stages also reject duplicate chain
+  identities across `lead_agent` and `support_agents`.
 - **CI drift guard.** `bun .claude/tools/aidlc-graph.ts compile --check` exits
   `0` on a clean tree and exits `1` if any stage YAML was edited without
   recompiling the JSON. CI runs this, so a forgotten `compile` blocks the merge
