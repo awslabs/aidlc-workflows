@@ -109,6 +109,9 @@ const LIB_TOOL_STUB = `import { join } from "node:path";
 export function stateFilePath(projectDir: string): string {
   return join(projectDir, ".aidlc-state-absent.json");
 }
+export function humanTurnMintAllowed(): boolean {
+  return process.env.AIDLC_UNATTENDED !== "1";
+}
 export function resolveWorkflowSelection(
   _projectDir: string,
   options: { sessionId?: string } = {},
