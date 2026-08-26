@@ -90,6 +90,19 @@ describe("enumeration is non-empty for every unit class (anti-rot guard a)", () 
     expect(counts["render-surface"]).toBe(7); // statusline render branches (incl. agent display)
   });
 
+  test("enumerated identities are unique, including overloaded functions", () => {
+    const units = enumerateAllUnits();
+    const identities = units.map((u) => `${u.unitClass}\0${u.unitId}`);
+    expect(new Set(identities).size).toBe(identities.length);
+    expect(
+      units.filter(
+        (u) =>
+          u.unitClass === "function" &&
+          u.unitId === "function:readRegularFileNoFollowOrThrow",
+      ),
+    ).toHaveLength(1);
+  });
+
   test("every row carries a valid status and a minMechanism matching its class", () => {
     const valid = new Set([
       "covered",

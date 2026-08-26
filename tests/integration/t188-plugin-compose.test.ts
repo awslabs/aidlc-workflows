@@ -626,7 +626,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(join(project, ".claude", "knowledge", "test-pro-metrics-agent", "methodology.md"))).toBe(true);
   });
 
-  test("removed plugin knowledge keeps provenance and stays excluded when the plugin is deselected", () => {
+  test("pre-sidecar plugin knowledge ownership is backfilled, retained, and excluded when deselected", () => {
     const upgradedPlugin = join(tmp, "plugin-knowledge-upgrade");
     cpSync(pluginBuilt, upgradedPlugin, { recursive: true });
     const knowledgeRel = "aidlc-product-agent/recursive/stale.md";
@@ -634,11 +634,33 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     mkdirSync(dirname(pluginKnowledge), { recursive: true });
     writeFileSync(pluginKnowledge, "# Plugin-owned stale knowledge\n");
 
+    const projectDir = join(tmp, "knowledge-provenance-upgrade");
     const provenanceProject = composePluginFixture({
       plugin: PLUGIN,
       harness: "claude",
-      projectDir: join(tmp, "knowledge-provenance-upgrade"),
+      projectDir,
       pluginBuilt: upgradedPlugin,
+      beforeCompose: ({ projectDir: copiedProject }) => {
+        const preinstalledKnowledge = join(
+          copiedProject,
+          ".claude",
+          "knowledge",
+          knowledgeRel,
+        );
+        mkdirSync(dirname(preinstalledKnowledge), { recursive: true });
+        writeFileSync(preinstalledKnowledge, readFileSync(pluginKnowledge));
+        expect(
+          existsSync(
+            join(
+              copiedProject,
+              ".claude",
+              "tools",
+              "data",
+              "plugin-files-test-pro.json",
+            ),
+          ),
+        ).toBe(false);
+      },
     }).projectDir;
     const installedKnowledge = join(
       provenanceProject,

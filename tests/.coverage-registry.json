@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 767,
+    "total": 771,
     "enumeratedByClass": {
-      "function": 472,
+      "function": 476,
       "audit": 90,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 275,
+      "function": 279,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -1752,6 +1752,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:codekbStoreIsCurrent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:compileStageGraph",
       "minMechanism": "none",
       "coveredBy": [
@@ -3017,6 +3029,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:latestPipelineLinkArtifactMtime",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:latestStartedStageSlug",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3640,6 +3664,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:pipelineAttemptStartedAt",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t205-gate-revision-backstop.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4818,6 +4854,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:singleStageAttemptIsOpen",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
