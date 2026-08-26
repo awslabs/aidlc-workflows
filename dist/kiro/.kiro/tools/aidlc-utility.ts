@@ -6317,6 +6317,13 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
     UNTRUSTED_PATH_NOTICE,
   } = await import("./aidlc-knowledge.ts");
   const documentInputByteCap = EXTRACT_OUTPUT_CHAR_CAP * 4;
+  // The transport file carries ONE path line, so it gets a path-sized cap, not
+  // the document cap. Without an explicit bound the whole file is allocated and
+  // UTF-8 decoded BEFORE the one-line check, so a sparse multi-megabyte
+  // .aidlc-document-input-path kills the process with an out-of-memory error
+  // before any validation runs. 4096 bytes covers PATH_MAX on every supported
+  // platform, plus the trailing newline.
+  const requestFileByteCap = 4096;
 
   const refuse = (message: string): never =>
     die(`${UNTRUSTED_PATH_NOTICE} ${message}`);
@@ -6325,7 +6332,12 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
     let raw: string;
     try {
       raw = new TextDecoder("utf-8", { fatal: true }).decode(
-        readDocumentBytes(requestFile, DOCUMENT_INPUT_REQUEST_FILE),
+        readDocumentBytes(
+          requestFile,
+          DOCUMENT_INPUT_REQUEST_FILE,
+          undefined,
+          requestFileByteCap,
+        ),
       );
     } catch (error) {
       return refuse(

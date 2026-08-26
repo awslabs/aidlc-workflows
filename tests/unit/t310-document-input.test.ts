@@ -343,4 +343,19 @@ describe("t310 project-description and document-input boundaries", () => {
     expect(multiple.status).not.toBe(0);
     expect(multiple.stderr).toContain("exactly one non-empty path line");
   });
+
+  test("bounds the transport file itself before decoding it", () => {
+    const dir = project();
+    const requestFile = documentInputRequestFilePath(dir);
+    writeFileSync(requestFile, "");
+    truncateSync(requestFile, 64 * 1024 * 1024);
+
+    const oversized = run(dir);
+    expect(oversized.status).not.toBe(0);
+    // The fstat size check refuses the read; the sparse 64 MiB payload is
+    // never allocated, UTF-8 decoded, or line/path validated.
+    expect(oversized.stderr).toContain("above the 4096-byte limit");
+    expect(oversized.stderr).toContain(DOCUMENT_INPUT_REQUEST_FILE);
+    expect(oversized.stderr).not.toContain("exactly one non-empty path line");
+  });
 });
