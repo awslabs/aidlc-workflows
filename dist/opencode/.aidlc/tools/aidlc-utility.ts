@@ -121,6 +121,7 @@ import {
   readUnitScopeStamp,
   recordHookDrop,
   readCurrentSessionId,
+  readProjectDescriptionAuthority,
   resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
@@ -6299,6 +6300,13 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
 // 200k-character delivery cap used by DocumentKB. Successful output carries
 // DocumentKB's path/content trust notices in the same JSON object as the bytes
 // they govern. No mkdir, state write, or audit event.
+function handleProjectDescription(projectDir: string): void {
+  const recordRoot = dirname(stateFilePath(projectDir));
+  process.stdout.write(
+    `${JSON.stringify(readProjectDescriptionAuthority(recordRoot))}\n`,
+  );
+}
+
 async function handleDocumentInput(projectDir: string): Promise<void> {
   const {
     detectMimeType,
@@ -6308,6 +6316,7 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
     UNTRUSTED_CONTENT_NOTICE,
     UNTRUSTED_PATH_NOTICE,
   } = await import("./aidlc-knowledge.ts");
+  const documentInputByteCap = EXTRACT_OUTPUT_CHAR_CAP * 4;
 
   const refuse = (message: string): never =>
     die(`${UNTRUSTED_PATH_NOTICE} ${message}`);
@@ -6365,6 +6374,8 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
         bytes: readDocumentBytes(
           resolvedPath,
           `document input ${JSON.stringify(portablePath)}`,
+          undefined,
+          documentInputByteCap,
         ),
       };
     } catch (error) {
@@ -7862,6 +7873,12 @@ export async function main(argv: string[]): Promise<void> {
     case "codekb-path":
       handleCodekbPath(projectDir, flags);
       break;
+    // project-description - read-only exact-description authority boundary.
+    // Marked records must load the JSON sidecar; only unmarked legacy records
+    // fall back to the state preview.
+    case "project-description":
+      handleProjectDescription(projectDir);
+      break;
     // document-input - read-only direct-document boundary used by Intent Capture
     // and Requirements Analysis. One exact path in, one trust-marked JSON object
     // out; no search, mutation, or audit.
@@ -7952,7 +7969,7 @@ export async function main(argv: string[]): Promise<void> {
       die(
         `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
           "Available commands: help, version, status, doctor, intent-create, intent, space, " +
-          "space-create, codekb-path, document-input, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
+          "space-create, codekb-path, project-description, document-input, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
           "recompose, scope-change, config-change, config-get, config-list, set-status, " +
           "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
           "Common options: [--project-dir <path>] [--scope <scope>] [--json]"

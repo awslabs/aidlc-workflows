@@ -805,8 +805,9 @@ export function readDocumentBytes(
   absPath: string,
   what: string,
   expectedSha256?: string,
+  maxBytes?: number,
 ): Buffer {
-  const buf = readRegularFileNoFollowOrThrow(absPath, what);
+  const buf = readRegularFileNoFollowOrThrow(absPath, what, maxBytes);
   if (expectedSha256 !== undefined) {
     const actual = sha256Hex(buf);
     if (actual !== expectedSha256) {

@@ -3,8 +3,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
 	authoritativeProjectDescription,
 	errorMessage,
-	PROJECT_DESCRIPTION_FILE,
-	readRegularFileNoFollowOrThrow,
+	readProjectDescriptionAuthority,
 	visibleMarkdownLines,
 } from "./aidlc-lib.ts";
 
@@ -180,39 +179,16 @@ function loadRecordAuthority(stageDir: string): RecordAuthority {
 		);
 	}
 
-	let rawProjectDescription = stateField(stateBody, "Project");
-	const descriptionSource = stateField(stateBody, "Project Description Source");
-	const descriptionPath = join(recordRoot, PROJECT_DESCRIPTION_FILE);
-	if (descriptionSource === PROJECT_DESCRIPTION_FILE) {
-		if (!existsSync(descriptionPath)) {
-			findings.push(
-				`cannot verify source register: ${PROJECT_DESCRIPTION_FILE} is required by aidlc-state.md but missing`,
-			);
-			rawProjectDescription = "";
-		}
-	} else if (descriptionSource !== "") {
+	let rawProjectDescription = "";
+	try {
+		rawProjectDescription = readProjectDescriptionAuthority(
+			recordRoot,
+			stateBody,
+		).description;
+	} catch (error) {
 		findings.push(
-			`cannot verify source register: unsupported Project Description Source ${descriptionSource}`,
+			`cannot verify source register: ${errorMessage(error)}`,
 		);
-		rawProjectDescription = "";
-	}
-	if (descriptionSource === PROJECT_DESCRIPTION_FILE && existsSync(descriptionPath)) {
-		try {
-			const serialized = readRegularFileNoFollowOrThrow(
-				descriptionPath,
-				"project description",
-			).toString("utf-8");
-			const parsed: unknown = JSON.parse(serialized);
-			if (typeof parsed !== "string") {
-				throw new Error("project description JSON must contain one string");
-			}
-			rawProjectDescription = parsed;
-		} catch (error) {
-			findings.push(
-				`cannot verify source register: failed to read ${PROJECT_DESCRIPTION_FILE}: ${errorMessage(error)}`,
-			);
-			rawProjectDescription = "";
-		}
 	}
 	const description = authoritativeProjectDescription(rawProjectDescription);
 	if (description.error) {

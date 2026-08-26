@@ -12,7 +12,7 @@ The exact initial description is stored beside it in
 `project-description.json` as one JSON string. `aidlc-state.md` names that
 committed source and keeps only a safe single-line
 `Project` preview, so multiline user input cannot introduce additional state
-fields. Pre-2.6.79 records without the source marker continue to use the
+fields. Pre-2.6.105 records without the source marker continue to use the
 existing `Project` field as their description; a marked new record whose file
 is missing or malformed fails source validation instead of silently degrading.
 JSON decoding preserves the original description even if Git normalizes the

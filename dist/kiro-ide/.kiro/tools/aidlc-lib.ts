@@ -11743,6 +11743,60 @@ export function readStateFile(projectDir: string, intent?: string, space?: strin
 
 export const PROJECT_DESCRIPTION_FILE = "project-description.json";
 export const DOCUMENT_INPUT_REQUEST_FILE = ".aidlc-document-input-path";
+const LEGACY_PROJECT_DESCRIPTION_SOURCE = "aidlc-state.md#Project";
+
+export interface ProjectDescriptionAuthority {
+  description: string;
+  source: typeof PROJECT_DESCRIPTION_FILE | typeof LEGACY_PROJECT_DESCRIPTION_SOURCE;
+}
+
+/**
+ * Load the exact initial description for one workflow record.
+ *
+ * A source marker makes the JSON sidecar mandatory. Records without the marker
+ * retain the pre-sidecar Project-field fallback; a malformed marked record never
+ * silently degrades to the preview.
+ */
+export function readProjectDescriptionAuthority(
+  recordRoot: string,
+  stateContent?: string,
+): ProjectDescriptionAuthority {
+  const state =
+    stateContent ?? readFileSync(join(recordRoot, "aidlc-state.md"), "utf-8");
+  const source = getField(state, "Project Description Source") ?? "";
+  if (source === "") {
+    const description = getField(state, "Project");
+    if (description === null) {
+      throw new Error("legacy aidlc-state.md is missing the Project field");
+    }
+    return { description, source: LEGACY_PROJECT_DESCRIPTION_SOURCE };
+  }
+  if (source !== PROJECT_DESCRIPTION_FILE) {
+    throw new Error(`unsupported Project Description Source ${source}`);
+  }
+
+  const path = join(recordRoot, PROJECT_DESCRIPTION_FILE);
+  if (!existsSync(path)) {
+    throw new Error(
+      `${PROJECT_DESCRIPTION_FILE} is required by aidlc-state.md but missing`,
+    );
+  }
+  try {
+    const parsed: unknown = JSON.parse(
+      readRegularFileNoFollowOrThrow(path, "project description").toString(
+        "utf-8",
+      ),
+    );
+    if (typeof parsed !== "string") {
+      throw new Error("project description JSON must contain one string");
+    }
+    return { description: parsed, source: PROJECT_DESCRIPTION_FILE };
+  } catch (error) {
+    throw new Error(
+      `failed to read ${PROJECT_DESCRIPTION_FILE}: ${errorMessage(error)}`,
+    );
+  }
+}
 
 export function projectDescriptionFilePath(
   projectDir: string,
@@ -13711,7 +13765,35 @@ export function readRegularFileNoFollowOrThrow(
     if (current.dev !== st.dev || current.ino !== st.ino) {
       throw changedDuringReadError(`${what} changed while opening: ${path}`);
     }
-    const bytes = readFileSync(fd);
+    let bytes: Buffer;
+    if (maxBytes === undefined) {
+      bytes = readFileSync(fd);
+    } else {
+      // The stat check rejects files already over the cap. Bound the descriptor
+      // read as well so a file that grows concurrently cannot force an
+      // allocation beyond its original size plus one detection byte.
+      const bounded = Buffer.alloc(Math.min(maxBytes + 1, st.size + 1));
+      let length = 0;
+      while (length < bounded.length) {
+        const count = readSync(
+          fd,
+          bounded,
+          length,
+          bounded.length - length,
+          length,
+        );
+        if (count === 0) break;
+        length += count;
+      }
+      if (length > maxBytes) {
+        const currentSize = fstatSync(fd).size;
+        throw new Error(
+          `${what} is ${currentSize} bytes, above the ${maxBytes}-byte limit: ${path}. ` +
+            "Reduce the file before retrying.",
+        );
+      }
+      bytes = bounded.subarray(0, length);
+    }
     const after = statSync(realpathSync(path));
     const afterFd = fstatSync(fd);
     if (after.dev !== st.dev || after.ino !== st.ino ||

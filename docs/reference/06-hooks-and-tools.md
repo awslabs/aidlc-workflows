@@ -683,6 +683,7 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `space [name]` | List spaces (`--json`) or switch the active-space cursor and harness include. Normally routed from `/aidlc space [name]`. | — |
 | `space-create <name>` | Create a new space from the framework memory baseline. Normally routed from `/aidlc space-create <name>`. | — |
 | `codekb-path [--repo <name>] [--json]` | Direct-only, read-only query that prints the deterministic per-repo codekb directory. There is no `/aidlc codekb-path` route. | — |
+| `project-description` | Direct-only, read-only query used by Intent Capture and Requirements Analysis. Marked records decode the exact `project-description.json` string; only unmarked pre-2.6.105 records fall back to `aidlc-state.md#Project`. | — |
 | `select-plugins [names]` | Direct-only query/update for the install's enabled plugin set. There is no `/aidlc select-plugins` route. | `PLUGIN_SELECTION_CHANGED` in set mode |
 | `scope-change` | Atomic scope updates mid-workflow (recalculate stage inclusion). Re-plans which stages are EXECUTE/SKIP. | `SCOPE_CHANGED` |
 | `config-get`, `config-list` | Read active workflow config (`depth`, `test-strategy`, `review`); `config-list --json` emits the structured shape. | none |
@@ -700,9 +701,9 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 
 The user-facing `intent`, `space`, and `space-create` forms are covered in
 [CLI Commands](../guide/12-cli-commands.md) and
-[Spaces and Intents](../guide/03-spaces-and-intents.md). `codekb-path` and
-`select-plugins` are intentionally invoked directly as
-`bun <harness-dir>/tools/aidlc-utility.ts <verb>`; neither is an orchestrator
+[Spaces and Intents](../guide/03-spaces-and-intents.md). `codekb-path`,
+`project-description`, and `select-plugins` are intentionally invoked directly as
+`bun <harness-dir>/tools/aidlc-utility.ts <verb>`; none is an orchestrator
 command.
 
 ### Design Rationale

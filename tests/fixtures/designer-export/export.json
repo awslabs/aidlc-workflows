@@ -173,7 +173,7 @@
       "reviewer_max_iterations": 2,
       "review_class": "advisory",
       "summary_confirmation": "required",
-      "inputs": "User's project description ($ARGUMENTS), scope selection",
+      "inputs": "Authoritative project description (project-description utility), scope selection",
       "outputs": "intent-statement.md, stakeholder-map.md, intent-capture-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
@@ -1003,7 +1003,7 @@
       "reviewer_max_iterations": 2,
       "review_class": "advisory",
       "summary_confirmation": "required",
-      "inputs": "RE artifacts (if brownfield), user's project description (from <record>/audit/<host>-<clone>.md)",
+      "inputs": "RE artifacts (if brownfield), authoritative project description (project-description utility)",
       "outputs": "requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {

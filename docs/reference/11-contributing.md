@@ -113,8 +113,11 @@ and creates NO directory (`mkdir`). It simply prints the canonical per-repo
 codekb directory the reverse-engineering stage writes its artifacts into, so
 prose never hand-derives that path.
 
-`document-input` is the same read-only direct-utility shape. Intent Capture and
-Requirements Analysis invoke
+`project-description` and `document-input` use the same read-only direct-utility
+shape. Both consuming stages invoke `project-description` first: a marked
+record must decode its exact `project-description.json` string, while an
+unmarked pre-2.6.105 record explicitly falls back to the legacy `Project` state
+field. They invoke
 `bun <harness-dir>/tools/aidlc-utility.ts document-input` after writing the
 selected path with the native file-write tool to the active record's fixed
 `.aidlc-document-input-path` transport. Customer-chosen path bytes never enter

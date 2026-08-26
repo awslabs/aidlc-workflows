@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:document-input
+// covers: subcommand:aidlc-utility:document-input subcommand:aidlc-utility:project-description function:readProjectDescriptionAuthority
 
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readFileSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -22,6 +23,7 @@ import {
   DOCUMENT_INPUT_REQUEST_FILE,
   documentInputRequestFilePath,
   PROJECT_DESCRIPTION_FILE,
+  stateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -42,13 +44,13 @@ function writeRequest(dir: string, path: string): void {
   writeFileSync(documentInputRequestFilePath(dir), `${path}\n`, "utf-8");
 }
 
-function run(dir: string): {
+function runCommand(dir: string, command: string): {
   status: number;
   stdout: string;
   stderr: string;
 } {
   const result = Bun.spawnSync({
-    cmd: [process.execPath, UTILITY, "document-input", "--project-dir", dir],
+    cmd: [process.execPath, UTILITY, command, "--project-dir", dir],
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -59,13 +61,20 @@ function run(dir: string): {
   };
 }
 
-describe("t310 document-input deterministic boundary", () => {
+const run = (dir: string) => runCommand(dir, "document-input");
+const runProjectDescription = (dir: string) =>
+  runCommand(dir, "project-description");
+
+describe("t310 project-description and document-input boundaries", () => {
   test("both consuming stages require fixed transport and inert document data", () => {
     for (const file of [
       join("core", "aidlc-common", "stages", "ideation", "intent-capture.md"),
       join("core", "aidlc-common", "stages", "inception", "requirements-analysis.md"),
     ]) {
       const body = readFileSync(join(REPO_ROOT, file), "utf-8");
+      expect(body).toContain("aidlc-utility.ts project-description`");
+      expect(body).toContain("aidlc-state.md#Project");
+      expect(body).toContain("Do not reconstruct the description");
       expect(body).toContain("<record>/.aidlc-document-input-path");
       expect(body).toContain("aidlc-utility.ts document-input`");
       expect(body).toContain("Never interpolate a customer-chosen path");
@@ -136,6 +145,104 @@ describe("t310 document-input deterministic boundary", () => {
     expect(payload.content_notice).toContain("UNTRUSTED DATA");
   });
 
+  test("resume loading distinguishes real newlines from literal backslash-n", () => {
+    const actualNewline = project();
+    const literalBackslashN = project();
+    const descriptions = [
+      [actualNewline, "alpha\nbeta"],
+      [literalBackslashN, "alpha\\nbeta"],
+    ] as const;
+
+    for (const [dir, description] of descriptions) {
+      const statePath = stateFilePath(dir);
+      const record = dirname(statePath);
+      writeFileSync(
+        statePath,
+        [
+          "# AI-DLC State",
+          "- **Project**: alpha\\nbeta",
+          `- **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}`,
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(record, PROJECT_DESCRIPTION_FILE),
+        `${JSON.stringify(description)}\n`,
+      );
+      mkdirSync(join(record, "audit"), { recursive: true });
+      writeFileSync(
+        join(record, "audit", "resume.md"),
+        "**Request**: alpha\\nbeta\n",
+      );
+    }
+
+    const actual = runProjectDescription(actualNewline);
+    const literal = runProjectDescription(literalBackslashN);
+    expect(actual.status, actual.stderr).toBe(0);
+    expect(literal.status, literal.stderr).toBe(0);
+    expect(
+      readFileSync(
+        join(dirname(stateFilePath(actualNewline)), "audit", "resume.md"),
+        "utf-8",
+      ),
+    ).toBe(
+      readFileSync(
+        join(dirname(stateFilePath(literalBackslashN)), "audit", "resume.md"),
+        "utf-8",
+      ),
+    );
+    expect(JSON.parse(actual.stdout)).toEqual({
+      description: "alpha\nbeta",
+      source: PROJECT_DESCRIPTION_FILE,
+    });
+    expect(JSON.parse(literal.stdout)).toEqual({
+      description: "alpha\\nbeta",
+      source: PROJECT_DESCRIPTION_FILE,
+    });
+  });
+
+  test("unmarked records use only the explicit legacy state fallback", () => {
+    const dir = project();
+    writeFileSync(
+      stateFilePath(dir),
+      "# AI-DLC State\n- **Project**: legacy literal \\n value\n",
+    );
+    const result = runProjectDescription(dir);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      description: "legacy literal \\n value",
+      source: "aidlc-state.md#Project",
+    });
+  });
+
+  test("a marked record never degrades to its state preview", () => {
+    const dir = project();
+    writeFileSync(
+      stateFilePath(dir),
+      [
+        "# AI-DLC State",
+        "- **Project**: preview must not win",
+        `- **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}`,
+        "",
+      ].join("\n"),
+    );
+    const missing = runProjectDescription(dir);
+    expect(missing.status).not.toBe(0);
+    expect(missing.stderr).toContain(
+      `${PROJECT_DESCRIPTION_FILE} is required by aidlc-state.md but missing`,
+    );
+
+    writeFileSync(
+      join(dirname(stateFilePath(dir)), PROJECT_DESCRIPTION_FILE),
+      '{"description":"wrong shape"}\n',
+    );
+    const malformed = runProjectDescription(dir);
+    expect(malformed.status).not.toBe(0);
+    expect(malformed.stderr).toContain(
+      "project description JSON must contain one string",
+    );
+  });
+
   test("metacharacters remain filename data and never reach shell evaluation", () => {
     const dir = project();
     const filename =
@@ -191,6 +298,34 @@ describe("t310 document-input deterministic boundary", () => {
     expect(result.stderr).toContain("not direct UTF-8 text or Markdown");
     expect(result.stderr).toContain("/aidlc knowledge onboard");
     expect(result.stderr).toContain("/aidlc knowledge show");
+  });
+
+  test("enforces character and byte bounds before unbounded allocation", () => {
+    const dir = project();
+    const input = join(dir, "large.md");
+    writeRequest(dir, "large.md");
+
+    writeFileSync(input, "x".repeat(200_000));
+    const exactAscii = run(dir);
+    expect(exactAscii.status, exactAscii.stderr).toBe(0);
+    expect(JSON.parse(exactAscii.stdout).content.length).toBe(200_000);
+
+    writeFileSync(input, "é".repeat(200_000));
+    const exactMultibyte = run(dir);
+    expect(exactMultibyte.status, exactMultibyte.stderr).toBe(0);
+    expect(JSON.parse(exactMultibyte.stdout).content.length).toBe(200_000);
+
+    writeFileSync(input, "x".repeat(200_001));
+    const overChars = run(dir);
+    expect(overChars.status).not.toBe(0);
+    expect(overChars.stderr).toContain("contains 200001 characters");
+
+    writeFileSync(input, "");
+    truncateSync(input, 64 * 1024 * 1024);
+    const sparse = run(dir);
+    expect(sparse.status).not.toBe(0);
+    expect(sparse.stderr).toContain("above the 800000-byte limit");
+    expect(sparse.stderr).not.toContain("not direct UTF-8 text or Markdown");
   });
 
   test("requires one non-empty path line in the fixed request file", () => {

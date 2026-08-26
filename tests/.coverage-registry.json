@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 759,
+    "total": 767,
     "enumeratedByClass": {
-      "function": 466,
+      "function": 472,
       "audit": 90,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 134,
+      "subcommand": 136,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 273,
+      "function": 275,
       "audit": 49,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 121,
+      "subcommand": 123,
       "render-surface": 7
     }
   },
@@ -3861,6 +3861,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readProjectDescriptionAuthority",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-document-input.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9089,6 +9101,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t327-plugin-author-routes.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility project-description",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-document-input.test.ts",
           "mechanism": "cli"
         }
       ],
