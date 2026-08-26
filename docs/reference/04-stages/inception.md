@@ -1193,7 +1193,14 @@ All Inception phase artifacts:
 
 6. **Prepare Completion** -- Verify the delivery and boundary-verification
    artifacts. Do not write the phase or stage state; the approval report owns
-   the atomic Inception-to-Construction transition.
+   the atomic Inception-to-Construction transition. Classify the approved
+   Bolt plan's Construction iteration. A unit-first plan may record
+   `set-construction-iteration unit-major`. Then ask whether one session or
+   several teams own Units; team ownership records `set-unit-ownership team`
+   (unit-major required) and asks whether approvals happen after every stage
+   (`set-unit-gate-rhythm per-stage`, default) or once after the Unit chain
+   (`unit-end`). The user-facing questions explain those choices without
+   exposing field/enum names.
 
 7. **Present Completion & Request Approval** -- Display completion message
    with :calendar: emoji. Approval gate: Approve (proceed to Construction) /

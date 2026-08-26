@@ -162,6 +162,8 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     "SWARM_UNIT_CONVERGED",
     "SWARM_SOURCE_MERGED",
     "AUTONOMY_MODE_SET",
+    "UNIT_OWNERSHIP_SET",
+    "UNIT_GATE_RHYTHM_SET",
     "UNIT_STARTED",
     "UNIT_PAUSED",
     "UNIT_RESUMED",
@@ -593,6 +595,51 @@ describe("t261 explicit decision self-attribution tripwire", () => {
     expect(guarded(STATE, ["gate-start", "feasibility"], p, DIRECT).rc).toBe(0);
     mintHumanTurn(p);
   }
+
+  test("solo approve/reject preserve state-precondition error precedence", () => {
+    proj = ideationProject();
+    const approve = guarded(
+      STATE,
+      ["approve", "scope-definition"],
+      proj,
+      DIRECT,
+    );
+    expect(approve.rc).not.toBe(0);
+    expect(approve.out).toContain(
+      "Stage scope-definition is in state 'pending'",
+    );
+    expect(approve.out).not.toContain("--user-input must contain");
+
+    const reject = guarded(
+      STATE,
+      ["reject", "scope-definition", "--feedback", "change it"],
+      proj,
+      DIRECT,
+    );
+    expect(reject.rc).not.toBe(0);
+    expect(reject.out).toContain(
+      "Stage scope-definition is in state 'pending'",
+    );
+    expect(reject.out).not.toContain("a real human has not acted");
+
+    mintHumanTurn(proj);
+    const attributed = guarded(
+      STATE,
+      [
+        "reject",
+        "scope-definition",
+        "--feedback",
+        "I, the conductor, am rejecting this.",
+      ],
+      proj,
+      DIRECT,
+    );
+    expect(attributed.rc).not.toBe(0);
+    expect(attributed.out).toContain(
+      "Stage scope-definition is in state 'pending'",
+    );
+    expect(attributed.out).not.toContain("decision self-attribution blocked");
+  });
 
   // This is deliberately a high-confidence tripwire, not proof of human
   // authorship. It rejects explicit self-attribution observed in issue 742 and

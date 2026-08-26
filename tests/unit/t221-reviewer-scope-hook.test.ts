@@ -405,6 +405,48 @@ function seedRecord(proj: string, overrides: Partial<ReviewerDispatch> = {}): vo
   );
 }
 
+function seedUnitScope(proj: string, unit = "U03-scoring"): void {
+  writeFileSync(
+    join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"),
+    "# AI-DLC State Tracking\n\n## Runtime State\n- **Unit Ownership**: team\n",
+    "utf-8",
+  );
+  writeFileSync(
+    join(proj, "aidlc", ".aidlc-unit-scope.json"),
+    `${JSON.stringify({
+      version: 1,
+      space: "default",
+      intent_uuid: "00000000-0000-4000-8000-000000000221",
+      intent_id8: "00000000",
+      unit,
+      owner: "t221",
+      generation: 1,
+      nonce: "t221-nonce",
+      claim_ref: `refs/heads/claim/00000000/${unit}`,
+      claim_oid: "1".repeat(40),
+      claimed_from_oid: "2".repeat(40),
+      integration_ref: "refs/heads/main",
+      gate_rhythm: "per-stage",
+    })}\n`,
+    "utf-8",
+  );
+}
+
+function seedAuditShard(proj: string): string {
+  const auditDir = join(proj, "aidlc", "spaces", "default", "intents", "audit");
+  mkdirSync(auditDir, { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "t221clone\n", "utf-8");
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  const shardPath = join(auditDir, `${host}-t221clone.md`);
+  writeFileSync(shardPath, "# Audit\n", "utf-8");
+  return shardPath;
+}
+
 function runHook(
   proj: string,
   payload: Record<string, unknown>,
@@ -494,6 +536,53 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(r.code).toBe(0);
   });
 
+  test("claimed checkout blocks normalized traversal and case-variant writes without a dispatch record", () => {
+    const proj = scratchProject();
+    seedUnitScope(proj);
+    const shardPath = seedAuditShard(proj);
+    const cwd = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "construction",
+      "U03-scoring",
+    );
+    const r = runHook(proj, {
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: "../u05-API/design.md" },
+      cwd,
+    });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('scoped to Unit "U03-scoring"');
+    expect(r.stderr).toContain("../u05-API/design.md");
+    const shard = readFileSync(shardPath, "utf-8");
+    expect(shard).toContain("REVIEWER_SCOPE_BLOCKED");
+    expect(shard).toContain("**Stage**: claimed-checkout");
+    expect(shard).toContain("**Target**: ../u05-API/design.md");
+  });
+
+  test("claimed checkout Bash matching follows the dispatch matcher", () => {
+    const proj = scratchProject();
+    seedUnitScope(proj);
+    const foreign = runHook(proj, {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "touch Construction/u05-API/result.md" },
+    });
+    expect(foreign.code).toBe(2);
+    expect(foreign.stderr).toContain("Construction/u05-API/result.md");
+
+    const current = runHook(proj, {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "touch construction/u03-SCORING/result.md" },
+    });
+    expect(current.code).toBe(0);
+  });
+
   test("garbage stdin fails open", () => {
     const proj = scratchProject();
     seedRecord(proj);
@@ -512,17 +601,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     // (audit/<host>-<clone>.md under the bare space record root) - the hook
     // gates its emit on that exact file existing. Pin the clone-id (t131's
     // idiom) so the seeded shard and the hook's resolved shard agree.
-    const auditDir = join(proj, "aidlc", "spaces", "default", "intents", "audit");
-    mkdirSync(auditDir, { recursive: true });
-    writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "t221clone\n", "utf-8");
-    const host =
-      hostname()
-        .toLowerCase()
-        .replace(/[^a-z0-9-]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 48) || "host";
-    const shardPath = join(auditDir, `${host}-t221clone.md`);
-    writeFileSync(shardPath, "# Audit\n", "utf-8");
+    const shardPath = seedAuditShard(proj);
     const r = runHook(proj, SIBLING_SWEEP);
     expect(r.code).toBe(2);
     const shard = readFileSync(shardPath, "utf-8");

@@ -38,6 +38,8 @@ Authoritative generated views:
 
 ## Runtime State
 - **Revision Count**: [integer]
+- **Unit Ownership**: [solo/team; optional, exact `team` activates the derived grid]
+- **Unit Gate Rhythm**: [per-stage/unit-end; optional, defaults to per-stage under team ownership]
 
 ## Phase Progress
 <!-- Status values: Pending, Active, Verified, Skipped -->
@@ -52,6 +54,23 @@ compiled stage in that phase:
 
 ### [PHASE] PHASE
 - [ ] stage-slug — [EXECUTE/SKIP: reason]
+
+## Unit Progress
+
+Present only when `Unit Ownership: team` and `Construction Iteration:
+unit-major`. This table is an engine-owned, derived projection of the Unit DAG,
+artifact coverage, lifecycle receipts, and unit gate events. It is rewritten on
+every `next`; hand edits are never routing or completion evidence.
+
+| unit | owner | [per-unit Construction stage columns in graph order] | gate |
+| --- | --- | --- | --- |
+| [Unit name] | - | [[ ]/[-]/[?]/[R]/[x]/[S] per stage] | [[ ]/[-]/[?]/[R]/[x]] |
+
+The stage columns use the same checkbox vocabulary as `## Stage Progress`.
+`owner` remains `-` until the claim increment supplies ownership. `gate`
+summarizes the current per-stage gates or the unit-end gate, depending on Unit
+Gate Rhythm. Stage Progress rows are derived complete only when their Unit
+Progress column and required team gates are complete.
 
 ## Current Status
 - **Lifecycle Phase**: [READY/INITIALIZATION/IDEATION/INCEPTION/CONSTRUCTION/OPERATION]

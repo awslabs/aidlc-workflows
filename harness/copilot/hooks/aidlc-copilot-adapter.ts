@@ -531,7 +531,7 @@ export async function run(
     if (lines.length > 2 || lines.slice(1).some((line) => !/^<shellId:\s*[^>]*completed with exit code 0>$/.test(line.trim()))) return null;
     try {
       const value = JSON.parse(lines[0]?.trim() ?? "") as Record<string, unknown>;
-      const kinds = new Set(["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "dispatch-subagent", "invoke-swarm", "present-gate"]);
+      const kinds = new Set(["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"]);
       if (!kinds.has(String(value.kind))) return null;
       const directive: CopilotDirectiveMetadata = {
         kind: value.kind as CopilotDirectiveMetadata["kind"],

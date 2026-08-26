@@ -74,12 +74,15 @@ export const TOOLS = {
   sensorUpstreamCoverage: "aidlc-sensor-upstream-coverage.ts",
   state: "aidlc-state.ts",
   swarm: "aidlc-swarm.ts",
+  unit: "aidlc-unit.ts",
   utility: "aidlc-utility.ts",
   validate: "aidlc-validate.ts",
   worktree: "aidlc-worktree.ts",
 } as const;
 
 export const SLASH_FLAG_ALIASES: readonly Alias[] = [
+  { from: "--claim", to: "unit claim", irregular: true },
+  { from: "--release", to: "unit release", irregular: true },
   { from: "--status", to: "status" },
   { from: "--doctor", to: "doctor" },
   { from: "--help", to: "help" },
@@ -98,14 +101,51 @@ export const ROUTES: readonly Route[] = [
     group: "top",
     kind: "top-passthrough",
     classification: "passthrough",
-    verbs: ["next", "continue", "report", "park"],
+    verbs: ["next", "continue", "report", "park", "team-board"],
     tool: TOOLS.orchestrate,
     human: [
       { command: "next [args]", summary: "run the next orchestrator action" },
       { command: "report [args]", summary: "render the orchestrator report" },
       { command: "park [args]", summary: "park the current workflow" },
     ],
-    all: ["next [args]", "continue <token>", "report [args]", "park [args]"],
+    all: [
+      "next [args]",
+      "continue <token>",
+      "report [args]",
+      "park [args]",
+      "team-board [--snapshot]",
+    ],
+  },
+  {
+    id: "unit",
+    group: "unit",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: [
+      "adopt",
+      "claim",
+      "gate",
+      "land",
+      "merge-status",
+      "participate",
+      "pin",
+      "publish",
+      "release",
+      "status",
+    ],
+    tool: TOOLS.unit,
+    all: [
+      "unit adopt <unit>",
+      "unit claim <unit>",
+      "unit gate <unit> --decision <approve|reject> --user-input <text>",
+      "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--accept-released-attempt --user-input <text>]",
+      "unit merge-status <unit>",
+      "unit participate",
+      "unit pin <unit>",
+      "unit publish <unit>",
+      "unit release <unit>",
+      "unit status",
+    ],
   },
   {
     id: "top-compose",
@@ -749,6 +789,8 @@ function resolveAlias(argv: string[]): Action | undefined {
       : topLevelError(argv.slice(0, 2).join(" "));
   }
   if (head === "--status") return { type: "delegate", tool: TOOLS.utility, args: ["status", ...argv.slice(1)] };
+  if (head === "--claim") return { type: "delegate", tool: TOOLS.utility, args: ["claim", ...argv.slice(1)] };
+  if (head === "--release") return { type: "delegate", tool: TOOLS.utility, args: ["release", ...argv.slice(1)] };
   if (head === "--doctor") return { type: "delegate", tool: TOOLS.utility, args: ["doctor", ...argv.slice(1)] };
   if (head === "--version") return { type: "version" };
   if (head === "--resume") return { type: "delegate", tool: TOOLS.orchestrate, args: ["next", "--resume", ...argv.slice(1)] };
@@ -953,6 +995,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-sensor-upstream-coverage.ts");
     case TOOLS.state:
       return import("./aidlc-state.ts");
+    case TOOLS.unit:
+      return import("./aidlc-unit.ts");
     case TOOLS.swarm:
       return import("./aidlc-swarm.ts");
     case TOOLS.utility:

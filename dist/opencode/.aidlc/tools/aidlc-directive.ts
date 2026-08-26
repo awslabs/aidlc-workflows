@@ -1,7 +1,7 @@
 // Directive schema — the frozen engine↔conductor interface. The engine
 // (aidlc-orchestrate.ts) answers "what's next?" with exactly one typed
 // `Directive`; the conductor reads its `kind` and does the one move it names.
-// This module defines the discriminated union over the 10 kinds the engine can
+// This module defines the discriminated union over the 11 kinds the engine can
 // emit, plus a runtime validator. Sibling of aidlc-stage-schema.ts and
 // aidlc-sensor-schema.ts — same tool-boundary discipline: a refused or
 // malformed directive is a clear signal, not a silent miss.
@@ -67,7 +67,7 @@ export const VALID_PROTOCOL_MODULES = [
 ] as const;
 export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
 
-// The 10 kinds, keyed on the `kind` discriminator.
+// The 11 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
   | "load-steering"
   | "run-stage"
@@ -78,7 +78,8 @@ export type DirectiveKind =
   | "print"
   | "error"
   | "done"
-  | "parked";
+  | "parked"
+  | "notice";
 
 // load-steering - one bounded part of the active stage's deterministic rule
 // bundle. The conductor applies rules_content in order and immediately invokes
@@ -173,6 +174,9 @@ export interface RunStageDirective {
   // walking-skeleton gate, which the conductor resolves via report (the
   // classify round-trip — see GATE_UNRESOLVED above).
   gate: GateValue;
+  // Present only for team-owned unit-major approval beats. The stage body is
+  // already settled; the conductor opens/reports this unit gate with --unit.
+  unit_gate?: "per-stage" | "unit-end";
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
@@ -356,7 +360,18 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   proposed_scope: string;
 }
 
-export type AskDirective = ReportAskDirective | NewWorkRoutingAskDirective;
+export interface UnitClaimAskDirective extends AskDirectiveBase {
+  ask_type: "unit-claim";
+  response_route: "claim";
+  claimable_units: string[];
+  claimed_units: Array<{ unit: string; holder: string }>;
+  waiting_units: Array<{ unit: string; blocked_by: string[] }>;
+}
+
+export type AskDirective =
+  | ReportAskDirective
+  | NewWorkRoutingAskDirective
+  | UnitClaimAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
@@ -407,6 +422,12 @@ export interface StageValidityAdvisory {
   warning: string;
 }
 
+export interface NoticeDirective {
+  kind: "notice";
+  narration?: NarrationField;
+  message: string;
+}
+
 // The Directive union — the engine emits exactly one of these per `next`.
 type DirectivePayload =
   | LoadSteeringDirective
@@ -418,7 +439,8 @@ type DirectivePayload =
   | PrintDirective
   | ErrorDirective
   | DoneDirective
-  | ParkedDirective;
+  | ParkedDirective
+  | NoticeDirective;
 
 /** `stage_validity` is universal and advisory; `kind` still owns routing. */
 export type Directive = DirectivePayload & {
@@ -431,7 +453,7 @@ export type ValidationResult =
 
 // --- Exported constants (imported by tests) ---
 
-// The 10 kinds, in the engine design's catalogue order. Used both for the unknown-kind
+// The 11 kinds, in the engine design's catalogue order. Used both for the unknown-kind
 // error message and as the discriminator allowlist.
 export const VALID_KINDS = [
   "load-steering",
@@ -444,6 +466,7 @@ export const VALID_KINDS = [
   "error",
   "done",
   "parked",
+  "notice",
 ] as const;
 
 // The mode enum carried by run-stage / dispatch-subagent. Mirrors
@@ -468,6 +491,7 @@ const RUN_STAGE_FIELDS = [
   "inline_context_paths",
   "context_warnings",
   "gate",
+  "unit_gate",
   "memory_path",
   "consumes",
   "produces",
@@ -528,14 +552,18 @@ const ASK_FIELDS = [
   "response_route",
   "new_work_description",
   "proposed_scope",
+  "claimable_units",
+  "claimed_units",
+  "waiting_units",
 ] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
+const NOTICE_FIELDS = ["kind", "message"] as const;
 
 // `narration` is legal on EVERY kind, so it is folded into each allowed-key set
-// centrally rather than repeated in ten literals. A presentation field carries no
+// centrally rather than repeated in eleven literals. A presentation field carries no
 // per-kind meaning: the conductor speaks it when present and works silently when
 // absent, on any kind. Folding it here also means a future emission point can
 // attach a line without touching this file.
@@ -559,6 +587,7 @@ const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> =
   error: withNarration(ERROR_FIELDS),
   done: withNarration(DONE_FIELDS),
   parked: withNarration(PARKED_FIELDS),
+  notice: withNarration(NOTICE_FIELDS),
 };
 
 // --- Validator ---
@@ -603,7 +632,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   }
 
   // Rule 3b: narration is legal on every kind, so it is type-checked once here
-  // rather than in each of the ten switch arms. Optional: absent is the normal
+  // rather than in each of the eleven switch arms. Optional: absent is the normal
   // case and never an error; present-but-not-a-string is, because the conductor
   // would otherwise be handed a non-sentence to speak.
   checkOptionalString(o, NARRATION_FIELD, kind, errors);
@@ -663,9 +692,13 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "response_route", kind, errors);
       checkOptionalString(o, "new_work_description", kind, errors);
       checkOptionalString(o, "proposed_scope", kind, errors);
-      if ("ask_type" in o && o.ask_type !== "new-work-routing") {
+      if (
+        "ask_type" in o &&
+        o.ask_type !== "new-work-routing" &&
+        o.ask_type !== "unit-claim"
+      ) {
         errors.push(
-          `${kind}: ask_type must be one of new-work-routing, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of new-work-routing, unit-claim, got ${String(o.ask_type)}`,
         );
       }
       if (o.ask_type === "new-work-routing") {
@@ -674,11 +707,21 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
         checkString(o, "new_work_description", kind, errors);
         checkString(o, "proposed_scope", kind, errors);
+      } else if (o.ask_type === "unit-claim") {
+        if (o.response_route !== "claim") {
+          errors.push(`${kind}: unit-claim response_route must be "claim"`);
+        }
+        checkStringArray(o, "claimable_units", kind, errors);
+        checkUnitClaimRows(o, "claimed_units", "holder", kind, errors);
+        checkUnitClaimRows(o, "waiting_units", "blocked_by", kind, errors);
       } else {
         for (const field of [
           "response_route",
           "new_work_description",
           "proposed_scope",
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
         ] as const) {
           if (field in o) {
             errors.push(
@@ -700,6 +743,9 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "parked":
       checkString(o, "reason", kind, errors);
       checkString(o, "stage", kind, errors);
+      break;
+    case "notice":
+      checkString(o, "message", kind, errors);
       break;
     // No default: the union is exhaustive — every member of DirectiveKind has a
     // case above. TS flags a missing case at compile time if a kind is added.
@@ -767,6 +813,17 @@ function checkRunStageShared(
   // Construction directive resolved to a concrete Unit of Work). A present
   // value must be a string; absent is valid.
   checkOptionalString(o, "unit", kind, errors);
+  checkOptionalString(o, "unit_gate", kind, errors);
+  checkEnum(
+    o,
+    "unit_gate",
+    ["per-stage", "unit-end"] as const,
+    kind,
+    errors,
+  );
+  if ("unit_gate" in o && typeof o.unit !== "string") {
+    errors.push(`${kind}: unit_gate requires unit`);
+  }
   // consumes_absent: optional (present only when a declared consume's file is
   // missing at emit time). Each entry must be {path: string, expected: boolean}.
   checkOptionalConsumesAbsent(o, "consumes_absent", kind, errors);
@@ -1307,12 +1364,52 @@ function checkEnum(
   }
 }
 
+function checkUnitClaimRows(
+  o: Record<string, unknown>,
+  field: string,
+  valueField: "holder" | "blocked_by",
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  const value = o[field];
+  if (!Array.isArray(value)) {
+    errors.push(`${kind}: field ${field} must be an array`);
+    return;
+  }
+  for (let i = 0; i < value.length; i++) {
+    const row = value[i];
+    if (row === null || typeof row !== "object" || Array.isArray(row)) {
+      errors.push(`${kind}: ${field}[${i}] must be an object`);
+      continue;
+    }
+    const record = row as Record<string, unknown>;
+    if (typeof record.unit !== "string") {
+      errors.push(`${kind}: ${field}[${i}].unit must be a string`);
+    }
+    if (
+      valueField === "holder" &&
+      typeof record.holder !== "string"
+    ) {
+      errors.push(`${kind}: ${field}[${i}].holder must be a string`);
+    }
+    if (
+      valueField === "blocked_by" &&
+      (
+        !Array.isArray(record.blocked_by) ||
+        !record.blocked_by.every((entry) => typeof entry === "string")
+      )
+    ) {
+      errors.push(`${kind}: ${field}[${i}].blocked_by must be a string array`);
+    }
+  }
+}
+
 // --- CLI self-check ---
 //
-// `bun aidlc-directive.ts` constructs one well-formed example of each of the 10
+// `bun aidlc-directive.ts` constructs one well-formed example of each of the 11
 // kinds, validates each, prints one line per kind ("<kind>: VALID" or the
-// errors), and exits 0 iff all 10 validate. Satisfies the acceptance check
-// "bun .../aidlc-directive.ts validates the 10 kinds".
+// errors), and exits 0 iff all 11 validate. Satisfies the acceptance check
+// "bun .../aidlc-directive.ts validates the 11 kinds".
 if (import.meta.main) {
   // One well-formed example per kind. run-stage mirrors the engine design's example
   // directive verbatim (domain-design); the others follow the same catalogue table.
@@ -1395,6 +1492,7 @@ if (import.meta.main) {
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
     { kind: "done", reason: "Workflow complete — all in-scope stages approved." },
     { kind: "parked", reason: 'Workflow parked at "feasibility". Resume with /aidlc --resume.', stage: "feasibility" },
+    { kind: "notice", message: "Team Unit fan-out is active." },
     // The classify-round-trip skeleton case: gate is the unresolved sentinel,
     // and the first run-stage of a workflow also carries the conductor persona.
     {

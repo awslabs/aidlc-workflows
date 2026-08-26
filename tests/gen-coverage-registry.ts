@@ -102,6 +102,9 @@ const ARTIFACT_VOCABULARY_PATH = join(
   TOOLS_DIR,
   "aidlc-artifact-vocabulary.ts",
 );
+const ORCHESTRATE_PATH = join(TOOLS_DIR, "aidlc-orchestrate.ts");
+const UNIT_PATH = join(TOOLS_DIR, "aidlc-unit.ts");
+const UTILITY_PATH = join(TOOLS_DIR, "aidlc-utility.ts");
 
 const REGISTRY_PATH =
   process.env.AIDLC_COVERAGE_REGISTRY ?? join(TESTS_DIR, ".coverage-registry.json");
@@ -236,6 +239,8 @@ export interface RegistryRow {
 //                     nested sub-switches (state.ts has practices-event + lookup
 //                     sub-switches keyed on different vars; we read only the
 //                     entry one keyed on `subcommand`).
+//   kind "if-chain" -> the entry `if (<anchor> === "x") ... else if ...` chain
+//                     inside main() (aidlc-unit uses this compact dispatch form).
 //
 // Verified against source on 2026-05-31:
 //   state.ts:115 switch(subcommand)     audit.ts:639 switch(subcommand)
@@ -243,15 +248,18 @@ export interface RegistryRow {
 //   log.ts:133 switch(subcommand)       worktree.ts:777 switch(subcommand)
 //   validate.ts:295 switch(subcommand)  learnings.ts:750 switch(cmd)
 //   sensor.ts:659 switch(cmd)           utility.ts:2814 switch(subcommand)
-//   graph.ts:1088 const COMMANDS = {}   runtime.ts:1024 const SUBCOMMANDS = {}
+//   unit.ts:729 if(command === ...)      graph.ts:1088 const COMMANDS = {}
+//   runtime.ts:1024 const SUBCOMMANDS = {}
 // ---------------------------------------------------------------------------
 interface ToolDescriptor {
   file: string; // basename under TOOLS_DIR
-  kind: "object" | "switch";
+  kind: "object" | "switch" | "if-chain";
   anchor: string; // object const name, or the switch variable
 }
 
 export const TOOL_DESCRIPTORS: readonly ToolDescriptor[] = [
+  { file: "aidlc-orchestrate.ts", kind: "switch", anchor: "subcommand" },
+  { file: "aidlc-unit.ts", kind: "if-chain", anchor: "command" },
   { file: "aidlc-state.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-audit.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-bolt.ts", kind: "switch", anchor: "subcommand" },
@@ -346,14 +354,34 @@ export function parseSwitchDispatchCases(
   return cases;
 }
 
+/** String-literal commands in the direct `if/else if` dispatch chain keyed on
+ *  `dispatchVar`. The aidlc-unit entrypoint uses this compact form instead of a
+ *  switch; equality checks elsewhere are excluded by limiting the scan to
+ *  main()'s balanced function body. */
+export function parseIfDispatchCases(
+  src: string,
+  dispatchVar: string,
+): string[] {
+  const main = /\b(?:export\s+)?function\s+main\s*\([^)]*\)\s*:\s*void\s*\{/.exec(src);
+  if (!main) return [];
+  const block = balancedBlock(src, main.index);
+  const cases: string[] = [];
+  const re = new RegExp(
+    `^\\s*(?:if|else\\s+if)\\s*\\(\\s*${dispatchVar}\\s*===\\s*"([a-z][a-z0-9-]*)"\\s*\\)`,
+  );
+  for (const line of block.split("\n")) {
+    const match = re.exec(line);
+    if (match) cases.push(match[1]);
+  }
+  return cases;
+}
+
 /** Public: the subcommands of one tool, by its descriptor. */
 export function subcommandsForTool(d: ToolDescriptor): string[] {
   const src = readFileSync(join(TOOLS_DIR, d.file), "utf-8");
-  const keys =
-    d.kind === "object"
-      ? parseObjectDispatchKeys(src, d.anchor)
-      : parseSwitchDispatchCases(src, d.anchor);
-  return keys;
+  if (d.kind === "object") return parseObjectDispatchKeys(src, d.anchor);
+  if (d.kind === "if-chain") return parseIfDispatchCases(src, d.anchor);
+  return parseSwitchDispatchCases(src, d.anchor);
 }
 
 /** ANTI-ROT GUARD (b), independent counter. Re-counts the dispatch sites in the
@@ -368,6 +396,16 @@ export function independentSubcommandCount(d: ToolDescriptor): number {
     if (!m) return 0;
     const block = balancedBlock(src, m.index);
     return countDepthOneKeys(block);
+  }
+  if (d.kind === "if-chain") {
+    const main = /\b(?:export\s+)?function\s+main\s*\([^)]*\)\s*:\s*void\s*\{/.exec(src);
+    if (!main) return 0;
+    const block = balancedBlock(src, main.index);
+    const re = new RegExp(
+      `\\b${d.anchor}\\s*===\\s*"[a-z][a-z0-9-]*"`,
+      "g",
+    );
+    return block.match(re)?.length ?? 0;
   }
   const swRe = new RegExp(`\\bswitch\\s*\\(\\s*${d.anchor}\\s*\\)\\s*\\{`);
   const m = swRe.exec(src);
@@ -571,6 +609,47 @@ export function enumerateExportedFunctions(): Unit[] {
         minMechanism: MIN_MECHANISM.function,
         source: rel,
       });
+    }
+  }
+  for (const [path, rel, names] of [
+    [
+      ORCHESTRATE_PATH,
+      "dist/claude/.claude/tools/aidlc-orchestrate.ts",
+      new Set([
+        "buildTeamConstructionBoard",
+        "buildTeamConstructionBoardForIntent",
+        "renderTeamConstructionBoard",
+      ]),
+    ],
+    [
+      UNIT_PATH,
+      "dist/claude/.claude/tools/aidlc-unit.ts",
+      new Set(["localUnitClaimOverviewForIntent"]),
+    ],
+    [
+      UTILITY_PATH,
+      "dist/claude/.claude/tools/aidlc-utility.ts",
+      new Set(["CLAIM_ACTIVITY_STALE_HOURS"]),
+    ],
+  ] as const) {
+    const src = readFileSync(path, "utf-8");
+    const found = new Set<string>();
+    for (const m of src.matchAll(re)) {
+      if (!names.has(m[1])) continue;
+      found.add(m[1]);
+      units.push({
+        unitClass: "function",
+        unitId: `function:${m[1]}`,
+        minMechanism: MIN_MECHANISM.function,
+        source: rel,
+      });
+    }
+    for (const name of names) {
+      if (!found.has(name)) {
+        throw new Error(
+          `function enumerator: expected export "${name}" missing from ${rel}`,
+        );
+      }
     }
   }
   return units;

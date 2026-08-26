@@ -303,12 +303,26 @@ function parseDispositionField(
 export function readReviewFindingDispositions(
   projectDir: string,
   stageSlug: string,
+  unit?: string,
 ): Map<string, ReviewFindingDisposition> {
   const events = readAuditShardEvents(projectDir)
-    .filter((event) =>
-      (event.event === "GATE_APPROVED" || event.event === "GATE_REJECTED") &&
-      auditBlockField(event.block, "Stage") === stageSlug
-    )
+    .filter((event) => {
+      if (event.event !== "GATE_APPROVED" && event.event !== "GATE_REJECTED") {
+        return false;
+      }
+      const gateStages = (auditBlockField(event.block, "Gate Stages") ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      if (
+        auditBlockField(event.block, "Stage") !== stageSlug &&
+        !gateStages.includes(stageSlug)
+      ) {
+        return false;
+      }
+      const eventUnit = auditBlockField(event.block, "Unit");
+      return unit === undefined || eventUnit === null || eventUnit === unit;
+    })
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
       if (a.shard === b.shard) return a.pos - b.pos;
@@ -354,6 +368,16 @@ export function readReviewFindingDispositions(
   return result;
 }
 
+type ReviewDispositionStages =
+  | ReviewFingerprintStage
+  | ReviewFingerprintStage[];
+
+function dispositionStages(
+  stages: ReviewDispositionStages,
+): ReviewFingerprintStage[] {
+  return Array.isArray(stages) ? stages : [stages];
+}
+
 export function hydrateReviewArtifactContexts(
   contexts: ReviewArtifactContext[],
   dispositions: Map<string, ReviewFindingDisposition>,
@@ -371,25 +395,28 @@ export function hydrateReviewArtifactContexts(
 
 export function acceptedRiskDispositionField(
   projectDir: string,
-  stage: ReviewFingerprintStage,
+  stages: ReviewDispositionStages,
+  unit?: string,
 ): string | undefined {
-  if (!stage.reviewer) return undefined;
-  const hydrated = hydrateReviewArtifactContexts(
-    readReviewArtifactContexts(projectDir, stage),
-    readReviewFindingDispositions(projectDir, stage.slug),
-  );
-  const dispositions = hydrated.flatMap((context) =>
-    context.findings
-      .filter((finding) =>
-        finding.status === "New" || finding.status === "Unresolved"
-      )
-      .map((finding): ReviewFindingDisposition => ({
-        artifact: finding.artifact,
-        id: finding.id,
-        fingerprint: finding.fingerprint,
-        status: "Accepted risk",
-      }))
-  );
+  const dispositions = dispositionStages(stages).flatMap((stage) => {
+    if (!stage.reviewer) return [];
+    const hydrated = hydrateReviewArtifactContexts(
+      readReviewArtifactContexts(projectDir, stage, unit),
+      readReviewFindingDispositions(projectDir, stage.slug, unit),
+    );
+    return hydrated.flatMap((context) =>
+      context.findings
+        .filter((finding) =>
+          finding.status === "New" || finding.status === "Unresolved"
+        )
+        .map((finding): ReviewFindingDisposition => ({
+          artifact: finding.artifact,
+          id: finding.id,
+          fingerprint: finding.fingerprint,
+          status: "Accepted risk",
+        }))
+    );
+  });
   return serializeReviewFindingDispositions(dispositions);
 }
 
@@ -411,20 +438,28 @@ function parseRejectedFindingSpec(
 
 export function rejectedFindingDispositionField(
   projectDir: string,
-  stage: ReviewFingerprintStage,
+  stages: ReviewDispositionStages,
   specs: string[],
+  unit?: string,
 ): string | undefined {
   if (specs.length === 0) return undefined;
-  if (!stage.reviewer) {
+  const stageList = dispositionStages(stages);
+  if (!stageList.some((stage) => stage.reviewer)) {
+    const subject = stageList.length === 1
+      ? `stage "${stageList[0].slug}"`
+      : `gate "${stageList.map((stage) => stage.slug).join(",")}"`;
     throw new Error(
-      `Cannot reject review findings for "${stage.slug}": the stage has no reviewer.`,
+      `Cannot reject review findings for ${subject}: ` +
+        `the ${stageList.length === 1 ? "stage" : "gate"} has no reviewer.`,
     );
   }
-  const hydrated = hydrateReviewArtifactContexts(
-    readReviewArtifactContexts(projectDir, stage),
-    readReviewFindingDispositions(projectDir, stage.slug),
-  );
-  const findings = hydrated.flatMap((context) => context.findings);
+  const findings = stageList.flatMap((stage) => {
+    if (!stage.reviewer) return [];
+    return hydrateReviewArtifactContexts(
+      readReviewArtifactContexts(projectDir, stage, unit),
+      readReviewFindingDispositions(projectDir, stage.slug, unit),
+    ).flatMap((context) => context.findings);
+  });
   const dispositions: ReviewFindingDisposition[] = [];
   const seen = new Set<string>();
   for (const raw of specs) {
@@ -441,7 +476,7 @@ export function rejectedFindingDispositionField(
     );
     if (!finding) {
       throw new Error(
-        `Cannot reject ${spec.artifact}#${spec.id}: it is not a current review finding for "${stage.slug}".`,
+        `Cannot reject ${spec.artifact}#${spec.id}: it is not a current review finding for this gate.`,
       );
     }
     if (finding.status !== "New" && finding.status !== "Unresolved") {

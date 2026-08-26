@@ -13,8 +13,10 @@ import {
   auditBlockField,
   boltSlugForUnit,
   checkSummaryConfirmationEvidence,
+  claimAttemptFields,
   emitError,
   errorMessage,
+  eventMatchesClaimAttempt,
   formatReceivedReply,
   freshReviewReceipts,
   filterProducesByKind,
@@ -24,6 +26,7 @@ import {
   humanPresenceGuardDisabled,
   isAutonomousConstructionDecision,
   isAutonomousSwarmStage,
+  isTeamUnitOwnership,
   loadStageGraphAll,
   isNonAnswer,
   parseCheckboxes,
@@ -50,11 +53,12 @@ import {
   toPosix,
   unitSourceFingerprint,
   UNBINDABLE_FINGERPRINT,
+  validateLiveUnitScope,
   withAuditLock,
   workspaceSourceState,
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
-import type { ReviewClass } from "./aidlc-lib.js";
+import type { AuditShardEvent, ReviewClass } from "./aidlc-lib.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -197,6 +201,7 @@ function handleDecision(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
+  if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const summaryEvidence =
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
@@ -211,7 +216,10 @@ function handleDecision(args: string[]): void {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;
   }
-  if (flags.unit) fields.Unit = flags.unit;
+  if (flags.unit) {
+    fields.Unit = flags.unit;
+    Object.assign(fields, claimAttemptFields(pd, flags.unit));
+  }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
   try {
@@ -307,13 +315,16 @@ function pendingSummaryDecision(
     ) {
       return false;
     }
-    return (
+    const matching =
       auditBlockField(entry.block, "Stage") === stage &&
       auditBlockField(entry.block, "Checkpoint") ===
         SUMMARY_CONFIRMATION_CHECKPOINT &&
       (auditBlockField(entry.block, "Unit") ?? undefined) === unit &&
       (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow &&
-      auditBlockField(entry.block, "Questions File") === questionsFile
+      auditBlockField(entry.block, "Questions File") === questionsFile;
+    return matching && (
+      unit === undefined ||
+      eventMatchesClaimAttempt(pd, entry.block, unit)
     );
   });
   if (entries.length === 0) {
@@ -456,6 +467,7 @@ function handleAnswer(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
+  if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const summaryEvidence = summaryCheckpoint
     ? summaryQuestionEvidence(pd, flags, flags.details)
     : null;
@@ -469,7 +481,10 @@ function handleAnswer(args: string[]): void {
     fields["Questions SHA-256"] = summaryEvidence!.sha256;
     fields["Hash Scope"] = SUMMARY_CONFIRMATION_HASH_SCOPE;
   }
-  if (flags.unit) fields.Unit = flags.unit;
+  if (flags.unit) {
+    fields.Unit = flags.unit;
+    Object.assign(fields, claimAttemptFields(pd, flags.unit));
+  }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
   // Classification and emission run under ONE audit lock: a concurrent
@@ -758,7 +773,7 @@ type ReviewAttemptSummary = {
 // per-unit floor because the forked audit inherits the main workflow's prior
 // rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
 function reviewAttemptSummary(
-  projectDir: string,
+  rows: AuditShardEvent[],
   stateContent: string,
   stage: { slug: string; for_each?: string },
   reviewer: string,
@@ -777,12 +792,13 @@ function reviewAttemptSummary(
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
-  const events = readAuditShardEvents(projectDir)
+  const events = rows
     .filter((row) => relevant.has(row.event))
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
       if (a.shard === b.shard) return a.pos - b.pos;
-      return a.shardIndex - b.shardIndex;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
     });
   const tiedAcrossShards = (index: number): boolean =>
     events.some(
@@ -791,10 +807,33 @@ function reviewAttemptSummary(
         row.timestamp === events[index].timestamp &&
         row.shard !== events[index].shard,
     );
+  const tiedOnlyToWorkflowBoundary = (index: number): boolean => {
+    let sawBoundary = false;
+    for (let other = 0; other < events.length; other++) {
+      if (
+        other === index ||
+        events[other].timestamp !== events[index].timestamp ||
+        events[other].shard === events[index].shard
+      ) {
+        continue;
+      }
+      if (
+        events[other].event !== "WORKFLOW_STARTED" &&
+        events[other].event !== "STAGE_JUMPED"
+      ) {
+        return false;
+      }
+      sawBoundary = true;
+    }
+    return sawBoundary;
+  };
 
   const unitMajor =
     stage.for_each === "unit-of-work" &&
     getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const teamOwnership =
+    stage.for_each === "unit-of-work" &&
+    isTeamUnitOwnership(stateContent);
   let floor = -1;
   let boltStarted = false;
   let boltBatch: string | null = null;
@@ -814,12 +853,14 @@ function reviewAttemptSummary(
       continue;
     }
     if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
-      if (tiedAcrossShards(i)) ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
+      if (teamOwnership && tiedAcrossShards(i)) {
+        ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
+      }
       floor = i;
       boltStarted = false;
       boltBatch = null;
       boltSlug = null;
-      if (!tiedAcrossShards(i)) ambiguity = null;
+      if (!teamOwnership || !tiedAcrossShards(i)) ambiguity = null;
       continue;
     }
     if (
@@ -841,14 +882,25 @@ function reviewAttemptSummary(
       expectedBoltSlug !== null &&
       auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
     ) {
+      const tied = tiedAcrossShards(i);
+      if (tied) ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
+      else ambiguity = null;
       floor = i;
       boltStarted = false;
       boltBatch = null;
       boltSlug = null;
       continue;
     }
-    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
     if (entry.event === "GATE_REJECTED") {
+      const gateStages = (
+        auditBlockField(entry.block, "Gate Stages") ??
+          auditBlockField(entry.block, "Stage") ??
+          ""
+      ).split(",").map((value) => value.trim());
+      if (!gateStages.includes(stage.slug)) continue;
+      const rejectedUnit = auditBlockField(entry.block, "Unit");
+      if (teamOwnership && unit !== undefined && rejectedUnit !== unit) continue;
+      if (teamOwnership && unit === undefined && rejectedUnit !== null) continue;
       const tied = tiedAcrossShards(i);
       if (tied) ambiguity = `cross-shard gate boundary tie at ${entry.timestamp}`;
       else ambiguity = null;
@@ -857,6 +909,7 @@ function reviewAttemptSummary(
       boltBatch = null;
       boltSlug = null;
     } else if (
+      auditBlockField(entry.block, "Stage") === stage.slug &&
       entry.event === "STAGE_STARTED" &&
       !unitMajor &&
       !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
@@ -898,7 +951,10 @@ function reviewAttemptSummary(
     ) {
       continue;
     }
-    if (tiedAcrossShards(i)) {
+    if (
+      tiedAcrossShards(i) &&
+      !(!teamOwnership && tiedOnlyToWorkflowBoundary(i))
+    ) {
       ambiguity = `cross-shard review authority tie at ${entry.timestamp}`;
       continue;
     }
@@ -1050,6 +1106,7 @@ function handleReview(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
+  if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const selection = resolveWorkflowSelection(pd);
   const space = selection.space;
   const intent = selection.intent;
@@ -1060,7 +1117,10 @@ function handleReview(args: string[]): void {
     Stage: flags.stage,
     Reviewer: flags.reviewer,
   };
-  if (flags.unit) fields.Unit = flags.unit;
+  if (flags.unit) {
+    fields.Unit = flags.unit;
+    Object.assign(fields, claimAttemptFields(pd, flags.unit));
+  }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   const retryPending = flags["retry-pending"] === "true";
 
@@ -1084,8 +1144,32 @@ function handleReview(args: string[]): void {
     }
     const autonomousCandidate =
       flags.unit !== undefined && isAutonomousSwarmStage(pd, state, node);
+    const teamOwnership = isTeamUnitOwnership(state);
     const attempt = reviewAttemptSummary(
-      pd,
+      readAuditShardEvents(pd, intent, space).filter(
+        (row) => {
+          if (!flags.unit || !teamOwnership) return true;
+          const eventUnit = auditBlockField(row.block, "Unit");
+          if (eventUnit !== null) {
+            return eventUnit !== flags.unit ||
+              eventMatchesClaimAttempt(pd, row.block, eventUnit);
+          }
+          const boltSlug = auditBlockField(row.block, "Bolt slug");
+          const boltNames = auditBlockField(row.block, "Bolt names");
+          if (
+            boltNames === flags.unit &&
+            boltSlug === boltSlugForUnit(flags.unit) &&
+            (
+              row.event === "BOLT_STARTED" ||
+              row.event === "BOLT_COMPLETED" ||
+              row.event === "BOLT_FAILED"
+            )
+          ) {
+            return eventMatchesClaimAttempt(pd, row.block, flags.unit);
+          }
+          return true;
+        },
+      ),
       state,
       node,
       flags.reviewer,

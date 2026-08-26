@@ -7,6 +7,7 @@ import {
   readdirSync,
   realpathSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import {
@@ -26,7 +27,12 @@ import {
   REVIEW_FINDING_DISPOSITIONS_FIELD,
 } from "./aidlc-review-brief.ts";
 import {
+  activeIntent,
+  activeIntentUuid,
+  activeSpace,
   activeUnitCheckpoint,
+  auditBlockField,
+  auditShardName,
   appendSlug,
   appendUnderHeading,
   artifactFilename,
@@ -35,13 +41,16 @@ import {
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
+  claimAttemptFields,
   codekbDir,
   codekbRepoName,
   countCheckboxes,
   currentSwarmSourceMergeChain,
   currentSwarmAttemptObligations,
+  effectiveUnitGateRhythm,
   emitError,
   errorMessage,
+  eventMatchesClaimAttempt,
   extractMarkdownSection,
   filterProducesByKind,
   findStageBySlug,
@@ -59,6 +68,7 @@ import {
   isAutonomousConstructionDecision,
   isAutonomousMode,
   isAutonomousSwarmStage,
+  isTeamUnitOwnership,
   isNonAnswer,
   isRegularFile,
   isoTimestamp,
@@ -75,8 +85,12 @@ import {
   pipelineLinkEvidence,
   producesArtifactFile,
   readAllAuditShards,
+  readApplicableTeamUnitScopeStamp,
   readAuditShardEvents,
   readStateFile,
+  readUnitMergeTransaction,
+  readUnitGateRhythm,
+  readUnitScopeStamp,
   recordDir,
   recoveryGuidance,
   relativeMemoryPath,
@@ -86,6 +100,7 @@ import {
   replaceSection,
   selfAttributedDecisionMarker,
   resolveBoltDag,
+  requireLiveClaimForTeamUnit,
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
   resolveReviewClass,
@@ -102,8 +117,14 @@ import {
   setPhaseProgress,
   stagesInScope,
   swarmConvergedUnits,
+  unitCompletedReceipts,
+  unitGateStatus,
+  unitMajorConstructionStageSlugs,
+  unitParkedPath,
+  type UnitGateScope,
   updateIntentStatus,
   usesStageLevelPerUnitArtifacts,
+  validateLiveUnitScope,
   validateUnitName,
   validScopes,
   withAuditLock,
@@ -112,6 +133,7 @@ import {
   worktreeStateFilePath,
   workspaceSourceState,
   writeStateFile,
+  writeUnitScopeStamp,
   writeFileAtomic,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
@@ -124,6 +146,7 @@ import {
   stageUsageAuditFields,
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
+import { deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -250,6 +273,48 @@ function hasStageAuditEvent(
     }
     return auditField(ev.block, "Stage") === stageSlug;
   });
+}
+
+function hasTeamAttemptStageAuditEvent(
+  projectDir: string,
+  eventType: string,
+  stageSlug: string,
+): boolean {
+  const rows = readAuditShardEvents(projectDir).sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+  let floor = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (
+      rows[i].event !== "WORKFLOW_STARTED" &&
+      rows[i].event !== "STAGE_JUMPED"
+    ) {
+      continue;
+    }
+    floor = i;
+    if (
+      rows.some(
+        (row) =>
+          row.timestamp === rows[i].timestamp &&
+          row.shard !== rows[i].shard,
+      )
+    ) {
+      while (
+        floor + 1 < rows.length &&
+        rows[floor + 1].timestamp === rows[i].timestamp
+      ) {
+        floor++;
+      }
+    }
+  }
+  return rows.slice(floor + 1).some(
+    (row) =>
+      row.event === eventType &&
+      auditBlockField(row.block, "Stage") === stageSlug &&
+      !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
 }
 
 interface OrderedAuditEvent {
@@ -576,11 +641,18 @@ export function main(argv: string[]): void {
     "revise",
     "skip",
     "park",
+    "refresh-unit-progress",
+    "sync-unit-scope-stage",
+    "fold-unit-merge",
   ]);
   if (
     subcommand &&
     engineOwnedTransitions.has(subcommand) &&
     process.env.AIDLC_STATE_TRANSITION_OWNER !== `orchestrate:${process.ppid}` &&
+    !(
+      subcommand === "fold-unit-merge" &&
+      process.env.AIDLC_STATE_TRANSITION_OWNER === `unit-merge:${process.ppid}`
+    ) &&
     process.env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS !== "1"
   ) {
     error(
@@ -605,6 +677,21 @@ export function main(argv: string[]): void {
         break;
       case "set-construction-iteration":
         handleSetConstructionIteration(args.slice(1));
+        break;
+      case "set-unit-ownership":
+        handleSetUnitOwnership(args.slice(1));
+        break;
+      case "set-unit-gate-rhythm":
+        handleSetUnitGateRhythm(args.slice(1));
+        break;
+      case "refresh-unit-progress":
+        handleRefreshUnitProgress(args.slice(1));
+        break;
+      case "sync-unit-scope-stage":
+        handleSyncUnitScopeStage(args.slice(1));
+        break;
+      case "fold-unit-merge":
+        handleFoldUnitMerge(args.slice(1));
         break;
       case "checkbox":
         handleCheckbox(args.slice(1));
@@ -671,7 +758,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -805,6 +892,12 @@ function handleSetConstructionIteration(args: string[]): void {
   // Lost-update safety: read-then-write under one lock, as for the stance write.
   withAuditLock(pd, () => {
   const content = readStateFile(pd);
+  if (value !== "unit-major" && isTeamUnitOwnership(content)) {
+    error(
+      "Construction Iteration cannot leave unit-major while Unit Ownership is team. " +
+        "Set unit ownership to solo first.",
+    );
+  }
   const updated = setOrInsertField(
     content,
     "## Runtime State",
@@ -813,6 +906,776 @@ function handleSetConstructionIteration(args: string[]): void {
   );
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, construction_iteration: value }));
+  });
+}
+
+function unitProgressSectionRange(
+  content: string,
+): { start: number; end: number } | null {
+  const match = /^## Unit Progress\r?$/m.exec(content);
+  if (!match) return null;
+  const afterHeading = match.index + match[0].length;
+  const next = /^## /m.exec(content.slice(afterHeading));
+  return {
+    start: match.index,
+    end: next ? afterHeading + next.index : content.length,
+  };
+}
+
+function removeUnitProgressSection(content: string): string {
+  const range = unitProgressSectionRange(content);
+  if (!range) return content;
+  return `${content.slice(0, range.start)}${content.slice(range.end)}`;
+}
+
+function upsertUnitProgressSection(content: string, section: string): string {
+  const normalized = `${section.trimEnd()}\n\n`;
+  const range = unitProgressSectionRange(content);
+  if (range) {
+    return `${content.slice(0, range.start)}${normalized}${content.slice(range.end)}`;
+  }
+  const currentStatus = /^## Current Status$/m;
+  if (currentStatus.test(content)) {
+    return content.replace(currentStatus, `${normalized}## Current Status`);
+  }
+  return `${content.trimEnd()}\n\n${normalized}`;
+}
+
+function currentUnitProgressSection(content: string): string {
+  const range = unitProgressSectionRange(content);
+  if (!range) refuseUnitProgress("State has no Unit Progress section.");
+  return content.slice(range.start, range.end).trimEnd();
+}
+
+function hasCurrentTeamUnitActivity(pd: string, content: string): boolean {
+  if (!isTeamUnitOwnership(content)) return false;
+  const rows = readAuditShardEvents(pd).sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+  let floor = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (
+      rows[i].event === "WORKFLOW_STARTED" ||
+      rows[i].event === "STAGE_JUMPED"
+    ) {
+      floor = i;
+      if (
+        rows.some(
+          (row) =>
+            row.timestamp === rows[i].timestamp &&
+            row.shard !== rows[i].shard,
+        )
+      ) {
+        while (
+          floor + 1 < rows.length &&
+          rows[floor + 1].timestamp === rows[i].timestamp
+        ) {
+          floor++;
+        }
+      }
+    }
+  }
+  let latestOwnership = -1;
+  for (let i = floor + 1; i < rows.length; i++) {
+    if (rows[i].event === "UNIT_OWNERSHIP_SET") latestOwnership = i;
+  }
+  let teamMode =
+    latestOwnership === -1 ||
+    auditBlockField(rows[latestOwnership].block, "Mode") === "team";
+  const activityEvents = new Set(
+    "UNIT_STARTED,UNIT_PAUSED,UNIT_RESUMED,UNIT_COMPLETED,STAGE_AWAITING_APPROVAL,STAGE_REVISING,GATE_APPROVED,GATE_REJECTED".split(
+      ",",
+    ),
+  );
+  for (let i = Math.max(floor, latestOwnership) + 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.event === "UNIT_OWNERSHIP_SET") {
+      teamMode = auditBlockField(row.block, "Mode") === "team";
+      continue;
+    }
+    if (
+      teamMode &&
+      activityEvents.has(row.event) &&
+      auditBlockField(row.block, "Unit") !== null
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function handleSetUnitOwnership(args: string[]): void {
+  const values = ["team", "solo"];
+  if (args.length < 1) {
+    error(`Usage: aidlc-state.ts set-unit-ownership <${values.join("|")}>`);
+  }
+  const value = args[0];
+  if (!values.includes(value)) {
+    error(`Invalid unit ownership "${value}". Valid: ${values.join(", ")}.`);
+  }
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    let content = readStateFile(pd);
+    const current = getField(content, "Unit Ownership")?.trim() || "solo";
+    if (value !== current && hasCurrentTeamUnitActivity(pd, content)) {
+      error(
+        `Unit ownership is frozen after team Unit activity in the current workflow attempt (current: ${current}).`,
+      );
+    }
+    if (
+      value === "team" &&
+      getField(content, "Construction Iteration")?.trim() !== "unit-major"
+    ) {
+      error(
+        'Unit ownership "team" requires Construction Iteration: unit-major. ' +
+          "Run aidlc-state.ts set-construction-iteration unit-major first.",
+      );
+    }
+    if (value === "team") {
+      const repos = intentRepos(pd);
+      if (repos.length > 0) {
+        error(
+          `Unit ownership "team" is not supported for intents with recorded workspace repos ` +
+            `(${repos.join(", ")}). Team-owned Unit claims require the workspace root itself ` +
+            "to be the source Git repository.",
+        );
+      }
+      const resolution = resolveBoltDag(pd);
+      if (resolution.state === "none") {
+        error(
+          'Unit ownership "team" requires a non-empty authoritative unit DAG.',
+        );
+      }
+      if (resolution.state === "malformed") {
+        error(
+          `Unit ownership "team" requires a valid authoritative unit DAG: ${resolution.reason}: ${resolution.detail}`,
+        );
+      }
+      if (resolution.units.length === 0) {
+        error(
+          'Unit ownership "team" requires a non-empty authoritative unit DAG.',
+        );
+      }
+    }
+    content = setOrInsertField(
+      content,
+      "## Runtime State",
+      "Unit Ownership",
+      value,
+    );
+    if (value === "solo") content = removeUnitProgressSection(content);
+    emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value });
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({ updated: true, unit_ownership: value }));
+  });
+}
+
+function handleSetUnitGateRhythm(args: string[]): void {
+  const values = ["per-stage", "unit-end"];
+  if (args.length < 1) {
+    error(`Usage: aidlc-state.ts set-unit-gate-rhythm <${values.join("|")}>`);
+  }
+  const value = args[0];
+  if (!values.includes(value)) {
+    error(`Invalid unit gate rhythm "${value}". Valid: ${values.join(", ")}.`);
+  }
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    let content = readStateFile(pd);
+    if (!isTeamUnitOwnership(content)) {
+      error(
+        "Unit gate rhythm requires Unit Ownership: team. " +
+          "Run aidlc-state.ts set-unit-ownership team first.",
+      );
+    }
+    const current = readUnitGateRhythm(content);
+    if (value !== current && hasCurrentTeamUnitActivity(pd, content)) {
+      error(
+        `Unit gate rhythm is frozen after team Unit activity in the current workflow attempt (current: ${current}).`,
+      );
+    }
+    content = setOrInsertField(
+      content,
+      "## Runtime State",
+      "Unit Gate Rhythm",
+      value,
+    );
+    emitAudit(pd, "UNIT_GATE_RHYTHM_SET", { Rhythm: value });
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({ updated: true, unit_gate_rhythm: value }));
+  });
+}
+
+interface UnitProgressRefreshPayload {
+  section: string;
+  stage_states: Record<string, CheckboxState>;
+}
+
+function refuseUnitProgress(msg: string): never {
+  console.error(JSON.stringify({ error: msg }));
+  process.exit(1);
+}
+
+function parseUnitProgressTable(section: string): {
+  preface: string[];
+  header: string[];
+  separator: string[];
+  rows: Map<string, string[]>;
+  order: string[];
+} {
+  const lines = section.split(/\r?\n/);
+  const firstTableLine = lines.findIndex((line) => line.startsWith("|"));
+  if (firstTableLine < 0) refuseUnitProgress("Invalid Unit Progress table.");
+  const table = lines.slice(firstTableLine).map((line) =>
+    line.split("|").slice(1, -1).map((cell) => cell.trim())
+  );
+  if (
+    table.length < 2 ||
+    table[0][0]?.toLowerCase() !== "unit" ||
+    table[1].length !== table[0].length
+  ) {
+    refuseUnitProgress("Invalid Unit Progress table header.");
+  }
+  const header = table[0];
+  const separator = table[1];
+  const rows = new Map<string, string[]>();
+  const order: string[] = [];
+  for (const cells of table.slice(2)) {
+    if (
+      cells.length !== header.length ||
+      cells.every((cell) => /^-+$/.test(cell))
+    ) {
+      continue;
+    }
+    rows.set(cells[0], cells);
+    order.push(cells[0]);
+  }
+  return {
+    preface: lines.slice(0, firstTableLine),
+    header,
+    separator,
+    rows,
+    order,
+  };
+}
+
+function foldUnitProgressSection(
+  currentSection: string,
+  authoritativeSection: string,
+  unit: string,
+): string {
+  const current = parseUnitProgressTable(currentSection);
+  const authoritative = parseUnitProgressTable(authoritativeSection);
+  const target = authoritative.rows.get(unit);
+  if (!target) {
+    refuseUnitProgress(`Authoritative Unit Progress has no row for "${unit}".`);
+  }
+  const currentIndex = new Map(
+    current.header.map((name, index) => [name, index]),
+  );
+  const rows = authoritative.order.map((rowUnit) => {
+    if (rowUnit === unit) return `| ${target.join(" | ")} |`;
+    const before = current.rows.get(rowUnit);
+    const derived = authoritative.rows.get(rowUnit);
+    if (!before || !derived) {
+      refuseUnitProgress(
+        `Cannot preserve non-target Unit Progress row "${rowUnit}".`,
+      );
+    }
+    const preserved = authoritative.header.map((name, index) => {
+      const oldIndex = currentIndex.get(name);
+      return oldIndex === undefined ? derived[index] : before[oldIndex];
+    });
+    return `| ${preserved.join(" | ")} |`;
+  });
+  return [
+    ...authoritative.preface,
+    `| ${authoritative.header.join(" | ")} |`,
+    `| ${authoritative.separator.join(" | ")} |`,
+    ...rows,
+  ].join("\n");
+}
+
+function handleRefreshUnitProgress(
+  args: string[],
+  quiet = false,
+  foldUnit?: string,
+  foldOwner?: string,
+  afterWrite?: () => void,
+): void {
+  const payloadRaw = getFlagValue(args, "--payload");
+  if (!payloadRaw) {
+    refuseUnitProgress(
+      "Usage: aidlc-state.ts refresh-unit-progress --payload <base64url-json>",
+    );
+  }
+  let payload: UnitProgressRefreshPayload;
+  try {
+    payload = JSON.parse(
+      Buffer.from(payloadRaw, "base64url").toString("utf-8"),
+    ) as UnitProgressRefreshPayload;
+  } catch (e) {
+    refuseUnitProgress(`Invalid unit progress payload: ${errorMessage(e)}`);
+  }
+  if (
+    typeof payload.section !== "string" ||
+    !payload.section.startsWith("## Unit Progress\n") ||
+    payload.stage_states === null ||
+    typeof payload.stage_states !== "object"
+  ) {
+    refuseUnitProgress("Invalid unit progress payload shape.");
+  }
+  const sectionTail = payload.section.split("\n").slice(1).join("\n");
+  if (
+    /^#{1,6}\s/m.test(sectionTail) ||
+    /^- \*\*[^*]+\*\*:/m.test(sectionTail)
+  ) {
+    refuseUnitProgress(
+      "Invalid unit progress payload: embedded headings and state field lines are forbidden.",
+    );
+  }
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    let content = readStateFile(pd);
+    const before = content;
+    if (!isTeamUnitOwnership(content)) {
+      refuseUnitProgress(
+        "Refusing Unit Progress refresh: Unit Ownership is not team.",
+      );
+    }
+    if (getField(content, "Construction Iteration")?.trim() !== "unit-major") {
+      refuseUnitProgress(
+        "Refusing Unit Progress refresh: Construction Iteration must be unit-major.",
+      );
+    }
+    let authoritative: ReturnType<typeof deriveTeamUnitProgressModel>;
+    try {
+      authoritative = deriveTeamUnitProgressModel(
+        pd,
+        content,
+        undefined,
+        foldUnit ? new Set([foldUnit]) : undefined,
+        foldUnit && foldOwner
+          ? { ownerOverrides: new Map([[foldUnit, foldOwner]]) }
+          : undefined,
+      );
+    } catch (e) {
+      refuseUnitProgress(
+        `Refusing Unit Progress refresh: ${errorMessage(e)}`,
+      );
+    }
+    const suppliedStates = Object.entries(payload.stage_states).sort(
+      ([a], [b]) => a.localeCompare(b),
+    );
+    const authoritativeStates = Object.entries(authoritative.stageStates).sort(
+      ([a], [b]) => a.localeCompare(b),
+    );
+    if (
+      payload.section !== authoritative.section ||
+      JSON.stringify(suppliedStates) !== JSON.stringify(authoritativeStates)
+    ) {
+      refuseUnitProgress(
+        "Refusing Unit Progress refresh: payload does not match authoritative DAG/artifact/receipt/gate evidence.",
+      );
+    }
+    const section = foldUnit
+      ? foldUnitProgressSection(
+        currentUnitProgressSection(content),
+        authoritative.section,
+        foldUnit,
+      )
+      : authoritative.section;
+    content = upsertUnitProgressSection(content, section);
+    const stageEntries = Object.entries(authoritative.stageStates);
+    const completedNow: string[] = [];
+    for (const [slug, state] of stageEntries) {
+      if (!isCheckboxState(state)) {
+        refuseUnitProgress(
+          `Invalid derived checkbox state for "${slug}": ${state}`,
+        );
+      }
+      const stage = findStageBySlug(slug);
+      if (
+        stage?.phase !== "construction" ||
+        stage.for_each !== "unit-of-work"
+      ) {
+        refuseUnitProgress(`Invalid Unit Progress stage: ${slug}`);
+      }
+      content = setCheckbox(content, slug, state);
+      if (
+        state === "completed" &&
+        (
+          getSlugState(before, slug) !== "completed" ||
+          !hasStageAuditEvent(pd, "STAGE_COMPLETED", slug)
+        )
+      ) {
+        completedNow.push(slug);
+      }
+    }
+
+    const allBlockStagesComplete =
+      stageEntries.length > 0 &&
+      stageEntries.every(([, state]) => state === "completed");
+    const blockSlugs = stageEntries.map(([slug]) => slug);
+    const currentSlug = getField(content, "Current Stage") ?? "";
+    let started: string | null = null;
+    let phaseBoundary = false;
+    let workflowCompleted = false;
+    let completedFinalStage: NonNullable<ReturnType<typeof findStageBySlug>> | null =
+      null;
+    if (allBlockStagesComplete && blockSlugs.includes(currentSlug)) {
+      const finalSlug = blockSlugs[blockSlugs.length - 1];
+      const workflowScope = getField(content, "Scope") ?? "";
+      const finalStage = findStageBySlug(finalSlug);
+      const next = nextInScopeStage(finalSlug, workflowScope, content);
+      if (finalStage && next) {
+        const nextAfter = nextInScopeStage(next.slug, workflowScope, content);
+        const timestamp = isoTimestamp();
+        phaseBoundary = finalStage.phase !== next.phase;
+        content = setCheckbox(content, next.slug, "in-progress");
+        content = setField(content, "Current Stage", next.slug);
+        content = setField(content, "Lifecycle Phase", next.phase.toUpperCase());
+        content = setField(content, "Next Stage", nextAfter?.slug ?? "none");
+        content = setField(content, "In Progress", next.slug);
+        content = setField(content, "Active Agent", next.lead_agent);
+        content = setField(content, "Status", "Running");
+        content = setField(content, "Last Updated", timestamp);
+        content = setField(content, "Last Completed Stage", finalSlug);
+        content = setField(content, "Next Action", `Execute ${next.name}`);
+        if (phaseBoundary) {
+          content = setPhaseProgress(content, finalStage.phase, "Verified");
+          content = setPhaseProgress(content, next.phase, "Active");
+        }
+        started = next.slug;
+      } else if (
+        finalStage &&
+        getField(before, "Status") !== "Completed"
+      ) {
+        const timestamp = isoTimestamp();
+        content = setField(content, "Current Stage", finalSlug);
+        content = setField(content, "Status", "Completed");
+        content = setField(content, "Last Updated", timestamp);
+        content = setField(content, "Last Completed Stage", finalSlug);
+        content = setField(content, "In Progress", "none");
+        content = setField(content, "Next Stage", "none");
+        content = setField(content, "Next Action", "Workflow complete");
+        content = setPhaseProgress(content, finalStage.phase, "Verified");
+        workflowCompleted = true;
+        completedFinalStage = finalStage;
+      }
+    }
+    content = setField(
+      content,
+      "Completed",
+      String(countCheckboxes(content, "completed")),
+    );
+    try {
+      for (const slug of completedNow) {
+        const stage = findStageBySlug(slug);
+        if (!hasTeamAttemptStageAuditEvent(pd, "STAGE_STARTED", slug)) {
+          emitAudit(pd, "STAGE_STARTED", {
+            Stage: slug,
+            Agent: stage?.lead_agent ?? "",
+          });
+        }
+        emitAudit(pd, "STAGE_COMPLETED", {
+          Stage: slug,
+          Details: `Stage ${stage?.name ?? slug} completed from team Unit Progress`,
+        });
+      }
+      if (started) {
+        const next = findStageBySlug(started);
+        if (phaseBoundary) {
+          emitAudit(pd, "PHASE_COMPLETED", {
+            "From phase": "construction",
+            "To phase": next?.phase ?? "",
+            "Stages completed": String(countCheckboxes(content, "completed")),
+          });
+          emitAudit(pd, "PHASE_VERIFIED", {
+            "Phase boundary": `construction → ${next?.phase ?? ""}`,
+          });
+          emitAudit(pd, "PHASE_STARTED", {
+            Phase: next?.phase ?? "",
+            Scope: getField(content, "Scope") ?? "",
+          });
+        }
+        emitAudit(pd, "STAGE_STARTED", {
+          Stage: started,
+          Agent: next?.lead_agent ?? "",
+        });
+      }
+      if (workflowCompleted && completedFinalStage) {
+        const scope = getField(content, "Scope") ?? "";
+        emitAudit(pd, "PHASE_COMPLETED", {
+          "From phase": completedFinalStage.phase,
+          "To phase": "(end)",
+          "Stages completed": String(countCheckboxes(content, "completed")),
+        });
+        emitAudit(pd, "PHASE_VERIFIED", {
+          "Phase boundary": `${completedFinalStage.phase} → end`,
+        });
+        emitAudit(pd, "WORKFLOW_COMPLETED", {
+          Scope: scope,
+          Details:
+            `Scope: ${scope}, ${countCheckboxes(content, "completed")} stages completed`,
+          ...workflowRollupFields(pd),
+        });
+      }
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    writeStateFile(pd, content);
+    if (workflowCompleted) {
+      const completedIntentDir = activeIntent(pd);
+      if (completedIntentDir) {
+        updateIntentStatus(pd, completedIntentDir, "complete");
+      }
+    }
+    afterWrite?.();
+    if (!quiet) {
+      console.log(JSON.stringify({
+        refreshed: true,
+        completed: completedNow,
+        started,
+        workflow_completed: workflowCompleted,
+      }));
+    }
+  });
+}
+
+function handleFoldUnitMerge(args: string[]): void {
+  const unit = getFlagValue(args, "--unit");
+  const pinnedOid = getFlagValue(args, "--pinned-oid");
+  const generationRaw = getFlagValue(args, "--generation");
+  if (!unit || !pinnedOid || !generationRaw) {
+    error(
+      "Usage: aidlc-state.ts fold-unit-merge --unit <unit> --pinned-oid <oid> --generation <n>",
+    );
+  }
+  const generation = Number(generationRaw);
+  if (!Number.isInteger(generation) || generation < 1) {
+    error("--generation must be a positive integer.");
+  }
+  const pd = resolveProjectDir(projectDir);
+  const existing = readUnitMergeTransaction(pd, unit);
+  if (
+    !existing ||
+    existing.pinned_oid !== pinnedOid ||
+    existing.generation !== generation ||
+    !existing.git_commit_oid ||
+    !["git-landed", "state-folded", "complete"].includes(existing.status)
+  ) {
+    error(`No git-landed Unit merge transaction matches "${unit}" at ${pinnedOid}.`);
+  }
+  const transaction = existing;
+  const mergeCommitOid = transaction.git_commit_oid!;
+  const space = activeSpace(pd);
+  const intentUuid = activeIntentUuid(pd, space);
+  if (
+    !intentUuid ||
+    transaction.space !== space ||
+    transaction.intent_uuid !== intentUuid
+  ) {
+    error(`Unit "${unit}" merge transaction belongs to another active space or intent.`);
+  }
+  const ancestor = spawnSync(
+    "git",
+    ["merge-base", "--is-ancestor", mergeCommitOid, "HEAD"],
+    { cwd: pd, encoding: "utf-8" },
+  );
+  if (ancestor.status !== 0) {
+    error(
+      `Unit "${unit}" merge commit ${mergeCommitOid} is not present on main.`,
+    );
+  }
+  const parents = spawnSync(
+    "git",
+    ["show", "-s", "--format=%P", mergeCommitOid],
+    { cwd: pd, encoding: "utf-8" },
+  );
+  if (
+    parents.status !== 0 ||
+    parents.stdout.trim().split(/\s+/)[1] !== pinnedOid
+  ) {
+    error(`Unit "${unit}" has no controlled merge commit for pinned OID ${pinnedOid}.`);
+  }
+  const mainShard = auditShardName(pd);
+  const mainRows = readAuditShardEvents(pd)
+    .filter((row) => basename(row.shard) === mainShard)
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  const gate = mainRows
+    .filter(
+      (row) =>
+        (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
+        auditBlockField(row.block, "Stage") === "unit-merge" &&
+        auditBlockField(row.block, "Unit") === unit &&
+        auditBlockField(row.block, "Pinned OID") === pinnedOid &&
+        auditBlockField(row.block, "Attempt Generation") ===
+          String(generation) &&
+        auditBlockField(row.block, "Gate Scope") === "unit-merge",
+    )
+    .at(-1);
+  if (gate?.event !== "GATE_APPROVED") {
+    error(`Unit "${unit}" has no current approved merge-gate receipt.`);
+  }
+  const gateStrategy = auditBlockField(gate.block, "Strategy");
+  const gateTarget = auditBlockField(gate.block, "Target branch");
+  const branch = spawnSync("git", ["branch", "--show-current"], {
+    cwd: pd,
+    encoding: "utf-8",
+  });
+  if (
+    gateStrategy !== "merge" ||
+    !gateTarget ||
+    branch.status !== 0 ||
+    branch.stdout.trim() !== gateTarget ||
+    transaction.target_branch !== gateTarget
+  ) {
+    error(`Unit "${unit}" merge-gate strategy or target does not match main.`);
+  }
+  const authorization = transaction.state_fold_authorized;
+  if (!authorization) {
+    error(
+      `Unit "${unit}" state fold has no land-bound claim authorization.`,
+    );
+  }
+  if (authorization.owner !== transaction.owner) {
+    error(
+      `Unit "${unit}" merge journal owner does not match the pinned claim owner.`,
+    );
+  }
+  const liveAuthorized =
+    authorization.mode === "live-claim" &&
+    authorization.observed_oid === pinnedOid &&
+    eventMatchesClaimAttempt(
+      pd,
+      `**Unit**: ${unit}\n**Attempt Generation**: ${generation}\n`,
+      unit,
+    );
+  const releasedAuthorized =
+    authorization.mode === "released-after-git" &&
+    transaction.released_after_git !== undefined &&
+    authorization.observed_oid ===
+      transaction.released_after_git.tombstone_oid &&
+    transaction.released_after_git.tombstone_generation === generation + 1 &&
+    mainRows.some(
+      (row) =>
+        row.event === "RECOVERY_COMPLETED" &&
+        auditBlockField(row.block, "Recovery") ===
+          "unit-merge-released-attempt" &&
+        auditBlockField(row.block, "Unit") === unit &&
+        auditBlockField(row.block, "Pinned OID") === pinnedOid &&
+        auditBlockField(row.block, "Attempt Generation") ===
+          String(generation) &&
+        auditBlockField(row.block, "Tombstone OID") ===
+          transaction.released_after_git?.tombstone_oid &&
+        auditBlockField(row.block, "Tombstone Generation") ===
+          String(
+            transaction.released_after_git?.tombstone_generation,
+          ) &&
+        auditBlockField(row.block, "User Input") ===
+          transaction.released_after_git?.user_input,
+    );
+  if (!liveAuthorized && !releasedAuthorized) {
+    error(`Unit "${unit}" merge attempt generation is no longer current.`);
+  }
+
+  const liveState = readStateFile(pd);
+  if (!isTeamUnitOwnership(liveState)) {
+    error("Unit merge folding requires Unit Ownership: team.");
+  }
+  const model = deriveTeamUnitProgressModel(
+    pd,
+    liveState,
+    undefined,
+    new Set([unit]),
+    {
+      ownerOverrides: new Map([[unit, authorization.owner]]),
+    },
+  );
+  const payload = Buffer.from(
+    JSON.stringify({
+      section: model.section,
+      stage_states: model.stageStates,
+    }),
+    "utf-8",
+  ).toString("base64url");
+  handleRefreshUnitProgress(
+    ["--payload", payload],
+    true,
+    unit,
+    authorization.owner,
+    () => {
+      const alreadyMerged = readAuditShardEvents(pd).some(
+        (row) =>
+          row.event === "UNIT_MERGED" &&
+          auditBlockField(row.block, "Unit") === unit &&
+          auditBlockField(row.block, "Pinned OID") === pinnedOid &&
+          auditBlockField(row.block, "Attempt Generation") ===
+            String(generation),
+      );
+      if (!alreadyMerged) {
+        appendAuditEntryUnlocked(
+          "UNIT_MERGED",
+          {
+            Unit: unit,
+            Owner: authorization.owner,
+            "Pinned OID": pinnedOid,
+            "Merge commit OID": mergeCommitOid,
+            "Attempt Generation": String(generation),
+          },
+          pd,
+        );
+      }
+    },
+  );
+  console.log(JSON.stringify({
+    folded: true,
+    unit,
+    pinned_oid: pinnedOid,
+    generation,
+  }));
+}
+
+function handleSyncUnitScopeStage(args: string[]): void {
+  const slug = args[0];
+  const unit = getFlagValue(args.slice(1), "--unit");
+  if (!slug || !unit) {
+    error("Usage: aidlc-state.ts sync-unit-scope-stage <stage> --unit <unit>");
+  }
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    let content = readStateFile(pd);
+    const stamp = validateLiveUnitScope(pd, unit);
+    if (!stamp) error("Scoped Unit stage sync requires a live Unit claim.");
+    const stage = findStageBySlug(slug);
+    if (
+      stage?.phase !== "construction" ||
+      stage.for_each !== "unit-of-work"
+    ) {
+      error(`Stage "${slug}" is not a per-unit Construction stage.`);
+    }
+    content = setField(content, "Current Stage", slug);
+    content = setField(content, "Lifecycle Phase", "CONSTRUCTION");
+    content = setField(content, "In Progress", slug);
+    content = setField(content, "Active Agent", stage.lead_agent);
+    if (getSlugState(content, slug) !== "completed") {
+      content = setCheckbox(content, slug, "in-progress");
+    }
+    content = setField(content, "Last Updated", isoTimestamp());
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({
+      synced: true,
+      stage: slug,
+      unit,
+      generation: stamp.generation,
+    }));
   });
 }
 
@@ -835,14 +1698,40 @@ function handleSetConstructionIteration(args: string[]): void {
 // tool refusal closes a path #365 did not have.)
 function handlePark(_args: string[]): void {
   const pd = resolveProjectDir(projectDir);
+  const initialContent = readStateFile(pd);
+  if (
+    getField(initialContent, "Construction Autonomy Mode")?.trim() ===
+      "autonomous"
+  ) {
+    error(
+      "Refusing to park: Construction Autonomy Mode is autonomous. An unattended " +
+        "autonomous run has no human to resume it and must keep moving - do not park it.",
+    );
+  }
+  const scopeStamp = validateLiveUnitScope(pd);
+  if (scopeStamp) {
+    writeFileSync(
+      unitParkedPath(pd),
+      `${JSON.stringify({
+        unit: scopeStamp.unit,
+        generation: scopeStamp.generation,
+        parked_at: isoTimestamp(),
+      })}\n`,
+      "utf-8",
+    );
+    process.stderr.write(
+      `[aidlc] warning: parked Unit "${scopeStamp.unit}" locally from its checkout stamp; ` +
+        "claim liveness was not required and will be rechecked at the next claim-sensitive boundary.\n",
+    );
+    console.log(JSON.stringify({
+      parked: true,
+      unit: scopeStamp.unit,
+      checkout_local: true,
+    }));
+    return;
+  }
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
-    if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") {
-      error(
-        "Refusing to park: Construction Autonomy Mode is autonomous. An unattended " +
-          "autonomous run has no human to resume it and must keep moving - do not park it.",
-      );
-    }
     const status = getField(content, "Status");
     if (status === "Completed") {
       error("Workflow is already Completed - nothing to park.");
@@ -868,6 +1757,21 @@ function handlePark(_args: string[]): void {
 // emit `parked`. Idempotent: clearing absent fields is a no-op.
 function handleUnpark(_args: string[]): void {
   const pd = resolveProjectDir(projectDir);
+  const scopeStamp = readApplicableTeamUnitScopeStamp(pd);
+  if (scopeStamp) {
+    const wasParked = existsSync(unitParkedPath(pd));
+    try {
+      unlinkSync(unitParkedPath(pd));
+    } catch {
+      // Idempotent.
+    }
+    console.log(JSON.stringify({
+      unparked: true,
+      was_parked: wasParked,
+      checkout_local: true,
+    }));
+    return;
+  }
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
     const wasParked = (getField(content, "Parked") ?? "").trim().length > 0;
@@ -938,6 +1842,7 @@ function handleUnit(args: string[]): void {
   }
 
   const pd = resolveProjectDir(projectDir);
+  validateLiveUnitScope(pd, unit);
   // One lock across read→validate→emit→write (the C2b idiom): the checkpoint
   // read and the receipt append must see one ledger snapshot, or two racing
   // `unit start` calls could both pass the single-active-unit check.
@@ -1066,7 +1971,9 @@ function handleUnit(args: string[]): void {
         pd,
         slug,
         getField(content, "Construction Iteration")?.trim() === "unit-major",
+        isTeamUnitOwnership(content) ? unit : undefined,
       ),
+      ...claimAttemptFields(pd, unit),
       ...(waveMode
         ? {
             Mode: "wave",
@@ -1142,12 +2049,13 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
     const result = spawnSync(command[0], command.slice(1), {
       cwd: pd,
       encoding: "utf-8",
-      env: {
-        ...process.env,
-        AIDLC_PROJECT_DIR: pd,
-        ...(stateSessionOverride
-          ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
-          : {}),
+        env: {
+          ...process.env,
+          AIDLC_PROJECT_DIR: pd,
+          AIDLC_ROUTE_CHECK: "1",
+          ...(stateSessionOverride
+            ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
+            : {}),
       },
       timeout: 30_000,
     });
@@ -1222,12 +2130,13 @@ function requireEngineRoutedWaveUnit(
     const result = spawnSync(command[0], command.slice(1), {
       cwd: pd,
       encoding: "utf-8",
-      env: {
-        ...process.env,
-        AIDLC_PROJECT_DIR: pd,
-        ...(stateSessionOverride
-          ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
-          : {}),
+        env: {
+          ...process.env,
+          AIDLC_PROJECT_DIR: pd,
+          AIDLC_ROUTE_CHECK: "1",
+          ...(stateSessionOverride
+            ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
+            : {}),
       },
       timeout: 30_000,
     });
@@ -3468,9 +4377,157 @@ function validateSlugInState(
   }
 }
 
-// gate-start <slug> — fire gate-bound sensors, then transition [-] → [?] and
-// emit STAGE_AWAITING_APPROVAL.
-// On an existing [?] gate, re-run every opening guard without writing another
+interface TeamGateContext {
+  unit: string;
+  scope: UnitGateScope;
+  stages: NonNullable<ReturnType<typeof findStageBySlug>>[];
+}
+
+function teamGateContext(
+  content: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  args: string[],
+): TeamGateContext | null {
+  const unit = getFlagValue(args, "--unit")?.trim();
+  if (!isTeamUnitOwnership(content)) {
+    if (unit) {
+      error("--unit gate decisions require Unit Ownership: team.");
+    }
+    return null;
+  }
+  if (stage.phase !== "construction" || stage.for_each !== "unit-of-work") {
+    if (unit) {
+      error(
+        `Stage "${stage.slug}" is not a per-unit Construction stage; team unit gates do not apply.`,
+      );
+    }
+    return null;
+  }
+  if (!unit) {
+    error(
+      `Unit Ownership: team requires --unit <name> for gate decisions on "${stage.slug}".`,
+    );
+  }
+  const unitError = validateUnitName(unit);
+  if (unitError) error(unitError);
+  const pd = resolveProjectDir(projectDir);
+  validateLiveUnitScope(pd, unit);
+  const resolution = resolveBoltDag(pd);
+  if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
+    error(`Unit "${unit}" is not in the authoritative unit DAG.`);
+  }
+  const rhythm = effectiveUnitGateRhythm(pd, content);
+  if (rhythm === "per-stage") {
+    return { unit, scope: "per-stage", stages: [stage] };
+  }
+  const workflowScope = getField(content, "Scope") ?? "";
+  const stages = unitMajorConstructionStageSlugs(
+    workflowScope,
+    content,
+    true,
+  )
+    .map((slug) => findStageBySlug(slug))
+    .filter(
+      (entry): entry is NonNullable<ReturnType<typeof findStageBySlug>> =>
+        !!entry,
+    );
+  const final = stages[stages.length - 1];
+  if (!final || final.slug !== stage.slug) {
+    error(
+      `Unit-end gate for "${unit}" must be reported against the final per-unit stage ` +
+        `"${final?.slug ?? "unknown"}", not "${stage.slug}".`,
+    );
+  }
+  return { unit, scope: "unit-end", stages };
+}
+
+function applicableUnitProduces(
+  pd: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  unit: string,
+): string[] {
+  let required = stage.produces ?? [];
+  if (stage.produces_kinds !== undefined) {
+    const resolution = resolveBoltDag(pd);
+    if (resolution.state === "ok" && resolution.unitKinds !== null) {
+      required = filterProducesByKind(
+        stage.produces_kinds,
+        required,
+        resolution.unitKinds.get(unit) ?? null,
+      );
+    }
+  }
+  return required;
+}
+
+function verifyReviewerPreconditionForUnit(
+  pd: string,
+  content: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  unit: string,
+): void {
+  if (!stage.reviewer) return;
+  const reviewClass = resolveReviewClass(
+    stage.review_class ?? "adversarial",
+    getField(content, "Scope") ?? "",
+    content,
+  );
+  if (reviewClass === "none") return;
+  const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  if (!receipts.unitVerdicts.has(unit)) {
+    error(
+      `Refusing gate for unit "${unit}" of "${stage.slug}": no fresh ` +
+        `REVIEW_COMPLETED receipt from ${stage.reviewer} is recorded for this unit.`,
+    );
+  }
+}
+
+function verifyTeamUnitGateEvidence(
+  pd: string,
+  content: string,
+  context: TeamGateContext,
+): void {
+  for (const stage of context.stages) {
+    if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
+    const missing = missingUnitArtifacts(pd, stage, context.unit);
+    if (missing.length > 0) {
+      error(
+        `Refusing gate for unit "${context.unit}" of "${stage.slug}": required ` +
+          `artifacts are missing (${missing.join(", ")}).`,
+      );
+    }
+    if (!unitCompletedReceipts(pd, stage.slug).has(context.unit)) {
+      error(
+        `Refusing gate for unit "${context.unit}" of "${stage.slug}": no current ` +
+          "UNIT_COMPLETED receipt is recorded.",
+      );
+    }
+    const summary = checkSummaryConfirmationEvidence(pd, stage, {
+      stateContent: content,
+      unit: context.unit,
+    });
+    if (!summary.ok) error(summary.message);
+    verifyReviewerPreconditionForUnit(pd, content, stage, context.unit);
+    if (stage.workspace_requires) verifyStageArtifacts(pd, stage);
+  }
+}
+
+function teamGateFields(
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  context: TeamGateContext,
+): Record<string, string> {
+  return {
+    Stage: stage.slug,
+    Unit: context.unit,
+    "Gate Scope": context.scope,
+    "Gate Stages": context.stages.map((entry) => entry.slug).join(","),
+    ...claimAttemptFields(resolveProjectDir(projectDir), context.unit),
+  };
+}
+
+// gate-start <slug> — fire gate-bound sensors, then open either the global
+// stage gate or the claim-scoped team Unit gate.
+// On an existing gate, re-run every opening guard without writing another
 // transition. A consumed blocking-sensor override emits a Revalidated row so
 // its human authorization cannot be reused; ordinary revalidation stays quiet.
 // --recovered marks a BACKFILLED gate row (the engine opening a gate the
@@ -3499,16 +4556,28 @@ function handleGateStart(args: string[]): void {
   const preflightContent = readStateFile(pd);
   const preflightStage = findStageBySlug(slug);
   if (!preflightStage) error(`Unknown stage: ${slug}`);
-  validateSlugInState(
-    preflightContent,
-    slug,
-    ["in-progress", "awaiting-approval"],
-  );
-  verifyGateOpeningGuards(
-    pd,
+  const preflightTeamGate = teamGateContext(
     preflightContent,
     preflightStage,
+    args.slice(1),
   );
+  if (preflightTeamGate) {
+    verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate);
+    for (const gateStage of preflightTeamGate.stages) {
+      verifyPipelineLinkPrecondition(pd, gateStage);
+    }
+  } else {
+    validateSlugInState(
+      preflightContent,
+      slug,
+      ["in-progress", "awaiting-approval"],
+    );
+    verifyGateOpeningGuards(
+      pd,
+      preflightContent,
+      preflightStage,
+    );
+  }
   const gateSensorEvaluation = fireGateSensors(
     pd,
     preflightStage,
@@ -3531,6 +4600,58 @@ function handleGateStart(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
+  const teamGate = teamGateContext(content, stage, args.slice(1));
+  if (teamGate) {
+    verifyTeamUnitGateEvidence(pd, content, teamGate);
+    for (const gateStage of teamGate.stages) {
+      verifyPipelineLinkPrecondition(pd, gateStage);
+    }
+    verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
+    const status = unitGateStatus(
+      pd,
+      stage.slug,
+      teamGate.unit,
+      teamGate.scope,
+    );
+    if (status === "approved") {
+      error(
+        `Gate for unit "${teamGate.unit}" of "${stage.slug}" is already approved.`,
+      );
+    }
+    if (status === "awaiting-approval") {
+      console.log(
+        JSON.stringify({
+          slug,
+          unit: teamGate.unit,
+          gate_scope: teamGate.scope,
+          new_state: "awaiting-approval",
+          already_awaiting_approval: true,
+          revalidated: true,
+        }),
+      );
+      return;
+    }
+    const timestamp = isoTimestamp();
+    content = setField(content, "Last Updated", timestamp);
+    try {
+      emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
+        ...teamGateFields(stage, teamGate),
+        ...(artifacts ? { Artifacts: artifacts } : {}),
+        ...(recovered ? { Recovered: "true" } : {}),
+      });
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({
+      slug,
+      unit: teamGate.unit,
+      gate_scope: teamGate.scope,
+      new_state: "awaiting-approval",
+      timestamp,
+    }));
+    return;
+  }
   validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
   const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
   verifyGateOpeningGuards(pd, content, stage);
@@ -3602,11 +4723,10 @@ function verifyApprovalDecision(
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   userInput?: string,
+  forceHuman = false,
 ): { approvalInput: string | undefined; autonomousDecision: boolean } {
-  const autonomousDecision = isAutonomousConstructionDecision(
-    content,
-    stage.phase,
-  );
+  const autonomousDecision =
+    !forceHuman && isAutonomousConstructionDecision(content, stage.phase);
   const approvalInput = userInput?.trim();
   const approvalAuthorship =
     autonomousDecision || humanPresenceGuardDisabled()
@@ -3668,20 +4788,33 @@ function handleApprove(args: string[]): void {
   const preflightContent = readStateFile(pd);
   const preflightStage = findStageBySlug(slug);
   if (!preflightStage) error(`Unknown stage: ${slug}`);
-  validateSlugInState(preflightContent, slug, "awaiting-approval");
+  const preflightTeamGate = teamGateContext(
+    preflightContent,
+    preflightStage,
+    args.slice(1),
+  );
+  if (!preflightTeamGate) {
+    validateSlugInState(preflightContent, slug, "awaiting-approval");
+  }
   const preflightDecision = verifyApprovalDecision(
     pd,
     preflightContent,
     preflightStage,
     userInput,
+    preflightTeamGate !== null,
   );
-  verifyStageArtifacts(pd, preflightStage);
-  verifySummaryConfirmationPrecondition(
-    pd,
-    preflightContent,
-    preflightStage,
-  );
+  if (preflightTeamGate) {
+    verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate);
+  } else {
+    verifyStageArtifacts(pd, preflightStage);
+    verifySummaryConfirmationPrecondition(
+      pd,
+      preflightContent,
+      preflightStage,
+    );
+  }
   const preflightBackstop =
+    preflightTeamGate === null &&
     !revisionBackstopDisabled() &&
     !preflightDecision.autonomousDecision &&
     unrecordedRevisionSinceGateOpen(pd, preflightStage);
@@ -3707,13 +4840,72 @@ function handleApprove(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
-  validateSlugInState(content, slug, "awaiting-approval");
+  const teamGate = teamGateContext(content, stage, args.slice(1));
+  if (!teamGate) {
+    validateSlugInState(content, slug, "awaiting-approval");
+  }
   const { approvalInput, autonomousDecision } = verifyApprovalDecision(
     pd,
     content,
     stage,
     userInput,
+    teamGate !== null,
   );
+
+  if (teamGate) {
+    verifyTeamUnitGateEvidence(pd, content, teamGate);
+    const reviewFindingDispositions = acceptedRiskDispositionField(
+      pd,
+      teamGate.stages,
+      teamGate.unit,
+    );
+    const status = unitGateStatus(
+      pd,
+      stage.slug,
+      teamGate.unit,
+      teamGate.scope,
+    );
+    if (status !== "awaiting-approval") {
+      error(
+        `Gate for unit "${teamGate.unit}" of "${stage.slug}" is ${status}; ` +
+          "open or revise the gate before approving it.",
+      );
+    }
+    if (
+      !humanPresenceGuardDisabled() &&
+      !humanActedSinceGate(pd)
+    ) {
+      error(
+        `Refusing to approve unit "${teamGate.unit}" for "${slug}": a real human ` +
+          "has not acted at this gate since it opened.",
+      );
+    }
+    const timestamp = isoTimestamp();
+    content = setField(content, "Last Updated", timestamp);
+    try {
+      emitAudit(pd, "GATE_APPROVED", {
+        ...teamGateFields(stage, teamGate),
+        ...(approvalInput ? { "User Input": approvalInput } : {}),
+        ...(reviewFindingDispositions
+          ? {
+              [REVIEW_FINDING_DISPOSITIONS_FIELD]:
+                reviewFindingDispositions,
+            }
+          : {}),
+      });
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({
+      slug,
+      unit: teamGate.unit,
+      gate_scope: teamGate.scope,
+      approved: true,
+      timestamp,
+    }));
+    return;
+  }
 
   // Artifact guard (issue #366): a stage cannot be approved without evidence of
   // work on disk. Runs BEFORE any mutation so a refusal (error() -> exit) leaves
@@ -3962,8 +5154,12 @@ function handleReject(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
-  const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
-  validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
+  const teamGate = teamGateContext(content, stage, args.slice(1));
+  if (!teamGate) {
+    validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
+  }
+  const autonomousDecision =
+    !teamGate && isAutonomousConstructionDecision(content, stage.phase);
   if (
     !autonomousDecision &&
     !humanPresenceGuardDisabled() &&
@@ -3995,7 +5191,9 @@ function handleReject(args: string[]): void {
 
   const autonomousMode = isAutonomousMode(content);
   const recoveryResetNeedsHuman =
-    autonomousMode && reviewRecoverySpentInCurrentAttempt(pd, content, stage);
+    !teamGate &&
+    autonomousMode &&
+    reviewRecoverySpentInCurrentAttempt(pd, content, stage);
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&
     !humanPresenceGuardDisabled() &&
@@ -4037,9 +5235,64 @@ function handleReject(args: string[]): void {
   }
   const reviewFindingDispositions = rejectedFindingDispositionField(
     pd,
-    stage,
+    teamGate?.stages ?? stage,
     rejectedFindings,
+    teamGate?.unit,
   );
+
+  if (teamGate) {
+    const priorStatus = unitGateStatus(
+      pd,
+      stage.slug,
+      teamGate.unit,
+      teamGate.scope,
+    );
+    if (
+      priorStatus !== "awaiting-approval" &&
+      priorStatus !== "pending"
+    ) {
+      error(
+        `Gate for unit "${teamGate.unit}" of "${stage.slug}" is ${priorStatus}; ` +
+          "only a pending or awaiting gate can be rejected.",
+      );
+    }
+    const current = getField(content, "Revision Count");
+    const parsed = current ? parseInt(current, 10) : 0;
+    const revCount = (Number.isFinite(parsed) ? parsed : 0) + 1;
+    content = setField(content, "Revision Count", String(revCount));
+    const timestamp = isoTimestamp();
+    content = setField(content, "Last Updated", timestamp);
+    const fields = teamGateFields(stage, teamGate);
+    try {
+      emitAudit(pd, "GATE_REJECTED", {
+        ...fields,
+        Feedback: feedback,
+        ...(reviewFindingDispositions
+          ? {
+              [REVIEW_FINDING_DISPOSITIONS_FIELD]:
+                reviewFindingDispositions,
+            }
+          : {}),
+      });
+      emitAudit(pd, "STAGE_REVISING", {
+        ...fields,
+        "Revision count": String(revCount),
+        Feedback: feedback,
+      });
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({
+      slug,
+      unit: teamGate.unit,
+      gate_scope: teamGate.scope,
+      new_state: "revising",
+      revision_count: revCount,
+      timestamp,
+    }));
+    return;
+  }
 
   // Increment Revision Count. Guard against non-numeric values (missing field,
   // manual edits, legacy state files) by coercing non-integers to 0.
@@ -4119,6 +5372,41 @@ function handleRevise(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
+  const teamGate = teamGateContext(content, stage, args.slice(1));
+  if (teamGate) {
+    const status = unitGateStatus(
+      pd,
+      stage.slug,
+      teamGate.unit,
+      teamGate.scope,
+    );
+    if (status !== "revising") {
+      error(
+        `Gate for unit "${teamGate.unit}" of "${stage.slug}" is ${status}; ` +
+          "only a revising gate can re-enter approval.",
+      );
+    }
+    verifyTeamUnitGateEvidence(pd, content, teamGate);
+    const timestamp = isoTimestamp();
+    content = setField(content, "Last Updated", timestamp);
+    try {
+      emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
+        ...teamGateFields(stage, teamGate),
+        Details: "Re-entering unit gate after revision",
+      });
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({
+      slug,
+      unit: teamGate.unit,
+      gate_scope: teamGate.scope,
+      new_state: "awaiting-approval",
+      timestamp,
+    }));
+    return;
+  }
   validateSlugInState(content, slug, "revising");
   verifyGateOpeningGuards(pd, content, stage);
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
@@ -5089,6 +6377,11 @@ function handleFork(args: string[]): void {
   });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
+  requireLiveClaimForTeamUnit(pd, slug, {
+    intent,
+    space,
+    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
+  });
   // recordPrefix is the worktree mirror's relative record dir (null -> the flat
   // legacy mirror, today's behaviour); wtRecord is the resolved record-dir NAME
   // the worktree state file lives under (null -> flat). Resolved on the MAIN
@@ -5185,6 +6478,7 @@ function handleFork(args: string[]): void {
         "Worktree path": relative(pd, wtPath).replaceAll("\\", "/"),
         "Source state hash": sha,
         "Target state hash": sha, // fork = byte-identical copy
+        ...claimAttemptFields(pd, slug),
       }, pd, resolvedIntent, space);
     } catch (e) {
       errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
@@ -5213,6 +6507,8 @@ function handleFork(args: string[]): void {
       // main side resolved — NOT the worktree's own cursor — so fork and merge
       // read/write one file. wtRecord===undefined -> the flat legacy mirror.
       writeStateFile(wtPath, wtContent, wtRecord, space);
+      const scopeStamp = readUnitScopeStamp(pd);
+      if (scopeStamp) writeUnitScopeStamp(wtPath, scopeStamp);
     } catch (e) {
       errorWithSlug(slug, `failed to write worktree state at ${wtPath}: ${errorMessage(e)}`);
     }
@@ -5260,6 +6556,11 @@ function handleMerge(args: string[]): void {
   });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
+  requireLiveClaimForTeamUnit(pd, slug, {
+    intent,
+    space,
+    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
+  });
   const recordPrefix = relativeRecordDir(pd, intent, space);
   // Resolve the intent ONCE before locking (same rationale as handleFork):
   // activeIntent maps an omitted selector to the active record, so resolvedIntent

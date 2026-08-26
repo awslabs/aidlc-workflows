@@ -10,11 +10,19 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  findStageBySlug,
+  freshReviewReceipts,
+  readStateFile,
+  reviewArtifactFingerprint,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   seedAidlcMemory,
+  seededAuditDir,
   seededRecordDir,
+  seedBoltDagBatches,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -73,6 +81,95 @@ function recordArtifactUpdate(proj: string, artifact: string): void {
 }
 
 describe("t291 stale review receipt recovery", () => {
+  test("solo cross-shard ties retain legacy receipt and review-budget ordering", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    seedStateFile(proj, "state-mid-inception.md");
+    writeRequirements(proj, "reviewed requirements\n");
+    const stage = findStageBySlug("requirements-analysis")!;
+    const fingerprint = reviewArtifactFingerprint(proj, stage);
+    const ts = "2026-08-20T00:00:00Z";
+    const block = (event: string, fields: string) =>
+      `## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      join(seededAuditDir(proj), "aaaa-boundary.md"),
+      block("WORKFLOW_STARTED", "**Scope**: feature"),
+    );
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-review.md"),
+      block(
+        "REVIEW_REQUESTED",
+        "**Stage**: requirements-analysis\n**Reviewer**: aidlc-product-lead-agent\n" +
+          `**Iteration**: 1\n**Artifact Fingerprint**: ${fingerprint}`,
+      ) +
+        block(
+          "REVIEW_COMPLETED",
+          "**Stage**: requirements-analysis\n**Reviewer**: aidlc-product-lead-agent\n" +
+            `**Iteration**: 1\n**Verdict**: READY\n**Artifact Fingerprint**: ${fingerprint}`,
+        ),
+    );
+    expect(
+      freshReviewReceipts(proj, readStateFile(proj), stage).stageVerdict,
+    ).toBe("READY");
+
+    const budgetProj = createTestProject();
+    tempDirs.push(budgetProj);
+    seedAidlcMemory(budgetProj);
+    seedStateFile(budgetProj, "state-mid-inception.md");
+    const budgetState = readStateFile(budgetProj).replace(
+      "- **Scope**: bugfix",
+      "- **Scope**: enterprise",
+    );
+    writeFileSync(
+      join(seededRecordDir(budgetProj), "aidlc-state.md"),
+      budgetState,
+      "utf-8",
+    );
+    seedBoltDagBatches(budgetProj, [["alpha"]]);
+    const budgetStage = findStageBySlug("functional-design")!;
+    const budgetFingerprint = reviewArtifactFingerprint(
+      budgetProj,
+      budgetStage,
+      "alpha",
+    );
+    mkdirSync(seededAuditDir(budgetProj), { recursive: true });
+    writeFileSync(
+      join(seededAuditDir(budgetProj), "aaaa-boundary.md"),
+      block("WORKFLOW_STARTED", "**Scope**: feature"),
+    );
+    writeFileSync(
+      join(seededAuditDir(budgetProj), "zzzz-review.md"),
+      block(
+        "REVIEW_REQUESTED",
+        "**Stage**: functional-design\n**Reviewer**: aidlc-architecture-reviewer-agent\n" +
+          `**Unit**: alpha\n**Iteration**: 1\n**Artifact Fingerprint**: ${budgetFingerprint}`,
+      ) +
+        block(
+          "REVIEW_COMPLETED",
+          "**Stage**: functional-design\n**Reviewer**: aidlc-architecture-reviewer-agent\n**Unit**: alpha\n" +
+            `**Iteration**: 1\n**Verdict**: NOT-READY\n**Artifact Fingerprint**: ${budgetFingerprint}`,
+        ),
+    );
+    const iterationTwo = run(
+      LOG_TOOL,
+      [
+        "review",
+        "--stage",
+        "functional-design",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--unit",
+        "alpha",
+        "--iteration",
+        "2",
+      ],
+      budgetProj,
+    );
+    expect(iterationTwo.status, iterationTwo.out).toBe(0);
+  });
+
   test("one recovery receipt unblocks completion and a second invalidation is final", () => {
     const proj = createTestProject();
     tempDirs.push(proj);

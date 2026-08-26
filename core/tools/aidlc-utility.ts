@@ -50,6 +50,11 @@ import {
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
+  type cachedUnitClaimOverview,
+  localUnitClaimOverviewForIntent,
+  main as unitMain,
+} from "./aidlc-unit.ts";
+import {
   activeIntent,
   activeSpace,
   auditBlockField,
@@ -76,6 +81,7 @@ import {
   hooksHealthDir,
   isAutonomousMode,
   isPlainObject,
+  isTeamUnitOwnership,
   isoTimestamp,
   isPackageJson,
   codekbDir,
@@ -106,6 +112,8 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   readActiveDirectiveMarker,
+  readUnitClaimRegistryCache,
+  readUnitScopeStamp,
   recordHookDrop,
   readCurrentSessionId,
   resolveWorkflowSelection,
@@ -136,6 +144,7 @@ import {
   stateFilePath,
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
+  unitDependencyPath,
   withAuditLock,
   validateBoltSlug,
   validScopes,
@@ -154,6 +163,7 @@ import {
   clearSessionRebindOffer,
   CURRENT_STATE_VERSION,
   type AuditShardEvent,
+  idSuffix,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -337,6 +347,16 @@ Scopes (set depth, test strategy, and stage count):
 const HELP_TEXT_TAIL = `
 Utilities:
   --status          Show current workflow progress (read-only)
+  --claim <unit>    Atomically claim a team-owned Unit in this checkout
+  --release <unit>  Release a Unit claim from the unscoped main checkout
+  unit adopt <unit>  Adopt the checked-out live claim branch in a fresh clone
+  unit participate  Mark this checkout for the guided Unit-claim picker
+  unit publish <unit>  Publish this scoped checkout's committed candidate
+  unit pin <unit>   Pin and validate a completed candidate from main
+  unit gate <unit>  Record approve/reject against the pinned candidate
+  unit land <unit>  Land pinned content, fold state, and finalize receipts (explicit post-git release recovery supported)
+  unit merge-status <unit>  Show the local pinned-merge transaction
+  unit status       Show claimable, claimed, and dependency-blocked Units
   compose "<task>"  Suggest a plan tailored to this task (mid-workflow: adjust the steps not yet run)
   compose --report <path>  Build a plan from a scan report (sort findings into a fix-and-ship run)
   --new-scope "<task>"  Build a custom plan even when a ready-made one matches
@@ -1468,6 +1488,45 @@ ${validityOutput}
 Last Completed: ${lastCompleted}
 Next Stage:     ${nextStage}
 `;
+  if (isTeamUnitOwnership(content)) {
+    const selectorArgs = [
+      ...(flags.intent ? ["--intent", flags.intent] : []),
+      ...(flags.space ? ["--space", flags.space] : []),
+    ];
+    const executable = compiledExecutable();
+    const command = executable
+      ? [
+        executable,
+        "team-board",
+        "--snapshot",
+        ...selectorArgs,
+        "--project-dir",
+        projectDir,
+      ]
+      : [
+        process.execPath,
+        resolveHarnessPath(["tools", "aidlc-orchestrate.ts"], { projectDir }),
+        "team-board",
+        "--snapshot",
+        ...selectorArgs,
+        "--project-dir",
+        projectDir,
+      ];
+    const board = spawnSync(command[0], command.slice(1), {
+      cwd: projectDir,
+      encoding: "utf-8",
+      env: process.env,
+    });
+    if ((board.status ?? 1) !== 0) {
+      die(
+        `Cannot render Team Construction snapshot: ${
+          (board.stderr || board.stdout || `exit ${board.status ?? 1}`).trim()
+        }`,
+      );
+    }
+    process.stdout.write(`${output}\n${board.stdout.trimEnd()}\n`);
+    return;
+  }
   process.stdout.write(output);
 }
 
@@ -1482,6 +1541,7 @@ export const PRACTICES_STALENESS_DAYS = 90;
 // MERGE_DISPATCH INVOKED-orphan window for advisory reconciliation. Window
 // covers a generous LLM Task call budget (Haiku 30s + retry + parse).
 export const MERGE_DISPATCH_TIMEOUT_SEC = 60;
+export const CLAIM_ACTIVITY_STALE_HOURS = 24;
 
 /**
  * Resolve the ordered list of Claude Code `managed-settings.json` paths to probe
@@ -3181,11 +3241,9 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   //   Check 5 — practices staleness    (Practices Affirmed Timestamp)
   //   Check 6 — MERGE_DISPATCH advisory (LLM-dispatch reconciliation)
   //
-  // Two surfaces deferred to a future release:
+  // One surface remains deferred to a future release:
   //   - orphan `Merge-Held: true` reconciliation (graph traversal, not a
   //     check; needs workshop-resume false-positive guard)
-  //   - workshop `git ls-remote origin "bolt-*"` stale-claim detection
-  //     (remote-aware doctor, composes with future designer offline-mode)
   // ===========================================================================
 
   const auditMd = auditAllShards;
@@ -3193,6 +3251,179 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   const boltRefs = stateMd
     ? parseRefsList(getField(stateMd, "Bolt Refs") ?? "")
     : [];
+
+  // Team claim reconciliation stays local-only. Registry refs are read from
+  // local refs/cache; doctor never fetches and never releases a claim. The
+  // presence gate preserves exact dormancy for workspaces that have never
+  // enabled team Unit ownership while retaining orphan detection after a team
+  // intent is removed but its local cache or checkout stamp remains.
+  const teamClaimDiagnostics =
+    readUnitScopeStamp(projectDir) !== null ||
+    readUnitClaimRegistryCache(projectDir) !== null ||
+    listSpaces(projectDir).some((space) =>
+      listIntents(projectDir, space.name).some((intent) => {
+        if (!intent.dirName) return false;
+        try {
+          return isTeamUnitOwnership(
+            readStateFile(projectDir, intent.dirName, space.name),
+          );
+        } catch {
+          return false;
+        }
+      })
+    );
+  if (teamClaimDiagnostics) {
+    try {
+    const overviewForIdentity = (
+      space: string,
+      intentUuid: string,
+    ): ReturnType<typeof cachedUnitClaimOverview> | null => {
+      const intent = listIntents(projectDir, space).find(
+        (candidate) =>
+          candidate.uuid === intentUuid &&
+          candidate.dirName !== null,
+      );
+      if (!intent?.dirName) return null;
+      try {
+        return localUnitClaimOverviewForIntent(projectDir, {
+          space,
+          intentUuid,
+          stateContent: readStateFile(projectDir, intent.dirName, space),
+          dependencyBody: readFileSync(
+            unitDependencyPath(projectDir, intent.dirName, space),
+            "utf-8",
+          ),
+        });
+      } catch {
+        return null;
+      }
+    };
+    const stamp = readUnitScopeStamp(projectDir);
+    if (stamp) {
+      const overview = overviewForIdentity(
+        stamp.space,
+        stamp.intent_uuid,
+      );
+      const current = overview?.claims.get(stamp.unit);
+      if (
+        current &&
+        (
+          current.status === "released" ||
+          current.generation !== stamp.generation ||
+          current.nonce !== stamp.nonce
+        )
+      ) {
+        results.push({
+          pass: false,
+          label:
+            `Unit claim stamp stale: ${stamp.unit} generation ${stamp.generation} is tombstoned or superseded`,
+          fix:
+            `the checkout stamp may linger after release; preserve any useful work, then delete ${join("aidlc", ".aidlc-unit-scope.json")} and re-claim explicitly`,
+        });
+      }
+    }
+
+    const claimCache = readUnitClaimRegistryCache(projectDir);
+    if (claimCache) {
+      const now = Date.now();
+      const observedOverview = overviewForIdentity(
+        claimCache.space,
+        claimCache.intent_uuid,
+      );
+      const observedClaims = [...(observedOverview?.claims.values() ?? [])]
+        .filter((claim) => claim.status === "claimed")
+        .filter((claim) => !claim.movementObserved);
+      const missingObservation = observedClaims
+        .filter(
+          (claim) =>
+            !claim.observedAt ||
+            Number.isNaN(Date.parse(claim.observedAt)),
+        )
+        .map((claim) => claim.unit)
+        .sort();
+      if (missingObservation.length > 0) {
+        results.push({
+          pass: true,
+          label:
+            `Unit claim activity baseline missing (advisory): ${missingObservation.join(", ")} - run /aidlc --status after the next explicit fetch to establish a local observed-ref timestamp`,
+        });
+      }
+      const staleActivity = observedClaims
+        .filter(
+          (claim) =>
+            !!claim.observedAt &&
+            !Number.isNaN(Date.parse(claim.observedAt)),
+        )
+        .filter((claim) => {
+          const observed = Date.parse(claim.observedAt!);
+          return now - observed >
+            CLAIM_ACTIVITY_STALE_HOURS * 60 * 60 * 1000;
+        })
+        .map((claim) => claim.unit)
+        .sort();
+      if (staleActivity.length > 0) {
+        results.push({
+          pass: false,
+          label:
+            `Unit claim activity: ${staleActivity.length} claim(s) with no observed ref movement for ${CLAIM_ACTIVITY_STALE_HOURS}h (${staleActivity.join(", ")}) - report only; inspect the team checkout and release only after a human decision`,
+          fix:
+            "inspect the owning checkout and candidate history; release only after a human confirms the attempt is abandoned",
+        });
+      }
+    }
+
+    const refs = spawnSync(
+      "git",
+      [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads/claim/",
+        "refs/remotes/",
+      ],
+      {
+        cwd: projectDir,
+        encoding: "utf-8",
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+      },
+    );
+    if ((refs.status ?? 1) === 0) {
+      const knownIntentIds = new Set<string>();
+      for (const space of listSpaces(projectDir)) {
+        for (const intent of listIntents(projectDir, space.name)) {
+          if (intent.uuid) knownIntentIds.add(idSuffix(intent.uuid));
+        }
+      }
+      const orphanRefs = [
+        ...new Set(
+          (refs.stdout ?? "")
+            .split(/\r?\n/)
+            .map((ref) => ({
+              ref,
+              id8:
+                /^refs\/heads\/claim\/([^/]+)\/[^/]+$/.exec(ref)?.[1] ??
+                /^refs\/remotes\/[^/]+\/claim\/([^/]+)\/[^/]+$/.exec(ref)?.[1],
+            }))
+            .filter(
+              (row): row is { ref: string; id8: string } =>
+                !!row.id8 && !knownIntentIds.has(row.id8),
+            )
+            .map((row) => row.ref),
+        ),
+      ].sort();
+      if (orphanRefs.length > 0) {
+        results.push({
+          pass: false,
+          label:
+            `Orphan Unit claim refs: ${orphanRefs.length} ref(s) match no local intent (${orphanRefs.join(", ")})`,
+          fix:
+            "confirm the intent was removed or renamed, preserve any candidate commit needed for salvage, then delete the orphan refs manually",
+        });
+      }
+    }
+    } catch {
+      // Claim reconciliation is additive; existing doctor checks still render.
+    }
+  }
 
   // Helper: extract the Bolt slug from an audit block. Returns null if absent.
   const blockBoltSlug = (block: string): string | null => {
@@ -7146,6 +7377,25 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case "status":
       handleStatus(projectDir, flags);
+      break;
+    case "claim":
+      unitMain([
+        "claim",
+        ...rawArgs.slice(1),
+        "--project-dir",
+        projectDir,
+      ]);
+      break;
+    case "release":
+      unitMain([
+        "release",
+        ...rawArgs.slice(1),
+        "--project-dir",
+        projectDir,
+      ]);
+      break;
+    case "participate":
+      unitMain(["participate", "--project-dir", projectDir]);
       break;
     case "doctor":
       handleDoctor(projectDir, flags);

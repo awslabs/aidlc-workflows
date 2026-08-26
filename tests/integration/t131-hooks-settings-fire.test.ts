@@ -417,6 +417,31 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     expect(existsSync(graphPath(proj))).toBe(true);
   }, 30000);
 
+  test("Unit landing refreshes runtime state from a UNIT_MERGED transition", () => {
+    const proj = makeProject(true);
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      pinnedShardPath(proj),
+      `## Unit Merged
+**Event**: UNIT_MERGED
+**Unit**: alpha
+**Attempt Generation**: 1
+
+---
+`,
+      "utf-8",
+    );
+    const json = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: {
+        command: "aidlc unit land alpha",
+      },
+    });
+    const r = runHook(runtimeCompileHook(proj), proj, json);
+    expect(r.status).toBe(0);
+    expect(existsSync(graphPath(proj))).toBe(true);
+  }, 30000);
+
   test("recursion twin: new-shape runtime compile -> no runtime-graph.json", () => {
     const proj = makeProject(true);
     // Even with a transition in the audit tail, the command-level recursion guard wins.

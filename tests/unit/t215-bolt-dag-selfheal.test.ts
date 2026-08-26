@@ -24,7 +24,10 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  parseBoltDag,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -274,7 +277,14 @@ function logReview(
     const result = spawnSync(
       BUN,
       [...args, ...suffix, "--project-dir", proj],
-      { encoding: "utf-8" },
+      {
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+        },
+      },
     );
     if ((result.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${result.stdout}${result.stderr}`);
@@ -361,6 +371,8 @@ function runReport(proj: string): RunResult {
     "functional-design",
     "--result",
     "approved",
+    "--user-input",
+    "Approve",
   ]);
 }
 
@@ -572,4 +584,20 @@ describe("t215 bolt dag self-heal", () => {
     );
     expect(r.stderr).toBe("");
   }, 30000);
+
+  test("13: Unit names that collide after case folding are rejected", () => {
+    const parsed = parseBoltDag(`\`\`\`yaml
+units:
+  - name: api
+    depends_on: []
+  - name: API
+    depends_on: []
+\`\`\`
+`);
+    expect(parsed).toEqual({
+      ok: false,
+      reason: "malformed",
+      detail: 'case-folding unit name collision: "api" and "API"',
+    });
+  });
 });

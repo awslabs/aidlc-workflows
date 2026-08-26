@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   constants as fsConstants,
@@ -18,6 +18,7 @@ import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
+  claimAttemptFields,
   cloneIdPath,
   errorMessage,
   hasUnsafeSingleLineCharacter,
@@ -27,8 +28,11 @@ import {
   relativeRecordDir,
   readRegularFileNoFollowOrThrow,
   releaseAuditLock,
+  requireLiveClaimForTeamUnit,
   resolveProjectDir,
   validateBoltSlug,
+  validateLiveUnitScope,
+  worktreeClaimBoundaryMatches,
   worktreeAuditFilePath,
   worktreePath,
   writeBufferAtomic,
@@ -146,6 +150,9 @@ const VALID_EVENT_TYPES = new Set([
   "BOLT_COMPLETED",
   "BOLT_FAILED",
   "AUTONOMY_MODE_SET",
+  "UNIT_OWNERSHIP_SET",
+  "UNIT_GATE_RHYTHM_SET",
+  "UNIT_MERGED",
   // Worktree lifecycle:
   //   WORKTREE_* emitted by aidlc-worktree.ts
   //   STATE_*    emitted by aidlc-state.ts state-fork/state-merge
@@ -250,6 +257,9 @@ const EVENT_HEADINGS: Record<string, string> = {
   BOLT_COMPLETED: "Bolt Completed",
   BOLT_FAILED: "Bolt Failed",
   AUTONOMY_MODE_SET: "Autonomy Mode Set",
+  UNIT_OWNERSHIP_SET: "Unit Ownership Set",
+  UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
+  UNIT_MERGED: "Unit Merged",
   WORKTREE_CREATED: "Worktree Created",
   WORKTREE_MERGED: "Worktree Merged",
   WORKTREE_DISCARDED: "Worktree Discarded",
@@ -363,6 +373,8 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_UNIT_CONVERGED",
   "SWARM_SOURCE_MERGED",
   "AUTONOMY_MODE_SET",
+  "UNIT_OWNERSHIP_SET",
+  "UNIT_GATE_RHYTHM_SET",
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
   // owning verb verifies artifacts before committing — a CLI-forged receipt
@@ -371,6 +383,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_MERGED",
   // DocumentKB provenance: the knowledge tool emits these through the library
   // inside its catalog transaction. A CLI-forged DOCUMENT_INDEXED whose
   // Digest+Source match a real row would make the tool's idempotent
@@ -406,6 +419,8 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "AUTONOMY_MODE_SET",
+  "UNIT_OWNERSHIP_SET",
+  "UNIT_GATE_RHYTHM_SET",
   // Routing-trusted unit lifecycle receipts.
   "UNIT_STARTED",
   "UNIT_PAUSED",
@@ -1149,14 +1164,24 @@ function handleAuditFork(args: string[], projectDir: string): void {
   // fork used). recordPrefix is the worktree mirror's relative record dir
   // (null -> flat-legacy mirror, today's behaviour).
   const { intent, space } = parseSelectorFlags(args);
+  const wtPath = worktreePath(projectDir, slug);
+  const priorForkVerification = existsSync(wtPath)
+    ? worktreeClaimBoundaryMatches(projectDir, wtPath, slug)
+    : null;
+  let scopeStamp: ReturnType<typeof requireLiveClaimForTeamUnit>;
+  if (priorForkVerification) {
+    validateLiveUnitScope(projectDir, slug);
+    scopeStamp = priorForkVerification;
+  } else {
+    scopeStamp = requireLiveClaimForTeamUnit(projectDir, slug, {
+      intent,
+      space,
+      walkingSkeletonMain: args.includes("--walking-skeleton-main"),
+    });
+  }
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
 
   const mainAuditPath = auditFilePath(projectDir, intent, space);
-  const wtPath = worktreePath(projectDir, slug);
-  // Thread the MAIN projectDir so the worktree shard name uses the main clone's
-  // stable token (the fork and merge subprocesses are both spawned from main →
-  // they resolve the SAME worktree shard across PIDs).
-  const wtAuditPath = worktreeAuditFilePath(wtPath, recordPrefix, projectDir);
 
   // Pre-emit guards (fail clean before any audit side-effect).
   if (!existsSync(mainAuditPath)) {
@@ -1175,7 +1200,77 @@ function handleAuditFork(args: string[], projectDir: string): void {
   let sourceHash = "";
   let auditTs = "";
   let alreadyCurrent = false;
+  let wtAuditPath = "";
   try {
+    const projectReal = realpathSync(projectDir);
+    const wtRel = relative(resolve(projectDir), resolve(wtPath));
+    if (wtRel === "" || wtRel === ".." || wtRel.startsWith(`..${sep}`) || isAbsolute(wtRel)) {
+      throw new Error(`worktree path is outside project: ${wtPath}`);
+    }
+    assertNoSymlinkInChainOrThrow(projectReal, wtRel);
+    const wtReal = realpathSync(wtPath);
+    const verifyWorktreeIdentity = (): void => {
+      assertNoSymlinkInChainOrThrow(projectReal, wtRel);
+      if (realpathSync(wtPath) !== wtReal) {
+        throw new Error(`worktree path changed during audit-fork: ${wtPath}`);
+      }
+    };
+    if (scopeStamp) {
+      const wtClone = cloneIdPath(wtPath);
+      verifyWorktreeIdentity();
+      assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtClone));
+      if (!existsSync(wtClone)) {
+        mkdirSync(dirname(wtClone), { recursive: true });
+        verifyWorktreeIdentity();
+        assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtClone));
+        const noFollow =
+          typeof fsConstants.O_NOFOLLOW === "number"
+            ? fsConstants.O_NOFOLLOW
+            : 0;
+        const bytes = Buffer.from(
+          `${randomUUID().replace(/-/g, "").slice(0, 12)}\n`,
+        );
+        let cloneFd: number | undefined;
+        try {
+          cloneFd = openSync(
+            wtClone,
+            fsConstants.O_WRONLY |
+              fsConstants.O_CREAT |
+              fsConstants.O_EXCL |
+              noFollow,
+            0o600,
+          );
+          const identity = fstatSync(cloneFd);
+          if (!identity.isFile()) {
+            throw new Error("worktree clone id target is not a regular file");
+          }
+          writeSync(cloneFd, bytes, 0, bytes.length);
+        } finally {
+          if (cloneFd !== undefined) closeSync(cloneFd);
+        }
+        verifyWorktreeIdentity();
+        assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtClone));
+        const cloneReal = realpathSync(wtClone);
+        const cloneRel = relative(wtReal, cloneReal);
+        if (
+          cloneRel === "" ||
+          cloneRel === ".." ||
+          cloneRel.startsWith(`..${sep}`) ||
+          isAbsolute(cloneRel) ||
+          !lstatSync(wtClone).isFile()
+        ) {
+          throw new Error("worktree clone id escaped the verified worktree");
+        }
+      }
+    }
+    // Fork and merge both select the worktree's clone ID exactly when the
+    // state fork copied a claim stamp into that worktree.
+    wtAuditPath = worktreeAuditFilePath(
+      wtPath,
+      recordPrefix,
+      scopeStamp ? wtPath : projectDir,
+    );
+
     const before = readAuditSnapshot(projectDir, mainAuditPath);
     if (existsSync(wtAuditPath)) {
       const existing = readAuditSnapshot(projectDir, wtAuditPath);
@@ -1196,7 +1291,10 @@ function handleAuditFork(args: string[], projectDir: string): void {
               `does not match the authoritative main row; discard the worktree before re-forking`,
           );
         }
-        if (!existing.bytes.equals(before.bytes.subarray(0, mainFork.end))) {
+        const expected = scopeStamp
+          ? before.bytes.subarray(mainFork.start, mainFork.end)
+          : before.bytes.subarray(0, mainFork.end);
+        if (!existing.bytes.equals(expected)) {
           throw new Error(
             `worktree audit already exists at ${wtAuditPath}, but its fork prefix differs ` +
               `from main; discard the worktree before re-forking`,
@@ -1217,6 +1315,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
           "Bolt slug": slug,
           "Source Audit Hash": sourceHash,
           "Fork Boundary": String(boundary),
+          ...claimAttemptFields(projectDir, slug),
         },
       };
       validateAuditEntry(forkEntry);
@@ -1233,26 +1332,13 @@ function handleAuditFork(args: string[], projectDir: string): void {
       );
       tapAuditMetric("AUDIT_FORKED", forkEntry.fields, projectDir);
 
-      const projectReal = realpathSync(projectDir);
-      const wtRel = relative(resolve(projectDir), resolve(wtPath));
-      if (wtRel === "" || wtRel === ".." || wtRel.startsWith(`..${sep}`) || isAbsolute(wtRel)) {
-        throw new Error(`worktree path is outside project: ${wtPath}`);
-      }
-      assertNoSymlinkInChainOrThrow(projectReal, wtRel);
-      const wtReal = realpathSync(wtPath);
-      const verifyWorktreeIdentity = (): void => {
-        assertNoSymlinkInChainOrThrow(projectReal, wtRel);
-        if (realpathSync(wtPath) !== wtReal) {
-          throw new Error(`worktree path changed during audit-fork: ${wtPath}`);
-        }
-      };
       // Worktree-local tools must append to the fork shard that audit-merge
-      // consumes. Share the parent clone token inside this isolated worktree;
-      // each worktree still has its own copy of the shard, so concurrent writes
-      // remain isolated until the serial merge. Copy this before the audit file
-      // so a token-copy failure leaves audit-fork retryable.
+      // consumes. Swarm worktrees share the parent clone token; claimed Unit
+      // worktrees keep the fresh token minted above.
       const wtCloneIdPath = cloneIdPath(wtPath);
-      const cloneBytes = readRegularFileNoFollowOrThrow(cloneIdPath(projectDir), "clone id");
+      const cloneBytes = scopeStamp
+        ? readRegularFileNoFollowOrThrow(wtCloneIdPath, "worktree clone id")
+        : readRegularFileNoFollowOrThrow(cloneIdPath(projectDir), "clone id");
       verifyWorktreeIdentity();
       assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));
       mkdirSync(dirname(wtCloneIdPath), { recursive: true });
@@ -1266,12 +1352,19 @@ function handleAuditFork(args: string[], projectDir: string): void {
         throw new Error("main audit changed identity during audit-fork");
       }
       const mainAfterFork = mainAfterForkSnapshot.bytes;
+      const worktreeForkBytes = scopeStamp
+        ? (() => {
+            const mainFork = latestAuditFork(mainAfterFork.toString("utf-8"), slug);
+            if (!mainFork) throw new Error("main audit is missing the emitted AUDIT_FORKED row");
+            return mainAfterFork.subarray(mainFork.start, mainFork.end);
+          })()
+        : mainAfterFork;
       verifyWorktreeIdentity();
       assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtAuditPath));
       mkdirSync(dirname(wtAuditPath), { recursive: true });
       verifyWorktreeIdentity();
       assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtAuditPath));
-      writeBufferAtomic(wtAuditPath, mainAfterFork);
+      writeBufferAtomic(wtAuditPath, worktreeForkBytes);
       verifyWorktreeIdentity();
     }
   } catch (e) {
@@ -1348,8 +1441,16 @@ function handleAuditMerge(args: string[], projectDir: string): void {
 
   const mainAuditPath = auditFilePath(projectDir, intent, space);
   const wtPath = worktreePath(projectDir, slug);
-  // Same MAIN clone-id token the fork used → the SAME worktree shard on merge.
-  const wtAuditPath = worktreeAuditFilePath(wtPath, recordPrefix, projectDir);
+  const scopeStamp = requireLiveClaimForTeamUnit(projectDir, slug, {
+    intent,
+    space,
+    walkingSkeletonMain: true,
+  });
+  const wtAuditPath = worktreeAuditFilePath(
+    wtPath,
+    recordPrefix,
+    scopeStamp ? wtPath : projectDir,
+  );
 
   if (!existsSync(wtAuditPath)) {
     jsonError(`worktree audit not found at ${wtAuditPath}; nothing to merge`);

@@ -24,12 +24,16 @@ export const BLOCKED_STATE_TRANSITIONS = new Set([
   "revise",
   "skip",
   "park",
+  "refresh-unit-progress",
+  "fold-unit-merge",
 ]);
 
 export const DELEGATED_STATE_MUTATIONS = new Set([
   ...BLOCKED_STATE_TRANSITIONS,
   "set-skeleton-stance",
   "set-construction-iteration",
+  "set-unit-ownership",
+  "set-unit-gate-rhythm",
   "acknowledge-compaction",
   "reuse-artifact",
   "practices-event",

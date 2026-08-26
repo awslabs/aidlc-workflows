@@ -352,6 +352,53 @@ describe("t304 executable review brief scenarios", () => {
     );
   });
 
+  test("Unit-end disposition readback follows Gate Stages and Unit scope", () => {
+    const { proj, artifacts } = perUnitReviewProject(
+      "functional-design",
+      ["unit-a", "unit-b"],
+    );
+    const stage = findStageBySlug("functional-design")!;
+    const serialized = acceptedRiskDispositionField(proj, stage, "unit-b");
+    expect(serialized).toBeString();
+    expect(
+      (
+        JSON.parse(serialized!) as {
+          dispositions: Array<{ artifact: string; id: string }>;
+        }
+      ).dispositions,
+    ).toMatchObject([
+      { artifact: artifacts.get("unit-b"), id: "R-02" },
+    ]);
+
+    appendAuditEntry(
+      "GATE_APPROVED",
+      {
+        Stage: "code-generation",
+        Unit: "unit-b",
+        "Gate Scope": "unit-end",
+        "Gate Stages": "functional-design,code-generation",
+        [REVIEW_FINDING_DISPOSITIONS_FIELD]: serialized!,
+      },
+      proj,
+    );
+    expect([
+      ...readReviewFindingDispositions(
+        proj,
+        "functional-design",
+        "unit-b",
+      ).values(),
+    ]).toMatchObject([
+      { artifact: artifacts.get("unit-b"), status: "Accepted risk" },
+    ]);
+    expect(
+      readReviewFindingDispositions(
+        proj,
+        "functional-design",
+        "unit-a",
+      ).size,
+    ).toBe(0);
+  });
+
   test("Approve records Accepted risk atomically and future context hydrates it", () => {
     const { proj } = requirementProject([ROW_NEW]);
     recordReviewAndOpenGate(proj);

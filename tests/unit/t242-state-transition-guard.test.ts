@@ -67,6 +67,8 @@ const BLOCKED = [
   "revise",
   "skip",
   "park",
+  "refresh-unit-progress",
+  "fold-unit-merge",
 ] as const;
 const STAGES_ROOT = join(REPO_ROOT, "core", "aidlc-common", "stages");
 const NON_INITIALIZATION_STAGES = [

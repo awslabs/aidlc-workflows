@@ -448,7 +448,7 @@ main's location. Its lifecycle is:
    that were active at this Bolt's audit-fork instant; later-starting
    siblings won't appear in the fragment because the worktree's audit
    is a snapshot at fork time.
-3. **Merge on Bolt complete.** `aidlc-bolt complete --merge --slug
+3. **Merge on Bolt complete (solo/swarm path).** `aidlc-bolt complete --merge --slug
    <slug>` delegates to `aidlc-runtime fragment-merge --slug <slug>`
    after state-merge + audit-merge. fragment-merge hashes the
    fragment for stdout observability, `unlinkSync`'s it, and emits a
@@ -491,7 +491,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 87-event taxonomy
+- **The audit log this graph is derived from** - the 90-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

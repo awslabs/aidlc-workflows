@@ -1,6 +1,6 @@
 # Orchestrator
 
-Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, with exactly four subcommands: `next`, `continue`, `report`, and `park`; `continue` is internal steering transport) owns every between-stage decision - scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion - and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive - running the named stage, asking the human a question, fanning out a swarm - and reports the outcome with `report`. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
+Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, with exactly five subcommands: `next`, `continue`, `report`, `park`, and `team-board`; `continue` is internal steering transport and `team-board` is the read-only Team Construction query) owns every between-stage decision - scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion - and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive - running the named stage, asking the human a question, fanning out a swarm - and reports the outcome with `report`. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
 
 This chapter documents the workflow behaviour from the conductor's side — entry points, session management, scope-to-stage mapping, the stage execution and advancement protocol, and the deliberate deviations. For the engine internals — the `next`/`report` contract, the typed directive union, the conductor persona, plural skills, scope shape, and the swarm referee — see [Engine and Skill System](17-skill-system.md). For user-facing command usage, see the [User Guide -- CLI Commands](../guide/12-cli-commands.md).
 
@@ -220,9 +220,10 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 | Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy |
 | Workspace State | Project root, detected languages, frameworks, build system |
 | Execution Plan Summary | Total stages, completed count, in-progress stage |
-| Runtime State | Revision count for the current stage |
+| Runtime State | Revision count plus optional Construction iteration, Unit ownership, and Unit gate rhythm |
 | Phase Progress | Per-phase status |
 | Stage Progress | Per-stage checkboxes generated from the compiled graph, organized by phase (see below) |
+| Unit Progress | Present only for team-owned unit-major Construction; a derived DAG/artifact/receipt/gate projection rewritten on every `next` |
 | Current Status | Lifecycle phase, current/next stage, status, last updated timestamp |
 | Session Resume Point | Last completed stage, next action, pending artifacts |
 
@@ -234,7 +235,22 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 - `[x]` completed (approved by user)
 - `[S]` skipped (scope-excluded at init, cut via `skip`, or bypassed via `--stage`/`--phase` jump)
 
-The Construction phase section is special: the default walk is stage-major (see [Construction Execution](#construction-execution) below), so each per-Unit Construction stage has a checkbox per Unit from `unit-of-work-dependency.md`. `bolt-plan.md` is planning content, not the checkbox source. Additionally, `Construction Autonomy Mode: [unset|autonomous|gated]` is recorded under **Current Status** — written after the ladder prompt fires and honoured on session resume.
+The Construction phase section is special: the default walk is stage-major
+(see [Construction Execution](#construction-execution) below), so each per-Unit
+Construction stage has a checkbox per Unit from `unit-of-work-dependency.md`;
+`bolt-plan.md` is planning content, not the checkbox source. Under exact
+`Unit Ownership: team`, the separate Unit Progress table carries one row per
+Unit and one cell per applicable per-Unit Construction stage plus its Unit gate;
+the Stage Progress rows remain one row per stage and become derived from those
+columns. `Construction Autonomy Mode: [unset|autonomous|gated]` is recorded
+under **Current Status** — written after the ladder prompt fires and honoured
+on session resume.
+
+During active team fan-out, unscoped main emits a turn-terminal `notice` whose
+message is the deterministic Team Construction board: Unit Progress, locally
+observed claim movement, merge readiness, claimable Units, and blockers. Stop
+hooks probe the same branch without cache or state writes. `/aidlc --status`
+invokes the same pure board query in snapshot mode.
 
 ### Recovery Breadcrumb
 

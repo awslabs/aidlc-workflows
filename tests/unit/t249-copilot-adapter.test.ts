@@ -1185,9 +1185,20 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
     const report = runLifecycle(
       reported, "report-owner", "source",
-      ["report", "--stage", "requirements-analysis", "--result", "rejected", "--reason", "test rejection"], "report-result",
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes",
+        "--reason",
+        "test rejection",
+      ],
+      "report-result",
     );
-    expect(report.directive.kind).toBe("print");
+    expect(report.directive.kind, JSON.stringify(report.directive)).toBe("print");
     expect(marker(reported)).toMatchObject({ kind: "print", delivery: "superseded" });
 
     const terminal = orchestrationProject();
@@ -1220,6 +1231,39 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(runAdapter(repeated, "continue-workflow", { ...FIXTURES.stop, cwd: repeated, session_id: "same-owner", stop_hook_active: true }).stdout).toBe("");
     expect(marker(repeated).stop_count).toBe(2);
   }, 60000);
+
+  test("21a: terminal notice output is captured, retained, and allows Copilot Stop", () => {
+    const dir = orchestrationProject();
+    const session = "notice-owner";
+    const attempt = "notice-attempt";
+    const spec = commandSpec(dir, "direct", ["next"]);
+    const pre = runAdapter(
+      dir,
+      "guard-tool-call",
+      commandPayload(dir, session, spec.text, attempt),
+    );
+    const rewritten = rewrittenCommand(pre);
+    expect(rewritten).toContain(`--aidlc-attempt-id ${attempt}`);
+    const notice = '{"kind":"notice","message":"Team Construction board"}';
+    const post = runAdapter(
+      dir,
+      "post-tool",
+      commandPayload(dir, session, rewritten, attempt, true, notice),
+    );
+    expect(post.code).toBe(0);
+    expect(marker(dir)).toMatchObject({
+      kind: "notice",
+      delivery: "delivered",
+      active_attempt: { id: attempt, status: "settled" },
+    });
+    expect(
+      runAdapter(dir, "continue-workflow", {
+        ...FIXTURES.stop,
+        cwd: dir,
+        session_id: session,
+      }).stdout,
+    ).toBe("");
+  });
 
   test.skipIf(COMPILED_BINARY === null)("21b: real compiled dispatcher normalizes next/continue and --resume shorthand", () => {
     const dir = orchestrationProject();

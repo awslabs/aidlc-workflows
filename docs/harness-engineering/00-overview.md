@@ -52,8 +52,9 @@ until a stage opts to use it.
 
 Two pieces of machinery move work through these stages, and as a harness
 engineer you shape the **data** both of them read. The deterministic **engine**
-(`core/tools/aidlc-orchestrate.ts`, with exactly four subcommands: `next`,
-`continue`, `report`, and `park`; `continue` is internal steering transport)
+(`core/tools/aidlc-orchestrate.ts`, with exactly five subcommands: `next`,
+`continue`, `report`, `park`, and `team-board`; `continue` is internal steering
+transport and `team-board` is the read-only Team Construction query)
 reads `aidlc-state.md` and the compiled `stage-graph.json`, decides what runs
 next, and emits one typed directive. The **conductor**
 (`skills/aidlc/SKILL.md`) is a thin forwarding loop that carries each directive

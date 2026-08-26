@@ -99,6 +99,37 @@ Generation included — is covered, one human approval per stage.
 Only the exact value `unit-major` activates it; absent or `stage-major` is the
 default.
 
+When delivery planning additionally records `Unit Ownership: team`, those late
+gates are replaced by Unit gates. The default `per-stage` rhythm gates each
+settled `(stage, Unit)` before that Unit advances; `unit-end` gates once after
+the final active, unskipped per-unit Construction stage for that Unit. The
+engine refreshes a derived `## Unit Progress`
+table on every `next`, and reports include `--unit` so approvals/rejections and
+receipt floors affect only that Unit. `solo` or an absent ownership field keeps
+the legacy directives, state bytes, events, and late cascade unchanged.
+
+Team-mode claims use `claim/<intent-id8>/<unit>` refs with compare-and-swap
+updates. A successful claim writes a gitignored checkout stamp; that checkout
+routes only the stamped Unit and carries the claim generation on lifecycle,
+review, gate, and fork evidence. Unscoped main emits a terminal fan-out notice
+while claims are live. `aidlc-unit.ts release <unit>` writes a tombstone instead
+of deleting the ref, invalidating stale attempts while preserving history. A
+participant clone opts into the guided claim picker once with
+`aidlc-unit.ts participate`; facilitator main deliberately omits that marker.
+Scoped routing and receipt writes are offline-first: the claim-time stamp is
+authoritative. Registry liveness is rechecked only at claim-sensitive
+boundaries such as fork/release; an unavailable remote warns and proceeds from
+the stamp, while an online stale or released attempt is refused.
+
+Completed teams commit and run `aidlc unit publish <unit>`. Unscoped main then
+pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
+Plan Approval without materializing a worktree, records one human merge gate,
+and lands the candidate through `aidlc unit land`. Git content lands before the
+Unit row is folded; main-owned state/runtime markers are retained, the team's
+new audit shard transports its attempt-keyed receipts, and `UNIT_MERGED` marks
+the row. Source conflicts abort before state mutation. After the final merged
+row, Build and Test and CI Pipeline route once on main.
+
 **Per-unit batch waves (optional, stage-major only).** On the default
 stage-major walk, the engine MAY emit `directive.wave` for one of the four
 inline design stages (3.1–3.4). The wave comes from one healed DAG snapshot;

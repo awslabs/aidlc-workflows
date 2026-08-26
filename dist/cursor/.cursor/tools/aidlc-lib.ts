@@ -1347,8 +1347,8 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
   // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
   // workflow engagement (a chat turn that ran git/cat/ls etc.).
   if (
-    !/aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(text) &&
-    !/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm)\b/.test(text)
+    !/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(text) &&
+    !/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm|unit)\b/.test(text)
   ) {
     return false;
   }
@@ -1366,7 +1366,7 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
 // Current legacy-shape engagement rules. Kept as a helper so the exported
 // classifier can preserve every old-shape result while adding the new grammar.
 function legacyEngineEngagementSegment(seg: string): boolean {
-  if (!/aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(seg)) return false;
+  if (!/aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg)) return false;
   // A PURE read-only query: a read-only flag present AND no mutating/advancing
   // verb in the SAME segment. `next --status` is read-only; `report --status`
   // (nonsensical, but) still has `report` so is engagement.
@@ -1384,6 +1384,9 @@ function legacyEngineEngagementSegment(seg: string): boolean {
     // The mutating / completing subcommands. (Read-only aidlc-state reads like
     // `get`/`show` are not here, so they fall through to non-engagement.)
     return /\b(approve|advance|finalize|complete-workflow|gate-start|checkbox|park|unpark|set|skip|reject|revise|resume)\b/.test(seg);
+  }
+  if (/aidlc-unit\b/.test(seg)) {
+    return !/\b(status|merge-status)\b/.test(seg);
   }
   // aidlc-jump / aidlc-bolt / aidlc-swarm: a read-only query (--help/--status)
   // is not engagement; anything else mutates (jump moves the pointer, bolt forks/
@@ -1405,13 +1408,13 @@ function legacyEngineEngagementSegment(seg: string): boolean {
 // "chat" - the conservative direction for loop integrity.
 export function isEngineEngagementSegment(seg: string): boolean {
   if (
-    /aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(seg) &&
+    /aidlc-(orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg) &&
     legacyEngineEngagementSegment(seg)
   ) {
     return true;
   }
 
-  if (!/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm)\b/.test(seg)) {
+  if (!/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm|unit)\b/.test(seg)) {
     return false;
   }
 
@@ -1443,6 +1446,9 @@ export function isEngineEngagementSegment(seg: string): boolean {
   if (/\baidlc\s+(?:jump|bolt|swarm)\b/.test(seg)) {
     if (hasReadOnlyFlag) return false;
     return true;
+  }
+  if (/\baidlc\s+unit\b/.test(seg)) {
+    return !/\baidlc\s+unit\s+(?:status|merge-status)\b/.test(seg);
   }
 
   return false;
@@ -1494,7 +1500,7 @@ const runtimeCompileHarnessPattern = KNOWN_HARNESS_DIRS
   .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
   .join("|");
 const runtimeCompileTool = new RegExp(
-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|utility)\\.ts\\b`,
+  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
 );
 const runtimeCompileReport = new RegExp(
   `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
@@ -1514,7 +1520,7 @@ export function classifyRuntimeCompileCommand(
   if (
     runtimeCompileTool.test(command) ||
     runtimeCompileReport.test(command) ||
-    /\baidlc\s+(?:state|jump|bolt)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(command) ||
+    /\baidlc\s+(?:state|jump|bolt|unit)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(command) ||
     /\baidlc\s+report\b|\baidlc\s+orchestrate\s+report\b|\baidlc\s+next\b.*\breport\b/.test(command)
   ) {
     // Utility split rationale: the new grammar keeps D2 parity for the public
@@ -1531,6 +1537,15 @@ export function classifyRuntimeCompileCommand(
 // intents live under spaces/<space>/ here; the engine stays in <harness>/).
 function workspaceRoot(projectDir: string): string {
   return join(projectDir, "aidlc");
+}
+
+function canonicalPathKey(path: string): string {
+  const resolved = resolvePath(path);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 // The active space for this project. Reads the `aidlc/active-space` cursor;
@@ -3358,7 +3373,7 @@ const ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
 
 export type ActiveDirectiveKind =
   | "load-steering" | "run-stage" | "ask" | "print" | "error"
-  | "done" | "parked" | "dispatch-subagent" | "invoke-swarm" | "present-gate";
+  | "done" | "parked" | "notice" | "dispatch-subagent" | "invoke-swarm" | "present-gate";
 export type ResumeAction = "resume" | "redo" | "jump" | "start-fresh";
 
 interface ActiveDirectiveAttempt {
@@ -3493,7 +3508,7 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   const integer = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
   const attempt = isPlainObject(parsed.active_attempt) ? parsed.active_attempt : null;
   const resume = isPlainObject(parsed.resume) ? parsed.resume : null;
-  const kinds: ActiveDirectiveKind[] = ["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "dispatch-subagent", "invoke-swarm", "present-gate"];
+  const kinds: ActiveDirectiveKind[] = ["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"];
   if (
     parsed.version !== 2 || !/^[0-9a-f]{64}$/.test(String(parsed.project_sha256 ?? "")) ||
     (parsed.intent_uuid !== null && typeof parsed.intent_uuid !== "string") || typeof parsed.state_present !== "boolean" ||
@@ -4198,7 +4213,7 @@ export function settleCopilotCommand(
         active_attempt: { ...attempt, status: "failed" },
       }, result: "settled" as const };
     }
-    const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked"].includes(directive.kind);
+    const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked", "notice"].includes(directive.kind);
     const enginePublished = (input.commandKind === "next" || input.commandKind === "continue") &&
       (directive.kind === "load-steering" || directive.kind === "run-stage");
     const resultBound = !enginePublished ||
@@ -4458,15 +4473,17 @@ export function cloneIdPath(projectDir: string): string {
 // harmless — readers glob `audit/*.md`). Memoized per process. Best-effort: an
 // unwritable workspace degrades to an in-memory token for this process (still
 // stable within the process, still distinct from other clones).
-let _cloneId: string | null = null;
+const CLONE_IDS = new Map<string, string>();
 function cloneId(projectDir: string): string {
-  if (_cloneId !== null) return _cloneId;
+  const key = canonicalPathKey(projectDir);
+  const cached = CLONE_IDS.get(key);
+  if (cached) return cached;
   const path = cloneIdPath(projectDir);
   try {
     const raw = readFileSync(path, "utf-8").trim();
     if (/^[a-z0-9]{1,32}$/.test(raw)) {
-      _cloneId = raw;
-      return _cloneId;
+      CLONE_IDS.set(key, raw);
+      return raw;
     }
   } catch {
     // no token yet → mint one below
@@ -4478,11 +4495,18 @@ function cloneId(projectDir: string): string {
     // Re-read so a concurrent first-run mint that landed first wins for ALL
     // processes in this clone (converge on one on-disk token).
     const settled = readFileSync(path, "utf-8").trim();
-    _cloneId = /^[a-z0-9]{1,32}$/.test(settled) ? settled : minted;
+    CLONE_IDS.set(
+      key,
+      /^[a-z0-9]{1,32}$/.test(settled) ? settled : minted,
+    );
   } catch {
-    _cloneId = minted; // unwritable workspace → in-memory token
+    CLONE_IDS.set(key, minted); // unwritable workspace → in-memory token
   }
-  return _cloneId;
+  return CLONE_IDS.get(key)!;
+}
+
+export function ensureCloneId(projectDir: string): string {
+  return cloneId(projectDir);
 }
 
 // --- Human presence at an approval/interview gate ---
@@ -5600,7 +5624,12 @@ export function checkSummaryConfirmationEvidence(
       } else if (eventWorkflow?.startsWith("single-stage:")) {
         return false;
       }
-      if ((auditBlockField(entry.block, "Unit") ?? null) !== question.unit) {
+      const eventUnit = auditBlockField(entry.block, "Unit");
+      if ((eventUnit ?? null) !== question.unit) return false;
+      if (
+        eventUnit &&
+        !eventMatchesClaimAttempt(projectDir, entry.block, eventUnit)
+      ) {
         return false;
       }
       return auditBlockField(entry.block, "Questions File") === questionRelative;
@@ -5867,33 +5896,98 @@ export function hasPendingDecision(
   projectDir: string,
   stage: string,
   afterEvent?: string,
+  unit?: string,
+  workflowAttempt = false,
 ): boolean {
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return false;
+  if (!workflowAttempt) {
+    const audit = readAllAuditShards(projectDir);
+    if (audit.length === 0) return false;
+    const relevant = new Set([
+      "DECISION_RECORDED",
+      "QUESTION_ANSWERED",
+      ...(afterEvent ? [afterEvent] : []),
+    ]);
+    const events = audit
+      .replace(/\r\n/g, "\n")
+      .split(/\n---\n/)
+      .map((block, position) => ({
+        event: auditBlockField(block, "Event") ?? "",
+        stage: auditBlockField(block, "Stage"),
+        workflow: auditBlockField(block, "Workflow"),
+        timestamp: auditBlockField(block, "Timestamp") ?? "",
+        position,
+      }))
+      .filter((event) => relevant.has(event.event))
+      .sort((a, b) => {
+        if (a.timestamp !== b.timestamp) {
+          return a.timestamp < b.timestamp ? -1 : 1;
+        }
+        return a.position - b.position;
+      });
+    let start = 0;
+    if (afterEvent) {
+      const boundary = events.findLastIndex(
+        (event) =>
+          event.event === afterEvent &&
+          event.stage === stage &&
+          !event.workflow?.startsWith("single-stage:"),
+      );
+      if (boundary === -1) return false;
+      start = boundary + 1;
+    }
+    let pending = false;
+    for (const event of events.slice(start)) {
+      if (event.stage !== stage) continue;
+      if (event.event === "DECISION_RECORDED") {
+        pending = true;
+      } else if (event.event === "QUESTION_ANSWERED") {
+        pending = false;
+      }
+    }
+    return pending;
+  }
 
   const relevant = new Set([
     "DECISION_RECORDED",
     "QUESTION_ANSWERED",
     ...(afterEvent ? [afterEvent] : []),
+    ...(workflowAttempt ? ["WORKFLOW_STARTED", "STAGE_JUMPED"] : []),
   ]);
-  const events = audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position) => ({
-      event: auditBlockField(block, "Event") ?? "",
-      stage: auditBlockField(block, "Stage"),
-      workflow: auditBlockField(block, "Workflow"),
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-      position,
+  const events = readAuditShardEvents(projectDir)
+    .filter((row) => relevant.has(row.event))
+    .map((row) => ({
+      ...row,
+      stage: auditBlockField(row.block, "Stage"),
+      unit: auditBlockField(row.block, "Unit"),
+      workflow: auditBlockField(row.block, "Workflow"),
     }))
-    .filter((event) => relevant.has(event.event))
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      return a.position - b.position;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
     });
+  if (events.length === 0) return false;
+  const lastAtTimestamp = new Map<string, number>();
+  const shardsAtTimestamp = new Map<string, Set<string>>();
+  for (let i = 0; i < events.length; i++) {
+    lastAtTimestamp.set(events[i].timestamp, i);
+    const shards = shardsAtTimestamp.get(events[i].timestamp) ?? new Set();
+    shards.add(events[i].shard);
+    shardsAtTimestamp.set(events[i].timestamp, shards);
+  }
+  const afterBoundary = (index: number): number =>
+    (shardsAtTimestamp.get(events[index].timestamp)?.size ?? 0) > 1
+      ? (lastAtTimestamp.get(events[index].timestamp) ?? index) + 1
+      : index + 1;
 
   let start = 0;
-  if (afterEvent) {
+  if (workflowAttempt) {
+    const boundary = events.findLastIndex(
+      (event) =>
+        event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED",
+    );
+    if (boundary >= 0) start = afterBoundary(boundary);
+  } else if (afterEvent) {
     const boundary = events.findLastIndex(
       (event) =>
         event.event === afterEvent &&
@@ -5901,17 +5995,39 @@ export function hasPendingDecision(
         !event.workflow?.startsWith("single-stage:"),
     );
     if (boundary === -1) return false;
-    start = boundary + 1;
+    start = afterBoundary(boundary);
   }
 
   let pending = false;
-  for (const event of events.slice(start)) {
-    if (event.stage !== stage) continue;
-    if (event.event === "DECISION_RECORDED") {
-      pending = true;
-    } else if (event.event === "QUESTION_ANSWERED") {
-      pending = false;
+  for (let groupStart = start; groupStart < events.length;) {
+    let groupEnd = groupStart + 1;
+    while (
+      groupEnd < events.length &&
+      events[groupEnd].timestamp === events[groupStart].timestamp
+    ) {
+      groupEnd++;
     }
+    const matching = events
+      .slice(groupStart, groupEnd)
+      .filter(
+        (event) =>
+          event.stage === stage &&
+          (unit === undefined || event.unit === unit) &&
+          (
+            event.event === "DECISION_RECORDED" ||
+            event.event === "QUESTION_ANSWERED"
+          ),
+      );
+    const matchingShards = new Set(matching.map((event) => event.shard));
+    const matchingEvents = new Set(matching.map((event) => event.event));
+    if (matchingShards.size > 1 && matchingEvents.size > 1) {
+      pending = false;
+    } else {
+      for (const event of matching) {
+        pending = event.event === "DECISION_RECORDED";
+      }
+    }
+    groupStart = groupEnd;
   }
   return pending;
 }
@@ -5922,16 +6038,23 @@ export function hasPendingDecision(
 // distinct across clones (so concurrent clones never collide / git-conflict).
 // hostname() is a human-readable hint only; it can carry dots/uppercase, so
 // normalise it to the slug shape it never escapes the audit dir.
-let _auditShardName: string | null = null;
+const AUDIT_SHARD_NAMES = new Map<string, string>();
 export function auditShardName(projectDir: string): string {
-  if (_auditShardName !== null) return _auditShardName;
+  const key = canonicalPathKey(projectDir);
+  const scoped = applicableTeamUnitScopeStamp(projectDir);
+  if (scoped?.audit_shard && /^[A-Za-z0-9._-]+\.md$/.test(scoped.audit_shard)) {
+    return scoped.audit_shard;
+  }
+  const cached = AUDIT_SHARD_NAMES.get(key);
+  if (cached) return cached;
   const host = hostname()
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "host";
-  _auditShardName = `${host}-${cloneId(projectDir)}.md`;
-  return _auditShardName;
+  const name = `${host}-${cloneId(projectDir)}.md`;
+  AUDIT_SHARD_NAMES.set(key, name);
+  return name;
 }
 
 // `…/intents/<slug>-<id8>/audit/` — the shard directory, or null when no intent
@@ -6705,6 +6828,15 @@ export function freshReviewReceipts(
   if (reviewClass === "none") return empty;
   const maxIterations =
     reviewClass === "advisory" ? 1 : stage.reviewer_max_iterations ?? 2;
+  const perUnit =
+    stage.for_each === "unit-of-work" &&
+    !usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    );
+  const unitMajor =
+    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const teamOwnership = perUnit && isTeamUnitOwnership(stateContent);
   const RELEVANT = new Set([
     "WORKFLOW_STARTED",
     "STAGE_STARTED",
@@ -6762,14 +6894,6 @@ export function freshReviewReceipts(
     return sawSessionBoundary;
   };
 
-  const perUnit =
-    stage.for_each === "unit-of-work" &&
-    !usesStageLevelPerUnitArtifacts(
-      getField(stateContent, "Scope"),
-      stateContent,
-    );
-  const unitMajor =
-    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
   const dag = perUnit ? options.boltDag ?? resolveBoltDag(projectDir) : null;
   const applicableUnits: Set<string> | null = dag?.state === "ok" ? new Set() : null;
   if (dag?.state === "ok" && applicableUnits !== null) {
@@ -6789,7 +6913,10 @@ export function freshReviewReceipts(
     const e = events[i];
     let boundary = e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED";
     if (!boundary && auditBlockField(e.block, "Stage") === stage.slug) {
-      boundary = e.event === "GATE_REJECTED" || (
+      boundary = (
+        e.event === "GATE_REJECTED" &&
+        !(teamOwnership && auditBlockField(e.block, "Unit"))
+      ) || (
         e.event === "STAGE_STARTED" &&
         !unitMajor &&
         !auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")
@@ -6802,11 +6929,10 @@ export function freshReviewReceipts(
         candidate.timestamp === e.timestamp &&
         candidate.shard !== e.shard,
     );
-    // A boundary involved in a cross-shard same-second tie floors the entire
-    // timestamp group. No receipt or artifact row in that unordered group may
-    // survive based on shard filename order. A later unambiguous boundary
-    // restores ordinary accounting.
-    if (tiedCrossShard) {
+    // Team-owned attempts fail closed across a same-second cross-shard
+    // boundary by flooring the entire unordered timestamp group. Solo mode
+    // retains its legacy merged-shard ordering for compatibility.
+    if (tiedCrossShard && teamOwnership) {
       let end = i;
       while (end + 1 < events.length && events[end + 1].timestamp === e.timestamp) end++;
       floorIdx = end;
@@ -6897,6 +7023,48 @@ export function freshReviewReceipts(
       applyDeferredBoundaries();
     }
     groupTimestamp = e.timestamp;
+    const eventUnit = auditBlockField(e.block, "Unit");
+    if (
+      eventUnit &&
+      !eventMatchesClaimAttempt(projectDir, e.block, eventUnit)
+    ) {
+      continue;
+    }
+    if (
+      teamOwnership &&
+      eventUnit &&
+      (e.event === "REVIEW_REQUESTED" || e.event === "REVIEW_COMPLETED") &&
+      events.some(
+        (candidate) =>
+          candidate.event === "GATE_REJECTED" &&
+          candidate.timestamp === e.timestamp &&
+          candidate.shard !== e.shard &&
+          auditBlockField(candidate.block, "Unit") === eventUnit &&
+          gateStagesFromBlock(candidate.block).includes(stage.slug),
+      )
+    ) {
+      continue;
+    }
+    if (teamOwnership && e.event === "GATE_REJECTED") {
+      const rejectedUnit = auditBlockField(e.block, "Unit");
+      if (!rejectedUnit || !gateStagesFromBlock(e.block).includes(stage.slug)) {
+        continue;
+      }
+      if (unitVerdicts.delete(rejectedUnit)) {
+        unitStale.add(rejectedUnit);
+        unitStaleProgress.set(rejectedUnit, {
+          nextIteration: (unitIterations.get(rejectedUnit) ?? 0) + 1,
+          recoverySpent: unitReceiptRecovery.get(rejectedUnit) ?? false,
+        });
+      }
+      unitIterations.delete(rejectedUnit);
+      unitReceiptRecovery.delete(rejectedUnit);
+      unitPending.delete(rejectedUnit);
+      for (const [key, request] of pendingRequests) {
+        if (request.unit === rejectedUnit) pendingRequests.delete(key);
+      }
+      continue;
+    }
     if (e.event === "SESSION_STARTED" || e.event === "SESSION_RESUMED") {
       if (eventIsCrossShardTied(i)) {
         deferredSessionBoundary = true;
@@ -6986,7 +7154,11 @@ export function freshReviewReceipts(
       const tiedAcrossShards = eventIsCrossShardTied(i);
       const sessionBoundaryOnlyTie =
         tiedAcrossShards && requestTieIsSessionBoundaryOnly(i);
-      if (tiedAcrossShards && !sessionBoundaryOnlyTie) continue;
+      if (
+        tiedAcrossShards &&
+        !sessionBoundaryOnlyTie &&
+        teamOwnership
+      ) continue;
       const previous = pendingRequests.get(requestKey);
       const recovery =
         previous?.recovery === true ||
@@ -7010,7 +7182,7 @@ export function freshReviewReceipts(
     }
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
-    if (eventIsCrossShardTied(i)) {
+    if (teamOwnership && eventIsCrossShardTied(i)) {
       pendingRequests.delete(requestKey);
       continue;
     }
@@ -9521,6 +9693,1069 @@ export function composeMarkerPath(projectDir: string): string {
   return join(projectDir, "aidlc", ".aidlc-compose-pending");
 }
 
+export const UNIT_SCOPE_FILE = ".aidlc-unit-scope.json";
+export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
+export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
+export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
+export const CLAIM_REGISTRY_CACHE_FILE = ".aidlc-claim-registry.json";
+export const UNIT_RELEASE_PENDING_FILE = ".aidlc-unit-releases";
+export const UNIT_MERGE_DIR = ".aidlc-unit-merges";
+
+export interface UnitScopeStamp {
+  version: 1;
+  space: string;
+  intent_uuid: string;
+  intent_id8: string;
+  unit: string;
+  owner: string;
+  generation: number;
+  nonce: string;
+  claim_ref: string;
+  claim_oid: string;
+  claimed_from_oid: string;
+  integration_ref: string;
+  gate_rhythm: "per-stage" | "unit-end";
+  audit_shard?: string;
+}
+
+export interface CachedUnitClaim {
+  status: "claimed" | "released";
+  owner: string;
+  generation: number;
+  nonce: string;
+  ref: string;
+  oid: string;
+  observed_at?: string;
+}
+
+export interface UnitClaimRegistryCache {
+  version: 1;
+  space: string;
+  intent_uuid: string;
+  claims: Record<string, CachedUnitClaim>;
+  warning?: string;
+}
+
+export interface UnitMergeEvidence {
+  stages_expected: string[];
+  stages_completed: string[];
+  gates_expected: string[];
+  gates_approved: string[];
+  reviewers_expected: string[];
+  reviewers_ready: string[];
+  plan_fingerprint: string | null;
+  artifact_paths: string[];
+  audit_shards: string[];
+  outside_unit_record_paths: string[];
+  merge_held: boolean;
+}
+
+export interface UnitMergeTransaction {
+  version: 1;
+  status:
+    | "pinned"
+    | "approved"
+    | "rejected"
+    | "git-landed"
+    | "state-folded"
+    | "complete";
+  space: string;
+  intent_uuid: string;
+  intent_id8: string;
+  unit: string;
+  owner: string;
+  generation: number;
+  nonce: string;
+  claim_ref: string;
+  pinned_oid: string;
+  candidate_tree_oid: string;
+  candidate_base_oid: string;
+  integration_oid: string;
+  integration_branch: string;
+  main_before_oid: string;
+  pinned_at: string;
+  pin_id?: string;
+  audit_shard?: string;
+  evidence: UnitMergeEvidence;
+  decision?: string;
+  user_input?: string;
+  target_branch?: string;
+  strategy?: "merge";
+  live_stage_columns?: string[];
+  checkpoint_parent_oid?: string;
+  checkpoint_commit_oid?: string;
+  git_commit_oid?: string;
+  conflict_files?: string[];
+  released_after_git?: {
+    accepted_at: string;
+    user_input: string;
+    tombstone_oid: string;
+    tombstone_generation: number;
+  };
+  state_fold_authorized?: {
+    authorized_at: string;
+    mode: "live-claim" | "released-after-git";
+    observed_oid: string;
+    owner: string;
+  };
+}
+
+export function unitScopePath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), UNIT_SCOPE_FILE);
+}
+
+export function unitParkedPath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), UNIT_PARKED_FILE);
+}
+
+export function claimGenerationsPath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), CLAIM_GENERATIONS_FILE);
+}
+
+export function unitParticipantPath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), UNIT_PARTICIPANT_FILE);
+}
+
+export function claimRegistryCachePath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), CLAIM_REGISTRY_CACHE_FILE);
+}
+
+function identityScopedUnitPath(
+  projectDir: string,
+  root: string,
+  unit: string,
+  space?: string,
+  intentUuid?: string,
+): string {
+  const resolvedSpace = space ?? activeSpace(projectDir);
+  const resolvedIntent = intentUuid ?? activeIntentUuid(projectDir, resolvedSpace);
+  if (!resolvedIntent) {
+    throw new Error("Cannot resolve the active intent for Unit recovery state.");
+  }
+  for (const [label, value] of [
+    ["space", resolvedSpace],
+    ["intent UUID", resolvedIntent],
+    ["Unit", unit],
+  ] as const) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)) {
+      throw new Error(`Invalid ${label} path segment "${value}".`);
+    }
+  }
+  return join(workspaceRoot(projectDir), root, resolvedSpace, resolvedIntent, `${unit}.json`);
+}
+
+export function unitReleasePendingPath(
+  projectDir: string,
+  unit: string,
+  space?: string,
+  intentUuid?: string,
+): string {
+  return identityScopedUnitPath(
+    projectDir,
+    UNIT_RELEASE_PENDING_FILE,
+    unit,
+    space,
+    intentUuid,
+  );
+}
+
+export function unitMergeTransactionPath(
+  projectDir: string,
+  unit: string,
+  space?: string,
+  intentUuid?: string,
+): string {
+  return identityScopedUnitPath(
+    projectDir,
+    UNIT_MERGE_DIR,
+    unit,
+    space,
+    intentUuid,
+  );
+}
+
+export function readUnitMergeTransaction(
+  projectDir: string,
+  unit: string,
+  space?: string,
+  intentUuid?: string,
+): UnitMergeTransaction | null {
+  try {
+    const resolvedSpace = space ?? activeSpace(projectDir);
+    const resolvedIntent = intentUuid ?? activeIntentUuid(projectDir, resolvedSpace);
+    if (!resolvedIntent) return null;
+    const parsed = JSON.parse(
+      readFileSync(
+        unitMergeTransactionPath(
+          projectDir,
+          unit,
+          resolvedSpace,
+          resolvedIntent,
+        ),
+        "utf-8",
+      ),
+    ) as UnitMergeTransaction;
+    const oid = (value: unknown): value is string =>
+      typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
+    if (
+      parsed.version !== 1 ||
+      ![
+        "pinned",
+        "approved",
+        "rejected",
+        "git-landed",
+        "state-folded",
+        "complete",
+      ].includes(parsed.status) ||
+      typeof parsed.space !== "string" ||
+      parsed.space !== resolvedSpace ||
+      typeof parsed.intent_uuid !== "string" ||
+      parsed.intent_uuid !== resolvedIntent ||
+      typeof parsed.intent_id8 !== "string" ||
+      typeof parsed.unit !== "string" ||
+      parsed.unit !== unit ||
+      typeof parsed.owner !== "string" ||
+      !Number.isInteger(parsed.generation) ||
+      parsed.generation < 1 ||
+      typeof parsed.nonce !== "string" ||
+      typeof parsed.claim_ref !== "string" ||
+      !parsed.claim_ref.endsWith(`/${unit}`) ||
+      !oid(parsed.pinned_oid) ||
+      !oid(parsed.candidate_tree_oid) ||
+      !oid(parsed.candidate_base_oid) ||
+      !oid(parsed.integration_oid) ||
+      typeof parsed.integration_branch !== "string" ||
+      !oid(parsed.main_before_oid) ||
+      typeof parsed.pinned_at !== "string" ||
+      (parsed.audit_shard !== undefined &&
+        (typeof parsed.audit_shard !== "string" ||
+          !/^[A-Za-z0-9._-]+\.md$/.test(parsed.audit_shard))) ||
+      parsed.evidence === null ||
+      typeof parsed.evidence !== "object" ||
+      !Array.isArray(parsed.evidence.stages_expected) ||
+      !Array.isArray(parsed.evidence.stages_completed) ||
+      !Array.isArray(parsed.evidence.gates_expected) ||
+      !Array.isArray(parsed.evidence.gates_approved) ||
+      !Array.isArray(parsed.evidence.reviewers_expected) ||
+      !Array.isArray(parsed.evidence.reviewers_ready) ||
+      !Array.isArray(parsed.evidence.artifact_paths) ||
+      !Array.isArray(parsed.evidence.audit_shards) ||
+      !Array.isArray(parsed.evidence.outside_unit_record_paths) ||
+      (parsed.live_stage_columns !== undefined &&
+        !Array.isArray(parsed.live_stage_columns)) ||
+      (parsed.checkpoint_parent_oid !== undefined &&
+        !oid(parsed.checkpoint_parent_oid)) ||
+      (parsed.checkpoint_commit_oid !== undefined &&
+        !oid(parsed.checkpoint_commit_oid)) ||
+      (parsed.git_commit_oid !== undefined && !oid(parsed.git_commit_oid))
+      ||
+      (
+        parsed.released_after_git !== undefined &&
+        (
+          typeof parsed.released_after_git.accepted_at !== "string" ||
+          typeof parsed.released_after_git.user_input !== "string" ||
+          !oid(parsed.released_after_git.tombstone_oid) ||
+          !Number.isInteger(
+            parsed.released_after_git.tombstone_generation,
+          ) ||
+          parsed.released_after_git.tombstone_generation < 2
+        )
+      )
+      ||
+      (
+        parsed.state_fold_authorized !== undefined &&
+        (
+          typeof parsed.state_fold_authorized.authorized_at !== "string" ||
+          (
+            parsed.state_fold_authorized.mode !== "live-claim" &&
+            parsed.state_fold_authorized.mode !== "released-after-git"
+          ) ||
+          !oid(parsed.state_fold_authorized.observed_oid) ||
+          typeof parsed.state_fold_authorized.owner !== "string" ||
+          parsed.state_fold_authorized.owner.length === 0
+        )
+      )
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function writeUnitMergeTransaction(
+  projectDir: string,
+  transaction: UnitMergeTransaction,
+): void {
+  const path = unitMergeTransactionPath(
+    projectDir,
+    transaction.unit,
+    transaction.space,
+    transaction.intent_uuid,
+  );
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify(transaction, null, 2)}\n`);
+}
+
+export function unitMergeTransactionsForIdentity(
+  projectDir: string,
+  space: string,
+  intentUuid: string,
+): UnitMergeTransaction[] {
+  const dir = join(
+    workspaceRoot(projectDir),
+    UNIT_MERGE_DIR,
+    space,
+    intentUuid,
+  );
+  let files: string[];
+  try {
+    files = readdirSync(dir)
+      .filter((file) => file.endsWith(".json"))
+      .sort();
+  } catch {
+    return [];
+  }
+  const transactions: UnitMergeTransaction[] = [];
+  for (const file of files) {
+    const unit = file.slice(0, -".json".length);
+    const transaction = readUnitMergeTransaction(
+      projectDir,
+      unit,
+      space,
+      intentUuid,
+    );
+    if (transaction) {
+      transactions.push(transaction);
+    }
+  }
+  return transactions;
+}
+
+export function unitMergeTransactions(
+  projectDir: string,
+): UnitMergeTransaction[] {
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  return intentUuid
+    ? unitMergeTransactionsForIdentity(projectDir, space, intentUuid)
+    : [];
+}
+
+export function hasAnyUnitMergeTransactions(projectDir: string): boolean {
+  return unitMergeTransactions(projectDir).length > 0;
+}
+
+export function readClaimGenerations(
+  projectDir: string,
+): Record<string, number> {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(claimGenerationsPath(projectDir), "utf-8"),
+    ) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, number] =>
+          Number.isInteger(entry[1]) && (entry[1] as number) > 0,
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function claimGenerationKey(projectDir: string, unit: string): string {
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space) ?? "legacy";
+  return `${space}/${intentUuid}/${unit}`;
+}
+
+export function writeClaimGeneration(
+  projectDir: string,
+  unit: string,
+  generation: number,
+): void {
+  const generations = readClaimGenerations(projectDir);
+  generations[claimGenerationKey(projectDir, unit)] = generation;
+  writeFileAtomic(
+    claimGenerationsPath(projectDir),
+    `${JSON.stringify(generations, null, 2)}\n`,
+  );
+}
+
+export function clearClaimGeneration(projectDir: string, unit: string): void {
+  const generations = readClaimGenerations(projectDir);
+  delete generations[claimGenerationKey(projectDir, unit)];
+  writeFileAtomic(
+    claimGenerationsPath(projectDir),
+    `${JSON.stringify(generations, null, 2)}\n`,
+  );
+}
+
+export function readUnitClaimRegistryCache(
+  projectDir: string,
+): UnitClaimRegistryCache | null {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(claimRegistryCachePath(projectDir), "utf-8"),
+    ) as Partial<UnitClaimRegistryCache>;
+    if (
+      parsed.version !== 1 ||
+      typeof parsed.space !== "string" ||
+      typeof parsed.intent_uuid !== "string" ||
+      parsed.claims === null ||
+      typeof parsed.claims !== "object" ||
+      Array.isArray(parsed.claims)
+    ) {
+      return null;
+    }
+    const claims: Record<string, CachedUnitClaim> = {};
+    for (const [unit, value] of Object.entries(parsed.claims)) {
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+      const claim = value as Partial<CachedUnitClaim>;
+      if (
+        (claim.status !== "claimed" && claim.status !== "released") ||
+        typeof claim.owner !== "string" ||
+        !Number.isInteger(claim.generation) ||
+        (claim.generation ?? 0) < 1 ||
+        typeof claim.nonce !== "string" ||
+        typeof claim.ref !== "string" ||
+        typeof claim.oid !== "string" ||
+        (
+          claim.observed_at !== undefined &&
+          typeof claim.observed_at !== "string"
+        )
+      ) {
+        return null;
+      }
+      claims[unit] = claim as CachedUnitClaim;
+    }
+    return {
+      version: 1,
+      space: parsed.space,
+      intent_uuid: parsed.intent_uuid,
+      claims,
+      ...(typeof parsed.warning === "string" && parsed.warning
+        ? { warning: parsed.warning }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function writeUnitClaimRegistryCache(
+  projectDir: string,
+  cache: UnitClaimRegistryCache,
+): void {
+  writeFileAtomic(
+    claimRegistryCachePath(projectDir),
+    `${JSON.stringify(cache, null, 2)}\n`,
+  );
+}
+
+interface ClaimRegistryPayload {
+  status: "claimed" | "released";
+  intent_uuid: string;
+  unit: string;
+  generation: number;
+  nonce: string;
+}
+
+const LIVE_CLAIM_PAYLOADS = new Map<string, ClaimRegistryPayload | null>();
+
+function claimRegistryGit(
+  projectDir: string,
+  args: string[],
+  options: { localOnly?: boolean } = {},
+): { ok: boolean; stdout: string; stderr: string } {
+  const result = spawnSync("git", args, {
+    cwd: projectDir,
+    encoding: "utf-8",
+    env: options.localOnly
+      ? { ...process.env, GIT_NO_LAZY_FETCH: "1" }
+      : process.env,
+  });
+  return {
+    ok: result.status === 0,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+function claimRegistryRemote(projectDir: string): string | null {
+  const remoteResult = claimRegistryGit(projectDir, ["remote"]);
+  if (!remoteResult.ok) {
+    throw new Error(`Unit claim registry read failed: ${remoteResult.stderr.trim()}`);
+  }
+  const remotes = remoteResult.stdout
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (remotes.includes("origin")) return "origin";
+  if (remotes.length === 0) return null;
+  if (remotes.length === 1) return remotes[0];
+  throw new Error(
+    `Unit claim registry read failed: multiple remotes (${remotes.join(", ")}) and no origin.`,
+  );
+}
+
+function claimRegistryTips(
+  projectDir: string,
+  intentUuid: string,
+): Array<{ oid: string; ref: string }> {
+  const prefix = `refs/heads/claim/${idSuffix(intentUuid)}/`;
+  const remote = claimRegistryRemote(projectDir);
+  const found = remote
+    ? claimRegistryGit(projectDir, ["ls-remote", remote, `${prefix}*`])
+    : claimRegistryGit(
+        projectDir,
+        ["for-each-ref", "--format=%(objectname) %(refname)", prefix],
+      );
+  if (!found.ok) {
+    throw new Error(
+      `Unit claim registry read failed: ${found.stderr.trim() || found.stdout.trim()}`,
+    );
+  }
+  return found.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts.length >= 2 && parts[0] && parts[1])
+    .map(([oid, ref]) => ({ oid, ref }));
+}
+
+function claimPayloadAtTip(
+  projectDir: string,
+  intentUuid: string,
+  tip: { oid: string; ref: string },
+): ClaimRegistryPayload {
+  const remote = claimRegistryRemote(projectDir);
+  const localOnly = { localOnly: true };
+  const hasCommit = (): boolean =>
+    claimRegistryGit(
+      projectDir,
+      ["cat-file", "-e", `${tip.oid}^{commit}`],
+      localOnly,
+    ).ok;
+  const payloadBlob = (): string | null => {
+    const found = claimRegistryGit(
+      projectDir,
+      ["rev-parse", `${tip.oid}:.aidlc-unit-claim.json`],
+      localOnly,
+    );
+    return found.ok && /^[0-9a-f]{40}$/.test(found.stdout.trim())
+      ? found.stdout.trim()
+      : null;
+  };
+  const hasBlob = (blob: string | null): boolean =>
+    blob !== null &&
+    claimRegistryGit(projectDir, ["cat-file", "-e", blob], localOnly).ok;
+  let blob = payloadBlob();
+  if ((!hasCommit() || !hasBlob(blob)) && remote) {
+    const fetched = claimRegistryGit(
+      projectDir,
+      ["fetch", "--no-tags", "--no-filter", remote, tip.ref],
+    );
+    if (!fetched.ok) {
+      throw new Error(
+        `Unit claim registry fetch failed: ${fetched.stderr.trim()} ` +
+          `(a partial clone requires a non-filtered fetch of ${tip.ref}).`,
+      );
+    }
+    blob = payloadBlob();
+  }
+  if (blob && !hasBlob(blob) && remote) {
+    const hydrated = claimRegistryGit(
+      projectDir,
+      ["fetch", "--no-tags", "--no-filter", remote, blob],
+    );
+    if (!hydrated.ok) {
+      throw new Error(
+        `Unit claim registry fetch failed: ${hydrated.stderr.trim()} ` +
+          `(the partial clone is missing payload blob ${blob} for ${tip.ref}).`,
+      );
+    }
+  }
+  if (!hasCommit() || !hasBlob(blob)) {
+    throw new Error(
+      `Unit claim registry fetch failed: payload at ${tip.ref} is unavailable after a non-filtered fetch; ` +
+        "the partial clone is missing the claim payload blob.",
+    );
+  }
+  const shown = claimRegistryGit(
+    projectDir,
+    ["show", `${tip.oid}:.aidlc-unit-claim.json`],
+    localOnly,
+  );
+  if (!shown.ok) {
+    throw new Error(`Unit claim registry payload is unreadable at ${tip.ref}.`);
+  }
+  try {
+    const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
+    if (
+      (payload.status !== "claimed" && payload.status !== "released") ||
+      payload.intent_uuid !== intentUuid ||
+      typeof payload.unit !== "string" ||
+      !Number.isInteger(payload.generation) ||
+      (payload.generation as number) < 1 ||
+      typeof payload.nonce !== "string"
+    ) {
+      throw new Error("invalid payload");
+    }
+    return payload as unknown as ClaimRegistryPayload;
+  } catch {
+    throw new Error(`Unit claim registry payload is invalid at ${tip.ref}.`);
+  }
+}
+
+function liveClaimPayload(
+  projectDir: string,
+  unit: string,
+): ClaimRegistryPayload | null {
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  if (!intentUuid) return null;
+  const cacheKey = `${canonicalPathKey(projectDir)}:${space}:${intentUuid}:${unit}`;
+  if (LIVE_CLAIM_PAYLOADS.has(cacheKey)) {
+    return LIVE_CLAIM_PAYLOADS.get(cacheKey) ?? null;
+  }
+  const ref = `refs/heads/claim/${idSuffix(intentUuid)}/${unit}`;
+  const tip = claimRegistryTips(projectDir, intentUuid).find(
+    (candidate) => candidate.ref === ref,
+  );
+  if (!tip) {
+    LIVE_CLAIM_PAYLOADS.set(cacheKey, null);
+    return null;
+  }
+  const payload = claimPayloadAtTip(projectDir, intentUuid, tip);
+  if (payload.unit !== unit) {
+    throw new Error(`Unit claim registry payload is invalid at ${ref}.`);
+  }
+  LIVE_CLAIM_PAYLOADS.set(cacheKey, payload);
+  return payload;
+}
+
+export function invalidateLiveClaimPayloadCache(
+  projectDir: string,
+  unit?: string,
+): void {
+  const prefix = `${canonicalPathKey(projectDir)}:`;
+  for (const key of LIVE_CLAIM_PAYLOADS.keys()) {
+    if (
+      key.startsWith(prefix) &&
+      (unit === undefined || key.endsWith(`:${unit}`))
+    ) {
+      LIVE_CLAIM_PAYLOADS.delete(key);
+    }
+  }
+}
+
+export function hasAnyUnitClaimRefs(projectDir: string): boolean {
+  const localOnly = { localOnly: true };
+  if (!claimRegistryGit(projectDir, ["rev-parse", "--git-dir"], localOnly).ok) {
+    return false;
+  }
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  if (!intentUuid) return false;
+  const id8 = idSuffix(intentUuid);
+  const local = claimRegistryGit(
+    projectDir,
+    [
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/heads/claim/",
+      "refs/remotes/",
+    ],
+    localOnly,
+  );
+  if (!local.ok) return false;
+  if (
+    local.stdout
+      .split(/\r?\n/)
+      .some((ref) =>
+        ref.startsWith(`refs/heads/claim/${id8}/`) ||
+        new RegExp(`^refs/remotes/[^/]+/claim/${escapeRegex(id8)}/`).test(ref)
+      )
+  ) {
+    return true;
+  }
+  const cache = readUnitClaimRegistryCache(projectDir);
+  return !!cache &&
+    cache.space === space &&
+    cache.intent_uuid === intentUuid &&
+    Object.keys(cache.claims).length > 0;
+}
+
+export function readUnitScopeStamp(projectDir: string): UnitScopeStamp | null {
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(unitScopePath(projectDir), "utf-8"),
+    );
+    if (parsed === null || typeof parsed !== "object") return null;
+    const stamp = parsed as Partial<UnitScopeStamp>;
+    if (
+      stamp.version !== 1 ||
+      typeof stamp.space !== "string" ||
+      typeof stamp.intent_uuid !== "string" ||
+      typeof stamp.intent_id8 !== "string" ||
+      typeof stamp.unit !== "string" ||
+      typeof stamp.owner !== "string" ||
+      !Number.isInteger(stamp.generation) ||
+      (stamp.generation ?? 0) < 1 ||
+      typeof stamp.nonce !== "string" ||
+      typeof stamp.claim_ref !== "string" ||
+      typeof stamp.claim_oid !== "string" ||
+      typeof stamp.claimed_from_oid !== "string" ||
+      typeof stamp.integration_ref !== "string" ||
+      (stamp.gate_rhythm !== "per-stage" && stamp.gate_rhythm !== "unit-end") ||
+      (stamp.audit_shard !== undefined &&
+        (typeof stamp.audit_shard !== "string" ||
+          !/^[A-Za-z0-9._-]+\.md$/.test(stamp.audit_shard)))
+    ) {
+      return null;
+    }
+    return stamp as UnitScopeStamp;
+  } catch {
+    return null;
+  }
+}
+
+export function writeUnitScopeStamp(
+  projectDir: string,
+  stamp: UnitScopeStamp,
+): void {
+  writeFileAtomic(
+    unitScopePath(projectDir),
+    `${JSON.stringify(stamp, null, 2)}\n`,
+  );
+}
+
+export function clearUnitScopeStamp(projectDir: string): void {
+  try {
+    unlinkSync(unitScopePath(projectDir));
+  } catch {
+    // Already absent.
+  }
+}
+
+function applicableTeamUnitScopeStamp(
+  projectDir: string,
+  stateContent?: string,
+): UnitScopeStamp | null {
+  let state = stateContent;
+  try {
+    state ??= readStateFile(projectDir);
+  } catch {
+    return null;
+  }
+  if (!isTeamUnitOwnership(state)) return null;
+  const stamp = readUnitScopeStamp(projectDir);
+  if (!stamp) return null;
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  if (
+    !intentUuid ||
+    stamp.space !== space ||
+    stamp.intent_uuid !== intentUuid
+  ) {
+    return null;
+  }
+  return stamp;
+}
+
+export function readApplicableTeamUnitScopeStamp(
+  projectDir: string,
+  stateContent?: string,
+): UnitScopeStamp | null {
+  return applicableTeamUnitScopeStamp(projectDir, stateContent);
+}
+
+export function worktreeClaimBoundaryMatches(
+  projectDir: string,
+  worktreeDir: string,
+  unit: string,
+): UnitScopeStamp | null {
+  const main = applicableTeamUnitScopeStamp(projectDir);
+  const forked = applicableTeamUnitScopeStamp(worktreeDir);
+  if (
+    !main ||
+    !forked ||
+    main.unit !== unit ||
+    forked.unit !== unit ||
+    main.intent_uuid !== forked.intent_uuid ||
+    main.generation !== forked.generation ||
+    main.nonce !== forked.nonce ||
+    main.claim_oid !== forked.claim_oid
+  ) {
+    return null;
+  }
+  return main;
+}
+
+function cachedClaimFanoutActive(projectDir: string): boolean {
+  const cache = readUnitClaimRegistryCache(projectDir);
+  const space = activeSpace(projectDir);
+  const intentUuid = activeIntentUuid(projectDir, space);
+  if (!intentUuid) return false;
+  if (
+    cache &&
+    cache.space === space &&
+    cache.intent_uuid === intentUuid &&
+    Object.values(cache.claims).some((claim) => claim.status === "claimed")
+  ) {
+    return true;
+  }
+  const id8 = idSuffix(intentUuid);
+  const refs = claimRegistryGit(projectDir, [
+    "for-each-ref",
+    "--format=%(objectname) %(refname)",
+    "refs/heads/claim/",
+    "refs/remotes/",
+  ], { localOnly: true });
+  if (!refs.ok) return false;
+  for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
+    const [oid, ref] = line.trim().split(/\s+/, 2);
+    if (
+      !oid ||
+      !ref ||
+      (
+        !ref.startsWith(`refs/heads/claim/${id8}/`) &&
+        !new RegExp(`^refs/remotes/[^/]+/claim/${escapeRegex(id8)}/`).test(ref)
+      )
+    ) {
+      continue;
+    }
+    const shown = claimRegistryGit(
+      projectDir,
+      ["show", `${oid}:.aidlc-unit-claim.json`],
+      { localOnly: true },
+    );
+    if (!shown.ok) continue;
+    try {
+      const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
+      if (
+        payload.intent_uuid === intentUuid &&
+        payload.status === "claimed"
+      ) {
+        return true;
+      }
+    } catch {
+      // Malformed local claim refs are handled by notice composition.
+    }
+  }
+  return false;
+}
+
+export function validateLiveUnitScope(
+  projectDir: string,
+  requestedUnit?: string,
+): UnitScopeStamp | null {
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  if (!isTeamUnitOwnership(state)) return null;
+  const stamp = applicableTeamUnitScopeStamp(pd, state);
+  if (!stamp) {
+    if (cachedClaimFanoutActive(pd)) {
+      throw new Error(
+        "Team Unit fan-out is active in an unscoped checkout; claim a Unit before lifecycle or report work.",
+      );
+    }
+    return null;
+  }
+  if (requestedUnit && requestedUnit !== stamp.unit) {
+    throw new Error(
+      `This checkout is scoped to Unit "${stamp.unit}"; refusing foreign Unit "${requestedUnit}".`,
+    );
+  }
+  return stamp;
+}
+
+export function isWalkingSkeletonUnitOnMain(
+  projectDir: string,
+  unit: string,
+): boolean {
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  if (
+    !isTeamUnitOwnership(state) ||
+    applicableTeamUnitScopeStamp(pd, state)
+  ) {
+    return false;
+  }
+  const scope = getField(state, "Scope") ?? "";
+  if (loadScopeMetadata()[scope]?.skeleton !== true) return false;
+  const dag = resolveBoltDag(pd);
+  if (dag.state !== "ok" || dag.batches[0]?.[0] !== unit) return false;
+  const top = claimRegistryGit(
+    pd,
+    ["rev-parse", "--show-toplevel"],
+    { localOnly: true },
+  );
+  const common = claimRegistryGit(
+    pd,
+    ["rev-parse", "--git-common-dir"],
+    { localOnly: true },
+  );
+  if (!top.ok || !common.ok) return false;
+  try {
+    const topReal = realpathSync(top.stdout.trim());
+    const commonAbs = resolvePath(topReal, common.stdout.trim());
+    return topReal === realpathSync(dirname(commonAbs));
+  } catch {
+    return false;
+  }
+}
+
+const CLAIM_BOUNDARY_WARNINGS = new Set<string>();
+
+function warnOfflineClaimBoundaryOnce(
+  projectDir: string,
+  unit: string,
+  message: string,
+): void {
+  const key = `${canonicalPathKey(projectDir)}:${unit}:${message}`;
+  if (CLAIM_BOUNDARY_WARNINGS.has(key)) return;
+  CLAIM_BOUNDARY_WARNINGS.add(key);
+  process.stderr.write(
+    `[aidlc] warning: Unit "${unit}" claim registry is unavailable (${message}); ` +
+      "proceeding from the checkout stamp for this claim-sensitive boundary.\n",
+  );
+}
+
+export function requireLiveClaimForTeamUnit(
+  projectDir: string,
+  unit: string,
+  selector: {
+    intent?: string;
+    space?: string;
+    walkingSkeletonMain?: boolean;
+  } = {},
+): UnitScopeStamp | null {
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd, selector.intent, selector.space);
+  if (!isTeamUnitOwnership(state)) return null;
+  if (
+    selector.walkingSkeletonMain &&
+    isWalkingSkeletonUnitOnMain(pd, unit)
+  ) {
+    return null;
+  }
+  const stamp = applicableTeamUnitScopeStamp(pd, state);
+  if (!stamp) {
+    throw new Error(
+      `Unit Ownership: team requires a live claim for Unit "${unit}" before fork or lifecycle work.`,
+    );
+  }
+  if (selector.space && selector.space !== stamp.space) {
+    throw new Error(
+      `Claimed Unit "${stamp.unit}" belongs to space "${stamp.space}", not "${selector.space}".`,
+    );
+  }
+  if (
+    selector.intent &&
+    selector.intent !== stamp.intent_uuid &&
+    !selector.intent.endsWith(stamp.intent_id8)
+  ) {
+    throw new Error(
+      `Claimed Unit "${stamp.unit}" belongs to intent "${stamp.intent_uuid}", not "${selector.intent}".`,
+    );
+  }
+  validateLiveUnitScope(pd, unit);
+  try {
+    invalidateLiveClaimPayloadCache(pd, stamp.unit);
+    const current = liveClaimPayload(pd, stamp.unit);
+    if (
+      current?.status !== "claimed" ||
+      current.intent_uuid !== stamp.intent_uuid ||
+      current.unit !== stamp.unit ||
+      current.generation !== stamp.generation ||
+      current.nonce !== stamp.nonce
+    ) {
+      throw new Error(
+        `The Unit "${stamp.unit}" claim attempt is stale or released; re-claim before continuing.`,
+      );
+    }
+  } catch (error) {
+    const message = errorMessage(error);
+    if (
+      message.startsWith("Unit claim registry read failed:") ||
+      message.startsWith("Unit claim registry fetch failed:")
+    ) {
+      warnOfflineClaimBoundaryOnce(pd, unit, message);
+    } else {
+      throw error;
+    }
+  }
+  return stamp;
+}
+
+export function claimAttemptFields(
+  projectDir: string,
+  unit?: string,
+): Record<string, string> {
+  const stamp = applicableTeamUnitScopeStamp(projectDir);
+  if (!stamp || (unit !== undefined && stamp.unit !== unit)) return {};
+  return { "Attempt Generation": String(stamp.generation) };
+}
+
+export function eventMatchesClaimAttempt(
+  projectDir: string,
+  block: string,
+  unit?: string,
+): boolean {
+  let state: string;
+  try {
+    state = readStateFile(projectDir);
+  } catch {
+    return true;
+  }
+  if (!isTeamUnitOwnership(state)) return true;
+  const stamp = applicableTeamUnitScopeStamp(projectDir, state);
+  if (!stamp) {
+    if (!unit) return true;
+    const eventGeneration = auditBlockField(block, "Attempt Generation");
+    if (eventGeneration === null) return true;
+    const generation =
+      readClaimGenerations(projectDir)[claimGenerationKey(projectDir, unit)];
+    return generation === undefined
+      ? true
+      : eventGeneration === String(generation);
+  }
+  const eventUnit = auditBlockField(block, "Unit");
+  if (unit !== undefined && unit !== stamp.unit) return false;
+  if (eventUnit !== null && eventUnit !== stamp.unit) return false;
+  return (
+    auditBlockField(block, "Attempt Generation") === String(stamp.generation)
+  );
+}
+
+export function unitMergedReceipts(
+  projectDir: string,
+  auditRows?: readonly AuditShardEvent[],
+): Set<string> {
+  const rows = auditRows ?? readAuditShardEvents(projectDir);
+  const merged = new Set<string>();
+  for (const row of rows) {
+    if (row.event !== "UNIT_MERGED") continue;
+    const unit = auditBlockField(row.block, "Unit");
+    if (!unit || !eventMatchesClaimAttempt(projectDir, row.block, unit)) continue;
+    merged.add(unit);
+  }
+  return merged;
+}
+
+export function effectiveUnitGateRhythm(
+  projectDir: string,
+  stateContent: string,
+): UnitGateRhythm {
+  return applicableTeamUnitScopeStamp(projectDir, stateContent)?.gate_rhythm ??
+    readUnitGateRhythm(stateContent);
+}
+
 // Freshness window for the compose marker. The Stop hook honours the carve-out
 // only while the marker's mtime is younger than this; an older marker is an
 // orphan (a session that crashed between write and gate-resolve) and is ignored
@@ -10159,9 +11394,24 @@ export function getField(content: string, field: string): string | null {
 // sites cannot drift. (This PR uses the helper only at the NEW gate sites;
 // refactoring the existing open-coded sites is a tracked follow-up.)
 export const AUTONOMY_MODE_FIELD = "Construction Autonomy Mode";
+export const UNIT_OWNERSHIP_FIELD = "Unit Ownership";
+export const UNIT_GATE_RHYTHM_FIELD = "Unit Gate Rhythm";
+
+export type UnitGateRhythm = "per-stage" | "unit-end";
 
 export function isAutonomousMode(stateContent: string | null): boolean {
   return !!stateContent && getField(stateContent, AUTONOMY_MODE_FIELD)?.trim() === "autonomous";
+}
+
+export function isTeamUnitOwnership(stateContent: string | null): boolean {
+  return !!stateContent && getField(stateContent, UNIT_OWNERSHIP_FIELD)?.trim() === "team";
+}
+
+export function readUnitGateRhythm(stateContent: string | null): UnitGateRhythm {
+  if (!isTeamUnitOwnership(stateContent)) return "per-stage";
+  return getField(stateContent!, UNIT_GATE_RHYTHM_FIELD)?.trim() === "unit-end"
+    ? "unit-end"
+    : "per-stage";
 }
 
 // True only for the topology the engine can dispatch as an autonomous swarm.
@@ -12789,6 +14039,138 @@ export function pipelineLinkEvidence(
   return { links, repos, receipts, reusedRepos, completed, missing };
 }
 
+export type UnitGateScope = "per-stage" | "unit-end";
+export type UnitGateStatus =
+  | "pending"
+  | "awaiting-approval"
+  | "revising"
+  | "approved";
+
+function gateStagesFromBlock(block: string): string[] {
+  const explicit = auditBlockField(block, "Gate Stages");
+  if (explicit) {
+    return explicit
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+  }
+  const stage = auditBlockField(block, "Stage");
+  return stage ? [stage] : [];
+}
+
+function gateEventMatchesUnit(
+  block: string,
+  slug: string,
+  unit: string | undefined,
+): boolean {
+  if (!gateStagesFromBlock(block).includes(slug)) return false;
+  const eventUnit = auditBlockField(block, "Unit");
+  return unit === undefined ? eventUnit === null : eventUnit === unit;
+}
+
+function gateRejectionMatchesAttempt(
+  block: string,
+  slug: string,
+  unit: string | undefined,
+): boolean {
+  if (!gateStagesFromBlock(block).includes(slug)) return false;
+  const eventUnit = auditBlockField(block, "Unit");
+  if (eventUnit === null) return true;
+  return unit !== undefined && eventUnit === unit;
+}
+
+export function unitGateStatus(
+  projectDir: string,
+  stage: string,
+  unit: string,
+  scope: UnitGateScope,
+  auditRows?: readonly AuditShardEvent[],
+): UnitGateStatus {
+  const rows = auditRows ?? readAuditShardEvents(projectDir).sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+  let status: UnitGateStatus = "pending";
+  for (let start = 0; start < rows.length;) {
+    let end = start + 1;
+    while (
+      end < rows.length &&
+      rows[end].timestamp === rows[start].timestamp
+    ) {
+      end++;
+    }
+    const relevant = rows.slice(start, end).filter((row) => {
+      if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
+        return true;
+      }
+      if (
+        row.event !== "STAGE_AWAITING_APPROVAL" &&
+        row.event !== "STAGE_REVISING" &&
+        row.event !== "GATE_APPROVED" &&
+        row.event !== "GATE_REJECTED"
+      ) {
+        return false;
+      }
+      return (
+        gateEventMatchesUnit(row.block, stage, unit) &&
+        eventMatchesClaimAttempt(projectDir, row.block, unit) &&
+        (auditBlockField(row.block, "Gate Scope") ?? "per-stage") === scope
+      );
+    });
+    if (relevant.length > 0) {
+      const relevantShards = new Set(relevant.map((row) => row.shard));
+      const hasBoundary = relevant.some(
+        (row) =>
+          row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED",
+      );
+      if (relevantShards.size > 1) {
+        if (hasBoundary) {
+          status = "pending";
+        } else {
+          const statuses = new Set(
+            relevant.map((row): UnitGateStatus =>
+              row.event === "GATE_APPROVED"
+                ? "approved"
+                : row.event === "GATE_REJECTED" ||
+                    row.event === "STAGE_REVISING"
+                  ? "revising"
+                  : "awaiting-approval",
+            ),
+          );
+          status = statuses.has("revising")
+            ? "revising"
+            : statuses.has("awaiting-approval")
+              ? "awaiting-approval"
+              : statuses.size === 1
+                ? "approved"
+                : "pending";
+        }
+      } else {
+        for (const row of relevant) {
+          if (
+            row.event === "WORKFLOW_STARTED" ||
+            row.event === "STAGE_JUMPED"
+          ) {
+            status = "pending";
+          } else if (row.event === "GATE_APPROVED") {
+            status = "approved";
+          } else if (
+            row.event === "GATE_REJECTED" ||
+            row.event === "STAGE_REVISING"
+          ) {
+            status = "revising";
+          } else {
+            status = "awaiting-approval";
+          }
+        }
+      }
+    }
+    start = end;
+  }
+  return status;
+}
+
 // Exact identity for the current main-workflow attempt of one stage. The token
 // names the latest relevant boundary plus its matching-event ordinal, so two
 // boundaries emitted in the same second still receive different floors.
@@ -12806,6 +14188,7 @@ export function latestMainWorkflowStageRunFloor(
   audit: string,
   slug: string,
   unitMajor = false,
+  unit?: string,
 ): string {
   let floor = "unstarted#0";
   const ordinals = new Map<string, number>();
@@ -12842,7 +14225,7 @@ export function latestMainWorkflowStageRunFloor(
     if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
       matches = true;
     } else if (row.event === "GATE_REJECTED") {
-      matches = stage === slug;
+      matches = gateRejectionMatchesAttempt(row.block, slug, unit);
     } else if (row.event === "STAGE_STARTED" && !unitMajor) {
       matches =
         stage === slug &&
@@ -12866,6 +14249,8 @@ export function latestMainWorkflowStageRunFloorForProject(
   projectDir: string,
   slug: string,
   unitMajor = false,
+  unit?: string,
+  auditRows?: readonly AuditShardEvent[],
   intent?: string,
   space?: string,
 ): string {
@@ -12875,41 +14260,52 @@ export function latestMainWorkflowStageRunFloorForProject(
     "STAGE_JUMPED",
     "GATE_REJECTED",
   ]);
-  const rows = readAuditShardEvents(projectDir, intent, space)
+  const rows = (auditRows ?? readAuditShardEvents(projectDir, intent, space))
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
       const stage = auditBlockField(row.block, "Stage");
       if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
         return true;
       }
-      if (row.event === "GATE_REJECTED") return stage === slug;
+      if (row.event === "GATE_REJECTED") {
+        return gateRejectionMatchesAttempt(row.block, slug, unit);
+      }
       return (
         !unitMajor &&
         stage === slug &&
         !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
       );
-    })
-    .sort((a, b) => {
+    });
+  if (!auditRows) {
+    rows.sort((a, b) => {
       if (a.timestamp !== b.timestamp) {
         return a.timestamp < b.timestamp ? -1 : 1;
       }
       if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
       return a.pos - b.pos;
     });
+  }
   if (rows.length === 0) return "unstarted#0";
 
   const latestTimestamp = rows[rows.length - 1].timestamp;
   const tied = rows.filter((row) => row.timestamp === latestTimestamp);
   if (new Set(tied.map((row) => row.shard)).size > 1) {
     const identity = tied
-      .map((row) =>
-        [
+      .map((row) => {
+        const fields = [
           basename(row.shard),
           row.pos,
           row.event,
           auditBlockField(row.block, "Stage") ?? "",
-        ].join(":"),
-      )
+        ];
+        if (unit !== undefined) {
+          fields.push(
+            auditBlockField(row.block, "Unit") ?? "",
+            auditBlockField(row.block, "Gate Stages") ?? "",
+          );
+        }
+        return fields.join(":");
+      })
       .sort()
       .join("|");
     const digest = createHash("sha256").update(identity).digest("hex").slice(0, 12);
@@ -12971,6 +14367,8 @@ export function currentSwarmAttemptObligations(
     projectDir,
     slug,
     false,
+    undefined,
+    undefined,
     intent,
     space,
   );
@@ -13081,6 +14479,8 @@ export function currentSwarmSourceOpeningFingerprint(
     projectDir,
     slug,
     false,
+    undefined,
+    undefined,
     intent,
     space,
   );
@@ -13176,6 +14576,8 @@ export function currentSwarmSourceMergeChain(
     projectDir,
     slug,
     false,
+    undefined,
+    undefined,
     intent,
     space,
   );
@@ -13353,13 +14755,50 @@ function currentUnitLifecycleRows(
   audit: string,
   slug: string,
   unitMajor: boolean,
+  auditRows?: readonly AuditShardEvent[],
+  stateContent?: string,
 ): UnitLifecycleRow[] {
-  const startedAt = latestMainWorkflowStageStarted(audit, slug);
-  const floor = latestMainWorkflowStageRunFloorForProject(
-    projectDir,
-    slug,
-    unitMajor,
-  );
+  const sourceRows = auditRows ?? readAuditShardEvents(projectDir);
+  const startedAt = auditRows
+    ? sourceRows
+        .filter(
+          (row) =>
+            row.event === "STAGE_STARTED" &&
+            auditBlockField(row.block, "Stage") === slug &&
+            !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+        )
+        .sort((a, b) => {
+          if (a.timestamp !== b.timestamp) {
+            return a.timestamp < b.timestamp ? -1 : 1;
+          }
+          if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+          return a.pos - b.pos;
+        })
+        .at(-1)?.timestamp ?? ""
+    : latestMainWorkflowStageStarted(audit, slug);
+  let teamOwnership = false;
+  try {
+    teamOwnership = isTeamUnitOwnership(
+      stateContent ?? readStateFile(projectDir),
+    );
+  } catch {
+    // No readable state means legacy stage-scoped flooring.
+  }
+  const floorByUnit = new Map<string, string>();
+  const floorFor = (unit: string): string => {
+    const key = teamOwnership ? unit : "";
+    const existing = floorByUnit.get(key);
+    if (existing) return existing;
+    const floor = latestMainWorkflowStageRunFloorForProject(
+      projectDir,
+      slug,
+      unitMajor,
+      teamOwnership ? unit : undefined,
+      sourceRows,
+    );
+    floorByUnit.set(key, floor);
+    return floor;
+  };
   const unitEvents = new Set([
     "UNIT_STARTED",
     "UNIT_PAUSED",
@@ -13367,13 +14806,14 @@ function currentUnitLifecycleRows(
     "UNIT_COMPLETED",
   ]);
   const rows: UnitLifecycleRow[] = [];
-  for (const row of readAuditShardEvents(projectDir)) {
+  for (const row of sourceRows) {
     if (!unitEvents.has(row.event)) continue;
     if (auditBlockField(row.block, "Stage") !== slug) continue;
-    if (auditBlockField(row.block, "Run floor") !== floor) continue;
-    if (!unitMajor && startedAt && row.timestamp < startedAt) continue;
     const unit = auditBlockField(row.block, "Unit");
     if (!unit) continue;
+    if (!eventMatchesClaimAttempt(projectDir, row.block, unit)) continue;
+    if (auditBlockField(row.block, "Run floor") !== floorFor(unit)) continue;
+    if (!unitMajor && startedAt && row.timestamp < startedAt) continue;
     rows.push({
       ts: row.timestamp,
       pos: row.pos,
@@ -13445,6 +14885,112 @@ function unitMajorLifecycleMode(projectDir: string): boolean {
   } catch {
     return false;
   }
+}
+
+export interface UnitLifecycleSnapshot {
+  receipts: Set<string>;
+  checkpoint: {
+    unit: string;
+    state: "in-progress" | "paused";
+    reason: string | null;
+    nextAction: string | null;
+  } | null;
+  inUse: boolean;
+  mode: UnitLifecycleMode;
+}
+
+export function unitLifecycleSnapshot(
+  projectDir: string,
+  slug: string,
+  auditRows: readonly AuditShardEvent[],
+  stateContent: string,
+  options: {
+    artifactFingerprint?: (
+      stage: StageEntry,
+      unit: string,
+    ) => string | null;
+  } = {},
+): UnitLifecycleSnapshot {
+  const unitMajor =
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const rows = currentUnitLifecycleRows(
+    projectDir,
+    "",
+    slug,
+    unitMajor,
+    auditRows,
+    stateContent,
+  );
+  const stage = resolveStage(slug);
+  const receipts = new Set<string>();
+  let sawSerial = false;
+  let sawWave = false;
+  for (const row of rows) {
+    if (auditBlockField(row.block, "Mode") === "wave") sawWave = true;
+    else sawSerial = true;
+    if (row.event !== "UNIT_COMPLETED") {
+      receipts.delete(row.unit);
+      continue;
+    }
+    if (auditBlockField(row.block, "Mode") !== "wave") {
+      receipts.add(row.unit);
+      continue;
+    }
+    const recorded = auditBlockField(row.block, "Artifact Fingerprint");
+    const current =
+      stage === undefined
+        ? null
+        : options.artifactFingerprint
+          ? options.artifactFingerprint(stage, row.unit)
+          : reviewArtifactFingerprint(projectDir, stage, row.unit, {
+              requireRequiredArtifacts: true,
+            });
+    if (
+      recorded !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recorded) &&
+      current === recorded
+    ) {
+      receipts.add(row.unit);
+    } else {
+      receipts.delete(row.unit);
+    }
+  }
+  const latest = new Map<string, { event: string; block: string }>();
+  for (const row of rows) {
+    latest.set(row.unit, { event: row.event, block: row.block });
+  }
+  let checkpoint: UnitLifecycleSnapshot["checkpoint"] = null;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const final = latest.get(rows[i].unit);
+    if (!final || final.event === "UNIT_COMPLETED") continue;
+    checkpoint = {
+      unit: rows[i].unit,
+      state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
+      reason: auditBlockField(final.block, "Reason"),
+      nextAction: auditBlockField(final.block, "Next Action"),
+    };
+    break;
+  }
+  const unitEvents = new Set([
+    "UNIT_STARTED",
+    "UNIT_PAUSED",
+    "UNIT_RESUMED",
+    "UNIT_COMPLETED",
+  ]);
+  const inUse = auditRows.some(
+    (row) =>
+      unitEvents.has(row.event) &&
+      auditBlockField(row.block, "Stage") === slug,
+  );
+  const mode: UnitLifecycleMode =
+    sawSerial && sawWave
+      ? "mixed"
+      : sawWave
+        ? "wave"
+        : sawSerial
+          ? "serial"
+          : "none";
+  return { receipts, checkpoint, inUse, mode };
 }
 
 export function unitCompletedReceipts(
@@ -14919,6 +16465,35 @@ export function parseStateStageSuffixes(
   return out;
 }
 
+export function unitMajorConstructionStageSlugs(
+  scope: string,
+  stateContent: string,
+  includeCompleted = false,
+): string[] {
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return [];
+  const stateOverrides = parseStateStageSuffixes(stateContent);
+  const checkboxStates = new Map(
+    parseCheckboxes(stateContent).map((entry) => [entry.slug, entry.state]),
+  );
+  return loadStageGraph()
+    .filter((stage) => {
+      if (
+        stage.phase !== "construction" ||
+        stage.for_each !== "unit-of-work"
+      ) {
+        return false;
+      }
+      const checkbox = checkboxStates.get(stage.slug);
+      if (checkbox === "skipped") return false;
+      if (checkbox === "completed" && !includeCompleted) return false;
+      return (
+        stateOverrides.get(stage.slug) ?? mapping.stages[stage.slug]
+      ) === "EXECUTE";
+    })
+    .map((stage) => stage.slug);
+}
+
 export function firstInScopeStageOfPhase(
   phase: string,
   scope: string
@@ -16032,11 +17607,22 @@ export function parseBoltDag(body: string): BoltDagParse {
   }
 
   const names = new Set<string>();
+  const foldedNames = new Map<string, string>();
   for (const u of edges) {
     if (names.has(u.name)) {
       return { ok: false, reason: "malformed", detail: `duplicate unit name: ${u.name}` };
     }
     names.add(u.name);
+    const folded = u.name.toLowerCase();
+    const existing = foldedNames.get(folded);
+    if (existing !== undefined && existing !== u.name) {
+      return {
+        ok: false,
+        reason: "malformed",
+        detail: `case-folding unit name collision: "${existing}" and "${u.name}"`,
+      };
+    }
+    foldedNames.set(folded, u.name);
   }
   for (const u of edges) {
     for (const dep of u.depends_on) {

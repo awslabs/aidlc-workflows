@@ -639,6 +639,13 @@ Fields managed by the tools (matching state template format `- **Field**: value`
 - **In Progress**: current stage slug
 - **Completed**: auto-synced by `checkbox` and `advance` commands (count of [x] stages)
 
+Under exact `Unit Ownership: team`, `next` also refreshes the conditional
+`## Unit Progress` table through the engine-owned state verb. That grid is a
+derived view of artifacts, receipts, reviews, and unit gate events; it is never
+a routing input and must not be edited by hand. Team unit gates report through
+the ordinary orchestrator with `--unit "<directive.unit>"`; the complete rhythm
+and dormancy contract lives in `stage-protocol-construction.md`.
+
 **Stage advancement** is engine-internal. `aidlc-orchestrate.ts report` selects `advance`, `approve`, `finalize`, or `complete-workflow` and invokes it with an ownership marker. Conductors never invoke those `aidlc-state.ts` lifecycle verbs directly.
 
 **Stage finalize** is likewise engine-internal and used by deterministic jump handling when stopping after a target stage.

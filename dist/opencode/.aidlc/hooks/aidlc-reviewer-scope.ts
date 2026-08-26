@@ -53,8 +53,11 @@ import {
   errorMessage,
   hooksHealthDir,
   isClaudeCodeHookInput,
+  isTeamUnitOwnership,
   isoTimestamp,
   recordHookDrop,
+  readStateFile,
+  readUnitScopeStamp,
   releaseAuditLock,
   resolveProjectDirFromHook,
   REVIEWER_DISPATCH_TTL_MS,
@@ -697,6 +700,46 @@ export function blockReason(target: string, dispatch: ReviewerDispatch): string 
   );
 }
 
+function emitReviewerScopeBlocked(
+  projectDir: string,
+  toolName: string,
+  target: string,
+  stage: string,
+  unit: string,
+): void {
+  // Best-effort: an audit failure never changes the block decision. The lock
+  // acquisition is TIME-BOUNDED well below the standard 5s budget (5 x 50ms):
+  // the block decision is already made, and a lock-starved Bolt fan-out must
+  // not stretch a fast refuse into a laggy one.
+  try {
+    if (!existsSync(auditFilePath(projectDir))) return;
+    if (!acquireAuditLock(projectDir, 5, 50)) {
+      recordHookDrop(
+        projectDir,
+        HOOK_NAME,
+        "audit lock contended; REVIEWER_SCOPE_BLOCKED row dropped (block still enforced)",
+      );
+      return;
+    }
+    try {
+      appendAuditEntryUnlocked(
+        "REVIEWER_SCOPE_BLOCKED",
+        {
+          Tool: toolName,
+          Target: target,
+          Stage: stage,
+          Unit: unit,
+        },
+        projectDir,
+      );
+    } finally {
+      releaseAuditLock(projectDir);
+    }
+  } catch {
+    // Advisory emission only.
+  }
+}
+
 // The two shipped review-only agents. Used ONLY for the advisory
 // missing-record drop below (when one of these is active with no dispatch
 // record and touches construction/ paths, the conductor likely forgot the stage-protocol-reviewer.md §12a
@@ -737,6 +780,49 @@ export async function run(input: string): Promise<number> {
   const toolInput = parsed.tool_input;
   if (!["Read", "NotebookRead", "Edit", "MultiEdit", "Write", "NotebookEdit", "LS", "Glob", "Grep", "Bash"].includes(toolName)) {
     return 0;
+  }
+
+  let unitScope = null;
+  try {
+    if (isTeamUnitOwnership(readStateFile(projectDir))) {
+      unitScope = readUnitScopeStamp(projectDir);
+    }
+  } catch {
+    // No active team workflow means no claimed-checkout write bound.
+  }
+  if (
+    unitScope &&
+    ["Edit", "MultiEdit", "Write", "NotebookEdit", "Bash"].includes(toolName)
+  ) {
+    let scopedVerdict: ScopeVerdict;
+    try {
+      const cwdField = (parsed as { cwd?: unknown }).cwd;
+      scopedVerdict = evaluateReviewerScope(
+        toolName,
+        toolInput,
+        { unit: unitScope.unit, exempt: [] },
+        {
+          recordRoot: dirname(reviewerDispatchPath(projectDir)),
+          cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
+        },
+      );
+    } catch (e) {
+      recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+      return 0;
+    }
+    if (scopedVerdict.block) {
+      emitReviewerScopeBlocked(
+        projectDir,
+        toolName,
+        scopedVerdict.target ?? "",
+        "claimed-checkout",
+        unitScope.unit,
+      );
+      process.stderr.write(
+        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}".\n`,
+      );
+      return 2;
+    }
   }
 
   const recordPath = reviewerDispatchPath(projectDir);
@@ -834,36 +920,13 @@ export async function run(input: string): Promise<number> {
   }
   if (!verdict.block) return 0;
 
-  // Audit the refusal so the run's record shows when the bound bit.
-  // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition is TIME-BOUNDED well below the standard 5s budget (5 x 50ms):
-  // the block decision is already made, and a lock-starved Bolt fan-out must
-  // not stretch a fast refuse into a laggy one - a dropped advisory row is
-  // preferable to a slow block.
-  try {
-    if (existsSync(auditFilePath(projectDir))) {
-      if (acquireAuditLock(projectDir, 5, 50)) {
-        try {
-          appendAuditEntryUnlocked(
-            "REVIEWER_SCOPE_BLOCKED",
-            {
-              Tool: toolName,
-              Target: verdict.target ?? "",
-              Stage: dispatch.stage,
-              Unit: dispatch.unit,
-            },
-            projectDir,
-          );
-        } finally {
-          releaseAuditLock(projectDir);
-        }
-      } else {
-        recordHookDrop(projectDir, HOOK_NAME, "audit lock contended; REVIEWER_SCOPE_BLOCKED row dropped (block still enforced)");
-      }
-    }
-  } catch {
-    // Advisory emission only.
-  }
+  emitReviewerScopeBlocked(
+    projectDir,
+    toolName,
+    verdict.target ?? "",
+    dispatch.stage,
+    dispatch.unit,
+  );
 
   process.stderr.write(`${blockReason(verdict.target ?? "", dispatch)}\n`);
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks

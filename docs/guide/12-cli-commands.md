@@ -34,6 +34,16 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
 | `/aidlc --status` | Display a read-only status summary |
+| `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
+| `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
+| `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
+| `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
+| `/aidlc unit publish <unit>` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref |
+| `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
+| `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
+| `/aidlc unit land <unit> ...` | Run the resumable git → state → audit landing transaction |
+| `/aidlc unit merge-status <unit>` | Read the local pinned-merge transaction journal |
+| `/aidlc unit status` | Read the current claimable, claimed, and dependency-blocked Unit sets |
 | `/aidlc --doctor` | Run a health check on your setup |
 | `/aidlc --doctor --export` | Run a fresh health check, then write a small, redacted diagnostic report for sharing |
 | `/aidlc --stage <slug\|#>` | Jump to a specific stage |
@@ -218,7 +228,9 @@ engine runs for you — not `/aidlc` flags you type. During Construction, each g
 operation (worktree, swarm, Bolt) targets one repo; the conductor passes
 `--repo <name>` to anchor it, required only when an intent spans more than one
 repo. An intent with no recorded repos is the single-repo default (git runs in the
-workspace/project dir). See [Artifacts Reference](14-artifacts-reference.md).
+workspace/project dir). Team-owned Units currently require that single-repo
+default: `set-unit-ownership team` rejects an intent with recorded sibling repos
+before changing state. See [Artifacts Reference](14-artifacts-reference.md).
 
 ---
 
@@ -335,6 +347,182 @@ Display current workflow progress without modifying anything.
 ```
 
 **Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, and the stage progress list. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+
+Under `Unit Ownership: team`, it appends a clearly labeled **Team Construction
+Snapshot** with the same board unscoped main renders: Unit Progress, locally
+observed claim refs (owner, generation, and observed movement rather than a push
+time), pinned merge readiness, claimable Units, and blockers. Scoped and
+unscoped checkouts render the same board. The command does not fetch or mutate
+state, cache, or audit. Explicit `--space` and `--intent` selectors bind the
+header, Unit DAG, claims, and merge journals to the same selected identity.
+The board ends with concrete next actions for claiming available or released
+work, recording a pinned merge gate, or resuming `aidlc unit land`.
+
+---
+
+### `/aidlc --claim <unit>` and `/aidlc unit claim <unit>` — Claim a team Unit
+
+Atomically claim one open Unit in a team-owned, unit-major Construction workflow.
+The claim registry is the git ref `claim/<intent-id8>/<unit>`: the command writes
+a unique claim commit with compare-and-swap semantics, verifies the winning
+nonce, and then writes a gitignored checkout-local scope stamp. Exactly one
+concurrent claimant succeeds.
+
+**Syntax:**
+
+```
+/aidlc --claim user-profile-api
+/aidlc --claim user-profile-api --team "Alice"
+/aidlc --claim user-profile-api --rhythm unit-end
+/aidlc unit claim user-profile-api --team "Alice"
+```
+
+`--team` supplies the human-readable holder label. `--rhythm` optionally pins
+this claim to `per-stage` or `unit-end`; when omitted, the workflow's affirmed
+Unit gate rhythm is used. Claims are refused until dependencies and any required
+walking skeleton are complete, and a checkout with a live claim routes only its
+stamped Unit.
+
+### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
+
+In a fresh clone, fetch and check out the exact local claim branch, then run:
+
+```bash
+git fetch origin refs/heads/claim/<intent-id8>/user-profile-api:refs/heads/claim/<intent-id8>/user-profile-api
+git switch claim/<intent-id8>/user-profile-api
+/aidlc unit adopt user-profile-api
+```
+
+Adoption verifies the checked-out claim OID and payload against the live ref,
+including space, intent UUID, Unit, generation, nonce, and bound audit shard,
+before writing the checkout-local scope stamp. Subsequent audit writes retain
+the claim's existing shard, and `publish` continues the same attempt.
+
+### `/aidlc --release <unit>` and `/aidlc unit release <unit>` — Release a claim
+
+Release a live claim from the unscoped main checkout. Release publishes a
+generation-advancing tombstone rather than deleting the ref, so stale stamped
+attempts fail closed at claim-sensitive boundaries and claim history remains
+inspectable.
+
+```
+/aidlc --release user-profile-api
+/aidlc unit release user-profile-api
+/aidlc unit release user-profile-api --expect-nonce <current-claim-nonce>
+```
+
+After a Unit has been released and re-claimed, a later release must include
+`--expect-nonce` from `aidlc-unit.ts status`; this binds the command to the
+successor attempt and prevents a lost-output retry from tombstoning it.
+
+### `/aidlc unit participate` — Enable the guided picker
+
+Write the gitignored participant marker for this clone. A subsequent bare
+`/aidlc` on unscoped main emits the typed Unit picker with claimable, already
+claimed, and dependency-blocked rows; a facilitator checkout without the marker
+receives the terminal fan-out notice instead.
+
+```
+/aidlc unit participate
+```
+
+### `/aidlc unit publish <unit>` — Publish a completed candidate
+
+Run from the scoped team checkout after committing its artifacts, source, state
+mirror, and audit shard:
+
+```bash
+/aidlc unit publish user-profile-api
+```
+
+The command requires a clean tracked worktree and CAS-updates the live claim ref
+to a candidate commit that preserves both claim and implementation history.
+
+### `/aidlc unit pin <unit>` — Pin candidate evidence
+
+Run from unscoped main:
+
+```bash
+/aidlc unit pin user-profile-api
+```
+
+Pinning fetches the claim ref, records its exact OID/generation and a fresh pin
+transaction ID, and reads
+artifacts, Unit receipts, team gates, reviewer verdicts, Plan Approval, state,
+and audit-shard transport directly from that commit. It does not merge or create
+a worktree. The claim-bound team shard may carry only that Unit's attempt
+receipts; main-authority rows, another Unit's record/receipt paths, extra shards,
+and other workflow-record paths are refused. Pin also compares the candidate
+base's Unit DAG, Unit kinds, and active per-Unit stage columns with live main;
+a changed Construction contract requires rebase and republish. Product-source
+paths outside the Unit record tree are listed in the evidence for the human
+merge gate.
+
+### `/aidlc unit gate <unit>` — Decide the pinned merge
+
+```bash
+/aidlc unit gate user-profile-api \
+  --decision approve \
+  --user-input "Approve pinned candidate"
+```
+
+Accepted decisions are `approve` and `reject`. The command requires a fresh
+`MERGE_DISPATCH_INVOKED` plus terminal dispatch result after the pin and a typed
+human turn. Every dispatch row must carry the pin output through
+`--pinned-oid <oid> --attempt-generation <n> --pin-id <uuid>`. Pinned Unit transactions require
+merge strategy so the reviewed OID remains a direct parent. A moved ref,
+changed generation, or HOLD-MERGE marker requires an explicit re-pin before
+approval.
+
+### `/aidlc unit land <unit>` — Land the pinned transaction
+
+```bash
+/aidlc unit land user-profile-api --target main
+```
+
+Landing first fetches the current integration branch and revalidates the
+approved evidence against the live Unit DAG, Unit kinds, and active per-Unit
+stage columns. Contract drift refuses before Git mutation and requires rebase,
+republish, re-pin, a new dispatch bracket, and a new merge gate. It then merges
+pinned content while retaining main-owned engine metadata, folds the Unit row,
+and finalizes the transported audit receipts. For crash recovery, run the
+idempotent steps separately:
+
+The content policy is candidate-exact. If main and the candidate both changed a
+shared file, even a clean automatic merge is refused before commit unless the
+result equals the pinned candidate blob. Rebase the team branch onto the current
+target, resolve there, and republish for a new pin.
+
+```bash
+/aidlc unit land user-profile-api --step git
+/aidlc unit land user-profile-api --step state
+/aidlc unit land user-profile-api --step audit
+/aidlc unit merge-status user-profile-api
+```
+
+Gate and land fail closed while the claim registry is unavailable. If the exact
+claim attempt is released only after `--step git` has landed its reviewed merge
+commit, inspect that commit and acknowledge the exceptional completion:
+
+```bash
+/aidlc unit land user-profile-api --step state \
+  --accept-released-attempt \
+  --user-input "I inspected the landed commit and accept completing this tombstoned attempt"
+```
+
+The command accepts only the immediate tombstone whose predecessor is the
+pinned OID, records the acknowledgment in the main audit and transaction
+journal, and refuses a successor claim.
+
+### `/aidlc unit status` — Inspect Unit claims
+
+Read the current integration state and claim registry, then print the claimable,
+claimed, and waiting Unit sets as JSON. This is a claim-time/status surface and
+may contact the configured git remote.
+
+```
+/aidlc unit status
+```
 
 ---
 

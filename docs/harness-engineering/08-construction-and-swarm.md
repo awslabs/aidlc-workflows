@@ -128,6 +128,13 @@ between them and can fan out together.
 The parallel surface itself is the five **per-Unit** Construction stages, each
 declaring `for_each: unit-of-work` in its frontmatter:
 
+For human team ownership, delivery planning can combine
+`Construction Iteration: unit-major` with `Unit Ownership: team`. The engine
+then derives `## Unit Progress` from the same DAG/artifact/receipt evidence and
+uses either per-stage or unit-end Unit gates instead of the legacy late
+unit-major cascade. This is an execution-policy knob, not a stage-graph edit;
+absent/solo ownership leaves the graph and directives unchanged.
+
 | Stage | Runs |
 |---|---|
 | `nfr-requirements` | once per Unit |
@@ -267,8 +274,9 @@ territory:
   Unit before merge (the lying-conductor guard), serialise merge-back, and emit
   the six `SWARM_*` audit events.
 - **The engine** `aidlc-orchestrate.ts` — the deterministic router with exactly
-  four subcommands: `next`, `continue`, `report`, and `park`; `continue` is
-  internal steering transport. It decides when a Construction batch is
+  five subcommands: `next`, `continue`, `report`, `park`, and `team-board`;
+  `continue` is internal steering transport and `team-board` is the read-only
+  Team Construction query. It decides when a Construction batch is
   eligible for the swarm.
 - **The Bolt-DAG parser** — the compile step that reads the edge block into
   `runtime-graph.json`.

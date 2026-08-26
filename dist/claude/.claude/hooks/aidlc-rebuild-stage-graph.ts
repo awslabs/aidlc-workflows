@@ -194,7 +194,7 @@ const last3 = blocks.slice(-3);
 //    runtime-graph at gate-start — without it, the gate ritual reads a
 //    stale memory_entries count snapshotted at STAGE_STARTED time
 //    (before the orchestrator wrote any §13 entries).
-const transitionRegex = /^\*\*Event\*\*:\s*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|WORKFLOW_COMPLETED)\s*$/m;
+const transitionRegex = /^\*\*Event\*\*:\s*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)\s*$/m;
 const hasTransition = last3.some((b) => transitionRegex.test(b));
 hookDebug(projectDir, "rebuild-stage-graph", "transition-gate", { hasTransition, last3count: last3.length });
 if (!hasTransition) {

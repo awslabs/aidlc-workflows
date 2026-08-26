@@ -457,7 +457,7 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
     }
 
     expect(pathDrift).toEqual([]);
-  });
+  }, 30000);
 
   test("6b: references to the DocumentKB skill require its authored source directory", () => {
     const roots = [

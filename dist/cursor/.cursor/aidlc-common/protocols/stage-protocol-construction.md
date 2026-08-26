@@ -309,6 +309,86 @@ After builds, `review_state: "outstanding"` runs the named iteration; `"retry-re
 
 **Unit-major iteration (opt-in).** By default the walk above is stage-major: a design stage runs for every Unit, then the next design stage runs for every Unit, and code-generation runs last for every Unit. When the state file records `Construction Iteration: unit-major` under `## Runtime State` (set at delivery-planning via `aidlc-state.ts set-construction-iteration unit-major`, or by a human), the engine instead walks EVERY per-unit Construction stage unit-major: for each Unit in Bolt build order (outer), for each per-unit stage in graph order (inner — the four inline design stages, then code-generation), it emits the first unsettled (stage, Unit) pair with `gate: false`, so one Unit's four design documents are authored consecutively and the Unit is BUILT before the next Unit begins. The first working code therefore lands after ONE Unit's design, not after every Unit's; code-generation's own Step 3 Plan Approval still hard-stops per Unit before generation. The autonomous swarm never fires under unit-major: the walk owns code-generation through the normal non-swarm per-unit settlement path, so an `autonomous` grant changes no routing while the knob is set. The gates are UNCHANGED in count and machinery: the per-stage gates still fire, but late and in a cascade at the end of the block once the whole (stage x Unit) grid — code-generation included — is settled, one human approval per stage per turn. Because a stage's per-Unit work can run while `Current Stage` still points at an earlier stage, a directive's `directive.stage` may name a LATER Construction stage (including code-generation) than `Current Stage`, and a stage's `STAGE_STARTED` audit event may land after that stage's per-Unit artifacts were written; unit-major receipt floors therefore use the current workflow/jump/rejection boundary and survive that later `STAGE_STARTED`. The audit trail stays complete and stage-keyed. Always act on the directive's own `directive.stage` + `directive.unit`, never on `Current Stage`.
 
+**Team-owned Unit Progress and gates (opt-in).** `Unit Ownership: team` is valid
+only with unit-major. In that mode every `next` rewrites `## Unit Progress` from
+the Unit DAG, artifact coverage, lifecycle/review receipts, and gate events.
+The table is engine-owned projection only; a hand edit is overwritten and never
+changes routing. Live git-native claims populate the `owner` cell.
+`Unit Gate Rhythm: per-stage` is the default: after one `(stage, Unit)` settles,
+the engine re-emits it with `gate: true` and `unit_gate: per-stage` before that
+Unit advances. `unit-end` leaves every active per-unit work beat gate-false,
+then emits one `unit_gate: unit-end` after the final active, unskipped per-unit
+Construction stage. These gates replace the five late
+end-of-grid gates, and Stage Progress checkboxes become derived from completed
+Unit columns.
+
+**Branch on `directive.unit_gate` before the ordinary `gate: true` branch.**
+The body, summary checkpoint, lifecycle completion, and reviewer are already
+settled; do not regenerate or re-review them. Run the approval/learnings
+presentation only. In team-owned unit work, every non-gate
+`aidlc-log.ts decision` / `answer` call also adds
+`--unit "<directive.unit>"` so pending human decisions remain attempt- and
+Unit-scoped. Every report call for this gate adds
+`--unit "<directive.unit>"`: first `awaiting-approval`, then `approved
+--user-input "<exact choice>"`, or `rejected --user-input "<feedback>"` and
+later `revised`. Rejection floors only that Unit's lifecycle/review receipts;
+for `unit-end` it floors all stages in that Unit's chain. Re-run `next` after
+each accepted report. When Unit Ownership is absent or `solo`, ignore this
+paragraph: directive bytes, state bytes, audit rows, waves, and the legacy late
+gate cascade stay unchanged.
+
+**Team Unit claims and scoped checkouts.** When `next` emits
+`ask_type: unit-claim`, present its claimable/claimed/waiting lists and run
+`aidlc-unit.ts claim <unit> --team "<label>"` for the selected Unit. The claim
+uses the `claim/<intent-id8>/<unit>` ref as an atomic registry and writes a
+gitignored checkout-local scope stamp. A stamped checkout executes only that
+Unit's active per-unit Construction stages and gates; every lifecycle, review,
+gate, and fork operation must name the stamped Unit and current attempt
+generation. A terminal `notice` means main is acting as the fan-out dispatcher:
+print it verbatim and stop. A participant clone runs `aidlc-unit.ts participate`
+once to opt into the guided picker; the unmarked facilitator main remains the
+notice surface. Release runs only from unscoped main via
+`aidlc-unit.ts release <unit>` and leaves a generation-bumping tombstone ref.
+Scoped `next`, lifecycle, decision, review, and gate writes trust the locally
+validated claim-time stamp and never require the network. Fork/release are
+claim-sensitive boundaries: recheck the registry when reachable, refuse an
+online stale attempt, and warn once plus proceed from the stamp when offline.
+
+**Pinned Unit merge-back.** When the scoped Unit is complete, commit its tracked
+work and run `aidlc unit publish <unit>`; publication CAS-updates the claim ref
+but does not integrate it. On unscoped main, run `aidlc unit pin <unit>` and
+bracket the existing pipeline-deploy strategy lookup with
+`MERGE_DISPATCH_INVOKED` / `MERGE_DISPATCH_RETURNED` (or `_FALLBACK`), then
+present the returned pinned OID + evidence summary as one merge gate. Record the
+exact human answer with `aidlc unit gate <unit> --decision <approve|reject>
+--user-input "<text>"`. On approval, `aidlc unit land <unit> --target <branch>`
+owns the transaction: pinned git content first with main-owned metadata retained,
+then one Unit-row fold under the intent lock, then audit/finalization. A moved
+claim ref requires re-pin, and an unavailable registry makes gate/land fail
+closed. If the exact attempt is released only after the git step landed, inspect
+the merge and continue explicitly with `aidlc unit land <unit>
+--accept-released-attempt --user-input "<human acknowledgment>"`; a successor
+claim is never accepted. Source conflicts abort before state folding. For
+crash recovery the same command accepts `--step git|state|audit`; each step is
+idempotent and `aidlc unit merge-status <unit>` reports the local journal.
+The dispatch bracket must be newer than the pin and followed by a typed human
+turn. This transaction deliberately requires strategy `merge` so the reviewed
+pinned OID remains a direct parent; a returned squash/rebase decision is refused.
+The candidate may transport one claim-bound new audit shard containing that
+team's own attempt-keyed lifecycle, team-gate, and reviewer receipts. These are
+team assertions rechecked against artifacts/fingerprints and judged at the main
+merge gate. `HUMAN_TURN`, `MERGE_DISPATCH_*`, `UNIT_MERGED`, unit-merge gates,
+foreign Unit receipts, sibling Unit record paths, and additional shards are
+never transportable.
+Pass `--pinned-oid <pin output OID> --attempt-generation <pin output generation>
+--pin-id <pin output pin_id>` to every `aidlc bolt dispatch-event` call in this
+bracket; the gate ignores unbound or older dispatch rows, including a bracket
+from an earlier pin of the same candidate. Dispatch and merge-gate rows are
+accepted only from the unscoped main checkout's audit shard and must match that
+exact OID, generation, and pin transaction; the subsequent main-shard
+`HUMAN_TURN` is the chronological human-presence proof and intentionally carries
+no transaction fields.
+
 Each construction stage file (3.1–3.4) documents its execution modes (QUESTION-ONLY, ARTIFACT-ONLY, Full) and the step split points. See the individual stage files for details.
 
 ---

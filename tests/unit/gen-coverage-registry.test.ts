@@ -49,6 +49,7 @@ import {
   mechanismRank,
   mechanismsOf,
   parseCoversHeader,
+  parseIfDispatchCases,
   parseObjectDispatchKeys,
   parseSwitchDispatchCases,
   ratchetFromRows,
@@ -469,6 +470,24 @@ const COMMANDS: Record<string, Handler> = {
     expect(keys).toEqual(["artifacts", "topo", "validate-scope"]);
     expect(keys).not.toContain("nested");
   });
+
+  test("the if-chain parser reads aidlc-unit-style direct command comparisons", () => {
+    const src = `
+export function main(argv: string[]): void {
+  const command = argv.shift();
+  if (command === "claim") claim();
+  else if (command === "release") release();
+  else if (command === "participate") participate();
+  else if (command === "status") status();
+  if (other === "nested") ignore();
+}`;
+    expect(parseIfDispatchCases(src, "command")).toEqual([
+      "claim",
+      "release",
+      "participate",
+      "status",
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -789,6 +808,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t276-cursor-adapter.test.ts",
     "unit/t277-validate-grid-nearest-stock.test.ts",
     "unit/t281-sensor-traceability.test.ts",
+    "unit/t324-team-unit-progress-gates.test.ts",
     // t289 spawns `bun test <driver>` to force a UUID collision in a SUBPROCESS.
     // Two rows can only collide if the id source is replaced, and an in-file
     // mock.module leaks the patched module into sibling tests -- so the patch is
@@ -899,6 +919,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t307-loopback-unitmajor-replay.test.ts",
     "integration/t21b.test.ts",
     "integration/t31-help.test.ts",
+    "integration/t325-team-unit-claims.test.ts",
+    "integration/t326-team-unit-merge.test.ts",
+    "integration/t327-team-dispatcher.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
     "integration/t33-hook-concurrency.test.ts",
     "integration/t39.test.ts",

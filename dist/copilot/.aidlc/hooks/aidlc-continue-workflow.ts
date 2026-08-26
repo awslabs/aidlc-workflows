@@ -132,6 +132,7 @@ import {
   docsRoot,
   errorMessage,
   findIntentByUuid,
+  effectiveUnitGateRhythm,
   getField,
   hasCurrentSharedResumeWait,
   hasPendingDecision,
@@ -139,6 +140,7 @@ import {
   isEngineToolCall,
   hooksHealthDir,
   isoTimestamp,
+  isTeamUnitOwnership,
   matchSubagentInflight,
   parseCheckboxes,
   readActiveDirectiveMarker,
@@ -156,6 +158,7 @@ import {
   updateCopilotStopCount,
   SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
+  unitGateStatus,
 } from "../tools/aidlc-lib.ts";
 import {
   foldTranscriptIntoLedger,
@@ -436,8 +439,26 @@ function resetGuard(projectDir: string): void {
 // the conductor's questions file rather than checkbox state.) Any parse error
 // falls through too: fail-open is the only safe failure mode for a hook that can
 // otherwise trap a turn.
-function isHumanWaitStop(stateContent: string): boolean {
+function isHumanWaitStop(
+  projectDir: string,
+  stateContent: string,
+  activeStage?: string,
+  activeUnit?: string,
+): boolean {
   try {
+    if (
+      isTeamUnitOwnership(stateContent) &&
+      activeStage &&
+      activeUnit
+    ) {
+      const status = unitGateStatus(
+        projectDir,
+        activeStage,
+        activeUnit,
+        effectiveUnitGateRhythm(projectDir, stateContent),
+      );
+      if (status === "awaiting-approval" || status === "revising") return true;
+    }
     const slug = currentStageSlug(stateContent);
     if (slug.length === 0) return false;
     const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
@@ -547,8 +568,17 @@ function isPendingQuestionStop(
       return false; // autonomy guard — keep the loop alive
     }
     if (currentSlug.length === 0 || slug.length === 0) return false;
-    const row = parseCheckboxes(stateContent).find((c) => c.slug === currentSlug);
-    if (row?.state !== "in-progress") return false; // positive [-] only
+    const teamUnitMajorDirective =
+      isTeamUnitOwnership(stateContent) &&
+      activeStage !== undefined &&
+      unit !== undefined &&
+      getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    if (!teamUnitMajorDirective) {
+      const row = parseCheckboxes(stateContent).find(
+        (c) => c.slug === currentSlug,
+      );
+      if (row?.state !== "in-progress") return false; // positive [-] only
+    }
     return hasPendingQuestion(
       projectDir,
       slug,
@@ -568,16 +598,37 @@ function isPendingQuestionStop(
 // that are not represented by a blank tag in `<slug>-questions.md`, such as the
 // §13 learning selection and "Anything to add?" prompts. Keep the same strict
 // stage-state and autonomy gates as the question-file carve-out.
-function isPendingDecisionStop(projectDir: string, stateContent: string): boolean {
+function isPendingDecisionStop(
+  projectDir: string,
+  stateContent: string,
+  activeStage?: string,
+  activeUnit?: string,
+): boolean {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false;
     }
-    const slug = currentStageSlug(stateContent);
+    const currentSlug = currentStageSlug(stateContent);
+    const teamUnitMajorDirective =
+      isTeamUnitOwnership(stateContent) &&
+      activeStage !== undefined &&
+      activeUnit !== undefined &&
+      getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    const slug = teamUnitMajorDirective
+      ? (activeStage?.trim() || currentSlug)
+      : currentSlug;
     if (slug.length === 0) return false;
-    const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
-    if (row?.state !== "in-progress") return false;
-    return hasPendingDecision(projectDir, slug, "STAGE_STARTED");
+    if (!teamUnitMajorDirective) {
+      const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
+      if (row?.state !== "in-progress") return false;
+    }
+    return hasPendingDecision(
+      projectDir,
+      slug,
+      teamUnitMajorDirective ? undefined : "STAGE_STARTED",
+      teamUnitMajorDirective ? activeUnit : undefined,
+      teamUnitMajorDirective,
+    );
   } catch {
     return false;
   }
@@ -1350,6 +1401,11 @@ if (kind === "done") {
   return allowStop();
 }
 
+if (kind === "notice") {
+  resetGuard(projectDir);
+  return allowStop();
+}
+
 // `parked` -> the workflow was intentionally parked mid-flow (issue #367); a
 // human resumes it later with /aidlc --resume. This is the SUPPORTED
 // multi-session exit: allow the turn to end and clear the guard exactly like
@@ -1394,7 +1450,7 @@ if (kind === "ask") {
 // error falls through to the cap-bounded block below, unchanged. (This is the
 // current-stage-scoped successor to the broad `[?]` substring match that landed
 // in 679153d; scoping to the current slug and adding [R] is strictly safer.)
-if (isHumanWaitStop(stateContent)) {
+if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
   recordHookDrop(
     projectDir,
     HOOK_NAME,
@@ -1421,11 +1477,21 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
 // no later QUESTION_ANSWERED. Copilot's numbered-prose questions end the turn
 // without a native picker, so this signal keeps the Stop hook from injecting a
 // continuation that the model could mistake for the answer.
-if (isPendingDecisionStop(projectDir, stateContent)) {
+if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
+  const teamPending =
+    isTeamUnitOwnership(stateContent) &&
+    activeStage !== undefined &&
+    activeUnit !== undefined &&
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const pendingStage = teamPending
+    ? (activeStage ?? currentStageSlug(stateContent))
+    : currentStageSlug(stateContent);
   recordHookDrop(
     projectDir,
     HOOK_NAME,
-    `current stage ${currentStageSlug(stateContent)} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`,
+    teamPending
+      ? `active stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`
+      : `current stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`,
   );
   return allowStop();
 }

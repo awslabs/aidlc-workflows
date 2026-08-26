@@ -21,7 +21,7 @@
 //       :22-154  const VALID_EVENT_TYPES = new Set([ "STAGE_STARTED", ... ]);
 //       :158-239 const EVENT_HEADINGS: Record<string,string> = { TYPE: "...", };
 //   - dist/claude/.claude/knowledge/aidlc-shared/audit-format.md
-//       "## Event Registry (87 events, 22 categories)" .. "## Hook-Generated"
+//       "## Event Registry (90 events, 22 categories)" .. "## Hook-Generated"
 //       — backtick-delimited `EVENT_TYPE` cells in the registry tables.
 //
 // Extraction parity with the .sh (so the sets are byte-identical to what the
@@ -72,8 +72,10 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // +REVIEW_CLASS_CHANGED (the --review per-run override) takes it to 78.
 // +UNIT_STARTED, +UNIT_PAUSED, +UNIT_RESUMED, and +UNIT_COMPLETED take it to 82;
 // +DOCUMENT_INDEXED, +DOCUMENT_UPDATED, and +DOCUMENT_REMOVED (DocumentKB) take
-// it to 86; +SWARM_SOURCE_MERGED takes it to 87.
-const CANONICAL_COUNT = 87;
+// it to 85; Unit ownership and gate-rhythm configuration take it to 87;
+// pinned Unit merge completion takes it to 88; PIPELINE_LINK_COMPLETED takes it
+// to 89; SWARM_SOURCE_MERGED takes it to 90.
+const CANONICAL_COUNT = 90;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n
@@ -175,7 +177,7 @@ describe("t28 audit event-type sync (migrated from t28-audit-event-sync.sh, plan
 
   // .sh test 7: assert_eq TS_COUNT - the canonical baseline pin, bumped when
   // events are added or removed. (#367 added WORKFLOW_PARKED/UNPARKED -> 69;
-  // #369 removed TEST_RUN_MODE_ENABLED -> 68; HUMAN_TURN took it to 69; the adaptive composer added RECOMPOSED -> 70; REVIEWER_SCOPE_BLOCKED took it to 71; PLUGIN_SELECTION_CHANGED took it to 72; REVIEW_REQUESTED/REVIEW_COMPLETED took it to 74; SUMMARY_CONFIRMATION_RECORDED took it to 75; REVIEW_FREEZE_BLOCKED took it to 76; PLAN_APPROVAL_BLOCKED took it to 77; REVIEW_CLASS_CHANGED took it to 78; the unit lifecycle receipts UNIT_STARTED/PAUSED/RESUMED/COMPLETED took it to 82; the DocumentKB DOCUMENT_INDEXED/UPDATED/REMOVED trio took it to 85.)
+  // #369 removed TEST_RUN_MODE_ENABLED -> 68; HUMAN_TURN took it to 69; the adaptive composer added RECOMPOSED -> 70; REVIEWER_SCOPE_BLOCKED took it to 71; PLUGIN_SELECTION_CHANGED took it to 72; REVIEW_REQUESTED/REVIEW_COMPLETED took it to 74; SUMMARY_CONFIRMATION_RECORDED took it to 75; REVIEW_FREEZE_BLOCKED took it to 76; PLAN_APPROVAL_BLOCKED took it to 77; REVIEW_CLASS_CHANGED took it to 78; the unit lifecycle receipts UNIT_STARTED/PAUSED/RESUMED/COMPLETED took it to 82; the DocumentKB DOCUMENT_INDEXED/UPDATED/REMOVED trio took it to 85; UNIT_OWNERSHIP_SET/UNIT_GATE_RHYTHM_SET take it to 87; UNIT_MERGED takes it to 88.)
   // The name interpolates CANONICAL_COUNT rather than hardcoding it: a literal
   // here drifts silently, since no drift guard reads test-name strings.
   test(`VALID_EVENT_TYPES.size === ${CANONICAL_COUNT} (baseline pin) [.sh test 7]`, () => {

@@ -20,7 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   absorbReviewerKnowledge,
   reviewerAgentSet,
@@ -92,6 +92,7 @@ function invoke(
   proj: string,
   subcommand: "next" | "continue",
   args: string[],
+  env: NodeJS.ProcessEnv = process.env,
 ): { directive: WireDirective; bytes: number } {
   cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(proj, ".claude", "tools", "aidlc-lib.ts"));
   cpSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), join(proj, ".claude", "tools", "aidlc-orchestrate.ts"));
@@ -104,7 +105,7 @@ function invoke(
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env: { ...process.env } },
+    { encoding: "utf-8", env: { ...env } },
   );
   expect(res.status, res.stderr).toBe(0);
   const line = (res.stdout ?? "").trim();
@@ -390,6 +391,106 @@ describe("t248 deterministic steering delivery", () => {
       "utf-8",
     ).trim();
     expect(otherKey).not.toBe(encodedKey);
+  });
+
+  test("team probe steering continues normally while solo probes preserve marker publication", () => {
+    const team = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(team);
+    const teamStatePath = seededStateFile(team);
+    writeFileSync(
+      teamStatePath,
+      readFileSync(teamStatePath, "utf-8").replace(
+        "- **Revision Count**: 0",
+        "- **Revision Count**: 0\n- **Construction Iteration**: unit-major\n- **Unit Ownership**: team",
+      ),
+    );
+    const teamOrg = join(
+      team,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "org.md",
+    );
+    appendFileSync(
+      teamOrg,
+      Array.from(
+        { length: 180 },
+        (_, i) => `\n## Probe Team ${i}\n\n${"x".repeat(320)}\n`,
+      ).join(""),
+    );
+    const teamProbe = invoke(
+      team,
+      "next",
+      [],
+      { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
+    ).directive;
+    expect(teamProbe.kind).toBe("load-steering");
+    expect(
+      existsSync(
+        join(seededRecordDir(team), ".aidlc-steering-token-key"),
+      ),
+    ).toBe(false);
+    expect(
+      existsSync(
+        join(seededRecordDir(team), ".aidlc-active-directive.json"),
+      ),
+    ).toBe(false);
+    const continued = invoke(
+      team,
+      "continue",
+      [teamProbe.continue_token ?? ""],
+    ).directive;
+    expect(continued.kind).not.toBe("error");
+
+    const forgedEnvelope = JSON.parse(
+      Buffer.from(
+        teamProbe.continue_token ?? "",
+        "base64url",
+      ).toString("utf-8"),
+    ) as { p: Record<string, unknown>; m: string; probe: true };
+    forgedEnvelope.p.i = 2;
+    const probeKey = createHash("sha256")
+      .update(`aidlc-stop-probe:${resolve(team)}`, "utf-8")
+      .digest();
+    forgedEnvelope.m = createHmac("sha256", probeKey)
+      .update(JSON.stringify(forgedEnvelope.p), "utf-8")
+      .digest("base64url");
+    const forged = Buffer.from(
+      JSON.stringify(forgedEnvelope),
+      "utf-8",
+    ).toString("base64url");
+    expect(invoke(team, "continue", [forged]).directive).toMatchObject({
+      kind: "error",
+    });
+
+    const solo = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(solo);
+    const soloProbe = invoke(
+      solo,
+      "next",
+      [],
+      { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
+    ).directive;
+    expect(soloProbe.kind).toBe("load-steering");
+    expect(
+      existsSync(
+        join(seededRecordDir(solo), ".aidlc-steering-token-key"),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(seededRecordDir(solo), ".aidlc-active-directive.json"),
+      ),
+    ).toBe(true);
+    expect(
+      invoke(solo, "continue", [soloProbe.continue_token ?? ""]).directive
+        .kind,
+    ).not.toBe("error");
   });
 
   test("sessionless continuation consumes the same token exactly once", () => {

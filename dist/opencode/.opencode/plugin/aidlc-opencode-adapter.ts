@@ -182,6 +182,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "tools/aidlc-swarm.ts",
     "tools/aidlc-testing-posture.ts",
     "tools/aidlc-tiers.ts",
+    "tools/aidlc-unit.ts",
     "tools/aidlc-usage.ts",
     "tools/aidlc-utility.ts",
     "tools/aidlc-validate.ts",
