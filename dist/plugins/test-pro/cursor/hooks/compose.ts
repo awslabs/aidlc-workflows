@@ -1889,30 +1889,19 @@ try {
     undefined,
     knowledgeWritten,
   ) || changed;
-  const ownedKnowledge: string[] = [];
-  for (const file of walk(knowledgeSource)) {
-    const rel = relative(knowledgeSource, file).replace(/\\/g, "/");
-    if (
-      !knowledgeWritten.has(rel) &&
-      !priorKnowledgeOwnership.has(rel)
-    ) {
-      continue;
-    }
-    const dest = join(knowledgeTarget, rel);
-    if (!existsSync(dest)) continue;
-    let source = readFileSync(file);
-    if (file.endsWith(".md")) {
-      source = Buffer.from(
-        source.toString("utf-8").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF),
-      );
-    }
-    if (readFileSync(dest).equals(source)) ownedKnowledge.push(rel);
-  }
+  // Composition is no-clobber: source removal does not remove an installed
+  // file, so retain its prior provenance until the installed file is gone.
+  const ownedKnowledge = new Set(
+    [...priorKnowledgeOwnership].filter((rel) =>
+      existsSync(join(knowledgeTarget, rel))
+    ),
+  );
+  for (const rel of knowledgeWritten) ownedKnowledge.add(rel);
   const pluginFilesManifest = `${
     JSON.stringify({
       schema_version: 1,
       plugin: PLUGIN_NAME,
-      knowledge: ownedKnowledge.sort(),
+      knowledge: [...ownedKnowledge].sort(),
     }, null, 2)
   }\n`;
   try {

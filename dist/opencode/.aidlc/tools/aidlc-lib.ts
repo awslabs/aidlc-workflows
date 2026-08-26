@@ -13751,8 +13751,9 @@ function sameFileIdentity(
 //   symlinks, so the swap can redirect the read to any file this process can
 //   read. Opening ONCE with O_NOFOLLOW and fstat-ing THAT descriptor makes the
 //   final-component identity checked the identity read. A caller that validated
-//   parent-chain containment first passes expectedIdentity as well, binding the
-//   opened descriptor to the file observed while that containment held.
+//   parent-chain containment first passes an expected identity or real path as
+//   well, binding the opened descriptor to the file observed while that
+//   containment held.
 //
 // Throws (does not exit) so each caller can attach its own flag name and exit
 // code. `what` names the thing in the message: "--text-file", "source", ….
@@ -13760,8 +13761,26 @@ export function readRegularFileNoFollowOrThrow(
   path: string,
   what: string,
   maxBytes?: number,
-  expectedIdentity?: FileIdentity,
-): Buffer {
+  expected?: FileIdentity | string,
+): Buffer;
+
+export function readRegularFileNoFollowOrThrow(
+  path: string,
+  what: string,
+  maxBytes: number | undefined,
+  expected: FileIdentity | string | undefined,
+  withSnapshot: true,
+): { bytes: Buffer; mtimeMs: number };
+
+export function readRegularFileNoFollowOrThrow(
+  path: string,
+  what: string,
+  maxBytes?: number,
+  expected?: FileIdentity | string,
+  withSnapshot = false,
+): Buffer | { bytes: Buffer; mtimeMs: number } {
+  const expectedIdentity = typeof expected === "object" ? expected : undefined;
+  const expectedRealPath = typeof expected === "string" ? expected : undefined;
   let fd: number;
   try {
     // O_NONBLOCK matters as much as O_NOFOLLOW here, and for a non-obvious
@@ -13831,7 +13850,17 @@ export function readRegularFileNoFollowOrThrow(
     if (lstatSync(path).isSymbolicLink()) {
       throw new Error(`${what} is a symlink, which is not followed: ${path}`);
     }
-    const current = statSync(realpathSync(path));
+    const currentRealPath = realpathSync(path);
+    if (
+      expectedRealPath !== undefined &&
+      currentRealPath !== expectedRealPath
+    ) {
+      throw new Error(
+        `${what} resolved outside its prevalidated path: ${path} -> ${currentRealPath}. ` +
+          `No path component may be replaced by a symlink while the file is read.`,
+      );
+    }
+    const current = statSync(currentRealPath);
     if (current.dev !== st.dev || current.ino !== st.ino) {
       throw changedDuringReadError(`${what} changed while opening: ${path}`);
     }
@@ -13864,7 +13893,17 @@ export function readRegularFileNoFollowOrThrow(
       }
       bytes = bounded.subarray(0, length);
     }
-    const after = statSync(realpathSync(path));
+    const afterRealPath = realpathSync(path);
+    if (
+      expectedRealPath !== undefined &&
+      afterRealPath !== expectedRealPath
+    ) {
+      throw new Error(
+        `${what} resolved outside its prevalidated path while being read: ${path} -> ${afterRealPath}. ` +
+          `No path component may be replaced by a symlink while the file is read.`,
+      );
+    }
+    const after = statSync(afterRealPath);
     const afterFd = fstatSync(fd);
     if (after.dev !== st.dev || after.ino !== st.ino ||
         afterFd.nlink !== 1 || afterFd.size !== st.size ||
@@ -13872,7 +13911,7 @@ export function readRegularFileNoFollowOrThrow(
         bytes.length !== st.size) {
       throw changedDuringReadError(`${what} changed while reading: ${path}`);
     }
-    return bytes;
+    return withSnapshot ? { bytes, mtimeMs: st.mtimeMs } : bytes;
   } finally {
     closeSync(fd);
   }
@@ -14517,10 +14556,9 @@ export function singleStageAttemptIsOpen(
   const floor = pipelineAttemptFloor(events, stageSlug, true);
   if (floor === null) return false;
   const floorShards = new Set(floor.rows.map((row) => row.shard));
-  const floorShard = floorShards.size === 1 ? floor.rows[0].shard : null;
-  const floorPos = floorShard === null
-    ? -1
-    : Math.max(...floor.rows.map((row) => row.pos));
+  if (floorShards.size !== 1) return false;
+  const floorShard = floor.rows[0].shard;
+  const floorPos = Math.max(...floor.rows.map((row) => row.pos));
   for (const entry of events) {
     if (
       entry.event !== "STAGE_COMPLETED" ||
@@ -14532,7 +14570,7 @@ export function singleStageAttemptIsOpen(
     if (pipelineEventAfterFloor(entry, floor)) return false;
     if (
       entry.timestamp === floor.timestamp &&
-      (floorShard === null || entry.shard !== floorShard)
+      entry.shard !== floorShard
     ) {
       return false;
     }
@@ -14606,10 +14644,8 @@ export function latestPipelineLinkArtifactMtime(
   const workflow = `single-stage:${stageSlug}`;
   const singleRun = options.singleRun === true;
   const events = orderedPipelineEvidenceEvents(projectDir);
-  const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
   let latest: number | null = null;
   for (const entry of events) {
-    if (!pipelineEventAfterFloor(entry, floor)) continue;
     const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (
       entry.event !== "PIPELINE_LINK_COMPLETED" ||
@@ -14655,15 +14691,24 @@ function pipelineReceiptArtifactIsCurrent(
   const path = resolvePath(projectDir, receipt.artifactPath);
   if (path !== root && !path.startsWith(`${root}${sep}`)) return false;
   try {
-    const stat = statSync(path);
+    const guardedPath = assertNoSymlinkInChainOrThrow(
+      realpathSync(projectDir),
+      relative(projectDir, path),
+    );
+    const snapshot = readRegularFileNoFollowOrThrow(
+      guardedPath,
+      "reverse-engineering developer handoff",
+      undefined,
+      guardedPath,
+      true,
+    );
     if (
-      !stat.isFile() ||
-      Math.abs(stat.mtimeMs - receipt.artifactMtimeMs) > 0.01
+      Math.abs(snapshot.mtimeMs - receipt.artifactMtimeMs) > 0.01
     ) {
       return false;
     }
     const digest = createHash("sha256")
-      .update(readFileSync(path))
+      .update(snapshot.bytes)
       .digest("hex");
     return receipt.artifactSha256 === `sha256:${digest}`;
   } catch {

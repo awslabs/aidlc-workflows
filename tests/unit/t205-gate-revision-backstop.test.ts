@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile
+// covers: subcommand:aidlc-state:approve, function:pipelineAttemptStartedAt, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile
 //
 // t205 - approve-time gate-revision backstop (the reconciliation half of the
 // forwarding-reliability gap). Mechanism: cli. The subject is the deterministic

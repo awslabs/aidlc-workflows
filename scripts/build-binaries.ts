@@ -1080,6 +1080,96 @@ function pathlessOrchestrateGate(
   }
 }
 
+function pathlessSingleAuditGate(artifact: string): GateResult {
+  const project = installedProject("aidlc-binary-pathless-single-audit-");
+  try {
+    const memoryTarget = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+    );
+    mkdirSync(dirname(memoryTarget), { recursive: true });
+    cpSync(
+      join(
+        REPO_ROOT,
+        "dist",
+        "claude",
+        ".claude",
+        "tools",
+        "data",
+        "memory-seed",
+      ),
+      memoryTarget,
+      { recursive: true },
+    );
+    const result = run(
+      artifact,
+      [
+        "next",
+        "--single",
+        "--stage",
+        "requirements-analysis",
+        "--project-dir",
+        project,
+      ],
+      {
+        cwd: project,
+        env: pathlessEnv(project),
+        timeoutMs: 30_000,
+      },
+    );
+    let kind = "";
+    let stage = "";
+    try {
+      const directive = JSON.parse(result.stdout) as {
+        kind?: string;
+        stage?: string;
+      };
+      kind = directive.kind ?? "";
+      stage = directive.stage ?? "";
+    } catch {
+      kind = "";
+    }
+    const auditDir = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "audit",
+    );
+    const audit = existsSync(auditDir)
+      ? readdirSync(auditDir)
+        .filter((name) => name.endsWith(".md"))
+        .map((name) => readFileSync(join(auditDir, name), "utf-8"))
+        .join("\n")
+      : "";
+    const output = `${result.stdout}\n${result.stderr}`;
+    return commandGate(
+      "pathless-single-audit",
+      result,
+      result.status === 0 &&
+        (kind === "load-steering" || kind === "run-stage") &&
+        stage === "requirements-analysis" &&
+        audit.includes("**Event**: STAGE_STARTED") &&
+        audit.includes("**Workflow**: single-stage:requirements-analysis") &&
+        !runtimeCrash(output),
+      {
+        expected:
+          "pathless isolated next emits stage work and records its synthetic STAGE_STARTED boundary",
+        actual:
+          kind && stage
+            ? `${kind}:${stage}; audit=${audit.includes("**Workflow**: single-stage:requirements-analysis")}`
+            : result.stderr.trim() || result.stdout.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function hookGate(artifact: string, hook: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-hook-"));
   try {
@@ -1750,14 +1840,7 @@ function buildTarget(target: TargetConfig): TargetResult {
       "error",
       "State file not found",
     ));
-    result.gates.push(pathlessOrchestrateGate(
-      actual.artifact,
-      "pathless-single-audit",
-      ["report", "--single", "--stage", "requirements-analysis", "--result", "completed"],
-      {},
-      "done",
-      "committed under synthetic workflow",
-    ));
+    result.gates.push(pathlessSingleAuditGate(actual.artifact));
     result.gates.push(hookGate(actual.artifact, "validate-state"));
     result.gates.push(hookGate(actual.artifact, "review-freeze"));
     result.gates.push(planApprovalHookGate(actual.artifact));

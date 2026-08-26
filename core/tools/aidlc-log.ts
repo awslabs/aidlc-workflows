@@ -7,10 +7,11 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
   boltSlugForUnit,
   checkSummaryConfirmationEvidence,
@@ -37,6 +38,7 @@ import {
   pipelineLinks,
   readAllAuditShards,
   readAuditShardEvents,
+  readRegularFileNoFollowOrThrow,
   readStateFile,
   readUnitSourceManifest,
   recordDir,
@@ -764,9 +766,30 @@ function handleLink(args: string[]): void {
             `Cannot record reverse-engineering developer link: --artifact must resolve to ${toPosix(relative(pd, expected))}.`,
           );
         }
-        if (!existsSync(artifact) || !statSync(artifact).isFile()) {
+        if (!existsSync(artifact)) {
           throw new Error(
             `Cannot record reverse-engineering developer link: handoff file does not exist: ${flags.artifact}.`,
+          );
+        }
+        let artifactBytes: Buffer;
+        let artifactMtimeMs: number;
+        try {
+          const guardedArtifact = assertNoSymlinkInChainOrThrow(
+            realpathSync(pd),
+            relative(pd, artifact),
+          );
+          const snapshot = readRegularFileNoFollowOrThrow(
+            guardedArtifact,
+            "reverse-engineering developer handoff",
+            undefined,
+            guardedArtifact,
+            true,
+          );
+          artifactBytes = snapshot.bytes;
+          artifactMtimeMs = snapshot.mtimeMs;
+        } catch (error) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: handoff file must be a regular file with no symlink path components (${errorMessage(error)}).`,
           );
         }
         const attemptStartedAt = pipelineAttemptStartedAt(
@@ -774,10 +797,9 @@ function handleLink(args: string[]): void {
           flags.stage,
           { singleRun },
         );
-        const artifactStat = statSync(artifact);
         if (
           attemptStartedAt === "" ||
-          artifactStat.mtimeMs < Date.parse(attemptStartedAt)
+          artifactMtimeMs < Date.parse(attemptStartedAt)
         ) {
           throw new Error(
             `Cannot record reverse-engineering developer link: ${toPosix(relative(pd, artifact))} was not written in the current stage attempt.`,
@@ -792,18 +814,18 @@ function handleLink(args: string[]): void {
         );
         if (
           previousMtime !== null &&
-          artifactStat.mtimeMs <= previousMtime
+          artifactMtimeMs <= previousMtime
         ) {
           throw new Error(
             `Cannot record reverse-engineering developer link: ${toPosix(relative(pd, artifact))} was not rewritten after its prior pipeline receipt.`,
           );
         }
         const digest = createHash("sha256")
-          .update(readFileSync(artifact))
+          .update(artifactBytes)
           .digest("hex");
         fields["Artifact Path"] = toPosix(relative(pd, artifact));
         fields["Artifact SHA256"] = `sha256:${digest}`;
-        fields["Artifact Mtime Ms"] = String(artifactStat.mtimeMs);
+        fields["Artifact Mtime Ms"] = String(artifactMtimeMs);
       }
       if (repo) fields.Repo = repo;
       if (singleRun) fields.Workflow = `single-stage:${flags.stage}`;

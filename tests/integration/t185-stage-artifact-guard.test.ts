@@ -46,6 +46,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
@@ -62,6 +63,7 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  pipelineAttemptStartedAt,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   sourceBaselineAuditFields,
   summaryConfirmationContentHash,
@@ -72,6 +74,16 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
+let handoffClock = 0;
+
+function ensurePipelineAttemptStarted(proj: string): void {
+  if (pipelineAttemptStartedAt(proj, "reverse-engineering")) return;
+  appendAuditEntry(
+    "STAGE_STARTED",
+    { Stage: "reverse-engineering", Agent: "aidlc-developer-agent" },
+    proj,
+  );
+}
 
 function reviewStage(
   proj: string,
@@ -469,6 +481,7 @@ function writeCodekbSet(
 }
 
 function completePipelineReceipts(proj: string, repos: string[] = []): void {
+  ensurePipelineAttemptStarted(proj);
   const chains = repos.length > 0 ? repos : [undefined];
   for (const repo of chains) {
     for (const link of ["aidlc-developer-agent", "aidlc-architect-agent"]) {
@@ -483,6 +496,36 @@ function completePipelineReceipts(proj: string, repos: string[] = []): void {
         proj,
       ];
       if (repo) args.splice(args.length - 2, 0, "--repo", repo);
+      if (link === "aidlc-developer-agent") {
+        const handoff = join(
+          seededRecordDir(proj),
+          "inception",
+          "reverse-engineering",
+          repo ? `developer-scan-${repo}.md` : "developer-scan.md",
+        );
+        mkdirSync(dirname(handoff), { recursive: true });
+        writeFileSync(
+          handoff,
+          "## Developer Code Scan Results\n\n## Handoff Summary\n\nFixture scan.\n",
+        );
+        const attemptStartedAt = pipelineAttemptStartedAt(
+          proj,
+          "reverse-engineering",
+        );
+        const attemptMs = Date.parse(attemptStartedAt);
+        const writtenAt = new Date(
+          Math.max(Date.now(), Number.isNaN(attemptMs) ? 0 : attemptMs) +
+            1_000 +
+            handoffClock++,
+        );
+        utimesSync(handoff, writtenAt, writtenAt);
+        args.splice(
+          args.length - 2,
+          0,
+          "--artifact",
+          relative(proj, handoff),
+        );
+      }
       const env = { ...process.env };
       delete env.AIDLC_SKIP_ARTIFACT_GUARD;
       delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
@@ -1818,6 +1861,7 @@ X. Other (please specify)
       guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
       writeCodekbSet(proj, "repo-a");
       writeCodekbSet(proj, "repo-b");
+      ensurePipelineAttemptStarted(proj);
       const reused = guarded(proj, [
         "reuse-artifact",
         "reverse-engineering",
@@ -1832,7 +1876,7 @@ X. Other (please specify)
       completePipelineReceipts(proj, ["repo-b"]);
 
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
-      expect(r.rc).toBe(0);
+      expect(r.rc, r.out).toBe(0);
     });
   });
 

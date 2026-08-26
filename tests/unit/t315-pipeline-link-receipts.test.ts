@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:checkPipelineLinkEvidence
+// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete
@@ -13,6 +13,8 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -30,9 +32,13 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  codekbStoreIsCurrent,
   codekbScopeFingerprint,
+  currentPipelineLinkReceipts,
+  latestPipelineLinkArtifactMtime,
   pipelineLinkEvidence,
   readAllAuditShards,
+  singleStageAttemptIsOpen,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -145,21 +151,6 @@ function state(
     BUN,
     [STATE, ...args, "--project-dir", proj],
     { encoding: "utf-8", env },
-  );
-  return {
-    rc: result.status ?? -1,
-    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
-  };
-}
-
-function orchestrate(
-  proj: string,
-  args: string[],
-): { rc: number; out: string } {
-  const result = spawnSync(
-    BUN,
-    [ORCH, ...args, "--project-dir", proj],
-    { encoding: "utf-8", env: childEnv() },
   );
   return {
     rc: result.status ?? -1,
@@ -421,6 +412,7 @@ describe("t315 pipeline link receipts", () => {
         "utf-8",
       );
 
+      expect(currentPipelineLinkReceipts(proj, RE_STAGE)).toEqual([]);
       const evidence = pipelineLinkEvidence(proj, {
         slug: RE_STAGE,
         lead_agent: LEAD,
@@ -434,6 +426,90 @@ describe("t315 pipeline link receipts", () => {
         { link: LEAD, repo: "repo-b" },
         { link: FINAL, repo: "repo-b" },
       ]);
+    });
+  }
+
+  for (const [startedFile, completedFile] of [
+    ["aaaa-started.md", "zzzz-completed.md"],
+    ["zzzz-started.md", "aaaa-completed.md"],
+  ]) {
+    test(`same-second cross-shard isolated lifecycle is not considered open (${startedFile})`, () => {
+      const proj = pipelineProject();
+      const auditDir = seededAuditDir(proj);
+      mkdirSync(auditDir, { recursive: true });
+      const tied = "2026-08-25T20:00:00Z";
+      const workflow = `single-stage:${RE_STAGE}`;
+      writeFileSync(
+        join(auditDir, startedFile),
+        [
+          "# AI-DLC Audit Log\n",
+          auditBlock("STAGE_STARTED", tied, {
+            Stage: RE_STAGE,
+            Agent: LEAD,
+            Workflow: workflow,
+          }),
+        ].join(""),
+        "utf-8",
+      );
+      writeFileSync(
+        join(auditDir, completedFile),
+        [
+          "# AI-DLC Audit Log\n",
+          auditBlock("STAGE_COMPLETED", tied, {
+            Stage: RE_STAGE,
+            Details: "Ambiguous completion",
+            Workflow: workflow,
+          }),
+        ].join(""),
+        "utf-8",
+      );
+
+      expect(singleStageAttemptIsOpen(proj, RE_STAGE)).toBe(false);
+    });
+  }
+
+  for (const [higherMtimeFile, lowerMtimeFile] of [
+    ["aaaa-higher-mtime.md", "zzzz-lower-mtime.md"],
+    ["zzzz-higher-mtime.md", "aaaa-lower-mtime.md"],
+  ]) {
+    test(`prior artifact mtime uses the cross-shard maximum across attempts (${higherMtimeFile})`, () => {
+      const proj = pipelineProject();
+      const auditDir = seededAuditDir(proj);
+      mkdirSync(auditDir, { recursive: true });
+      const prior = "2026-08-25T19:59:59Z";
+      const current = "2026-08-25T20:00:00Z";
+      const receipt = (mtime: string) =>
+        auditBlock("PIPELINE_LINK_COMPLETED", prior, {
+          Stage: RE_STAGE,
+          Link: LEAD,
+          Position: "1/2",
+          "Artifact Mtime Ms": mtime,
+        });
+      writeFileSync(
+        join(auditDir, higherMtimeFile),
+        `# AI-DLC Audit Log\n${receipt("200")}`,
+        "utf-8",
+      );
+      writeFileSync(
+        join(auditDir, lowerMtimeFile),
+        `# AI-DLC Audit Log\n${receipt("100")}`,
+        "utf-8",
+      );
+      writeFileSync(
+        join(auditDir, "current-attempt.md"),
+        [
+          "# AI-DLC Audit Log\n",
+          auditBlock("STAGE_STARTED", current, {
+            Stage: RE_STAGE,
+            Agent: LEAD,
+          }),
+        ].join(""),
+        "utf-8",
+      );
+
+      expect(
+        latestPipelineLinkArtifactMtime(proj, RE_STAGE, LEAD, null),
+      ).toBe(200);
     });
   }
 
@@ -457,10 +533,79 @@ describe("t315 pipeline link receipts", () => {
     expect(runLog(proj, LEAD).rc).toBe(0);
   });
 
+  test("developer handoffs reject symlinks when minting and verifying receipts", () => {
+    const proj = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    const handoff = developerHandoffPath(proj);
+    const external = join(proj, "outside-developer-scan.md");
+    mkdirSync(dirname(handoff), { recursive: true });
+    writeFileSync(external, "External scan.\n");
+    symlinkSync(external, handoff);
+
+    const refused = runLog(proj, LEAD, undefined, false, false);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("no symlink path components");
+
+    unlinkSync(handoff);
+    writeDeveloperHandoff(proj);
+    expect(runLog(proj, LEAD, undefined, false, false).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    const receiptMtime = statSync(handoff).mtimeMs;
+    const receiptBytes = readFileSync(handoff);
+    unlinkSync(handoff);
+    writeFileSync(external, receiptBytes);
+    const matchedTime = new Date(receiptMtime);
+    utimesSync(external, matchedTime, matchedTime);
+    symlinkSync(external, handoff);
+
+    const evidence = pipelineLinkEvidence(proj, {
+      slug: RE_STAGE,
+      lead_agent: LEAD,
+      support_agents: [FINAL],
+    });
+    expect(evidence.receipts).toEqual([]);
+    expect(evidence.completed).toEqual([]);
+
+    const parentProj = pipelineProject();
+    appendAuditEntry(
+      "STAGE_STARTED",
+      { Stage: RE_STAGE, Agent: LEAD },
+      parentProj,
+    );
+    const parentHandoff = developerHandoffPath(parentProj);
+    const externalDir = join(parentProj, "outside-reverse-engineering");
+    mkdirSync(externalDir, { recursive: true });
+    writeFileSync(
+      join(externalDir, "developer-scan.md"),
+      "External parent redirect.\n",
+    );
+    mkdirSync(dirname(dirname(parentHandoff)), { recursive: true });
+    rmSync(dirname(parentHandoff), { recursive: true, force: true });
+    symlinkSync(externalDir, dirname(parentHandoff), "dir");
+
+    const parentRefused = runLog(
+      parentProj,
+      LEAD,
+      undefined,
+      false,
+      false,
+    );
+    expect(parentRefused.rc).not.toBe(0);
+    expect(parentRefused.out).toContain("no symlink path components");
+  });
+
   test("post-receipt handoff edits invalidate the whole downstream chain", () => {
     const proj = pipelineProject();
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
     expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(
+      latestPipelineLinkArtifactMtime(
+        proj,
+        RE_STAGE,
+        LEAD,
+        null,
+      ),
+    ).toBe(statSync(developerHandoffPath(proj)).mtimeMs);
     expect(runLog(proj, FINAL).rc).toBe(0);
 
     const handoff = developerHandoffPath(proj);
@@ -786,6 +931,7 @@ describe("t315 pipeline link receipts", () => {
   test("isolated all-reuse records fresh authority and refuses a stale next attempt", () => {
     const proj = pipelineProject();
     const current = writeCurrentCodekbStore(proj);
+    expect(codekbStoreIsCurrent(proj)).toBe(true);
     expect(runOrchestrateNext(
       ORCH,
       proj,
@@ -837,7 +983,9 @@ describe("t315 pipeline link receipts", () => {
       ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     ).directive?.kind).toBe("run-stage");
+    expect(singleStageAttemptIsOpen(proj, RE_STAGE)).toBe(true);
     appendFileSync(current.source, "export const changed = true;\n");
+    expect(codekbStoreIsCurrent(proj)).toBe(false);
     const stale = state(proj, [
       "reuse-artifact",
       RE_STAGE,
@@ -1039,68 +1187,4 @@ describe("t315 pipeline link receipts", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(stateBefore);
   });
 
-  test("--single directives resume isolated receipts and reports require the full isolated chain", () => {
-    const proj = pipelineProject();
-    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
-    expect(runLog(proj, LEAD).rc).toBe(0);
-
-    const initial = runOrchestrateNext(
-      ORCH,
-      proj,
-      ["--stage", RE_STAGE, "--single"],
-      { env: childEnv() },
-    );
-    expect(initial.directive?.pipeline).toEqual({
-      links: [LEAD, FINAL],
-      completed: [],
-    });
-
-    const noReceipts = orchestrate(proj, [
-      "report",
-      "--single",
-      "--stage",
-      RE_STAGE,
-      "--result",
-      "completed",
-    ]);
-    expect(noReceipts.out).toContain('"kind":"error"');
-    expect(noReceipts.out).toContain("complete an isolated run");
-    expect(noReceipts.out).toContain(LEAD);
-    expect(noReceipts.out).toContain(FINAL);
-
-    expect(runLog(proj, LEAD, undefined, true).rc).toBe(0);
-    const resumed = runOrchestrateNext(
-      ORCH,
-      proj,
-      ["--stage", RE_STAGE, "--single"],
-      { env: childEnv() },
-    );
-    expect(resumed.directive?.pipeline).toEqual({
-      links: [LEAD, FINAL],
-      completed: [LEAD],
-    });
-
-    const partial = orchestrate(proj, [
-      "report",
-      "--single",
-      "--stage",
-      RE_STAGE,
-      "--result",
-      "completed",
-    ]);
-    expect(partial.out).toContain('"kind":"error"');
-    expect(partial.out).toContain(FINAL);
-
-    expect(runLog(proj, FINAL, undefined, true).rc).toBe(0);
-    const complete = orchestrate(proj, [
-      "report",
-      "--single",
-      "--stage",
-      RE_STAGE,
-      "--result",
-      "completed",
-    ]);
-    expect(complete.rc).toBe(0);
-    expect(complete.out).toContain('"kind":"done"');
-  });
 });

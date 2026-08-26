@@ -1060,6 +1060,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t328-nodag-per-unit-continuity.test.ts",
     "unit/t312-orchestrate-session-binding.test.ts",
     "unit/t255-workspace-sync.test.ts",
+    "unit/t314-minimal-scope-performance.test.ts",
     "unit/t314-source-freshness-receipts.test.ts",
     // t305 runs the shipped review/state tools because source-attribution
     // acceptance depends on actual audit receipts and completion refusals.

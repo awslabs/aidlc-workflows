@@ -25,7 +25,10 @@ import {
   auditLockDir,
   releaseAuditLock,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import {
+  REPO_ROOT,
+  runOrchestrateNext,
+} from "../harness/fixtures.ts";
 import {
   HARNESS_MATRIX,
   type ShippedHarnessName,
@@ -621,6 +624,102 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(join(project, ".claude", "scopes", "test-pro-validation.md"))).toBe(true);
     expect(existsSync(join(project, ".claude", "agents", "test-pro-metrics-agent.md"))).toBe(true);
     expect(existsSync(join(project, ".claude", "knowledge", "test-pro-metrics-agent", "methodology.md"))).toBe(true);
+  });
+
+  test("removed plugin knowledge keeps provenance and stays excluded when the plugin is deselected", () => {
+    const upgradedPlugin = join(tmp, "plugin-knowledge-upgrade");
+    cpSync(pluginBuilt, upgradedPlugin, { recursive: true });
+    const knowledgeRel = "aidlc-product-agent/recursive/stale.md";
+    const pluginKnowledge = join(upgradedPlugin, "knowledge", knowledgeRel);
+    mkdirSync(dirname(pluginKnowledge), { recursive: true });
+    writeFileSync(pluginKnowledge, "# Plugin-owned stale knowledge\n");
+
+    const provenanceProject = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: join(tmp, "knowledge-provenance-upgrade"),
+      pluginBuilt: upgradedPlugin,
+    }).projectDir;
+    const installedKnowledge = join(
+      provenanceProject,
+      ".claude",
+      "knowledge",
+      knowledgeRel,
+    );
+    const sidecarPath = join(
+      provenanceProject,
+      ".claude",
+      "tools",
+      "data",
+      "plugin-files-test-pro.json",
+    );
+    const ownership = () =>
+      JSON.parse(readFileSync(sidecarPath, "utf-8")) as {
+        schema_version?: number;
+        plugin?: string;
+        knowledge?: string[];
+      };
+
+    expect(ownership()).toEqual({
+      schema_version: 1,
+      plugin: PLUGIN,
+      knowledge: expect.arrayContaining([knowledgeRel]),
+    });
+
+    rmSync(pluginKnowledge);
+    const recompose = spawnSync(BUN, [join(upgradedPlugin, "hooks", "compose.ts")], {
+      cwd: provenanceProject,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: upgradedPlugin,
+        CLAUDE_PROJECT_DIR: provenanceProject,
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    });
+    expect(recompose.status, recompose.stderr).toBe(0);
+    expect(existsSync(installedKnowledge)).toBe(true);
+    expect(ownership().knowledge).toContain(knowledgeRel);
+
+    const select = spawnSync(
+      BUN,
+      [
+        join(provenanceProject, ".claude", "tools", "aidlc-utility.ts"),
+        "select-plugins",
+        "aidlc",
+      ],
+      {
+        cwd: provenanceProject,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: provenanceProject,
+          AIDLC_HARNESS_DIR: ".claude",
+        },
+      },
+    );
+    expect(select.status, select.stderr).toBe(0);
+
+    const next = runOrchestrateNext(
+      join(provenanceProject, ".claude", "tools", "aidlc-orchestrate.ts"),
+      provenanceProject,
+      ["--scope", "poc", "--stage", "intent-capture"],
+      {
+        cwd: provenanceProject,
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: provenanceProject,
+          AIDLC_HARNESS_DIR: ".claude",
+        },
+      },
+    );
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.kind).toBe("run-stage");
+    expect(next.directive?.inline_context_paths).not.toContain(
+      `.claude/knowledge/${knowledgeRel}`,
+    );
   });
 
   test("compose regenerates plugin runner skills and preserves core runner bytes", () => {
