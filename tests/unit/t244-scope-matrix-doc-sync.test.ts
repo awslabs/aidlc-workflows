@@ -307,6 +307,7 @@ describe("t244 stage-by-scope matrix doc drift guard", () => {
 // Strategy INHERITS Depth when a scope declares no override, which is why
 // `classic` reads Standard/Standard while `workshop` reads Standard/Minimal.
 describe("t244 scope routing summary table doc drift guard", () => {
+  const SUMMARY_HEADING = "## Scope Routing Table";
   const SUMMARY_HEADER = "| Scope | EXECUTE / Total | Depth | Test Strategy | Use Case |";
 
   interface SummaryRow {
@@ -319,7 +320,32 @@ describe("t244 scope routing summary table doc drift guard", () => {
   }
 
   const allSummaryRows = (): SummaryRow[] => {
-    const lines = readFileSync(DOC, "utf-8").split("\n");
+    const contents = readFileSync(DOC, "utf-8");
+    const sectionStart = contents.indexOf(SUMMARY_HEADING);
+    expect(sectionStart, `summary table heading not found in ${DOC}`).toBeGreaterThan(-1);
+    expect(
+      contents.indexOf(SUMMARY_HEADING, sectionStart + SUMMARY_HEADING.length),
+      `duplicate summary table heading in ${DOC}`,
+    ).toBe(-1);
+    const sectionEnd = contents.indexOf("\n## ", sectionStart + SUMMARY_HEADING.length);
+    const headerStart = contents.indexOf(SUMMARY_HEADER, sectionStart);
+    expect(headerStart, `summary table header not found in ${DOC}`).toBeGreaterThan(sectionStart);
+    expect(
+      contents.indexOf(SUMMARY_HEADER),
+      `summary table header must not appear before its section in ${DOC}`,
+    ).toBe(headerStart);
+    expect(
+      contents.indexOf(SUMMARY_HEADER, headerStart + SUMMARY_HEADER.length),
+      `duplicate summary table header in ${DOC}`,
+    ).toBe(-1);
+    if (sectionEnd !== -1) {
+      expect(headerStart, "summary table header must stay inside its section").toBeLessThan(
+        sectionEnd,
+      );
+    }
+    const lines = contents
+      .slice(sectionStart, sectionEnd === -1 ? undefined : sectionEnd)
+      .split("\n");
     const at = lines.findIndex((l) => l.startsWith(SUMMARY_HEADER));
     expect(at, `summary table header not found in ${DOC}`).toBeGreaterThan(-1);
     const rows: SummaryRow[] = [];
