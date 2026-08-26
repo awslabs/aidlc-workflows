@@ -12,6 +12,7 @@ import {
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditBlockField,
   boltSlugForUnit,
   freshReviewReceipts,
   loadStageGraphAll,
@@ -101,6 +102,19 @@ function seedOutputs(proj: string, unit: string): void {
     "traceability.json",
   ]) {
     writeFileSync(join(dir, name), `# ${name} for ${unit}\n`);
+  }
+}
+
+function seedStageOutputs(proj: string): void {
+  const dir = join(seededRecordDir(proj), "construction", STAGE);
+  mkdirSync(dir, { recursive: true });
+  for (const name of [
+    "entities.md",
+    "rules.md",
+    "functional-spec.md",
+    "traceability.json",
+  ]) {
+    writeFileSync(join(dir, name), `# stage-level ${name}\n`);
   }
 }
 
@@ -234,11 +248,56 @@ function requestReview(
   return run(LOG, reviewArgs(unit, iteration, undefined, retryPending), proj);
 }
 
+// Completion validates a canonical `## Review` appendix appended after the
+// request boundary, and refuses bytes that predate the request; write a
+// fresh, distinct reviewer section onto the exact append owner the matching
+// REVIEW_REQUESTED row recorded.
+let reviewPass = 0;
+
+function appendReviewerSection(
+  proj: string,
+  unit: string | undefined,
+  iteration: number,
+): void {
+  const requested = readAllAuditShards(proj)
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .filter(
+      (block) =>
+        auditBlockField(block, "Event") === "REVIEW_REQUESTED" &&
+        auditBlockField(block, "Stage") === STAGE &&
+        (auditBlockField(block, "Unit") ?? undefined) === unit &&
+        auditBlockField(block, "Iteration") === String(iteration),
+    )
+    .at(-1);
+  const logicalPath =
+    requested === undefined
+      ? null
+      : auditBlockField(requested, "Review Appendix Artifact");
+  if (!logicalPath) return;
+  const artifact = join(seededRecordDir(proj), logicalPath);
+  const current = readFileSync(artifact, "utf-8");
+  const staleAppendix = current.search(/^## Review[ \t]*$/m);
+  const body =
+    staleAppendix === -1
+      ? current
+      : `${current.slice(0, staleAppendix).replace(/\s+$/, "")}\n`;
+  writeFileSync(
+    artifact,
+    `${body}\n## Review\n\n` +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${REVIEWER}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
+  );
+}
+
 function recordVerdict(
   proj: string,
   unit: string | undefined,
   iteration = 1,
 ): RunResult {
+  appendReviewerSection(proj, unit, iteration);
   return run(LOG, reviewArgs(unit, iteration, "READY"), proj);
 }
 
@@ -682,6 +741,9 @@ describe("t328 no-DAG per-unit review continuity", () => {
 
   test("an open-only stage review uses fallback paths and goes stale after merge", () => {
     const proj = project();
+    // The stage-level fallback needs a real append owner on disk: the
+    // review request must snapshot the stage-level review_artifact file.
+    seedStageOutputs(proj);
     startBolt(proj, "alpha");
 
     const request = requestReview(proj, undefined);

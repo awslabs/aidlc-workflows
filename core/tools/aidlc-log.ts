@@ -1826,10 +1826,11 @@ function handleReview(args: string[]): void {
 
       if (snapshot.requestFingerprint !== requestBinding.artifactFingerprint) {
         refuseReview(
-          `Refusing REVIEW_COMPLETED for "${flags.stage}": declared artifacts changed ` +
-            `outside the reviewer-authored appendix after REVIEW_REQUESTED iteration ` +
-            `${iteration}. Restore the requested bytes and re-dispatch that exact ` +
-            "iteration; --retry-pending cannot rebaseline changed content.",
+          `Cannot record the verdict for "${flags.stage}" because ` +
+            `its output documents changed outside the reviewer-authored appendix ` +
+            `after review iteration ${iteration} started. Restore the bytes the ` +
+            "reviewer was dispatched on and re-run that exact iteration; " +
+            "--retry-pending cannot rebaseline changed content.",
         );
       }
       if (

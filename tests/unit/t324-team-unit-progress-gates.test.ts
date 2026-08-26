@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -274,12 +274,33 @@ function addReviewFinding(
   return relativeArtifact;
 }
 
+// Completion validates a canonical `## Review` appendix appended to the
+// stage's review_artifact after REVIEW_REQUESTED, and refuses bytes that
+// predate the request; every simulated pass strips any stale appendix before
+// requesting and appends a fresh, distinct section afterwards.
+let reviewPass = 0;
+
 function logReviewReady(
   proj: string,
   stage: string,
   unit: string,
   reviewer: string,
 ): void {
+  const reviewArtifact = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    stage,
+    artifactFilename(findStageBySlug(stage)!.review_artifact!),
+  );
+  const current = readFileSync(reviewArtifact, "utf-8");
+  const staleAppendix = current.search(/^## Review[ \t]*$/m);
+  if (staleAppendix !== -1) {
+    writeFileSync(
+      reviewArtifact,
+      `${current.slice(0, staleAppendix).replace(/\s+$/, "")}\n`,
+    );
+  }
   const base = [
     LOG,
     "review",
@@ -294,14 +315,24 @@ function logReviewReady(
     "--project-dir",
     proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const result = spawnSync(BUN, [...base, ...suffix], {
-      encoding: "utf-8",
-      env: ENV,
-    });
-    if ((result.status ?? -1) !== 0) {
-      throw new Error(`review failed: ${result.stdout}${result.stderr}`);
-    }
+  const request = spawnSync(BUN, base, { encoding: "utf-8", env: ENV });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review failed: ${request.stdout}${request.stderr}`);
+  }
+  appendFileSync(
+    reviewArtifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      "**Iteration:** 1\n\n" +
+      `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
+  );
+  const completed = spawnSync(BUN, [...base, "--verdict", "READY"], {
+    encoding: "utf-8",
+    env: ENV,
+  });
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(`review failed: ${completed.stdout}${completed.stderr}`);
   }
 }
 

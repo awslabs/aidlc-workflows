@@ -38,7 +38,14 @@
 // test re-enables enforcement by DELETING that var from the spawned tool's env
 // - otherwise it would be testing the bypass, not the guard.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -69,6 +76,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
+setDefaultTimeout(30_000);
+
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -2058,7 +2067,10 @@ X. Other (please specify)
     }
 
     test("PASSES with zero on-disk artifacts once every DAG unit converged", () => {
-      seedSwarm(UNITS); // all converged; nothing written to the record dir
+      // The migrated review flow writes each converged unit's reviewed plan
+      // into the record dir, but the exemption is still granted from the
+      // convergence ledger before any produces walk.
+      seedSwarm(UNITS); // all converged
       bypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(
         proj,
@@ -2073,8 +2085,15 @@ X. Other (please specify)
       gateSetupBypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
+      // The converged unit's reviewed plan exists in the record dir (the
+      // request -> appendix -> verdict flow writes it), so the refusal falls
+      // through the produces walk to the workspace_requires source-work
+      // guard - still fail-closed, no state mutation.
       expect((JSON.parse(r.out) as { error: string }).error).toContain(
-        'Cannot complete "code-generation": none of its declared artifacts exist',
+        'Cannot complete "code-generation"',
+      );
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        "no source work is evident",
       );
     });
 

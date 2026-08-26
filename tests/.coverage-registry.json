@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 771,
+    "total": 772,
     "enumeratedByClass": {
-      "function": 476,
+      "function": 477,
       "audit": 90,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 279,
+      "function": 280,
       "audit": 49,
       "scope": 11,
       "stage": 11,

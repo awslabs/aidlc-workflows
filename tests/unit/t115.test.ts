@@ -1713,8 +1713,8 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       p,
     );
     expect(verdict.status).not.toBe(0);
-    expect(verdict.out).toContain("declared artifacts changed");
-    expect(verdict.out).toContain("after REVIEW_REQUESTED");
+    expect(verdict.out).toContain("output documents changed");
+    expect(verdict.out).toContain("after review iteration");
     expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
   }, 30000);
 });

@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -559,6 +560,22 @@ describe("t325 atomic team Unit claims", () => {
         checkout,
       ).status,
     ).toBe(0);
+    // Completion validates a canonical reviewer appendix appended to the
+    // stage's review_artifact after the request.
+    appendFileSync(
+      join(
+        seededRecordDir(checkout),
+        "construction",
+        "alpha",
+        "functional-design",
+        artifactFilename("functional-spec"),
+      ),
+      "\n## Review\n\n" +
+        "**Verdict:** READY\n" +
+        "**Reviewer:** aidlc-architecture-reviewer-agent\n" +
+        "**Iteration:** 1\n\n" +
+        "### Findings\n\nNo blocking findings.\n",
+    );
     expect(
       run(
         LOG,

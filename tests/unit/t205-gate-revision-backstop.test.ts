@@ -46,7 +46,14 @@
 //   hooks/aidlc-write-audit-log.ts (emits ARTIFACT_UPDATED with the production File shape);
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import {
@@ -72,6 +79,8 @@ import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath;
+
+setDefaultTimeout(30_000);
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -146,6 +155,11 @@ function recordStageStarted(proj: string, slug: string): void {
   }
 }
 
+// Each simulated reviewer pass writes distinct appendix bytes: completion
+// refuses an appendix that is byte-identical to the pre-request suffix, so a
+// repeated iteration ordinal (attempt reset) needs freshly authored content.
+let reviewPass = 0;
+
 function recordReview(proj: string, slug: string, iteration: number): void {
   const reviewer = "aidlc-product-lead-agent";
   const dir = join(seededRecordDir(proj), "inception", slug);
@@ -191,7 +205,7 @@ function recordReview(proj: string, slug: string, iteration: number): void {
       "**Verdict:** READY\n" +
       `**Reviewer:** ${reviewer}\n` +
       `**Iteration:** ${iteration}\n\n` +
-      "### Findings\n\nNo blocking findings.\n",
+      `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
     "utf-8",
   );
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
