@@ -51,6 +51,7 @@ import {
   summaryConfirmationContentHash,
   stateFilePath,
   toPosix,
+  unattendedHumanPresenceHint,
   unitSourceFingerprint,
   UNBINDABLE_FINGERPRINT,
   validateLiveUnitScope,
@@ -559,7 +560,7 @@ function handleAnswer(args: string[]): void {
         error(
           "Cannot record the summary choice because no human reply has arrived after this "
             + "question, or that turn was already used by another decision. End the turn, "
-            + "wait for the human's choice, then try again.",
+            + `wait for the human's choice, then try again.${unattendedHumanPresenceHint()}`,
         );
       }
       try {
@@ -602,7 +603,10 @@ function handleAnswer(args: string[]): void {
         !humanActedSinceLastAnswer(pd)
       ) {
         error(
-          "Cannot record this approval choice because no new human reply has arrived. After the human types their choice, use aidlc-orchestrate.ts report --result approved or rejected; do not use aidlc-log.ts answer for an approval."
+          "Cannot record this approval choice because no new human reply has arrived. "
+            + "After the human types their choice, use aidlc-orchestrate.ts report --result "
+            + "approved or rejected; do not use aidlc-log.ts answer for an approval."
+            + unattendedHumanPresenceHint(),
         );
       }
       console.log(
@@ -621,7 +625,9 @@ function handleAnswer(args: string[]): void {
       // scoped test off-switch
     } else if (!humanActedSinceLastAnswer(pd)) {
       error(
-        "Cannot record this answer because no new human reply has arrived for the question. Wait for the human to type an answer, then try again."
+        "Cannot record this answer because no new human reply has arrived for the question. "
+          + "Wait for the human to type an answer, then try again."
+          + unattendedHumanPresenceHint(),
       );
     }
 

@@ -78,6 +78,14 @@ valid choices are shown again; nothing is recorded and the gate remains open.
 
 The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
 
+Automation that submits prompts without a person present must set
+`AIDLC_UNATTENDED=1` in the driving process. The declaration is opt-in because
+only the driver knows whether a prompt is unattended; without it, prompt-submit
+events retain interactive behavior. With it set, every harness withholds the
+authority-bearing `HUMAN_TURN`, so approval and interview gates continue to
+wait. When a person takes over, unset `AIDLC_UNATTENDED` and submit a fresh
+response. Presence-related refusal messages name the flag when it is still set.
+
 ### Approval Gate Flow
 
 ```mermaid

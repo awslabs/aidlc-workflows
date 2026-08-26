@@ -11448,6 +11448,21 @@ export function humanPresenceGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD === "1";
 }
 
+// An unattended driver is the only component that knows its prompt-submit
+// event did not originate from a person. Withhold the authority-bearing ledger
+// mint while retaining non-authority turn markers used by forwarding hooks.
+export function humanTurnMintAllowed(): boolean {
+  return process.env.AIDLC_UNATTENDED !== "1";
+}
+
+export function unattendedHumanPresenceHint(): string {
+  return humanTurnMintAllowed()
+    ? ""
+    : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
+      "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
+      "mode, then submit a new human response.";
+}
+
 export function setField(content: string, field: string, value: string): string {
   // [ \t]* instead of \s* so an empty value doesn't let the regex eat the
   // following line. .* with the m flag does not cross lines on its own, but

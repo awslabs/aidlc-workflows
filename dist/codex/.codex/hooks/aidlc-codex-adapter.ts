@@ -62,6 +62,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
+  humanTurnMintAllowed,
   isNonAnswer,
   sessionsDir,
   stateFilePath,
@@ -701,7 +702,9 @@ switch (target) {
     // Fail-open: a record-human-turn failure must never block the turn. Advisory, no stdout.
     try {
       if (existsSync(stateFilePath(projectDir))) {
-        appendAuditEntry("HUMAN_TURN", {}, projectDir);
+        if (humanTurnMintAllowed()) {
+          appendAuditEntry("HUMAN_TURN", {}, projectDir);
+        }
       }
     } catch {
       // best-effort presence record — advisory

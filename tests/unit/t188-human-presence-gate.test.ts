@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -73,11 +73,17 @@ const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 // Drive a state subcommand with the PRESENCE guard ENABLED (clear the suite's
 // presence-bypass var) but the ARTIFACT guard still bypassed (a separate
 // chokepoint these bare fixtures don't satisfy). Returns exit code + output.
-function guarded(proj: string, args: string[]): { rc: number; out: string } {
+function guarded(
+  proj: string,
+  args: string[],
+  unattended = false,
+): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  if (unattended) env.AIDLC_UNATTENDED = "1";
+  else delete env.AIDLC_UNATTENDED;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -86,10 +92,16 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
 }
 
 // Drive an aidlc-log subcommand with the same guard posture.
-function guardedLog(proj: string, args: string[]): { rc: number; out: string } {
+function guardedLog(
+  proj: string,
+  args: string[],
+  unattended = false,
+): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  if (unattended) env.AIDLC_UNATTENDED = "1";
+  else delete env.AIDLC_UNATTENDED;
   const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -367,9 +379,16 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(fireMintHook(proj, true)).toBe(0);
       guarded(proj, ["gate-start", slug]);
       // ...and the gate still has no human to point at.
-      const r = guarded(proj, ["approve", slug, "--user-input", "ok"]);
+      const r = guarded(
+        proj,
+        ["approve", slug, "--user-input", "Approve"],
+        true,
+      );
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to approve");
+      expect(r.out).toContain("Cannot approve");
+      expect(r.out).toContain(
+        "AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count as a human reply",
+      );
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
       expect(field(proj, "Current Stage")).toBe(slug);
     });
@@ -486,19 +505,24 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       ).toBe(0);
 
       summaryQuestions(proj, "Looks correct");
-      const fabricated = guardedLog(proj, [
-        "answer",
-        "--stage",
-        slug,
-        "--checkpoint",
-        "summary-confirmation",
-        "--questions-file",
-        questions,
-        "--details",
-        "Looks correct",
-      ]);
+      const fabricated = guardedLog(
+        proj,
+        [
+          "answer",
+          "--stage",
+          slug,
+          "--checkpoint",
+          "summary-confirmation",
+          "--questions-file",
+          questions,
+          "--details",
+          "Looks correct",
+        ],
+        true,
+      );
       expect(fabricated.rc).not.toBe(0);
       expect(fabricated.out).toContain("no human reply has arrived");
+      expect(fabricated.out).toContain("Unset AIDLC_UNATTENDED");
 
       recordHumanTurn(proj);
       const confirmed = guardedLog(proj, [
@@ -765,9 +789,14 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
           "A,B",
         ]).rc,
       ).toBe(0);
-      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
+      const r = guardedLog(
+        proj,
+        ["answer", "--stage", slug, "--details", "my answer"],
+        true,
+      );
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Cannot record this answer");
+      expect(r.out).toContain("Unset AIDLC_UNATTENDED");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 

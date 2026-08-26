@@ -209,6 +209,7 @@ function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
+  envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
@@ -219,9 +220,11 @@ function runAdapter(
       encoding: "utf-8",
       env: {
         ...process.env,
+        AIDLC_UNATTENDED: undefined,
         AIDLC_PROJECT_DIR: undefined,
         CLAUDE_PROJECT_DIR: undefined,
         AIDLC_COMPILED_EXECUTABLE: COMPILED_BINARY ?? undefined,
+        ...envOverrides,
       } as NodeJS.ProcessEnv,
       timeout: 30_000,
     },
@@ -1094,6 +1097,15 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   });
 
   test("12: record-human-turn records HUMAN_TURN only when workflow state exists", () => {
+    const unattendedDir = scratchProject(true);
+    runAdapter(
+      unattendedDir,
+      "record-human-turn",
+      withCwd(FIXTURES.userPromptSubmit, unattendedDir),
+      { AIDLC_UNATTENDED: "1" },
+    );
+    expect(readAudit(unattendedDir)).not.toContain("HUMAN_TURN");
+
     const withStateDir = scratchProject(true);
     runAdapter(withStateDir, "record-human-turn", withCwd(FIXTURES.userPromptSubmit, withStateDir));
     expect(readAudit(withStateDir)).toContain("HUMAN_TURN");

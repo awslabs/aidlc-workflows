@@ -70,6 +70,7 @@ import {
   claimCopilotCommand,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
+  humanTurnMintAllowed,
   recordCopilotHumanSequence,
   resolveWorkflowSelection,
   settleCopilotCommand,
@@ -924,7 +925,9 @@ export async function run(
         return 0;
       }
       try {
-        appendAuditEntry("HUMAN_TURN", {}, projectDir);
+        if (humanTurnMintAllowed()) {
+          appendAuditEntry("HUMAN_TURN", {}, projectDir);
+        }
       } catch {
         // best-effort presence record — advisory
       }

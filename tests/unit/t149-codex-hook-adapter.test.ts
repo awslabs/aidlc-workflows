@@ -236,6 +236,7 @@ function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
+  envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
@@ -244,7 +245,12 @@ function runAdapter(
       cwd: projectDir,
       input: typeof payload === "string" ? payload : JSON.stringify(payload),
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      env: {
+        ...process.env,
+        AIDLC_UNATTENDED: undefined,
+        CLAUDE_PROJECT_DIR: undefined,
+        ...envOverrides,
+      } as NodeJS.ProcessEnv,
       timeout: 30_000,
     },
   );
@@ -279,6 +285,33 @@ function humanTurnCount(dir: string): number {
 }
 
 describe("t149 Codex structured request_user_input presence", () => {
+  test("an unattended structured selection does not mint HUMAN_TURN", () => {
+    const dir = scratchProject(true);
+    try {
+      const unattended = structuredSelectionPayload(
+        dir,
+        JSON.stringify({ answers: { decision: { answers: ["Approve"] } } }),
+        "unattended-turn",
+      );
+      expect(
+        runAdapter(dir, "record-human-turn", unattended, {
+          AIDLC_UNATTENDED: "1",
+        }).code,
+      ).toBe(0);
+      expect(humanTurnCount(dir)).toBe(0);
+
+      const attended = structuredSelectionPayload(
+        dir,
+        JSON.stringify({ answers: { decision: { answers: ["Approve"] } } }),
+        "attended-turn",
+      );
+      expect(runAdapter(dir, "record-human-turn", attended).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("an explicit nested selection mints exactly one HUMAN_TURN across duplicate delivery", () => {
     const dir = scratchProject(true);
     try {

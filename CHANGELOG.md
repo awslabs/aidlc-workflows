@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.108] - 2026-08-26
+
+Unattended drivers can now explicitly withhold human-presence authority across every harness, preventing scheduled prompts from satisfying approval and interview gates. **Upgrade:** refresh your `dist/<harness>/` shell and set `AIDLC_UNATTENDED=1` on any process that submits prompts without a person present.
+
+* `AIDLC_UNATTENDED=1` suppresses the authority-bearing `HUMAN_TURN` audit event in Claude, Codex, Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode while preserving non-authority turn markers used by forwarding hooks. An unflagged driver retains the existing interactive behavior.
+* Approval, rejection, ordinary-answer, and summary-confirmation refusals now name a leaked `AIDLC_UNATTENDED=1` and instruct operators to unset it before returning to interactive mode and submitting a fresh response.
+
 ## [2.6.107] - 2026-08-26
 
 Team-owned unit-major Construction can now fan out safely across clones or sibling worktrees, publish exact candidates, and converge through a pinned human-gated merge transaction with a deterministic dispatcher. Landing now refuses a stale local integration target, and its ownership-boundary regression is portable across case-sensitive and case-insensitive filesystems. **Upgrade:** refresh your `dist/<harness>/` shell; existing workflows remain solo unless delivery planning explicitly enables team ownership.

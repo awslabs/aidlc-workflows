@@ -150,8 +150,14 @@ function runIdeStdin(
   projectDir: string,
   target: string,
   stdinPayload: string,
+  envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
-  const env: Record<string, string> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    AIDLC_UNATTENDED: undefined,
+    CLAUDE_PROJECT_DIR: projectDir,
+    ...envOverrides,
+  };
   delete (env as Record<string, string | undefined>).USER_PROMPT;
   const r = spawnSync(
     "bun",
@@ -1458,6 +1464,22 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       rmSync(dir, { recursive: true, force: true });
     }
   }, 40_000);
+
+  test("N6b: unattended record-human-turn exits cleanly without minting presence", () => {
+    const dir = scratchProject(true);
+    try {
+      expect(
+        runIdeStdin(dir, "record-human-turn", "", {
+          AIDLC_UNATTENDED: "1",
+        }).code,
+      ).toBe(0);
+      expect(readAudit(dir)).not.toContain("HUMAN_TURN");
+      expect(runIdeStdin(dir, "record-human-turn", "").code).toBe(0);
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test("N7: a 0.12 payload target consumes USER_PROMPT without probing held-open stdin", async () => {
     // The #543 0.12 shape: USER_PROMPT carries the payload while stdin is opened

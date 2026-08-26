@@ -20,8 +20,9 @@
 // ledger event serves the human-presence GATE; the marker serves the Stop hook's
 // conversational carve-out, which needs a cheap "when was the last human prompt,
 // relative to the last engine advance?" comparison that works on harnesses
-// delivering no transcript. Both are written from this one seam so they can never
-// disagree about when a human spoke. See the marker family in aidlc-lib.ts.
+// delivering no transcript. Both ride this seam, but AIDLC_UNATTENDED=1
+// deliberately withholds only the authority-bearing ledger event while retaining
+// the conversational marker. See the marker family in aidlc-lib.ts.
 //
 // UNATTENDED DRIVING (AIDLC_UNATTENDED=1). The mint is a presence ASSERTION, and
 // this hook has no evidence for it: UserPromptSubmit carries no signal about who
@@ -49,23 +50,19 @@
 // a separate behaviour with its own tests. Reviewers who want the marker
 // suppressed too should say so — it is a one-line follow-on, not a silent choice.
 import { existsSync } from "node:fs";
-import { markHumanTurn, resolveProjectDirFromHook, stateFilePath } from "../tools/aidlc-lib.ts";
+import {
+  humanTurnMintAllowed,
+  markHumanTurn,
+  resolveProjectDirFromHook,
+  stateFilePath,
+} from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-
-/**
- * True when the caller has declared this prompt is NOT a person's, so the
- * presence token must not be minted. Set by an unattended driver for the whole
- * child process.
- */
-export function unattendedPromptSubmit(): boolean {
-  return process.env.AIDLC_UNATTENDED === "1";
-}
 
 export async function run(_input: string): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   if (existsSync(stateFilePath(projectDir))) {
-    if (!unattendedPromptSubmit()) {
+    if (humanTurnMintAllowed()) {
       appendAuditEntry("HUMAN_TURN", {}, projectDir);
     }
     markHumanTurn(projectDir);

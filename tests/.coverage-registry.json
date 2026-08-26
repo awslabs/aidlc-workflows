@@ -2616,6 +2616,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:humanTurnMintAllowed",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:idSuffix",
       "minMechanism": "none",
       "coveredBy": [],
@@ -5106,6 +5118,18 @@
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unattendedHumanPresenceHint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

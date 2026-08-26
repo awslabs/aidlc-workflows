@@ -159,6 +159,7 @@ function runAdapter(
   target: string,
   payload: unknown,
   extraArgs: string[] = [],
+  envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
@@ -171,7 +172,12 @@ function runAdapter(
       cwd: projectDir,
       input: typeof payload === "string" ? payload : JSON.stringify(payload),
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+      env: {
+        ...process.env,
+        AIDLC_UNATTENDED: undefined,
+        CLAUDE_PROJECT_DIR: projectDir,
+        ...envOverrides,
+      } as NodeJS.ProcessEnv,
       timeout: 30_000,
     },
   );
@@ -216,6 +222,26 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
 }
 
 describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
+  test("unattended prompt submit does not mint HUMAN_TURN", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = {
+        ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
+        cwd: dir,
+      };
+      expect(
+        runAdapter(dir, "verb-intercept", payload, [], {
+          AIDLC_UNATTENDED: "1",
+        }).code,
+      ).toBe(0);
+      expect(readAudit(dir)).not.toContain("HUMAN_TURN");
+      expect(runAdapter(dir, "verb-intercept", payload).code).toBe(0);
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
     try {

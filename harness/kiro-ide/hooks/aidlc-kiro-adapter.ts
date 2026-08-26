@@ -79,6 +79,7 @@ import {
   hookDebug,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  humanTurnMintAllowed,
   isAutonomousMode,
   markHumanTurn,
   recordHookDrop,
@@ -574,13 +575,16 @@ if (target === "terminal-command-guard") {
 // what makes the Stop hook's conversational carve-out work on this harness. The
 // IDE delivers no `transcript_path`, so the carve-out cannot read the turn
 // history; it compares this marker's mtime against .aidlc-engine-touch instead.
-// Both writes ride this one seam so the ledger and the marker can never
-// disagree about when a human spoke. See the marker family in aidlc-lib.ts.
+// Both writes ride this seam, but AIDLC_UNATTENDED=1 deliberately withholds
+// only the authority-bearing ledger event while retaining the conversational
+// marker. See the marker family in aidlc-lib.ts.
 if (target === "record-human-turn") {
   try {
     const pd = process.cwd();
     if (existsSync(stateFilePath(pd))) {
-      appendAuditEntry("HUMAN_TURN", {}, pd);
+      if (humanTurnMintAllowed()) {
+        appendAuditEntry("HUMAN_TURN", {}, pd);
+      }
       markHumanTurn(pd);
     }
   } catch {
