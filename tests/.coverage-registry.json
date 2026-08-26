@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 677,
+    "total": 678,
     "enumeratedByClass": {
-      "function": 410,
+      "function": 411,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,12 +31,12 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 219,
+      "function": 220,
       "audit": 46,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 97,
+      "subcommand": 99,
       "render-surface": 7
     }
   },
@@ -4119,6 +4119,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:runWithOwnerStampedLock",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-plugin-build.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:sanitizeHarnessPlainText",
       "minMechanism": "none",
       "coveredBy": [
@@ -7832,10 +7844,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t327-plugin-author-routes.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
-      "status": "UNDER-MECHANISM"
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
@@ -7872,10 +7884,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t327-plugin-author-routes.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
-      "status": "UNDER-MECHANISM"
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",

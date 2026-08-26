@@ -1,5 +1,7 @@
-// covers: file:core/tools/aidlc-plugin-build.ts, file:core/tools/aidlc-plugin-emit.ts
+// covers: file:core/tools/aidlc-plugin-build.ts, file:core/tools/aidlc-plugin-emit.ts,
+// function:runWithOwnerStampedLock
 
+import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -13,6 +15,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -293,6 +296,121 @@ describe("t315 standalone plugin builder", () => {
       ).toThrow("could not acquire plugin build output lock");
       expect(existsSync(outDir)).toBe(false);
     } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  test("direct emission reclaims a dead owner-stamped output lock", () => {
+    const pluginRoot = copyPlugin("dead-output-lock");
+    const outDir = join(scratch, "dead-owner-output");
+    const lockDir = pluginBuildLockPath(outDir);
+    const token = randomUUID();
+    mkdirSync(join(lockDir, token), { recursive: true });
+    writeFileSync(
+      join(lockDir, "owner.json"),
+      JSON.stringify({
+        pid: 2_000_000_000,
+        startedAtMs: Math.floor(
+          performance.timeOrigin + performance.now(),
+        ),
+        reapLiveOwnerAfterStale: true,
+        token,
+      }),
+      "utf-8",
+    );
+    const target = readPluginTargets(
+      join(SOURCE_TOOLS, "data", "plugin-targets.json"),
+    ).claude;
+
+    buildPluginProjection({
+      pluginRoot,
+      target,
+      outDir,
+      templateHooksDir: join(
+        SOURCE_TOOLS,
+        "data",
+        "plugin-hooks-template",
+      ),
+      lockTimeoutMs: 25,
+    });
+
+    expect(existsSync(outDir)).toBe(true);
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
+  test("direct emission does not reclaim a live owner-stamped output lock", () => {
+    const pluginRoot = copyPlugin("live-output-lock");
+    const outDir = join(scratch, "live-owner-output");
+    const lockDir = pluginBuildLockPath(outDir);
+    const token = randomUUID();
+    mkdirSync(join(lockDir, token), { recursive: true });
+    writeFileSync(
+      join(lockDir, "owner.json"),
+      JSON.stringify({
+        pid: process.pid,
+        startedAtMs: Math.floor(
+          performance.timeOrigin + performance.now(),
+        ),
+        reapLiveOwnerAfterStale: true,
+        token,
+      }),
+      "utf-8",
+    );
+    const target = readPluginTargets(
+      join(SOURCE_TOOLS, "data", "plugin-targets.json"),
+    ).claude;
+    try {
+      expect(() =>
+        buildPluginProjection({
+          pluginRoot,
+          target,
+          outDir,
+          templateHooksDir: join(
+            SOURCE_TOOLS,
+            "data",
+            "plugin-hooks-template",
+          ),
+          lockTimeoutMs: 25,
+        })
+      ).toThrow("could not acquire plugin build output lock");
+      expect(existsSync(lockDir)).toBe(true);
+      expect(existsSync(outDir)).toBe(false);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  test("direct emission reclaims only an aged unstamped output lock", () => {
+    const pluginRoot = copyPlugin("aged-unstamped-output-lock");
+    const outDir = join(scratch, "aged-unstamped-output");
+    const lockDir = pluginBuildLockPath(outDir);
+    mkdirSync(lockDir, { recursive: true });
+    utimesSync(lockDir, new Date(0), new Date(0));
+    const target = readPluginTargets(
+      join(SOURCE_TOOLS, "data", "plugin-targets.json"),
+    ).claude;
+    const previousGrace = process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
+    process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS = "1";
+    try {
+      buildPluginProjection({
+        pluginRoot,
+        target,
+        outDir,
+        templateHooksDir: join(
+          SOURCE_TOOLS,
+          "data",
+          "plugin-hooks-template",
+        ),
+        lockTimeoutMs: 25,
+      });
+      expect(existsSync(outDir)).toBe(true);
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      if (previousGrace === undefined) {
+        delete process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
+      } else {
+        process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS = previousGrace;
+      }
       rmSync(lockDir, { recursive: true, force: true });
     }
   });

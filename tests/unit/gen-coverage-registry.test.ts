@@ -634,6 +634,20 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
   });
 
+  test("spawning the root aidlc.ts dispatcher derives cli", () => {
+    const src = [
+      "// covers: subcommand:aidlc-utility:plugin-validate",
+      'import { spawnSync } from "node:child_process";',
+      "const BUN = process.execPath;",
+      'const DISPATCHER = "../../dist/claude/.claude/tools/aidlc.ts";',
+      'test("x", () => {',
+      '  const r = spawnSync(BUN, [DISPATCHER, "plugin", "validate"]);',
+      "  expect(r.status).toBe(0);",
+      "});",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
+  });
+
   test("runOrchestrateNext derives cli through the shared spawned-engine helper", () => {
     const src = [
       "// covers: subcommand:aidlc-orchestrate:next",
@@ -856,6 +870,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t121-stop-hook-enforce.test.ts",
     "integration/t195-stop-hook-compose-carveout.test.ts",
     "integration/t311-gate-sensor-enforcement.test.ts",
+    // t327 spawns the public aidlc.ts dispatcher to prove the documented plugin
+    // authoring routes reach the standalone validator and shared builder.
+    "integration/t327-plugin-author-routes.test.ts",
     "integration/t327-stop-hook-subagent-inflight.test.ts",
     "integration/t127-single-stage-invariant.test.ts",
     "integration/t128-custom-runner.test.ts",

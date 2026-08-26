@@ -11621,6 +11621,30 @@ function acquireOwnerStampedLock(
   return null;
 }
 
+export type OwnerStampedLockRun<T> =
+  | { acquired: false }
+  | { acquired: true; value: T };
+
+export function runWithOwnerStampedLock<T>(
+  lockDir: string,
+  maxRetries: number,
+  retryMs: number,
+  action: () => T,
+): OwnerStampedLockRun<T> {
+  const receipt = acquireOwnerStampedLock(lockDir, maxRetries, retryMs);
+  if (!receipt) return { acquired: false };
+  const onExit = () => {
+    releaseCanonicalOwnerStampedLock(receipt);
+  };
+  process.on("exit", onExit);
+  try {
+    return { acquired: true, value: action() };
+  } finally {
+    const outcome = releaseCanonicalOwnerStampedLock(receipt);
+    if (outcome !== "retryable") process.off("exit", onExit);
+  }
+}
+
 function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
   return acquireOwnerStampedLock(lockDir, 100, 10);
 }

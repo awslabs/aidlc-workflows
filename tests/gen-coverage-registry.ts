@@ -733,14 +733,15 @@ export function claudeDependenciesOf(_fileName: string, src: string): ClaudeDepe
  *        stay {tui} and never spuriously gain {cli}.)
  *    2. A RUNTIME spawn — `spawnSync`/`spawn`/`execSync`/`execFileSync`/`Bun.spawn*`
  *       whose runtime is `BUN` / `process.execPath` / a literal `"bun"` or `"node"` —
- *       whose argv targets an `aidlc-*.ts` tool. The tool is matched whether it is an
- *       inline string literal (`spawnSync(BUN,["…/aidlc-state.ts"])`) OR a const bound
- *       to one (`const GRAPH_TS = join(TOOLS_DIR,"aidlc-graph.ts"); spawnSync(BUN,[GRAPH_TS,…])`),
+ *       whose argv targets the `aidlc.ts` dispatcher or an `aidlc-*.ts` tool. The
+ *       target is matched whether it is an inline string literal
+ *       (`spawnSync(BUN,["…/aidlc-state.ts"])`) OR a const bound to one
+ *       (`const GRAPH_TS = join(TOOLS_DIR,"aidlc-graph.ts"); spawnSync(BUN,[GRAPH_TS,…])`),
  *       since the const definition survives in the code view (imports/comments are stripped,
  *       but a `const X = "…aidlc-*.ts"` is real code).
  *    3. A `bash` spawn (`spawnSync("bash",…)` / `execFileSync("bash",…)`) of `run-tests.sh`.
  *
- *  WHY gate on a real spawn and not a bare `aidlc-*.ts` mention: 12 deterministic floor
+ *  WHY gate on a real spawn and not a bare `aidlc*.ts` mention: 12 deterministic floor
  *  tests reference a tool ONLY through a multi-line `import { … } from "…/aidlc-lib.ts"`
  *  whose path lands on a CONTINUATION line the import-strip misses — they call the lib
  *  IN-PROCESS and must stay {none}. Requiring (spawn primitive ∧ runtime ∧ shipped target)
@@ -749,9 +750,11 @@ function drivesCliSurface(code: string): boolean {
   // 1. claude in print mode (NOT --version).
   if (drivesClaudePrintSurface(code)) return true;
 
-  // The shipped targets: an aidlc-*.ts tool, or the run-tests.sh runner — as a
-  // string literal anywhere in the code view (inline arg OR a `const X = "…"` def).
-  const hasAidlcToolLiteral = /["'][^"']*\baidlc-[A-Za-z0-9_-]+\.ts["']/.test(code);
+  // The shipped targets: the aidlc.ts dispatcher, an aidlc-*.ts tool, or the
+  // run-tests.sh runner — as a string literal anywhere in the code view
+  // (inline arg OR a `const X = "…"` def).
+  const hasAidlcToolLiteral =
+    /["'][^"']*\baidlc(?:-[A-Za-z0-9_-]+)?\.ts["']/.test(code);
   const hasRunnerLiteral = /["'][^"']*\brun-tests\.sh["']/.test(code);
   if (!hasAidlcToolLiteral && !hasRunnerLiteral) return false;
 

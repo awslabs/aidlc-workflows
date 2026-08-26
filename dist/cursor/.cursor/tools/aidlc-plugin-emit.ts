@@ -34,6 +34,7 @@ import {
   scanPluginFiles,
   walkPluginFiles,
 } from "./aidlc-plugin-validate.ts";
+import { runWithOwnerStampedLock } from "./aidlc-lib.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 
@@ -112,11 +113,6 @@ export function pluginBuildLockPath(outDir: string): string {
   return join(tmpdir(), "aidlc-plugin-build-locks", key);
 }
 
-function waitForLockRetry(): void {
-  const wait = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(wait, 0, 0, PLUGIN_BUILD_LOCK_RETRY_MS);
-}
-
 function withPluginBuildOutputLock<T>(
   outDir: string,
   timeoutMs: number,
@@ -124,31 +120,18 @@ function withPluginBuildOutputLock<T>(
 ): T {
   const lockDir = pluginBuildLockPath(outDir);
   mkdirSync(dirname(lockDir), { recursive: true, mode: 0o700 });
-  const started = Date.now();
-  while (true) {
-    try {
-      mkdirSync(lockDir, { mode: 0o700 });
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (Date.now() - started >= timeoutMs) {
-        throw new Error(
-          `could not acquire plugin build output lock "${lockDir}" within ${timeoutMs}ms`,
-        );
-      }
-      waitForLockRetry();
-    }
-  }
-  try {
-    writeFileSync(
-      join(lockDir, "owner.json"),
-      `${JSON.stringify({ pid: process.pid, output: canonicalOutputPath(outDir) })}\n`,
-      "utf-8",
+  const result = runWithOwnerStampedLock(
+    lockDir,
+    Math.max(0, Math.floor(timeoutMs / PLUGIN_BUILD_LOCK_RETRY_MS)),
+    PLUGIN_BUILD_LOCK_RETRY_MS,
+    action,
+  );
+  if (!result.acquired) {
+    throw new Error(
+      `could not acquire plugin build output lock "${lockDir}" within ${timeoutMs}ms`,
     );
-    return action();
-  } finally {
-    rmSync(lockDir, { recursive: true, force: true });
   }
+  return result.value;
 }
 
 export function readPluginTargets(path: string): PluginTargetTable {
