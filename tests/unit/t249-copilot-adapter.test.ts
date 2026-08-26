@@ -1903,7 +1903,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     ]);
     expect(stops.filter((result) => result.stdout.includes('"decision":"block"'))).toHaveLength(1);
     // Lock contention fails open, so the released Stop may not persist its count.
-    expect([1, 2]).toContain(marker(dir).stop_count);
+    const concurrentStopCount = marker(dir).stop_count;
+    expect(concurrentStopCount === 1 || concurrentStopCount === 2).toBe(true);
     rewriteMarker(dir, (value) => { value.unit = "unit-b"; });
     expect((JSON.parse(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout) as { decision?: string }).decision).toBe("block");
     expect(marker(dir).stop_count).toBe(1);
