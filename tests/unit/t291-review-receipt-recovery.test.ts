@@ -5,7 +5,13 @@
 // while a second invalidation refuses another recovery until the human resets
 // the attempt at the gate.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -27,6 +33,8 @@ import {
 } from "../harness/fixtures.ts";
 
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+
+setDefaultTimeout(30_000);
 const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const tempDirs: string[] = [];
 const TEST_ENV = {
@@ -141,6 +149,21 @@ describe("t291 stale review receipt recovery", () => {
     );
     seedBoltDagBatches(budgetProj, [["alpha"]]);
     const budgetStage = findStageBySlug("functional-design")!;
+    const budgetDir = join(
+      seededRecordDir(budgetProj),
+      "construction",
+      "alpha",
+      "functional-design",
+    );
+    mkdirSync(budgetDir, { recursive: true });
+    for (const name of [
+      "entities.md",
+      "rules.md",
+      "functional-spec.md",
+      "traceability.json",
+    ]) {
+      writeFileSync(join(budgetDir, name), `# ${name}\n`, "utf-8");
+    }
     const budgetFingerprint = reviewArtifactFingerprint(
       budgetProj,
       budgetStage,

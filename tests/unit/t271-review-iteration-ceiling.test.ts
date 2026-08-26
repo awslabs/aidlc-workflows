@@ -1,6 +1,6 @@
 // covers: function:isAutonomousSwarmStage, function:reviewArtifactSnapshot,
 // function:validateReviewAppendix, function:reviewCompletionMatchesRequest,
-// function:reviewRequestBindingFromBlock
+// function:reviewRequestBindingFromBlock, function:reviewAppendixDigest
 //
 // t271 — engine-enforced review iteration ceiling (aidlc-log review).
 //
@@ -51,6 +51,7 @@ import {
   boltSlugForUnit,
   freshReviewReceipts,
   readAllAuditShards,
+  reviewAppendixDigest,
   reviewArtifactFingerprint,
   reviewArtifactSnapshot,
   resolveStage,
@@ -1947,5 +1948,140 @@ describe("t271 review iteration ceiling", () => {
     expect(audit).not.toContain("**Event**: REVIEW_REQUESTED");
     expect(audit).not.toContain("**Event**: REVIEW_COMPLETED");
     expect(audit).not.toContain("## Forged review");
+  });
+
+  test("a pre-request appendix cannot be replayed as fresh reviewer authority", () => {
+    const proj = seedProject("feature");
+    const body = "reviewed requirements\n";
+    const staleAppendix = reviewAppendix(
+      "aidlc-product-lead-agent",
+      1,
+      "READY",
+    );
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      `${body}${staleAppendix}`,
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+
+    expect(
+      runReview(proj, request, { AIDLC_TEST_KEEP_REVIEW: "1" }).status,
+    ).toBe(0);
+    const requested = auditBlocks(proj, "REVIEW_REQUESTED")[0];
+    const priorDigest = auditBlockField(
+      requested,
+      "Review Appendix Prior Digest",
+    );
+    expect(priorDigest).toBe(
+      reviewAppendixDigest(Buffer.from(staleAppendix, "utf-8")),
+    );
+
+    // No artifact byte changed after the request: the pre-existing canonical
+    // appendix must not satisfy completion.
+    const replay = runReview(
+      proj,
+      [...request, "--verdict", "READY"],
+      { AIDLC_TEST_KEEP_REVIEW: "1" },
+    );
+    expect(replay.status).not.toBe(0);
+    expect(replay.stderr).toContain("not fresh reviewer evidence");
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+    expect(readFileSync(artifact, "utf-8")).toBe(`${body}${staleAppendix}`);
+
+    // The request-first flow still permits deleting the stale appendix and
+    // appending a freshly written one; only unchanged bytes are refused.
+    writeFileSync(
+      artifact,
+      `${body}${reviewAppendix(
+        "aidlc-product-lead-agent",
+        1,
+        "READY",
+        "Fresh reviewer pass over the requested bytes.",
+      )}`,
+      "utf-8",
+    );
+    const fresh = runReview(
+      proj,
+      [...request, "--verdict", "READY"],
+      { AIDLC_TEST_KEEP_REVIEW: "1" },
+    );
+    expect(fresh.status, fresh.stderr).toBe(0);
+    const completed = auditBlocks(proj, "REVIEW_COMPLETED")[0];
+    expect(
+      auditBlockField(completed, "Review Appendix Prior Digest"),
+    ).toBe(priorDigest);
+  });
+
+  test("an attempt reset cannot reuse the previous attempt's appendix for the same reviewer, iteration, and verdict", () => {
+    const proj = seedProject("feature");
+    const body = "reviewed requirements\n";
+    const artifact = writeReviewedArtifact(proj, "requirements-analysis", body);
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+
+    // Attempt 1: normal request -> reviewer appendix -> READY receipt.
+    expect(runReview(proj, request).status).toBe(0);
+    expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
+    const attemptOneAppendix = readFileSync(artifact, "utf-8").slice(
+      body.length,
+    );
+    expect(attemptOneAppendix).toContain("## Review");
+
+    // Attempt reset: ordinals restart at 1 while the attempt-1 appendix is
+    // still present in the artifact.
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "requirements-analysis",
+      Agent: "aidlc-product-agent",
+    }, proj);
+
+    expect(
+      runReview(proj, request, { AIDLC_TEST_KEEP_REVIEW: "1" }).status,
+    ).toBe(0);
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(2);
+    expect(
+      auditBlockField(requests[1], "Review Appendix Prior Digest"),
+    ).toBe(reviewAppendixDigest(Buffer.from(attemptOneAppendix, "utf-8")));
+
+    // Same reviewer, same iteration ordinal, same verdict, zero byte changes:
+    // the attempt-1 appendix must not become attempt-2 reviewer evidence.
+    const replay = runReview(
+      proj,
+      [...request, "--verdict", "READY"],
+      { AIDLC_TEST_KEEP_REVIEW: "1" },
+    );
+    expect(replay.status).not.toBe(0);
+    expect(replay.stderr).toContain("not fresh reviewer evidence");
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+
+    // A genuinely re-written appendix for the reset attempt completes.
+    writeFileSync(
+      artifact,
+      `${body}${reviewAppendix(
+        "aidlc-product-lead-agent",
+        1,
+        "READY",
+        "Re-reviewed after the attempt reset.",
+      )}`,
+      "utf-8",
+    );
+    const fresh = runReview(
+      proj,
+      [...request, "--verdict", "READY"],
+      { AIDLC_TEST_KEEP_REVIEW: "1" },
+    );
+    expect(fresh.status, fresh.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(2);
   });
 });

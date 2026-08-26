@@ -4448,6 +4448,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewAppendixDigest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewArtifactBytesSnapshot",
       "minMechanism": "none",
       "coveredBy": [

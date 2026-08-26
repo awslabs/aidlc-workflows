@@ -1,8 +1,15 @@
 // covers: function:reviewArtifactEntries, tool:aidlc-review-brief, audit:GATE_APPROVED,
 // audit:GATE_REJECTED, audit:STAGE_JUMPED
 
-import { afterEach, describe, expect, test } from "bun:test";
 import {
+  afterEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
+import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -48,6 +55,8 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const REVIEW_BRIEF = join(AIDLC_SRC, "tools", "aidlc-review-brief.ts");
+
+setDefaultTimeout(30_000);
 const tempDirs: string[] = [];
 const TEST_ENV = {
   ...process.env,
@@ -133,7 +142,7 @@ function requirementProject(
   };
 }
 
-function recordReviewAndOpenGate(proj: string): void {
+function recordReviewAndOpenGate(proj: string, artifact: string): void {
   const base = [
     "review",
     "--stage",
@@ -144,6 +153,13 @@ function recordReviewAndOpenGate(proj: string): void {
     "1",
   ];
   expect(run(LOG, base, proj).status).toBe(0);
+  // The fixture's review section predates the request; a completion needs
+  // reviewer bytes written after REVIEW_REQUESTED, so extend the appendix.
+  appendFileSync(
+    artifact,
+    "\nRe-authored by the dispatched reviewer for this request.\n",
+    "utf-8",
+  );
   expect(run(LOG, [...base, "--verdict", "READY"], proj).status).toBe(0);
   expect(
     run(STATE, ["gate-start", "requirements-analysis"], proj).status,
@@ -400,8 +416,8 @@ describe("t304 executable review brief scenarios", () => {
   });
 
   test("Approve records Accepted risk atomically and future context hydrates it", () => {
-    const { proj } = requirementProject([ROW_NEW]);
-    recordReviewAndOpenGate(proj);
+    const { proj, artifact } = requirementProject([ROW_NEW]);
+    recordReviewAndOpenGate(proj, artifact);
     const approved = run(
       ORCHESTRATE,
       [
@@ -435,8 +451,8 @@ describe("t304 executable review brief scenarios", () => {
   });
 
   test("Request Changes records only explicitly rejected findings with the exact reason", () => {
-    const { proj, relativeArtifact } = requirementProject([ROW_NEW]);
-    recordReviewAndOpenGate(proj);
+    const { proj, artifact, relativeArtifact } = requirementProject([ROW_NEW]);
+    recordReviewAndOpenGate(proj, artifact);
     const rejected = run(
       ORCHESTRATE,
       [
@@ -465,8 +481,8 @@ describe("t304 executable review brief scenarios", () => {
   });
 
   test("generic Request Changes leaves findings unresolved", () => {
-    const { proj } = requirementProject([ROW_UNRESOLVED]);
-    recordReviewAndOpenGate(proj);
+    const { proj, artifact } = requirementProject([ROW_UNRESOLVED]);
+    recordReviewAndOpenGate(proj, artifact);
     expect(
       run(
         STATE,

@@ -41,6 +41,7 @@ import {
   recoveryGuidance,
   reviewCompletionMatchesRequest,
   reviewArtifactSnapshot,
+  reviewAppendixDigest,
   reviewRequestBindingFromBlock,
   resolveBoltDag,
   reviewAttemptWindow,
@@ -1577,6 +1578,7 @@ function handleReview(args: string[]): void {
           const legacyUpgrade =
             requestBinding.appendixArtifact === null ||
             requestBinding.appendixOffset === null ||
+            requestBinding.priorAppendixDigest === null ||
             (node.workspace_requires &&
               requestBinding.sourceFingerprint === null) ||
             (node.workspace_requires &&
@@ -1616,6 +1618,9 @@ function handleReview(args: string[]): void {
           fields["Review Appendix Offset"] = String(
             requestBinding.appendixOffset ?? snapshot.appendixOffset,
           );
+          fields["Review Appendix Prior Digest"] =
+            requestBinding.priorAppendixDigest ??
+            reviewAppendixDigest(snapshot.appendix);
           if (requestBinding.sourceFingerprint !== null) {
             fields["Source Fingerprint"] = requestBinding.sourceFingerprint;
           }
@@ -1710,6 +1715,9 @@ function handleReview(args: string[]): void {
         fields["Artifact Fingerprint"] = snapshot.requestFingerprint;
         fields["Review Appendix Artifact"] = snapshot.appendixArtifact;
         fields["Review Appendix Offset"] = String(snapshot.appendixOffset);
+        fields["Review Appendix Prior Digest"] = reviewAppendixDigest(
+          snapshot.appendix,
+        );
         stampRequestedSourceBinding(node);
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
@@ -1776,6 +1784,13 @@ function handleReview(args: string[]): void {
             "does not carry a modern review appendix binding.",
         );
       }
+      if (requestBinding.priorAppendixDigest === null) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+            `iteration ${iteration} does not pin the pre-request appendix state. ` +
+            "Modernize that exact request with --retry-pending before recording the verdict.",
+        );
+      }
       const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
         requireRequiredArtifacts,
         boltDag: unitResolution ?? undefined,
@@ -1817,6 +1832,19 @@ function handleReview(args: string[]): void {
             "iteration; --retry-pending cannot rebaseline changed content.",
         );
       }
+      if (
+        snapshot.appendix.length > 0 &&
+        reviewAppendixDigest(snapshot.appendix) ===
+          requestBinding.priorAppendixDigest
+      ) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": the review appendix is ` +
+            `byte-identical to the section that already existed before REVIEW_REQUESTED ` +
+            `iteration ${iteration}, so it is not fresh reviewer evidence. Have the ` +
+            "reviewer replace it with a newly written `## Review` section for this " +
+            "iteration, then record the verdict.",
+        );
+      }
       const incompleteFallback =
         snapshot.appendix.length === 0 &&
         pendingRequest.retried &&
@@ -1839,6 +1867,8 @@ function handleReview(args: string[]): void {
       fields["Review Appendix Offset"] = String(
         requestBinding.appendixOffset,
       );
+      fields["Review Appendix Prior Digest"] =
+        requestBinding.priorAppendixDigest;
       // Bind the terminal receipt to the workspace source state the reviewer
       // inspected. Only workspace-writing stages carry this binding. A newly
       // unbindable receipt records that explicitly so completion fails closed;

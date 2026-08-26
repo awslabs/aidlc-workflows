@@ -6871,6 +6871,21 @@ export interface ReviewArtifactSnapshot {
   appendix: Buffer;
 }
 
+/**
+ * Canonical audit binding for the bytes after a review appendix offset.
+ * `none` pins the verified absence of any pre-request appendix; a sha256
+ * digest pins the exact suffix that already existed when REVIEW_REQUESTED
+ * was recorded. Completion refuses an appendix whose bytes still match the
+ * request-time digest, so a `## Review` section that predates the request
+ * (for example one surviving an attempt reset) can never be replayed as
+ * fresh reviewer evidence.
+ */
+export function reviewAppendixDigest(appendix: Buffer): string {
+  return appendix.length === 0
+    ? "none"
+    : `sha256:${createHash("sha256").update(appendix).digest("hex")}`;
+}
+
 function existingReviewAppendixOffset(body: Buffer): number | null {
   let text: string;
   try {
@@ -7232,6 +7247,7 @@ function renderReviewMarkdownAuthority(
 }
 
 const REVIEW_FINGERPRINT_RE = /^sha256:[0-9a-f]{64}$/;
+const REVIEW_APPENDIX_DIGEST_RE = /^(?:none|sha256:[0-9a-f]{64})$/;
 const SOURCE_FINGERPRINT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/;
 const UNIT_SOURCE_FINGERPRINT_RE = /^(?:sha256:[0-9a-f]{64}|unbindable)$/;
 
@@ -7239,6 +7255,7 @@ export interface ReviewRequestBinding {
   artifactFingerprint: string;
   appendixArtifact: string | null;
   appendixOffset: number | null;
+  priorAppendixDigest: string | null;
   sourceFingerprint: string | null;
   unitSourceFingerprint: string | null;
   recoveryCause: ReviewRecoveryCause | null;
@@ -7265,6 +7282,17 @@ export function reviewRequestBindingFromBlock(
     if (!/^[0-9]+$/.test(rawOffset)) return null;
     appendixOffset = Number(rawOffset);
     if (!Number.isSafeInteger(appendixOffset)) return null;
+  }
+  const priorAppendixDigest = auditBlockField(
+    block,
+    "Review Appendix Prior Digest",
+  );
+  if (
+    priorAppendixDigest !== null &&
+    (appendixArtifact === null ||
+      !REVIEW_APPENDIX_DIGEST_RE.test(priorAppendixDigest))
+  ) {
+    return null;
   }
   const sourceFingerprint = auditBlockField(block, "Source Fingerprint");
   if (
@@ -7295,6 +7323,7 @@ export function reviewRequestBindingFromBlock(
     artifactFingerprint,
     appendixArtifact,
     appendixOffset,
+    priorAppendixDigest,
     sourceFingerprint,
     unitSourceFingerprint,
     recoveryCause,
@@ -7336,6 +7365,14 @@ export function reviewCompletionMatchesRequest(
       ? request.appendixOffset !== null
       : !/^[0-9]+$/.test(completionAppendixOffset) ||
         Number(completionAppendixOffset) !== request.appendixOffset)
+  ) {
+    return false;
+  }
+
+  if (
+    request.priorAppendixDigest !== null &&
+    auditBlockField(completionBlock, "Review Appendix Prior Digest") !==
+      request.priorAppendixDigest
   ) {
     return false;
   }
