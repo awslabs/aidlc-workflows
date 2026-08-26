@@ -34,6 +34,23 @@ command -v bun    >/dev/null && echo "✓ bun installed"          || echo "✗ I
 
 This implementation ships configured for **AWS Bedrock**. The shipped `.claude/settings.json` sets:
 
+### Why Bedrock is the shipped default
+
+The Claude distribution needs a predictable runtime baseline across the
+orchestrator and its tier-pinned subagents. Bedrock lets the distribution name
+exact global inference profiles and their context variants, so a workflow does
+not silently pick different model aliases or context windows on different
+machines. It also uses the standard AWS SDK credential chain and IAM controls,
+which lets teams manage access without committing provider keys to a project.
+The repository's live Claude test environment uses the same provider baseline.
+
+This is a distribution default, not an AI-DLC methodology requirement. AI-DLC
+does not call the Bedrock API directly. To use the direct Anthropic API or
+another Claude Code-supported setup, remove the Bedrock-specific environment
+and model pins from the installed `.claude/settings.json`, then configure Claude
+Code normally. The workflow contract is unchanged; the selected models still
+need enough context for the orchestrator and delegated agents.
+
 | Variable | Value | Purpose |
 |----------|-------|---------|
 | `CLAUDE_CODE_USE_BEDROCK` | `1` | Routes Claude Code through Bedrock |
