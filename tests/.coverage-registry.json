@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 672,
+    "total": 674,
     "enumeratedByClass": {
-      "function": 407,
+      "function": 409,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 216,
+      "function": 218,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -977,6 +977,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:_posixGateLibraryCandidatesForTests",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:_resetAgentsForTests",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1002,6 +1014,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:_setAuditLockFaultHooksForTests",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

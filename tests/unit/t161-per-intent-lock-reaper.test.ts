@@ -1,4 +1,6 @@
-// covers: function:auditLockDir, function:acquireAuditLock, function:releaseAuditLock, function:withAuditLock, function:holdsAuditLock
+// covers: function:auditLockDir, function:acquireAuditLock, function:releaseAuditLock,
+// function:withAuditLock, function:holdsAuditLock,
+// function:_posixGateLibraryCandidatesForTests, function:_setAuditLockFaultHooksForTests
 //
 // t161 — P3 per-intent lock keying + stale-lock reaper. Mechanism: in-process
 // for the keying invariants + the reaper liveness logic (deterministic, no LLM,
