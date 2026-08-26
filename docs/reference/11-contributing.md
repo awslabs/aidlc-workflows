@@ -116,7 +116,7 @@ prose never hand-derives that path.
 `project-description` and `document-input` use the same read-only direct-utility
 shape. Both consuming stages invoke `project-description` first: a marked
 record must decode its exact `project-description.json` string, while an
-unmarked pre-2.6.105 record explicitly falls back to the legacy `Project` state
+unmarked pre-2.6.109 record explicitly falls back to the legacy `Project` state
 field. They invoke
 `bun <harness-dir>/tools/aidlc-utility.ts document-input` after writing the
 selected path with the native file-write tool to the active record's fixed
