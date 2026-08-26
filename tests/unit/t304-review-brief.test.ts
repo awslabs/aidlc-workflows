@@ -6,15 +6,20 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   findStageBySlug,
   readAllAuditShards,
+  reviewArtifactEntries,
+  sourcePathKey,
+  writeUnitSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  acceptedRiskDispositionField,
   hydrateReviewArtifactContexts,
   parseReviewArtifact,
   readReviewArtifactContexts,
@@ -31,7 +36,9 @@ import {
   createTestProject,
   seedAidlcMemory,
   seedBoltDag,
+  seededAuditDir,
   seededRecordDir,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -143,6 +150,103 @@ function recordReviewAndOpenGate(proj: string): void {
   ).toBe(0);
 }
 
+function perUnitReviewProject(
+  stageSlug: "functional-design" | "code-generation",
+  units: string[],
+): { proj: string; artifacts: Map<string, string> } {
+  const proj = createTestProject();
+  tempDirs.push(proj);
+  seedAidlcMemory(proj);
+  seedStateFile(proj, "state-construction.md");
+  seedBoltDag(proj, units);
+  const artifacts = new Map<string, string>();
+  const files = stageSlug === "functional-design"
+    ? ["entities.md", "rules.md", "functional-spec.md", "traceability.json"]
+    : [
+      "code-generation-plan.md",
+      "unit-test-instructions.md",
+      "code-summary.md",
+      "traceability.json",
+    ];
+  for (const [index, unit] of units.entries()) {
+    const dir = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      stageSlug,
+    );
+    mkdirSync(dir, { recursive: true });
+    for (const file of files) {
+      writeFileSync(join(dir, file), `# ${file}\n`, "utf-8");
+    }
+    const artifact = join(dir, files[0]);
+    const relativeArtifact = relative(proj, artifact).replaceAll("\\", "/");
+    writeFileSync(
+      artifact,
+      reviewMarkdown(
+        "NOT-READY",
+        [
+          `| R-0${index + 1} | Major | ${relativeArtifact} > section | ${unit} concern | Fix ${unit} | New |`,
+        ],
+      ),
+      "utf-8",
+    );
+    artifacts.set(unit, relativeArtifact);
+  }
+  return { proj, artifacts };
+}
+
+function seedReviewedPerUnitStage(
+  proj: string,
+  stageSlug: string,
+  unit: string,
+  findingId: string,
+): string {
+  const stage = findStageBySlug(stageSlug)!;
+  const entries = reviewArtifactEntries(proj, stage, unit) ?? [];
+  const primary = entries.find((entry) =>
+    entry.path !== null && entry.required && entry.path.endsWith(".md")
+  );
+  if (primary?.path === null || primary === undefined) {
+    throw new Error(`No reviewable artifact for ${stageSlug}/${unit}`);
+  }
+  for (const entry of entries) {
+    if (entry.path === null) continue;
+    mkdirSync(dirname(entry.path), { recursive: true });
+    writeFileSync(entry.path, `# ${entry.logicalPath}\n`, "utf-8");
+  }
+  const artifact = relative(proj, primary.path).replaceAll("\\", "/");
+  writeFileSync(
+    primary.path,
+    reviewMarkdown(
+      "NOT-READY",
+      [
+        `| ${findingId} | Major | ${artifact} > section | ${stageSlug} concern | Re-check ${stageSlug} | New |`,
+      ],
+    ),
+    "utf-8",
+  );
+  return artifact;
+}
+
+function auditBlock(
+  title: string,
+  timestamp: string,
+  event: string,
+  fields: Record<string, string>,
+): string {
+  return [
+    `## ${title}`,
+    "",
+    `**Timestamp**: ${timestamp}`,
+    `**Event**: ${event}`,
+    ...Object.entries(fields).map(([name, value]) => `**${name}**: ${value}`),
+    "",
+    "---",
+    "",
+  ].join("\n");
+}
+
 const ROW_NEW =
   "| R-01 | Minor | aidlc/spaces/default/intents/fixture/inception/requirements-analysis/requirements.md > FR-1 | Deadline is missing | Add a delivery date | New |";
 const ROW_UNRESOLVED =
@@ -192,6 +296,59 @@ describe("t304 executable review brief scenarios", () => {
     expect(second.findings[0].status).toBe("Resolved");
     expect(renderFindingsContext([second])).toContain(
       "requirements-analysis-questions.md > Q4",
+    );
+  });
+
+  test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {
+    const { proj, artifacts } = perUnitReviewProject(
+      "functional-design",
+      ["unit-a", "unit-b"],
+    );
+    const rendered = run(
+      REVIEW_BRIEF,
+      [
+        "review",
+        "--stage",
+        "functional-design",
+        "--why",
+        "first",
+        "--unit",
+        "unit-b",
+      ],
+      proj,
+    );
+    expect(rendered.status, rendered.out).toBe(0);
+
+    const displayed = new Set<string>();
+    let currentArtifact = "";
+    for (const line of rendered.stdout.split(/\r?\n/)) {
+      const artifact = /^\*\*Review artifact:\*\* `([^`]+)`$/.exec(line);
+      if (artifact) {
+        currentArtifact = artifact[1];
+        continue;
+      }
+      const finding = /^\| (R-[0-9]+) \|/.exec(line);
+      if (finding && currentArtifact) {
+        displayed.add(`${currentArtifact}#${finding[1]}`);
+      }
+    }
+
+    const stage = findStageBySlug("functional-design")!;
+    const serialized = acceptedRiskDispositionField(proj, stage);
+    expect(serialized).toBeString();
+    const dispositioned = new Set(
+      (
+        JSON.parse(serialized!) as {
+          dispositions: Array<{ artifact: string; id: string }>;
+        }
+      ).dispositions.map((finding) => `${finding.artifact}#${finding.id}`),
+    );
+    expect([...displayed].sort()).toEqual([...dispositioned].sort());
+    expect(displayed).toEqual(
+      new Set([
+        `${artifacts.get("unit-a")}#R-01`,
+        `${artifacts.get("unit-b")}#R-02`,
+      ]),
     );
   });
 
@@ -282,7 +439,7 @@ describe("t304 executable review brief scenarios", () => {
     ).toBe(0);
   });
 
-  test("stale artifact brief names a changed secondary output and the primary review requiring re-check", () => {
+  test("stale artifact brief retains the changed output through the required recovery review", () => {
     const { proj, questions, relativeArtifact } = requirementProject([ROW_NEW]);
     appendAuditEntry(
       "REVIEW_COMPLETED",
@@ -303,6 +460,28 @@ describe("t304 executable review brief scenarios", () => {
       },
       proj,
     );
+    appendAuditEntry(
+      "REVIEW_REQUESTED",
+      {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+        Iteration: "2",
+        Recovery: "stale-receipt",
+        "Artifact Fingerprint": `sha256:${"b".repeat(64)}`,
+      },
+      proj,
+    );
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+        Iteration: "2",
+        Verdict: "READY",
+        "Artifact Fingerprint": `sha256:${"b".repeat(64)}`,
+      },
+      proj,
+    );
     const stage = findStageBySlug("requirements-analysis")!;
     const brief = renderReviewBrief(proj, stage, "stale");
     const relativeQuestions = relative(proj, questions).replaceAll("\\", "/");
@@ -310,6 +489,213 @@ describe("t304 executable review brief scenarios", () => {
     expect(brief).toContain(
       `**Downstream reviews requiring re-check:** \`${relativeArtifact}#Review\``,
     );
+    appendAuditEntry(
+      "GATE_REJECTED",
+      {
+        Stage: "requirements-analysis",
+        Feedback: "Revise the changed questions",
+      },
+      proj,
+    );
+    const nextAttempt = renderReviewBrief(proj, stage, "stale");
+    expect(nextAttempt).not.toContain(relativeQuestions);
+    expect(nextAttempt).not.toContain(`${relativeArtifact}#Review`);
+  });
+
+  test("cross-shard equal-second gate and write do not invent an ordering", () => {
+    const { proj, questions, relativeArtifact } = requirementProject([ROW_NEW]);
+    const auditDir = seededAuditDir(proj);
+    rmSync(auditDir, { recursive: true, force: true });
+    mkdirSync(auditDir, { recursive: true });
+    writeFileSync(
+      join(auditDir, "a.md"),
+      auditBlock(
+        "Review Completed",
+        "2026-08-26T00:00:00Z",
+        "REVIEW_COMPLETED",
+        {
+          Stage: "requirements-analysis",
+          Reviewer: "aidlc-product-lead-agent",
+          Iteration: "1",
+          Verdict: "READY",
+          "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+        },
+      ) +
+        auditBlock(
+          "Artifact Updated",
+          "2026-08-26T00:00:01Z",
+          "ARTIFACT_UPDATED",
+          {
+            File: questions,
+            Tool: "Edit",
+          },
+        ),
+      "utf-8",
+    );
+    writeFileSync(
+      join(auditDir, "b.md"),
+      auditBlock(
+        "Gate Rejected",
+        "2026-08-26T00:00:01Z",
+        "GATE_REJECTED",
+        {
+          Stage: "requirements-analysis",
+          Feedback: "Revise the questions",
+        },
+      ),
+      "utf-8",
+    );
+
+    const stage = findStageBySlug("requirements-analysis")!;
+    const brief = renderReviewBrief(proj, stage, "stale");
+    expect(brief).not.toContain(relative(proj, questions).replaceAll("\\", "/"));
+    expect(brief).not.toContain(`${relativeArtifact}#Review`);
+  });
+
+  test("cross-shard equal-second gate does not consume backward-jump invalidation paths", () => {
+    const { proj, relativeArtifact } = requirementProject([ROW_NEW]);
+    seedStateFile(proj, "state-construction.md");
+    seedBoltDag(proj, ["widget-checkout"]);
+    const functionalRelative = seedReviewedPerUnitStage(
+      proj,
+      "functional-design",
+      "widget-checkout",
+      "R-03",
+    );
+    const auditDir = seededAuditDir(proj);
+    rmSync(auditDir, { recursive: true, force: true });
+    mkdirSync(auditDir, { recursive: true });
+    writeFileSync(
+      join(auditDir, "a.md"),
+      auditBlock(
+        "Gate Approved",
+        "2026-08-26T00:00:01Z",
+        "GATE_APPROVED",
+        {
+          Stage: "functional-design",
+          Decision: "Approve",
+        },
+      ),
+      "utf-8",
+    );
+    writeFileSync(
+      join(auditDir, "b.md"),
+      auditBlock(
+        "Stage Jumped",
+        "2026-08-26T00:00:01Z",
+        "STAGE_JUMPED",
+        {
+          Direction: "BACKWARD",
+          Source: "code-generation",
+          Target: "requirements-analysis",
+          Scope: "feature",
+          "Changed Upstream Artifacts": JSON.stringify([relativeArtifact]),
+          "Invalidated Downstream Artifacts": JSON.stringify([
+            functionalRelative,
+          ]),
+          "Invalidated Downstream Reviews": JSON.stringify([
+            `${functionalRelative}#Review`,
+          ]),
+        },
+      ),
+      "utf-8",
+    );
+
+    const stage = findStageBySlug("requirements-analysis")!;
+    const brief = renderReviewBrief(proj, stage, "stale");
+    expect(brief).toContain(`\`${functionalRelative}\``);
+    expect(brief).toContain(`\`${functionalRelative}#Review\``);
+  });
+
+  test("stale source brief retains changed claimed paths through recovery and a later Unit review", () => {
+    const { proj, artifacts } = perUnitReviewProject(
+      "code-generation",
+      ["unit-a", "unit-b"],
+    );
+    const key = sourcePathKey("", "src/app.ts");
+    const claims = { claims: new Set([key]), prefixes: [] };
+    const before = writeUnitSourceSnapshot(
+      proj,
+      "code-generation",
+      "unit-a",
+      new Map([[key, `100644 ${"a".repeat(40)}`]]),
+      claims,
+      "b".repeat(64),
+    );
+    const after = writeUnitSourceSnapshot(
+      proj,
+      "code-generation",
+      "unit-a",
+      new Map([[key, `100644 ${"c".repeat(40)}`]]),
+      claims,
+      "b".repeat(64),
+    );
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      {
+        Stage: "code-generation",
+        Reviewer: "aidlc-architecture-reviewer-agent",
+        Unit: "unit-a",
+        Iteration: "1",
+        Verdict: "READY",
+        "Artifact Fingerprint": `sha256:${"d".repeat(64)}`,
+        "Unit Source Fingerprint": before,
+      },
+      proj,
+    );
+    appendAuditEntry(
+      "REVIEW_REQUESTED",
+      {
+        Stage: "code-generation",
+        Reviewer: "aidlc-architecture-reviewer-agent",
+        Unit: "unit-a",
+        Iteration: "2",
+        Recovery: "stale-receipt",
+        "Artifact Fingerprint": `sha256:${"e".repeat(64)}`,
+        "Unit Source Fingerprint": after,
+      },
+      proj,
+    );
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      {
+        Stage: "code-generation",
+        Reviewer: "aidlc-architecture-reviewer-agent",
+        Unit: "unit-a",
+        Iteration: "2",
+        Verdict: "READY",
+        "Artifact Fingerprint": `sha256:${"e".repeat(64)}`,
+        "Unit Source Fingerprint": after,
+      },
+      proj,
+    );
+    const unitAArtifact = artifacts.get("unit-a")!;
+    appendAuditEntry(
+      "ARTIFACT_UPDATED",
+      {
+        File: join(proj, unitAArtifact),
+        Tool: "Edit",
+      },
+      proj,
+    );
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      {
+        Stage: "code-generation",
+        Reviewer: "aidlc-architecture-reviewer-agent",
+        Unit: "unit-b",
+        Iteration: "1",
+        Verdict: "READY",
+        "Artifact Fingerprint": `sha256:${"f".repeat(64)}`,
+      },
+      proj,
+    );
+
+    const stage = findStageBySlug("code-generation")!;
+    const brief = renderReviewBrief(proj, stage, "stale", "unit-b");
+    expect(brief).toContain("`src/app.ts`");
+    expect(brief).toContain(`\`${unitAArtifact}\``);
+    expect(brief).toContain(`${artifacts.get("unit-a")}#Review`);
   });
 
   test("reviewer-free stages cannot record finding dispositions", () => {
@@ -328,6 +714,17 @@ describe("t304 executable review brief scenarios", () => {
     const { proj, relativeArtifact } = requirementProject([ROW_NEW]);
     seedStateFile(proj, "state-construction.md");
     seedBoltDag(proj, ["widget-checkout"]);
+    const statePath = seededStateFile(proj);
+    const cleanState = readFileSync(statePath, "utf-8")
+      .replace(
+        "Per unit: widget-cart\n- [x] functional-design — EXECUTE\n- [x] nfr-requirements — EXECUTE\n",
+        "",
+      )
+      .replace("- [-] functional-design — EXECUTE", "- [x] functional-design — EXECUTE")
+      .replace("- [ ] nfr-requirements — EXECUTE", "- [x] nfr-requirements — EXECUTE")
+      .replace("- [ ] code-generation — EXECUTE", "- [-] code-generation — EXECUTE")
+      .replace("**Current Stage**: functional-design", "**Current Stage**: code-generation");
+    writeFileSync(statePath, cleanState, "utf-8");
     const functionalDir = join(
       seededRecordDir(proj),
       "construction",
@@ -340,6 +737,12 @@ describe("t304 executable review brief scenarios", () => {
     }
     const functional = join(functionalDir, "functional-spec.md");
     writeFileSync(functional, reviewMarkdown("READY", []), "utf-8");
+    const nfrRelative = seedReviewedPerUnitStage(
+      proj,
+      "nfr-requirements",
+      "widget-checkout",
+      "R-03",
+    );
     const jumped = run(
       JUMP,
       [
@@ -354,6 +757,27 @@ describe("t304 executable review brief scenarios", () => {
       proj,
     );
     expect(jumped.status, jumped.out).toBe(0);
+    appendAuditEntry(
+      "REVIEW_REQUESTED",
+      {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+        Iteration: "1",
+        "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+      },
+      proj,
+    );
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+        Iteration: "1",
+        Verdict: "READY",
+        "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+      },
+      proj,
+    );
 
     const stage = findStageBySlug("requirements-analysis")!;
     const brief = renderReviewBrief(proj, stage, "stale");
@@ -361,6 +785,25 @@ describe("t304 executable review brief scenarios", () => {
     expect(brief).toContain(`\`${relativeArtifact}\``);
     expect(brief).toContain(`\`${functionalRelative}\``);
     expect(brief).toContain(`\`${functionalRelative}#Review\``);
+    expect(brief).toContain(`\`${nfrRelative}\``);
+
+    appendAuditEntry(
+      "GATE_APPROVED",
+      {
+        Stage: "functional-design",
+        Decision: "Approve",
+      },
+      proj,
+    );
+    const nfrStage = findStageBySlug("nfr-requirements")!;
+    const laterBrief = renderReviewBrief(
+      proj,
+      nfrStage,
+      "stale",
+      "widget-checkout",
+    );
+    expect(laterBrief).toContain(`\`${nfrRelative}\``);
+    expect(laterBrief).not.toContain(functionalRelative);
   });
 
   test("Guide Me, self-edit, and Chat use the same exact pre-generation decision brief", () => {

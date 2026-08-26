@@ -8,10 +8,12 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import {
+  type AuditShardEvent,
   auditBlockField,
   extractMarkdownSection,
   findStageBySlug,
   readAuditShardEvents,
+  readUnitSourceSnapshot,
   recordDir,
   resolveAuditProjectPath,
   resolveProjectDir,
@@ -224,8 +226,9 @@ function workspaceArtifactPath(
     : toPosix(relative(projectDir, entry.path));
 }
 
-function entryUnit(logicalPath: string): string | undefined {
-  return /^construction\/([^/]+)\//.exec(logicalPath)?.[1];
+function entryUnit(logicalPath: string, stageSlug: string): string | undefined {
+  const match = /^construction\/([^/]+)\/([^/]+)\//.exec(logicalPath);
+  return match?.[2] === stageSlug ? match[1] : undefined;
 }
 
 export function readReviewArtifactContexts(
@@ -242,7 +245,7 @@ export function readReviewArtifactContexts(
     const parsed = parseReviewArtifact(
       readFileSync(entry.path, "utf-8"),
       artifact,
-      unit ?? entryUnit(entry.logicalPath),
+      unit ?? entryUnit(entry.logicalPath, stage.slug),
     );
     if (parsed) contexts.push(parsed);
   }
@@ -499,6 +502,83 @@ function parseAuditPathArray(value: string | null): string[] {
   }
 }
 
+function pathUnit(path: string, stageSlug: string): string | undefined {
+  const match = /(?:^|\/)construction\/([^/]+)\/([^/]+)\//.exec(path);
+  return match?.[2] === stageSlug ? match[1] : undefined;
+}
+
+function definitelyBefore(
+  first: Pick<AuditShardEvent, "timestamp" | "shard" | "pos">,
+  second: Pick<AuditShardEvent, "timestamp" | "shard" | "pos">,
+): boolean {
+  if (first.timestamp !== second.timestamp) {
+    return first.timestamp < second.timestamp;
+  }
+  return first.shard === second.shard && first.pos < second.pos;
+}
+
+function maximalEvents(events: AuditShardEvent[]): AuditShardEvent[] {
+  return events.filter((candidate, index) =>
+    !events.some((other, otherIndex) =>
+      otherIndex !== index && definitelyBefore(candidate, other)
+    )
+  );
+}
+
+function afterFrontier(
+  frontier: AuditShardEvent[],
+  event: AuditShardEvent,
+): boolean {
+  return frontier.every((boundary) => definitelyBefore(boundary, event));
+}
+
+function sourcePathDisplay(key: string): string | null {
+  const separator = key.indexOf("\0");
+  if (separator === -1 || key.indexOf("\0", separator + 1) !== -1) return null;
+  const repo = key.slice(0, separator);
+  const path = key.slice(separator + 1);
+  if (path.length === 0) return null;
+  return repo.length > 0 ? `${repo}/${path}` : path;
+}
+
+function changedUnitSourcePaths(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  beforeFingerprint: string | null,
+  afterFingerprint: string | null,
+): { paths: string[]; manifestChanged: boolean } {
+  if (!beforeFingerprint || !afterFingerprint) {
+    return { paths: [], manifestChanged: false };
+  }
+  const before = readUnitSourceSnapshot(
+    projectDir,
+    stageSlug,
+    unit,
+    beforeFingerprint,
+  );
+  const after = readUnitSourceSnapshot(
+    projectDir,
+    stageSlug,
+    unit,
+    afterFingerprint,
+  );
+  if (before === null || after === null) {
+    return { paths: [], manifestChanged: false };
+  }
+
+  const paths = new Set<string>();
+  for (const key of new Set([...before.listing.keys(), ...after.listing.keys()])) {
+    if (before.listing.get(key) === after.listing.get(key)) continue;
+    const display = sourcePathDisplay(key);
+    if (display !== null) paths.add(display);
+  }
+  return {
+    paths: [...paths].sort(),
+    manifestChanged: before.manifestSha256 !== after.manifestSha256,
+  };
+}
+
 export interface ReviewInvalidationDetails {
   changedUpstream: string[];
   invalidatedArtifacts: string[];
@@ -515,61 +595,243 @@ export function reviewInvalidationDetails(
     if (a.shard === b.shard) return a.pos - b.pos;
     return a.shardIndex - b.shardIndex;
   });
-  let latestReview = -1;
-  let latestJump = -1;
-  for (let i = 0; i < events.length; i++) {
-    if (
-      events[i].event === "REVIEW_COMPLETED" &&
-      auditBlockField(events[i].block, "Stage") === stage.slug
-    ) {
-      latestReview = i;
-    }
-    if (
-      events[i].event === "STAGE_JUMPED" &&
-      auditBlockField(events[i].block, "Direction") === "BACKWARD" &&
-      auditBlockField(events[i].block, "Changed Upstream Artifacts")
-    ) {
-      latestJump = i;
-    }
-  }
-  if (latestJump > latestReview) {
-    const jump = events[latestJump].block;
-    return {
-      changedUpstream: parseAuditPathArray(
-        auditBlockField(jump, "Changed Upstream Artifacts"),
-      ),
-      invalidatedArtifacts: parseAuditPathArray(
-        auditBlockField(jump, "Invalidated Downstream Artifacts"),
-      ),
-      invalidatedReviews: parseAuditPathArray(
-        auditBlockField(jump, "Invalidated Downstream Reviews"),
-      ),
-    };
-  }
+
+  // Equal-second rows from different shards are causally unordered. Keep the
+  // maximal boundary frontier instead of resolving ties by shard filename.
+  const attemptFrontier = maximalEvents(
+    events.filter((event) =>
+      event.event === "WORKFLOW_STARTED" ||
+      event.event === "STAGE_JUMPED" ||
+      (
+        (event.event === "GATE_APPROVED" ||
+          event.event === "GATE_REJECTED") &&
+        auditBlockField(event.block, "Stage") === stage.slug
+      )
+    ),
+  );
+  const inAttempt = (event: AuditShardEvent): boolean =>
+    afterFrontier(attemptFrontier, event);
 
   const currentArtifacts = new Set(
     (reviewArtifactEntries(projectDir, stage) ?? []).map((entry) =>
       workspaceArtifactPath(projectDir, entry)
     ),
   );
-  const changed = new Set<string>();
-  for (const event of events.slice(latestReview + 1)) {
-    if (event.event !== "ARTIFACT_CREATED" && event.event !== "ARTIFACT_UPDATED") {
+  const currentReviews = new Set(
+    contexts.map((context) => `${context.artifact}#Review`),
+  );
+  const changedUpstream = new Set<string>();
+  const invalidatedArtifacts = new Set<string>();
+  const invalidatedReviews = new Set<string>();
+
+  const addContextReviews = (unit?: string): void => {
+    const affected = unit
+      ? contexts.filter((context) => context.unit === unit)
+      : contexts;
+    for (const context of affected) {
+      invalidatedReviews.add(`${context.artifact}#Review`);
+    }
+  };
+
+  const collectArtifactChanges = (
+    reviewFrontier: AuditShardEvent[],
+    before?: AuditShardEvent,
+    unit?: string,
+  ): void => {
+    for (const event of events) {
+      if (
+        !inAttempt(event) ||
+        !afterFrontier(reviewFrontier, event) ||
+        (before !== undefined && !definitelyBefore(event, before))
+      ) {
+        continue;
+      }
+      if (
+        event.event !== "ARTIFACT_CREATED" &&
+        event.event !== "ARTIFACT_UPDATED"
+      ) {
+        continue;
+      }
+      const file = auditBlockField(event.block, "File");
+      if (!file) continue;
+      const normalized = toPosix(
+        relative(projectDir, resolveAuditProjectPath(projectDir, file)),
+      );
+      if (currentArtifacts.has(normalized)) {
+        const changedUnit = pathUnit(normalized, stage.slug);
+        if (
+          unit !== undefined &&
+          changedUnit !== undefined &&
+          changedUnit !== unit
+        ) {
+          continue;
+        }
+        changedUpstream.add(normalized);
+        addContextReviews(changedUnit ?? unit);
+        continue;
+      }
+      const sourceManifest =
+        /(?:^|\/)construction\/([^/]+)\/([^/]+)\/source-manifest\.json$/.exec(
+          normalized,
+        );
+      if (sourceManifest?.[2] === stage.slug) {
+        if (unit !== undefined && sourceManifest[1] !== unit) continue;
+        changedUpstream.add(normalized);
+        addContextReviews(sourceManifest[1]);
+      }
+    }
+  };
+
+  // Recovery is stamped on REVIEW_REQUESTED. Pair each recovery request with
+  // the receipt it replaces so those concrete changes survive the later
+  // REVIEW_COMPLETED row.
+  for (const event of events) {
+    if (
+      !inAttempt(event) ||
+      event.event !== "REVIEW_REQUESTED" ||
+      auditBlockField(event.block, "Stage") !== stage.slug ||
+      auditBlockField(event.block, "Recovery") !== "stale-receipt"
+    ) {
       continue;
     }
-    const file = auditBlockField(event.block, "File");
-    if (!file) continue;
-    const normalized = toPosix(
-      relative(projectDir, resolveAuditProjectPath(projectDir, file)),
+    const unit = auditBlockField(event.block, "Unit") ?? undefined;
+    const staleReviewFrontier = maximalEvents(
+      events.filter((candidate) =>
+        inAttempt(candidate) &&
+        candidate.event === "REVIEW_COMPLETED" &&
+        auditBlockField(candidate.block, "Stage") === stage.slug &&
+        (auditBlockField(candidate.block, "Unit") ?? undefined) === unit &&
+        definitelyBefore(candidate, event)
+      ),
     );
-    if (currentArtifacts.has(normalized)) changed.add(normalized);
+    if (staleReviewFrontier.length === 0) continue;
+    collectArtifactChanges(staleReviewFrontier, event, unit);
+
+    if (unit && staleReviewFrontier.length === 1) {
+      const staleReview = staleReviewFrontier[0];
+      const sourceChanges = changedUnitSourcePaths(
+        projectDir,
+        stage.slug,
+        unit,
+        auditBlockField(
+          staleReview.block,
+          "Unit Source Fingerprint",
+        ),
+        auditBlockField(event.block, "Unit Source Fingerprint"),
+      );
+      for (const path of sourceChanges.paths) changedUpstream.add(path);
+      if (sourceChanges.paths.length > 0) addContextReviews(unit);
+      if (sourceChanges.manifestChanged) {
+        const record = recordDir(projectDir);
+        if (record !== null) {
+          changedUpstream.add(
+            toPosix(
+              relative(
+                projectDir,
+                resolve(
+                  record,
+                  "construction",
+                  unit,
+                  stage.slug,
+                  "source-manifest.json",
+                ),
+              ),
+            ),
+          );
+          addContextReviews(unit);
+        }
+      }
+    }
   }
+
+  // Preserve newly stale receipts per Unit. A later receipt for Unit B must not
+  // move Unit A's scan window past an A-specific write.
+  const reviewScopes = new Map<string, AuditShardEvent[]>();
+  for (const event of events) {
+    if (
+      !inAttempt(event) ||
+      event.event !== "REVIEW_COMPLETED" ||
+      auditBlockField(event.block, "Stage") !== stage.slug
+    ) {
+      continue;
+    }
+    const key = auditBlockField(event.block, "Unit") ?? "";
+    const scope = reviewScopes.get(key) ?? [];
+    scope.push(event);
+    reviewScopes.set(key, scope);
+  }
+  for (const [key, reviews] of reviewScopes) {
+    collectArtifactChanges(
+      maximalEvents(reviews),
+      undefined,
+      key.length > 0 ? key : undefined,
+    );
+  }
+
+  // A backward jump is itself an attempt boundary. Remove downstream paths
+  // whose own stage gate has since consumed them, while preserving the changed
+  // upstream source as context for stages that still require re-check.
+  const boundary = attemptFrontier.length === 1
+    ? attemptFrontier[0]
+    : undefined;
+  if (
+    boundary?.event === "STAGE_JUMPED" &&
+    auditBlockField(boundary.block, "Direction") === "BACKWARD"
+  ) {
+    const jumpChanged = parseAuditPathArray(
+      auditBlockField(boundary.block, "Changed Upstream Artifacts"),
+    );
+    const jumpArtifacts = parseAuditPathArray(
+      auditBlockField(boundary.block, "Invalidated Downstream Artifacts"),
+    );
+    const jumpReviews = parseAuditPathArray(
+      auditBlockField(boundary.block, "Invalidated Downstream Reviews"),
+    );
+    const consumedArtifacts = new Set<string>();
+    const consumedReviews = new Set<string>();
+    for (const event of events) {
+      if (
+        event.event !== "GATE_APPROVED" &&
+        event.event !== "GATE_REJECTED"
+      ) {
+        continue;
+      }
+      // Consume paths only when the gate is causally proven after the jump.
+      // Equal-second cross-shard ties remain pending rather than hiding work
+      // that may have been invalidated after that gate.
+      if (!definitelyBefore(boundary, event)) continue;
+      const consumedStageSlug = auditBlockField(event.block, "Stage");
+      const consumedStage = consumedStageSlug
+        ? findStageBySlug(consumedStageSlug)
+        : undefined;
+      if (!consumedStage) continue;
+      for (const entry of reviewArtifactEntries(projectDir, consumedStage) ?? []) {
+        const path = workspaceArtifactPath(projectDir, entry);
+        consumedArtifacts.add(path);
+        consumedReviews.add(`${path}#Review`);
+      }
+    }
+    const pendingArtifacts = jumpArtifacts.filter((path) =>
+      !consumedArtifacts.has(path)
+    );
+    const pendingReviews = jumpReviews.filter((path) =>
+      !consumedReviews.has(path)
+    );
+    const relevant =
+      jumpChanged.some((path) => currentArtifacts.has(path)) ||
+      pendingArtifacts.some((path) => currentArtifacts.has(path)) ||
+      pendingReviews.some((path) => currentReviews.has(path));
+    if (relevant) {
+      for (const path of jumpChanged) changedUpstream.add(path);
+      for (const path of pendingArtifacts) invalidatedArtifacts.add(path);
+      for (const path of pendingReviews) invalidatedReviews.add(path);
+    }
+  }
+
   return {
-    changedUpstream: [...changed],
-    invalidatedArtifacts: [],
-    invalidatedReviews: changed.size > 0
-      ? contexts.map((context) => `${context.artifact}#Review`)
-      : [],
+    changedUpstream: [...changedUpstream].sort(),
+    invalidatedArtifacts: [...invalidatedArtifacts].sort(),
+    invalidatedReviews: [...invalidatedReviews].sort(),
   };
 }
 
@@ -580,8 +842,11 @@ export function renderReviewBrief(
   unit?: string,
   fallbackFinding?: string,
 ): string {
+  // Per-Unit review dispatches are isolated, but their final human approval is
+  // one stage-level gate. The last Unit is only the execution cursor.
+  const contextUnit = stage.for_each === "unit-of-work" ? undefined : unit;
   let contexts = hydrateReviewArtifactContexts(
-    readReviewArtifactContexts(projectDir, stage, unit),
+    readReviewArtifactContexts(projectDir, stage, contextUnit),
     readReviewFindingDispositions(projectDir, stage.slug),
   );
   if (contexts.length === 0 && fallbackFinding) {

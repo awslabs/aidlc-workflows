@@ -1043,7 +1043,9 @@ omits the reviewer block entirely and the stage runs reviewless.
    <first|revision|stale>` renders the exact stage, ordinary-language outcome,
    review artifact(s), hydrated findings, decision effects, and concrete
    upstream/downstream invalidation paths (`reviewer_max_iterations` is 1,
-   engine-enforced).
+   engine-enforced). The final gate of a per-Unit stage renders every Unit
+   covered by that single approval; Unit filtering remains limited to reviewer
+   dispatch context.
    On `adversarial`: READY → proceed to the learnings ritual then the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer

@@ -188,12 +188,15 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    **Review brief (required at every reviewer-backed human gate).** Before the
    structured approval question, run
    `bun .kiro/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --why <first|revision|stale>`;
-   add `--unit "<directive.unit>"` when presenting a per-unit gate. Select
-   `first` after the initial review, `revision` after a requested revision, and
-   `stale` after artifact/source invalidation or a backward jump. Print stdout
-   verbatim. It deterministically renders the stage, plain-language outcome,
-   path-specific reason, every review artifact and hydrated findings table, and
-   the two decision effects without exposing the raw verdict token. On the
+   on the final `gate: true` re-entry of a per-unit stage, omit `--unit` because
+   that one human decision covers every Unit and approval records dispositions
+   for every Unit's open findings. Unit-filtered `context` output remains mandatory for
+   each reviewer dispatch. Select `first` after the initial review, `revision`
+   after a requested revision, and `stale` after artifact/source invalidation or
+   a backward jump. Print stdout verbatim. It deterministically renders the
+   stage, plain-language outcome, path-specific reason, every review artifact
+   and hydrated findings table, and the two decision effects without exposing
+   the raw verdict token. On the
    terminal incomplete-attempt fallback, add
    `--fallback-finding "review did not complete within its turn budget"` so the
    same table shape names the recorded finding.
