@@ -6412,9 +6412,17 @@ export interface FreshReviewReceipts {
   unitIterations: Map<string, number>;
   stagePending: PendingReviewProgress | null;
   unitPending: Map<string, PendingReviewProgress>;
-  /** Units whose latest paired Bolt lifecycle row is BOLT_COMPLETED. */
+  /**
+   * Units with a merge-confirmed Bolt attempt. A name-only attempt is
+   * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
+   * confirmed only when a matching later AUDIT_MERGED proves the state and
+   * audit merge sequence landed.
+   */
   mergedBoltUnits: Set<string>;
-  /** Units whose latest paired Bolt lifecycle row is BOLT_STARTED. */
+  /**
+   * Units whose latest paired Bolt attempt is still open or completed but
+   * awaiting merge evidence.
+   */
   openBoltUnits: Set<string>;
 }
 
@@ -6877,6 +6885,7 @@ const REVIEW_RECEIPT_EVENTS = new Set([
   "BOLT_STARTED",
   "BOLT_COMPLETED",
   "BOLT_FAILED",
+  "AUDIT_MERGED",
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
   "REVIEW_REQUESTED",
@@ -6905,7 +6914,11 @@ function boltEventUnits(event: AuditShardEvent): string[] {
 /**
  * One audit snapshot supplies review freshness, no-DAG artifact enumeration,
  * request admission, and gate coverage. Bolt terminal rows pair by slug when
- * both rows carry one, and otherwise by Unit name.
+ * both rows carry one, and otherwise by Unit name. BOLT_COMPLETED alone is
+ * terminal only for a name-only, non-worktree attempt; a completion that
+ * involves a slug on either row is completion-pending-merge and becomes
+ * merged only when a matching later AUDIT_MERGED proves the state and audit
+ * merge sequence landed on main.
  */
 export function reviewAttemptWindow(
   projectDir: string,
@@ -6974,9 +6987,23 @@ export function reviewAttemptWindow(
   const attempts: Array<{
     unit: string;
     slug: string | null;
-    state: "open" | "merged" | "failed";
+    state: "open" | "completed" | "merged" | "failed";
   }> = [];
   const applyBoltEvent = (event: AuditShardEvent): void => {
+    if (event.event === "AUDIT_MERGED") {
+      // Merge evidence: audit-merge emits AUDIT_MERGED only after the state
+      // merge succeeded and the worktree delta landed on main. It confirms
+      // the newest completion-pending attempt for its slug; it cannot
+      // resurrect a failed attempt or invent one that never completed.
+      const slug = auditBlockField(event.block, "Bolt slug");
+      if (slug === null) return;
+      const attemptIndex = attempts.findLastIndex(
+        (attempt) =>
+          attempt.slug === slug && attempt.state === "completed",
+      );
+      if (attemptIndex !== -1) attempts[attemptIndex].state = "merged";
+      return;
+    }
     const units = boltEventUnits(event);
     const slug = auditBlockField(event.block, "Bolt slug");
     if (event.event === "BOLT_STARTED") {
@@ -6985,6 +7012,7 @@ export function reviewAttemptWindow(
       }
       return;
     }
+    const completion = event.event === "BOLT_COMPLETED";
     for (const unit of units) {
       let attemptIndex = -1;
       if (slug !== null) {
@@ -6993,28 +7021,47 @@ export function reviewAttemptWindow(
             attempt.state === "open" && attempt.slug === slug,
         );
         if (attemptIndex === -1) {
+          // A confirmed merge is final for its attempt: a duplicate
+          // completion replay must not demote it back to pending, and a
+          // later fragment-cleanup BOLT_FAILED must not erase it.
           attemptIndex = attempts.findLastIndex(
-            (attempt) => attempt.slug === slug,
+            (attempt) =>
+              attempt.slug === slug && attempt.state !== "merged",
           );
         }
       }
       if (attemptIndex === -1) {
+        // A slugless completion pairs only name-only attempts: it must not
+        // close a slug-backed (worktree) attempt whose merge sequence never
+        // ran. A slugless failure still closes the newest open attempt,
+        // covering discard/abort rows emitted with --name only.
         attemptIndex = attempts.findIndex(
           (attempt) =>
             attempt.state === "open" &&
             attempt.unit === unit &&
-            (slug === null || attempt.slug === null),
+            ((slug === null && !completion) || attempt.slug === null),
         );
       }
       if (attemptIndex === -1 && slug === null) {
         attemptIndex = attempts.findLastIndex(
-          (attempt) => attempt.unit === unit,
+          (attempt) =>
+            attempt.unit === unit &&
+            attempt.state !== "merged" &&
+            (!completion || attempt.slug === null),
         );
       }
       if (attemptIndex === -1) continue;
       const attempt = attempts[attemptIndex];
-      attempt.state =
-        event.event === "BOLT_COMPLETED" ? "merged" : "failed";
+      if (!completion) {
+        attempt.state = "failed";
+        continue;
+      }
+      if (attempt.slug === null && slug !== null) {
+        // A slug-carrying completion of a name-only start binds the merge
+        // slug to the attempt so the later AUDIT_MERGED can confirm it.
+        attempt.slug = slug;
+      }
+      attempt.state = attempt.slug !== null ? "completed" : "merged";
     }
   };
   if (perUnit) {
@@ -7031,7 +7078,8 @@ export function reviewAttemptWindow(
         (event) =>
           event.event === "BOLT_STARTED" ||
           event.event === "BOLT_COMPLETED" ||
-          event.event === "BOLT_FAILED",
+          event.event === "BOLT_FAILED" ||
+          event.event === "AUDIT_MERGED",
       );
       const byShard = new Map<string, AuditShardEvent[]>();
       for (const event of boltEvents) {
@@ -7045,7 +7093,9 @@ export function reviewAttemptWindow(
           ? 0
           : event.event === "BOLT_FAILED"
             ? 1
-            : 2;
+            : event.event === "BOLT_COMPLETED"
+              ? 2
+              : 3;
       while (queues.length > 0) {
         let selected = 0;
         for (let index = 1; index < queues.length; index++) {
@@ -7072,7 +7122,9 @@ export function reviewAttemptWindow(
   const openBoltUnits = new Set<string>();
   for (const attempt of attempts) {
     if (attempt.state === "merged") mergedBoltUnits.add(attempt.unit);
-    else if (attempt.state === "open") openBoltUnits.add(attempt.unit);
+    else if (attempt.state === "open" || attempt.state === "completed") {
+      openBoltUnits.add(attempt.unit);
+    }
   }
   return {
     allEvents,

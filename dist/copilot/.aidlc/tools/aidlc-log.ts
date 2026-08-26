@@ -969,6 +969,10 @@ function reviewAttemptSummary(
       tied.length > 1 &&
       tiedShards.size > 1 &&
       tied.every((event) => {
+        // AUDIT_MERGED is referee merge plumbing (main-emitted, merge
+        // protected); it carries no reviewer authority and cannot make the
+        // tie ambiguous for this unit's lifecycle accounting.
+        if (event.event === "AUDIT_MERGED") return true;
         if (
           event.event !== "BOLT_STARTED" &&
           event.event !== "BOLT_COMPLETED" &&

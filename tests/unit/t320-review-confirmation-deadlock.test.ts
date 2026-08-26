@@ -436,6 +436,14 @@ describe("t320 review/summary deadlock prevention", () => {
       },
       proj,
     );
+    appendAuditEntry(
+      "AUDIT_MERGED",
+      {
+        "Bolt slug": slug,
+        "Entries Merged": "1",
+      },
+      proj,
+    );
     const postMerge = run(
       LOG,
       [

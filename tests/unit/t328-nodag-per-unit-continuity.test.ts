@@ -129,6 +129,26 @@ function completeBolt(proj: string, unit: string, batch = "1"): void {
   );
 }
 
+// Merge evidence for a slug-backed completion: `aidlc-audit audit-merge`
+// appends the worktree delta and this receipt to main only after the state
+// merge succeeded, so a synthesized AUDIT_MERGED stands in for a landed
+// merge sequence.
+function confirmMerge(proj: string, unit: string, slug?: string): void {
+  appendAuditEntry(
+    "AUDIT_MERGED",
+    {
+      "Bolt slug": slug ?? boltSlugForUnit(unit),
+      "Entries Merged": "1",
+    },
+    proj,
+  );
+}
+
+function mergeBolt(proj: string, unit: string, batch = "1"): void {
+  completeBolt(proj, unit, batch);
+  confirmMerge(proj, unit);
+}
+
 function startNameOnlyBolt(
   proj: string,
   unit: string,
@@ -318,6 +338,13 @@ describe("t328 no-DAG per-unit review continuity", () => {
           "Error summary": "merge failed",
         }),
       );
+      writeFileSync(
+        join(auditDir, "m-merge.md"),
+        auditBlock("2026-08-24T22:00:01Z", "AUDIT_MERGED", {
+          "Bolt slug": boltSlugForUnit("alpha"),
+          "Entries Merged": "1",
+        }),
+      );
 
       const refused = finalize(proj);
       expect(refused.status).not.toBe(0);
@@ -370,6 +397,13 @@ describe("t328 no-DAG per-unit review continuity", () => {
           "Bolt names": "alpha",
           "Batch number": "1",
           "Bolt slug": boltSlugForUnit("alpha"),
+        }),
+      );
+      writeFileSync(
+        join(auditDir, "m-merge.md"),
+        auditBlock("2026-08-24T22:00:01Z", "AUDIT_MERGED", {
+          "Bolt slug": boltSlugForUnit("alpha"),
+          "Entries Merged": "1",
         }),
       );
 
@@ -463,6 +497,10 @@ describe("t328 no-DAG per-unit review continuity", () => {
             "Batch number": "1",
             "Bolt slug": "alpha-old",
           }),
+          auditBlock("2026-08-25T00:00:03Z", "AUDIT_MERGED", {
+            "Bolt slug": "alpha-old",
+            "Entries Merged": "1",
+          }),
         ].join(""),
       );
 
@@ -492,8 +530,8 @@ describe("t328 no-DAG per-unit review continuity", () => {
     }
     recordReview(proj, "alpha");
     recordReview(proj, "beta");
-    completeBolt(proj, "alpha");
-    completeBolt(proj, "beta");
+    mergeBolt(proj, "alpha");
+    mergeBolt(proj, "beta");
 
     const compile = run(RUNTIME, ["compile"], proj);
     expect(compile.status, compile.out).toBe(0);
@@ -533,7 +571,7 @@ describe("t328 no-DAG per-unit review continuity", () => {
     }
     recordReview(proj, "alpha");
     completeNameOnlyBolt(proj, "alpha");
-    completeBolt(proj, "beta");
+    mergeBolt(proj, "beta");
 
     const refused = finalize(proj);
     expect(refused.status).not.toBe(0);
@@ -554,12 +592,12 @@ describe("t328 no-DAG per-unit review continuity", () => {
     forgeUnitReceipt(withoutObserved, "ghost");
     const noHistory = finalize(withoutObserved);
     expect(noHistory.status).not.toBe(0);
-    expect(noHistory.out).toContain("no fresh REVIEW_COMPLETED");
+    expect(noHistory.out).toContain("has not reviewed the current output");
 
     const withObserved = project();
     seedOutputs(withObserved, "alpha");
     startBolt(withObserved, "alpha");
-    completeBolt(withObserved, "alpha");
+    mergeBolt(withObserved, "alpha");
     forgeUnitReceipt(withObserved, "ghost");
     const refused = finalize(withObserved);
     expect(refused.status).not.toBe(0);
@@ -577,7 +615,7 @@ describe("t328 no-DAG per-unit review continuity", () => {
       startBolt(proj, unit);
     }
     recordReview(proj, "alpha");
-    completeBolt(proj, "alpha");
+    mergeBolt(proj, "alpha");
     completeBolt(proj, "beta");
     failBolt(proj, "beta");
 
@@ -593,7 +631,7 @@ describe("t328 no-DAG per-unit review continuity", () => {
     seedOutputs(proj, "alpha");
     seedOutputs(proj, "ghost");
     startBolt(proj, "alpha");
-    completeBolt(proj, "alpha");
+    mergeBolt(proj, "alpha");
 
     const request = requestReview(proj, "alpha");
     expect(request.status, request.out).toBe(0);
@@ -631,7 +669,7 @@ describe("t328 no-DAG per-unit review continuity", () => {
     for (const unit of ["alpha", "beta"]) {
       seedOutputs(proj, unit);
       startBolt(proj, unit);
-      completeBolt(proj, unit);
+      mergeBolt(proj, unit);
     }
     recordReview(proj, undefined);
 
@@ -652,7 +690,7 @@ describe("t328 no-DAG per-unit review continuity", () => {
     expect(verdict.status, verdict.out).toBe(0);
     const beforeMerge = receipts(proj);
 
-    completeBolt(proj, "alpha");
+    mergeBolt(proj, "alpha");
     const afterMerge = receipts(proj);
     const refused = finalize(proj);
     expect(refused.status).not.toBe(0);
@@ -664,5 +702,82 @@ describe("t328 no-DAG per-unit review continuity", () => {
     expect(afterMerge.stageVerdict).toBeNull();
     expect(afterMerge.stageStale).toBe(true);
     expect([...afterMerge.mergedBoltUnits]).toEqual(["alpha"]);
+  });
+
+  test("a worktree completion without merge evidence stays pending and recovers once the merge lands", () => {
+    const proj = project();
+    seedOutputs(proj, "alpha");
+    startBolt(proj, "alpha");
+    completeBolt(proj, "alpha");
+
+    // Crash window: `aidlc-bolt complete --merge` emits BOLT_COMPLETED
+    // before the state and audit merges. Completion alone is pending, not
+    // merged: the gate must not demand or accept a post-merge review yet.
+    const pending = receipts(proj);
+    expect([...pending.mergedBoltUnits]).toEqual([]);
+    expect([...pending.openBoltUnits]).toEqual(["alpha"]);
+    const refused = finalize(proj);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).not.toContain("merged Bolt unit alpha");
+    const premature = requestReview(proj, "alpha");
+    expect(premature.status).not.toBe(0);
+    expect(premature.out).toContain(
+      "no matching active or merged Bolt attempt was found",
+    );
+
+    // Recovery: re-running complete --merge lands AUDIT_MERGED, which
+    // confirms the pending completion and opens the per-unit review path.
+    confirmMerge(proj, "alpha");
+    const merged = receipts(proj);
+    expect([...merged.mergedBoltUnits]).toEqual(["alpha"]);
+    expect([...merged.openBoltUnits]).toEqual([]);
+    const owes = finalize(proj);
+    expect(owes.status).not.toBe(0);
+    expect(owes.out).toContain("merged Bolt unit alpha");
+    recordReview(proj, "alpha");
+    expect(finalize(proj).status).toBe(0);
+  });
+
+  test("a slugless completion cannot close a slug-backed attempt", () => {
+    const proj = project();
+    seedOutputs(proj, "alpha");
+    startBolt(proj, "alpha");
+    appendAuditEntry(
+      "BOLT_COMPLETED",
+      { "Bolt names": "alpha", "Batch number": "1" },
+      proj,
+    );
+
+    const observed = receipts(proj);
+    expect([...observed.mergedBoltUnits]).toEqual([]);
+    expect([...observed.openBoltUnits]).toEqual(["alpha"]);
+    const refused = finalize(proj);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).not.toContain("merged Bolt unit alpha");
+  });
+
+  test("a fragment-cleanup failure after merge evidence keeps the unit merged", () => {
+    const proj = project();
+    seedOutputs(proj, "alpha");
+    startBolt(proj, "alpha");
+    mergeBolt(proj, "alpha");
+    appendAuditEntry(
+      "BOLT_FAILED",
+      {
+        "Failed Bolt": "alpha",
+        "Bolt slug": boltSlugForUnit("alpha"),
+        "Error summary": "fragment-merge-failed",
+      },
+      proj,
+    );
+
+    const observed = receipts(proj);
+    expect([...observed.mergedBoltUnits]).toEqual(["alpha"]);
+    expect([...observed.openBoltUnits]).toEqual([]);
+    const refused = finalize(proj);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("merged Bolt unit alpha");
+    recordReview(proj, "alpha");
+    expect(finalize(proj).status).toBe(0);
   });
 });
