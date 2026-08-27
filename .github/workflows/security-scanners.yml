@@ -36,12 +36,14 @@ jobs:
           gitleaks --version
       - name: Run gitleaks (full history)
         id: gitleaks
+        env:
+          SCAN_REF: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           ARGS=""
           [ -f .gitleaks.toml ] && ARGS="$ARGS --config=.gitleaks.toml"
           [ -f .gitleaks-baseline.json ] && ARGS="$ARGS --baseline-path=.gitleaks-baseline.json"
           set +e
-          gitleaks git $ARGS --report-path=gitleaks-report_sarif.json --report-format=sarif .
+          gitleaks git $ARGS --log-opts="$SCAN_REF" --report-path=gitleaks-report_sarif.json --report-format=sarif .
           GITLEAKS_EXIT=$?
           set -e
           echo "exit_code=$GITLEAKS_EXIT" >> "$GITHUB_OUTPUT"
