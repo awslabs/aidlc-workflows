@@ -211,9 +211,18 @@ Expand your harness:
 ```bash
 cp -r dist/claude/.claude/ your-project/.claude/
 cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a sibling of .claude/, not inside it
+cp    dist/claude/.gitignore your-project/.gitignore # merge if you already have one
 ```
 
 The first line copies the engine — the orchestrator, stage files, agent personas, hooks, knowledge files, and default settings. The second copies the **workspace shell**: the pre-built `aidlc/spaces/default/memory/` method tree the engine reads. It ships as a **sibling** of `.claude/` (not inside it), so it must be copied separately — or copy the whole `dist/claude/` tree at once. `/aidlc --doctor` fails its "workspace shell ready" check if `aidlc/spaces/default/memory/` is missing.
+
+The third line copies the `.gitignore` AI-DLC ships for a workspace. Without it
+your first commit picks up the per-user cursors (`aidlc/active-space`,
+`aidlc/spaces/*/intents/active-intent`) and machine-local runtime
+(`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor caches,
+`spaces/*/knowledge/.sources.local.json`), which the `## Git Integration`
+section of the installed `.claude/CLAUDE.md` states are already excluded. Merge
+its entries if your project already has a `.gitignore`.
 
 Start (or fully restart) Claude Code from the project root, approve the project hooks when prompted or through `/hooks`, then fully restart Claude Code again so the approval takes effect; `/clear` is not enough. On managed fleets, if `/hooks` says hooks are restricted by policy, follow [Claude managed policy blocks project hooks](15-troubleshooting.md#claude-managed-policy-blocks-project-hooks).
 
@@ -227,6 +236,7 @@ mkdir -p your-project/.kiro your-project/aidlc
 cp -R dist/kiro/.kiro/. your-project/.kiro/
 cp -R dist/kiro/aidlc/. your-project/aidlc/    # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp dist/kiro/AGENTS.md your-project/AGENTS.md  # merge if you already have one
+cp dist/kiro/.gitignore your-project/.gitignore # merge if you already have one
 ```
 
 Then continue in [Running AI-DLC on Kiro CLI](harnesses/kiro-cli.md): prerequisites (Kiro CLI ≥ 2.6, a paid plan for Opus 4.8) and the shipped default-agent setting.
@@ -443,6 +453,7 @@ command -v bun    >/dev/null && echo "✓ bun"          || echo "✗ bun"
 # Install (engine + the workspace shell sibling)
 cp -r dist/claude/.claude/ your-project/.claude/
 cp -r dist/claude/aidlc/   your-project/aidlc/
+cp    dist/claude/.gitignore your-project/.gitignore
 
 # Launch Claude Code in your project
 cd your-project && claude
