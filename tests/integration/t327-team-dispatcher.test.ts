@@ -799,9 +799,15 @@ describe("t327 team construction dispatcher", () => {
     const teamPicker = nextDirective(team, {}, ["--scope", "feature"]);
     expect(teamPicker).toMatchObject({ kind: "ask" });
     const question = teamPicker.question as string;
-    expect(question).toContain("`team-work` (team construction, 2 units claimable)");
-    expect(question).toContain("`parked-work` (parked at code-generation)");
-    expect(question).toContain("`done-work` (complete)");
+    expect(question).toContain(
+      "`team-work` (record: `team-work-11111111`) (team construction, 2 units claimable)",
+    );
+    expect(question).toContain(
+      "`parked-work` (record: `parked-work-22222222`) (parked at code-generation)",
+    );
+    expect(question).toContain(
+      "`done-work` (record: `done-work-33333333`) (complete)",
+    );
 
     const parkedPath = join(
       team,
@@ -819,7 +825,7 @@ describe("t327 team construction dispatcher", () => {
     );
     const markerMissing = nextDirective(team, {}, ["--scope", "feature"]);
     expect(markerMissing.question as string).not.toContain(
-      "`parked-work` (parked at",
+      "`parked-work` (record: `parked-work-22222222`) (parked at",
     );
     writeFileSync(
       parkedPath,
@@ -830,7 +836,7 @@ describe("t327 team construction dispatcher", () => {
     );
     const staleByProgress = nextDirective(team, {}, ["--scope", "feature"]);
     expect(staleByProgress.question as string).not.toContain(
-      "`parked-work` (parked at",
+      "`parked-work` (record: `parked-work-22222222`) (parked at",
     );
 
     const solo = pickerFixture(false, 3);
@@ -840,7 +846,9 @@ describe("t327 team construction dispatcher", () => {
       ["--scope", "feature"],
     ).question as string;
     expect(soloQuestion).toContain(
-      "`team-work`, `parked-work`, `done-work`",
+      "`team-work` (record: `team-work-11111111`), " +
+        "`parked-work` (record: `parked-work-22222222`), " +
+        "`done-work` (record: `done-work-33333333`)",
     );
     expect(soloQuestion).not.toContain("team construction");
     expect(soloQuestion).not.toContain("parked at");
