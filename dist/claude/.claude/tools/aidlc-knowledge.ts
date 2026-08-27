@@ -35,9 +35,9 @@
 //   2. no path COMPONENT is a symlink (assertNoSymlinkInChainOrThrow) — a walk
 //      that validates a container and then trusts its contents will read a
 //      symlinked file inside an already-trusted directory;
-//   3. containment is re-checked AFTER realpathSync, and the bytes are read
-//      through readRegularFileNoFollowOrThrow so the identity checked is the
-//      identity read.
+//   3. containment is re-checked AFTER realpathSync, the contained identity is
+//      retained, and readRegularFileNoFollowOrThrow requires the opened
+//      descriptor to match it before reading.
 //
 // Steps 2 and 3 are separate on purpose. A containment check on the resolved
 // leaf answers "does this land inside?" but not "did we travel through
@@ -69,6 +69,7 @@ import {
   emitError,
   ensureDirSync,
   errorMessage,
+  type FileIdentity,
   intentsDir,
   isPidAlive,
   knowledgeDir,
@@ -780,10 +781,14 @@ function realpathOrSelf(p: string): string {
 //
 // The order matters and each step catches something the others cannot:
 //   lexical    — a `..` or absolute segment is refused before touching disk;
-//   per-part   — no COMPONENT is a symlink, so nothing can be repointed later;
+//   per-part   — no COMPONENT is a symlink at validation time;
 //   realpath   — resolve what is actually there;
 //   containment— re-check AFTER resolution, because that is when an escape
 //                becomes visible.
+//
+// This path-only helper does not bind a later open against a parent-directory
+// replacement. Direct document reads use resolveContainedFile below so the
+// descriptor must match the identity observed while containment still held.
 export function resolveContainedPath(anchorReal: string, relPath: string): string {
   const anchorNorm = realpathOrSelf(anchorReal);
   const candidate = assertNoSymlinkInChainOrThrow(anchorNorm, relPath);
@@ -798,6 +803,43 @@ export function resolveContainedPath(anchorReal: string, relPath: string): strin
   return real;
 }
 
+export interface ResolvedContainedFile {
+  readonly absPath: string;
+  readonly identity: FileIdentity;
+}
+
+function sameFileIdentity(
+  left: FileIdentity,
+  right: FileIdentity,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+/** Resolve a contained path and retain the identity that was validated there.
+ *
+ * The second resolution closes the gap between the first containment check and
+ * the identity snapshot: a parent swapped before the snapshot is either outside
+ * on the second check or resolves back to a different identity. A swap after
+ * this function returns is caught when the read descriptor is fstat-ed. */
+export function resolveContainedFile(
+  anchorReal: string,
+  relPath: string,
+): ResolvedContainedFile {
+  const absPath = resolveContainedPath(anchorReal, relPath);
+  const first = statSync(absPath);
+  const verifiedPath = resolveContainedPath(anchorReal, relPath);
+  const verified = statSync(verifiedPath);
+  if (verifiedPath !== absPath || !sameFileIdentity(first, verified)) {
+    throw new Error(
+      `path changed while validating project containment: ${relPath}`,
+    );
+  }
+  return {
+    absPath: verifiedPath,
+    identity: { dev: verified.dev, ino: verified.ino },
+  };
+}
+
 /** Read a document's bytes through the full boundary, and verify the digest if
  *  one is expected. A digest mismatch means the file changed under us, or that
  *  a row is pointing at a different file than it was written for. */
@@ -806,8 +848,14 @@ export function readDocumentBytes(
   what: string,
   expectedSha256?: string,
   maxBytes?: number,
+  expectedIdentity?: FileIdentity,
 ): Buffer {
-  const buf = readRegularFileNoFollowOrThrow(absPath, what, maxBytes);
+  const buf = readRegularFileNoFollowOrThrow(
+    absPath,
+    what,
+    maxBytes,
+    expectedIdentity,
+  );
   if (expectedSha256 !== undefined) {
     const actual = sha256Hex(buf);
     if (actual !== expectedSha256) {

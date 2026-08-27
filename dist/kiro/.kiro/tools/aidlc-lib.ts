@@ -11679,55 +11679,65 @@ export function authoritativeProjectDescription(raw: string): {
 } {
   const open = "<document>";
   const close = "</document>";
-  const outside: string[] = [];
-  let cursor = 0;
-  let pastedDocumentPresent = false;
+  const start = raw.indexOf(open);
+  const strayClose = raw.indexOf(close);
+  if (start < 0) {
+    if (strayClose >= 0) {
+      return {
+        description: "",
+        pastedDocumentPresent: false,
+        error: `project description has ${close} without a matching ${open}`,
+      };
+    }
+    return {
+      description: raw.trim(),
+      pastedDocumentPresent: false,
+    };
+  }
+  if (strayClose >= 0 && strayClose < start) {
+    return {
+      description: "",
+      pastedDocumentPresent: false,
+      error: `project description has ${close} before the next ${open}`,
+    };
+  }
 
-  for (;;) {
-    const start = raw.indexOf(open, cursor);
-    const strayClose = raw.indexOf(close, cursor);
-    if (start < 0) {
-      if (strayClose >= 0) {
-        return {
-          description: "",
-          pastedDocumentPresent,
-          error: `project description has ${close} without a matching ${open}`,
-        };
-      }
-      outside.push(raw.slice(cursor));
-      break;
-    }
-    if (strayClose >= 0 && strayClose < start) {
-      return {
-        description: "",
-        pastedDocumentPresent,
-        error: `project description has ${close} before the next ${open}`,
-      };
-    }
-    const end = raw.indexOf(close, start + open.length);
-    if (end < 0) {
-      return {
-        description: "",
-        pastedDocumentPresent,
-        error: `project description has ${open} without a matching ${close}`,
-      };
-    }
-    const nested = raw.indexOf(open, start + open.length);
-    if (nested >= 0 && nested < end) {
-      return {
-        description: "",
-        pastedDocumentPresent,
-        error: "project description has nested <document> blocks",
-      };
-    }
-    outside.push(raw.slice(cursor, start));
-    cursor = end + close.length;
-    pastedDocumentPresent = true;
+  const end = raw.indexOf(close, start + open.length);
+  if (end < 0) {
+    return {
+      description: "",
+      pastedDocumentPresent: false,
+      error: `project description has ${open} without a matching ${close}`,
+    };
+  }
+  const nested = raw.indexOf(open, start + open.length);
+  if (nested >= 0 && nested < end) {
+    return {
+      description: "",
+      pastedDocumentPresent: false,
+      error: "project description has nested <document> blocks",
+    };
+  }
+
+  const trailing = raw.slice(end + close.length);
+  if (trailing.includes(open) || trailing.includes(close)) {
+    return {
+      description: "",
+      pastedDocumentPresent: true,
+      error: "project description has repeated or additional <document> markers",
+    };
+  }
+  if (trailing.trim().length > 0) {
+    return {
+      description: "",
+      pastedDocumentPresent: true,
+      error: `project description has content after terminal ${close}`,
+    };
   }
 
   return {
-    description: outside.join("").trim(),
-    pastedDocumentPresent,
+    description: raw.slice(0, start).trim(),
+    pastedDocumentPresent: true,
   };
 }
 
@@ -13674,6 +13684,18 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
   return current;
 }
 
+export interface FileIdentity {
+  readonly dev: number;
+  readonly ino: number;
+}
+
+function sameFileIdentity(
+  left: FileIdentity,
+  right: FileIdentity,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
 // THE read boundary for any path that came from OUTSIDE the workspace — a CLI
 // flag, a value-transport file, a committed ledger row. Returns the contents of a
 // REGULAR file or throws; it never blocks indefinitely and never follows a link.
@@ -13691,7 +13713,9 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
 //   another if something swapped the name in between — and readFileSync follows
 //   symlinks, so the swap can redirect the read to any file this process can
 //   read. Opening ONCE with O_NOFOLLOW and fstat-ing THAT descriptor makes the
-//   identity checked the identity read; there is no second resolution to race.
+//   final-component identity checked the identity read. A caller that validated
+//   parent-chain containment first passes expectedIdentity as well, binding the
+//   opened descriptor to the file observed while that containment held.
 //
 // Throws (does not exit) so each caller can attach its own flag name and exit
 // code. `what` names the thing in the message: "--text-file", "source", ….
@@ -13699,6 +13723,7 @@ export function readRegularFileNoFollowOrThrow(
   path: string,
   what: string,
   maxBytes?: number,
+  expectedIdentity?: FileIdentity,
 ): Buffer {
   let fd: number;
   try {
@@ -13724,6 +13749,14 @@ export function readRegularFileNoFollowOrThrow(
   }
   try {
     const st = fstatSync(fd);
+    if (
+      expectedIdentity !== undefined &&
+      !sameFileIdentity(st, expectedIdentity)
+    ) {
+      throw changedDuringReadError(
+        `${what} changed after project-containment validation: ${path}`,
+      );
+    }
     if (!st.isFile()) {
       const kind = st.isFIFO()
         ? "a FIFO / named pipe"

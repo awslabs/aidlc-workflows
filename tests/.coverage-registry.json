@@ -3868,7 +3868,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-document-input.test.ts",
+          "file": "tests/unit/t329-document-input.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8872,7 +8872,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-document-input.test.ts",
+          "file": "tests/unit/t329-document-input.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9112,7 +9112,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-document-input.test.ts",
+          "file": "tests/unit/t329-document-input.test.ts",
           "mechanism": "cli"
         }
       ],

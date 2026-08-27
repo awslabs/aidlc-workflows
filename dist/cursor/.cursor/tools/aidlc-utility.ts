@@ -6312,7 +6312,7 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
     detectMimeType,
     EXTRACT_OUTPUT_CHAR_CAP,
     readDocumentBytes,
-    resolveContainedPath,
+    resolveContainedFile,
     UNTRUSTED_CONTENT_NOTICE,
     UNTRUSTED_PATH_NOTICE,
   } = await import("./aidlc-knowledge.ts");
@@ -6380,14 +6380,15 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
 
   const { absPath, bytes } = (() => {
     try {
-      const resolvedPath = resolveContainedPath(projectRoot, portablePath);
+      const resolved = resolveContainedFile(projectRoot, portablePath);
       return {
-        absPath: resolvedPath,
+        absPath: resolved.absPath,
         bytes: readDocumentBytes(
-          resolvedPath,
+          resolved.absPath,
           `document input ${JSON.stringify(portablePath)}`,
           undefined,
           documentInputByteCap,
+          resolved.identity,
         ),
       };
     } catch (error) {

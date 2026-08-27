@@ -6,6 +6,8 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
@@ -25,6 +27,10 @@ import {
   PROJECT_DESCRIPTION_FILE,
   stateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  readDocumentBytes,
+  resolveContainedFile,
+} from "../../core/tools/aidlc-knowledge.ts";
 
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const created: string[] = [];
@@ -65,7 +71,7 @@ const run = (dir: string) => runCommand(dir, "document-input");
 const runProjectDescription = (dir: string) =>
   runCommand(dir, "project-description");
 
-describe("t310 project-description and document-input boundaries", () => {
+describe("t329 project-description and document-input boundaries", () => {
   test("both consuming stages require fixed transport and inert document data", () => {
     for (const file of [
       join("core", "aidlc-common", "stages", "ideation", "intent-capture.md"),
@@ -284,6 +290,41 @@ describe("t310 project-description and document-input boundaries", () => {
     const linked = run(dir);
     expect(linked.status).not.toBe(0);
     expect(linked.stderr).toContain("symlink");
+  });
+
+  test("binds the read descriptor to the identity validated inside the project", () => {
+    const dir = project();
+    const outside = project();
+    const docs = join(dir, "docs");
+    mkdirSync(docs);
+    writeFileSync(join(docs, "vision.md"), "inside vision");
+    writeFileSync(join(outside, "vision.md"), "outside secret");
+
+    const resolved = resolveContainedFile(
+      realpathSync(dir),
+      "docs/vision.md",
+    );
+    renameSync(docs, join(dir, "docs-original"));
+    symlinkSync(
+      outside,
+      docs,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    expect(readFileSync(join(docs, "vision.md"), "utf-8")).toBe(
+      "outside secret",
+    );
+
+    let returned: string | undefined;
+    expect(() => {
+      returned = readDocumentBytes(
+        resolved.absPath,
+        'document input "docs/vision.md"',
+        undefined,
+        800_000,
+        resolved.identity,
+      ).toString("utf-8");
+    }).toThrow("changed after project-containment validation");
+    expect(returned).toBeUndefined();
   });
 
   test("refuses binary input with DocumentKB remediation", () => {

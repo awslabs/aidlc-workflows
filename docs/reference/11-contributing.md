@@ -116,13 +116,15 @@ prose never hand-derives that path.
 `project-description` and `document-input` use the same read-only direct-utility
 shape. Both consuming stages invoke `project-description` first: a marked
 record must decode its exact `project-description.json` string, while an
-unmarked pre-2.6.110 record explicitly falls back to the legacy `Project` state
+unmarked pre-2.6.115 record explicitly falls back to the legacy `Project` state
 field. They invoke
 `bun <harness-dir>/tools/aidlc-utility.ts document-input` after writing the
 selected path with the native file-write tool to the active record's fixed
 `.aidlc-document-input-path` transport. Customer-chosen path bytes never enter
-the shell command. The handler resolves one exact project-root path, refuses
-redirects and unsupported input, and emits the same inline untrusted-path and
+the shell command. The handler resolves one exact project-root path, records
+the contained file identity, and requires the opened descriptor to match it
+before reading; parent-directory replacement, redirects, and unsupported input
+are refused. Successful reads emit the same inline untrusted-path and
 untrusted-content notices as DocumentKB.
 
 ### LLM-driven handlers
