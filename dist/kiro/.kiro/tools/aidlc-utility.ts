@@ -60,6 +60,7 @@ import {
   activeIntent,
   activeSpace,
   authoritativeProjectDescription,
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
   auditShards,
@@ -6504,36 +6505,65 @@ function codekbTransactionRoot(
   );
 }
 
+function trustedCodekbRecoveryPath(
+  projectReal: string,
+  relativePath: string,
+): string {
+  try {
+    return assertNoSymlinkInChainOrThrow(projectReal, relativePath);
+  } catch (error) {
+    throw new Error(
+      `refusing CodeKB recovery through an unsafe project path: ${errorMessage(error)}`,
+    );
+  }
+}
+
 function recoverCodekbTransactions(
   projectDir: string,
   space: string,
   repo: string,
-  storeDir: string,
 ): void {
-  const root = codekbTransactionRoot(projectDir, space, repo);
+  const projectReal = realpathSync(projectDir);
+  const rootRelative = relative(
+    projectReal,
+    codekbTransactionRoot(projectReal, space, repo),
+  );
+  const storeRelative = join("aidlc", "spaces", space, "codekb", repo);
+  const root = trustedCodekbRecoveryPath(projectReal, rootRelative);
+  const storeDir = trustedCodekbRecoveryPath(projectReal, storeRelative);
   if (!existsSync(root)) return;
   const rootStat = lstatSync(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
     throw new Error(`refusing CodeKB recovery from non-directory transaction root: ${root}`);
   }
   for (const name of readdirSync(root).sort()) {
-    const txn = join(root, name);
+    const txnRelative = join(rootRelative, name);
+    const txn = trustedCodekbRecoveryPath(projectReal, txnRelative);
     const txnStat = lstatSync(txn);
     if (!txnStat.isDirectory() || txnStat.isSymbolicLink()) {
       throw new Error(`refusing CodeKB recovery from non-directory transaction: ${txn}`);
     }
-    const backup = join(txn, "backup");
+    const backupRelative = join(txnRelative, "backup");
+    const backup = trustedCodekbRecoveryPath(projectReal, backupRelative);
     if (!existsSync(storeDir) && existsSync(backup)) {
       const backupStat = lstatSync(backup);
       if (!backupStat.isDirectory() || backupStat.isSymbolicLink()) {
         throw new Error(`refusing CodeKB recovery from non-directory backup: ${backup}`);
       }
-      mkdirSync(dirname(storeDir), { recursive: true });
-      renameSync(backup, storeDir);
+      const checkedStore = trustedCodekbRecoveryPath(projectReal, storeRelative);
+      const checkedBackup = trustedCodekbRecoveryPath(projectReal, backupRelative);
+      mkdirSync(dirname(checkedStore), { recursive: true });
+      renameSync(checkedBackup, checkedStore);
     }
-    rmSync(txn, { recursive: true, force: true });
+    rmSync(
+      trustedCodekbRecoveryPath(projectReal, txnRelative),
+      { recursive: true, force: true },
+    );
   }
-  rmSync(root, { recursive: true, force: true });
+  rmSync(
+    trustedCodekbRecoveryPath(projectReal, rootRelative),
+    { recursive: true, force: true },
+  );
 }
 
 function withCodekbLock<T>(
@@ -6560,7 +6590,7 @@ function handleCodekbSnapshot(
     resolveCodekbRepo(projectDir, flags);
   const paths = codekbPaths(flags, "codekb-snapshot");
   const snapshot = withCodekbLock(projectDir, space, repo, () => {
-    recoverCodekbTransactions(projectDir, space, repo, storeDir);
+    recoverCodekbTransactions(projectDir, space, repo);
     const sourceFingerprint = codekbSourceFingerprint(repoDir, paths, excludes);
     if (sourceFingerprint === null) {
       die(`codekb-snapshot: cannot fingerprint source paths: ${paths.join(", ")}`);
@@ -6673,7 +6703,7 @@ function handleCodekbPublish(
   }
 
   const result = withCodekbLock(projectDir, space, repo, () => {
-    recoverCodekbTransactions(projectDir, space, repo, storeDir);
+    recoverCodekbTransactions(projectDir, space, repo);
     const currentStore = codekbStoreGeneration(storeDir);
     if (currentStore !== expectedStore) {
       die(

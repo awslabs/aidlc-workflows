@@ -8,11 +8,15 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   renameSync,
+  rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -48,8 +52,10 @@ const ARTIFACT_NAMES = [
 resetAidlcEnv();
 
 const tempDirs: string[] = [];
+const externalDirs: string[] = [];
 afterAll(() => {
   for (const dir of tempDirs) cleanupTestProject(dir);
+  for (const dir of externalDirs) rmSync(dir, { recursive: true, force: true });
 });
 
 function freshProject(): string {
@@ -262,6 +268,46 @@ describe("t304 source and store generation interleavings", () => {
     expect(
       readFileSync(join(storeDir(project), "architecture.md"), "utf-8"),
     ).toContain("ORIGINAL");
+  });
+
+  test("recovery refuses a transaction root redirected outside the project", () => {
+    const project = freshProject();
+    const source = join(project, "src", "payments");
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, "index.ts"), "export const payments = 1;\n");
+
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-t304-outside-"));
+    externalDirs.push(outside);
+    const externalTransaction = join(outside, basename(project), "crashed");
+    mkdirSync(externalTransaction, { recursive: true });
+    const sentinel = join(externalTransaction, "must-survive.txt");
+    writeFileSync(sentinel, "outside\n");
+
+    const transactionLink = join(
+      project,
+      "aidlc",
+      "spaces",
+      DEFAULT_SPACE,
+      "intents",
+      ".aidlc-codekb-transactions",
+    );
+    mkdirSync(dirname(transactionLink), { recursive: true });
+    symlinkSync(
+      outside,
+      transactionLink,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const refused = runUtility(project, [
+      "codekb-snapshot",
+      "--paths",
+      "src/payments/",
+      "--json",
+    ]);
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}\n${refused.stderr}`).toContain("symlink");
+    expect(readFileSync(sentinel, "utf-8")).toBe("outside\n");
+    expect(existsSync(externalTransaction)).toBe(true);
   });
 
   test("source mutation after the snapshot refuses stale prose with a newly minted fingerprint", () => {
