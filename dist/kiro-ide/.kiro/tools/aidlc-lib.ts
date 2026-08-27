@@ -1959,6 +1959,112 @@ export function codekbScopeFingerprint(
   }
 }
 
+function normalizeGenerationPath(path: string): string | null {
+  const portable = path.trim().replaceAll("\\", "/");
+  if (
+    portable === "" ||
+    portable.startsWith("/") ||
+    /^[A-Za-z]:\//.test(portable) ||
+    /[*?[\]]/.test(portable)
+  ) {
+    return null;
+  }
+  const segments = portable.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (segments.some((segment) => segment === "..")) return null;
+  return segments.length === 0 ? "." : segments.join("/");
+}
+
+function treeGeneration(
+  rootDir: string,
+  paths: string[],
+  excludedPaths: string[] = [],
+): string | null {
+  const normalizedPaths = [...new Set(paths.map(normalizeGenerationPath))];
+  if (normalizedPaths.includes(null) || normalizedPaths.length === 0) return null;
+  const normalizedExcludes = new Set(
+    [".git", ...excludedPaths]
+      .map(normalizeGenerationPath)
+      .filter((path): path is string => path !== null),
+  );
+  const root = resolvePath(rootDir);
+  const seen = new Set<string>();
+  const hash = createHash("sha256");
+  const excluded = (portable: string): boolean =>
+    [...normalizedExcludes].some(
+      (entry) => portable === entry || portable.startsWith(`${entry}/`),
+    );
+
+  const visit = (absPath: string, portable: string): boolean => {
+    if (portable !== "." && excluded(portable)) return true;
+    if (seen.has(portable)) return true;
+    seen.add(portable);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(absPath);
+    } catch {
+      return false;
+    }
+    if (stat.isSymbolicLink()) {
+      hash.update(`L\0${portable}\0${readlinkSync(absPath)}\0`, "utf-8");
+      return true;
+    }
+    if (stat.isDirectory()) {
+      hash.update(`D\0${portable}\0`, "utf-8");
+      let names: string[];
+      try {
+        names = readdirSync(absPath).sort();
+      } catch {
+        return false;
+      }
+      for (const name of names) {
+        const childPortable = portable === "." ? name : `${portable}/${name}`;
+        if (!visit(join(absPath, name), childPortable)) return false;
+      }
+      return true;
+    }
+    if (!stat.isFile()) return false;
+    hash.update(`F\0${portable}\0${stat.size}\0`, "utf-8");
+    hash.update(readFileSync(absPath));
+    hash.update("\0", "utf-8");
+    return true;
+  };
+
+  for (const portable of normalizedPaths as string[]) {
+    const absPath = portable === "." ? root : resolvePath(root, ...portable.split("/"));
+    const rel = relative(root, absPath);
+    if (rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute(rel)) return null;
+    hash.update(`S\0${portable}\0`, "utf-8");
+    if (!visit(absPath, portable)) return null;
+  }
+  return hash.digest("hex");
+}
+
+// A generation token for the source paths that informed one CodeKB candidate.
+// Prefer the existing git-aware fingerprint (ignored files excluded); fall back
+// to a byte-exact tree hash so non-git workspaces still receive a real CAS token.
+export function codekbSourceFingerprint(
+  repoDir: string,
+  paths: string[],
+  excludedPaths: string[] = [],
+): string | null {
+  const git = codekbScopeFingerprint(repoDir, paths, excludedPaths);
+  if (git !== null) return `git:${git}`;
+  const tree = treeGeneration(repoDir, paths, excludedPaths);
+  return tree === null ? null : `tree:${tree}`;
+}
+
+// Hash the complete on-disk CodeKB directory, not only its timestamp. This is
+// the compare-and-swap generation for cumulative merges: any concurrent edit to
+// any artifact changes the token and makes a stale publish refuse.
+export function codekbStoreGeneration(storeDir: string): string {
+  if (!existsSync(storeDir)) return "none";
+  const generation = treeGeneration(storeDir, ["./"]);
+  if (generation === null) {
+    throw new Error(`cannot compute CodeKB store generation for ${storeDir}`);
+  }
+  return `sha256:${generation}`;
+}
+
 // Coverage test for the compare mode: does the incoming run's analyzed set
 // cover a store entry? Literal match, or an incoming DIRECTORY prefix (entry
 // ending "/") subsuming the store path. Deliberately prefix-only - scope

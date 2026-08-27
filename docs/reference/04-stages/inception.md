@@ -163,11 +163,16 @@ before one stage-level lifecycle report.
    `.claude/knowledge/aidlc-architect-agent/` in the delegation prompt. Pass
    the complete developer scan results as context. Include workspace state from
    `aidlc-state.md`. Resolve the repository's output directory with
-   `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-path --repo <repo>` and
-   pass that exact path to the architect.
+   `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-path --repo <repo>`.
+   Immediately before the scan, capture source/store generations with
+   `codekb-snapshot`. Pass the existing store plus its snapshot to the
+   architect.
 
    The architect synthesizes scan results into the 9 output artifacts (see
-   Outputs below) in the resolved space-level codekb directory.
+   Outputs below) in a temporary complete candidate directory. The engine
+   publishes that candidate with `codekb-publish`, which refuses a source
+   change or concurrent shared-store generation and requires a fresh scan or
+   re-merge before retrying.
 
 4. **Prepare Completion** -- Verify all nine artifacts exist. Do not edit
    `aidlc-state.md`; lifecycle completion belongs to the report after the gate.

@@ -89,7 +89,10 @@ analyzed area into them and preserves prior prose outside it. Verified-current
 coverage is accumulated as a union; stale or unverifiable prior deep coverage
 is retained as prose and demoted to shallow
 (`reverse-engineering-timestamp.md` records when the last scan ran and what
-it covered). Intents therefore read the newest scan of the repo, not the one
+it covered). Pre-scan source/store generations and a locked all-artifact
+publication prevent a source change from being mislabeled current and prevent
+concurrent focused scans from silently replacing each other. Intents therefore
+read the newest scan of the repo, not the one
 taken when their own record dir was created. What the record dir does get is
 the stage's own `memory.md` diary — created by the engine when it emits the
 run-stage directive (see **Per-stage memory diary** below) — so an

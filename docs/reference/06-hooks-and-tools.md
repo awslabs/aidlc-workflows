@@ -684,6 +684,9 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `space-create <name>` | Create a new space from the framework memory baseline. Normally routed from `/aidlc space-create <name>`. | — |
 | `codekb-path [--repo <name>] [--json]` | Direct-only, read-only query that prints the deterministic per-repo codekb directory. There is no `/aidlc codekb-path` route. | — |
 | `project-description` | Direct-only, read-only query used by Intent Capture and Requirements Analysis. Marked records decode the exact `project-description.json` string; only unmarked pre-2.6.115 records fall back to `aidlc-state.md#Project`. | — |
+| `codekb-snapshot --repo <name> --paths <csv> [--json]` | Direct-only pre-scan snapshot of the shared store generation and source fingerprint. There is no `/aidlc codekb-snapshot` route. | — |
+| `codekb-publish --repo <name> --staged <dir> --paths <csv> --expect-store <generation> --expect-source <fingerprint> [--json]` | Direct-only guarded publication of a complete nine-artifact CodeKB candidate. Refuses stale source or store generations. There is no `/aidlc codekb-publish` route. | — |
+| `codekb-scope-diff [--repo <name>] [--compare <timestamp.md> \| --mint --paths <csv>] [--json]` | Direct-only CodeKB status, scope comparison, and source-fingerprint minting query. There is no `/aidlc codekb-scope-diff` route. | — |
 | `select-plugins [names]` | Direct-only query/update for the install's enabled plugin set. There is no `/aidlc select-plugins` route. | `PLUGIN_SELECTION_CHANGED` in set mode |
 | `scope-change` | Atomic scope updates mid-workflow (recalculate stage inclusion). Re-plans which stages are EXECUTE/SKIP. | `SCOPE_CHANGED` |
 | `config-get`, `config-list` | Read active workflow config (`depth`, `test-strategy`, `review`); `config-list --json` emits the structured shape. | none |
@@ -701,8 +704,9 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 
 The user-facing `intent`, `space`, and `space-create` forms are covered in
 [CLI Commands](../guide/12-cli-commands.md) and
-[Spaces and Intents](../guide/03-spaces-and-intents.md). `codekb-path`,
-`project-description`, and `select-plugins` are intentionally invoked directly as
+[Spaces and Intents](../guide/03-spaces-and-intents.md). The `codekb-*` verbs,
+`project-description`, `document-input`, and `select-plugins` are intentionally
+invoked directly as
 `bun <harness-dir>/tools/aidlc-utility.ts <verb>`; none is an orchestrator
 command.
 

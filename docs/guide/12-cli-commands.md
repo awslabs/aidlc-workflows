@@ -911,6 +911,45 @@ It prints the active space's deterministic
 no audit event; reverse-engineering stage prose invokes it directly so paths
 are never derived by hand.
 
+### `aidlc-utility codekb-snapshot` - bind a scan to source and store generations
+
+This is a **direct utility invocation**, not an `/aidlc codekb-snapshot` command:
+
+```bash
+bun .claude/tools/aidlc-utility.ts codekb-snapshot \
+  --repo <repo> --paths src/payments/,src/catalog/ --json
+```
+
+Immediately before a reverse-engineering scan, this command captures the
+complete shared CodeKB generation plus a source fingerprint over the paths the
+scan will inspect. The source token uses the Git working-tree fingerprint when
+available and a byte-exact tree fallback outside Git. A space+repo lock keeps
+the two values from straddling a concurrent publication. The returned
+`store_generation`, `source_fingerprint`, and `paths` are inputs to
+`codekb-publish`.
+
+### `aidlc-utility codekb-publish` - guarded all-artifact publication
+
+This is a **direct utility invocation**, not an `/aidlc codekb-publish` command:
+
+```bash
+bun .claude/tools/aidlc-utility.ts codekb-publish \
+  --repo <repo> \
+  --staged <record>/.aidlc-codekb-stage-<repo>/ \
+  --paths src/payments/,src/catalog/ \
+  --expect-store <generation> \
+  --expect-source <fingerprint> \
+  --json
+```
+
+The staged directory must contain exactly the nine CodeKB artifacts.
+Publication acquires the same space+repo lock, rechecks both snapshot values,
+validates the timestamp's final scope fingerprint, and swaps the complete
+candidate into the shared store with rollback and crash recovery. A concurrent
+CodeKB publication returns `CODEKB_STORE_CHANGED`; source movement returns
+`CODEKB_SOURCE_CHANGED`. Both publish nothing and require a fresh re-merge or
+scan rather than a last-writer-wins overwrite.
+
 ### `aidlc-utility codekb-scope-diff` - check the code knowledge base before a rerun
 
 This is a **direct utility invocation**, not an `/aidlc codekb-scope-diff` command:

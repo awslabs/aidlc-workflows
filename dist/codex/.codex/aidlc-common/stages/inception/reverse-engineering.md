@@ -156,6 +156,29 @@ Use one row per reused registered repo. For an unrecorded single-repo workspace,
 omit `--repo`; for an isolated run, do not mint this main-workflow reuse row.
 The all-reuse routing below is unchanged.
 
+Immediately before Step 2, take one compare-and-swap snapshot for every repo
+selected for scanning:
+
+```
+bun .codex/tools/aidlc-utility.ts codekb-snapshot --repo <repo> --paths <source paths> --json
+```
+
+Choose `<source paths>` as follows:
+
+- Full rescan: `./`.
+- Focused scan of a CURRENT store: the union of the store's existing
+  `analyzed.paths` and the intended focused paths. A full store therefore uses
+  `./`.
+- Focused scan of a STALE, UNVERIFIED, UNKNOWN_SCOPE, or NO_STORE store: the
+  intended focused paths.
+
+Keep the returned `store_generation`, `source_fingerprint`, and `paths` keyed
+by repo. They bind synthesis to both the exact shared CodeKB generation and the
+source bytes the scan is about to inspect. If the developer later reports an
+`analyzed.paths` entry outside the snapshot's `paths`, discard that result and
+repeat the snapshot plus scan over the expanded path set; never widen verified
+coverage after the scan without a matching pre-scan source snapshot.
+
 Only after every repository decision has been resolved:
 
 - If every repo is reused on an ordinary workflow run, report the stage as
@@ -179,7 +202,8 @@ Delegate to Task tool with aidlc-developer-agent:
 Brief the developer with the scan breadth chosen at the Step 1 guard (full
 rescan = the whole repo; focused scan = the intent's area, named explicitly in
 the brief) and require the scan results' Scan Coverage section (re-artifacts.md
-template) to list what was actually analyzed deeply vs skimmed.
+template) to list what was actually analyzed deeply vs skimmed. Include the
+repo's snapshot `paths`; the deeply analyzed result MUST stay within that set.
 
 For each repo selected for scanning, the developer scans `<repo>`'s codebase
 (the sibling dir `<workspace>/<repo>/`; for a single-repo intent this is the
@@ -211,7 +235,7 @@ Delegate to Task tool with aidlc-architect-agent:
 - Pass the complete developer scan results as context
 - Include workspace state from aidlc-state.md
 
-Architect synthesizes scan results into 9 artifacts:
+Architect synthesizes scan results into a complete 9-artifact candidate:
 1. **business-overview.md** — Business domain, purpose, key functionality
 2. **architecture.md** — System architecture, patterns, component relationships (with Mermaid diagrams). MUST include Interaction Diagrams section depicting how business transactions are implemented across components (sequence or flow diagrams).
 3. **code-structure.md** — Package/module organization, file classification, code patterns
@@ -246,6 +270,12 @@ Choose the write behavior recorded in Step 1:
   `kind: partial`; `kind: full` is valid only when `analyzed.paths` includes
   `./`.
 
+The architect MUST write the candidate into
+`<record>/.aidlc-codekb-stage-<repo>/`, not into the
+shared CodeKB. The staging directory contains exactly the nine filenames above
+and no other entries. It is temporary transaction input, not a durable stage
+artifact.
+
 For the block's `fingerprint:` line, run the mint command with the final
 `analyzed.paths` from the merged or replaced block (comma-separated) and paste
 its output verbatim:
@@ -254,15 +284,17 @@ its output verbatim:
    bun .codex/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --paths <analyzed paths>
    ```
 
-**Resolve the write directory with the engine, do NOT compose the path yourself.**
-Run the read-only tool
+**Resolve the final publish directory with the engine, do NOT compose the path
+yourself.** Run the read-only tool
 
 ```
 bun .codex/tools/aidlc-utility.ts codekb-path --repo <repo>
 ```
 
 (omit `--repo` for a single/unrecorded repo — the engine resolves the repo name).
-It prints ONE line: the exact directory, e.g. `aidlc/spaces/<active-space>/codekb/<repo>/`.
+It prints ONE line: the exact final directory, e.g.
+`aidlc/spaces/<active-space>/codekb/<repo>/`. Read an existing store from this
+directory for a merge, but do not write the candidate there directly.
 
 **Coverage backstop - run BEFORE writing (the compare needs the prior store
 unchanged).** When the Step 1 guard found an existing store (any verdict but
@@ -283,11 +315,40 @@ NARROWER identifies coverage that was demoted or lost. A focused run after a
 that repo's `scope-draft-<repo>.md` immediately after preserving the compare
 output; scope drafts are temporary and MUST NOT remain in the intent record.
 
-Write all 9 artifacts into the directory `codekb-path` printed - verbatim,
-creating it if absent. This is the durable per-repo code knowledge base, a
-space-level store shared across every intent in the space. Never substitute
-the intent slug, the record dir, or a hand-composed path for what the tool
-prints.
+Publish the complete candidate through the compare-and-swap utility, using the
+exact snapshot values captured immediately before Step 2:
+
+```
+bun .codex/tools/aidlc-utility.ts codekb-publish \
+  --repo <repo> \
+  --staged <record>/.aidlc-codekb-stage-<repo>/ \
+  --paths <snapshot paths> \
+  --expect-store <snapshot store_generation> \
+  --expect-source <snapshot source_fingerprint> \
+  --json
+```
+
+The utility validates all nine files and the candidate timestamp, acquires a
+space+repo lock, rechecks the source and shared-store generations, then swaps
+the complete staged directory into the final `codekb-path` location with
+rollback/recovery. No other step may write those nine shared files.
+
+- `CODEKB_STORE_CHANGED`: another intent published after this repo's snapshot.
+  Re-run the Step 1 status check, read the new store, recompute the focused
+  merge and scope union/demotion, take a fresh snapshot over the new candidate
+  path set, and retry publication. The existing developer scan may be reused
+  only when a fresh snapshot over the same paths returns the same
+  `source_fingerprint`.
+- `CODEKB_SOURCE_CHANGED`: source bytes changed after the pre-scan snapshot.
+  Discard the staged candidate, take a fresh snapshot, and repeat Step 2 plus
+  synthesis for that repo before retrying.
+- `CODEKB_CANDIDATE_STALE`: the timestamp fingerprint was not minted from the
+  source currently being published. Rebuild the candidate and retry.
+
+Never bypass a refusal with direct writes or by substituting the newly observed
+generation into the old candidate. After a successful publish, delete that
+repo's `.aidlc-codekb-stage-<repo>/` directory. The final directory remains the
+durable per-repo code knowledge base shared across every intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are
 present, mint the final-link receipt:

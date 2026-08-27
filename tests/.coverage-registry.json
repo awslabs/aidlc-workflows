@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 767,
+    "total": 771,
     "enumeratedByClass": {
-      "function": 472,
+      "function": 474,
       "audit": 90,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 136,
+      "subcommand": 138,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 275,
+      "function": 277,
       "audit": 49,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 123,
+      "subcommand": 125,
       "render-surface": 7
     }
   },
@@ -1745,6 +1745,30 @@
       "coveredBy": [
         {
           "file": "tests/unit/t248-codekb-scope-diff.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbSourceFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-codekb-cumulative-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbStoreGeneration",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-codekb-cumulative-merge.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8680,11 +8704,35 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-utility codekb-publish",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-codekb-cumulative-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-utility codekb-scope-diff",
       "minMechanism": "cli",
       "coveredBy": [
         {
           "file": "tests/unit/t248-codekb-scope-diff.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility codekb-snapshot",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-codekb-cumulative-merge.test.ts",
           "mechanism": "cli"
         }
       ],
