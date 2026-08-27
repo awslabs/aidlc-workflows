@@ -55,9 +55,9 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 | Harness | Install (copy into your project) | Invoke | Install & usage guide |
 | --- | --- | --- | --- |
-| **Kiro IDE** | `dist/kiro-ide/.kiro/` + `dist/kiro-ide/aidlc/` → `<project>/` (+ `dist/kiro-ide/AGENTS.md`, `dist/kiro-ide/.gitignore`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro IDE](docs/guide/harnesses/kiro-ide.md). |
-| **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` + `dist/kiro/aidlc/` → `<project>/` (+ `dist/kiro/AGENTS.md`, `dist/kiro/.gitignore`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
-| **Claude Code** | `dist/claude/.claude/` + `dist/claude/aidlc/` + `dist/claude/.gitignore` → `<project>/` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
+| **Kiro IDE** | `dist/kiro-ide/.kiro/` + `dist/kiro-ide/aidlc/` → `<project>/` (+ `dist/kiro-ide/AGENTS.md`; copy or merge the AI-DLC `.gitignore` section) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro IDE](docs/guide/harnesses/kiro-ide.md). |
+| **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` + `dist/kiro/aidlc/` → `<project>/` (+ `dist/kiro/AGENTS.md`; copy or merge the AI-DLC `.gitignore` section) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
+| **Claude Code** | `dist/claude/.claude/` + `dist/claude/aidlc/` → `<project>/` (copy or merge the AI-DLC `.gitignore` section) | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
 | **Codex CLI** (≥ 0.145.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `aidlc/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
 | **Cursor** | `bun dist/cursor/install.ts <project>` | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on Cursor](docs/guide/harnesses/cursor.md). |
 | **opencode** (≥ 1.17) | `dist/opencode/` → `<project>/` (`.aidlc/` + `.opencode/` + `aidlc/` + `opencode.json` + `AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on opencode](docs/guide/harnesses/opencode.md). |
@@ -131,10 +131,13 @@ mkdir -p your-project/.kiro your-project/aidlc
 cp -R dist/kiro-ide/.kiro/. your-project/.kiro/
 cp -R dist/kiro-ide/aidlc/. your-project/aidlc/     # the workspace shell — a sibling of .kiro/, not inside it
 cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
-cp dist/kiro-ide/.gitignore your-project/.gitignore # merge if you already have one
+# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
+if [ ! -e your-project/.gitignore ]; then
+  cp dist/kiro-ide/.gitignore your-project/.gitignore
+fi
 ```
 
-The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it. The `.gitignore` carries the workspace's commit/ignore split: the per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`) and machine-local runtime stay untracked, while the shared records — method memory, state, audit shards, artifacts — travel with git. The `## Git Integration` section of the installed onboarding file assumes those rules are in place.
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it. The `.gitignore` carries the workspace's commit/ignore split: the per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`) and machine-local runtime stay untracked, while the shared records — method memory, state, audit shards, artifacts — travel with git. The guarded command copies the complete starter file only when the project has no `.gitignore`. If one exists, preserve every project-owned rule and merge only the section from `# AI-DLC` through the end of the shipped file; do not copy its generic starter rules. The `## Git Integration` section of the installed onboarding file assumes the AI-DLC rules are in place.
 
 Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill, and `.kiro/agents/aidlc.md` exposes the conductor in the IDE agent selector. Agents are Markdown-only in this distribution; Kiro CLI's agent-v1 JSON files and `settings/cli.json` do not ship. The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
 
@@ -160,11 +163,14 @@ mkdir -p your-project/.kiro your-project/aidlc
 cp -R dist/kiro/.kiro/. your-project/.kiro/
 cp -R dist/kiro/aidlc/. your-project/aidlc/    # the workspace shell — a sibling of .kiro/, not inside it
 cp dist/kiro/AGENTS.md your-project/AGENTS.md   # merge if you already have one
-cp dist/kiro/.gitignore your-project/.gitignore # merge if you already have one
+# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
+if [ ! -e your-project/.gitignore ]; then
+  cp dist/kiro/.gitignore your-project/.gitignore
+fi
 cd your-project && kiro-cli chat
 ```
 
-The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it. The `.gitignore` carries the workspace's commit/ignore split: the per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`) and machine-local runtime stay untracked, while the shared records — method memory, state, audit shards, artifacts — travel with git. The `## Git Integration` section of the installed onboarding file assumes those rules are in place.
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it. The `.gitignore` carries the workspace's commit/ignore split: the per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`) and machine-local runtime stay untracked, while the shared records — method memory, state, audit shards, artifacts — travel with git. The guarded command copies the complete starter file only when the project has no `.gitignore`. If one exists, preserve every project-owned rule and merge only the section from `# AI-DLC` through the end of the shipped file; do not copy its generic starter rules. The `## Git Integration` section of the installed onboarding file assumes the AI-DLC rules are in place.
 
 The install ships `.kiro/settings/cli.json` with `chat.defaultAgent` set to `aidlc`, so `/aidlc` is active by default. Inside the session, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start. The [Kiro CLI guide](docs/guide/harnesses/kiro-cli.md) has the full prerequisites and harness differences.
 
@@ -201,11 +207,14 @@ curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del in
 # Copy the implementation (engine + the workspace shell sibling), then launch
 cp -r dist/claude/.claude/ your-project/.claude/
 cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a sibling of .claude/, not inside it
-cp    dist/claude/.gitignore your-project/.gitignore # merge if you already have one
+# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
+if [ ! -e your-project/.gitignore ]; then
+  cp dist/claude/.gitignore your-project/.gitignore
+fi
 cd your-project && claude
 ```
 
-The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it. The `.gitignore` carries the workspace's commit/ignore split: the per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`) and machine-local runtime stay untracked, while the shared records — method memory, state, audit shards, artifacts — travel with git. The `## Git Integration` section of the installed onboarding file assumes those rules are in place.
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it. The `.gitignore` carries the workspace's commit/ignore split: the per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`) and machine-local runtime stay untracked, while the shared records — method memory, state, audit shards, artifacts — travel with git. The guarded command copies the complete starter file only when the project has no `.gitignore`. If one exists, preserve every project-owned rule and merge only the section from `# AI-DLC` through the end of the shipped file; do not copy its generic starter rules. The `## Git Integration` section of the installed onboarding file assumes the AI-DLC rules are in place.
 
 Then, inside the Claude Code session:
 
