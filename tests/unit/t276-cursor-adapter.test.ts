@@ -1918,7 +1918,7 @@ if (import.meta.main) {
 
     const resetRepositorySelectors =
       `env -i GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`;
-    const safeResetRepository = runAdapter(
+    const resetRepository = runAdapter(
       proj,
       "guards",
       payload("preToolUseShell", proj, {
@@ -1927,7 +1927,14 @@ if (import.meta.main) {
         tool_input: { command: resetRepositorySelectors },
       }),
     );
-    expectAllowJson(safeResetRepository, resetRepositorySelectors);
+    const resetRepositoryOut = JSON.parse(resetRepository.stdout) as {
+      permission?: string;
+      agent_message?: string;
+    };
+    expect(resetRepositoryOut.permission).toBe("deny");
+    expect(resetRepositoryOut.agent_message ?? "").toContain(
+      "dynamic command evaluation",
+    );
 
     const alternateChild = join(safeAlternateRepo, "child");
     mkdirSync(alternateChild, { recursive: true });
@@ -2176,7 +2183,14 @@ if (import.meta.main) {
         tool_input: { command: resetIndexCommand },
       }),
     );
-    expectAllowJson(resetIndexStatus, resetIndexCommand);
+    const resetIndexOut = JSON.parse(resetIndexStatus.stdout) as {
+      permission?: string;
+      agent_message?: string;
+    };
+    expect(resetIndexOut.permission).toBe("deny");
+    expect(resetIndexOut.agent_message ?? "").toContain(
+      "dynamic command evaluation",
+    );
 
 
     for (const command of [
@@ -2418,19 +2432,7 @@ if (import.meta.main) {
           env: { HOME: undefined, XDG_CONFIG_HOME: xdgHome },
         },
         {
-          command: "env -i git status --short",
-          env: { HOME: alternateHome, XDG_CONFIG_HOME: undefined },
-        },
-        {
-          command: "env --ignore-environment git status --short",
-          env: { HOME: undefined, XDG_CONFIG_HOME: xdgHome },
-        },
-        {
           command: "command env -u HOME git status --short",
-          env: { HOME: alternateHome, XDG_CONFIG_HOME: undefined },
-        },
-        {
-          command: "nice env -i git status --short",
           env: { HOME: alternateHome, XDG_CONFIG_HOME: undefined },
         },
       ]) {
@@ -3627,7 +3629,7 @@ if (import.meta.main) {
     );
   });
 
-  test("37: delegated project executables cannot erase attribution stores", () => {
+  test("37: delegated executable lookup and data-driven mutators cannot erase attribution stores", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     clearLedger(proj);
@@ -3654,12 +3656,11 @@ if (import.meta.main) {
       scriptDir,
       process.platform === "win32" ? "wipe-attribution.cmd" : "wipe-attribution",
     );
-    writeFileSync(
-      script,
+    const destructiveBody =
       process.platform === "win32"
         ? `@echo off\r\nrmdir /s /q "${ledgerDirFor(proj)}"\r\ndel /q "${witness}"\r\n`
-        : `#!/bin/sh\nrm -rf ${JSON.stringify(ledgerDirFor(proj))}\nrm -f ${JSON.stringify(witness)}\n`,
-    );
+        : `#!/bin/sh\n/bin/rm -rf ${JSON.stringify(ledgerDirFor(proj))}\n/bin/rm -f ${JSON.stringify(witness)}\n`;
+    writeFileSync(script, destructiveBody);
     if (process.platform !== "win32") chmodSync(script, 0o755);
 
     const command =
@@ -3701,6 +3702,121 @@ if (import.meta.main) {
     );
     expect(ledgerFilesFor(proj)).toHaveLength(1);
     expect(witnessFilesFor(proj)).toHaveLength(1);
+
+    const shadowedRg = join(
+      scriptDir,
+      process.platform === "win32" ? "rg.cmd" : "rg",
+    );
+    writeFileSync(shadowedRg, destructiveBody);
+    if (process.platform !== "win32") chmodSync(shadowedRg, 0o755);
+    const resolutionCommands = [
+      `env PATH=${JSON.stringify(scriptDir)} rg`,
+      `PATH=${JSON.stringify(scriptDir)} rg`,
+      `PATH=${JSON.stringify(scriptDir)}; rg`,
+      `env PaTh=${JSON.stringify(scriptDir)} rg`,
+      "env PATHEXT=.CMD rg",
+      "env -uPATH rg",
+      "env --unset=PATH rg",
+      "env -i rg",
+      "env -i0 rg",
+      "env --ignore-environment rg",
+      "nice env -i rg",
+    ];
+    for (const [index, unsafeCommand] of resolutionCommands.entries()) {
+      const denied = runAdapter(
+        proj,
+        "guards",
+        payload("preToolUseShell", proj, {
+          conversation_id: "developer-project-executable-child",
+          session_id: "developer-project-executable-child",
+          tool_input: { command: unsafeCommand },
+        }),
+      );
+      const deniedOut = JSON.parse(denied.stdout) as {
+        permission?: string;
+        agent_message?: string;
+      };
+      if (deniedOut.permission === "allow" && index === 0) {
+        const result =
+          process.platform === "win32"
+            ? spawnSync(
+                process.env.ComSpec ?? "cmd.exe",
+                ["/d", "/s", "/c", "rg"],
+                {
+                  cwd: proj,
+                  encoding: "utf-8",
+                  env: {
+                    ...process.env,
+                    PATH: scriptDir,
+                    PATHEXT: ".CMD",
+                  },
+                },
+              )
+            : spawnSync("rg", [], {
+                cwd: proj,
+                encoding: "utf-8",
+                env: { ...process.env, PATH: scriptDir },
+              });
+        expect(result.status, result.stderr).toBe(0);
+      }
+      expect(deniedOut.permission, unsafeCommand).toBe("deny");
+      expect(ledgerFilesFor(proj), unsafeCommand).toHaveLength(1);
+      expect(witnessFilesFor(proj), unsafeCommand).toHaveLength(1);
+    }
+
+    const safeEnvironment = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "developer-project-executable-child",
+        session_id: "developer-project-executable-child",
+        tool_input: { command: "env HOME=scratch rg --version" },
+      }),
+    );
+    expectAllowJson(safeEnvironment);
+
+    const targets = join(scriptDir, "targets.txt");
+    writeFileSync(targets, "../aidlc\n");
+    const dataDrivenCommand = "xargs rm -rf < targets.txt";
+    const dataDriven = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "developer-project-executable-child",
+        session_id: "developer-project-executable-child",
+        cwd: scriptDir,
+        tool_input: { command: dataDrivenCommand, cwd: scriptDir },
+      }),
+    );
+    const dataDrivenOut = JSON.parse(dataDriven.stdout) as {
+      permission?: string;
+      agent_message?: string;
+    };
+    if (dataDrivenOut.permission === "allow" && process.platform !== "win32") {
+      const result = spawnSync("sh", ["-c", dataDrivenCommand], {
+        cwd: scriptDir,
+        encoding: "utf-8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(dataDrivenOut.permission).toBe("deny");
+    expect(ledgerFilesFor(proj)).toHaveLength(1);
+    expect(witnessFilesFor(proj)).toHaveLength(1);
+
+    const safeDataDriven = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "developer-project-executable-child",
+        session_id: "developer-project-executable-child",
+        cwd: scriptDir,
+        tool_input: {
+          command: "xargs printf < targets.txt",
+          cwd: scriptDir,
+        },
+      }),
+    );
+    expectAllowJson(safeDataDriven);
 
     for (const unsafeCommand of [
       process.platform === "win32"

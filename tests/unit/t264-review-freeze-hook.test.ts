@@ -47,6 +47,7 @@ import {
   judgeFreeze,
   REVIEW_FREEZE_FALLBACK_GUIDANCE,
   reviewFreezeRecoveryGuidance,
+  shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,
   writeTargets,
@@ -174,6 +175,68 @@ test("inspection preserves executable provenance and unwraps multiplexer applets
   ]);
   expect(shellCommandInvocations("toybox rm -rf aidlc")).toEqual([
     { name: "rm", args: ["-rf", "aidlc"] },
+  ]);
+});
+
+test("inspection marks altered executable lookup and data-driven mutations", () => {
+  for (const command of [
+    "PATH=/tmp rg",
+    "env PATH=/tmp rg",
+    "env PaTh=/tmp rg",
+    "env PATHEXT=.CMD rg",
+    "env -uPATH rg",
+    "env --unset=PATH rg",
+    "env -i rg",
+    "env --ignore-environment rg",
+  ]) {
+    expect(shellCommandInvocationDetails(command), command).toEqual([
+      expect.objectContaining({
+        name: "rg",
+        executableResolutionChanged: true,
+      }),
+    ]);
+  }
+  for (const command of [
+    "PATH=/tmp; rg",
+    "env -S 'PATH=/tmp rg'",
+    "env --split-string='PATHEXT=.CMD rg'",
+  ]) {
+    expect(shellCommandAltersExecutableResolution(command), command).toBe(true);
+  }
+  for (const command of [
+    "HOME=/tmp rg",
+    "MYPATH=/tmp rg",
+    "echo PATH=/tmp",
+    "env --argv0 PATH rg",
+  ]) {
+    expect(shellCommandAltersExecutableResolution(command), command).toBe(false);
+  }
+  expect(shellCommandInvocationDetails("env HOME=/tmp rg")).toEqual([
+    {
+      name: "rg",
+      args: [],
+      executable: "rg",
+      launchers: ["env"],
+    },
+  ]);
+  expect(shellCommandInvocationDetails("xargs rm -rf")).toEqual([
+    {
+      name: "rm",
+      args: ["-rf"],
+      executable: "rm",
+      launchers: ["xargs"],
+      dataDriven: true,
+      dataDrivenMutation: true,
+    },
+  ]);
+  expect(shellCommandInvocationDetails("xargs printf '%s\\n'")).toEqual([
+    {
+      name: "printf",
+      args: ["%s\\n"],
+      executable: "printf",
+      launchers: ["xargs"],
+      dataDriven: true,
+    },
   ]);
 });
 

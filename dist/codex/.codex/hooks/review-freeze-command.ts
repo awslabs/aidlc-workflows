@@ -100,6 +100,8 @@ export interface ShellInvocationDetails extends ShellInvocation {
   executable?: string;
   launchers?: string[];
   dataDriven?: boolean;
+  dataDrivenMutation?: boolean;
+  executableResolutionChanged?: boolean;
 }
 
 function shellExecutableName(value: string): string {
@@ -116,6 +118,14 @@ interface WrapperOptionSpec {
   shortFlags?: readonly string[];
   longFlags?: readonly string[];
   numericShortValue?: boolean;
+}
+
+interface ShellInvocationParseState {
+  executableResolutionChanged: boolean;
+}
+
+function changesExecutableResolution(name: string): boolean {
+  return /^(?:PATH|PATHEXT)$/i.test(name);
 }
 
 function consumeWrapperOptions(
@@ -188,11 +198,21 @@ function shellInvocation(
   depth = 0,
   dataDriven = false,
   launchers: string[] = [],
+  state: ShellInvocationParseState = {
+    executableResolutionChanged: false,
+  },
 ): ShellInvocationDetails | null {
   if (depth > 8) return null;
   let index = 0;
   const skipAssignments = () => {
-    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index] ?? "")) index++;
+    while (index < words.length) {
+      const match = words[index].match(/^([A-Za-z_][A-Za-z0-9_]*)=/);
+      if (!match) break;
+      if (changesExecutableResolution(match[1])) {
+        state.executableResolutionChanged = true;
+      }
+      index++;
+    }
   };
   skipAssignments();
 
@@ -263,25 +283,52 @@ function shellInvocation(
           continue;
         }
         if (/^-(?:u|C|a).+/.test(option)) {
+          if (
+            option.startsWith("-u") &&
+            changesExecutableResolution(option.slice(2))
+          ) {
+            state.executableResolutionChanged = true;
+          }
           index++;
           continue;
         }
         if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(option)) {
+          if (
+            (option === "-u" || option === "--unset") &&
+            changesExecutableResolution(words[index + 1] ?? "")
+          ) {
+            state.executableResolutionChanged = true;
+          }
           index += 2;
           continue;
         }
+        if (option.startsWith("--unset=")) {
+          if (changesExecutableResolution(option.slice("--unset=".length))) {
+            state.executableResolutionChanged = true;
+          }
+          index++;
+          continue;
+        }
         if (
-          /^(?:--unset|--chdir|--argv0)=/.test(option) ||
+          /^(?:--chdir|--argv0)=/.test(option) ||
           option === "-" ||
           option === "-i" ||
           option === "--ignore-environment" ||
           option === "-0" ||
           option === "--null"
         ) {
+          if (
+            option === "-" ||
+            option === "-i" ||
+            option === "--ignore-environment"
+          ) {
+            state.executableResolutionChanged = true;
+          }
           index++;
           continue;
         }
         if (/^-[i0v]+$/.test(option)) {
+          if (option.includes("i")) state.executableResolutionChanged = true;
           index++;
           continue;
         }
@@ -306,6 +353,7 @@ function shellInvocation(
           depth + 1,
           dataDriven,
           launchers,
+          state,
         );
       }
       continue;
@@ -448,12 +496,20 @@ function shellInvocation(
 
   const executable = words[index];
   if (!executable) return null;
+  const name = shellExecutableName(executable);
+  const args = words.slice(index + 1);
   return {
-    name: shellExecutableName(executable),
-    args: words.slice(index + 1),
+    name,
+    args,
     executable,
     ...(launchers.length > 0 ? { launchers } : {}),
     ...(dataDriven ? { dataDriven: true } : {}),
+    ...(dataDriven && invocationMayMutate(name, args)
+      ? { dataDrivenMutation: true }
+      : {}),
+    ...(state.executableResolutionChanged
+      ? { executableResolutionChanged: true }
+      : {}),
   };
 }
 
@@ -468,11 +524,24 @@ export function shellCommandInvocationDetails(
   return invocations;
 }
 
+export function shellCommandAltersExecutableResolution(command: string): boolean {
+  for (const segment of shellCommandSegments(command)) {
+    const state: ShellInvocationParseState = {
+      executableResolutionChanged: false,
+    };
+    shellInvocation(shellWords(segment), 0, false, [], state);
+    if (state.executableResolutionChanged) return true;
+  }
+  return false;
+}
+
 export function shellCommandInvocations(command: string): ShellInvocation[] {
   return shellCommandInvocationDetails(command).map(
     ({
       dataDriven: _dataDriven,
+      dataDrivenMutation: _dataDrivenMutation,
       executable: _executable,
+      executableResolutionChanged: _executableResolutionChanged,
       launchers: _launchers,
       ...invocation
     }) => invocation,

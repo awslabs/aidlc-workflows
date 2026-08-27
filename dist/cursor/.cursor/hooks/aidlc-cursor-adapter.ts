@@ -700,6 +700,7 @@ export async function run(
   }
 
   interface ReviewFreezeCommandModule {
+    shellCommandAltersExecutableResolution?: (command: string) => boolean;
     shellCommandInvocationDetails?: (
       command: string,
     ) => Array<{
@@ -708,6 +709,8 @@ export async function run(
       ambiguous?: boolean;
       executable?: string;
       launchers?: string[];
+      dataDrivenMutation?: boolean;
+      executableResolutionChanged?: boolean;
     }>;
     shellCommandInvocations?: (
       command: string,
@@ -2408,7 +2411,13 @@ export async function run(
     };
     try {
       const module = await loadReviewFreezeCommandModule();
-      if (typeof module.shellCommandInvocationDetails !== "function") return true;
+      if (
+        typeof module.shellCommandAltersExecutableResolution !== "function" ||
+        typeof module.shellCommandInvocationDetails !== "function"
+      ) {
+        return true;
+      }
+      if (module.shellCommandAltersExecutableResolution(command)) return true;
       const hostExpression = shellUsesDirectHostExpression(command);
       const flavor: PathFlavor =
         process.platform === "win32" ? "win32" : "posix";
@@ -2459,6 +2468,7 @@ export async function run(
             const leaf = win32.basename(posix.basename(invocation.name));
             if (
               invocation.ambiguous ||
+              invocation.dataDrivenMutation ||
               [invocation.executable, ...(invocation.launchers ?? [])].some(
                 (value) =>
                   typeof value !== "string" ||

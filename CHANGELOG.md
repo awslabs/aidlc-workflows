@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.123] - 2026-08-28
+
+Cursor now preserves delegated-agent attribution and reviewer-state integrity across POSIX and Windows path dialects, shell wrappers, Git configuration surfaces, filesystem traversal, and executable lookup changes. **Upgrade:** re-copy `dist/cursor/` into the project so the updated Cursor adapter, shared review-freeze parser, and version metadata replace the vulnerable hooks.
+
+* Deny delegated evaluators, general-purpose interpreters, project-local or path-qualified executables, scripts, unknown command surfaces, BusyBox/Toybox execution applets, and allowlisted command names reached through altered `PATH`, `PATHEXT`, or environment-clearing lookup state.
+* Protect every attributed delegated agent with an independent active-delegation witness and fail closed when either attribution store becomes unavailable, preserving nested-Task denial after attempted state removal.
+* Resolve bare ancestors and cross-platform path aliases for traversal and mutation commands, including `find`, PowerShell/CMD operations, `rsync`, and data-driven `xargs` mutators whose input targets cannot be inspected; read-only data-driven commands and concrete safe mutations remain available.
+* Canonicalize symlink, junction, device, trailing-dot/space, Git-Bash drive, native Windows, mixed-separator, UNC, home, wildcard, and 8.3 path forms before protected-state comparison.
+* Carry every reachable shell working directory through compound commands into Git safety inspection, retaining fail-closed behavior across failures, conditionals, pipelines, backgrounds, and subshells.
+
 ## [2.6.122] - 2026-08-27
 
 Code Generation source-freshness receipts now bind supported non-Git and missing-Git workspaces without weakening per-Unit attribution or autonomous swarm Source Commits. **Upgrade:** refresh your `dist/<harness>/` shell. In-flight `workspace_requires` reviews from earlier versions must be reviewed once more before completion because the source identity format changed.
