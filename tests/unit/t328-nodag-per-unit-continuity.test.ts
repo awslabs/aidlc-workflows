@@ -780,4 +780,76 @@ describe("t328 no-DAG per-unit review continuity", () => {
     recordReview(proj, "alpha");
     expect(finalize(proj).status).toBe(0);
   });
+
+  test("a same-second cross-shard AUDIT_MERGED does not make a team review receipt ambiguous", () => {
+    const proj = project();
+    seedOutputs(proj, "alpha");
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        "- **Revision Count**: 0",
+        "- **Revision Count**: 0\n- **Unit Ownership**: team",
+      ),
+    );
+    const fingerprint = reviewArtifactFingerprint(
+      proj,
+      stageDefinition(),
+      "alpha",
+    );
+    if (fingerprint === null) {
+      throw new Error("could not fingerprint alpha outputs");
+    }
+    const fields = {
+      Stage: STAGE,
+      Reviewer: REVIEWER,
+      Unit: "alpha",
+      Iteration: "1",
+      "Artifact Fingerprint": fingerprint,
+    };
+    const timestamp = "2026-08-25T02:00:00Z";
+    const auditDir = seededAuditDir(proj);
+    mkdirSync(auditDir, { recursive: true });
+    writeFileSync(
+      join(auditDir, "m-bolt.md"),
+      [
+        auditBlock("2026-08-25T01:59:59Z", "BOLT_STARTED", {
+          "Bolt names": "alpha",
+          "Batch number": "1",
+          "Walking skeleton": "false",
+          "Bolt slug": boltSlugForUnit("alpha"),
+        }),
+        auditBlock("2026-08-25T01:59:59Z", "BOLT_COMPLETED", {
+          "Bolt names": "alpha",
+          "Batch number": "1",
+          "Bolt slug": boltSlugForUnit("alpha"),
+        }),
+      ].join(""),
+    );
+    writeFileSync(
+      join(auditDir, "a-review.md"),
+      [
+        auditBlock(timestamp, "REVIEW_REQUESTED", fields),
+        auditBlock(timestamp, "REVIEW_COMPLETED", {
+          ...fields,
+          Verdict: "READY",
+        }),
+      ].join(""),
+    );
+    // The merge receipt lands in another shard within the same second. It
+    // carries no reviewer authority, so the request/verdict pair above must
+    // stay matched instead of failing closed as an unordered tie.
+    writeFileSync(
+      join(auditDir, "z-merge.md"),
+      auditBlock(timestamp, "AUDIT_MERGED", {
+        "Bolt slug": boltSlugForUnit("alpha"),
+        "Entries Merged": "1",
+      }),
+    );
+
+    const observed = receipts(proj);
+    expect([...observed.mergedBoltUnits]).toEqual(["alpha"]);
+    expect(observed.unitVerdicts.get("alpha")).toBe("READY");
+    expect(observed.unitStale.has("alpha")).toBe(false);
+  });
 });

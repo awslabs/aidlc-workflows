@@ -176,7 +176,9 @@ receipt confirms the merge sequence landed on main; a name-only, non-worktree
 Bolt's `BOLT_COMPLETED` remains terminal. A completion still awaiting merge
 evidence stays on the open path, a slugless completion cannot close a
 slug-backed attempt, and a later fragment-cleanup `BOLT_FAILED` cannot erase a
-confirmed merge. An open Bolt remains on the ordinary stage-level fallback
+confirmed merge. `AUDIT_MERGED` itself carries no reviewer authority: a
+same-second row in another audit shard never makes a review request, verdict,
+or receipt ambiguous. An open Bolt remains on the ordinary stage-level fallback
 path because
 its Unit artifacts still live outside the main tree. Merging that Bolt changes
 the fingerprint domain and intentionally invalidates an earlier stage-level

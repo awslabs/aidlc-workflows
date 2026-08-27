@@ -7209,7 +7209,17 @@ export function freshReviewReceipts(
     return empty;
   }
   const eventIsCrossShardTied = (index: number): boolean => {
-    return auditEventIsCrossShardTied(events, index);
+    // AUDIT_MERGED is referee merge plumbing (main-emitted, merge-protected)
+    // with no reviewer authority: a same-second row in another shard must
+    // not make a receipt, request, or boundary in this window ambiguous.
+    const event = events[index];
+    return events.some(
+      (candidate, other) =>
+        other !== index &&
+        candidate.event !== "AUDIT_MERGED" &&
+        candidate.timestamp === event.timestamp &&
+        candidate.shard !== event.shard,
+    );
   };
   const requestTieIsSessionBoundaryOnly = (index: number): boolean => {
     const event = events[index];
@@ -7218,7 +7228,8 @@ export function freshReviewReceipts(
       if (
         other === index ||
         events[other].timestamp !== event.timestamp ||
-        events[other].shard === event.shard
+        events[other].shard === event.shard ||
+        events[other].event === "AUDIT_MERGED"
       ) {
         continue;
       }
