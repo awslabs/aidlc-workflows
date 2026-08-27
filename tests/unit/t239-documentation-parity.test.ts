@@ -146,7 +146,7 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(90);
+    expect(eventTypes.length).toBe(91);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -512,7 +512,13 @@ describe("documentation parity derives current behavior from authored implementa
 
     const cliGuide = read("docs", "guide", "12-cli-commands.md");
     for (const verb of workspaceVerbs) expect(cliGuide).toContain(`/aidlc ${verb}`);
-    const directOnlyVerbs = ["codekb-path", "codekb-scope-diff", "select-plugins"];
+    const directOnlyVerbs = [
+      "codekb-path",
+      "codekb-snapshot",
+      "codekb-publish",
+      "codekb-scope-diff",
+      "select-plugins",
+    ];
     for (const verb of directOnlyVerbs) {
       expect(workspaceVerbs).not.toContain(verb);
       expect(cliGuide).toContain("direct utility invocation");

@@ -68,6 +68,8 @@ interface CursorHookInput {
   tool_use_id?: string;
   reason?: string;
   source?: string;
+  prompt?: string;
+  user_message?: string;
   is_background_agent?: boolean;
 }
 
@@ -807,7 +809,14 @@ export async function run(
       // turn must not mint HUMAN_TURN (the approval gates' presence evidence).
       if (cursor.is_background_agent === true) return 0;
       // A real human acted this turn.
-      runCore("aidlc-record-human-turn.ts", JSON.stringify({ hook_event_name: "UserPromptSubmit" }));
+      runCore(
+        "aidlc-record-human-turn.ts",
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          ...(sessionId ? { session_id: sessionId } : {}),
+          prompt: cursor.prompt ?? cursor.user_message ?? "",
+        }),
+      );
       // Cursor's sessionStart fires only for a new conversation and carries no
       // startup/resume discriminator. Probe the core resume-rebind logic here,
       // where the same session_id is available. beforeSubmitPrompt cannot
@@ -846,8 +855,9 @@ export async function run(
     case "guards": {
       // preToolUse: the state-transition, reviewer read-scope, and review-freeze
       // guards (the Claude settings.json registration order). The core hooks
-      // self-filter by tool; a Task spawn runs the plan-approval guard before
-      // it feeds the identity ledger. Block contract conversion: core exit 2 + stderr becomes
+      // self-filter by tool; plan approval runs for both workspace mutations
+      // and Task dispatch before a spawn feeds the identity ledger. Block
+      // contract conversion: core exit 2 + stderr becomes
       // Cursor's {"permission":"deny","agent_message"} stdout JSON
       // (live-verified: the deny blocks the call and relays the reason).
       // Allow paths write {"permission":"allow"} — required under failClosed.
@@ -932,6 +942,13 @@ export async function run(
         guards.push({
           file: "aidlc-review-freeze.ts",
           input: claudeShaped("PreToolUse", reviewerToolName),
+        });
+      }
+      const planToolName = toolName === "Delete" ? "Write" : toolName;
+      if (["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"].includes(planToolName)) {
+        guards.push({
+          file: "aidlc-plan-approval-guard.ts",
+          input: claudeShaped("PreToolUse", planToolName),
         });
       }
       for (const guard of guards) {

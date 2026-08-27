@@ -587,10 +587,12 @@ export function enumerateRenderSurfaces(): Unit[] {
 }
 
 /** Exported lib functions from shared library modules. Matches a
- *  top-level `export function|const|class|async function NAME`. unitId is
- *  `function:NAME` so it joins to the `function:NAME` covers-IDs t106-t111 use. */
+ *  top-level `export function|const|class|async function NAME`. Overload
+ *  declarations collapse to one class+ID identity. unitId is `function:NAME`
+ *  so it joins to the `function:NAME` covers-IDs t106-t111 use. */
 export function enumerateExportedFunctions(): Unit[] {
   const units: Unit[] = [];
+  const identities = new Set<string>();
   const re =
     /^export\s+(?:async\s+function|function|const|class)\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
   for (const [path, rel] of [
@@ -603,12 +605,16 @@ export function enumerateExportedFunctions(): Unit[] {
   ] as const) {
     const src = readFileSync(path, "utf-8");
     for (const m of src.matchAll(re)) {
-      units.push({
+      const unit: Unit = {
         unitClass: "function",
         unitId: `function:${m[1]}`,
         minMechanism: MIN_MECHANISM.function,
         source: rel,
-      });
+      };
+      const identity = `${unit.unitClass}\0${unit.unitId}`;
+      if (identities.has(identity)) continue;
+      identities.add(identity);
+      units.push(unit);
     }
   }
   for (const [path, rel, names] of [

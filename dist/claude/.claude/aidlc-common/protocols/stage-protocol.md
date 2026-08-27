@@ -1073,7 +1073,7 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
 
 ### The ritual
 
-1. **Maintain a per-stage memory file as you work.** Append entries to `<record>/<phase>/<stage>/memory.md` (created by the engine from the shipped template when it emits the run-stage directive). Use four standard H2 headings:
+1. **Maintain a per-stage memory file as you work.** Append entries to `<record>/<phase>/<stage>/memory.md` (created by the engine from the shipped template when it emits the run-stage directive). Treat this path as an output-only target: the orchestrator never reads, probes, creates, or initializes it, and follows the active harness's diary-write discipline when inserting entries. Use four standard H2 headings:
    - **Interpretations** — choices made where the stage prose was ambiguous
    - **Deviations** — places where you intentionally departed from the stage prose, and why
    - **Tradeoffs** — alternatives considered and why you picked what you did
@@ -1161,14 +1161,19 @@ When a stage detects existing output artifacts in its artifact directory:
 bun .claude/tools/aidlc-state.ts reuse-artifact <stage-slug> \
   --decision <keep|modify|redo> \
   --artifacts "<comma-separated list of existing artifacts found>" \
-  [--repo <repo>]
+  [--repo <repo>] [--single]
 ```
 
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts`
-fields and optional `Repo` — never hand-write `**Event**:` markdown blocks.
+fields, optional `Repo`, and isolated `Workflow` when `--single` is used —
+never hand-write `**Event**:` markdown blocks.
 Use `--repo` when one repository's reuse decision must be distinguished from
-other repositories in the same stage. See `docs/reference/12-state-machine.md`
-for the canonical emitter registry.
+other repositories in the same stage. Reverse Engineering `--single` Keep
+receipts require the exact CodeKB path, every graph-declared required artifact
+as an authoritative regular file, and a `CURRENT` scope fingerprint; the
+pipeline completion check independently verifies the artifact set and freshness
+again. See
+`docs/reference/12-state-machine.md` for the canonical emitter registry.
 
 This applies to ALL stages, not just jump targets — when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice.
 
@@ -1205,3 +1210,33 @@ those decisions, dispatch the declared reviewer for every applicable unit and
 record fresh current-attempt reviews BEFORE presenting the settle/approval
 gate. The human already gave the confirming decision by choosing "Retry with
 fix"; this is not a second, silent autonomy inference.
+
+## 14. Sensor Imports
+
+A stage's `sensors:` frontmatter list is its complete set of imported checks.
+Each named manifest defines its file match, command, time budget, `fire_on`
+timing, and `default_severity`; only sensors imported by the stage are eligible
+to run. `fire_on: write` runs during matching writes and remains advisory in
+this release, even when the manifest declares `blocking`. `fire_on: gate` runs
+against matching declared deliverables when the stage enters or re-enters its
+approval gate. Advisory outcomes emit their audit rows but do not stop the
+gate. A blocking gate sensor requires a verified pass: findings, unavailable
+evaluation, malformed output, and timeouts refuse gate entry until the issue
+is fixed or the human-backed override flow in §2 completes. Autonomous mode
+cannot override a blocking sensor.
+
+Failed checks emit a `SENSOR_FAILED` audit row and write findings to
+`<record>/.aidlc-sensors/<stage-slug>/<sensor>-<fire-id>.md`; use that detail
+file to correct the output and run the check again.
+
+`required-sections` applies to markdown outputs. Unless a stage declares a
+more specific contract, it enforces the registry default of at least two H2
+headings. A stage's `## Sensors` compartment may retain extra requirements for
+particular files.
+
+`upstream-coverage` compares output prose with the stage's `consumes:`
+frontmatter. Every declared artefact must be referenced so the output shows
+which upstream inputs informed it. Stages with an empty `consumes:` list pass
+this check trivially. The compact `Imports:` and `Upstream targets:` lines in
+each stage file are the local summary; frontmatter remains authoritative when
+checks are resolved.

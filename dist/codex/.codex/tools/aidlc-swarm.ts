@@ -127,7 +127,10 @@ import {
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
-import { evaluateCodeGenerationApproval } from "./aidlc-testing-posture.ts";
+import {
+  beginCodeGeneration,
+  evaluateCodeGenerationApproval,
+} from "./aidlc-testing-posture.ts";
 
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -1218,7 +1221,7 @@ function handlePrepare(rest: string[]): void {
   const autonomy = (getField(state, "Construction Autonomy Mode") ?? "").trim();
   if (stage === "code-generation" && autonomy === "autonomous") {
     const invalid = units
-      .map((unit) => evaluateCodeGenerationApproval(projectDir, unit))
+      .map((unit) => evaluateCodeGenerationApproval(projectDir, { unit }))
       .filter((approval) => !approval.ok);
     if (invalid.length > 0) {
       fail(
@@ -1226,6 +1229,17 @@ function handlePrepare(rest: string[]): void {
           `unit before worktrees are forked: ${invalid
             .map((approval) => `${approval.unit} (${approval.reason})`)
             .join("; ")}`,
+      );
+    }
+    try {
+      for (const unit of units) {
+        beginCodeGeneration(projectDir, { unit });
+      }
+    } catch (error) {
+      fail(
+        `prepare could not start protected Code Generation authority: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
       );
     }
   }

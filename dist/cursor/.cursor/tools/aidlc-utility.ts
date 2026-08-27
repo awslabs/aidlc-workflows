@@ -6,11 +6,13 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
   basename,
   dirname,
@@ -58,6 +60,7 @@ import {
   activeIntent,
   activeSpace,
   authoritativeProjectDescription,
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
   auditShards,
@@ -89,10 +92,13 @@ import {
   isPluginEnabled,
   isoTimestamp,
   isPackageJson,
+  isValidRepoName,
   codekbDir,
   intentsDir,
   codekbRepoName,
   codekbScopeFingerprint,
+  codekbSourceFingerprint,
+  codekbStoreGeneration,
   parseReScope,
   relativeCodekbDir,
   RESERVED_RECORD_NAMES,
@@ -6431,10 +6437,347 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
   );
 }
 
+const CODEKB_ARTIFACT_FILES = [
+  "api-documentation.md",
+  "architecture.md",
+  "business-overview.md",
+  "code-quality-assessment.md",
+  "code-structure.md",
+  "component-inventory.md",
+  "dependencies.md",
+  "reverse-engineering-timestamp.md",
+  "technology-stack.md",
+] as const;
+
+function resolveCodekbRepo(
+  projectDir: string,
+  flags: Record<string, string>,
+): { space: string; repo: string; repoDir: string; storeDir: string; excludes: string[] } {
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const repo = flags.repo && flags.repo.length > 0
+    ? flags.repo
+    : codekbRepoName(projectDir, space, selection.intent ?? undefined);
+  if (!isValidRepoName(repo)) {
+    die(`Invalid --repo "${repo}": a repo name must be one path segment.`);
+  }
+  const siblingDir = join(projectDir, repo);
+  const sourceDir =
+    existsSync(siblingDir) && statSync(siblingDir).isDirectory()
+      ? siblingDir
+      : projectDir;
+  return {
+    space,
+    repo,
+    repoDir: sourceDir,
+    storeDir: codekbDir(projectDir, repo, space),
+    excludes: sourceDir === projectDir ? ["aidlc"] : [],
+  };
+}
+
+function codekbPaths(flags: Record<string, string>, command: string): string[] {
+  const paths = (flags.paths ?? "")
+    .split(",")
+    .map((path) => path.trim())
+    .filter((path) => path !== "");
+  if (paths.length === 0) {
+    die(`${command}: pass --paths <comma-separated repo-relative paths>`);
+  }
+  return [...new Set(paths)];
+}
+
+function codekbLockIntent(repo: string): string {
+  return `__codekb__${createHash("sha256").update(repo).digest("hex").slice(0, 16)}`;
+}
+
+function codekbTransactionRoot(
+  projectDir: string,
+  space: string,
+  repo: string,
+): string {
+  return join(
+    projectDir,
+    "aidlc",
+    "spaces",
+    space,
+    "intents",
+    ".aidlc-codekb-transactions",
+    repo,
+  );
+}
+
+function trustedCodekbRecoveryPath(
+  projectReal: string,
+  relativePath: string,
+): string {
+  try {
+    return assertNoSymlinkInChainOrThrow(projectReal, relativePath);
+  } catch (error) {
+    throw new Error(
+      `refusing CodeKB recovery through an unsafe project path: ${errorMessage(error)}`,
+    );
+  }
+}
+
+function recoverCodekbTransactions(
+  projectDir: string,
+  space: string,
+  repo: string,
+): void {
+  const projectReal = realpathSync(projectDir);
+  const rootRelative = relative(
+    projectReal,
+    codekbTransactionRoot(projectReal, space, repo),
+  );
+  const storeRelative = join("aidlc", "spaces", space, "codekb", repo);
+  const root = trustedCodekbRecoveryPath(projectReal, rootRelative);
+  const storeDir = trustedCodekbRecoveryPath(projectReal, storeRelative);
+  if (!existsSync(root)) return;
+  const rootStat = lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error(`refusing CodeKB recovery from non-directory transaction root: ${root}`);
+  }
+  for (const name of readdirSync(root).sort()) {
+    const txnRelative = join(rootRelative, name);
+    const txn = trustedCodekbRecoveryPath(projectReal, txnRelative);
+    const txnStat = lstatSync(txn);
+    if (!txnStat.isDirectory() || txnStat.isSymbolicLink()) {
+      throw new Error(`refusing CodeKB recovery from non-directory transaction: ${txn}`);
+    }
+    const backupRelative = join(txnRelative, "backup");
+    const backup = trustedCodekbRecoveryPath(projectReal, backupRelative);
+    if (!existsSync(storeDir) && existsSync(backup)) {
+      const backupStat = lstatSync(backup);
+      if (!backupStat.isDirectory() || backupStat.isSymbolicLink()) {
+        throw new Error(`refusing CodeKB recovery from non-directory backup: ${backup}`);
+      }
+      const checkedStore = trustedCodekbRecoveryPath(projectReal, storeRelative);
+      const checkedBackup = trustedCodekbRecoveryPath(projectReal, backupRelative);
+      mkdirSync(dirname(checkedStore), { recursive: true });
+      renameSync(checkedBackup, checkedStore);
+    }
+    rmSync(
+      trustedCodekbRecoveryPath(projectReal, txnRelative),
+      { recursive: true, force: true },
+    );
+  }
+  rmSync(
+    trustedCodekbRecoveryPath(projectReal, rootRelative),
+    { recursive: true, force: true },
+  );
+}
+
+function withCodekbLock<T>(
+  projectDir: string,
+  space: string,
+  repo: string,
+  fn: () => T extends Promise<unknown> ? never : T,
+): T extends Promise<unknown> ? never : T {
+  return withAuditLock(
+    projectDir,
+    fn,
+    codekbLockIntent(repo),
+    space,
+  );
+}
+
+// Snapshot the two generations a scan is built from. The stage takes this
+// immediately before scanning and passes both tokens to codekb-publish.
+function handleCodekbSnapshot(
+  projectDir: string,
+  flags: Record<string, string>,
+): void {
+  const { space, repo, repoDir, storeDir, excludes } =
+    resolveCodekbRepo(projectDir, flags);
+  const paths = codekbPaths(flags, "codekb-snapshot");
+  const snapshot = withCodekbLock(projectDir, space, repo, () => {
+    recoverCodekbTransactions(projectDir, space, repo);
+    const sourceFingerprint = codekbSourceFingerprint(repoDir, paths, excludes);
+    if (sourceFingerprint === null) {
+      die(`codekb-snapshot: cannot fingerprint source paths: ${paths.join(", ")}`);
+    }
+    return {
+      repo,
+      store: `${relativeCodekbDir(projectDir, repo, space)}/`,
+      paths,
+      store_generation: codekbStoreGeneration(storeDir),
+      source_fingerprint: sourceFingerprint,
+    };
+  });
+  if (flags.json === "true") {
+    process.stdout.write(`${JSON.stringify(snapshot)}\n`);
+    return;
+  }
+  process.stdout.write(
+    `STORE_GENERATION ${snapshot.store_generation}\n` +
+      `SOURCE_FINGERPRINT ${snapshot.source_fingerprint}\n` +
+      `SOURCE_PATHS ${snapshot.paths.join(",")}\n`,
+  );
+}
+
+function readCodekbCandidate(
+  projectDir: string,
+  stagedFlag: string | undefined,
+): {
+  files: Map<string, Buffer>;
+  scope: Extract<ReturnType<typeof parseReScope>, { ok: true }>["scope"];
+} {
+  if (!stagedFlag) {
+    die("codekb-publish: pass --staged <directory-containing-all-nine-artifacts>");
+  }
+  const stagedPath = resolve(projectDir, stagedFlag);
+  const rel = relative(projectDir, stagedPath);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    die("codekb-publish: --staged must resolve inside the project directory");
+  }
+  let stagedStat: ReturnType<typeof lstatSync>;
+  try {
+    stagedStat = lstatSync(stagedPath);
+  } catch {
+    die(`codekb-publish: staged directory not found: ${stagedFlag}`);
+  }
+  if (!stagedStat.isDirectory() || stagedStat.isSymbolicLink()) {
+    die("codekb-publish: --staged must be a real directory, not a symlink");
+  }
+  const projectReal = realpathSync(projectDir);
+  const stagedDir = realpathSync(stagedPath);
+  const realRel = relative(projectReal, stagedDir);
+  if (
+    realRel === "" ||
+    realRel === ".." ||
+    realRel.startsWith(`..${sep}`) ||
+    isAbsolute(realRel)
+  ) {
+    die("codekb-publish: --staged must not escape the project through a symlinked ancestor");
+  }
+  const entries = readdirSync(stagedDir).sort();
+  const required = [...CODEKB_ARTIFACT_FILES].sort();
+  if (JSON.stringify(entries) !== JSON.stringify(required)) {
+    die(
+      `codekb-publish: staged directory must contain exactly the nine CodeKB artifacts; ` +
+        `found: ${entries.join(", ") || "(empty)"}`,
+    );
+  }
+  const files = new Map<string, Buffer>();
+  for (const name of required) {
+    const path = join(stagedDir, name);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      die(`codekb-publish: staged artifact must be a regular file: ${name}`);
+    }
+    files.set(name, readFileSync(path));
+  }
+  const parsed = parseReScope(
+    files.get("reverse-engineering-timestamp.md")?.toString("utf-8") ?? "",
+  );
+  if (!parsed.ok) {
+    die(
+      `codekb-publish: staged reverse-engineering-timestamp.md has an invalid ` +
+        `Scope of Analysis block (${parsed.reason}: ${parsed.detail})`,
+    );
+  }
+  return { files, scope: parsed.scope };
+}
+
+function handleCodekbPublish(
+  projectDir: string,
+  flags: Record<string, string>,
+): void {
+  const { space, repo, repoDir, storeDir, excludes } =
+    resolveCodekbRepo(projectDir, flags);
+  const expectedStore = flags["expect-store"];
+  const expectedSource = flags["expect-source"];
+  if (!expectedStore || !expectedSource) {
+    die(
+      "codekb-publish: pass --expect-store <generation> and --expect-source <fingerprint> from codekb-snapshot",
+    );
+  }
+  const sourcePaths = codekbPaths(flags, "codekb-publish");
+  const candidate = readCodekbCandidate(projectDir, flags.staged);
+  for (const path of candidate.scope.analyzedPaths) {
+    if (!sourcePaths.includes("./") && !scopePathCovered(sourcePaths, path)) {
+      die(
+        `codekb-publish: snapshot paths do not cover candidate analyzed path "${path}"; ` +
+          `take a fresh codekb-snapshot over the complete candidate scope`,
+      );
+    }
+  }
+
+  const result = withCodekbLock(projectDir, space, repo, () => {
+    recoverCodekbTransactions(projectDir, space, repo);
+    const currentStore = codekbStoreGeneration(storeDir);
+    if (currentStore !== expectedStore) {
+      die(
+        `CODEKB_STORE_CHANGED: expected ${expectedStore}, found ${currentStore}. ` +
+          `Re-read the current store, re-merge the staged scan, take a fresh snapshot, and retry.`,
+      );
+    }
+    const currentSource = codekbSourceFingerprint(repoDir, sourcePaths, excludes);
+    if (currentSource === null || currentSource !== expectedSource) {
+      die(
+        `CODEKB_SOURCE_CHANGED: expected ${expectedSource}, found ${currentSource ?? "unavailable"}. ` +
+          `Re-scan the affected source, re-synthesize all nine artifacts, take a fresh snapshot, and retry.`,
+      );
+    }
+    const currentCandidateFingerprint = codekbScopeFingerprint(
+      repoDir,
+      candidate.scope.analyzedPaths,
+      excludes,
+    );
+    if (
+      candidate.scope.fingerprint !== currentCandidateFingerprint &&
+      !(candidate.scope.fingerprint === null && currentCandidateFingerprint === null)
+    ) {
+      die(
+        `CODEKB_CANDIDATE_STALE: staged fingerprint ` +
+          `${candidate.scope.fingerprint ?? "unknown"} does not match the current source ` +
+          `${currentCandidateFingerprint ?? "unknown"}. Re-mint the timestamp and retry.`,
+      );
+    }
+
+    const txn = join(
+      codekbTransactionRoot(projectDir, space, repo),
+      `${process.pid}-${randomUUID()}`,
+    );
+    const next = join(txn, "next");
+    const backup = join(txn, "backup");
+    mkdirSync(next, { recursive: true });
+    try {
+      for (const [name, bytes] of candidate.files) {
+        writeFileSync(join(next, name), bytes);
+      }
+      mkdirSync(dirname(storeDir), { recursive: true });
+      const hadStore = existsSync(storeDir);
+      if (hadStore) renameSync(storeDir, backup);
+      try {
+        renameSync(next, storeDir);
+      } catch (error) {
+        if (hadStore && existsSync(backup) && !existsSync(storeDir)) {
+          renameSync(backup, storeDir);
+        }
+        throw error;
+      }
+      rmSync(backup, { recursive: true, force: true });
+      return {
+        repo,
+        published: `${relativeCodekbDir(projectDir, repo, space)}/`,
+        generation: codekbStoreGeneration(storeDir),
+      };
+    } finally {
+      rmSync(txn, { recursive: true, force: true });
+    }
+  });
+  process.stdout.write(
+    flags.json === "true"
+      ? `${JSON.stringify(result)}\n`
+      : `PUBLISHED ${result.published} ${result.generation}\n`,
+  );
+}
+
 // `aidlc-utility.ts codekb-scope-diff [--repo <name>] [--compare <timestamp.md>]
 // [--json]` - read-only. The deterministic half of the reverse-engineering
-// rerun guard (the store is shared space-level knowledge; a narrower rerun
-// overwrites it last-writer-wins, so the human decides on evidence).
+// rerun guard (the store is shared space-level knowledge; compare mode reports
+// which paths/components are no longer claimed as verified deep coverage).
 //
 // Status mode (default): parse the STORE's reverse-engineering-timestamp.md
 // scope block and recompute the content fingerprint over its analyzed paths.
@@ -6508,7 +6851,7 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
   if (!parsed.ok) {
     emit(
       { verdict: "UNKNOWN_SCOPE", reason: parsed.reason, detail: parsed.detail },
-      `UNKNOWN_SCOPE (${parsed.reason}): ${parsed.detail}. The store predates scope tracking - a rerun replaces it without a coverage comparison.`,
+      `UNKNOWN_SCOPE (${parsed.reason}): ${parsed.detail}. The store predates scope tracking. A focused merge may retain its prose, but prior paths and components are not claimed as verified coverage until rescanned.`,
     );
     return;
   }
@@ -6550,7 +6893,7 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
     if (narrower) {
       emit(
         payload,
-        `NARROWER: replacing the store discards deep knowledge of:\n` +
+        `NARROWER: the incoming scope no longer claims verified deep coverage for:\n` +
           discardedPaths.map((p) => `  - ${p}`).join("\n") +
           (discardedComponents.length > 0
             ? `\n  components: ${discardedComponents.join(", ")}`
@@ -7898,6 +8241,12 @@ export async function main(argv: string[]): Promise<void> {
     case "document-input":
       await handleDocumentInput(projectDir);
       break;
+    case "codekb-snapshot":
+      handleCodekbSnapshot(projectDir, flags);
+      break;
+    case "codekb-publish":
+      handleCodekbPublish(projectDir, flags);
+      break;
     // codekb-scope-diff - read-only query verb. Compares the codekb store's
     // recorded scope of analysis against the live tree (status) or an
     // incoming run's timestamp (--compare). The RE stage's rerun guard.
@@ -7982,7 +8331,7 @@ export async function main(argv: string[]): Promise<void> {
       die(
         `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
           "Available commands: help, version, status, doctor, intent-create, intent, space, " +
-          "space-create, codekb-path, project-description, document-input, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
+          "space-create, codekb-path, codekb-snapshot, codekb-publish, project-description, document-input, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
           "recompose, scope-change, config-change, config-get, config-list, set-status, " +
           "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
           "Common options: [--project-dir <path>] [--scope <scope>] [--json]"

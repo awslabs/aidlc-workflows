@@ -88,8 +88,11 @@ fields that carry the structural weight:
 | `reviewer` / `review_artifact` | Optional pair — the review agent and the required Markdown `produces` entry that exclusively owns its `## Review` appendix |
 
 The body opens with `## Steps` — the imperative prose the lead agent follows.
-The `## Sensors` and `## Learn` compartments come after it. For the complete
-field table, types, and constraints, see
+The `## Sensors` compartment then summarizes output location, exact frontmatter
+imports, and upstream targets; preserve any stage-specific sensor exception.
+The final `## Learn` compartment points to `stage-protocol.md` §13, with the
+bootstrap no-gate exception where applicable. For the complete field table,
+types, and constraints, see
 [Field reference — when to use](../reference/15-stage-definition.md#field-reference-when-to-use).
 
 ### 3. Wire the dependency edges so the graph places it
@@ -196,7 +199,9 @@ bun .claude/tools/aidlc-orchestrate.ts next --stage <your-slug> --single
 The engine's `--single` mode runs that one stage in isolation. It emits a single
 `run-stage` directive for the stage (with its lead agent, resolved
 consumes/produces paths, rules, and sensors), the conductor runs it, and a
-synthetic-id `STAGE_STARTED`/`STAGE_COMPLETED` pair is committed to the audit log.
+synthetic-id lifecycle is committed to the audit log: `next --single` records
+`STAGE_STARTED` before dispatch, and `report --single` requires that boundary
+before recording `STAGE_COMPLETED`.
 The directive carries `single: true`, so the conductor runs the configured body,
 topology, reviewer, and completion checks, reports once with
 `report --single --stage <slug> --result completed`, and stops on `done`. It does

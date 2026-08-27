@@ -168,6 +168,17 @@ function unselectedNewWorkRoutingAsk(): Record<string, unknown> {
   };
 }
 
+function legacyPlanApprovalRecoveryAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    question:
+      "Recover the current legacy Code Generation Plan Approval capability?",
+    ask_type: "legacy-plan-approval-recovery",
+    response_route: "next",
+    recovery_choice: "Recover Plan Approval",
+  };
+}
+
 function print(): Record<string, unknown> {
   return { kind: "print", message: "AIDLC framework version 0.0.0" };
 }
@@ -204,6 +215,45 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("run-stage well-formed -> VALID", () => {
     expect(validateDirective(runStage()).valid).toBe(true);
+  });
+
+  test("Code Generation directives validate matching legacy Plan Approval choices", () => {
+    const choices = {
+      approve: "Approve Plan [0123456789ab]",
+      request_changes: "Request Changes [0123456789ab]",
+    };
+    expect(
+      errs({
+        ...runStage(),
+        stage: "code-generation",
+        legacy_plan_approval_choices: choices,
+      }),
+    ).toBe("VALID");
+    expect(
+      errs({
+        ...invokeSwarm(),
+        legacy_plan_approval_choices: choices,
+      }),
+    ).toBe("VALID");
+    expect(
+      errs({
+        ...runStage(),
+        legacy_plan_approval_choices: {
+          ...choices,
+          request_changes: "Request Changes [fedcba987654]",
+        },
+      }),
+    ).toContain(
+      "legacy_plan_approval_choices must carry matching protected choice labels",
+    );
+    expect(
+      errs({
+        ...dispatchSubagent(),
+        legacy_plan_approval_choices: choices,
+      }),
+    ).toContain(
+      "dispatch-subagent: unknown key: legacy_plan_approval_choices",
+    );
   });
 
   test("run-stage accepts validated protocol module hints", () => {
@@ -290,6 +340,18 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(
       errs({ ...unselectedNewWorkRoutingAsk(), available_intents: ["fixture", 42] }),
     ).toContain("ask: available_intents[1] must be string");
+  });
+
+  test("legacy Plan Approval recovery ask carries one exact human takeover choice", () => {
+    expect(validateDirective(legacyPlanApprovalRecoveryAsk()).valid).toBe(true);
+    expect(
+      errs({
+        ...legacyPlanApprovalRecoveryAsk(),
+        recovery_choice: "Approve Plan",
+      }),
+    ).toContain(
+      'legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"',
+    );
   });
 
   test("new-work-routing ask rejects a report response route", () => {

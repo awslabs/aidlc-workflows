@@ -45,8 +45,6 @@ outputs: build-instructions.md, integration-test-instructions.md, performance-te
 
 # Build and Test
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
 ## Steps
 
 ### Step 1: Analyze Testing Requirements
@@ -275,51 +273,22 @@ and test commands as part of execution. The instruction artefacts are
 the agent-authored outputs the markdown-shape sensors check; the build
 itself emits exit codes and a results report.
 
-The imported sensors check those outputs:
+Imports: `required-sections`, `upstream-coverage`, `type-check`.
 
-- **`required-sections`** verifies each instruction file contains the
-  registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the prose references the upstream
-  artefacts this stage consumes (`code-generation-plan`,
-  `unit-test-instructions`, `code-summary`).
-- **`type-check`** runs against any TypeScript/TSX code touched as part
-  of test generation (matches `**/*.{ts,tsx}`).
+Upstream targets: `code-generation-plan`, `unit-test-instructions`, `code-summary`.
 
-`linter` is intentionally NOT imported. The canonical lint runs as part
-of the build pipeline this stage drives — double-firing the framework
-sensor would produce redundant findings against the same files. The
-build's own exit code is the load-bearing signal.
+`type-check` inspects matching TypeScript/TSX code touched during test
+generation.
+
+`linter` is intentionally NOT imported. The canonical lint runs in the build
+pipeline this stage drives, so importing it would duplicate findings; the
+build exit code remains the authoritative signal.
 
 ## Learn
 
-While running this stage, record observations in the engine-created
-`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
-never read, probe, create, or initialize it. Follow the active harness's
-diary-write discipline when inserting entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-Before the approval gate, run the `stage-protocol.md` §13
-`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
-model, reads memory.md and returns the candidates for the structured question.
-For each entry the user keeps, write to the appropriate
-harness destination per `stage-protocol.md` §13 — never to this stage file:
-
-- Prescriptive rule → a practice line under the routed heading in
-  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
-- Verification check → new manifest at `.aidlc/sensors/aidlc-<id>.md`
-  (capability descriptor only — no `applies_to`); add the new id to
-  the relevant stage's `sensors: [...]` frontmatter list to wire it
-
-Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
-file stays in the artefact directory as part of the stage's permanent record.
-
-Stage files are immutable framework artefacts — the ritual writes into the
-harness, not into this file. Next time this stage runs, the new rules and
-sensors load automatically.
+Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
+under the four standard headings while working; before the approval gate,
+surface candidates with `aidlc-learnings.ts`;
+still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
+with the tool. The memory file stays in the artefact directory, and the stage
+file remains immutable.

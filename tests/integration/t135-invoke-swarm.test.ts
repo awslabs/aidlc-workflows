@@ -65,6 +65,7 @@
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -73,7 +74,7 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -90,10 +91,18 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  toPosix,
+  writeActiveDirectiveMarker,
+  writePlanApprovalReceipt,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
+  evaluateCodeGenerationApproval,
+  legacyPlanApprovalGuardState,
   renderTestingContract,
+  resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
@@ -296,8 +305,22 @@ function setAutonomous(proj: string): void {
   writeFileSync(statePath, state);
 }
 
-function seedApprovedCodeGenerationPlan(proj: string, unit: string): void {
+function seedApprovedCodeGenerationPlan(
+  proj: string,
+  unit: string,
+  publishMarker = true,
+): void {
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  if (publishMarker) {
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage",
+      stage: "code-generation",
+      unit,
+      state_sha256: createHash("sha256").update(state).digest("hex"),
+    });
+  }
   const contract = resolveTestingPosture(proj);
+  const authority = resolveCodeGenerationAuthority(proj, { unit });
   const dir = join(
     seededRecordDir(proj),
     "construction",
@@ -314,6 +337,7 @@ function seedApprovedCodeGenerationPlan(proj: string, unit: string): void {
     plan,
     instructions,
     contract.contract_sha256,
+    authority,
   );
   writeFileSync(
     join(dir, "code-generation-questions.md"),
@@ -322,10 +346,36 @@ function seedApprovedCodeGenerationPlan(proj: string, unit: string): void {
       `[Approval Fingerprint]: ${fingerprint}`,
       "A. Approve Plan",
       "B. Request Changes",
-      "[Answer]: A. Approve Plan",
+      "[Answer]: Approve Plan",
       "",
     ].join("\n"),
   );
+  const questionsPath = join(dir, "code-generation-questions.md");
+  const questions = readFileSync(questionsPath, "utf-8");
+  writePlanApprovalReceipt(proj, {
+    version: 1,
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    directiveEpoch: authority.directiveEpoch,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile: toPosix(relative(proj, questionsPath)),
+    promptSha256: createHash("sha256")
+      .update(
+        `${questions
+          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
+          .trimEnd()}\n`,
+      )
+      .digest("hex"),
+    sourceFloor: authority.sourceFloor,
+    markerRevision: authority.markerRevision,
+    session: "fixture-session",
+    challengeId: "fixture-challenge",
+    choice: "Approve Plan",
+    questionsSha256: createHash("sha256").update(questions).digest("hex"),
+    certifiedSourceSha256: authority.sourceFloor,
+    status: "approved",
+  });
 }
 
 function logWorktreeReview(
@@ -617,8 +667,30 @@ afterAll(() => {
 
 describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from t135-invoke-swarm.sh, plan 8)", () => {
   test("1: autonomy granted + eligible batch -> engine emits invoke-swarm", () => {
-    const { directive } = runNext(seedCodegenProject("autonomous"));
+    const proj = seedCodegenProject("autonomous");
+    const { directive } = runNext(proj);
     expect(directive.kind).toBe("invoke-swarm");
+    const marker = JSON.parse(
+      readFileSync(
+        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        "utf-8",
+      ),
+    ) as { kind?: string; stage?: string; code_generation_source_sha256?: string };
+    expect(marker.kind).toBe("invoke-swarm");
+    expect(marker.stage).toBe("code-generation");
+    expect(marker.code_generation_source_sha256).toMatch(/^[0-9a-f]{64}$/);
+  }, 30000);
+
+  test("1a: legacy swarm planning selects concrete units from the real marker", () => {
+    const proj = seedCodegenProject("autonomous");
+    const { directive } = runNext(proj);
+    expect(directive.kind).toBe("invoke-swarm");
+    expect(legacyPlanApprovalGuardState(proj).target).toEqual({ unit: "a" });
+    seedApprovedCodeGenerationPlan(proj, "a", false);
+    const reentry = runNext(proj).directive;
+    expect(reentry.kind).toBe("invoke-swarm");
+    expect(legacyPlanApprovalGuardState(proj).target).toEqual({ unit: "b" });
+    expect(evaluateCodeGenerationApproval(proj, { unit: "a" }).ok).toBe(true);
   }, 30000);
 
   test("1b: invoke-swarm names the batch units off the compiled bolt_dag (order-preserved)", () => {

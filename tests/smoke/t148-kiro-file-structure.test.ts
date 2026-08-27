@@ -380,6 +380,8 @@ describe("t148 dist/kiro file structure", () => {
       "execute_bash",
       "execute_bash",
       "execute_bash",
+      "execute_bash",
+      "fs_write",
       "fs_write",
       "subagent",
       "subagent",
@@ -412,6 +414,7 @@ describe("t148 dist/kiro file structure", () => {
     for (const [name, config] of configs) {
       if (!((config.tools as string[]) ?? []).includes("fs_write")) continue;
       const freeze = registrationMatchers(config, "preToolUse", "review-freeze");
+      const plan = registrationMatchers(config, "preToolUse", "plan-approval-guard");
       const audit = registrationMatchers(config, "postToolUse", "audit-and-sensors");
       for (const tool of REGISTRATION_TOOL_NAMES.writes) {
         expect(
@@ -419,10 +422,18 @@ describe("t148 dist/kiro file structure", () => {
           `${name}: freeze selection for ${tool}`,
         ).toHaveLength(1);
         expect(
+          plan.filter((matcher) => matchesKiroMatcher(matcher, tool)),
+          `${name}: plan approval selection for ${tool}`,
+        ).toHaveLength(1);
+        expect(
           audit.filter((matcher) => matchesKiroMatcher(matcher, tool)),
           `${name}: audit selection for ${tool}`,
         ).toHaveLength(1);
       }
+      expect(
+        plan.filter((matcher) => matchesKiroMatcher(matcher, "execute_bash")),
+        `${name}: plan approval shell selection`,
+      ).toHaveLength(1);
     }
 
     for (const name of [
@@ -465,6 +476,26 @@ describe("t148 dist/kiro file structure", () => {
     }
 
     expect(matchesKiroMatcher("write|fs_write", "write")).toBe(false);
+  });
+
+  test("Kiro CLI standalone v3 hooks enforce human turns and plan approval", () => {
+    const hooks = join(K, "hooks");
+    const human = JSON.parse(
+      readFileSync(join(hooks, "aidlc-record-human-turn.kiro.hook"), "utf-8"),
+    ) as { when: { type: string }; then: { command: string } };
+    const plan = JSON.parse(
+      readFileSync(join(hooks, "aidlc-plan-approval-guard.kiro.hook"), "utf-8"),
+    ) as { when: { type: string; toolTypes: string[] }; then: { command: string } };
+    expect(human.when.type).toBe("promptSubmit");
+    expect(human.then.command).toContain("aidlc-record-human-turn.ts");
+    expect(plan.when.type).toBe("preToolUse");
+    expect(plan.when.toolTypes).toEqual([
+      "write",
+      "shell",
+      "subagent",
+      ".*invoke_sub_agent.*",
+    ]);
+    expect(plan.then.command).toContain("plan-approval-guard");
   });
 
   test("workspace activation ships chat.defaultAgent=aidlc (D-5)", () => {

@@ -90,6 +90,19 @@ describe("enumeration is non-empty for every unit class (anti-rot guard a)", () 
     expect(counts["render-surface"]).toBe(7); // statusline render branches (incl. agent display)
   });
 
+  test("enumerated identities are unique, including overloaded functions", () => {
+    const units = enumerateAllUnits();
+    const identities = units.map((u) => `${u.unitClass}\0${u.unitId}`);
+    expect(new Set(identities).size).toBe(identities.length);
+    expect(
+      units.filter(
+        (u) =>
+          u.unitClass === "function" &&
+          u.unitId === "function:readRegularFileNoFollowOrThrow",
+      ),
+    ).toHaveLength(1);
+  });
+
   test("every row carries a valid status and a minMechanism matching its class", () => {
     const valid = new Set([
       "covered",
@@ -794,6 +807,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t280-contract-design-wiring.test.ts",
     "unit/t282-state-version-doctor.test.ts",
     "unit/t283-copilot-engine-cursor.test.ts",
+    "unit/t304-codekb-cumulative-merge.test.ts",
     "unit/t306-learnings-cid-collision-followup.test.ts",
     "unit/t324-doctor-hooks-disabled.test.ts",
     "unit/t240-opencode-packaging.test.ts",
@@ -879,6 +893,12 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t317 creates a deterministic plugin from copied tools, then proves the
     // scaffold validates, builds, and composes without checkout paths.
     "unit/t317-plugin-create.test.ts",
+    // t327 drives the real next/continue transport because stable authority
+    // publication is observable only across the emitted continuation cursor.
+    "unit/t327-code-generation-authority-publication.test.ts",
+    // t328 drives the shipped log, human-turn, and begin CLIs so protected
+    // challenge/response receipts and cross-process lock ordering are genuine.
+    "unit/t328-plan-approval-runtime-authority.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",
@@ -1060,6 +1080,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t328-nodag-per-unit-continuity.test.ts",
     "unit/t312-orchestrate-session-binding.test.ts",
     "unit/t255-workspace-sync.test.ts",
+    "unit/t314-minimal-scope-performance.test.ts",
     "unit/t314-source-freshness-receipts.test.ts",
     // t305 runs the shipped review/state tools because source-attribution
     // acceptance depends on actual audit receipts and completion refusals.

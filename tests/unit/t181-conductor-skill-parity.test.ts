@@ -475,13 +475,30 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
   });
 
-  test("stage definitions preserve the engine-owned diary boundary", () => {
+  test("stage definitions preserve the centralized engine-owned diary boundary", () => {
     const failures: string[] = [];
+    const protocol = readFileSync(
+      join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"),
+      "utf-8",
+    );
+    for (const required of [
+      "created by the engine from the shipped template",
+      "Treat this path as an output-only target",
+      "the orchestrator never reads, probes, creates, or initializes it",
+    ]) {
+      if (!protocol.includes(required)) {
+        failures.push(`stage-protocol.md §13 missing: ${required}`);
+      }
+    }
+
     for (const rel of stageDefinitionFiles()) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       if (!body.includes("memory.md")) continue;
-      if (!body.includes("engine-created")) {
-        failures.push(`${rel} missing engine-created diary ownership`);
+      if (
+        !body.includes("engine-created") &&
+        !body.includes("stage-protocol.md §13")
+      ) {
+        failures.push(`${rel} missing centralized diary contract reference`);
       }
       for (const retired of [
         "create on stage start if absent",

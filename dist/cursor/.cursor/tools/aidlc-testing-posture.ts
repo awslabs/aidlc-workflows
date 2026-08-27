@@ -8,15 +8,43 @@
 // swarm referee consume the same contract.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
+  auditBlockField,
   docsRoot,
   getField,
+  latestMainWorkflowStageRunFloorForProject,
+  LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
+  clearPlanApprovalChallenge,
+  clearPlanApprovalLegacyOffer,
+  clearPlanApprovalReceipt,
+  readActiveDirectiveMarker,
+  readAuditShardEvents,
+  readPlanApprovalChallenge,
+  readPlanApprovalLegacyOffer,
+  readPlanApprovalLegacyRecoveryChallenge,
+  readPlanApprovalReceipt,
+  readPlanApprovalResponse,
+  readPlanApprovalViolation,
+  resolveBoltDag,
   resolveProjectDir,
   resolveWorkflowSelection,
   stateFilePath,
+  toPosix,
+  UNBINDABLE_FINGERPRINT,
+  validateUnitName,
   visibleMarkdownLines,
+  withActiveDirectiveLock,
+  withAuditLock,
+  workspaceSourceFingerprint,
+  writePlanApprovalChallenge,
+  writePlanApprovalLegacyRecoveryResponse,
+  writePlanApprovalReceipt,
+  writePlanApprovalResponse,
+  type PlanApprovalRuntimeChallenge,
+  type PlanApprovalRuntimeIdentity,
+  type PlanApprovalRuntimeReceipt,
 } from "./aidlc-lib.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
@@ -65,14 +93,40 @@ export interface TestingPostureContract extends TestingPostureContractBody {
 
 export interface CodeGenerationApproval {
   ok: boolean;
-  unit: string;
+  unit: string | null;
   reason: string;
   planExists: boolean;
   instructionsExist: boolean;
   approved: boolean;
   contractValid: boolean;
   fingerprintValid: boolean;
+  receiptValid: boolean;
   contractHash: string | null;
+  approvalFingerprint: string | null;
+  directiveEpoch: string | null;
+}
+
+export interface CodeGenerationTarget {
+  unit: string | null;
+}
+
+export interface CodeGenerationAuthority extends CodeGenerationTarget {
+  targetId: string;
+  intentId: string;
+  directiveEpoch: string;
+  runFloor: string;
+  stageDir: string;
+  sourceFloor: string;
+  markerRevision: number;
+}
+
+export interface PlanApprovalQuestionEvidence {
+  authority: CodeGenerationAuthority;
+  fingerprint: string;
+  questionsPath: string;
+  questionsRelativePath: string;
+  questionsSha256: string;
+  promptSha256: string;
 }
 
 interface ClassifiedPosture {
@@ -90,6 +144,7 @@ const TESTABLE_LAYERS = [
   "Frontend behavior",
 ];
 const CONTRACT_HEADING = "## Testing Contract";
+export const PLAN_APPROVAL_CHECKPOINT = "Code Generation Plan Approval";
 const CONTRACT_MARKER_RE =
   /^[ \t]*AIDLC-TESTING-CONTRACT[ \t]*:[ \t]*(sha256:[0-9a-f]{64})[ \t]*$/;
 const MARKDOWN_HEADING_RE = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/;
@@ -765,11 +820,20 @@ export function approvalFingerprint(
   plan: string,
   instructions: string,
   contractHash: string,
+  authority: Pick<
+    CodeGenerationAuthority,
+    "targetId" | "intentId" | "directiveEpoch" | "runFloor" | "sourceFloor"
+  >,
 ): string {
   return hashObject({
     plan,
     instructions,
     testing_contract: contractHash,
+    target: authority.targetId,
+    intent: authority.intentId,
+    directive_epoch: authority.directiveEpoch,
+    run_floor: authority.runFloor,
+    source_floor: authority.sourceFloor,
   });
 }
 
@@ -868,41 +932,701 @@ export function promptTestingContractMarkers(text: string): string[] {
   return Array.from(hashes);
 }
 
+function normalizeCodeGenerationTarget(target: CodeGenerationTarget): CodeGenerationTarget {
+  if (target.unit === null) return { unit: null };
+  const unit = target.unit.trim();
+  const error = validateUnitName(unit);
+  if (error) throw new Error(error);
+  return { unit };
+}
+
+export function codeGenerationTargetId(target: CodeGenerationTarget): string {
+  const normalized = normalizeCodeGenerationTarget(target);
+  return normalized.unit === null ? "stage:code-generation" : `unit:${normalized.unit}`;
+}
+
+export function resolveCodeGenerationAuthority(
+  projectDir: string,
+  requestedTarget: CodeGenerationTarget,
+): CodeGenerationAuthority {
+  const target = normalizeCodeGenerationTarget(requestedTarget);
+  const statePath = stateFilePath(projectDir);
+  if (!existsSync(statePath)) {
+    throw new Error("Code Generation approval authority requires an active workflow state");
+  }
+  const state = readFileSync(statePath, "utf-8");
+  const marker = readActiveDirectiveMarker(projectDir, state);
+  if (marker?.version !== 2) {
+    throw new Error(
+      "Code Generation approval authority is unavailable because the active directive is missing, stale, or legacy; run a fresh `next`",
+    );
+  }
+  if (marker.stage !== "code-generation") {
+    throw new Error(
+      `Code Generation approval authority does not match active directive stage "${marker.stage}"`,
+    );
+  }
+  if (marker.kind !== "run-stage" && marker.kind !== "invoke-swarm") {
+    throw new Error(
+      `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
+    );
+  }
+
+  if (target.unit === null) {
+    if (marker.kind !== "run-stage" || marker.unit !== undefined) {
+      throw new Error(
+        "Stage-level Code Generation approval requires a zero-Unit run-stage directive",
+      );
+    }
+  } else if (marker.kind === "run-stage") {
+    if (marker.unit !== target.unit) {
+      throw new Error(
+        `Code Generation approval target unit "${target.unit}" does not match active directive unit "${marker.unit ?? "(none)"}"`,
+      );
+    }
+  } else {
+    const dag = resolveBoltDag(projectDir);
+    if (
+      dag.state !== "ok" ||
+      !dag.units.includes(target.unit) ||
+      !marker.units?.includes(target.unit)
+    ) {
+      throw new Error(
+        `Code Generation approval target unit "${target.unit}" is not in the active swarm directive and authoritative Unit DAG`,
+      );
+    }
+  }
+
+  const issuanceRevision =
+    marker.code_generation_authority_revision ??
+    marker.active_attempt?.result_revision ??
+    marker.revision;
+  if (!Number.isInteger(issuanceRevision)) {
+    throw new Error("Code Generation active directive has no stable issuance revision");
+  }
+  const markerRevision = Number(issuanceRevision);
+  const targetId = codeGenerationTargetId(target);
+  const intentId = marker.intent_uuid ?? "bare-space";
+  const sourceFloor =
+    marker.code_generation_source_sha256 ?? UNBINDABLE_FINGERPRINT;
+  const runFloor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    "code-generation",
+    getField(state, "Construction Iteration")?.trim() === "unit-major",
+  );
+  const directiveEpoch = hashObject({
+    version: marker.version,
+    project: marker.project_sha256,
+    intent: marker.intent_uuid,
+    state: marker.state_sha256,
+    stage: marker.stage,
+    directive_unit: marker.unit ?? null,
+    kind: marker.kind,
+    issuance_revision: issuanceRevision,
+    owner_epoch: marker.owner_epoch,
+    context_epoch: marker.context_epoch,
+    continue_token: marker.continue_token_sha256 ?? null,
+    target: targetId,
+    source_floor: sourceFloor,
+  });
+  return {
+    unit: target.unit,
+    targetId,
+    intentId,
+    directiveEpoch,
+    runFloor,
+    stageDir: codeGenerationRecordDir(projectDir, target.unit),
+    sourceFloor,
+    markerRevision,
+  };
+}
+
+export function codeGenerationRecordDir(
+  projectDir: string,
+  unit: string | null,
+): string {
+  const root = join(docsRoot(projectDir), "construction");
+  const normalizedUnit = unit?.trim() ?? "";
+  return normalizedUnit.length > 0
+    ? join(root, normalizedUnit, "code-generation")
+    : join(root, "code-generation");
+}
+
+function codeGenerationApprovalArtifacts(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+): {
+  plan: string;
+  instructions: string;
+  questions: string;
+  planExists: boolean;
+  instructionsExist: boolean;
+  approvedAnswer: boolean;
+  contractValid: boolean;
+  contractHash: string | null;
+  expectedFingerprint: string | null;
+  recordedFingerprint: string | null;
+  questionsPath: string;
+} {
+  const planPath = join(authority.stageDir, "code-generation-plan.md");
+  const instructionsPath = join(authority.stageDir, "unit-test-instructions.md");
+  const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+  const plan = existsSync(planPath) ? readFileSync(planPath, "utf-8") : "";
+  const instructions = existsSync(instructionsPath)
+    ? readFileSync(instructionsPath, "utf-8")
+    : "";
+  const questions = existsSync(questionsPath)
+    ? readFileSync(questionsPath, "utf-8")
+    : "";
+  const planExists = plan.trim().length > 0;
+  const instructionsExist = instructions.trim().length > 0;
+  const approvedAnswer = questionsFileApproved(questions);
+  const embedded = planExists ? parseTestingContract(plan) : null;
+  const current = planExists ? resolveTestingPosture(projectDir) : null;
+  const contractHash = embedded?.contract_sha256 ?? null;
+  const contractValid =
+    embedded !== null &&
+    current !== null &&
+    embedded.contract_sha256 === current.contract_sha256;
+  const expectedFingerprint =
+    planExists && instructionsExist && contractValid && current
+      ? approvalFingerprint(
+          plan,
+          instructions,
+          current.contract_sha256,
+          authority,
+        )
+      : null;
+  return {
+    plan,
+    instructions,
+    questions,
+    planExists,
+    instructionsExist,
+    approvedAnswer,
+    contractValid,
+    contractHash,
+    expectedFingerprint,
+    recordedFingerprint: questionsFileApprovalFingerprint(questions),
+    questionsPath,
+  };
+}
+
+export interface LegacyPlanApprovalGuardState {
+  active: boolean;
+  approved: boolean;
+  pending: boolean;
+  humanAfterDecision: boolean;
+  sourceFloorValid: boolean;
+  violated?: boolean;
+  target: CodeGenerationTarget | null;
+}
+
+/**
+ * Legacy Kiro IDE PreToolUse payloads identify the tool but omit its arguments.
+ * The adapter therefore cannot distinguish a planning-record write from a
+ * workspace mutation. This state lets it preserve the usable workflow:
+ * planning remains available before the exact Plan Approval prompt, every tool
+ * hard-stops while that prompt awaits a human, and the decision/answer commands
+ * separately require workspace source to match the directive-issued floor.
+ */
+export function legacyPlanApprovalGuardState(
+  projectDir: string,
+): LegacyPlanApprovalGuardState {
+  const inactive: LegacyPlanApprovalGuardState = {
+    active: false,
+    approved: false,
+    pending: false,
+    humanAfterDecision: false,
+    sourceFloorValid: true,
+    violated: false,
+    target: null,
+  };
+  try {
+    const statePath = stateFilePath(projectDir);
+    if (!existsSync(statePath)) return inactive;
+    const state = readFileSync(statePath, "utf-8");
+    const marker = readActiveDirectiveMarker(projectDir, state);
+    if (
+      marker?.version !== 2 ||
+      marker.stage !== "code-generation" ||
+      (marker.kind !== "run-stage" && marker.kind !== "invoke-swarm")
+    ) {
+      return inactive;
+    }
+    let target: CodeGenerationTarget;
+    if (marker.kind === "run-stage") {
+      target = { unit: marker.unit?.trim() || null };
+    } else {
+      const units = marker.units ?? [];
+      if (units.length === 0) {
+        throw new Error("active swarm directive carries no authoritative units");
+      }
+      const pending = units.find(
+        (unit) => !evaluateCodeGenerationApproval(projectDir, { unit }).ok,
+      );
+      target = { unit: pending ?? units[0] };
+    }
+    const authority = resolveCodeGenerationAuthority(projectDir, target);
+    const violation = readPlanApprovalViolation(projectDir);
+    const violated =
+      violation?.version === 1 &&
+      violation.markerRevision === authority.markerRevision;
+    const approval = evaluateCodeGenerationApproval(projectDir, target);
+    const currentSource = workspaceSourceFingerprint(projectDir);
+    const sourceFloorValid =
+      authority.sourceFloor !== UNBINDABLE_FINGERPRINT &&
+      currentSource !== null &&
+      currentSource === authority.sourceFloor;
+    if (approval.ok) {
+      return {
+        active: true,
+        approved: true,
+        pending: false,
+        humanAfterDecision: false,
+        sourceFloorValid: true,
+        violated,
+        target,
+      };
+    }
+
+    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority);
+    if (artifacts.expectedFingerprint === null) {
+      return {
+        active: true,
+        approved: false,
+        pending: false,
+        humanAfterDecision: false,
+        sourceFloorValid,
+        violated,
+        target,
+      };
+    }
+    const promptSha256 = createHash("sha256")
+      .update(
+        `${artifacts.questions
+          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
+          .trimEnd()}\n`,
+        "utf-8",
+      )
+      .digest("hex");
+    const allEntries = readAuditShardEvents(projectDir);
+    type Entry = (typeof allEntries)[number];
+    const latestCausal = (candidates: Entry[]): Entry | null => {
+      if (candidates.length === 0) return null;
+      let latestTimestamp = candidates[0].timestamp;
+      for (const candidate of candidates) {
+        if (candidate.timestamp > latestTimestamp) latestTimestamp = candidate.timestamp;
+      }
+      const atLatestTimestamp = candidates.filter(
+        (candidate) => candidate.timestamp === latestTimestamp,
+      );
+      if (new Set(atLatestTimestamp.map((candidate) => candidate.shard)).size !== 1) {
+        return null;
+      }
+      return atLatestTimestamp.reduce((latest, candidate) =>
+        candidate.pos > latest.pos ? candidate : latest
+      );
+    };
+    const latestSession = latestCausal(
+      allEntries.filter(
+        (entry) =>
+          entry.event === "SESSION_STARTED" ||
+          entry.event === "SESSION_RESUMED",
+      ),
+    );
+    const session = latestSession === null
+      ? null
+      : auditBlockField(latestSession.block, "Session");
+    const challenge =
+      session === null ? null : readPlanApprovalChallenge(projectDir, session);
+    const response =
+      session === null ? null : readPlanApprovalResponse(projectDir, session);
+    const challengeMatches =
+      challenge !== null &&
+      challenge.targetId === authority.targetId &&
+      challenge.intentId === authority.intentId &&
+      challenge.directiveEpoch === authority.directiveEpoch &&
+      challenge.runFloor === authority.runFloor &&
+      challenge.fingerprint === artifacts.expectedFingerprint &&
+      challenge.questionsFile ===
+        toPosix(relative(projectDir, artifacts.questionsPath)) &&
+      challenge.promptSha256 === promptSha256 &&
+      challenge.sourceFloor === authority.sourceFloor &&
+      challenge.markerRevision === authority.markerRevision;
+    const humanAfterDecision =
+      challengeMatches &&
+      response !== null &&
+      response.challengeId === challenge.challengeId;
+    return {
+      active: true,
+      approved: false,
+      pending: challengeMatches && !humanAfterDecision,
+      humanAfterDecision,
+      sourceFloorValid,
+      violated,
+      target,
+    };
+  } catch {
+    return {
+      active: true,
+      approved: false,
+      pending: false,
+      humanAfterDecision: false,
+      sourceFloorValid: false,
+      violated: true,
+      target: null,
+    };
+  }
+}
+
+function runtimeIdentity(
+  evidence: PlanApprovalQuestionEvidence,
+): PlanApprovalRuntimeIdentity {
+  return {
+    targetId: evidence.authority.targetId,
+    intentId: evidence.authority.intentId,
+    directiveEpoch: evidence.authority.directiveEpoch,
+    runFloor: evidence.authority.runFloor,
+    fingerprint: evidence.fingerprint,
+    questionsFile: evidence.questionsRelativePath,
+    promptSha256: evidence.promptSha256,
+    sourceFloor: evidence.authority.sourceFloor,
+    markerRevision: evidence.authority.markerRevision,
+  };
+}
+
+function runtimeIdentityMatches(
+  value: PlanApprovalRuntimeIdentity,
+  expected: PlanApprovalRuntimeIdentity,
+): boolean {
+  return (
+    value.targetId === expected.targetId &&
+    value.intentId === expected.intentId &&
+    value.directiveEpoch === expected.directiveEpoch &&
+    value.runFloor === expected.runFloor &&
+    value.fingerprint === expected.fingerprint &&
+    value.questionsFile === expected.questionsFile &&
+    value.promptSha256 === expected.promptSha256 &&
+    value.sourceFloor === expected.sourceFloor &&
+    value.markerRevision === expected.markerRevision
+  );
+}
+
+export function recordPlanApprovalChallenge(
+  projectDir: string,
+  evidence: PlanApprovalQuestionEvidence,
+  session: string,
+  options: [string, string] = ["Approve Plan", "Request Changes"],
+  requireExactOptionLabels = false,
+  hashOptionLabels = false,
+  useLegacyDirectiveOffer = false,
+): PlanApprovalRuntimeChallenge {
+  if (!session.trim()) {
+    throw new Error("Plan Approval challenge requires a nonblank session");
+  }
+  const identity = runtimeIdentity(evidence);
+  if (
+    (hashOptionLabels || useLegacyDirectiveOffer) &&
+    readPlanApprovalChallenge(projectDir, session)
+  ) {
+    throw new Error(
+      "a protected legacy Plan Approval challenge is already pending for this session",
+    );
+  }
+  const createChallenge = (): PlanApprovalRuntimeChallenge => {
+    const offer = useLegacyDirectiveOffer
+      ? readPlanApprovalLegacyOffer(projectDir, session)
+      : null;
+    if (
+      useLegacyDirectiveOffer &&
+      (
+        !offer ||
+        offer.intentId !== identity.intentId ||
+        offer.markerRevision !== identity.markerRevision ||
+        !offer.allowedUnits.some((unit) => unit === evidence.authority.unit)
+      )
+    ) {
+      throw new Error(
+        "legacy Plan Approval requires protected choices from the invoking Code Generation directive",
+      );
+    }
+    const effectiveHashedOptions = hashOptionLabels || useLegacyDirectiveOffer;
+    const storedOptions: [string, string] = offer
+      ? offer.options
+      : hashOptionLabels
+      ? options.map((option) =>
+        createHash("sha256")
+          .update(option.trim().toLowerCase(), "utf-8")
+          .digest("hex")
+      ) as [string, string]
+      : options;
+    const challenge: PlanApprovalRuntimeChallenge = {
+      version: 1,
+      ...identity,
+      session,
+      challengeId: hashObject({
+        ...identity,
+        session,
+        options: storedOptions,
+        requireExactOptionLabels,
+        hashedOptionLabels: effectiveHashedOptions,
+        legacyDirectiveOffer: useLegacyDirectiveOffer,
+      }),
+      options: storedOptions,
+      requireExactOptionLabels,
+      hashedOptionLabels: effectiveHashedOptions,
+    };
+    writePlanApprovalChallenge(projectDir, challenge);
+    if (useLegacyDirectiveOffer) {
+      clearPlanApprovalLegacyOffer(projectDir, session);
+    }
+    return challenge;
+  };
+  return useLegacyDirectiveOffer
+    ? withActiveDirectiveLock(projectDir, createChallenge)
+    : createChallenge();
+}
+
+function offeredPlanApprovalChoice(
+  challenge: PlanApprovalRuntimeChallenge,
+  responseText: string,
+): "Approve Plan" | "Request Changes" | null {
+  const response = responseText.trim();
+  const comparison = challenge.hashedOptionLabels
+    ? createHash("sha256")
+      .update(response.toLowerCase(), "utf-8")
+      .digest("hex")
+    : response.toLowerCase();
+  const matchedIndex = challenge.options.findIndex((option) =>
+    challenge.hashedOptionLabels
+      ? option === comparison
+      : option.toLowerCase() === comparison
+  );
+  if (matchedIndex >= 0) {
+    return matchedIndex === 0 ? "Approve Plan" : "Request Changes";
+  }
+  if (challenge.requireExactOptionLabels) return null;
+  if (response === "1") return "Approve Plan";
+  if (response === "2") return "Request Changes";
+  if (response.toLowerCase() === "approve plan") return "Approve Plan";
+  if (response.toLowerCase() === "request changes") return "Request Changes";
+  return null;
+}
+
+export interface PlanApprovalHumanResponseResult {
+  recorded: boolean;
+}
+
+export function recordPlanApprovalHumanResponse(
+  projectDir: string,
+  session: string,
+  responseText: string,
+): PlanApprovalHumanResponseResult {
+  const challenge = readPlanApprovalChallenge(projectDir, session);
+  if (challenge) {
+    const choice = offeredPlanApprovalChoice(challenge, responseText);
+    if (choice) {
+      writePlanApprovalResponse(projectDir, {
+        version: 1,
+        session,
+        challengeId: challenge.challengeId,
+        choice,
+        responseSha256: createHash("sha256")
+          .update(responseText.trim(), "utf-8")
+          .digest("hex"),
+      });
+      return { recorded: true };
+    }
+  }
+  const recovery = readPlanApprovalLegacyRecoveryChallenge(
+    projectDir,
+    session,
+  );
+  if (
+    recovery &&
+    responseText.trim() === LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE
+  ) {
+    writePlanApprovalLegacyRecoveryResponse(projectDir, {
+      version: 1,
+      session,
+      challengeId: recovery.challengeId,
+      responseSha256: createHash("sha256")
+        .update(LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE, "utf-8")
+        .digest("hex"),
+    });
+    return { recorded: true };
+  }
+  return { recorded: false };
+}
+
+export function recordPlanApprovalReceipt(
+  projectDir: string,
+  evidence: PlanApprovalQuestionEvidence,
+  session: string,
+  choice: "Approve Plan" | "Request Changes",
+): PlanApprovalRuntimeReceipt | null {
+  return withActiveDirectiveLock(projectDir, () => {
+  const identity = runtimeIdentity(evidence);
+  const challenge = readPlanApprovalChallenge(projectDir, session);
+  const response = readPlanApprovalResponse(projectDir, session);
+  if (
+    !challenge ||
+    !response ||
+    challenge.challengeId !== response.challengeId ||
+    response.choice !== choice ||
+    !runtimeIdentityMatches(challenge, identity)
+  ) {
+    throw new Error(
+      "Plan Approval requires the actual offered choice from this prompt and session",
+    );
+  }
+  const receiptBarrier =
+    process.env.AIDLC_TEST_PLAN_APPROVAL_RECEIPT_BARRIER?.trim();
+  if (receiptBarrier) {
+    writeFileSync(`${receiptBarrier}.snapshotted`, "snapshotted\n", "utf-8");
+    const waitCell = new Int32Array(new SharedArrayBuffer(4));
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(`${receiptBarrier}.release`)) {
+      if (Date.now() >= deadline) {
+        throw new Error("timed out waiting at Plan Approval receipt barrier");
+      }
+      Atomics.wait(waitCell, 0, 0, 10);
+    }
+  }
+  if (choice === "Request Changes") {
+    clearPlanApprovalChallenge(projectDir, session);
+    return null;
+  }
+  const sourceBefore = workspaceSourceFingerprint(projectDir);
+  if (
+    sourceBefore === null ||
+    sourceBefore !== evidence.authority.sourceFloor
+  ) {
+    throw new Error(
+      "Plan Approval requires workspace source to match the Code Generation directive's pre-planning source floor",
+    );
+  }
+  const receipt: PlanApprovalRuntimeReceipt = {
+    version: 1,
+    ...identity,
+    session,
+    challengeId: challenge.challengeId,
+    choice: "Approve Plan",
+    questionsSha256: evidence.questionsSha256,
+    certifiedSourceSha256: sourceBefore,
+    status: "approved",
+  };
+  writePlanApprovalReceipt(projectDir, receipt);
+  const sourceAfter = workspaceSourceFingerprint(projectDir);
+  if (sourceAfter === null || sourceAfter !== sourceBefore) {
+    clearPlanApprovalReceipt(projectDir, identity);
+    throw new Error(
+      "Plan Approval source changed during receipt certification; present the current plan again",
+    );
+  }
+  clearPlanApprovalChallenge(projectDir, session);
+  return receipt;
+  });
+}
+
+export function codeGenerationPlanApprovalQuestionEvidence(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  suppliedQuestionsFile: string,
+  expectedAnswer: "" | "Approve Plan" | "Request Changes",
+): PlanApprovalQuestionEvidence {
+  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const currentSource = workspaceSourceFingerprint(projectDir);
+  if (
+    authority.sourceFloor !== UNBINDABLE_FINGERPRINT &&
+    (currentSource === null || currentSource !== authority.sourceFloor)
+  ) {
+    throw new Error(
+      "Plan Approval requires workspace source to match the Code Generation directive's pre-planning source floor",
+    );
+  }
+  const expectedPath = resolve(
+    authority.stageDir,
+    "code-generation-questions.md",
+  );
+  const suppliedPath = isAbsolute(suppliedQuestionsFile)
+    ? resolve(suppliedQuestionsFile)
+    : resolve(projectDir, suppliedQuestionsFile);
+  if (suppliedPath !== expectedPath) {
+    throw new Error(
+      `Plan Approval questions file must be the active target's canonical file: ${toPosix(relative(projectDir, expectedPath))}`,
+    );
+  }
+  const artifacts = codeGenerationApprovalArtifacts(projectDir, authority);
+  if (!artifacts.planExists || !artifacts.instructionsExist) {
+    throw new Error("Plan Approval requires non-empty plan and unit-test instructions");
+  }
+  if (!artifacts.contractValid || artifacts.expectedFingerprint === null) {
+    throw new Error("Plan Approval requires the current Testing Contract");
+  }
+  if (artifacts.recordedFingerprint !== artifacts.expectedFingerprint) {
+    throw new Error(
+      "Plan Approval fingerprint does not match the active intent, target, directive epoch, plan, instructions, and Testing Contract",
+    );
+  }
+  const latest = latestPlanApproval(artifacts.questions);
+  if (!latest.found || latest.answer === null || latest.answer !== expectedAnswer) {
+    throw new Error(
+      `Plan Approval questions file must contain exactly [Answer]: ${expectedAnswer || "(blank)"}`,
+    );
+  }
+  return {
+    authority,
+    fingerprint: artifacts.expectedFingerprint,
+    questionsPath: suppliedPath,
+    questionsRelativePath: toPosix(relative(projectDir, suppliedPath)),
+    questionsSha256: createHash("sha256")
+      .update(artifacts.questions, "utf-8")
+      .digest("hex"),
+    promptSha256: createHash("sha256")
+      .update(
+        `${artifacts.questions
+          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
+          .trimEnd()}\n`,
+        "utf-8",
+      )
+      .digest("hex"),
+  };
+}
+
 export function evaluateCodeGenerationApproval(
   projectDir: string,
-  unit: string,
+  target: CodeGenerationTarget,
 ): CodeGenerationApproval {
-  const stageDir = join(
-    docsRoot(projectDir),
-    "construction",
-    unit,
-    "code-generation",
-  );
-  const planPath = join(stageDir, "code-generation-plan.md");
-  const instructionsPath = join(stageDir, "unit-test-instructions.md");
-  const questionsPath = join(stageDir, "code-generation-questions.md");
+  let normalizedUnit: string | null = null;
   const empty: CodeGenerationApproval = {
     ok: false,
-    unit,
+    unit: null,
     reason: "",
     planExists: false,
     instructionsExist: false,
     approved: false,
     contractValid: false,
     fingerprintValid: false,
+    receiptValid: false,
     contractHash: null,
+    approvalFingerprint: null,
+    directiveEpoch: null,
   };
   try {
-    const plan = existsSync(planPath) ? readFileSync(planPath, "utf-8") : "";
-    const instructions = existsSync(instructionsPath)
-      ? readFileSync(instructionsPath, "utf-8")
-      : "";
-    const questions = existsSync(questionsPath)
-      ? readFileSync(questionsPath, "utf-8")
-      : "";
-    empty.planExists = plan.trim().length > 0;
-    empty.instructionsExist = instructions.trim().length > 0;
-    empty.approved = questionsFileApproved(questions);
+    const normalizedTarget = normalizeCodeGenerationTarget(target);
+    normalizedUnit = normalizedTarget.unit;
+    empty.unit = normalizedUnit;
+    const authority = resolveCodeGenerationAuthority(projectDir, normalizedTarget);
+    empty.directiveEpoch = authority.directiveEpoch;
+    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority);
+    empty.planExists = artifacts.planExists;
+    empty.instructionsExist = artifacts.instructionsExist;
+    empty.approved = artifacts.approvedAnswer;
+    empty.contractValid = artifacts.contractValid;
+    empty.contractHash = artifacts.contractHash;
+    empty.approvalFingerprint = artifacts.expectedFingerprint;
     if (!empty.planExists) {
       empty.reason = "code-generation-plan.md is missing or empty";
       return empty;
@@ -911,15 +1635,10 @@ export function evaluateCodeGenerationApproval(
       empty.reason = "unit-test-instructions.md is missing or empty";
       return empty;
     }
-    const embedded = parseTestingContract(plan);
-    if (!embedded) {
+    if (artifacts.contractHash === null) {
       empty.reason = "code-generation-plan.md has no valid ## Testing Contract JSON block";
       return empty;
     }
-    const current = resolveTestingPosture(projectDir);
-    empty.contractHash = embedded.contract_sha256;
-    empty.contractValid =
-      embedded.contract_sha256 === current.contract_sha256;
     if (!empty.contractValid) {
       empty.reason =
         "the approved Testing Contract is stale because memory, scope, test strategy, or project type changed";
@@ -929,26 +1648,131 @@ export function evaluateCodeGenerationApproval(
       empty.reason = "Plan Approval is not explicitly answered Approve Plan";
       return empty;
     }
-    const recordedFingerprint =
-      questionsFileApprovalFingerprint(questions);
-    const expectedFingerprint = approvalFingerprint(
-      plan,
-      instructions,
-      current.contract_sha256,
-    );
-    empty.fingerprintValid = recordedFingerprint === expectedFingerprint;
+    empty.fingerprintValid =
+      artifacts.expectedFingerprint !== null &&
+      artifacts.recordedFingerprint === artifacts.expectedFingerprint;
     if (!empty.fingerprintValid) {
       empty.reason =
-        "the Plan Approval fingerprint does not match the current plan, test instructions, and Testing Contract";
+        "the Plan Approval fingerprint does not match the active intent, target, directive epoch, plan, test instructions, and Testing Contract";
+      return empty;
+    }
+    const questionsSha256 = createHash("sha256")
+      .update(artifacts.questions, "utf-8")
+      .digest("hex");
+    const promptSha256 = createHash("sha256")
+      .update(
+        `${artifacts.questions
+          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
+          .trimEnd()}\n`,
+        "utf-8",
+      )
+      .digest("hex");
+    const identity: PlanApprovalRuntimeIdentity = {
+      targetId: authority.targetId,
+      intentId: authority.intentId,
+      directiveEpoch: authority.directiveEpoch,
+      runFloor: authority.runFloor,
+      fingerprint: artifacts.expectedFingerprint!,
+      questionsFile: toPosix(relative(projectDir, artifacts.questionsPath)),
+      promptSha256,
+      sourceFloor: authority.sourceFloor,
+      markerRevision: authority.markerRevision,
+    };
+    const violation = readPlanApprovalViolation(projectDir);
+    if (
+      violation?.version === 1 &&
+      violation.markerRevision === authority.markerRevision
+    ) {
+      empty.reason =
+        `legacy Plan Approval authority was poisoned by unsupported write target "${violation.target}"`;
+      return empty;
+    }
+    const receipt = readPlanApprovalReceipt(projectDir, identity);
+    empty.receiptValid =
+      receipt !== null &&
+      runtimeIdentityMatches(receipt, identity) &&
+      receipt.choice === "Approve Plan" &&
+      receipt.questionsSha256 === questionsSha256 &&
+      receipt.certifiedSourceSha256 === authority.sourceFloor &&
+      (
+        receipt.status === "generation" ||
+        workspaceSourceFingerprint(projectDir) === receipt.certifiedSourceSha256
+      );
+    if (!empty.receiptValid) {
+      empty.reason =
+        "no current protected Plan Approval receipt matches this prompt, session response, target, directive epoch, and source floor";
       return empty;
     }
     return { ...empty, ok: true, reason: "approved" };
   } catch (error) {
     return {
       ...empty,
+      unit: normalizedUnit,
       reason: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export function beginCodeGeneration(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): void {
+  withAuditLock(projectDir, () => {
+    withActiveDirectiveLock(projectDir, () => {
+      const approval = evaluateCodeGenerationApproval(projectDir, target);
+      if (!approval.ok || !approval.approvalFingerprint) {
+        throw new Error(approval.reason || "Code Generation requires Plan Approval");
+      }
+      const authority = resolveCodeGenerationAuthority(projectDir, target);
+      const receipt = readPlanApprovalReceipt(projectDir, {
+        targetId: authority.targetId,
+        directiveEpoch: authority.directiveEpoch,
+      });
+      if (!receipt) {
+        throw new Error("Code Generation has no protected approval receipt");
+      }
+      if (receipt.status === "generation") return;
+      const sourceBefore = workspaceSourceFingerprint(projectDir);
+      if (
+        sourceBefore === null ||
+        sourceBefore !== receipt.certifiedSourceSha256
+      ) {
+        throw new Error(
+          "workspace source changed after Plan Approval and before generation began",
+        );
+      }
+      // Publication is the generation boundary. It sits between two source
+      // fingerprints while both authority locks are held: neither another
+      // guard nor directive publication can retire this receipt mid-start.
+      writePlanApprovalReceipt(projectDir, {
+        ...receipt,
+        status: "generation",
+      });
+      const publicationBarrier =
+        process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER?.trim();
+      if (publicationBarrier) {
+        writeFileSync(`${publicationBarrier}.published`, "published\n", "utf-8");
+        const waitCell = new Int32Array(new SharedArrayBuffer(4));
+        const deadline = Date.now() + 30_000;
+        while (!existsSync(`${publicationBarrier}.release`)) {
+          if (Date.now() >= deadline) {
+            clearPlanApprovalReceipt(projectDir, receipt);
+            throw new Error(
+              "timed out waiting for the Plan Approval publication test barrier",
+            );
+          }
+          Atomics.wait(waitCell, 0, 0, 5);
+        }
+      }
+      const sourceAfter = workspaceSourceFingerprint(projectDir);
+      if (sourceAfter === null || sourceAfter !== sourceBefore) {
+        clearPlanApprovalReceipt(projectDir, receipt);
+        throw new Error(
+          "workspace source changed while Code Generation authority was starting",
+        );
+      }
+    });
+  });
 }
 
 function flagValue(args: string[], name: string): string | undefined {
@@ -956,22 +1780,30 @@ function flagValue(args: string[], name: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
-export function main(argv: string[]): void {
-  let subcommand: string | undefined;
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith("--")) {
-      if (
-        !argv[i].includes("=") &&
-        i + 1 < argv.length &&
-        !argv[i + 1].startsWith("--")
-      ) {
-        i++;
-      }
-      continue;
-    }
-    subcommand = argv[i];
-    break;
+function targetFromArgs(
+  args: string[],
+  subcommand: "fingerprint" | "verify" | "begin",
+): CodeGenerationTarget {
+  const unitIndex = args.indexOf("--unit");
+  const stageLevel = args.includes("--stage-level");
+  if (unitIndex >= 0 && stageLevel) {
+    throw new Error(`${subcommand} accepts exactly one of --unit <unit> or --stage-level`);
   }
+  if (unitIndex >= 0) {
+    const unit = args[unitIndex + 1];
+    if (!unit || unit.startsWith("--") || unit.trim().length === 0) {
+      throw new Error(`${subcommand} requires a non-blank --unit <unit>`);
+    }
+    return normalizeCodeGenerationTarget({ unit });
+  }
+  if (stageLevel) return { unit: null };
+  throw new Error(`${subcommand} requires exactly one of --unit <unit> or --stage-level`);
+}
+
+export function main(argv: string[]): void {
+  const subcommand = argv.find((arg) =>
+    ["resolve", "render", "fingerprint", "verify", "begin"].includes(arg)
+  );
   const projectDir = resolveProjectDir(flagValue(argv, "--project-dir"));
   try {
     switch (subcommand) {
@@ -982,15 +1814,10 @@ export function main(argv: string[]): void {
         process.stdout.write(renderTestingContract(resolveTestingPosture(projectDir)));
         return;
       case "fingerprint": {
-        const unit = flagValue(argv, "--unit");
-        if (!unit) throw new Error("fingerprint requires --unit <unit>");
-        const approval = evaluateCodeGenerationApproval(projectDir, unit);
-        const stageDir = join(
-          docsRoot(projectDir),
-          "construction",
-          unit,
-          "code-generation",
-        );
+        const target = targetFromArgs(argv, "fingerprint");
+        const authority = resolveCodeGenerationAuthority(projectDir, target);
+        const approval = evaluateCodeGenerationApproval(projectDir, target);
+        const stageDir = authority.stageDir;
         const plan = readFileSync(join(stageDir, "code-generation-plan.md"), "utf-8");
         const instructions = readFileSync(
           join(stageDir, "unit-test-instructions.md"),
@@ -1021,21 +1848,27 @@ export function main(argv: string[]): void {
             plan,
             instructions,
             current.contract_sha256,
+            authority,
           ),
         );
         return;
       }
       case "verify": {
-        const unit = flagValue(argv, "--unit");
-        if (!unit) throw new Error("verify requires --unit <unit>");
-        const result = evaluateCodeGenerationApproval(projectDir, unit);
+        const target = targetFromArgs(argv, "verify");
+        const result = evaluateCodeGenerationApproval(projectDir, target);
         console.log(JSON.stringify(result, null, 2));
         process.exit(result.ok ? 0 : 2);
         return;
       }
+      case "begin": {
+        const target = targetFromArgs(argv, "begin");
+        beginCodeGeneration(projectDir, target);
+        console.log(JSON.stringify({ status: "generation", target }));
+        return;
+      }
       default:
         throw new Error(
-          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify`,
+          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin`,
         );
     }
   } catch (error) {

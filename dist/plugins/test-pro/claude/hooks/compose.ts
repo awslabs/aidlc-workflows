@@ -1486,6 +1486,7 @@ function copyTreeNoClobber(
   precheck?: CopyPrecheck,
   transform?: CopyTransform,
   existingHandler?: ExistingCopyHandler,
+  composedPaths?: Set<string>,
 ): boolean {
   if (!existsSync(src)) return false;
   let wrote = false;
@@ -1510,6 +1511,7 @@ function copyTreeNoClobber(
         installed,
       }) ?? "compare";
       if (existingAction === "written") {
+        composedPaths?.add(rel.replace(/\\/g, "/"));
         wrote = true;
         continue;
       }
@@ -1522,7 +1524,9 @@ function copyTreeNoClobber(
           current = null;
         }
       }
-      if (current === null || !installed.equals(current)) {
+      if (current !== null && installed.equals(current)) {
+        composedPaths?.add(rel.replace(/\\/g, "/"));
+      } else {
         recordDrop(`${kind} "${rel}" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path`);
       }
       continue;
@@ -1539,6 +1543,7 @@ function copyTreeNoClobber(
     }
     mkdirSync(join(dest, ".."), { recursive: true });
     writeComposeFile(dest, buf);
+    composedPaths?.add(rel.replace(/\\/g, "/"));
     wrote = true;
   }
   return wrote;
@@ -1781,6 +1786,38 @@ function spliceFragment(content: string, f: Fragment, target: string): string {
 let changed = false;
 try {
   const pluginKeySafe = await installedSchemaAccepts("plugin", "probe-name");
+  const pluginFilesManifestPath = join(
+    HARNESS_DIR,
+    "tools",
+    "data",
+    `plugin-files-${PLUGIN_KEY}.json`,
+  );
+  const priorKnowledgeOwnership = (() => {
+    try {
+      const parsed = JSON.parse(
+        readFileSync(pluginFilesManifestPath, "utf-8"),
+      ) as {
+        schema_version?: unknown;
+        plugin?: unknown;
+        knowledge?: unknown;
+      };
+      if (
+        parsed.schema_version !== 1 ||
+        parsed.plugin !== PLUGIN_NAME ||
+        !Array.isArray(parsed.knowledge)
+      ) {
+        return new Set<string>();
+      }
+      return new Set(
+        parsed.knowledge.filter((value): value is string =>
+          typeof value === "string"
+        ),
+      );
+    } catch {
+      return new Set<string>();
+    }
+  })();
+  const composedKnowledge = new Set<string>();
 
   // 1. Copy NEW primitives (no-clobber, token-substituted).
   // Plugin scopes and agents use the plugin prefix in place of core's `aidlc-`
@@ -1843,7 +1880,50 @@ try {
       ) || changed;
     }
   }
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "knowledge"), join(HARNESS_DIR, "knowledge"), "knowledge") || changed;
+  const knowledgeSource = join(PLUGIN_ROOT, "knowledge");
+  const knowledgeTarget = join(HARNESS_DIR, "knowledge");
+  changed = copyTreeNoClobber(
+    knowledgeSource,
+    knowledgeTarget,
+    "knowledge",
+    undefined,
+    undefined,
+    undefined,
+    composedKnowledge,
+  ) || changed;
+  // Composition is no-clobber: source removal does not remove an installed
+  // file, so retain its prior provenance until the installed file is gone.
+  // Byte-identical installed files also establish ownership for upgrades from
+  // compose hooks that predated the ownership sidecar.
+  const ownedKnowledge = new Set(
+    [...priorKnowledgeOwnership].filter((rel) =>
+      existsSync(join(knowledgeTarget, rel))
+    ),
+  );
+  for (const rel of composedKnowledge) ownedKnowledge.add(rel);
+  const pluginFilesManifest = `${
+    JSON.stringify({
+      schema_version: 1,
+      plugin: PLUGIN_NAME,
+      knowledge: [...ownedKnowledge].sort(),
+    }, null, 2)
+  }\n`;
+  try {
+    const current = existsSync(pluginFilesManifestPath)
+      ? readFileSync(pluginFilesManifestPath, "utf-8")
+      : null;
+    if (current !== pluginFilesManifest) {
+      mkdirSync(dirname(pluginFilesManifestPath), { recursive: true });
+      writeComposeFile(pluginFilesManifestPath, pluginFilesManifest);
+    }
+  } catch (e) {
+    recordDrop(
+      `could not write plugin file ownership sidecar ${
+        relative(PROJECT_DIR, pluginFilesManifestPath)
+      }: ${e instanceof Error ? e.message : String(e)} - Minimal context may not recognize recursively composed knowledge`,
+      "advisory",
+    );
+  }
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors"), "sensor", sensorManifestNamePrecheck()) || changed;
   changed = copyTreeNoClobber(
     join(PLUGIN_ROOT, "tools"),

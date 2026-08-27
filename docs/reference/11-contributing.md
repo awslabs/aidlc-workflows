@@ -106,12 +106,15 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations. `--doctor` also accepts `--export` (with an optional `--output <dir>`), which runs a fresh doctor pass and then writes a small, redacted diagnostic report; the shared `DoctorFinding` model and the report-assembly logic live in `core/tools/aidlc-doctor-bundle.ts`, so the live report and the exported report draw from one set of findings.
 
-The `codekb-path` handler is a read-only **direct utility verb**: stage prose
-invokes `bun <harness-dir>/tools/aidlc-utility.ts codekb-path`, not
-`/aidlc codekb-path`. It emits NO audit event, drives NO SKILL.md task tracking,
-and creates NO directory (`mkdir`). It simply prints the canonical per-repo
-codekb directory the reverse-engineering stage writes its artifacts into, so
-prose never hand-derives that path.
+The `codekb-path`, `codekb-snapshot`, `codekb-publish`, and
+`codekb-scope-diff` handlers are **direct utility verbs**: stage prose invokes
+`bun <harness-dir>/tools/aidlc-utility.ts <verb>`, not `/aidlc <verb>`.
+`codekb-path` and `codekb-scope-diff` are read-only. `codekb-snapshot` may
+recover an interrupted prior CodeKB directory swap before returning the
+source/store generations. `codekb-publish` is the sole shared-store writer: it
+validates a complete nine-file candidate and commits it under a space+repo
+compare-and-swap lock. None emits an audit event or drives SKILL.md task
+tracking.
 
 `project-description` and `document-input` use the same read-only direct-utility
 shape. Both consuming stages invoke `project-description` first: a marked

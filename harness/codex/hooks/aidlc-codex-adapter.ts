@@ -60,9 +60,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
-  humanTurnMintAllowed,
   isNonAnswer,
   sessionsDir,
   stateFilePath,
@@ -84,6 +82,9 @@ interface CodexHookInput {
   agent_type?: string;
   agent_id?: string;
   stop_hook_active?: boolean;
+  prompt?: string;
+  user_prompt?: string;
+  message?: string;
 }
 
 interface CodexSpawnAgentInput {
@@ -155,6 +156,23 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
       return !isNonAnswer(answer) || offered.get(questionId)?.has(answer.trim()) === true;
     });
   });
+}
+
+function explicitHumanSelectionText(toolResponse: unknown): string {
+  if (typeof toolResponse !== "string") return "";
+  try {
+    const parsed = JSON.parse(toolResponse) as {
+      answers?: Record<string, { answers?: unknown[] }>;
+    };
+    for (const selection of Object.values(parsed.answers ?? {})) {
+      for (const answer of selection.answers ?? []) {
+        if (typeof answer === "string" && answer.trim()) return answer.trim();
+      }
+    }
+  } catch {
+    // Non-structured prompt payloads use the direct fields below.
+  }
+  return "";
 }
 
 export async function run(
@@ -634,15 +652,46 @@ switch (target) {
   }
 
   case "plan-approval-guard": {
-    // PreToolUse: code-generation's plan-before-generation ordering. Codex's
-    // delegation surface is spawn_agent, whose arguments carry the target in
-    // tool_input.agent_type and task text in message/items. Top-level
-    // agent_type identifies the currently acting agent, so it must not select
-    // the spawn target. Anything else - other tools or other target roles -
-    // allows instantly. The block contract is exit 2 + stderr, cached like
-    // reviewer-scope so a duplicate delivery replays the block faithfully.
-    // Fail-open on any spawn failure.
+    // PreToolUse: code-generation's plan-before-generation ordering. Bash
+    // forwards directly; apply_patch fans out one Write call per touched path;
+    // spawn_agent is normalized to the core Task shape. The block contract is
+    // exit 2 + stderr, cached like reviewer-scope so duplicate delivery replays
+    // the block faithfully.
     const tool = codex.tool_name ?? "";
+    if (tool === "Bash") {
+      const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", rawInput);
+      persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
+      if (r.code === 2) {
+        process.stderr.write(r.stderr);
+        return 2;
+      }
+      return 0;
+    }
+    if (tool === "apply_patch") {
+      const command = (codex.tool_input?.command as string) ?? "";
+      const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
+      for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
+        const rel = m[1].trim();
+        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
+      }
+      for (const f of targets) {
+        const r = runCoreWithStderr(
+          "aidlc-plan-approval-guard.ts",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: f.tool,
+            tool_input: { file_path: f.path },
+          }),
+        );
+        if (r.code === 2) {
+          persistResponse("", 2, r.stderr);
+          process.stderr.write(r.stderr);
+          return 2;
+        }
+      }
+      persistResponse("", 0);
+      return 0;
+    }
     if (tool !== "spawn_agent") {
       persistResponse("", 0);
       return 0;
@@ -700,15 +749,20 @@ switch (target) {
     // state existing (same self-gate as the core record-human-turn hook) so a prompt in a
     // project that never ran the framework does not scaffold audit shards.
     // Fail-open: a record-human-turn failure must never block the turn. Advisory, no stdout.
-    try {
-      if (existsSync(stateFilePath(projectDir))) {
-        if (humanTurnMintAllowed()) {
-          appendAuditEntry("HUMAN_TURN", {}, projectDir);
-        }
-      }
-    } catch {
-      // best-effort presence record — advisory
-    }
+    const responseText =
+      explicitHumanSelectionText(codex.tool_response) ||
+      codex.prompt ||
+      codex.user_prompt ||
+      codex.message ||
+      "";
+    runCoreWithStderr(
+      "aidlc-record-human-turn.ts",
+      JSON.stringify({
+        hook_event_name: "UserPromptSubmit",
+        ...(codex.session_id ? { session_id: codex.session_id } : {}),
+        prompt: responseText,
+      }),
+    );
     persistResponse("", 0);
     return 0;
   }

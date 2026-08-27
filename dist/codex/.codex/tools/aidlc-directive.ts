@@ -136,6 +136,11 @@ export interface RunStagePipeline {
   completed: string[];
 }
 
+export interface LegacyPlanApprovalChoices {
+  approve: string;
+  request_changes: string;
+}
+
 // run-stage — load the resolved rules, load lead + support agents, load
 // `consumes` artifacts, run the stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
 // support_agents, mode, gate, sensors_applicable, rules_in_context, stage_file)
@@ -153,7 +158,7 @@ export interface RunStageDirective {
   mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
   // Pipeline recovery surface. links is the declared lead→support chain;
   // completed contains current-attempt receipts (repo-qualified as
-  // `<repo>:<agent>` when the intent registers multiple repositories).
+  // `<repo>:<agent>` whenever the intent records repository identity).
   pipeline?: RunStagePipeline;
   // single marks an isolated stage-runner invocation. The conductor branches
   // on this before gate handling, reports with `report --single`, and treats
@@ -190,6 +195,10 @@ export interface RunStageDirective {
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   stage_file: string;
+  // Kiro IDE 0.12 has no chat/session id. The engine emits this one-time
+  // capability only to the `next`/`continue` caller that owns legacy planning;
+  // runtime authority stores hashes, never these plaintext labels.
+  legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
   // after the stage body completes. Absent (undefined) when no review step is
   // configured for this stage. See stage-protocol-reviewer.md §12a.
@@ -325,6 +334,7 @@ export interface InvokeSwarmDirective {
   // conductor's knowledge call, so it supplies --repo from the intent's recorded
   // set). When present, the conductor passes it straight through as `prepare --repo`.
   repo?: string;
+  legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
 }
 
 // present-gate — run the stage-protocol §13 learnings ritual, then render the
@@ -356,6 +366,10 @@ export interface ReportAskDirective extends AskDirectiveBase {
   proposed_scope?: undefined;
   available_intents?: undefined;
   numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
 }
 
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
@@ -367,6 +381,10 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   available_intents?: string[];
   /** Engine-authored numbered rendering for prose-only harnesses such as Kiro. */
   numbered_prose_question: string;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
 }
 
 export interface UnitClaimAskDirective extends AskDirectiveBase {
@@ -375,12 +393,32 @@ export interface UnitClaimAskDirective extends AskDirectiveBase {
   claimable_units: string[];
   claimed_units: Array<{ unit: string; holder: string }>;
   waiting_units: Array<{ unit: string; blocked_by: string[] }>;
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  recovery_choice?: undefined;
+}
+
+export interface LegacyPlanApprovalRecoveryAskDirective
+  extends AskDirectiveBase {
+  ask_type: "legacy-plan-approval-recovery";
+  response_route: "next";
+  recovery_choice: "Recover Plan Approval";
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
 }
 
 export type AskDirective =
   | ReportAskDirective
   | NewWorkRoutingAskDirective
-  | UnitClaimAskDirective;
+  | UnitClaimAskDirective
+  | LegacyPlanApprovalRecoveryAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
@@ -518,6 +556,7 @@ const RUN_STAGE_FIELDS = [
   "unit",
   "wave",
   "consumes_absent",
+  "legacy_plan_approval_choices",
 ] as const;
 
 const LOAD_STEERING_FIELDS = [
@@ -538,7 +577,8 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "single" &&
       field !== "wave" &&
       field !== "protocol_modules" &&
-      field !== "swarm_settled",
+      field !== "swarm_settled" &&
+      field !== "legacy_plan_approval_choices",
   ),
   "worker",
 ] as const;
@@ -554,6 +594,7 @@ const INVOKE_SWARM_FIELDS = [
   "review_class",
   "protocol_modules",
   "repo",
+  "legacy_plan_approval_choices",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = [
@@ -568,6 +609,7 @@ const ASK_FIELDS = [
   "claimable_units",
   "claimed_units",
   "waiting_units",
+  "recovery_choice",
 ] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
@@ -707,6 +749,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       }
       checkOptionalProtocolModules(o, kind, errors);
       checkOptionalString(o, "repo", kind, errors);
+      checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
       break;
     case "present-gate":
       checkString(o, "stage", kind, errors);
@@ -721,13 +764,15 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
+      checkOptionalString(o, "recovery_choice", kind, errors);
       if (
         "ask_type" in o &&
         o.ask_type !== "new-work-routing" &&
-        o.ask_type !== "unit-claim"
+        o.ask_type !== "unit-claim" &&
+        o.ask_type !== "legacy-plan-approval-recovery"
       ) {
         errors.push(
-          `${kind}: ask_type must be one of new-work-routing, unit-claim, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of new-work-routing | unit-claim | legacy-plan-approval-recovery, got ${String(o.ask_type)}`,
         );
       }
       if (o.ask_type === "new-work-routing") {
@@ -737,6 +782,18 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "new_work_description", kind, errors);
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "numbered_prose_question", kind, errors);
+        for (const field of [
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+          "recovery_choice",
+        ] as const) {
+          if (field in o) {
+            errors.push(
+              `${kind}: ${field} is not valid for new-work-routing`,
+            );
+          }
+        }
       } else if (o.ask_type === "unit-claim") {
         if (o.response_route !== "claim") {
           errors.push(`${kind}: unit-claim response_route must be "claim"`);
@@ -744,6 +801,43 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkStringArray(o, "claimable_units", kind, errors);
         checkUnitClaimRows(o, "claimed_units", "holder", kind, errors);
         checkUnitClaimRows(o, "waiting_units", "blocked_by", kind, errors);
+        for (const field of [
+          "new_work_description",
+          "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "recovery_choice",
+        ] as const) {
+          if (field in o) {
+            errors.push(`${kind}: ${field} is not valid for unit-claim`);
+          }
+        }
+      } else if (o.ask_type === "legacy-plan-approval-recovery") {
+        if (o.response_route !== "next") {
+          errors.push(
+            `${kind}: legacy-plan-approval-recovery response_route must be "next"`,
+          );
+        }
+        if (o.recovery_choice !== "Recover Plan Approval") {
+          errors.push(
+            `${kind}: legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"`,
+          );
+        }
+        for (const field of [
+          "new_work_description",
+          "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+        ] as const) {
+          if (field in o) {
+            errors.push(
+              `${kind}: ${field} is not valid for legacy-plan-approval-recovery`,
+            );
+          }
+        }
       } else {
         for (const field of [
           "response_route",
@@ -754,6 +848,7 @@ export function validateDirective(obj: unknown): ValidationResult {
           "claimable_units",
           "claimed_units",
           "waiting_units",
+          "recovery_choice",
         ] as const) {
           if (field in o) {
             errors.push(
@@ -821,6 +916,7 @@ function checkRunStageShared(
   checkStringArray(o, "rules_in_context", kind, errors);
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkString(o, "stage_file", kind, errors);
+  checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
   // next_stage: optional-nullable on a run-stage directive. Present as a string
   // names the following in-scope stage; null means this is the final in-scope
@@ -983,6 +1079,49 @@ function checkOptionalString(
   if (!(field in o)) return;
   if (typeof o[field] !== "string") {
     errors.push(`${kind}: ${field} must be string, got ${describe(o[field])}`);
+  }
+}
+
+function checkOptionalLegacyPlanApprovalChoices(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("legacy_plan_approval_choices" in o)) return;
+  const value = o.legacy_plan_approval_choices;
+  if (!isPlainObject(value)) {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices must be object, got ${describe(value)}`,
+    );
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "approve" && key !== "request_changes") {
+      errors.push(
+        `${kind}: legacy_plan_approval_choices unknown key: ${key}`,
+      );
+    }
+  }
+  const approve = value.approve;
+  const requestChanges = value.request_changes;
+  if (typeof approve !== "string") {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices.approve must be string, got ${describe(approve)}`,
+    );
+  }
+  if (typeof requestChanges !== "string") {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices.request_changes must be string, got ${describe(requestChanges)}`,
+    );
+  }
+  if (typeof approve !== "string" || typeof requestChanges !== "string") return;
+  const approveMatch = /^Approve Plan \[([0-9a-f]{12})\]$/.exec(approve);
+  const changesMatch =
+    /^Request Changes \[([0-9a-f]{12})\]$/.exec(requestChanges);
+  if (!approveMatch || !changesMatch || approveMatch[1] !== changesMatch[1]) {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices must carry matching protected choice labels`,
+    );
   }
 }
 

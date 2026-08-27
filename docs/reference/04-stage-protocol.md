@@ -996,8 +996,11 @@ omits the reviewer block entirely and the stage runs reviewless.
    records the review request. The directive's `review_artifact` field names
    the required Markdown output that owns the appendix; output ordering and
    plugin additions cannot change it. If a terminal appendix already exists,
-   the request binds the exact bytes before that appendix, so deleting it does
-   not rebaseline the dispatched content. For stale-source recovery this
+   the request binds the exact bytes before that appendix and returns a
+   `reviewChallenge` in its successful JSON; the conductor passes that exact
+   value to the reviewer, so deleting the old appendix does not rebaseline the
+   dispatched content and replaying it cannot become fresh authority through an
+   unrelated mutation. For stale-source recovery this
    request-first
    order is what suspends the review freeze for exactly the named stage/Unit,
    while its stale condition still exists, in the session that recorded or
@@ -1032,7 +1035,8 @@ omits the reviewer block entirely and the stage runs reviewless.
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
    any listed validation tools, and appends exactly ONE `## Review` section to
    `review_artifact`. The complete suffix contains one matching Verdict,
-   Reviewer, and Iteration line and no second H2 section. The request binds
+   Reviewer, and Iteration line, plus exactly one matching Request Challenge
+   line when the request returned one, and no second H2 section. The request binds
    artifact bytes and workspace source before dispatch; retry cannot rebaseline
    either, and completion uses one stable file-identity snapshot. The reviewers
    run under a hard turn budget (`maxTurns: 60`),

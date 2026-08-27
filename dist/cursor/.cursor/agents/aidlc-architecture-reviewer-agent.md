@@ -159,6 +159,7 @@ Use this exact format:
 **Reviewer:** aidlc-architecture-reviewer-agent
 **Date:** [ISO timestamp from Bash]
 **Iteration:** [1, 2, etc.]
+**Request Challenge:** [exact reviewChallenge returned by the request; omit this line when none was returned]
 
 ### Findings
 

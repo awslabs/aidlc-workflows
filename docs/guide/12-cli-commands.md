@@ -911,6 +911,45 @@ It prints the active space's deterministic
 no audit event; reverse-engineering stage prose invokes it directly so paths
 are never derived by hand.
 
+### `aidlc-utility codekb-snapshot` - bind a scan to source and store generations
+
+This is a **direct utility invocation**, not an `/aidlc codekb-snapshot` command:
+
+```bash
+bun .claude/tools/aidlc-utility.ts codekb-snapshot \
+  --repo <repo> --paths src/payments/,src/catalog/ --json
+```
+
+Immediately before a reverse-engineering scan, this command captures the
+complete shared CodeKB generation plus a source fingerprint over the paths the
+scan will inspect. The source token uses the Git working-tree fingerprint when
+available and a byte-exact tree fallback outside Git. A space+repo lock keeps
+the two values from straddling a concurrent publication. The returned
+`store_generation`, `source_fingerprint`, and `paths` are inputs to
+`codekb-publish`.
+
+### `aidlc-utility codekb-publish` - guarded all-artifact publication
+
+This is a **direct utility invocation**, not an `/aidlc codekb-publish` command:
+
+```bash
+bun .claude/tools/aidlc-utility.ts codekb-publish \
+  --repo <repo> \
+  --staged <record>/.aidlc-codekb-stage-<repo>/ \
+  --paths src/payments/,src/catalog/ \
+  --expect-store <generation> \
+  --expect-source <fingerprint> \
+  --json
+```
+
+The staged directory must contain exactly the nine CodeKB artifacts.
+Publication acquires the same space+repo lock, rechecks both snapshot values,
+validates the timestamp's final scope fingerprint, and swaps the complete
+candidate into the shared store with rollback and crash recovery. A concurrent
+CodeKB publication returns `CODEKB_STORE_CHANGED`; source movement returns
+`CODEKB_SOURCE_CHANGED`. Both publish nothing and require a fresh re-merge or
+scan rather than a last-writer-wins overwrite.
+
 ### `aidlc-utility codekb-scope-diff` - check the code knowledge base before a rerun
 
 This is a **direct utility invocation**, not an `/aidlc codekb-scope-diff` command:
@@ -922,7 +961,8 @@ bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --path
 ```
 
 The reverse-engineering rerun guard. The codekb store is space-level and
-shared across intents; a rerun replaces it, so the stage checks first:
+shared across intents; a full rescan replaces it, while a focused scan merges
+new knowledge into it cumulatively, so the stage checks first:
 
 - **Status mode** (default) reads the store's
   `reverse-engineering-timestamp.md` Scope of Analysis block and recomputes a
@@ -932,9 +972,12 @@ shared across intents; a rerun replaces it, so the stage checks first:
   not a git work tree), `UNKNOWN_SCOPE` (store predates scope tracking).
 - **Compare mode** (`--compare <incoming timestamp.md>`) answers whether the
   incoming run's scope covers the store's: `COVERS`, or `NARROWER` plus the
-  exact paths and components an overwrite discards. A `kind: full` scope must
-  include repository root (`./`), and only another full scope can replace a
-  full store without a `NARROWER` warning.
+  exact paths and components no longer claimed as deep coverage. `COVERS` is
+  the focused-merge backstop: it means the merged scope preserved the store's
+  verified coverage. A `kind: full` scope must include repository root (`./`),
+  and only another full scope can cover a full store without a `NARROWER`
+  warning. On a stale or unverified focused merge, prior prose is preserved
+  while unverifiable analyzed paths are demoted to `shallow.paths`.
 - **Mint mode** (`--mint --paths <a,b,...>`) prints the fingerprint the
   architect pastes into the scope block at synthesis time (`unknown` outside
   a git work tree or when a pathspec is invalid).

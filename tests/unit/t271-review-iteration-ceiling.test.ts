@@ -294,12 +294,16 @@ function reviewAppendix(
   iteration: number,
   verdict: "READY" | "NOT-READY",
   findings = "No blocking findings.",
+  reviewChallenge?: string,
 ): string {
   return (
     "\n## Review\n\n" +
     `**Verdict:** ${verdict}\n` +
     `**Reviewer:** ${reviewer}\n` +
-    `**Iteration:** ${iteration}\n\n` +
+    `**Iteration:** ${iteration}\n` +
+    (reviewChallenge === undefined
+      ? "\n"
+      : `**Request Challenge:** ${reviewChallenge}\n\n`) +
     `### Findings\n\n${findings}\n`
   );
 }
@@ -1780,6 +1784,85 @@ describe("t271 review iteration ceiling", () => {
     expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
   });
 
+  test("a pending pre-challenge request with an old appendix is modernized once", () => {
+    const proj = seedProject("feature");
+    const body = "legacy challenge requirements\n";
+    const oldAppendix = reviewAppendix(
+      "aidlc-product-lead-agent",
+      1,
+      "READY",
+    );
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      `${body}${oldAppendix}`,
+    );
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis missing from graph");
+    const snapshot = reviewArtifactSnapshot(proj, stage);
+    if (!snapshot) throw new Error("review snapshot failed");
+    appendAuditEntry(
+      "REVIEW_REQUESTED",
+      {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+        Iteration: "1",
+        "Artifact Fingerprint": snapshot.requestFingerprint,
+        "Review Appendix Artifact": snapshot.appendixArtifact,
+        "Review Appendix Offset": String(snapshot.appendixOffset),
+        "Review Appendix Prior Digest": reviewAppendixDigest(snapshot.appendix),
+        "Review Appendix Prior Length": String(
+          reviewAppendixEvidenceBytes(snapshot.appendix).length,
+        ),
+      },
+      proj,
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+
+    const legacyCompletion = runReview(
+      proj,
+      [...request, "--verdict", "READY"],
+      { AIDLC_TEST_KEEP_REVIEW: "1" },
+    );
+    expect(legacyCompletion.status).not.toBe(0);
+    expect(legacyCompletion.stderr).toContain(
+      "predates request challenges",
+    );
+
+    const upgraded = runReview(proj, [...request, "--retry-pending"]);
+    expect(upgraded.status, upgraded.stderr).toBe(0);
+    expect(upgraded.stdout).toContain('"upgrade":"legacy-request"');
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(2);
+    const reviewChallenge = auditBlockField(requests[1], "Review Challenge");
+    expect(reviewChallenge).toMatch(/^review:[0-9a-f]{32}$/);
+    expect(upgraded.stdout).toContain(
+      `"reviewChallenge":"${reviewChallenge}"`,
+    );
+
+    writeFileSync(
+      artifact,
+      `${body}${reviewAppendix(
+        "aidlc-product-lead-agent",
+        1,
+        "READY",
+        "Fresh review after modernization.",
+        reviewChallenge as string,
+      )}`,
+      "utf-8",
+    );
+    const completed = runReview(
+      proj,
+      [...request, "--verdict", "READY"],
+      { AIDLC_TEST_KEEP_REVIEW: "1" },
+    );
+    expect(completed.status, completed.stderr).toBe(0);
+  });
+
   test("malformed pending requests are safely invalidated and do not consume their ordinal", () => {
     for (const malformed of ["partial appendix", "invalid source"] as const) {
       const proj = seedProject("feature");
@@ -1971,10 +2054,19 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "1",
     ];
 
-    expect(
-      runReview(proj, request, { AIDLC_TEST_KEEP_REVIEW: "1" }).status,
-    ).toBe(0);
+    const requestResult = runReview(proj, request, {
+      AIDLC_TEST_KEEP_REVIEW: "1",
+    });
+    expect(requestResult.status, requestResult.stderr).toBe(0);
     const requested = auditBlocks(proj, "REVIEW_REQUESTED")[0];
+    const reviewChallenge = auditBlockField(requested, "Review Challenge");
+    expect(reviewChallenge).toMatch(/^review:[0-9a-f]{32}$/);
+    expect(requestResult.stdout).toContain(
+      `"reviewChallenge":"${reviewChallenge}"`,
+    );
+    const wrongReviewChallenge =
+      `${(reviewChallenge as string).slice(0, -1)}` +
+      ((reviewChallenge as string).endsWith("0") ? "1" : "0");
     const priorDigest = auditBlockField(
       requested,
       "Review Appendix Prior Digest",
@@ -2032,6 +2124,74 @@ describe("t271 review iteration ceiling", () => {
       `${body}${staleAppendix}${unrelatedNote}`,
     );
 
+    // A one-byte mutation evades the request-time prefix digest but still
+    // cannot replay the old authority without the request-specific challenge.
+    const mutatedAppendix = staleAppendix.replace(
+      "No blocking findings.",
+      "No blocking findings!",
+    );
+    writeFileSync(artifact, `${body}${mutatedAppendix}`, "utf-8");
+    const mutatedReplay = runReview(
+      proj,
+      [...request, "--verdict", "READY"],
+      { AIDLC_TEST_KEEP_REVIEW: "1" },
+    );
+    expect(mutatedReplay.status).not.toBe(0);
+    expect(mutatedReplay.stderr).toContain(
+      "exactly one Request Challenge line matching the request",
+    );
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+
+    const invalidChallenges = [
+      {
+        name: "wrong",
+        appendix: reviewAppendix(
+          "aidlc-product-lead-agent",
+          1,
+          "READY",
+          "Fresh reviewer pass.",
+          wrongReviewChallenge,
+        ),
+      },
+      {
+        name: "malformed",
+        appendix: reviewAppendix(
+          "aidlc-product-lead-agent",
+          1,
+          "READY",
+          "Fresh reviewer pass.",
+          "not-a-review-challenge",
+        ),
+      },
+      {
+        name: "duplicate",
+        appendix: reviewAppendix(
+          "aidlc-product-lead-agent",
+          1,
+          "READY",
+          "Fresh reviewer pass.",
+          reviewChallenge as string,
+        ).replace(
+          `**Request Challenge:** ${reviewChallenge}\n`,
+          `**Request Challenge:** ${reviewChallenge}\n` +
+            `**Request Challenge:** ${reviewChallenge}\n`,
+        ),
+      },
+    ];
+    for (const invalid of invalidChallenges) {
+      writeFileSync(artifact, `${body}${invalid.appendix}`, "utf-8");
+      const refused = runReview(
+        proj,
+        [...request, "--verdict", "READY"],
+        { AIDLC_TEST_KEEP_REVIEW: "1" },
+      );
+      expect(refused.status, invalid.name).not.toBe(0);
+      expect(refused.stderr, invalid.name).toContain(
+        "exactly one Request Challenge line matching the request",
+      );
+      expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+    }
+
     // The request-first flow still permits deleting the stale appendix and
     // appending a freshly written one.
     writeFileSync(
@@ -2041,6 +2201,7 @@ describe("t271 review iteration ceiling", () => {
         1,
         "READY",
         "Fresh reviewer pass over the requested bytes.",
+        reviewChallenge as string,
       )}`,
       "utf-8",
     );
@@ -2060,6 +2221,9 @@ describe("t271 review iteration ceiling", () => {
       String(
         reviewAppendixEvidenceBytes(Buffer.from(staleAppendix, "utf-8")).length,
       ),
+    );
+    expect(auditBlockField(completed, "Review Challenge")).toBe(
+      reviewChallenge,
     );
   });
 
@@ -2096,6 +2260,8 @@ describe("t271 review iteration ceiling", () => {
     ).toBe(0);
     const requests = auditBlocks(proj, "REVIEW_REQUESTED");
     expect(requests).toHaveLength(2);
+    const reviewChallenge = auditBlockField(requests[1], "Review Challenge");
+    expect(reviewChallenge).toMatch(/^review:[0-9a-f]{32}$/);
     expect(
       auditBlockField(requests[1], "Review Appendix Prior Digest"),
     ).toBe(reviewAppendixDigest(Buffer.from(attemptOneAppendix, "utf-8")));
@@ -2128,6 +2294,7 @@ describe("t271 review iteration ceiling", () => {
         1,
         "READY",
         "Re-reviewed after the attempt reset.",
+        reviewChallenge as string,
       )}`,
       "utf-8",
     );

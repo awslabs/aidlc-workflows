@@ -62,8 +62,6 @@ outputs: "performance-requirements.md, security-requirements.md, scalability-req
 
 # NFR Requirements
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
 ## Steps
 
 ### Execution Modes
@@ -166,46 +164,19 @@ Approval gate: strictly 2-option (Approve / Request Changes).
 
 This stage's outputs are markdown design artefacts under `<record>/construction/{unit-name}/nfr-requirements/`. Some sections include code samples that the code-shape sensors can also flag.
 
-The imported sensors check those outputs:
+Imports: `required-sections`, `upstream-coverage`, `linter`, `type-check`, `traceability`.
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `functional-spec`, `rules`, `requirements`, `contract-summary`).
-- **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
-- **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
-- **`traceability`** validates that inception NFR IDs are declared and covered by per-Unit `NFRx.y` requirements.
+Upstream targets: `functional-spec`, `rules`, `requirements`, `contract-summary`, `technology-stack`.
 
-Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
+`linter` and `type-check` inspect matching TypeScript/JavaScript snippets.
+`traceability` verifies that inception NFR IDs are declared and covered by
+per-Unit `NFRx.y` requirements.
 
 ## Learn
 
-While running this stage, record observations in the engine-created
-`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
-never read, probe, create, or initialize it. Follow the active harness's
-diary-write discipline when inserting entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-Before the approval gate, run the `stage-protocol.md` §13
-`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
-model, reads memory.md and returns the candidates for the structured question.
-For each entry the user keeps, write to the appropriate
-harness destination per `stage-protocol.md` §13 — never to this stage file:
-
-- Prescriptive rule → a practice line under the routed heading in
-  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
-- Verification check → new manifest at `.cursor/sensors/aidlc-<id>.md`
-  (capability descriptor only — no `applies_to`); add the new id to
-  the relevant stage's `sensors: [...]` frontmatter list to wire it
-
-Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
-file stays in the artefact directory as part of the stage's permanent record.
-
-Stage files are immutable framework artefacts — the ritual writes into the
-harness, not into this file. Next time this stage runs, the new rules and
-sensors load automatically.
+Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
+under the four standard headings while working; before the approval gate,
+surface candidates with `aidlc-learnings.ts`;
+still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
+with the tool. The memory file stays in the artefact directory, and the stage
+file remains immutable.

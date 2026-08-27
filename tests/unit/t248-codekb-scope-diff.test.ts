@@ -366,6 +366,10 @@ describe("t248 codekb-scope-diff verb — status mode", () => {
     const parsed = JSON.parse(res.stdout);
     expect(parsed.verdict).toBe("UNKNOWN_SCOPE");
     expect(parsed.reason).toBe("absent");
+    const human = runVerb(proj);
+    expect(human.stdout).toContain(
+      "A focused merge may retain its prose, but prior paths and components are not claimed as verified coverage until rescanned.",
+    );
   });
 
   test("matching fingerprint → CURRENT; edit inside scope → STALE", () => {
@@ -495,6 +499,10 @@ describe("t248 codekb-scope-diff verb — compare mode", () => {
     expect(parsed.discarded_components).toEqual(["payment-gateway"]);
     expect(parsed.store_intent).toBe("fix-payment-timeout");
     expect(parsed.incoming_intent).toBe("restructure-auth");
+    const human = runVerb(proj, "--compare", incoming);
+    expect(human.stdout).toContain(
+      "NARROWER: the incoming scope no longer claims verified deep coverage for:",
+    );
   });
 
   test("valid incoming full root covers a partial store", () => {
