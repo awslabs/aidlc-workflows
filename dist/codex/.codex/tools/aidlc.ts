@@ -13,6 +13,7 @@ import {
   isCompiledExecutable,
   packagedDistributionRoot,
   runtimeHarnessDir,
+  runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
@@ -1243,13 +1244,16 @@ export async function main(argv: string[]): Promise<void> {
     await metrics.sendMetricFromStdin();
     return;
   }
-  if (isCompiledExecutable() && !process.env.AIDLC_HARNESS_DIR) {
-    // Compiled, no explicit harness: probe the project install (.claude /
-    // .kiro / .codex by tools/data/harness.json) rather than assuming
-    // .claude — module-relative derivation can't work from $bunfs, and every
-    // delegate and sibling tool reads this env, so pin the probe's answer
-    // once here. Falls back to .claude when no install is present.
-    process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+  if (isCompiledExecutable()) {
+    // Compiled modules cannot derive the installed harness from their bundled
+    // path, and embedded data may be Claude-flavoured. Pin both identifiers
+    // before lazy delegate imports so same-directory harnesses retain identity.
+    if (!process.env.AIDLC_HARNESS_DIR) {
+      process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+    }
+    if (!process.env.AIDLC_HARNESS_NAME) {
+      process.env.AIDLC_HARNESS_NAME = runtimeHarnessName();
+    }
   }
   const code = await execute(resolveAction(argv));
   process.exitCode = code;

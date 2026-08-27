@@ -351,6 +351,8 @@ export interface ReportAskDirective extends AskDirectiveBase {
   response_route?: undefined;
   new_work_description?: undefined;
   proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
 }
 
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
@@ -358,6 +360,10 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   response_route: "next";
   new_work_description: string;
   proposed_scope: string;
+  /** Existing unselected intent record-dir selectors, when the clone-local cursor is missing. */
+  available_intents?: string[];
+  /** Engine-authored numbered rendering for prose-only harnesses such as Kiro. */
+  numbered_prose_question: string;
 }
 
 export interface UnitClaimAskDirective extends AskDirectiveBase {
@@ -552,6 +558,8 @@ const ASK_FIELDS = [
   "response_route",
   "new_work_description",
   "proposed_scope",
+  "available_intents",
+  "numbered_prose_question",
   "claimable_units",
   "claimed_units",
   "waiting_units",
@@ -692,6 +700,8 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "response_route", kind, errors);
       checkOptionalString(o, "new_work_description", kind, errors);
       checkOptionalString(o, "proposed_scope", kind, errors);
+      checkOptionalStringArray(o, "available_intents", kind, errors);
+      checkOptionalString(o, "numbered_prose_question", kind, errors);
       if (
         "ask_type" in o &&
         o.ask_type !== "new-work-routing" &&
@@ -707,6 +717,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
         checkString(o, "new_work_description", kind, errors);
         checkString(o, "proposed_scope", kind, errors);
+        checkString(o, "numbered_prose_question", kind, errors);
       } else if (o.ask_type === "unit-claim") {
         if (o.response_route !== "claim") {
           errors.push(`${kind}: unit-claim response_route must be "claim"`);
@@ -719,6 +730,8 @@ export function validateDirective(obj: unknown): ValidationResult {
           "response_route",
           "new_work_description",
           "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
           "claimable_units",
           "claimed_units",
           "waiting_units",

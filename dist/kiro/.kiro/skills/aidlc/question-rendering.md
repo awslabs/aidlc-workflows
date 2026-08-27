@@ -107,6 +107,39 @@ remapped to the final number; do not synthesize another row. A prose mention,
 tip, or instruction about Other outside the numbered list never satisfies this
 invariant.
 
+## Engine-emitted ask directives
+
+An engine `ask` directive is already the routing decision. Do not run another
+query, inspect intent state, add a recommendation, or replace it with a newly
+derived question before rendering. Untyped asks use `directive.question`; the
+typed exception uses the engine-authored numbered field below. This prose-only
+path is the compatibility contract for older and newer Kiro CLI versions.
+
+Every engine-ask render is invalid until its final displayed option is the next
+number followed by `**Other** — describe what you want instead`. A trailing
+sentence such as "or tell me" is not the Other option and must not replace it.
+
+For `ask_type: "new-work-routing"`, do not derive a rendering from
+`directive.question`. Print `directive.numbered_prose_question` verbatim and END
+THE TURN. The engine-authored field already contains the prompt, options 1-3,
+`4. **Other** — describe what you want instead`, and the reply hint. Do not
+paraphrase it, remove its numbers, collapse the routes into Yes/No, add a
+recommendation, or call `intent --json`; the typed ask and its
+`response_route: "next"` metadata remain authoritative for the next human
+answer.
+
+If that answer is only `4` or `Other`, ask exactly
+**"What would you like me to do instead?"** and END THE TURN without calling a
+tool. Forward the human's subsequent substantive alternative unchanged through
+`next "<human alternative>"`; never use `report` for this response route.
+
+For an untyped intent-picker ask that explicitly names
+`/aidlc intent <name>`, keep the complete `directive.question` as the prompt,
+render each record name already named by the engine as one numbered option in the same
+order, then write option `N+1` as
+`**Other** — describe what you want instead`, and END THE TURN. Do not query the
+registry or use the pending prose to invent a new-work offer.
+
 ## Mandatory consolidated-summary checkpoint
 
 After guided or chat file-backed Q&A (and whenever a stage definition requires

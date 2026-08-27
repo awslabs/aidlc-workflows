@@ -7663,6 +7663,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/e2e/t-acp-kiro-new-work-routing.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
           "mechanism": "cli"
         },

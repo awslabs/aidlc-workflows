@@ -12,7 +12,7 @@
 // intent over the existing ones, violating "auto-create fires only on ZERO
 // intents". The fix: before creating, consult listIntents over the active
 // space; if intents EXIST but none is flagged active, emit an `ask` directive
-// that lists them and asks the human to pick one via `/aidlc intent <slug>`,
+// that lists them and asks the human to pick one via `/aidlc intent <name>`,
 // instead of the creation `print`. The zero-intent case STILL creates unchanged.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -23,6 +23,10 @@ import {
   createTestProject,
   removeWorkspaceRecord,
 } from "../harness/fixtures.ts";
+import {
+  HARNESS_MATRIX,
+  harnessByName,
+} from "../harness/harness-matrix.ts";
 import { readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -48,11 +52,13 @@ interface Run {
   stdout: string;
   out: string;
 }
-function util(args: string[], p = proj): Run {
+function runTool(tool: string, args: string[], p = proj): Run {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  delete env.AIDLC_HARNESS_DIR;
+  delete env.AIDLC_HARNESS_NAME;
   const r = Bun.spawnSync({
-    cmd: [BUN, UTIL, ...args, "--project-dir", p],
+    cmd: [BUN, tool, ...args, "--project-dir", p],
     stdout: "pipe",
     stderr: "pipe",
     env,
@@ -60,17 +66,11 @@ function util(args: string[], p = proj): Run {
   const stdout = r.stdout.toString();
   return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
 }
-function next(args: string[], p = proj): Run {
-  const env = { ...process.env };
-  delete env.AWS_AIDLC_DEFAULT_SCOPE;
-  const r = Bun.spawnSync({
-    cmd: [BUN, ORCH, "next", ...args, "--project-dir", p],
-    stdout: "pipe",
-    stderr: "pipe",
-    env,
-  });
-  const stdout = r.stdout.toString();
-  return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
+function util(args: string[], p = proj): Run {
+  return runTool(UTIL, args, p);
+}
+function next(args: string[], p = proj, orchestrator = ORCH): Run {
+  return runTool(orchestrator, ["next", ...args], p);
 }
 
 const intentsDir = (p: string, space = "default"): string =>
@@ -109,17 +109,14 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.kind).not.toBe("print");
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent-create");
-      // It prompts to pick an existing intent by slug via `/aidlc intent <slug>`.
-      expect(d.question).toContain("/aidlc intent <slug>");
-      // The two existing intent slugs are named in the prompt. The engine lists
-      // the registry `slug` values (aidlc-orchestrate.ts intentPickPrompt →
-      // intents.map(i => i.slug)), NOT the dir names — so derive the expected
-      // slugs from the registry, not by stripping the (now date-prefixed, no-hex)
-      // dir name. These creates passed no description, so each slug is its scope
-      // token ("poc", "feature").
-      const slugs = readIntentRegistry(proj).map((e) => e.slug);
-      expect(slugs.length).toBe(2);
-      for (const s of slugs) expect(d.question).toContain(s);
+      // The engine exposes exact record names accepted by the switch command,
+      // with the slug retained only as the human label.
+      expect(d.question).toContain("/aidlc intent <name>");
+      const records = readIntentRegistry(proj)
+        .map((entry) => entry.dirName)
+        .filter((name): name is string => typeof name === "string");
+      expect(records.length).toBe(2);
+      for (const name of records) expect(d.question).toContain(name);
       // Read-only: no third intent was created; the cursor is still unset.
       expect(recordDirs(proj).length).toBe(2);
       expect(existsSync(cursorPath(proj))).toBe(false);
@@ -131,8 +128,132 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent-create");
-      expect(d.question).toContain("/aidlc intent <slug>");
+      expect(d.question).toContain("/aidlc intent <name>");
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
+    });
+
+    for (const harness of HARNESS_MATRIX.filter(
+      (candidate) => candidate.name !== "kiro" && candidate.name !== "kiro-ide",
+    )) {
+      test(`${harness.name}: scoped new prose retains the pre-existing untyped picker contract`, () => {
+        seedTwoIntentsNoCursor();
+        const orchestrator = join(
+          harness.engineRoot,
+          "tools",
+          "aidlc-orchestrate.ts",
+        );
+        const r = next([
+          "poc",
+          "Create a tiny TypeScript command-line program that prints Hello World.",
+        ], proj, orchestrator);
+        const d = JSON.parse(r.stdout.trim());
+        expect(d.kind).toBe("ask");
+        expect(d.ask_type).toBeUndefined();
+        expect(d.available_intents).toBeUndefined();
+        expect(d.numbered_prose_question).toBeUndefined();
+        expect(d.question).toContain("/aidlc intent <name>");
+      });
+    }
+
+    test("Claude freeform prose retains its scope-confirm route instead of receiving the Kiro subtype", () => {
+      seedTwoIntentsNoCursor();
+      const r = next(["fix the broken login button"]);
+      const d = JSON.parse(r.stdout.trim());
+      expect(d.ask_type).toBeUndefined();
+      expect(d.available_intents).toBeUndefined();
+      expect(d.question).toContain('This looks like "bugfix" work');
+      expect(d.question).toContain("fix the broken login button");
+    });
+
+    for (const harnessName of ["kiro", "kiro-ide"] as const) {
+      test(`${harnessName}: scoped new prose emits the typed routing ask with record selectors`, () => {
+        seedTwoIntentsNoCursor();
+        const harness = harnessByName(harnessName);
+        const orchestrator = join(
+          harness.engineRoot,
+          "tools",
+          "aidlc-orchestrate.ts",
+        );
+        const r = next([
+          "poc",
+          "Create a tiny TypeScript command-line program that prints Hello World.",
+        ], proj, orchestrator);
+        const d = JSON.parse(r.stdout.trim());
+        const selectors = readIntentRegistry(proj)
+          .map((entry) => entry.dirName)
+          .filter((name): name is string => typeof name === "string");
+        expect(d.kind).toBe("ask");
+        expect(d.ask_type).toBe("new-work-routing");
+        expect(d.response_route).toBe("next");
+        expect(d.proposed_scope).toBe("poc");
+        expect(d.new_work_description).toContain("Hello World");
+        expect(d.available_intents).toEqual(selectors);
+        expect(d.numbered_prose_question).toContain(
+          "1. **Part of existing work**",
+        );
+        expect(d.numbered_prose_question).toContain("4. **Other**");
+        for (const selector of selectors) {
+          expect(d.numbered_prose_question).toContain(selector);
+        }
+      });
+    }
+
+    test("Kiro duplicate labels expose switchable full record selectors", () => {
+      const kiro = harnessByName("kiro");
+      const kiroUtility = join(
+        kiro.engineRoot,
+        "tools",
+        "aidlc-utility.ts",
+      );
+      const kiroOrchestrator = join(
+        kiro.engineRoot,
+        "tools",
+        "aidlc-orchestrate.ts",
+      );
+      expect(
+        runTool(kiroUtility, [
+          "intent-create",
+          "--scope",
+          "poc",
+          "--label",
+          "same label",
+        ]).status,
+      ).toBe(0);
+      expect(
+        runTool(kiroUtility, [
+          "intent-create",
+          "--scope",
+          "feature",
+          "--label",
+          "same label",
+        ]).status,
+      ).toBe(0);
+      const rows = readIntentRegistry(proj);
+      expect(rows.map((row) => row.slug)).toEqual(["same-label", "same-label"]);
+      const selectors = rows
+        .map((row) => row.dirName)
+        .filter((name): name is string => typeof name === "string");
+      expect(new Set(selectors).size).toBe(2);
+      rmSync(cursorPath(proj), { force: true });
+
+      const routed = next([
+        "poc",
+        "Create a tiny TypeScript command-line program that prints Hello World.",
+      ], proj, kiroOrchestrator);
+      const directive = JSON.parse(routed.stdout.trim());
+      expect(directive.available_intents).toEqual(selectors);
+      for (const selector of selectors) {
+        expect(directive.numbered_prose_question).toContain(selector);
+      }
+
+      const chosen = selectors[1];
+      const switchRoute = next(["intent", chosen], proj, kiroOrchestrator);
+      const switchDirective = JSON.parse(switchRoute.stdout.trim());
+      expect(switchDirective.kind).toBe("print");
+      expect(switchDirective.message).toContain(`intent ${chosen}`);
+      const switched = runTool(kiroUtility, ["intent", chosen]);
+      expect(switched.status, switched.out).toBe(0);
+      expect(readFileSync(cursorPath(proj), "utf-8").trim()).toBe(chosen);
     });
   });
 
