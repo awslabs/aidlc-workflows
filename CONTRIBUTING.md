@@ -47,7 +47,7 @@ Rules are organized by phase:
 Test your rule changes with at least one supported platform (Amazon Q Developer, Kiro, or other tools) before submitting. Describe what you tested in your PR.
 
 If you're adding or updating installation instructions, ensure you've tested them on Mac,
-Windows CMD, and Windows Powershell.
+Windows CMD, and Windows PowerShell.
 
 ## Reporting Bugs/Feature Requests
 

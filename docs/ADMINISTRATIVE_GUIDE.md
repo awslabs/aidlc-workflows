@@ -51,7 +51,10 @@ awslabs/aidlc-workflows/
 │   ├── labeler.yml               # Auto-label rules (path → label mapping)
 │   ├── pull_request_template.md  # PR template with contributor statement
 │   └── workflows/
+│       ├── ci.yml                # Markdown lint and formatting checks
 │       ├── codebuild.yml         # CI via AWS CodeBuild
+│       ├── codeql.yml            # CodeQL static analysis
+│       ├── docs.yml              # Documentation build and Pages deployment
 │       ├── pull-request-lint.yml # PR validation (title, labels, merge gates)
 │       ├── release.yml           # GitHub Release on tag push
 │       ├── release-pr.yml        # Changelog PR before release
@@ -74,7 +77,7 @@ awslabs/aidlc-workflows/
 
 ## CI/CD Architecture
 
-Six workflows form two distinct pipelines, a security scanning suite, plus a pull request validation gate:
+Nine workflows form two release/CI pipelines, a security scanning suite, a pull request validation gate, and standalone markdown, CodeQL, and documentation workflows:
 
 ### Pipeline 1: Release (changelog-first)
 
@@ -172,6 +175,12 @@ flowchart TD
 ```
 
 `pull-request-lint.yml` runs on every PR targeting `main` and on merge queue checks. It enforces four gates (conventional commit PR titles, the contributor statement from the PR template, a configurable merge-halt mechanism, and a do-not-merge label check) and automatically applies labels based on changed file paths. The workflow uses `pull_request_target` (not `pull_request`) so it runs in the context of the base branch — this is safe because it never checks out PR code and the `auto-label` job uses `actions/labeler` which only reads file paths from the API.
+
+### Standalone validation and documentation workflows
+
+- **`ci.yml`** runs markdownlint and the repository's multiple-choice formatting check on pushes and pull requests targeting `main`, plus manual dispatches.
+- **`codeql.yml`** runs CodeQL analysis for GitHub Actions and Python on pushes and pull requests targeting `main`, plus its weekly schedule.
+- **`docs.yml`** builds documentation for pushes and pull requests targeting `v2`. Non-PR runs upload and deploy the GitHub Pages artifact; PR runs perform the strict build only.
 
 ---
 
@@ -414,6 +423,42 @@ Only runs for `pull_request` and `pull_request_target` events. Skipped for bot a
 
 ---
 
+### Markdown CI Workflow (`ci.yml`)
+
+| Property     | Value                                                  |
+| ------------ | ------------------------------------------------------ |
+| **File**     | `.github/workflows/ci.yml`                             |
+| **Triggers** | Push and pull request to `main`; `workflow_dispatch`   |
+| **Purpose**  | Markdown linting and multiple-choice formatting checks |
+
+The workflow denies permissions by default and grants only `contents: read` to its `markdownlint` job.
+
+---
+
+### CodeQL Workflow (`codeql.yml`)
+
+| Property     | Value                                                  |
+| ------------ | ------------------------------------------------------ |
+| **File**     | `.github/workflows/codeql.yml`                         |
+| **Triggers** | Push and pull request to `main`; weekly schedule       |
+| **Purpose**  | CodeQL analysis of GitHub Actions and Python           |
+
+The workflow denies permissions by default. Its matrix job grants only the read permissions needed for source, workflow metadata, and CodeQL packs, plus `security-events: write` for results.
+
+---
+
+### Documentation Workflow (`docs.yml`)
+
+| Property     | Value                                                  |
+| ------------ | ------------------------------------------------------ |
+| **File**     | `.github/workflows/docs.yml`                           |
+| **Triggers** | Push and pull request to `v2`; `workflow_dispatch`     |
+| **Purpose**  | Strict documentation build and GitHub Pages deployment |
+
+The workflow grants `contents: read` for its build. On non-PR runs, the deploy job additionally receives `pages: write` and `id-token: write`.
+
+---
+
 ### Security Scanners Workflow (`security-scanners.yml`)
 
 | Property        | Value                                                                                          |
@@ -426,20 +471,18 @@ Only runs for `pull_request` and `pull_request_target` events. Skipped for bot a
 
 **Purpose:** Runs six independent security scanners in parallel to detect secrets, vulnerabilities, misconfigurations, and malware. All HIGH and CRITICAL findings must be remediated or have a documented risk acceptance before merge (see [Security Finding Requirements](#security-finding-requirements)).
 
-**Permissions model:** Deny-all at workflow level, then each job grants only `actions: read`, `contents: read`, and `security-events: write`.
+**Permissions model:** Deny-all at workflow level. The five SARIF-producing jobs grant `actions: read`, `contents: read`, and `security-events: write`; ClamAV grants only `actions: read` and `contents: read`.
 
 **Jobs:**
 
-| Job        | Scanner  | What it detects                                     | Fails on                                                     |
-| ---------- | -------- | --------------------------------------------------- | ------------------------------------------------------------ |
-| `gitleaks` | Gitleaks | Secrets in git history                              | Any secret not in `.gitleaks-baseline.json`                  |
-| `semgrep`  | Semgrep  | Security anti-patterns (all languages)              | Any finding (PRs: new findings only via `--baseline-commit`) |
-| `grype`    | Grype    | Known CVEs in dependencies                          | High or critical CVEs (`fail-on-severity: high`)             |
-| `bandit`   | Bandit   | Python security issues                              | Any finding with high confidence                             |
-| `checkov`  | Checkov  | IaC misconfigurations (GitHub Actions, Dockerfiles) | Any check failure (minus skipped checks)                     |
-| `clamav`   | ClamAV   | Malware and viruses                                 | Any detection                                                |
+- **Gitleaks:** secrets in git history; fails on any secret not in `.gitleaks-baseline.json`.
+- **Semgrep:** security anti-patterns; fails when the generated SARIF contains a result whose level is `error`.
+- **Grype:** dependency vulnerabilities; fails on high or critical CVEs (`fail-on-severity: high`).
+- **Bandit:** Python security issues; fails when the generated SARIF contains a result whose level is `error`.
+- **Checkov:** IaC misconfigurations; fails when the generated SARIF contains a result whose level is `error`.
+- **ClamAV:** malware and viruses; fails on any detection.
 
-**Deferred-failure pattern:** All scanners capture the exit code without failing the step (`set +e`), upload the SARIF report as an artifact and to GitHub Code Scanning, then fail the job if findings were detected. This ensures results are always preserved regardless of outcome. ClamAV follows the same pattern but uploads a text log instead of SARIF.
+**Deferred-failure pattern:** All scanners capture the exit code without failing the scan step (`set +e`), preserve the results, then fail the job when the configured threshold is met. Five jobs upload SARIF as both an artifact and a GitHub Code Scanning result; ClamAV uploads a text log artifact only.
 
 **Configuration files:**
 
@@ -460,16 +503,17 @@ For detailed remediation and suppression instructions, see [Developer's Guide �
 
 ## Protected Environments
 
-| Environment | Used By                     | Purpose                                       |
-| ----------- | --------------------------- | --------------------------------------------- |
-| `codebuild` | `codebuild.yml` job `build` | Gates access to AWS credentials for CodeBuild |
+| Environment    | Used By                     | Purpose                                       |
+| -------------- | --------------------------- | --------------------------------------------- |
+| `codebuild`    | `codebuild.yml` job `build` | Gates access to AWS credentials for CodeBuild |
+| `github-pages` | `docs.yml` job `deploy`     | Records and protects the Pages deployment     |
 
-The `codebuild` environment is the only protected environment. It contains:
+The `codebuild` environment contains:
 
 - The `AWS_CODEBUILD_ROLE_ARN` secret (required for OIDC-based AWS role assumption)
 - Possibly the repository variables `CODEBUILD_PROJECT_NAME`, `AWS_REGION`, and `ROLE_DURATION_SECONDS` (these may alternatively be set at the repository level)
 
-Environment protection rules (configured in GitHub repository settings) may include required reviewers or deployment branch restrictions.
+Environment protection rules (configured in GitHub repository settings) may include required reviewers or deployment branch restrictions. The Pages-managed `github-pages` environment records the documentation deployment URL.
 
 ---
 
@@ -502,32 +546,41 @@ All variables have sensible defaults via `${{ vars.VAR || 'default' }}` syntax, 
 
 ### Workflow-level permissions
 
-| Workflow                  | Permissions                               |
-| ------------------------- | ----------------------------------------- |
-| `codebuild.yml`           | All 16 scopes explicitly set to `none`    |
-| `pull-request-lint.yml`   | All 16 scopes explicitly set to `none`    |
-| `release.yml`             | All 16 scopes explicitly set to `none`    |
-| `release-pr.yml`          | All 16 scopes explicitly set to `none`    |
-| `security-scanners.yml`   | All 16 scopes explicitly set to `none`    |
-| `tag-on-merge.yml`        | All 16 scopes explicitly set to `none`    |
+| Workflow                | Permissions                            |
+| ----------------------- | -------------------------------------- |
+| `ci.yml`                | `permissions: {}` (deny all)           |
+| `codebuild.yml`         | `permissions: {}` (deny all)           |
+| `codeql.yml`            | `permissions: {}` (deny all)           |
+| `docs.yml`              | `contents: read`                       |
+| `pull-request-lint.yml` | `permissions: {}` (deny all)           |
+| `release.yml`           | `permissions: {}` (deny all)           |
+| `release-pr.yml`        | `permissions: {}` (deny all)           |
+| `security-scanners.yml` | `permissions: {}` (deny all)           |
+| `tag-on-merge.yml`      | `permissions: {}` (deny all)           |
 
 ### Job-level permissions (overrides)
 
 | Workflow                | Job                    | Permissions                                               | Rationale                                                                                                    |
 | ----------------------- | ---------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `ci.yml`                | `markdownlint`         | `contents: read`                                          | Check out the repository for markdown validation                                                             |
 | `codebuild.yml`         | `label-reminder`       | `pull-requests: write`                                    | Post reminder comment when `rules` label is missing                                                          |
-| `codebuild.yml`         | `label-cleanup`        | `pull-requests: write`                                    | Delete reminder comment when `rules` label is applied                                                        |
-| `codebuild.yml`         | `build`                | `actions: write`, `contents: write`, `id-token: write`    | Cache management, release asset upload, OIDC token for AWS STS                                               |
+| `codebuild.yml`         | `label-cleanup`        | `issues: write`, `pull-requests: write`                   | Delete reminder comment when `rules` label is applied                                                        |
 | `pull-request-lint.yml` | `auto-label`           | `contents: read`, `issues: write`, `pull-requests: write` | Apply/remove labels based on changed file paths; `issues: write` allows creating labels that don't yet exist |
 | `pull-request-lint.yml` | `get-pr-info`          | `contents: read`, `pull-requests: read`                   | Read PR metadata and labels via API                                                                          |
 | `pull-request-lint.yml` | `check-merge-status`   | `pull-requests: read`                                     | Read PR state for merge gate checks                                                                          |
 | `pull-request-lint.yml` | `validate`             | `pull-requests: read`                                     | Read PR title for conventional commit validation                                                             |
 | `pull-request-lint.yml` | `contributorStatement` | `pull-requests: read`                                     | Read PR body for contributor acknowledgment                                                                  |
 | `release.yml`           | `release`              | `contents: write`                                         | Create draft release and attach zip artifact                                                                 |
-| `release-pr.yml`        | `release-pr`           | `contents: write`, `pull-requests: write`                 | Generate changelog, push branch, open PR                                                                     |
 | `tag-on-merge.yml`      | `tag`                  | `contents: write`, `actions: write`                       | Create tag via API, dispatch release and codebuild workflows                                                 |
 
-All six workflows follow a **deny-all-then-grant** pattern: every permission scope is set to `none` at the workflow level, then only the required scopes are granted at the job level. This is the strictest possible configuration and prevents privilege escalation from compromised steps. `security-scanners.yml` grants each of its six jobs `actions: read`, `contents: read`, and `security-events: write`.
+Additional wider job grants:
+
+- `codebuild.yml` / `build`: `actions: write`, `contents: write`, `id-token: write`, and `pull-requests: write`.
+- `release-pr.yml` / `release-pr`: `contents: write`, `pull-requests: write`, and `issues: write`.
+- `codeql.yml` / `analyze`: `security-events: write`, `packages: read`, `actions: read`, and `contents: read`.
+- `docs.yml` / `deploy`: `pages: write` and `id-token: write`.
+
+All nine workflows follow a least-privilege model. Eight deny permissions at the workflow level and grant only what their jobs require; `docs.yml` grants `contents: read` for its build and adds Pages/OIDC permissions only on the deploy job. Five SARIF-producing security scanner jobs grant `actions: read`, `contents: read`, and `security-events: write`; ClamAV grants only `actions: read` and `contents: read`.
 
 ---
 
@@ -537,15 +590,17 @@ All six workflows follow a **deny-all-then-grant** pattern: every permission sco
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Supply-chain protection** | All external actions pinned to full commit SHAs (not mutable version tags)                                                                                                                                                                              |
 | **AWS authentication**      | OIDC-based role assumption via `id-token: write` — no static credentials stored                                                                                                                                                                         |
-| **Least-privilege tokens**  | All six workflows explicitly deny all 16 permission scopes at workflow level, grant only required scopes at job level                                                                                                                                   |
 | **Environment protection**  | `codebuild` environment gates AWS credential access with potential reviewer/branch rules                                                                                                                                                                |
-| **Security scanning**       | Six automated scanners (SAST, SCA, secrets, IaC, malware) run on every push to `main`, every PR, and daily. Findings are published to GitHub Code Scanning. All HIGH and CRITICAL findings require remediation or documented risk acceptance            |
 | **Label-gated CI**          | `codebuild.yml` requires the `rules` label on PRs and only triggers for `aidlc-rules/**` changes, preventing unnecessary builds and environment approval prompts. The label is applied automatically by the `auto-label` job in `pull-request-lint.yml` |
 | **Concurrency control**     | `codebuild.yml`, `pull-request-lint.yml`, and `security-scanners.yml` cancel in-progress runs for the same branch                                                                                                                                       |
 | **Safe PR trigger**         | `pull-request-lint.yml` uses `pull_request_target` but never checks out PR code — only inspects metadata (title, labels, body)                                                                                                                          |
 | **Injection-safe inputs**   | Zero `${{ }}` expression interpolation in `run:` blocks — all dynamic values (`github.ref_name`, `github.repository`, `env.*`, event inputs) passed via step-level `env:` or auto-exported workflow `env:` variables                                    |
 | **Code ownership**          | `.github/` (including workflows) owned exclusively by `@awslabs/aidlc-admins` via CODEOWNERS                                                                                                                                                            |
 | **Account masking**         | `mask-aws-account-id: true` in AWS credential configuration                                                                                                                                                                                             |
+
+**Security scanning:** Six automated scanners cover SAST, SCA, secrets, IaC, and malware on pushes to `main`, pull requests, and the daily schedule. Five publish SARIF to GitHub Code Scanning; ClamAV publishes a text artifact. Findings at each workflow's configured failure threshold require remediation or documented risk acceptance.
+
+**Least-privilege tokens:** All nine workflows grant only the permissions required by their jobs. Pages access is isolated to the documentation deploy job; OIDC is granted only to that job and the CodeBuild job that assumes the AWS role.
 
 ### Security Finding Requirements
 

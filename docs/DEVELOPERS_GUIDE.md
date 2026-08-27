@@ -13,33 +13,33 @@ You can run AWS CodeBuild builds locally using the [CodeBuild local agent](https
 
 1. Setup
 
-- Download the local CodeBuild script and make it executable.
-- Send the `GH_TOKEN` environmental GitHub Personal Access Token (PAT) into a `./.env` file
+   - Download the local CodeBuild script and make it executable.
+   - Write the `GH_TOKEN` environment variable (a GitHub Personal Access Token) into a `./.env` file
 
-```bash
-if [ ! -f codebuild_build.sh ]; then
-  curl -O https://raw.githubusercontent.com/aws/aws-codebuild-docker-images/master/local_builds/codebuild_build.sh && chmod +x codebuild_build.sh;
-fi;
-echo "GH_TOKEN=${GH_TOKEN:-ghp_notset}" > "./.env";
-```
+   ```bash
+   if [ ! -f codebuild_build.sh ]; then
+     curl -O https://raw.githubusercontent.com/aws/aws-codebuild-docker-images/master/local_builds/codebuild_build.sh && chmod +x codebuild_build.sh;
+   fi;
+   echo "GH_TOKEN=${GH_TOKEN:-ghp_notset}" > "./.env";
+   ```
 
-1. Iterate
+2. Iterate
 
-- _Optionally edit the `buildspec-override` value in the `.github/workflows/codebuild.yml` GitHub workflow_
-- Update `./buildspec.yml` based on the workflow contents to a local file
-- Run AWS CodeBuild build locally with images based on the machine architecture
+   - _Optionally edit the `buildspec-override` value in the `.github/workflows/codebuild.yml` GitHub workflow_
+   - Update `./buildspec.yml` based on the workflow contents to a local file
+   - Run AWS CodeBuild build locally with images based on the machine architecture
 
-```bash
-cat .github/workflows/codebuild.yml \
-    | uvx yq -r '.jobs.build.steps[] | select(.id == "codebuild") | .with["buildspec-override"]' \
-    > buildspec.yml
-./codebuild_build.sh \
-  -i "public.ecr.aws/codebuild/amazonlinux-$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "x86_64")-standard:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "3.0" || echo "5.0")" \
-  -a "./.codebuild/artifacts/" \
-  -l "public.ecr.aws/codebuild/local-builds:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "latest")" \
-  -c \
-  -e "./.env"
-```
+   ```bash
+   cat .github/workflows/codebuild.yml \
+       | uvx yq -r '.jobs.build.steps[] | select(.id == "codebuild") | .with["buildspec-override"]' \
+       > buildspec.yml
+   ./codebuild_build.sh \
+     -i "public.ecr.aws/codebuild/amazonlinux-$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "x86_64")-standard:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "3.0" || echo "5.0")" \
+     -a "./.codebuild/artifacts/" \
+     -l "public.ecr.aws/codebuild/local-builds:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "latest")" \
+     -c \
+     -e "./.env"
+   ```
 
 ### All Script Options
 
@@ -59,17 +59,17 @@ cat .github/workflows/codebuild.yml \
 
 ## Security Scanners
 
-The [`security-scanners.yml`](../.github/workflows/security-scanners.yml) workflow runs six scanners on every push to `main`, every PR targeting `main`, and on a daily schedule. Each scanner uploads a SARIF report to GitHub Code Scanning (visible under the **Security** tab) and as a downloadable artifact.
+The [`security-scanners.yml`](../.github/workflows/security-scanners.yml) workflow runs six scanners on every push to `main`, every PR targeting `main`, and on a daily schedule. Five upload SARIF to GitHub Code Scanning (visible under the **Security** tab) and as downloadable artifacts; ClamAV uploads a text log artifact only.
 
-All scanners except ClamAV use a **deferred-failure pattern**: the scan always runs to completion and uploads results before the job fails. This ensures findings are recorded even when the build breaks.
+All six scanners use a **deferred-failure pattern**: the scan always runs to completion and preserves results before the job fails. This ensures findings are recorded even when the build breaks.
 
 ### Bandit — Python SAST
 
 **What it detects:** Common security issues in Python code (e.g., use of `subprocess`, `eval`, hardcoded passwords, weak crypto).
 
-**What triggers failure:** Any finding with **high confidence**, at any severity level. See the Bandit configuration in [`.github/workflows/security-scanners.yml`](../.github/workflows/security-scanners.yml) for the exact filters used.
+**What triggers failure:** Any generated SARIF result whose level is `error`.
 
-**Scope:** Runs against all tracked Python files in the repository; see [`.github/workflows/security-scanners.yml`](../.github/workflows/security-scanners.yml) for the precise include/exclude patterns.
+**Scope:** Runs against Python files under `scripts/`, subject to the exclusions in `.bandit`.
 
 **How to review findings:**
 
@@ -91,7 +91,7 @@ All scanners except ClamAV use a **deferred-failure pattern**: the scan always r
 
 **What it detects:** Security anti-patterns, dangerous API usage, and code quality issues across all languages using the full Semgrep Registry (`--config=r/all`).
 
-**What triggers failure:** Any finding. On PRs, only **new** findings (vs the PR base commit) trigger failure — pre-existing findings are ignored via `--baseline-commit`.
+**What triggers failure:** Any generated SARIF result whose level is `error`. On PRs, the scan uses `--baseline-commit` so the report is scoped to new findings.
 
 **How to review findings:**
 
@@ -180,7 +180,7 @@ All scanners except ClamAV use a **deferred-failure pattern**: the scan always r
 
 **Scope:** Only scans `github_actions` and `dockerfile` frameworks (configured in `.checkov.yaml`).
 
-**What triggers failure:** Any check failure, except checks listed in `skip-check`.
+**What triggers failure:** Any generated SARIF result whose level is `error`; checks listed in `skip-check` are excluded.
 
 **How to review findings:**
 
