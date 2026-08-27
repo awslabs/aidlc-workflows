@@ -102,10 +102,18 @@ function appendReviewAppendix(
   artifact: string,
   reviewer: string,
   iteration: number,
+  reviewChallenge?: string,
 ): void {
   appendFileSync(
     artifact,
-    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n` +
+      (reviewChallenge === undefined
+        ? "\n"
+        : `**Request Challenge:** ${reviewChallenge}\n\n`) +
+      "### Findings\n\nNo blocking findings.\n",
     "utf-8",
   );
 }
@@ -131,7 +139,10 @@ function recordReview(
   if (request.status !== 0) {
     throw new Error(`review request failed: ${request.out}`);
   }
-  appendReviewAppendix(artifact, reviewer, 1);
+  const { reviewChallenge } = JSON.parse(request.stdout) as {
+    reviewChallenge?: string;
+  };
+  appendReviewAppendix(artifact, reviewer, 1, reviewChallenge);
   const verdict = runLog(proj, [...base, "--verdict", "READY"]);
   if (verdict.status !== 0) {
     throw new Error(`review verdict failed: ${verdict.out}`);
@@ -345,6 +356,10 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
     const recovery = runLog(proj, recoveryArgs);
     expect(recovery.status).toBe(0);
     expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
+    const { reviewChallenge } = JSON.parse(recovery.stdout) as {
+      reviewChallenge?: string;
+    };
+    expect(reviewChallenge).toMatch(/^review:[0-9a-f]{32}$/);
     stripReviewAppendix(betaPlan);
     const recoveryReceipts = freshReviewReceipts(
       proj,
@@ -371,6 +386,10 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
     expect(runHook(proj, betaPlan).status).toBe(2);
     const retry = runLog(proj, [...recoveryArgs, "--retry-pending"]);
     expect(retry.status, retry.stderr).toBe(0);
+    expect(
+      (JSON.parse(retry.stdout) as { reviewChallenge?: string })
+        .reviewChallenge,
+    ).toBe(reviewChallenge);
     expect(runHook(proj, betaPlan).status).toBe(0);
 
     const gate = spawnSync(
@@ -413,6 +432,7 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
       betaPlan,
       "aidlc-architecture-reviewer-agent",
       2,
+      reviewChallenge,
     );
     expect(
       runLog(proj, [...recoveryArgs, "--verdict", "READY"]).status,

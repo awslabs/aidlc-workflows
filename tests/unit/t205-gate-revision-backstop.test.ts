@@ -195,6 +195,9 @@ function recordReview(proj: string, slug: string, iteration: number): void {
   if ((request.status ?? -1) !== 0) {
     throw new Error(`recordReview request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
+  const { reviewChallenge } = JSON.parse(request.stdout ?? "") as {
+    reviewChallenge?: string;
+  };
   const current = readFileSync(artifact, "utf-8");
   const reviewStart = current.search(/^## Review[ \t]*$/m);
   if (reviewStart !== -1) {
@@ -209,7 +212,10 @@ function recordReview(proj: string, slug: string, iteration: number): void {
     "\n## Review\n\n" +
       "**Verdict:** READY\n" +
       `**Reviewer:** ${reviewer}\n` +
-      `**Iteration:** ${iteration}\n\n` +
+      `**Iteration:** ${iteration}\n` +
+      (typeof reviewChallenge === "string"
+        ? `**Request Challenge:** ${reviewChallenge}\n\n`
+        : "\n") +
       `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
     "utf-8",
   );
