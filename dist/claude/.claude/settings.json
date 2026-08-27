@@ -68,7 +68,7 @@
         ]
       },
       {
-        "matcher": "Task",
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|Task|Agent",
         "hooks": [
           {
             "type": "command",

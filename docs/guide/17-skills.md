@@ -88,7 +88,11 @@ Each one packages `/aidlc --stage <slug> --single`:
 
 ### Why it's safe
 
-The `--single` invariant is tool-enforced. A single-stage run records its work under a synthetic workflow id and refuses to write your main workflow's `Current Stage`. If a runner ever tried to advance the main pointer, the engine returns an error instead. The engine guarantees this, so the safety holds even if the docs were wrong.
+The `--single` invariant is tool-enforced. `next --single` records the isolated
+start before work begins; `report --single` can only close that same synthetic
+attempt and refuses a direct completion with no start. Neither operation writes
+your main workflow's `Current Stage`. If a runner ever tried to advance the main
+pointer, the engine returns an error instead.
 
 The three bootstrap **initialization** stages ship no stage-runner - creating half an intent has no standalone meaning. Instead the whole initialization phase is packaged as one command:
 

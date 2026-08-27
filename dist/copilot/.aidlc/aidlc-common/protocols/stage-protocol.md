@@ -1161,14 +1161,19 @@ When a stage detects existing output artifacts in its artifact directory:
 bun .aidlc/tools/aidlc-state.ts reuse-artifact <stage-slug> \
   --decision <keep|modify|redo> \
   --artifacts "<comma-separated list of existing artifacts found>" \
-  [--repo <repo>]
+  [--repo <repo>] [--single]
 ```
 
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts`
-fields and optional `Repo` — never hand-write `**Event**:` markdown blocks.
+fields, optional `Repo`, and isolated `Workflow` when `--single` is used —
+never hand-write `**Event**:` markdown blocks.
 Use `--repo` when one repository's reuse decision must be distinguished from
-other repositories in the same stage. See `docs/reference/12-state-machine.md`
-for the canonical emitter registry.
+other repositories in the same stage. Reverse Engineering `--single` Keep
+receipts require the exact CodeKB path, every graph-declared required artifact
+as an authoritative regular file, and a `CURRENT` scope fingerprint; the
+pipeline completion check independently verifies the artifact set and freshness
+again. See
+`docs/reference/12-state-machine.md` for the canonical emitter registry.
 
 This applies to ALL stages, not just jump targets — when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice.
 

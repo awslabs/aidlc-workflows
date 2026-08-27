@@ -6453,10 +6453,11 @@ function resolveCodekbRepo(
   projectDir: string,
   flags: Record<string, string>,
 ): { space: string; repo: string; repoDir: string; storeDir: string; excludes: string[] } {
-  const space = activeSpace(projectDir);
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
   const repo = flags.repo && flags.repo.length > 0
     ? flags.repo
-    : codekbRepoName(projectDir, space);
+    : codekbRepoName(projectDir, space, selection.intent ?? undefined);
   if (!isValidRepoName(repo)) {
     die(`Invalid --repo "${repo}": a repo name must be one path segment.`);
   }

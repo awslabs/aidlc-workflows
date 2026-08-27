@@ -51,8 +51,13 @@
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Payloads without session_id share the explicit legacy bucket.
-//   - session-start: retain the modern session_id (or the legacy synthetic id)
-//     in workspace-local runtime state.
+//   - plan-approval-guard: populated inputs use exact target enforcement.
+//     Legacy argument-less inputs permit only single-file planning writes,
+//     hard-stop opaque shell/append/mutators, mediate Testing Contract +
+//     fingerprint/decision/answer ownership after canonical record writes,
+//     and bind approval to the directive-issued workspace source floor.
+//   - session-start: retain the modern session_id or derive a legacy identity
+//     from the measured IDE host-instance environment.
 //   - stop: prefer the event-local modern session_id; use retained identity for
 //     the legacy channel and broken modern payloads.
 //   - session-end: read retained identity without probing payload.
@@ -76,20 +81,37 @@ import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
   hasOpenGate,
+  clearKiroIdeLegacyPlanApprovalHost,
+  clearPlanApprovalViolation,
+  getField,
   hookDebug,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
-  humanTurnMintAllowed,
   isAutonomousMode,
-  markHumanTurn,
+  kiroIdeLegacyPlanApprovalSessionId,
+  markKiroIdeLegacyPlanApprovalHost,
+  clearPlanApprovalLegacyWindow,
   recordHookDrop,
+  readPlanApprovalLegacyWindow,
+  readPlanApprovalLegacyWindows,
+  readActiveDirectiveMarker,
   resolveProjectDirFromHook,
   sanitizeHarnessPlainText,
+  writePlanApprovalLegacyWindow,
+  writePlanApprovalViolation,
   sessionsDir,
   splitKiroCommandArgs,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import {
+  approvalFingerprint,
+  beginCodeGeneration,
+  legacyPlanApprovalGuardState,
+  parseTestingContract,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../tools/aidlc-testing-posture.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -100,8 +122,10 @@ const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // captures have empty inputs; later 1.x builds populate some PreToolUse and
 // delegation inputs (#543), so normalization preserves either shape.
 interface IdeHookContext {
+  channel?: "legacy" | "modern";
   sessionId?: string;
   prompt?: string;
+  userPrompt?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
@@ -119,10 +143,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const PAYLOAD_TARGETS = new Set([
   "audit-and-sensors",
   "log-subagent",
+  "plan-approval-guard",
   "rebuild-stage-graph",
   "terminal-command-guard",
 ]);
-const SESSION_ID_TARGETS = new Set(["session-start", "continue-workflow"]);
+const SESSION_ID_TARGETS = new Set([
+  "session-start",
+  "continue-workflow",
+  "record-human-turn",
+]);
 const INPUT_TARGETS = new Set([
   ...PAYLOAD_TARGETS,
   ...SESSION_ID_TARGETS,
@@ -130,6 +159,302 @@ const INPUT_TARGETS = new Set([
 ]);
 const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
 const KIRO_IDE_SESSION_FILE = ".kiro-ide-current-session";
+const LEGACY_PLANNING_WRITE_TOOLS = new Set([
+  "fs_write",
+  "str_replace",
+]);
+const PLAN_APPROVAL_SAFE_READ_TOOLS = new Set([
+  "fs_read",
+  "file_search",
+  "grep_search",
+  "thinking",
+  "todo_list",
+]);
+
+function upsertTestingContract(plan: string, rendered: string): string {
+  const section = /(^|\n)## Testing Contract[^\n]*\n[\s\S]*?(?=\n## |\s*$)/m;
+  if (section.test(plan)) {
+    return plan.replace(section, (_match, prefix: string) =>
+      `${prefix}${rendered.trimEnd()}\n`
+    );
+  }
+  return `${plan.trimEnd()}\n\n${rendered}`;
+}
+
+function runLegacyPlanTool(
+  projectDir: string,
+  tool: "aidlc-log.ts",
+  args: string[],
+): { code: number; stdout: string; stderr: string } {
+  const result = Bun.spawnSync(
+    [process.execPath, join(HOOKS_DIR, "..", "tools", tool), ...args],
+    {
+      cwd: projectDir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: process.env,
+    },
+  );
+  return {
+    code: result.exitCode ?? 1,
+    stdout: result.stdout?.toString() ?? "",
+    stderr: result.stderr?.toString() ?? "",
+  };
+}
+
+function legacyPlanApprovalSessionId(): string {
+  const session = kiroIdeLegacyPlanApprovalSessionId();
+  if (session) return session;
+  throw new Error(
+    "legacy Plan Approval requires the Kiro IDE host identity (VSCODE_IPC_HOOK or VSCODE_PID)",
+  );
+}
+
+function resolvedPlanApprovalSessionId(ide: IdeHookContext): string {
+  if (ide.sessionId?.trim()) return ide.sessionId.trim();
+  try {
+    return legacyPlanApprovalSessionId();
+  } catch {
+    return LEGACY_SESSION_ID;
+  }
+}
+
+function runLegacyRecoveryNext(
+  projectDir: string,
+  sessionId: string,
+): { ok: boolean; detail: string; recoveryRequired?: boolean } {
+  let args = ["next", "--project-dir", projectDir];
+  for (let step = 0; step < 64; step++) {
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        join(HOOKS_DIR, "..", "tools", "aidlc-orchestrate.ts"),
+        ...args,
+      ],
+      {
+        cwd: projectDir,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: process.env,
+      },
+    );
+    const stdout = result.stdout?.toString().trim() ?? "";
+    const stderr = result.stderr?.toString().trim() ?? "";
+    if ((result.exitCode ?? 1) !== 0) {
+      return { ok: false, detail: stderr || stdout || "engine recovery failed" };
+    }
+    let directive: {
+      kind?: string;
+      ask_type?: string;
+      continue_token?: string;
+      recovery_choice?: string;
+    };
+    try {
+      directive = JSON.parse(stdout);
+    } catch {
+      return { ok: false, detail: "engine recovery emitted invalid JSON" };
+    }
+    if (directive.kind === "error") {
+      return {
+        ok: false,
+        detail: stdout || "engine recovery returned an error directive",
+      };
+    }
+    if (
+      directive.kind === "ask" &&
+      directive.ask_type === "legacy-plan-approval-recovery"
+    ) {
+      return {
+        ok: false,
+        recoveryRequired: true,
+        detail: stdout,
+      };
+    }
+    if (directive.kind !== "load-steering") {
+      clearPlanApprovalViolation(projectDir);
+      clearPlanApprovalLegacyWindow(projectDir, sessionId);
+      return { ok: true, detail: stdout };
+    }
+    if (!directive.continue_token) {
+      return { ok: false, detail: "load-steering recovery omitted its token" };
+    }
+    args = [
+      "continue",
+      directive.continue_token,
+      "--project-dir",
+      projectDir,
+    ];
+  }
+  return { ok: false, detail: "engine recovery exceeded 64 steering parts" };
+}
+
+function legacyRecoveryBlockReason(
+  recovery: ReturnType<typeof runLegacyRecoveryNext>,
+): string {
+  if (recovery.recoveryRequired) {
+    return (
+      "Legacy Plan Approval recovery requires a human response. " +
+      "Present exactly `Recover Plan Approval`, end the turn, then retry recovery. " +
+      `The unknown original shell command remains blocked. Directive: ${recovery.detail}`
+    );
+  }
+  return recovery.ok
+    ? `Legacy Plan Approval recovery issued a fresh directive and blocked the unknown original shell command. Resume canonical planning from: ${recovery.detail}`
+    : `Legacy Plan Approval recovery failed closed: ${recovery.detail}`;
+}
+
+function latestPlanApprovalAnswer(questions: string): string | null {
+  const answers = Array.from(
+    questions.matchAll(/^\[Answer\]:[ \t]*(.*?)\s*$/gm),
+    (match) => match[1].trim(),
+  );
+  return answers.length === 0 ? null : answers[answers.length - 1];
+}
+
+function processLegacyPlanApprovalWrite(
+  projectDir: string,
+  filePath: string,
+  sessionId: string,
+): null {
+  const normalizedPath = resolve(filePath);
+  const writeWindow = readPlanApprovalLegacyWindow(projectDir, sessionId);
+  const state = legacyPlanApprovalGuardState(projectDir);
+  if (!state.active || state.target === null) {
+    if (writeWindow) {
+      writePlanApprovalViolation(projectDir, {
+        version: 1,
+        markerRevision: writeWindow.markerRevision,
+        reason: "legacy write destroyed or invalidated Plan Approval authority",
+        target: normalizedPath,
+      });
+    }
+    return null;
+  }
+  if (state.approved) return null;
+  const authority = resolveCodeGenerationAuthority(projectDir, state.target);
+  const planPath = join(authority.stageDir, "code-generation-plan.md");
+  const instructionsPath = join(authority.stageDir, "unit-test-instructions.md");
+  const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+
+  if (normalizedPath === planPath) {
+    const contract = resolveTestingPosture(projectDir);
+    const plan = readFileSync(planPath, "utf-8");
+    if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
+      writeFileSync(
+        planPath,
+        upsertTestingContract(plan, renderTestingContract(contract)),
+        "utf-8",
+      );
+    }
+    clearPlanApprovalLegacyWindow(projectDir, sessionId);
+    return null;
+  }
+  if (normalizedPath === instructionsPath) {
+    clearPlanApprovalLegacyWindow(projectDir, sessionId);
+    return null;
+  }
+  if (normalizedPath !== questionsPath) {
+    writePlanApprovalViolation(projectDir, {
+      version: 1,
+      markerRevision: authority.markerRevision,
+      reason: "unsupported legacy write target",
+      target: normalizedPath,
+    });
+    return null;
+  }
+
+  let questions = readFileSync(questionsPath, "utf-8");
+  const answer = latestPlanApprovalAnswer(questions);
+  const targetArgs =
+    state.target.unit === null
+      ? ["--stage-level"]
+      : ["--unit", state.target.unit];
+  if (answer === "") {
+    const plan = readFileSync(planPath, "utf-8");
+    const instructions = readFileSync(instructionsPath, "utf-8");
+    const contract = resolveTestingPosture(projectDir);
+    if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
+      throw new Error(
+        "legacy Plan Approval mediation requires the current Testing Contract in code-generation-plan.md",
+      );
+    }
+    const fingerprint = approvalFingerprint(
+      plan,
+      instructions,
+      contract.contract_sha256,
+      authority,
+    );
+    const withFingerprint = /^\[Approval Fingerprint\]:.*$/m.test(questions)
+      ? questions.replace(
+          /^\[Approval Fingerprint\]:.*$/m,
+          `[Approval Fingerprint]: ${fingerprint}`,
+        )
+      : questions.replace(
+          /^(\[Answer\]:)/m,
+          `[Approval Fingerprint]: ${fingerprint}\n$1`,
+        );
+    writeFileSync(questionsPath, withFingerprint, "utf-8");
+    const decision = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
+      "decision",
+      "--stage",
+      "code-generation",
+      "--checkpoint",
+      "plan-approval",
+      "--session",
+      sessionId,
+      "--questions-file",
+      questionsPath,
+      "--decision",
+      "Approve this exact Code Generation plan?",
+      "--options",
+      "Approve Plan,Request Changes",
+      "--exact-option-labels",
+      "true",
+      "--legacy-directive-options",
+      "true",
+      ...targetArgs,
+    ]);
+    if (decision.code !== 0) {
+      throw new Error(
+        `legacy Plan Approval decision mediation failed: ${decision.stderr.trim() || decision.stdout.trim()}`,
+      );
+    }
+    clearPlanApprovalLegacyWindow(projectDir, sessionId);
+    return null;
+  }
+  if (
+    answer === "Approve Plan" ||
+    answer === "Request Changes"
+  ) {
+    questions = questions.replace(
+      /^\[Answer\]:[ \t]*.*$/m,
+      `[Answer]: ${answer}`,
+    );
+    writeFileSync(questionsPath, questions, "utf-8");
+  }
+  if (answer !== "Approve Plan" && answer !== "Request Changes") return null;
+  const recorded = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
+    "answer",
+    "--stage",
+    "code-generation",
+    "--checkpoint",
+    "plan-approval",
+    "--session",
+    sessionId,
+    "--questions-file",
+    questionsPath,
+    "--details",
+    answer,
+    ...targetArgs,
+  ]);
+  if (recorded.code !== 0) {
+    throw new Error(
+      `legacy Plan Approval answer mediation failed: ${recorded.stderr.trim() || recorded.stdout.trim()}`,
+    );
+  }
+  clearPlanApprovalLegacyWindow(projectDir, sessionId);
+  return null;
+}
 
 export async function run(
   target: string,
@@ -151,22 +476,36 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 let ide: IdeHookContext = {};
 if (INPUT_TARGETS.has(target)) {
   let raw = input;
-  if (raw.trim().length === 0) raw = process.env.USER_PROMPT ?? "";
+  const legacyPayload = process.env.USER_PROMPT ?? "";
+  let channel: IdeHookContext["channel"] =
+    raw.trim().length > 0
+      ? legacyPayload.trim().length > 0 && raw === legacyPayload
+        ? "legacy"
+        : "modern"
+      : undefined;
+  if (raw.trim().length === 0) {
+    raw = legacyPayload;
+    if (raw.trim().length > 0) channel = "legacy";
+  }
   if (raw.trim().length > 0) {
     if (target === "verb-intercept" && /^\s*\/aidlc(?![\w-])/.test(raw)) {
-      ide = { prompt: raw };
+      ide = { channel, prompt: raw, userPrompt: raw };
     } else {
       try {
         const parsed: unknown = JSON.parse(raw);
         if (!isRecord(parsed)) {
           ide = { malformedFields: ["payload"] };
         } else {
-          const rawPrompt = parsed.prompt;
           const rawName = parsed.toolName ?? parsed.tool_name;
           const rawArgs = parsed.toolArgs ?? parsed.tool_input;
           const rawResult = parsed.toolResult ?? parsed.tool_response;
           const rawSuccess = parsed.toolSuccess ?? parsed.tool_success;
-          const rawSessionId = parsed.session_id;
+          const rawSessionId = parsed.session_id ?? parsed.sessionId;
+          const rawPrompt =
+            parsed.prompt ??
+            parsed.user_prompt ??
+            parsed.userPrompt ??
+            parsed.message;
           const malformedFields: string[] = [];
           if (
             rawPrompt !== null &&
@@ -204,10 +543,12 @@ if (INPUT_TARGETS.has(target)) {
             malformedFields.push("toolSuccess");
           }
           ide = {
+            channel,
             sessionId: typeof rawSessionId === "string"
               ? rawSessionId
               : undefined,
             prompt: typeof rawPrompt === "string" ? rawPrompt : undefined,
+            userPrompt: typeof rawPrompt === "string" ? rawPrompt : undefined,
             toolName: typeof rawName === "string" ? rawName : undefined,
             toolArgs: isRecord(rawArgs) ? rawArgs : undefined,
             toolResult: typeof rawResult === "string" ? rawResult : "",
@@ -220,9 +561,13 @@ if (INPUT_TARGETS.has(target)) {
           };
         }
       } catch {
-        // Malformed context — advisory hooks fail open without forwarding an
-        // event whose fields cannot be trusted.
-        ide = { malformedFields: ["JSON"] };
+        if (target === "record-human-turn") {
+          ide = { channel, prompt: raw, userPrompt: raw };
+        } else {
+          // Malformed context - advisory hooks fail open without forwarding an
+          // event whose fields cannot be trusted.
+          ide = { malformedFields: ["JSON"] };
+        }
       }
     }
   }
@@ -231,7 +576,7 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   target,
   hasStdinPayload: input.trim().length > 0,
   hasUserPrompt: (process.env.USER_PROMPT ?? "").length > 0,
-  prompt: (ide.prompt ?? "").slice(0, 160),
+  prompt: (ide.prompt ?? ide.userPrompt ?? "").slice(0, 160),
   toolName: ide.toolName ?? "",
   sessionId: ide.sessionId ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
@@ -240,7 +585,7 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
 // Persist the effective SessionStart identity under the existing gitignored
 // runtime dir so separate adapter processes can forward it to payload-free
 // SessionEnd and use it when a legacy or broken-channel Stop has no event-local
-// session_id. A legacy promptSubmit writes the synthetic id, replacing any
+// session_id. A legacy promptSubmit writes its host-derived id, replacing any
 // stale modern value from a prior IDE generation in the same workspace.
 function rememberKiroIdeSessionId(sessionId: string): void {
   if (!sessionId) return;
@@ -575,24 +920,8 @@ if (target === "terminal-command-guard") {
 // what makes the Stop hook's conversational carve-out work on this harness. The
 // IDE delivers no `transcript_path`, so the carve-out cannot read the turn
 // history; it compares this marker's mtime against .aidlc-engine-touch instead.
-// Both writes ride this seam, but AIDLC_UNATTENDED=1 deliberately withholds
-// only the authority-bearing ledger event while retaining the conversational
-// marker. See the marker family in aidlc-lib.ts.
-if (target === "record-human-turn") {
-  try {
-    const pd = process.cwd();
-    if (existsSync(stateFilePath(pd))) {
-      if (humanTurnMintAllowed()) {
-        appendAuditEntry("HUMAN_TURN", {}, pd);
-      }
-      markHumanTurn(pd);
-    }
-  } catch {
-    /* advisory - mint never blocks the turn */
-  }
-  return 0;
-}
-
+// Both writes ride this one seam so the ledger and the marker can never
+// disagree about when a human spoke. See the marker family in aidlc-lib.ts.
 // --- block: the preToolUse human-presence floor ---
 //
 // Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while
@@ -691,9 +1020,36 @@ function isFailedWriteResult(toolResult: string): boolean {
 // creates a (possibly new) file; str_replace/fs_append always target an
 // existing file → Edit (forces ARTIFACT_UPDATED in the core write-audit-log).
 function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
-  if (name === "fs_write") return "Write";
-  if (name === "str_replace" || name === "fs_append") return "Edit";
+  if (name === "fs_write" || name === "create_file") return "Write";
+  if (
+    name === "str_replace" ||
+    name === "fs_append" ||
+    name === "delete_file" ||
+    name === "apply_patch" ||
+    name === "edit_file"
+  ) return "Edit";
   return "";
+}
+
+function mutationCapableTool(name: string): boolean {
+  return name.length > 0 && !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name);
+}
+
+function inputPaths(input: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  const add = (value: unknown) => {
+    if (typeof value === "string" && value.length > 0) paths.push(value);
+  };
+  add(input.path);
+  add(input.file_path);
+  add(input.filePath);
+  if (Array.isArray(input.paths)) for (const path of input.paths) add(path);
+  if (Array.isArray(input.operations)) {
+    for (const operation of input.operations) {
+      if (isRecord(operation)) add(operation.path);
+    }
+  }
+  return [...new Set(paths)];
 }
 
 // Recover the delegated agent's identity from the hook payload.
@@ -732,14 +1088,72 @@ function buildForward(): Forward {
       "kiro-adapter",
       `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
     );
+    if (target === "plan-approval-guard") {
+      const malformedToolName = ide.toolName ?? "";
+      if (
+        readPlanApprovalLegacyWindows(projectDir).length > 0 &&
+        (
+          malformedToolName === "" ||
+          mutationCapableTool(malformedToolName)
+        )
+      ) {
+        return {
+          hook: "__legacy_plan_approval_block__",
+          input: {
+            reason:
+              `Plan Approval denied a malformed mutation payload while a legacy write recovery latch is active (${ide.malformedFields?.join(", ")}).`,
+          },
+        };
+      }
+      let codeGenerationRelevant = false;
+      try {
+        const statePath = stateFilePath(projectDir);
+        if (existsSync(statePath)) {
+          const state = readFileSync(statePath, "utf-8");
+          const marker = readActiveDirectiveMarker(projectDir, state);
+          codeGenerationRelevant =
+            getField(state, "Current Stage")
+              ?.trim()
+              .toLowerCase()
+              .replace(/\s+/g, "-") === "code-generation" ||
+            marker?.stage === "code-generation";
+        }
+      } catch {
+        codeGenerationRelevant = false;
+      }
+      if (!codeGenerationRelevant) return null;
+      return {
+        hook: "__legacy_plan_approval_block__",
+        input: {
+          reason:
+            `Plan Approval denied a malformed PreToolUse payload (${ide.malformedFields?.join(", ")}).`,
+        },
+      };
+    }
     return null;
   }
 
   switch (target) {
     case "session-start": {
       // Modern IDE payloads carry session_id. Legacy promptSubmit does not, so
-      // use one workspace-local synthetic id for its promptSubmit/agentStop pair.
-      const sessionId = ide.sessionId?.trim() || LEGACY_SESSION_ID;
+      // bind the legacy channel to the measured IDE host instance.
+      const sessionId =
+        ide.sessionId?.trim() ||
+        (() => {
+          try {
+            return legacyPlanApprovalSessionId();
+          } catch {
+            return LEGACY_SESSION_ID;
+          }
+          })();
+      if (ide.channel === "legacy") {
+        markKiroIdeLegacyPlanApprovalHost(projectDir, sessionId);
+      } else if (ide.channel === "modern") {
+        const legacyHostSession = kiroIdeLegacyPlanApprovalSessionId();
+        if (legacyHostSession) {
+          clearKiroIdeLegacyPlanApprovalHost(projectDir, legacyHostSession);
+        }
+      }
       rememberKiroIdeSessionId(sessionId);
       return {
         hook: "aidlc-session-start.ts",
@@ -747,6 +1161,396 @@ function buildForward(): Forward {
           hook_event_name: "SessionStart",
           source: "startup",
           session_id: sessionId,
+        },
+      };
+    }
+
+    case "record-human-turn": {
+      const sessionId =
+        ide.sessionId?.trim() ||
+        (() => {
+          try {
+            return legacyPlanApprovalSessionId();
+          } catch {
+            return rememberedKiroIdeSessionId();
+          }
+        })();
+      if (ide.channel === "legacy") {
+        markKiroIdeLegacyPlanApprovalHost(projectDir, sessionId);
+      }
+      return {
+        hook: "aidlc-record-human-turn.ts",
+        input: {
+          hook_event_name: "UserPromptSubmit",
+          session_id: sessionId,
+          prompt: ide.userPrompt ?? "",
+        },
+      };
+    }
+
+    case "plan-approval-guard": {
+      const toolName = ide.toolName ?? "";
+      const toolArgs = ide.toolArgs ?? {};
+      if (ide.channel === "legacy") {
+        try {
+          markKiroIdeLegacyPlanApprovalHost(
+            projectDir,
+            legacyPlanApprovalSessionId(),
+          );
+        } catch {
+          // The guard's missing-authority branches below remain fail closed.
+        }
+      }
+      const writeTool = canonicalWriteTool(toolName);
+      const paths = inputPaths(toolArgs);
+      const activeWriteWindows = readPlanApprovalLegacyWindows(projectDir);
+      if (
+        activeWriteWindows.length > 0 &&
+        (toolName === "" || mutationCapableTool(toolName))
+      ) {
+        let recoverySession = resolvedPlanApprovalSessionId(ide);
+        try {
+          recoverySession = legacyPlanApprovalSessionId();
+          markKiroIdeLegacyPlanApprovalHost(projectDir, recoverySession);
+        } catch {
+          // Missing host identity remains fail closed below.
+        }
+        if (toolName === "execute_bash") {
+          const recovery = runLegacyRecoveryNext(
+            projectDir,
+            recoverySession,
+          );
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: { reason: legacyRecoveryBlockReason(recovery) },
+          };
+        }
+        return {
+          hook: "__legacy_plan_approval_block__",
+          input: {
+            reason:
+              "Plan Approval blocked this mutation because a legacy write did not complete PostToolUse mediation. Exact human recovery is required before any legacy or modern write.",
+          },
+        };
+      }
+      const opaqueMutation =
+        toolName === "" ||
+        (
+          mutationCapableTool(toolName) &&
+          (
+            Object.keys(toolArgs).length === 0 ||
+            (
+              toolName !== "execute_bash" &&
+              paths.length === 0
+            )
+          )
+        );
+      if (opaqueMutation) {
+        const approvalSession = resolvedPlanApprovalSessionId(ide);
+        const state = legacyPlanApprovalGuardState(projectDir);
+        const writeWindows = readPlanApprovalLegacyWindows(projectDir);
+        if (
+          (!state.active || state.target === null) &&
+          writeWindows.length > 0
+        ) {
+          if (toolName === "execute_bash") {
+            const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason: legacyRecoveryBlockReason(recovery),
+              },
+            };
+          }
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: {
+              reason:
+                "Legacy Plan Approval blocked this tool because the preceding argument-less write destroyed or invalidated its authority files. Repair authority or use the adapter-owned recovery shell path.",
+            },
+          };
+        }
+        let interruptedWrite = false;
+        if (writeWindows.length > 0 && state.active && state.target !== null) {
+          try {
+            const authority = resolveCodeGenerationAuthority(
+              projectDir,
+              state.target,
+            );
+            interruptedWrite = writeWindows.some((window) =>
+              authority.markerRevision === window.markerRevision &&
+              authority.targetId === window.targetId &&
+              authority.unit === window.unit
+            );
+          } catch {
+            interruptedWrite = true;
+          }
+        }
+        if (interruptedWrite && !state.approved) {
+          if (toolName === "execute_bash") {
+            const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason: legacyRecoveryBlockReason(recovery),
+              },
+            };
+          }
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: {
+              reason:
+                "Legacy Plan Approval blocked this tool because the preceding argument-less write did not complete PostToolUse mediation. Exact human recovery is required before another write.",
+            },
+          };
+        }
+        if (!state.active) {
+          const statePath = stateFilePath(projectDir);
+          const durableCodeGeneration =
+            existsSync(statePath) &&
+            getField(readFileSync(statePath, "utf-8"), "Current Stage")
+              ?.trim()
+              .toLowerCase()
+              .replace(/\s+/g, "-") === "code-generation";
+          if (durableCodeGeneration && toolName === "execute_bash") {
+            const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason: legacyRecoveryBlockReason(recovery),
+              },
+            };
+          }
+          if (durableCodeGeneration) {
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason:
+                  "Plan Approval fallback blocked this tool because Code Generation authority state is missing or corrupt.",
+              },
+            };
+          }
+        }
+        if (state.active && state.violated) {
+          if (toolName === "execute_bash") {
+            const recovery = runLegacyRecoveryNext(projectDir, approvalSession);
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason: legacyRecoveryBlockReason(recovery),
+              },
+            };
+          }
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: {
+              reason:
+                "Legacy Plan Approval was poisoned by an unsupported write target. Run a fresh `next` to issue a new directive before continuing.",
+            },
+          };
+        }
+        if (state.active && !state.approved && !state.sourceFloorValid) {
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: {
+              reason:
+                "Plan Approval fallback blocked this tool because workspace source changed after the Code Generation directive. Revert pre-approval source changes before continuing.",
+            },
+          };
+        }
+        if (
+          state.active &&
+          !state.approved &&
+          state.pending &&
+          !state.humanAfterDecision
+        ) {
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: {
+              reason:
+                "Plan Approval is awaiting a human response. This Kiro IDE payload does not expose the tool target, so tool calls are blocked until the human answers.",
+            },
+          };
+        }
+        if (
+          state.active &&
+          state.approved &&
+          state.target !== null &&
+          (toolName === "" || mutationCapableTool(toolName))
+        ) {
+          try {
+            beginCodeGeneration(projectDir, state.target);
+          } catch (error) {
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason:
+                  `Legacy Code Generation could not start its protected authority: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+              },
+            };
+          }
+        }
+        if (
+          state.active &&
+          !state.approved &&
+          (
+            toolName === "" ||
+            toolName === "execute_bash" ||
+            toolName === "fs_append"
+          )
+        ) {
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: {
+              reason:
+                "Legacy Plan Approval blocks opaque shell and append tools before approval. Author only the canonical plan, unit-test instructions, and questions files with fs_write/str_replace; the write hook injects the Testing Contract and owns fingerprint, decision, and answer recording.",
+            },
+          };
+        }
+        if (
+          toolName === "" ||
+          mutationCapableTool(toolName)
+        ) {
+          if (
+            state.active &&
+            !state.approved &&
+            !LEGACY_PLANNING_WRITE_TOOLS.has(toolName)
+          ) {
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason:
+                  "Legacy Plan Approval permits only single-file planning writes before approval; this mutation-capable tool is not safely attributable.",
+              },
+            };
+          }
+          if (
+            LEGACY_PLANNING_WRITE_TOOLS.has(toolName) &&
+            state.target !== null
+          ) {
+            try {
+              const authority = resolveCodeGenerationAuthority(
+                projectDir,
+                state.target,
+              );
+              writePlanApprovalLegacyWindow(projectDir, {
+                version: 1,
+                session: approvalSession,
+                toolName,
+                markerRevision: authority.markerRevision,
+                targetId: authority.targetId,
+                unit: authority.unit,
+              });
+            } catch (error) {
+              return {
+                hook: "__legacy_plan_approval_block__",
+                input: {
+                  reason:
+                    `Legacy Plan Approval could not preserve its pre-write authority: ${
+                      error instanceof Error ? error.message : String(error)
+                    }`,
+                },
+              };
+            }
+          }
+          if (Object.keys(toolArgs).length > 0 && toolName !== "execute_bash") {
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason:
+                  "Plan Approval blocked a mutation-capable payload whose target path is missing or unsupported.",
+              },
+            };
+          }
+          // Legacy planning and post-human answer recording remain usable. The
+          // directive-issued source floor prevents any workspace mutation in
+          // this opaque window from being authorized by the later receipt.
+          return null;
+        }
+      }
+      if (toolName === "") return null;
+      if (PLAN_APPROVAL_SAFE_READ_TOOLS.has(toolName)) return null;
+      if (writeTool) {
+        return {
+          hook: "aidlc-plan-approval-guard.ts",
+          input: {
+            hook_event_name: "PreToolUse",
+            tool_name: writeTool,
+            tool_input: {
+              file_path: paths[0] ?? "",
+              paths,
+            },
+            cwd: projectDir,
+          },
+        };
+      }
+      if (toolName === "execute_bash") {
+        return {
+          hook: "aidlc-plan-approval-guard.ts",
+          input: {
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: {
+              command:
+                typeof toolArgs.command === "string" ? toolArgs.command : "",
+            },
+            cwd: projectDir,
+          },
+        };
+      }
+      let directAgent =
+        [
+          toolArgs.name,
+          toolArgs.subagent_type,
+          toolArgs.agent,
+          toolArgs.agent_name,
+          toolArgs.role,
+        ].find((value): value is string =>
+          typeof value === "string" && value.trim().length > 0
+        )?.trim() ??
+        (
+          toolName.startsWith("subagent_") &&
+            toolName !== "subagent_response"
+            ? toolName.slice("subagent_".length).trim()
+            : ""
+        );
+      if (toolName === "invoke_sub_agent" && directAgent === "") {
+        // The old generic dispatch shape does not always expose the target.
+        // Treat it as guarded generation rather than letting an ambiguous
+        // trusted-agent dispatch bypass the Code Generation floor.
+        directAgent = "aidlc-developer-agent";
+      }
+      if (
+        directAgent === "aidlc-developer-agent" ||
+        toolName === "invoke_sub_agent"
+      ) {
+        const prompt =
+          [toolArgs.prompt, toolArgs.task, toolArgs.description]
+            .find((value): value is string =>
+              typeof value === "string" && value.trim().length > 0
+            ) ?? "";
+        return {
+          hook: "aidlc-plan-approval-guard.ts",
+          input: {
+            hook_event_name: "PreToolUse",
+            tool_name: "Task",
+            tool_input: {
+              subagent_type: directAgent,
+              prompt,
+            },
+            cwd: projectDir,
+          },
+        };
+      }
+      return {
+        hook: "aidlc-plan-approval-guard.ts",
+        input: {
+          hook_event_name: "PreToolUse",
+          tool_name: toolName,
+          tool_input: toolArgs,
+          cwd: projectDir,
         },
       };
     }
@@ -763,7 +1567,18 @@ function buildForward(): Forward {
       // false is treated as a failure; an absent success flag (the 1.x stdin
       // channel carries none) falls through to the path check so an
       // unknown-shape payload is never silently dropped here.
-      if (ide.toolSuccess === false) return null;
+      if (ide.toolSuccess === false) {
+        if (
+          canonicalWriteTool(ide.toolName ?? "") !== "" &&
+          Object.keys(ide.toolArgs ?? {}).length === 0
+        ) {
+          clearPlanApprovalLegacyWindow(
+            projectDir,
+            resolvedPlanApprovalSessionId(ide),
+          );
+        }
+        return null;
+      }
       // A payload target that ends up with NO context at all means acquisition
       // failed on both channels (stdin raced out AND USER_PROMPT was empty) —
       // a broken channel, not a legitimate no-op. Record a visible drop before
@@ -800,11 +1615,47 @@ function buildForward(): Forward {
         // `toolSuccess: true` is authoritative and must never be overridden by
         // defensive prose guesses.
         if (ide.toolSuccess === undefined && isFailedWriteResult(ide.toolResult ?? "")) {
+          if (Object.keys(ide.toolArgs ?? {}).length === 0) {
+            clearPlanApprovalLegacyWindow(
+              projectDir,
+              resolvedPlanApprovalSessionId(ide),
+            );
+          }
           hookDebug(projectDir, "kiro-adapter", "audit-and-sensors: write failed, nothing to audit", {
             toolName: ide.toolName ?? "?",
             toolResult: (ide.toolResult ?? "").slice(0, 160),
           });
           return null;
+        }
+        if (Object.keys(ide.toolArgs ?? {}).length === 0) {
+          try {
+            const state = legacyPlanApprovalGuardState(projectDir);
+            const writeWindow = readPlanApprovalLegacyWindow(
+              projectDir,
+              resolvedPlanApprovalSessionId(ide),
+            );
+            if (state.active && !state.approved && state.target !== null) {
+              const authority = resolveCodeGenerationAuthority(
+                projectDir,
+                state.target,
+              );
+              writePlanApprovalViolation(projectDir, {
+                version: 1,
+                markerRevision: authority.markerRevision,
+                reason: "legacy write target was not recoverable",
+                target: "(unresolved write target)",
+              });
+            } else if (writeWindow) {
+              writePlanApprovalViolation(projectDir, {
+                version: 1,
+                markerRevision: writeWindow.markerRevision,
+                reason: "legacy write target was not recoverable after authority loss",
+                target: "(unresolved write target)",
+              });
+            }
+          } catch {
+            // The next protected call still fails closed on missing authority.
+          }
         }
         recordHookDrop(
           projectDir,
@@ -986,7 +1837,10 @@ function buildForward(): Forward {
   }
 }
 
-function runCore(hookFile: string, input: Record<string, unknown>): { stdout: string; code: number } {
+function runCore(
+  hookFile: string,
+  input: Record<string, unknown>,
+): { stdout: string; stderr: string; code: number } {
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
@@ -996,12 +1850,13 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
-    stderr: "ignore",
+    stderr: "pipe",
   });
   return {
     stdout: new TextDecoder("utf-8").decode(
       r.stdout ?? new Uint8Array(),
     ),
+    stderr: r.stderr?.toString() ?? "",
     code: r.exitCode ?? 0,
   };
 }
@@ -1011,6 +1866,10 @@ if (fwd === null) {
   hookDebug(projectDir, "kiro-adapter", "forward: null (no-op)", { target });
   return 0;
 }
+if (fwd.hook === "__legacy_plan_approval_block__") {
+  process.stderr.write(`${String(fwd.input.reason ?? "Plan Approval blocked this tool.")}\n`);
+  return 2;
+}
 hookDebug(projectDir, "kiro-adapter", "forward", {
   target,
   hook: fwd.hook,
@@ -1019,6 +1878,28 @@ hookDebug(projectDir, "kiro-adapter", "forward", {
 });
 
 if (fwd.hook === "__audit_and_sensors__") {
+  const filePath =
+    (fwd.input.tool_input as { file_path?: string } | undefined)?.file_path ?? "";
+  if (
+    filePath &&
+    Object.keys(ide.toolArgs ?? {}).length === 0
+  ) {
+    try {
+      processLegacyPlanApprovalWrite(
+        projectDir,
+        filePath,
+        ide.sessionId?.trim() || legacyPlanApprovalSessionId(),
+      );
+    } catch (error) {
+      recordHookDrop(
+        projectDir,
+        "kiro-adapter",
+        `legacy Plan Approval mediation: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   // Two core hooks ride the same write event, in audit-then-sensors order
   // (mirrors the Claude settings.json registration). Both advisory: exit 0.
   runCore("aidlc-write-audit-log.ts", fwd.input);
@@ -1028,9 +1909,9 @@ if (fwd.hook === "__audit_and_sensors__") {
 
 const result = runCore(fwd.hook, fwd.input);
 
-if (target === "session-start") {
+if (target === "session-start" || target === "record-human-turn") {
   // Unwrap {"additionalContext": ...} → plain text on stdout (Kiro's context
-  // channel). Anything unparseable passes through untouched.
+  // channels). Anything unparseable passes through untouched.
   try {
     const parsed = JSON.parse(result.stdout) as { additionalContext?: string };
     if (parsed.additionalContext) {
@@ -1048,6 +1929,7 @@ if (target === "session-start") {
 // Kiro IDE 1.x the host discards Stop-hook output, so this relay does not imply
 // a shared `{"decision":"block","reason"}` contract.
 if (result.stdout) process.stdout.write(result.stdout);
+if (result.code === 2 && result.stderr) process.stderr.write(result.stderr);
 return result.code;
 }
 
@@ -1076,7 +1958,8 @@ async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
 
 if (import.meta.main) {
   const target = process.argv[2] ?? "";
-  // Acquire input only for targets that need tool payload or session identity. A non-empty
+  // Acquire input only for targets that need tool payload, session identity, or
+  // the human response text. A non-empty
   // USER_PROMPT identifies the 0.12 channel and is consumed immediately: that
   // IDE leaves stdin open forever, so probing stdin first imposed a mandatory
   // 2s delay on every payload hook. IDE 1.x sends USER_PROMPT empty and writes

@@ -51,6 +51,10 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 
 ### Technical Debt Signals
 - [signal description and location]
+
+## Handoff Summary
+- **Intent-relevant finding**: [the finding most relevant to the active intent, with file/line evidence]
+- **Risks / follow-up**: [facts the architect or next stage must preserve; "None" if absent]
 ```
 
 ### Architecture Synthesis Template

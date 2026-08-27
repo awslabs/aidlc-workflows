@@ -103,9 +103,20 @@ one implementation iteration and write this stage's artifacts under
 ordinary stage work: no Bolt, walking-skeleton, ladder, per-Unit receipt, or
 swarm ceremony applies.
 
+For every later path in this stage, set `<code-generation-record>` from the
+directive exactly once:
+
+- `directive.unit` present:
+  `<record>/construction/<directive.unit>/code-generation/`
+- `directive.unit` absent:
+  `<record>/construction/code-generation/`
+
 ### Step 2: PART 1 — Planning
 
-Create a detailed code generation plan at `<record>/construction/{unit-name}/code-generation/code-generation-plan.md` with checkboxes for each implementation step. Include story-to-code-step traceability — map each plan step back to the user story it implements.
+Create a detailed code generation plan at
+`<code-generation-record>/code-generation-plan.md` with checkboxes for each
+implementation step. Include story-to-code-step traceability — map each plan
+step back to the user story it implements.
 
 Plan should cover (as applicable to the unit):
 - [ ] Business logic implementation
@@ -156,7 +167,7 @@ The contract always puts test-runner readiness before the first executable test 
 Number each plan step sequentially (Step 1, Step 2, etc.) for clear execution ordering and traceability. Preserve dependency ordering inside the selected methodology, and deviate only when the architecture requires it (for example, event-driven systems or independently deployable services).
 
 Also create
-`<record>/construction/{unit-name}/code-generation/unit-test-instructions.md`
+`<code-generation-record>/unit-test-instructions.md`
 before Plan Approval. Consult the active test strategy (stage-protocol.md §8
 "Test Strategy") and use the matching unit-test scope:
 
@@ -187,15 +198,24 @@ to the user.
 ### Step 3: Plan Approval
 
 Before presenting the approval, create or update
-`<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
+`<code-generation-record>/code-generation-questions.md`
 with a **Plan Approval** question that covers both
 `code-generation-plan.md`, its embedded Testing Contract, and
 `unit-test-instructions.md`. For a revision, reset the existing Plan Approval
 `[Answer]:` to blank before regenerating anything. After both files are final,
 run:
 
+Run the unit-bound form when `directive.unit` is present:
+
 ```bash
-bun .cursor/tools/aidlc-testing-posture.ts fingerprint --unit "<unit-name>"
+bun .cursor/tools/aidlc-testing-posture.ts fingerprint --unit "<directive.unit>"
+```
+
+For a zero-Unit directive, use the explicit `--stage-level` target; the tool then resolves the stage-level
+`<record>/construction/code-generation/` evidence:
+
+```bash
+bun .cursor/tools/aidlc-testing-posture.ts fingerprint --stage-level
 ```
 
 Write the returned hash into the Plan Approval section as
@@ -205,25 +225,64 @@ blank `[Answer]:` tag:
 - "Approve Plan" — proceed to code generation
 - "Request Changes" — revise the plan
 
-Then present that question as a structured question and STOP the turn. Fill the
-`[Answer]:` tag only after the human explicitly responds. On "Request Changes",
-record that answer, revise the plan and unit test instructions as needed, reset
-the Plan Approval `[Answer]:` to blank, regenerate the Testing Contract and
-fingerprint, and present the question again. Any post-approval change to the
-plan, unit test instructions, `## Testing Posture` memory, scope, test strategy,
-or project type invalidates the fingerprint and reopens Plan Approval. Do not
-begin Step 4, dispatch the developer agent, or infer approval from a
-forwarding-loop continuation. Only an explicit "Approve Plan" response
-authorizes generation from the exact fingerprinted files and contract.
+When the active directive carries `legacy_plan_approval_choices`, those two
+nonce-labelled values are the presentation-only choices for legacy Kiro IDE.
+Present them exactly and never write them into the questions file, audit, plan,
+instructions, or any other shared artifact. Map the selected protected label
+back to canonical `Approve Plan` or `Request Changes` for `[Answer]:`,
+`--details`, and all subsequent lifecycle logic.
 
-> **Build-and-Test loop-back exception:** The loop-back in the construction
-> protocol module (`aidlc-common/protocols/stage-protocol-construction.md`)
-> repairs the already-approved plan. Do not blank the Plan Approval `[Answer]:`
-> when applying that revision; record the plan delta in the Loop-Back Log
-> instead. In gated mode, the human's "Retry with fix" answer is the re-approval
-> of the revised approach and is recorded through `--user-input` on the replayed
-> approval report. The plan-approval guard's evidence survives the jump because
-> the non-empty plan and approved questions file are preserved.
+Before presenting, record the exact prompt identity:
+
+```bash
+bun .cursor/tools/aidlc-log.ts decision --stage code-generation \
+  --checkpoint plan-approval \
+  --session "<Runtime Session from SessionStart context>" \
+  --questions-file "<code-generation-record>/code-generation-questions.md" \
+  --decision "Approve this exact Code Generation plan?" \
+  --options "Approve Plan,Request Changes" \
+  --unit "<directive.unit>"
+```
+
+For zero-Unit work replace `--unit "<directive.unit>"` with `--stage-level`.
+Then present the structured question and STOP the turn. Fill `[Answer]:` only
+after the human explicitly responds, using the exact unlettered choice
+`Approve Plan` or `Request Changes`, then immediately run the matching receipt:
+
+```bash
+bun .cursor/tools/aidlc-log.ts answer --stage code-generation \
+  --checkpoint plan-approval \
+  --session "<same Runtime Session>" \
+  --questions-file "<code-generation-record>/code-generation-questions.md" \
+  --details "<exact choice>" \
+  --unit "<directive.unit>"
+```
+
+Again use `--stage-level` instead of `--unit` for zero-Unit work. The markdown
+answer and `PLAN_APPROVAL_RECORDED` audit row are context/provenance only.
+Generation remains blocked until this command consumes the protected
+session-bound challenge/response and writes its runtime receipt under
+`aidlc/.aidlc-sessions/`. A conductor-authored answer or forged audit row cannot
+create that authority.
+
+On "Request Changes", record that choice through the same answer command, revise
+the plan and unit test instructions as needed, reset `[Answer]:` to blank,
+regenerate the Testing Contract and fingerprint, record a fresh decision, and
+present the question again. Any post-approval file, testing-posture, scope,
+strategy, project-type, active-target, stage-attempt, or directive reissue
+invalidates the fingerprint/receipt and reopens Plan Approval. Do not begin Step
+4, dispatch the developer agent, or infer approval from a forwarding-loop
+continuation. Only the matching durable receipt authorizes generation.
+
+> **Build-and-Test loop-back:** The construction protocol module
+> (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
+> A jump/reissued directive changes the Plan
+> Approval authority epoch. Preserve the Loop-Back Log, but reset the Plan
+> Approval `[Answer]:`, regenerate the fingerprint under the replayed
+> code-generation directive, and run the full decision/human-turn/answer receipt
+> sequence again. The earlier "Retry with fix" choice authorizes the jump; it
+> does not mint approval for plan bytes or a directive the human has not yet
+> reviewed.
 
 ### Step 4: PART 2 — Generation
 
@@ -235,10 +294,11 @@ Delegate to Task tool with subagent_type="aidlc-developer-agent".
 The aidlc-developer-agent persona and its knowledge are loaded automatically by the named agent. Do NOT manually inject the persona in the prompt.
 
 Include in the delegation prompt:
-- As the first line, the exact target marker `AIDLC-UNIT: <directive.unit>` (or
-  the current unit name when the single-iteration directive has no `unit`
-  field). This marker identifies the one unit whose approved plan authorizes
-  the dispatch; do not repeat it for contextual dependencies.
+- As the first line, the exact target marker. Use
+  `AIDLC-UNIT: <directive.unit>` when `directive.unit` is present. For a
+  zero-Unit directive use `AIDLC-STAGE: code-generation`. This marker identifies
+  the one approval authority whose plan authorizes the dispatch; do not repeat
+  either marker for contextual dependencies.
 - As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` copied from
   the approved plan's Testing Contract. The plan-approval guard rejects a
   missing, different, or stale hash.
@@ -263,7 +323,8 @@ The subagent generates all code, test files, and configuration artifacts in the 
 
 ### Step 5: Generate Code Summary
 
-After subagent completes, create `<record>/construction/{unit-name}/code-generation/code-summary.md` documenting:
+After subagent completes, create `<code-generation-record>/code-summary.md`
+documenting:
 - Files created/modified
 - Key implementation decisions
 - Test coverage summary
@@ -294,7 +355,7 @@ to record the unit review without this manifest, and unclaimed changed paths
 block stage completion.
 
 Create
-`<record>/construction/{unit-name}/code-generation/traceability.json`.
+`<code-generation-record>/traceability.json`.
 Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
 `NFR` IDs when incremental scope skipped the design chain). Every `OK` target
 must be one existing workspace-relative implementation or test file:
@@ -329,7 +390,7 @@ Present completion message and approval gate:
 Summary of code produced (files, tests, key decisions), then:
 
 ```
-**Review:** `<record>/construction/{unit-name}/code-generation/`
+**Review:** `<code-generation-record>/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
@@ -343,7 +404,7 @@ worktree. Generated code lives at the workspace root (NEVER under
 the record dir); the planning, plan-approval, and summary artefacts
 (`code-generation-plan.md`, `code-generation-questions.md`,
 `unit-test-instructions.md`, `code-summary.md`) live under
-`<record>/construction/{unit-name}/code-generation/`.
+`<code-generation-record>/`.
 
 The imported sensors check the code outputs and per-unit markdown artefacts.
 `source-manifest.json` is engine-validated against its strict schema and source

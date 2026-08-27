@@ -31,9 +31,11 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
 milliseconds for diagnostics and deterministic latency tests. Both field
 spellings are accepted. Acquisition is gated to the payload-dependent targets,
-the two terminal-command targets, plus `session-start` and `continue-workflow`
-for their modern `session_id`; every other target (including the per-tool-call
-approval floor) touches neither channel and keeps its zero-latency path.
+including `plan-approval-guard`, the two terminal-command targets, plus
+`session-start` and `continue-workflow` for their modern `session_id`, and
+`record-human-turn` for the exact approval response. Every other target
+(including the per-tool-call approval floor) touches neither channel and keeps
+its zero-latency path.
 
 The legacy environment variable name does not imply raw user text: the measured
 0.12 contract is camelCase JSON. A promptSubmit payload without a `prompt`
@@ -43,7 +45,10 @@ recognized later from `toolArgs.command` on the matching preToolUse event. Raw
 directly, but is not the 0.12 compatibility claim.
 
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
-CLI), but the adapter keys off the payload channels above.
+CLI). Legacy Plan Approval hashes those measured host-instance values into its
+runtime session identity, so two IDE windows in one workspace do not share
+challenge/response files. Other adapter routing still keys off the payload
+channels above.
 
 ## Per-event captures
 
@@ -107,8 +112,8 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   idempotency guard so a lingering transition — e.g. after `WORKFLOW_COMPLETED`
   — does not recompile on every subsequent shell command). The shell result and
   session identity are still forwarded: modern events use their exact
-  `session_id`, while the legacy channel uses the synthetic identity retained by
-  SessionStart. When the result names a successful `intent-create`, the shared
+  `session_id`, while the legacy channel uses the host-derived identity retained
+  by SessionStart. When the result names a successful `intent-create`, the shared
   hook binds that session to the created record.
 - **sync-workflow-state** — the IDE gives no task payload, so it derives the current
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
@@ -127,9 +132,48 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
+- **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
+  shared target-aware guard. Kiro IDE 0.12 identifies the tool but supplies an
+  empty argument object, so the adapter uses a mediated source-floor protocol:
+  only the measured `fs_write` and `str_replace` tools remain available while
+  planning; shell, append, delete, patch, aliases, and custom mutation tools stop
+  before approval. After a canonical plan write the adapter injects the current
+  Testing Contract. After a canonical questions write it replaces the
+  target-bound fingerprint and invokes the reserved decision or answer tool
+  itself. Kiro discards PostToolUse stdout, so that write hook remains silent.
+  The invoking `next` or final steering `continue` carries one
+  `legacy_plan_approval_choices` capability in its Code Generation directive.
+  Runtime stores only its hashes, while the plaintext labels remain in that
+  chat's tool result. The human's later `promptSubmit` must carry one exact
+  label; unrelated prompts receive no capability. Ownership is global for the
+  active intent/revision rather than looked up through the incoming session.
+  Recovery is human-gated: the owning window first receives a typed recovery
+  ask and must record the exact `Recover Plan Approval` response before a later
+  `next` rotates any offer or challenge. Another live window is refused. A
+  replacement window can request the same human recovery only after the
+  recorded owner PID is gone, or after an IPC-only owner's endpoint disappears.
+  Takeover rotates any pending challenge and clears its prior response. The
+  shared questions file stays canonical and the audit redacts the choices.
+  Missing or corrupt offer/challenge files do not make authority disappear:
+  the pre-write window itself is an orphan-recovery latch if PostToolUse never
+  arrives, and a matching write violation continues that latch when PostToolUse
+  does run. Fresh publication remains blocked until the exact human recovery
+  response. The adapter preserves a recovery ask and, after success, clears only
+  the violation/write window rather than deleting the replacement offer. Before each
+  write, a latch is created; authoritative `toolSuccess: false` and recognized
+  failure prose clear it because no mutation occurred, while unknown outcomes
+  retain it and require recovery.
+  argument-less planning write the adapter stores the current target/revision in
+  a protected write window. If the write deletes or corrupts state, the active
+  marker, or another authority file, PostToolUse poisons the saved revision and
+  later mutation calls remain blocked even when live authority can no longer be
+  parsed. Adapter-owned `next` recovery clears that poison only after the engine
+  returns a valid non-error directive. Raw audit appends have no authority.
+  Fresh directives retire runtime state and rotate the source floor after
+  generation.
 - **session-start** — reads the modern `session_id` and persists it under the
-  gitignored runtime session directory; the legacy channel records its stable
-  synthetic ID instead.
+  gitignored runtime session directory; the legacy channel derives a stable
+  per-host-instance ID from `VSCODE_IPC_HOOK`/`VSCODE_PID`.
 - **terminal commands** — newer builds that expose the submitted `/aidlc ...`
   prompt run deterministic utilities at UserPromptSubmit. IDE 1.0.242 exposes
   an empty prompt, so the fallback recognizes the exact `execute_pwsh`
@@ -145,9 +189,12 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   workspace-global SessionStart marker, so concurrent chats consume only their
   own post-create handoff receipts. Legacy agentStop and broken modern channels
   fall back to the retained identity.
-- **session-end / mint / block** — need no payload and never read stdin.
-  Session-end reuses the identity persisted by SessionStart, with the legacy
-  synthetic ID as the fallback.
+- **record-human-turn** — reads the modern `session_id` and answer payload, or
+  the legacy `USER_PROMPT`; it can submit an exact directive-issued choice but
+  never reveals, rotates, or transfers another chat's protected capability.
+- **session-end / block** — need no payload and never read stdin. Session-end
+  reuses the identity persisted by SessionStart, with the legacy lifecycle
+  fallback retained only where no approval authority is involved.
 
 ## toolResult path-extraction patterns
 

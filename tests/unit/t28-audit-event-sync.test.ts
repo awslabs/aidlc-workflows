@@ -21,7 +21,7 @@
 //       :22-154  const VALID_EVENT_TYPES = new Set([ "STAGE_STARTED", ... ]);
 //       :158-239 const EVENT_HEADINGS: Record<string,string> = { TYPE: "...", };
 //   - dist/claude/.claude/knowledge/aidlc-shared/audit-format.md
-//       "## Event Registry (90 events, 22 categories)" .. "## Hook-Generated"
+//       "## Event Registry (91 events, 22 categories)" .. "## Hook-Generated"
 //       — backtick-delimited `EVENT_TYPE` cells in the registry tables.
 //
 // Extraction parity with the .sh (so the sets are byte-identical to what the
@@ -74,8 +74,9 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // +DOCUMENT_INDEXED, +DOCUMENT_UPDATED, and +DOCUMENT_REMOVED (DocumentKB) take
 // it to 85; Unit ownership and gate-rhythm configuration take it to 87;
 // pinned Unit merge completion takes it to 88; PIPELINE_LINK_COMPLETED takes it
-// to 89; SWARM_SOURCE_MERGED takes it to 90.
-const CANONICAL_COUNT = 90;
+// to 89; SWARM_SOURCE_MERGED takes it to 90; PLAN_APPROVAL_RECORDED takes it
+// to 91.
+const CANONICAL_COUNT = 91;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

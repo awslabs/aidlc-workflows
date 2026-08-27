@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 771,
+    "total": 808,
     "enumeratedByClass": {
-      "function": 474,
-      "audit": 90,
+      "function": 510,
+      "audit": 91,
       "scope": 11,
       "stage": 33,
       "hook": 18,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 277,
+      "function": 292,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -345,6 +345,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PLAN_APPROVAL_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "audit",
@@ -1176,6 +1183,10 @@
         {
           "file": "tests/unit/t283-copilot-engine-cursor.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1664,6 +1675,70 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearKiroIdeLegacyPlanApprovalHost",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t218-kiro-ide-hook-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearPlanApprovalChallenge",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearPlanApprovalLegacyOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearPlanApprovalLegacyRecovery",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearPlanApprovalLegacyWindow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearPlanApprovalReceipt",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearPlanApprovalViolation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t218-kiro-ide-hook-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:clearSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1769,6 +1844,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t304-codekb-cumulative-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbStoreIsCurrent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2713,6 +2800,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:installedHarnessName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:INTENT_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2952,6 +3046,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:kiroIdeLegacyPlanApprovalSessionId",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:KNOWLEDGE_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3041,7 +3142,26 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:latestPipelineLinkArtifactMtime",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:latestStartedStageSlug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3280,6 +3400,18 @@
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:markKiroIdeLegacyPlanApprovalHost",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t218-kiro-ide-hook-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3667,6 +3799,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:pipelineAttemptStartedAt",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t205-gate-revision-backstop.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:pipelineLinkEvidence",
       "minMechanism": "none",
       "coveredBy": [
@@ -3688,6 +3832,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:planApprovalRuntimeHasReceiptForMarker",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3882,6 +4033,96 @@
     {
       "unitClass": "function",
       "unitId": "function:readIntentRegistry",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readKiroIdeLegacyPlanApprovalHost",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanApprovalChallenge",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanApprovalLegacyOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanApprovalLegacyRecoveryChallenge",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanApprovalLegacyRecoveryResponse",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanApprovalLegacyWindow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanApprovalLegacyWindows",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t218-kiro-ide-hook-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanApprovalReceipt",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanApprovalResponse",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanApprovalViolation",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4289,6 +4530,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resetPlanApprovalRuntime",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4842,6 +5090,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:singleStageAttemptIsOpen",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5679,6 +5939,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:withActiveDirectiveLock",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:withAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -5843,6 +6110,10 @@
         {
           "file": "tests/unit/t272-unit-major-code-gen.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5901,6 +6172,77 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writePlanApprovalChallenge",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writePlanApprovalLegacyOffer",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writePlanApprovalLegacyRecoveryChallenge",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writePlanApprovalLegacyRecoveryResponse",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writePlanApprovalLegacyWindow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writePlanApprovalReceipt",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writePlanApprovalResponse",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writePlanApprovalViolation",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -7760,6 +8102,10 @@
         },
         {
           "file": "tests/unit/t283-copilot-engine-cursor.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t327-code-generation-authority-publication.test.ts",
           "mechanism": "cli"
         }
       ],

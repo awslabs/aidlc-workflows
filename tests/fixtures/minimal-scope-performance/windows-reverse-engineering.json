@@ -1,0 +1,42 @@
+{
+  "baseline_commit": "75d8af80ac46890ccd863acb9464aa42ee8ac5a8",
+  "windows_checkout": "C:\\workspace\\aidlc-p2-scope-performance",
+  "before": {
+    "stamp": "2026-08-24T08-12-05Z-p14700",
+    "elapsed_seconds": 670,
+    "output_tokens": 51267,
+    "cache_create_tokens": 247342,
+    "cache_read_tokens": 4190628,
+    "cost_usd": 4.9232965,
+    "agent_dispatches": 2,
+    "bash_calls": 15,
+    "read_calls": 8,
+    "conductor_source_discovery_calls": 1
+  },
+  "after": {
+    "stamp": "2026-08-24T11-56-28Z-p8568",
+    "elapsed_seconds": 574,
+    "output_tokens": 47863,
+    "cache_create_tokens": 284827,
+    "cache_read_tokens": 4652480,
+    "cost_usd": 5.30347375,
+    "agent_dispatches": 2,
+    "bash_calls": 14,
+    "read_calls": 6,
+    "conductor_source_discovery_calls": 0
+  },
+  "invariants": {
+    "pipeline_links_before": 2,
+    "pipeline_links_after": 2,
+    "codekb_artifacts_before": 9,
+    "codekb_artifacts_after": 9,
+    "codekb_bytes_before": 21786,
+    "codekb_bytes_after": 19470,
+    "handoff_h2_sections_after": 2,
+    "handoff_sensor_pass_after": true,
+    "digest_bound_receipt_after": true,
+    "approval_gate_pass_after": true,
+    "stage_validation_artifacts_after": 9,
+    "cost_regression_acknowledged": true
+  }
+}

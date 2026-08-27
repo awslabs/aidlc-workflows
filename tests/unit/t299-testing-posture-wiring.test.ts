@@ -6,6 +6,7 @@
 // that consume the contract.
 
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -14,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   approvalFingerprint,
   buildPlanProfile,
@@ -24,13 +25,19 @@ import {
   questionsFileApprovalFingerprint,
   questionsFileApproved,
   renderTestingContract,
+  resolveCodeGenerationAuthority,
   resolveTestingPosture,
   resolveTestingPostureFromSections,
   type ProjectType,
   type TestStrategy,
   type TestingMethodology,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { extractMarkdownSection } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  extractMarkdownSection,
+  toPosix,
+  writeActiveDirectiveMarker,
+  writePlanApprovalReceipt,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const STAGE_REL = "core/aidlc-common/stages/construction/code-generation.md";
@@ -53,6 +60,13 @@ const ORG = [
   "- **Methodology**: test-after",
   "- **Ordering**: implement each layer, then test it.",
 ].join("\n");
+const AUTHORITY = {
+  targetId: "unit:auth",
+  intentId: "intent-1",
+  directiveEpoch: `sha256:${"d".repeat(64)}`,
+  runFloor: "STAGE_STARTED:2026-08-23T00:00:00Z#1",
+  sourceFloor: "a".repeat(40),
+};
 const LEGACY_ORG = `We treat tests as a first-class deliverable in every Bolt. Specific
 methodology — TDD, BDD, ATDD, or classic test-after — is captured by the
 testing-strategy stage when it ships.
@@ -568,15 +582,38 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
 
   test("approval fingerprint binds plan, instructions, and contract", () => {
     const hash = `sha256:${"a".repeat(64)}`;
-    const baseline = approvalFingerprint("plan", "instructions", hash);
-    expect(approvalFingerprint("plan changed", "instructions", hash)).not.toBe(
+    const baseline = approvalFingerprint("plan", "instructions", hash, AUTHORITY);
+    expect(approvalFingerprint("plan changed", "instructions", hash, AUTHORITY)).not.toBe(
       baseline,
     );
-    expect(approvalFingerprint("plan", "instructions changed", hash)).not.toBe(
+    expect(approvalFingerprint("plan", "instructions changed", hash, AUTHORITY)).not.toBe(
       baseline,
     );
     expect(
-      approvalFingerprint("plan", "instructions", `sha256:${"b".repeat(64)}`),
+      approvalFingerprint(
+        "plan",
+        "instructions",
+        `sha256:${"b".repeat(64)}`,
+        AUTHORITY,
+      ),
+    ).not.toBe(baseline);
+    expect(
+      approvalFingerprint("plan", "instructions", hash, {
+        ...AUTHORITY,
+        targetId: "unit:other",
+      }),
+    ).not.toBe(baseline);
+    expect(
+      approvalFingerprint("plan", "instructions", hash, {
+        ...AUTHORITY,
+        directiveEpoch: `sha256:${"e".repeat(64)}`,
+      }),
+    ).not.toBe(baseline);
+    expect(
+      approvalFingerprint("plan", "instructions", hash, {
+        ...AUTHORITY,
+        sourceFloor: "b".repeat(40),
+      }),
     ).not.toBe(baseline);
   });
 
@@ -630,11 +667,20 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
           "- **Project Type**: Greenfield",
           "- **Scope**: feature",
           "- **Test Strategy**: Standard",
+          "- **Current Stage**: code-generation",
           "",
         ].join("\n"),
       );
+      const state = readFileSync(join(recordDir, "aidlc-state.md"), "utf-8");
+      writeActiveDirectiveMarker(project, {
+        kind: "run-stage",
+        stage: "code-generation",
+        unit: "auth",
+        state_sha256: createHash("sha256").update(state).digest("hex"),
+      });
 
       const contract = resolveTestingPosture(project);
+      const authority = resolveCodeGenerationAuthority(project, { unit: "auth" });
       const plan = `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Run profile\n`;
       const instructions =
         "# Unit Test Instructions\n\n## Command\n\n`bun test auth.test.ts`\n";
@@ -647,6 +693,7 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
         plan,
         instructions,
         contract.contract_sha256,
+        authority,
       );
       writeFileSync(
         join(stageDir, "code-generation-questions.md"),
@@ -655,17 +702,43 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
           `[Approval Fingerprint]: ${fingerprint}`,
           "A. Approve Plan",
           "B. Request Changes",
-          "[Answer]: A. Approve Plan",
+          "[Answer]: Approve Plan",
           "",
         ].join("\n"),
       );
-      expect(evaluateCodeGenerationApproval(project, "auth").ok).toBe(true);
+      const questionsPath = join(stageDir, "code-generation-questions.md");
+      const questions = readFileSync(questionsPath, "utf-8");
+      writePlanApprovalReceipt(project, {
+        version: 1,
+        targetId: authority.targetId,
+        intentId: authority.intentId,
+        directiveEpoch: authority.directiveEpoch,
+        runFloor: authority.runFloor,
+        fingerprint,
+        questionsFile: toPosix(relative(project, questionsPath)),
+        promptSha256: createHash("sha256")
+          .update(
+            `${questions
+              .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
+              .trimEnd()}\n`,
+          )
+          .digest("hex"),
+        sourceFloor: authority.sourceFloor,
+        markerRevision: authority.markerRevision,
+        session: "fixture-session",
+        challengeId: "fixture-challenge",
+        choice: "Approve Plan",
+        questionsSha256: createHash("sha256").update(questions).digest("hex"),
+        certifiedSourceSha256: authority.sourceFloor,
+        status: "approved",
+      });
+      expect(evaluateCodeGenerationApproval(project, { unit: "auth" }).ok).toBe(true);
 
       writeFileSync(
         join(memoryDir, "project.md"),
         "# Project\n\n## Testing Posture\n\nAdd an integration regression suite.\n",
       );
-      const stale = evaluateCodeGenerationApproval(project, "auth");
+      const stale = evaluateCodeGenerationApproval(project, { unit: "auth" });
       expect(stale.ok).toBe(false);
       expect(stale.reason).toContain("stale");
     } finally {

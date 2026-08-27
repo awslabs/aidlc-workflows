@@ -88,6 +88,7 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-terminal-command.json", dst: "hooks/aidlc-terminal-command.json" },
     { src: "hooks/aidlc-terminal-command-guard.json", dst: "hooks/aidlc-terminal-command-guard.json" },
     { src: "hooks/aidlc-enforce-approval-gate.json", dst: "hooks/aidlc-enforce-approval-gate.json" },
+    { src: "hooks/aidlc-plan-approval-guard.json", dst: "hooks/aidlc-plan-approval-guard.json" },
     { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
     { src: "hooks/aidlc-rebuild-stage-graph.json", dst: "hooks/aidlc-rebuild-stage-graph.json" },
     // No v2 session-end registration: the IDE's Stop trigger fires at the end
@@ -106,6 +107,7 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-terminal-command.kiro.hook", dst: "hooks/aidlc-terminal-command.kiro.hook" },
     { src: "hooks/aidlc-terminal-command-guard.kiro.hook", dst: "hooks/aidlc-terminal-command-guard.kiro.hook" },
     { src: "hooks/aidlc-enforce-approval-gate.kiro.hook", dst: "hooks/aidlc-enforce-approval-gate.kiro.hook" },
+    { src: "hooks/aidlc-plan-approval-guard.kiro.hook", dst: "hooks/aidlc-plan-approval-guard.kiro.hook" },
     { src: "hooks/aidlc-log-subagent.kiro.hook", dst: "hooks/aidlc-log-subagent.kiro.hook" },
     { src: "hooks/aidlc-rebuild-stage-graph.kiro.hook", dst: "hooks/aidlc-rebuild-stage-graph.kiro.hook" },
     { src: "hooks/aidlc-session-end.kiro.hook", dst: "hooks/aidlc-session-end.kiro.hook" },

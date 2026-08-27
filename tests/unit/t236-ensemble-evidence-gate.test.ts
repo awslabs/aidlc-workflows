@@ -42,6 +42,8 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seededAuditDir,
   seededAuditShard,
@@ -235,7 +237,26 @@ function reportSingle(proj: string): Directive {
     "user-stories",
     "--result",
     "approved",
-  ]);
+  ], { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" });
+}
+
+function startSingle(
+  proj: string,
+  env: Record<string, string | undefined> = {},
+): void {
+  seedAidlcMemory(proj);
+  const result = runOrchestrateNext(
+    ORCH,
+    proj,
+    ["--scope", "feature", "--stage", "user-stories", "--single"],
+    { cwd: proj, env: { ...process.env, ...env } },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(
+    result.directive?.kind,
+    JSON.stringify(result.directive),
+  ).toBe("run-stage");
+  expect(result.directive?.single).toBe(true);
 }
 
 function auditText(proj: string): string {
@@ -568,6 +589,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
 
   test("report --single refuses missing mob evidence without writing synthetic audit rows", () => {
     const proj = seedProject();
+    startSingle(proj);
     const before = auditText(proj);
     const d = reportSingle(proj);
     expect(d.kind).toBe("error");
@@ -1079,9 +1101,13 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const missingProj = seedProject();
     seedBoltDag(missingProj, ["unit-a", "unit-b"]);
     const missingGraph = perUnitEnsembleGraph(missingProj);
+    startSingle(missingProj, { AIDLC_STAGE_GRAPH: missingGraph });
     const missing = runReport(missingProj, [
       "--single", "--stage", "user-stories", "--result", "approved",
-    ], { AIDLC_STAGE_GRAPH: missingGraph });
+    ], {
+      AIDLC_STAGE_GRAPH: missingGraph,
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    });
     expect(missing.kind).toBe("error");
     // Refused at the STAGE level (no per-unit paths in the remediation).
     expect(missing.message).toContain("aidlc-design-agent (no contribution file)");
@@ -1090,17 +1116,21 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const completeProj = seedProject();
     seedBoltDag(completeProj, ["unit-a", "unit-b"]);
     const completeGraph = perUnitEnsembleGraph(completeProj);
+    startSingle(completeProj, { AIDLC_STAGE_GRAPH: completeGraph });
     writeFallbackContribution(completeProj, "aidlc-design-agent");
     const before = mutationSnapshot(completeProj);
     const complete = runReport(completeProj, [
       "--single", "--stage", "user-stories", "--result", "approved",
-    ], { AIDLC_STAGE_GRAPH: completeGraph });
+    ], {
+      AIDLC_STAGE_GRAPH: completeGraph,
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    });
     expect(complete.kind).toBe("done");
     expect(readFileSync(seededStateFile(completeProj), "utf-8")).toBe(before.state);
     const afterAudit = auditText(completeProj);
     expect(afterAudit).not.toBe(before.audit);
     expect(eventCount(afterAudit, "STAGE_STARTED")).toBe(
-      eventCount(before.audit, "STAGE_STARTED") + 1,
+      eventCount(before.audit, "STAGE_STARTED"),
     );
     expect(eventCount(afterAudit, "STAGE_COMPLETED")).toBe(
       eventCount(before.audit, "STAGE_COMPLETED") + 1,

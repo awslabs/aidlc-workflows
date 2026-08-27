@@ -26,6 +26,7 @@ import {
 } from "../harness/fixtures.ts";
 import {
   codekbScopeFingerprint,
+  writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -131,11 +132,15 @@ function writeCandidate(
   }
 }
 
-function runUtility(project: string, args: string[]) {
+function runUtility(
+  project: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = childEnv(),
+) {
   return spawnSync(
     BUN,
     [UTILITY, ...args, "--project-dir", project],
-    { encoding: "utf-8", env: childEnv() },
+    { encoding: "utf-8", env },
   );
 }
 
@@ -226,6 +231,33 @@ describe("t304 cumulative CodeKB stage contract", () => {
 });
 
 describe("t304 source and store generation interleavings", () => {
+  test("snapshot uses the invoking session's bound space", () => {
+    const project = freshProject();
+    const source = join(project, "src", "payments");
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, "index.ts"), "export const payments = 1;\n");
+    writeSessionBinding(project, "session-team", "team-b", null);
+    const env = {
+      ...childEnv(),
+      AIDLC_SESSION_OVERRIDE: "session-team",
+      AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+    };
+
+    const pathResult = runUtility(project, ["codekb-path", "--json"], env);
+    expect(pathResult.status, pathResult.stderr).toBe(0);
+    expect(JSON.parse(pathResult.stdout).space).toBe("team-b");
+
+    const snapshotResult = runUtility(
+      project,
+      ["codekb-snapshot", "--paths", "src/payments/", "--json"],
+      env,
+    );
+    expect(snapshotResult.status, snapshotResult.stderr).toBe(0);
+    expect(JSON.parse(snapshotResult.stdout).store).toStartWith(
+      "aidlc/spaces/team-b/codekb/",
+    );
+  });
+
   test("a snapshot recovers an interrupted directory swap before reading generations", () => {
     const project = freshProject();
     const source = join(project, "src", "payments");

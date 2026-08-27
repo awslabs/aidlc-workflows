@@ -6,10 +6,12 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
-import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
   boltSlugForUnit,
   checkSummaryConfirmationEvidence,
@@ -29,11 +31,14 @@ import {
   isTeamUnitOwnership,
   loadStageGraphAll,
   isNonAnswer,
+  latestPipelineLinkArtifactMtime,
   parseCheckboxes,
+  pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
   readAllAuditShards,
   readAuditShardEvents,
+  readRegularFileNoFollowOrThrow,
   readStateFile,
   readUnitSourceManifest,
   recordDir,
@@ -61,6 +66,13 @@ import {
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
 import type { AuditShardEvent, ReviewClass } from "./aidlc-lib.js";
+import {
+  codeGenerationPlanApprovalQuestionEvidence,
+  type CodeGenerationTarget,
+  PLAN_APPROVAL_CHECKPOINT,
+  recordPlanApprovalChallenge,
+  recordPlanApprovalReceipt,
+} from "./aidlc-testing-posture.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -115,7 +127,7 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
-      if (a === "--single" || a === "--retry-pending") {
+      if (a === "--single" || a === "--retry-pending" || a === "--stage-level") {
         flags[a.slice(2)] = "true";
         continue;
       }
@@ -183,6 +195,33 @@ function summaryQuestionEvidence(
   };
 }
 
+function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget {
+  const unit = flags.unit?.trim();
+  const stageLevel = flags["stage-level"] === "true";
+  if (unit && stageLevel) {
+    error("Plan Approval accepts exactly one of --unit <unit> or --stage-level.");
+  }
+  if (unit) return { unit };
+  if (stageLevel) return { unit: null };
+  error("Plan Approval requires exactly one of --unit <unit> or --stage-level.");
+}
+
+function planApprovalFields(
+  evidence: ReturnType<typeof codeGenerationPlanApprovalQuestionEvidence>,
+): Record<string, string> {
+  return {
+    Checkpoint: PLAN_APPROVAL_CHECKPOINT,
+    "Plan Target": evidence.authority.targetId,
+    Intent: evidence.authority.intentId,
+    "Directive Epoch": evidence.authority.directiveEpoch,
+    "Run floor": evidence.authority.runFloor,
+    "Approval Fingerprint": evidence.fingerprint,
+    "Questions File": evidence.questionsRelativePath,
+    "Questions SHA-256": evidence.questionsSha256,
+    "Prompt SHA-256": evidence.promptSha256,
+  };
+}
+
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
 //   [--rationale <text>] [--checkpoint summary-confirmation
@@ -195,10 +234,11 @@ function handleDecision(args: string[]): void {
   if (!flags.decision) error("Missing --decision <text>");
   if (
     flags.checkpoint !== undefined &&
-    flags.checkpoint !== "summary-confirmation"
+    flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
     );
   }
 
@@ -208,15 +248,43 @@ function handleDecision(args: string[]): void {
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
       : null;
+  const planEvidence =
+    flags.checkpoint === "plan-approval"
+      ? codeGenerationPlanApprovalQuestionEvidence(
+          pd,
+          planApprovalTarget(flags),
+          flags["questions-file"] ?? "",
+          "",
+        )
+      : null;
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Decision: flags.decision,
   };
-  if (flags.options) fields.Options = flags.options;
+  if (flags.options) {
+    fields.Options =
+      planEvidence &&
+          (
+            flags["hash-option-labels"] === "true" ||
+            flags["legacy-directive-options"] === "true"
+          )
+        ? "[protected exact choices]"
+        : flags.options;
+  }
   if (flags.rationale) fields.Rationale = flags.rationale;
   if (flags.checkpoint === "summary-confirmation") {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;
+  }
+  if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
+  if (planEvidence) {
+    const session = flags.session?.trim();
+    if (!session) {
+      error(
+        "Plan Approval requires --session <id> from the invoking SessionStart context.",
+      );
+    }
+    fields.Session = session;
   }
   if (flags.unit) {
     fields.Unit = flags.unit;
@@ -228,6 +296,28 @@ function handleDecision(args: string[]): void {
     emitAudit(pd, "DECISION_RECORDED", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
+  }
+  if (planEvidence) {
+    try {
+      const options = (flags.options ?? "")
+        .split(",")
+        .map((option) => option.trim())
+        .filter(Boolean);
+      if (options.length !== 2) {
+        error("Plan Approval decision requires exactly two offered options");
+      }
+      recordPlanApprovalChallenge(
+        pd,
+        planEvidence,
+        fields.Session,
+        [options[0], options[1]],
+        flags["exact-option-labels"] === "true",
+        flags["hash-option-labels"] === "true",
+        flags["legacy-directive-options"] === "true",
+      );
+    } catch (e) {
+      error(`Plan Approval challenge creation failed: ${errorMessage(e)}`);
+    }
   }
 
   console.log(
@@ -439,13 +529,15 @@ function handleAnswer(args: string[]): void {
 
   if (
     flags.checkpoint !== undefined &&
-    flags.checkpoint !== "summary-confirmation"
+    flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
     );
   }
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
+  const planCheckpoint = flags.checkpoint === "plan-approval";
   if (
     summaryCheckpoint &&
     flags.details !== "Looks correct" &&
@@ -455,6 +547,16 @@ function handleAnswer(args: string[]): void {
       `Cannot record the summary choice because reply ${formatReceivedReply(flags.details)} ` +
         'did not match an offered option. Present "Looks correct" and ' +
         '"Request changes". Re-present those choices and wait for the human to choose one.',
+    );
+  }
+  if (
+    planCheckpoint &&
+    flags.details !== "Approve Plan" &&
+    flags.details !== "Request Changes"
+  ) {
+    error(
+      `Refusing to record Plan Approval: received reply ${formatReceivedReply(flags.details)}. ` +
+        'Valid choices are "Approve Plan" or "Request Changes".',
     );
   }
 
@@ -473,6 +575,9 @@ function handleAnswer(args: string[]): void {
   const summaryEvidence = summaryCheckpoint
     ? summaryQuestionEvidence(pd, flags, flags.details)
     : null;
+  let planEvidence: ReturnType<
+    typeof codeGenerationPlanApprovalQuestionEvidence
+  > | null = null;
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Details: flags.details,
@@ -495,6 +600,22 @@ function handleAnswer(args: string[]): void {
   // re-create the answer-consumes-the-turn deadlock this branch prevents.
   // appendAuditEntry / emitError re-acquire reentrantly (per-pd depth).
   withAuditLock(pd, () => {
+    if (planCheckpoint) {
+      planEvidence = codeGenerationPlanApprovalQuestionEvidence(
+        pd,
+        planApprovalTarget(flags),
+        flags["questions-file"] ?? "",
+        flags.details as "Approve Plan" | "Request Changes",
+      );
+      Object.assign(fields, planApprovalFields(planEvidence));
+      const session = flags.session?.trim();
+      if (!session) {
+        error(
+          "Plan Approval requires --session <id> from the invoking SessionStart context.",
+        );
+      }
+      fields.Session = session;
+    }
     // Human-presence gate (ledger-event design): the interview answer is
     // a human-judgement event, so require a HUMAN_TURN appended AFTER the last
     // QUESTION_ANSWERED (ledger order) before recording another. The prior
@@ -579,6 +700,39 @@ function handleAnswer(args: string[]): void {
       return;
     }
 
+    if (planCheckpoint) {
+      try {
+        recordPlanApprovalReceipt(
+          pd,
+          planEvidence!,
+          fields.Session,
+          flags.details as "Approve Plan" | "Request Changes",
+        );
+      } catch (e) {
+        error(`Refusing to record Plan Approval: ${errorMessage(e)}`);
+      }
+      try {
+        if (flags.details === "Approve Plan") {
+          emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
+        } else {
+          emitAudit(pd, "QUESTION_ANSWERED", fields);
+        }
+      } catch (e) {
+        error(`Audit emission failed: ${errorMessage(e)}`);
+      }
+      console.log(
+        JSON.stringify({
+          emitted:
+            flags.details === "Approve Plan"
+              ? "PLAN_APPROVAL_RECORDED"
+              : "QUESTION_ANSWERED",
+          checkpoint: "plan-approval",
+          stage: flags.stage,
+        }),
+      );
+      return;
+    }
+
     // Approval choices are lifecycle transitions, not interview answers. A
     // conductor may nevertheless route an approval through `answer` before
     // `report`; emitting QUESTION_ANSWERED here would consume the same
@@ -646,7 +800,8 @@ function handleAnswer(args: string[]): void {
 
 // --- Subcommand: link ---
 // Usage:
-//   aidlc-log link --stage <slug> --link <agent> [--repo <repo>] [--single]
+//   aidlc-log link --stage <slug> --link <agent> [--repo <repo>]
+//     [--artifact <path>] [--single]
 //       → PIPELINE_LINK_COMPLETED
 //
 // The receipt is emitted only after a declared pipeline link returns. Ordering,
@@ -691,7 +846,7 @@ function handleLink(args: string[]): void {
       if (evidence.repos.length > 0) {
         if (!flags.repo) {
           throw new Error(
-            `Cannot record pipeline link for "${flags.stage}": this intent has multiple repositories; pass --repo <repo>.`,
+            `Cannot record pipeline link for "${flags.stage}": this intent records repository identity; pass --repo <repo>.`,
           );
         }
         if (!evidence.repos.includes(flags.repo)) {
@@ -699,6 +854,10 @@ function handleLink(args: string[]): void {
             `Cannot record pipeline link for "${flags.stage}": repo "${flags.repo}" is not registered for this intent (${evidence.repos.join(", ")}).`,
           );
         }
+      } else if (flags.repo) {
+        throw new Error(
+          `Cannot record pipeline link for "${flags.stage}": this intent has no registered repo identity; omit --repo.`,
+        );
       }
 
       const repo = flags.repo ?? null;
@@ -729,6 +888,94 @@ function handleLink(args: string[]): void {
         Link: flags.link,
         Position: `${index + 1}/${links.length}`,
       };
+      if (
+        flags.stage === "reverse-engineering" &&
+        flags.link === node.lead_agent
+      ) {
+        if (!flags.artifact) {
+          throw new Error(
+            'Cannot record reverse-engineering developer link: pass --artifact "<record>/inception/reverse-engineering/developer-scan[-<repo>].md".',
+          );
+        }
+        const root = recordDir(pd);
+        if (root === null) {
+          throw new Error(
+            "Cannot record reverse-engineering developer link: active intent record is unavailable.",
+          );
+        }
+        const expected = join(
+          root,
+          "inception",
+          "reverse-engineering",
+          repo ? `developer-scan-${repo}.md` : "developer-scan.md",
+        );
+        const artifact = resolve(pd, flags.artifact);
+        if (artifact !== expected) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: --artifact must resolve to ${toPosix(relative(pd, expected))}.`,
+          );
+        }
+        if (!existsSync(artifact)) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: handoff file does not exist: ${flags.artifact}.`,
+          );
+        }
+        let artifactBytes: Buffer;
+        let artifactMtimeMs: number;
+        try {
+          const guardedArtifact = assertNoSymlinkInChainOrThrow(
+            realpathSync(pd),
+            relative(pd, artifact),
+          );
+          const snapshot = readRegularFileNoFollowOrThrow(
+            guardedArtifact,
+            "reverse-engineering developer handoff",
+            undefined,
+            guardedArtifact,
+            true,
+          );
+          artifactBytes = snapshot.bytes;
+          artifactMtimeMs = snapshot.mtimeMs;
+        } catch (error) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: handoff file must be a regular file with no symlink path components (${errorMessage(error)}).`,
+          );
+        }
+        const attemptStartedAt = pipelineAttemptStartedAt(
+          pd,
+          flags.stage,
+          { singleRun },
+        );
+        if (
+          attemptStartedAt === "" ||
+          artifactMtimeMs < Date.parse(attemptStartedAt)
+        ) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: ${toPosix(relative(pd, artifact))} was not written in the current stage attempt.`,
+          );
+        }
+        const previousMtime = latestPipelineLinkArtifactMtime(
+          pd,
+          flags.stage,
+          flags.link,
+          repo,
+          { singleRun },
+        );
+        if (
+          previousMtime !== null &&
+          artifactMtimeMs <= previousMtime
+        ) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: ${toPosix(relative(pd, artifact))} was not rewritten after its prior pipeline receipt.`,
+          );
+        }
+        const digest = createHash("sha256")
+          .update(artifactBytes)
+          .digest("hex");
+        fields["Artifact Path"] = toPosix(relative(pd, artifact));
+        fields["Artifact SHA256"] = `sha256:${digest}`;
+        fields["Artifact Mtime Ms"] = String(artifactMtimeMs);
+      }
       if (repo) fields.Repo = repo;
       if (singleRun) fields.Workflow = `single-stage:${flags.stage}`;
       emitAudit(pd, "PIPELINE_LINK_COMPLETED", fields, intent, space);

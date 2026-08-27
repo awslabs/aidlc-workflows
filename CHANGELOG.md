@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.117] - 2026-08-27
+## [2.6.119] - 2026-08-27
 
 Focused Reverse Engineering rescans now merge their newly analyzed area into the shared CodeKB instead of replacing unrelated knowledge, with generation-checked all-artifact publication so concurrent intents cannot silently lose each other's scans or label preserved stale prose as current. Full rescans still replace all nine artifacts; stale or unverified prior coverage is preserved as prose and demoted to shallow when it cannot be reverified. **Upgrade:** re-copy your `dist/<harness>/` shell so the updated utility, stage, and artifact guidance are installed.
 
@@ -9,6 +9,27 @@ Focused Reverse Engineering rescans now merge their newly analyzed area into the
 * Verified-current focused merges record the union of prior and new analyzed paths/components; stale or unverified merges record the new verified area and demote prior analyzed paths to `shallow.paths`.
 * `codekb-snapshot` binds a scan to the exact shared-store generation and source bytes; `codekb-publish` validates a complete nine-file candidate under a space+repo lock and refuses `CODEKB_STORE_CHANGED`, `CODEKB_SOURCE_CHANGED`, or `CODEKB_CANDIDATE_STALE` instead of overwriting. Crash recovery validates every transaction and store path component from the real project root and refuses redirected ancestors before any rename or recursive cleanup.
 * The scope comparison remains the deterministic backstop: `COVERS` confirms retained verified coverage, while `NARROWER` identifies paths/components no longer claimed as verified deep coverage even though focused-merge prose was preserved.
+
+## [2.6.118] - 2026-08-27
+
+Zero-Unit Code Generation now uses its documented stage-level record as a first-class Plan Approval authority, and inline generation cannot bypass the approval enforced on delegated workers. Workspace aliases retain the same trusted planning operations without weakening child-symlink rejection. **Upgrade:** refresh your `dist/<harness>/` shell so the updated stage, testing-posture tool, plan-approval hook, and mutation-surface registrations are installed together.
+
+* `aidlc-testing-posture.ts fingerprint`, `verify`, and `begin` accept the stage-level Code Generation target while preserving per-Unit targets and bind approval to the active intent, directive epoch, source floor, plan, instructions, and Testing Contract.
+* Protected, gitignored challenge, response, and receipt state authorizes Code Generation; the Markdown `PLAN_APPROVAL_RECORDED` event remains provenance rather than authority.
+* Write, edit, patch, shell, interpreter, build-tool, and symlink or junction mutation paths refuse until approval, while exact installed `tools/aidlc-*.ts` invocations and writes inside the active Code Generation record remain available through aliased workspace roots.
+* Code Generation publication and resume paths preserve or rotate the source-bound authority under the active-directive and audit locks, including swarm and legacy Kiro IDE flows.
+
+## [2.6.117] - 2026-08-27
+
+Minimal workflows now avoid unrelated framework knowledge, duplicate conductor source scans, and in-context scan-body handoffs while retaining the same artifacts, reviews, sensors, learnings, and approval gates. **Upgrade:** refresh your `dist/<harness>/` shell so the depth-aware context roster and file-backed Reverse Engineering handoff are installed.
+
+* Minimal Intent Capture and Requirements Analysis load only their stage-relevant shipped knowledge; plugin-installed knowledge, Standard and Comprehensive runs, active-space rules, personas, consumes, and user/team knowledge keep the existing full context.
+* Dispatched agents return path/decision/concern summaries instead of repeating artifact, scan, source, or test-output bodies that already exist on disk.
+* Reverse Engineering keeps its developer-to-architect pipeline and all nine CodeKB artifacts, but transfers the developer scan through a durable record file, rejects symlinked handoffs when minting or verifying receipts, binds accepted receipts to the current-attempt path, write time, and content digest, and prevents a duplicate conductor source scan.
+* Isolated pipeline stage runners now record their synthetic start boundary before the first agent dispatch, require their own receipts before completion, and resume that open attempt without touching the main workflow pointer.
+* Isolated Reverse Engineering reuse now emits synthetic-workflow evidence for all-reuse and mixed-reuse runs only when the complete canonical CodeKB artifact set exists and source freshness matches; missing, redirected, invalid, or later-stale evidence cannot complete.
+* Reverse Engineering keeps every recorded repo identity qualified through its handoff filename, receipt chain, resume evidence, and CodeKB destination, including an intent with exactly one registered repo.
+* Plugin composition records exact recursive knowledge ownership and retains provenance for still-installed files removed from a later plugin version, so Minimal context retains active plugin files while deselected or removed plugin knowledge cannot become unowned context.
 
 ## [2.6.116] - 2026-08-27
 

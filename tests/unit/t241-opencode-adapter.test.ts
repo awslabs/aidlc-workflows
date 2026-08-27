@@ -4,6 +4,7 @@
 // covers: function:KNOWN_HARNESS_DIRS, hook:aidlc-rebuild-stage-graph
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
@@ -34,6 +35,7 @@ import {
   subagentInflightMarkerPath,
   writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TEST_ENTRYPOINTS = new Set([
@@ -66,6 +68,21 @@ function freshInstalledProject(): string {
     { recursive: true },
   );
   return root;
+}
+
+function seedUnapprovedCodeGeneration(root: string): void {
+  seedStateFile(root, "state-construction.md");
+  const statePath = join(seededRecordDir(root), "aidlc-state.md");
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^- \*\*Current Stage\*\*:.*$/m,
+    "- **Current Stage**: code-generation",
+  );
+  writeFileSync(statePath, state);
+  writeActiveDirectiveMarker(root, {
+    kind: "run-stage",
+    stage: "code-generation",
+    state_sha256: createHash("sha256").update(state).digest("hex"),
+  });
 }
 
 function readAudit(root: string): string {
@@ -407,6 +424,43 @@ describe("t241 OpenCode adapter dispatch rules", () => {
       args: output.args,
     });
     expect(existsSync(subagentInflightMarkerPath(root))).toBe(false);
+  });
+});
+
+describe("t241 OpenCode native plan-approval payloads", () => {
+  test("write, bash, and developer task paths block before a human-owned receipt", async () => {
+    const root = freshInstalledProject();
+    seedAidlcMemory(root);
+    seedUnapprovedCodeGeneration(root);
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    const before = adapter["tool.execute.before"];
+
+    await expect(
+      before(
+        { tool: "write", sessionID: "main", callID: "write" },
+        { args: { filePath: join(root, "src", "blocked.ts") } },
+      ),
+    ).rejects.toThrow(/plan|approval/i);
+    await expect(
+      before(
+        { tool: "bash", sessionID: "main", callID: "bash" },
+        { args: { command: "sort input.txt -o src/blocked.txt" } },
+      ),
+    ).rejects.toThrow(/plan|approval/i);
+    await expect(
+      before(
+        { tool: "task", sessionID: "main", callID: "task" },
+        {
+          args: {
+            subagent_type: "aidlc-developer-agent",
+            prompt:
+              "AIDLC-STAGE: code-generation\n" +
+              `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`,
+          },
+        },
+      ),
+    ).rejects.toThrow(/plan|approval/i);
   });
 });
 

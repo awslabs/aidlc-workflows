@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile
+// covers: subcommand:aidlc-state:approve, function:pipelineAttemptStartedAt, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile
 //
 // t205 - approve-time gate-revision backstop (the reconciliation half of the
 // forwarding-reliability gap). Mechanism: cli. The subject is the deterministic
@@ -48,11 +48,12 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   existsSync,
   mkdirSync,
   readFileSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import {
@@ -67,7 +68,10 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  pipelineAttemptStartedAt,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath;
@@ -77,6 +81,7 @@ const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility ([-])
+let handoffClock = 0;
 // feasibility declares produces: feasibility-assessment, constraint-register, ...
 const PRIMARY_ARTIFACT = "feasibility-assessment";
 
@@ -178,7 +183,10 @@ function recordReview(proj: string, slug: string, iteration: number): void {
 }
 
 function recordPipelineLinks(proj: string, repos: string[] = []): void {
-  const chains = repos.length > 1 ? repos : [undefined];
+  if (!pipelineAttemptStartedAt(proj, "reverse-engineering")) {
+    recordStageStarted(proj, "reverse-engineering");
+  }
+  const chains = repos.length > 0 ? repos : [undefined];
   for (const repo of chains) {
     for (const link of ["aidlc-developer-agent", "aidlc-architect-agent"]) {
       const args = [
@@ -192,6 +200,37 @@ function recordPipelineLinks(proj: string, repos: string[] = []): void {
         proj,
       ];
       if (repo) args.splice(args.length - 2, 0, "--repo", repo);
+      if (link === "aidlc-developer-agent") {
+        const artifact = join(
+          seededRecordDir(proj),
+          "inception",
+          "reverse-engineering",
+          repo ? `developer-scan-${repo}.md` : "developer-scan.md",
+        );
+        mkdirSync(dirname(artifact), { recursive: true });
+        writeFileSync(
+          artifact,
+          "## Developer Code Scan Results\n\n### Scan Coverage\n\n- src/\n\n## Handoff Summary\n\nCurrent attempt.\n",
+          "utf-8",
+        );
+        const attemptStartedAt = pipelineAttemptStartedAt(
+          proj,
+          "reverse-engineering",
+        );
+        const attemptMs = Date.parse(attemptStartedAt);
+        const writtenAt = new Date(
+          Math.max(Date.now(), Number.isNaN(attemptMs) ? 0 : attemptMs) +
+            1_000 +
+            handoffClock++,
+        );
+        utimesSync(artifact, writtenAt, writtenAt);
+        args.splice(
+          args.length - 2,
+          0,
+          "--artifact",
+          relative(proj, artifact),
+        );
+      }
       const result = spawnSync(BUN, args, {
         encoding: "utf-8",
         env: process.env,
@@ -701,7 +740,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    recordPipelineLinks(proj);
+    recordPipelineLinks(proj, ["repo-a"]);
     guarded(proj, ["gate-start", slug]);
     recordHumanTurn(proj);
     const revisionCountBefore = field(proj, "Revision Count");

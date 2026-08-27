@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   artifactFilename,
   auditShardName,
@@ -264,6 +265,7 @@ function prepareCandidate(
   expect(claim.status, claim.out).toBe(0);
   const claimPayload = JSON.parse(claim.stdout);
   const generation = claimPayload.generation as number;
+  const intentUuid = claimPayload.intent_uuid as string;
   const stages = [
     "functional-design",
     "nfr-requirements",
@@ -325,16 +327,31 @@ function prepareCandidate(
     "## Steps\n\n- [ ] Implement the Unit.\n";
   const instructions =
     "# Unit Test Instructions\n\n## Command\n\n`bun test`\n";
+  const authority = {
+    targetId: `unit:${unit}`,
+    intentId: intentUuid,
+    directiveEpoch: `sha256:${createHash("sha256")
+      .update(`directive:${unit}:${generation}`)
+      .digest("hex")}`,
+    runFloor: "unstarted#0",
+    sourceFloor: `sha256:${createHash("sha256")
+      .update(`source:${unit}:${generation}`)
+      .digest("hex")}`,
+  };
+  const planFingerprint = approvalFingerprint(
+    plan,
+    instructions,
+    contract.contract_sha256,
+    authority,
+  );
+  const questionsFile = join(codeDir, "code-generation-questions.md");
+  const questions =
+    "## Plan Approval\n" +
+    `[Approval Fingerprint]: ${planFingerprint}\n` +
+    "[Answer]: A. Approve Plan\n";
   writeFileSync(join(codeDir, "code-generation-plan.md"), plan);
   writeFileSync(join(codeDir, "unit-test-instructions.md"), instructions);
-  writeFileSync(
-    join(codeDir, "code-generation-questions.md"),
-    "## Plan Approval\n" +
-      `[Approval Fingerprint]: ${
-        approvalFingerprint(plan, instructions, contract.contract_sha256)
-      }\n` +
-      "[Answer]: A. Approve Plan\n",
-  );
+  writeFileSync(questionsFile, questions);
   const srcDir = join(checkout, "src");
   mkdirSync(srcDir, { recursive: true });
   writeFileSync(
@@ -365,6 +382,32 @@ function prepareCandidate(
       stage,
       lifecycleExtra,
     );
+    if (stage === "code-generation") {
+      const promptSha256 = createHash("sha256")
+        .update(
+          `${questions
+            .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
+            .trimEnd()}\n`,
+          "utf-8",
+        )
+        .digest("hex");
+      audit += auditBlock(
+        "PLAN_APPROVAL_RECORDED",
+        unit,
+        generation,
+        stage,
+        `**Details**: Approve Plan\n` +
+          `**Checkpoint**: Code Generation Plan Approval\n` +
+          `**Plan Target**: unit:${unit}\n` +
+          `**Intent**: ${intentUuid}\n` +
+          `**Directive Epoch**: ${authority.directiveEpoch}\n` +
+          `**Approval Fingerprint**: ${planFingerprint}\n` +
+          `**Questions File**: ${relative(checkout, questionsFile).replaceAll("\\", "/")}\n` +
+          `**Questions SHA-256**: ${createHash("sha256").update(questions, "utf-8").digest("hex")}\n` +
+          `**Prompt SHA-256**: ${promptSha256}\n` +
+          `**Session**: ${label}-session\n`,
+      );
+    }
     if (stageNode?.reviewer) {
       const fingerprint = reviewArtifactFingerprint(
         checkout,
@@ -447,14 +490,24 @@ function completeUnitOnMain(projectDir: string, unit: string): void {
     "## Steps\n\n- [ ] Implement the Unit on main.\n";
   const instructions =
     "# Unit Test Instructions\n\n## Command\n\n`bun test`\n";
+  const planFingerprint = approvalFingerprint(
+    plan,
+    instructions,
+    contract.contract_sha256,
+    {
+      targetId: `unit:${unit}`,
+      intentId: "main-fixture",
+      directiveEpoch: `sha256:${"1".repeat(64)}`,
+      runFloor: "unstarted#0",
+      sourceFloor: `sha256:${"2".repeat(64)}`,
+    },
+  );
   writeFileSync(join(codeDir, "code-generation-plan.md"), plan);
   writeFileSync(join(codeDir, "unit-test-instructions.md"), instructions);
   writeFileSync(
     join(codeDir, "code-generation-questions.md"),
     "## Plan Approval\n" +
-      `[Approval Fingerprint]: ${
-        approvalFingerprint(plan, instructions, contract.contract_sha256)
-      }\n` +
+      `[Approval Fingerprint]: ${planFingerprint}\n` +
       "[Answer]: A. Approve Plan\n",
   );
   writeFileSync(
@@ -2322,16 +2375,17 @@ describe("t326 pinned team Unit merge", () => {
       "alpha",
       "plan-team",
     );
-    const instructions = join(
-      seededRecordDir(planned.checkout),
-      "construction",
-      "alpha",
-      "code-generation",
-      "unit-test-instructions.md",
+    const auditPath = join(
+      seededAuditDir(planned.checkout),
+      planned.auditShard,
     );
+    const audit = readFileSync(auditPath, "utf-8");
     writeFileSync(
-      instructions,
-      `${readFileSync(instructions, "utf-8")}\nchanged after approval\n`,
+      auditPath,
+      audit.replace(
+        /(\*\*Event\*\*: PLAN_APPROVAL_RECORDED[\s\S]*?\*\*Approval Fingerprint\*\*: )sha256:[0-9a-f]{64}/,
+        `$1sha256:${"0".repeat(64)}`,
+      ),
     );
     git(planned.checkout, ["add", "-A"]);
     git(planned.checkout, ["commit", "-m", "stale plan approval"]);
