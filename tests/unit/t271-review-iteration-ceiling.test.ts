@@ -1,6 +1,7 @@
 // covers: function:isAutonomousSwarmStage, function:reviewArtifactSnapshot,
 // function:validateReviewAppendix, function:reviewCompletionMatchesRequest,
-// function:reviewRequestBindingFromBlock, function:reviewAppendixDigest
+// function:reviewRequestBindingFromBlock, function:reviewAppendixDigest,
+// function:reviewAppendixEvidenceBytes
 //
 // t271 — engine-enforced review iteration ceiling (aidlc-log review).
 //
@@ -52,6 +53,7 @@ import {
   freshReviewReceipts,
   readAllAuditShards,
   reviewAppendixDigest,
+  reviewAppendixEvidenceBytes,
   reviewArtifactFingerprint,
   reviewArtifactSnapshot,
   resolveStage,
@@ -1980,6 +1982,13 @@ describe("t271 review iteration ceiling", () => {
     expect(priorDigest).toBe(
       reviewAppendixDigest(Buffer.from(staleAppendix, "utf-8")),
     );
+    expect(
+      auditBlockField(requested, "Review Appendix Prior Length"),
+    ).toBe(
+      String(
+        reviewAppendixEvidenceBytes(Buffer.from(staleAppendix, "utf-8")).length,
+      ),
+    );
 
     // No artifact byte changed after the request: the pre-existing canonical
     // appendix must not satisfy completion.
@@ -1993,8 +2002,38 @@ describe("t271 review iteration ceiling", () => {
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
     expect(readFileSync(artifact, "utf-8")).toBe(`${body}${staleAppendix}`);
 
+    // Permitted blank separators are not reviewer evidence and cannot shift
+    // the stale section past the request-time prefix binding.
+    writeFileSync(artifact, `${body}\n${staleAppendix}`, "utf-8");
+    const shiftedReplay = runReview(
+      proj,
+      [...request, "--verdict", "READY"],
+      { AIDLC_TEST_KEEP_REVIEW: "1" },
+    );
+    expect(shiftedReplay.status).not.toBe(0);
+    expect(shiftedReplay.stderr).toContain("not fresh reviewer evidence");
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+
+    // Extending the stale section with unrelated post-request prose does not
+    // prove that a reviewer replaced the pre-request authority.
+    const unrelatedNote = "\nUnrelated post-request note.\n";
+    writeFileSync(artifact, `${body}${staleAppendix}${unrelatedNote}`, "utf-8");
+    const extendedReplay = runReview(
+      proj,
+      [...request, "--verdict", "READY"],
+      { AIDLC_TEST_KEEP_REVIEW: "1" },
+    );
+    expect(extendedReplay.status).not.toBe(0);
+    expect(extendedReplay.stderr).toContain(
+      "Appending prose does not make stale reviewer authority fresh",
+    );
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+    expect(readFileSync(artifact, "utf-8")).toBe(
+      `${body}${staleAppendix}${unrelatedNote}`,
+    );
+
     // The request-first flow still permits deleting the stale appendix and
-    // appending a freshly written one; only unchanged bytes are refused.
+    // appending a freshly written one.
     writeFileSync(
       artifact,
       `${body}${reviewAppendix(
@@ -2015,6 +2054,13 @@ describe("t271 review iteration ceiling", () => {
     expect(
       auditBlockField(completed, "Review Appendix Prior Digest"),
     ).toBe(priorDigest);
+    expect(
+      auditBlockField(completed, "Review Appendix Prior Length"),
+    ).toBe(
+      String(
+        reviewAppendixEvidenceBytes(Buffer.from(staleAppendix, "utf-8")).length,
+      ),
+    );
   });
 
   test("an attempt reset cannot reuse the previous attempt's appendix for the same reviewer, iteration, and verdict", () => {
@@ -2053,6 +2099,15 @@ describe("t271 review iteration ceiling", () => {
     expect(
       auditBlockField(requests[1], "Review Appendix Prior Digest"),
     ).toBe(reviewAppendixDigest(Buffer.from(attemptOneAppendix, "utf-8")));
+    expect(
+      auditBlockField(requests[1], "Review Appendix Prior Length"),
+    ).toBe(
+      String(
+        reviewAppendixEvidenceBytes(
+          Buffer.from(attemptOneAppendix, "utf-8"),
+        ).length,
+      ),
+    );
 
     // Same reviewer, same iteration ordinal, same verdict, zero byte changes:
     // the attempt-1 appendix must not become attempt-2 reviewer evidence.

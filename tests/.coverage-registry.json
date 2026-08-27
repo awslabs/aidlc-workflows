@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 772,
+    "total": 773,
     "enumeratedByClass": {
-      "function": 477,
+      "function": 478,
       "audit": 90,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 280,
+      "function": 281,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -4449,6 +4449,18 @@
     {
       "unitClass": "function",
       "unitId": "function:reviewAppendixDigest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewAppendixEvidenceBytes",
       "minMechanism": "none",
       "coveredBy": [
         {

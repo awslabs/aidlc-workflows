@@ -6872,18 +6872,44 @@ export interface ReviewArtifactSnapshot {
 }
 
 /**
- * Canonical audit binding for the bytes after a review appendix offset.
+ * Exclude permitted blank separator lines from the reviewer-owned evidence.
+ * This keeps the stale-appendix binding anchored at the canonical
+ * `## Review` heading instead of letting an extra blank line shift old
+ * authority past the request-time prefix check.
+ */
+export function reviewAppendixEvidenceBytes(appendix: Buffer): Buffer {
+  let offset = 0;
+  while (offset < appendix.length) {
+    const lineStart = offset;
+    while (appendix[offset] === 0x20 || appendix[offset] === 0x09) offset++;
+    if (appendix[offset] === 0x0d) {
+      offset++;
+      if (appendix[offset] === 0x0a) offset++;
+      continue;
+    }
+    if (appendix[offset] === 0x0a) {
+      offset++;
+      continue;
+    }
+    return appendix.subarray(lineStart);
+  }
+  return appendix.subarray(offset);
+}
+
+/**
+ * Canonical audit binding for the reviewer evidence after an appendix offset.
  * `none` pins the verified absence of any pre-request appendix; a sha256
- * digest pins the exact suffix that already existed when REVIEW_REQUESTED
- * was recorded. Completion refuses an appendix whose bytes still match the
- * request-time digest, so a `## Review` section that predates the request
- * (for example one surviving an attempt reset) can never be replayed as
- * fresh reviewer evidence.
+ * digest pins the exact section that already existed when REVIEW_REQUESTED
+ * was recorded. Its recorded byte length lets completion reject both an
+ * unchanged section and one that merely extends those same pre-request bytes,
+ * so a `## Review` section that predates the request (for example one
+ * surviving an attempt reset) cannot be replayed as fresh reviewer evidence.
  */
 export function reviewAppendixDigest(appendix: Buffer): string {
-  return appendix.length === 0
+  const evidence = reviewAppendixEvidenceBytes(appendix);
+  return evidence.length === 0
     ? "none"
-    : `sha256:${createHash("sha256").update(appendix).digest("hex")}`;
+    : `sha256:${createHash("sha256").update(evidence).digest("hex")}`;
 }
 
 function existingReviewAppendixOffset(body: Buffer): number | null {
@@ -7256,6 +7282,7 @@ export interface ReviewRequestBinding {
   appendixArtifact: string | null;
   appendixOffset: number | null;
   priorAppendixDigest: string | null;
+  priorAppendixLength: number | null;
   sourceFingerprint: string | null;
   unitSourceFingerprint: string | null;
   recoveryCause: ReviewRecoveryCause | null;
@@ -7294,6 +7321,23 @@ export function reviewRequestBindingFromBlock(
   ) {
     return null;
   }
+  const rawPriorAppendixLength = auditBlockField(
+    block,
+    "Review Appendix Prior Length",
+  );
+  let priorAppendixLength: number | null = null;
+  if (rawPriorAppendixLength !== null) {
+    if (!/^[0-9]+$/.test(rawPriorAppendixLength)) return null;
+    priorAppendixLength = Number(rawPriorAppendixLength);
+    if (!Number.isSafeInteger(priorAppendixLength)) return null;
+    if (
+      appendixArtifact === null ||
+      priorAppendixDigest === null ||
+      (priorAppendixDigest === "none") !== (priorAppendixLength === 0)
+    ) {
+      return null;
+    }
+  }
   const sourceFingerprint = auditBlockField(block, "Source Fingerprint");
   if (
     sourceFingerprint !== null &&
@@ -7324,6 +7368,7 @@ export function reviewRequestBindingFromBlock(
     appendixArtifact,
     appendixOffset,
     priorAppendixDigest,
+    priorAppendixLength,
     sourceFingerprint,
     unitSourceFingerprint,
     recoveryCause,
@@ -7375,6 +7420,25 @@ export function reviewCompletionMatchesRequest(
       request.priorAppendixDigest
   ) {
     return false;
+  }
+  if (
+    request.priorAppendixDigest !== null &&
+    request.priorAppendixLength === null
+  ) {
+    return false;
+  }
+  if (request.priorAppendixLength !== null) {
+    const completionPriorLength = auditBlockField(
+      completionBlock,
+      "Review Appendix Prior Length",
+    );
+    if (
+      completionPriorLength === null ||
+      !/^[0-9]+$/.test(completionPriorLength) ||
+      Number(completionPriorLength) !== request.priorAppendixLength
+    ) {
+      return false;
+    }
   }
 
   if (request.sourceFingerprint !== null) {

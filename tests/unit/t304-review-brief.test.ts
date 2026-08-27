@@ -9,7 +9,6 @@ import {
   test,
 } from "bun:test";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -143,6 +142,12 @@ function requirementProject(
 }
 
 function recordReviewAndOpenGate(proj: string, artifact: string): void {
+  const reviewed = readFileSync(artifact, "utf-8");
+  const reviewStart = reviewed.indexOf("## Review");
+  expect(reviewStart).toBeGreaterThanOrEqual(0);
+  const requestedBody = reviewed.slice(0, reviewStart);
+  const reviewerAppendix = reviewed.slice(reviewStart);
+  writeFileSync(artifact, requestedBody, "utf-8");
   const base = [
     "review",
     "--stage",
@@ -153,13 +158,7 @@ function recordReviewAndOpenGate(proj: string, artifact: string): void {
     "1",
   ];
   expect(run(LOG, base, proj).status).toBe(0);
-  // The fixture's review section predates the request; a completion needs
-  // reviewer bytes written after REVIEW_REQUESTED, so extend the appendix.
-  appendFileSync(
-    artifact,
-    "\nRe-authored by the dispatched reviewer for this request.\n",
-    "utf-8",
-  );
+  writeFileSync(artifact, `${requestedBody}${reviewerAppendix}`, "utf-8");
   expect(run(LOG, [...base, "--verdict", "READY"], proj).status).toBe(0);
   expect(
     run(STATE, ["gate-start", "requirements-analysis"], proj).status,
