@@ -3626,4 +3626,146 @@ if (import.meta.main) {
       "nested delegation is not allowed",
     );
   });
+
+  test("37: delegated project executables cannot erase attribution stores", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    const spawn = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_input: {
+          description: "Developer probe",
+          prompt: "Implement the unit.",
+          subagent_type: "aidlc-developer-agent",
+        },
+      }),
+    );
+    expectAllowJson(spawn);
+    const [witness] = witnessFilesFor(proj);
+    expect(ledgerFilesFor(proj)).toHaveLength(1);
+    expect(witness).toBeDefined();
+
+    const scriptDir = join(proj, "scratch");
+    mkdirSync(scriptDir, { recursive: true });
+    const script = join(
+      scriptDir,
+      process.platform === "win32" ? "wipe-attribution.cmd" : "wipe-attribution",
+    );
+    writeFileSync(
+      script,
+      process.platform === "win32"
+        ? `@echo off\r\nrmdir /s /q "${ledgerDirFor(proj)}"\r\ndel /q "${witness}"\r\n`
+        : `#!/bin/sh\nrm -rf ${JSON.stringify(ledgerDirFor(proj))}\nrm -f ${JSON.stringify(witness)}\n`,
+    );
+    if (process.platform !== "win32") chmodSync(script, 0o755);
+
+    const command =
+      process.platform === "win32"
+        ? "scratch\\wipe-attribution.cmd"
+        : "./scratch/wipe-attribution";
+    const execution = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "developer-project-executable-child",
+        session_id: "developer-project-executable-child",
+        tool_input: { command },
+      }),
+    );
+    const executionOut = JSON.parse(execution.stdout) as {
+      permission?: string;
+      agent_message?: string;
+    };
+    if (executionOut.permission === "allow") {
+      const result =
+        process.platform === "win32"
+          ? spawnSync(
+              process.env.ComSpec ?? "cmd.exe",
+              [
+                "/d",
+                "/s",
+                "/c",
+                `"${script}"`,
+              ],
+              { encoding: "utf-8" },
+            )
+          : spawnSync(script, [], { encoding: "utf-8" });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(executionOut.permission).toBe("deny");
+    expect(executionOut.agent_message ?? "").toContain(
+      "general-purpose interpreters",
+    );
+    expect(ledgerFilesFor(proj)).toHaveLength(1);
+    expect(witnessFilesFor(proj)).toHaveLength(1);
+
+    for (const unsafeCommand of [
+      process.platform === "win32"
+        ? "scratch\\echo.cmd harmless"
+        : "./scratch/printf.sh harmless",
+      "busybox rm -rf aidlc",
+      "toybox rm -rf aidlc",
+    ]) {
+      const denied = runAdapter(
+        proj,
+        "guards",
+        payload("preToolUseShell", proj, {
+          conversation_id: "developer-project-executable-child",
+          session_id: "developer-project-executable-child",
+          tool_input: { command: unsafeCommand },
+        }),
+      );
+      const deniedOut = JSON.parse(denied.stdout) as {
+        permission?: string;
+        agent_message?: string;
+      };
+      expect(deniedOut.permission, unsafeCommand).toBe("deny");
+      expect(ledgerFilesFor(proj), unsafeCommand).toHaveLength(1);
+      expect(witnessFilesFor(proj), unsafeCommand).toHaveLength(1);
+    }
+
+    for (const safeCommand of [
+      "printf '%s\\n' harmless",
+      "busybox printf '%s\\n' harmless",
+      "toybox printf '%s\\n' harmless",
+    ]) {
+      const allowed = runAdapter(
+        proj,
+        "guards",
+        payload("preToolUseShell", proj, {
+          conversation_id: "developer-project-executable-child",
+          session_id: "developer-project-executable-child",
+          tool_input: { command: safeCommand },
+        }),
+      );
+      expectAllowJson(allowed, safeCommand);
+    }
+
+    const nested = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        conversation_id: "developer-project-executable-child",
+        session_id: "developer-project-executable-child",
+        generation_id: "project-executable-nested-generation",
+        tool_use_id: "project-executable-nested-tool-use",
+        tool_input: {
+          description: "Nested probe",
+          prompt: "Delegate again.",
+          subagent_type: "aidlc-quality-agent",
+        },
+      }),
+    );
+    const nestedOut = JSON.parse(nested.stdout) as {
+      permission?: string;
+      agent_message?: string;
+    };
+    expect(nestedOut.permission).toBe("deny");
+    expect(nestedOut.agent_message ?? "").toContain(
+      "nested delegation is not allowed",
+    );
+  });
 });

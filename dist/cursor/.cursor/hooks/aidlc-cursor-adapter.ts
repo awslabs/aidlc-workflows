@@ -700,6 +700,15 @@ export async function run(
   }
 
   interface ReviewFreezeCommandModule {
+    shellCommandInvocationDetails?: (
+      command: string,
+    ) => Array<{
+      name: string;
+      args: string[];
+      ambiguous?: boolean;
+      executable?: string;
+      launchers?: string[];
+    }>;
     shellCommandInvocations?: (
       command: string,
     ) => Array<{ name: string; args: string[]; ambiguous?: boolean }>;
@@ -2285,6 +2294,111 @@ export async function run(
       /^(?:remove|clear|set|new|move|copy|rename)-item$|^(?:set|add|clear)-content$|^out-file$|^(?:ri|rm|rd|del|erase|rmdir|mi|mv|cp|cpi|ren|ni|sc|ac|clc)$/i;
     const dynamicPowerShellHost =
       /^(?:invoke-expression|iex|invoke-command|icm|invoke-item|ii|start-process|saps|start-job|sajb)$/i;
+    const inspectableDelegatedCommands = new Set([
+      ":",
+      "[",
+      "ac",
+      "add-content",
+      "basename",
+      "cat",
+      "cd",
+      "chdir",
+      "clear-content",
+      "clear-item",
+      "clc",
+      "cli",
+      "cmp",
+      "copy",
+      "copy-item",
+      "cp",
+      "cpi",
+      "cut",
+      "dd",
+      "del",
+      "dir",
+      "dirname",
+      "echo",
+      "erase",
+      "exist",
+      "false",
+      "file",
+      "find",
+      "get-childitem",
+      "get-content",
+      "get-item",
+      "git",
+      "grep",
+      "head",
+      "join-path",
+      "jq",
+      "ls",
+      "md",
+      "mi",
+      "mkdir",
+      "move",
+      "move-item",
+      "mv",
+      "new-item",
+      "ni",
+      "out-file",
+      "pop-location",
+      "popd",
+      "printf",
+      "push-location",
+      "pushd",
+      "pwd",
+      "rd",
+      "readlink",
+      "realpath",
+      "remove-item",
+      "ren",
+      "rename",
+      "rename-item",
+      "resolve-path",
+      "rg",
+      "ri",
+      "rmdir",
+      "rm",
+      "rni",
+      "rsync",
+      "sc",
+      "select-string",
+      "set-content",
+      "set-item",
+      "set-location",
+      "sha1sum",
+      "sha256sum",
+      "sha512sum",
+      "shred",
+      "sl",
+      "sort",
+      "split-path",
+      "stat",
+      "tail",
+      "tee",
+      "test",
+      "test-path",
+      "touch",
+      "tr",
+      "true",
+      "truncate",
+      "type",
+      "uniq",
+      "unlink",
+      "wc",
+      "where",
+      "which",
+    ]);
+    const uninspectableExecutableToken = (value: string): boolean => {
+      const normalized = value.replaceAll("\\", "/");
+      return (
+        normalized.includes("/") ||
+        /^[A-Za-z]:/.test(normalized) ||
+        /\.(?:bat|cmd|ps1|psd1|psm1|sh|bash|dash|fish|ksh|zsh|cjs|js|mjs|cts|mts|ts|py|rb|pl|php|lua|jar|vbs|wsf|hta)$/i.test(
+          normalized,
+        )
+      );
+    };
     const isInterpreter = (name: string): boolean => {
       const candidates = [name, posix.basename(name), win32.basename(name)];
       if (candidates.some((candidate) => interpreter.test(candidate))) return true;
@@ -2294,7 +2408,7 @@ export async function run(
     };
     try {
       const module = await loadReviewFreezeCommandModule();
-      if (typeof module.shellCommandInvocations !== "function") return true;
+      if (typeof module.shellCommandInvocationDetails !== "function") return true;
       const hostExpression = shellUsesDirectHostExpression(command);
       const flavor: PathFlavor =
         process.platform === "win32" ? "win32" : "posix";
@@ -2332,17 +2446,27 @@ export async function run(
           }
         }
 
-        const invocations = module.shellCommandInvocations(segment);
+        const functionDefinition =
+          /^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:\(\s*\))?\s*\{/.test(
+            segment,
+          );
+        const invocations = functionDefinition
+          ? []
+          : module.shellCommandInvocationDetails(segment);
         for (const state of activeStates) {
           const gitContext = gitCommandEnvironment(segment, state.cwd);
           for (const invocation of invocations) {
             const leaf = win32.basename(posix.basename(invocation.name));
             if (
               invocation.ambiguous ||
+              [invocation.executable, ...(invocation.launchers ?? [])].some(
+                (value) =>
+                  typeof value !== "string" ||
+                  value.length === 0 ||
+                  uninspectableExecutableToken(value),
+              ) ||
               isInterpreter(invocation.name) ||
               dynamicPowerShellHost.test(invocation.name) ||
-              (/^busybox(?:\.exe)?$/i.test(leaf) &&
-                isInterpreter(invocation.args[0] ?? "")) ||
               (/^git(?:\.exe)?$/i.test(leaf) &&
                 (gitContext.ambiguous ||
                   gitInvocationUsesDynamicEvaluation(
@@ -2359,7 +2483,8 @@ export async function run(
                 )) ||
               invocation.name === "eval" ||
               invocation.name === "source" ||
-              invocation.name === "."
+              invocation.name === "." ||
+              !inspectableDelegatedCommands.has(invocation.name)
             ) {
               return true;
             }

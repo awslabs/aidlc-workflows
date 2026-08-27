@@ -47,6 +47,7 @@ import {
   judgeFreeze,
   REVIEW_FREEZE_FALLBACK_GUIDANCE,
   reviewFreezeRecoveryGuidance,
+  shellCommandInvocationDetails,
   shellCommandInvocations,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
@@ -145,6 +146,34 @@ test("builtin wrappers recursively expose evaluators", () => {
   }
   expect(shellCommandInvocations("builtin -p eval")).toEqual([
     { name: "", args: [], ambiguous: true },
+  ]);
+});
+
+test("inspection preserves executable provenance and unwraps multiplexer applets", () => {
+  expect(
+    shellCommandInvocationDetails(
+      "command ./scratch/echo.cmd harmless",
+    ),
+  ).toEqual([
+    {
+      name: "echo",
+      args: ["harmless"],
+      executable: "./scratch/echo.cmd",
+      launchers: ["command"],
+    },
+  ]);
+  expect(
+    shellCommandInvocationDetails("busybox env HOME=/tmp sh -c harmless"),
+  ).toEqual([
+    {
+      name: "sh",
+      args: ["-c", "harmless"],
+      executable: "sh",
+      launchers: ["busybox", "env"],
+    },
+  ]);
+  expect(shellCommandInvocations("toybox rm -rf aidlc")).toEqual([
+    { name: "rm", args: ["-rf", "aidlc"] },
   ]);
 });
 

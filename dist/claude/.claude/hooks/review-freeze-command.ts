@@ -96,7 +96,9 @@ export interface ShellInvocation {
   ambiguous?: boolean;
 }
 
-interface ShellInvocationDetails extends ShellInvocation {
+export interface ShellInvocationDetails extends ShellInvocation {
+  executable?: string;
+  launchers?: string[];
   dataDriven?: boolean;
 }
 
@@ -185,6 +187,7 @@ function shellInvocation(
   words: string[],
   depth = 0,
   dataDriven = false,
+  launchers: string[] = [],
 ): ShellInvocationDetails | null {
   if (depth > 8) return null;
   let index = 0;
@@ -208,6 +211,7 @@ function shellInvocation(
       continue;
     }
     if (wrapper === "command") {
+      launchers.push(words[index]);
       index++;
       while (index < words.length && words[index].startsWith("-")) {
         const option = words[index++];
@@ -222,6 +226,7 @@ function shellInvocation(
       continue;
     }
     if (wrapper === "builtin") {
+      launchers.push(words[index]);
       index++;
       if (words[index] === "--") index++;
       else if ((words[index] ?? "").startsWith("-")) {
@@ -231,6 +236,7 @@ function shellInvocation(
       continue;
     }
     if (wrapper === "env") {
+      launchers.push(words[index]);
       index++;
       let splitCommand: string[] = [];
       while (index < words.length) {
@@ -299,7 +305,17 @@ function shellInvocation(
           [...splitCommand, ...words.slice(index)],
           depth + 1,
           dataDriven,
+          launchers,
         );
+      }
+      continue;
+    }
+
+    if (wrapper === "busybox" || wrapper === "toybox") {
+      launchers.push(words[index]);
+      index++;
+      if (!words[index] || words[index].startsWith("-")) {
+        return { name: "", args: [], ambiguous: true, launchers };
       }
       continue;
     }
@@ -398,6 +414,7 @@ function shellInvocation(
     };
     const spec = simpleWrappers[wrapper];
     if (spec) {
+      launchers.push(words[index]);
       const consumed = consumeWrapperOptions(words, index + 1, spec);
       if (consumed.ambiguous) return { name: "", args: [], ambiguous: true };
       index = consumed.index;
@@ -407,6 +424,7 @@ function shellInvocation(
     }
 
     if (wrapper === "timeout") {
+      launchers.push(words[index]);
       const consumed = consumeWrapperOptions(words, index + 1, {
         shortValues: ["-k", "-s"],
         longValues: ["--kill-after", "--signal"],
@@ -433,11 +451,15 @@ function shellInvocation(
   return {
     name: shellExecutableName(executable),
     args: words.slice(index + 1),
+    executable,
+    ...(launchers.length > 0 ? { launchers } : {}),
     ...(dataDriven ? { dataDriven: true } : {}),
   };
 }
 
-function shellCommandInvocationDetails(command: string): ShellInvocationDetails[] {
+export function shellCommandInvocationDetails(
+  command: string,
+): ShellInvocationDetails[] {
   const invocations: ShellInvocationDetails[] = [];
   for (const segment of shellCommandSegments(command)) {
     const invocation = shellInvocation(shellWords(segment));
@@ -448,7 +470,12 @@ function shellCommandInvocationDetails(command: string): ShellInvocationDetails[
 
 export function shellCommandInvocations(command: string): ShellInvocation[] {
   return shellCommandInvocationDetails(command).map(
-    ({ dataDriven: _dataDriven, ...invocation }) => invocation,
+    ({
+      dataDriven: _dataDriven,
+      executable: _executable,
+      launchers: _launchers,
+      ...invocation
+    }) => invocation,
   );
 }
 
