@@ -577,6 +577,7 @@ describe("t242 state-transition ownership guard", () => {
     seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
     const env = unownedEnv();
     env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+    env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
     const r = spawnSync(
       process.execPath,
       [
@@ -673,7 +674,7 @@ describe("t242 state-transition ownership guard", () => {
     expect(r.stdout.trim()).toBe("feasibility");
   });
 
-  test("non-initialization stages delegate lifecycle transitions and owned Learn writes", () => {
+  test("non-initialization stages delegate lifecycle transitions and Learn writes through §13", () => {
     expect(NON_INITIALIZATION_STAGES).toHaveLength(30);
     for (const path of NON_INITIALIZATION_STAGES) {
       const body = readFileSync(path, "utf-8");
@@ -690,13 +691,11 @@ describe("t242 state-transition ownership guard", () => {
       expect(body, label).not.toMatch(DIRECT_STATE_HEADING);
       expect(body, label).not.toMatch(DIRECT_PHASE_BOOKKEEPING);
 
-      if (slug === "practices-discovery") continue;
-      // The Learn routing must match what §13 and aidlc-learnings.ts actually
-      // write: project.md (default) / team.md (promoted). No phases/ tier, no
-      // org tier — the tool has no write path for either.
-      expect(body, label).toContain(
-        "`aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)",
-      );
+      // Stage files carry only the compact pointer; §13 owns routing and the
+      // aidlc-learnings.ts tool owns writes. No retired direct-write target may
+      // return to a stage body.
+      expect(body, label).toContain("stage-protocol.md §13");
+      expect(body, label).toContain("aidlc-learnings.ts");
       expect(body, label).not.toContain("memory/phases/<phase>.md");
       expect(body, label).not.toContain("memory/<org|team|project>.md");
       expect(body, label).not.toContain(

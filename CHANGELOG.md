@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.119] - 2026-08-27
+## [2.6.120] - 2026-08-27
 
 Focused Reverse Engineering rescans now merge their newly analyzed area into the shared CodeKB instead of replacing unrelated knowledge, with generation-checked all-artifact publication so concurrent intents cannot silently lose each other's scans or label preserved stale prose as current. Full rescans still replace all nine artifacts; stale or unverified prior coverage is preserved as prose and demoted to shallow when it cannot be reverified. **Upgrade:** re-copy your `dist/<harness>/` shell so the updated utility, stage, and artifact guidance are installed.
 
@@ -9,6 +9,14 @@ Focused Reverse Engineering rescans now merge their newly analyzed area into the
 * Verified-current focused merges record the union of prior and new analyzed paths/components; stale or unverified merges record the new verified area and demote prior analyzed paths to `shallow.paths`.
 * `codekb-snapshot` binds a scan to the exact shared-store generation and source bytes; `codekb-publish` validates a complete nine-file candidate under a space+repo lock and refuses `CODEKB_STORE_CHANGED`, `CODEKB_SOURCE_CHANGED`, or `CODEKB_CANDIDATE_STALE` instead of overwriting. Crash recovery validates every transaction and store path component from the real project root and refuses redirected ancestors before any rename or recursive cleanup.
 * The scope comparison remains the deterministic backstop: `COVERS` confirms retained verified coverage, while `NARROWER` identifies paths/components no longer claimed as verified deep coverage even though focused-merge prose was preserved.
+
+## [2.6.119] - 2026-08-27
+
+Stage definitions now carry compact Learn and Sensors compartments while their shared behavior lives once in the always-loaded stage protocol, reducing repeated prompt context without changing approval gates, learning capture, or sensor enforcement. **Upgrade:** refresh your `dist/<harness>/` shell so every generated stage and the shared protocol are updated together.
+
+* All gated stages point their Learn compartment to the §13 engine-created, output-only diary, question, and persistence contract; bootstrap initialization stages retain their no-gate exception.
+* Sensors compartments now mirror frontmatter through concise `Imports:` and `Upstream targets:` summaries while preserving stage-specific validation and intentional-omission notes.
+* `stage-protocol.md` §14 defines shared fire timing, advisory and blocking severity, failure reporting, required-section defaults, and upstream-coverage behavior, and redundant per-stage protocol reminders are removed.
 
 ## [2.6.118] - 2026-08-27
 

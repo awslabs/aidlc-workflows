@@ -498,13 +498,14 @@ Only `## Steps` is populated in v0.3.0.
 | Compartment | v0.3.0 | v0.5.0 | What goes here |
 |-------------|--------|--------|----------------|
 | `## Steps` | Required, populated | Unchanged | Imperative prose the agent follows |
-| `## Sensors` | Reserved, absent | Populated | Deterministic sensor bindings (IDs from the flat `.claude/sensors/` registry) |
-| `## Learn` | Reserved, absent | Populated | Loop-driver bindings and observer rules |
+| `## Sensors` | Reserved, absent | Populated | Compact output-location, imported-sensor, and upstream-target summary; stage-specific exceptions remain local |
+| `## Learn` | Reserved, absent | Populated | Compact pointer to the shared §13 learning-loop contract and bootstrap exception |
 
 Pre-declaring the three compartments in v0.3.0 meant v0.5.0's additions
 were slot-in changes, not body restructures. See [Sensor
 System](07-sensor-system.md) for the `## Sensors` binding semantics and
-the pull-import model.
+the pull-import model. Shared sensor behavior is defined once in
+`stage-protocol.md` §14, while the full learning ritual is defined in §13.
 
 **milestone 8 migration rule:** wrap the existing body under `## Steps`, nothing
 else. Most stage files already use `## Steps` as their first body heading.
