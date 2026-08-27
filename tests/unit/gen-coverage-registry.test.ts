@@ -794,6 +794,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t280-contract-design-wiring.test.ts",
     "unit/t282-state-version-doctor.test.ts",
     "unit/t283-copilot-engine-cursor.test.ts",
+    "unit/t304-codekb-cumulative-merge.test.ts",
     "unit/t306-learnings-cid-collision-followup.test.ts",
     "unit/t324-doctor-hooks-disabled.test.ts",
     "unit/t240-opencode-packaging.test.ts",
