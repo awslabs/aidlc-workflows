@@ -96,6 +96,10 @@ export interface ShellInvocation {
   ambiguous?: boolean;
 }
 
+interface ShellInvocationDetails extends ShellInvocation {
+  dataDriven?: boolean;
+}
+
 function shellExecutableName(value: string): string {
   const normalized = value.replaceAll("\\", "/");
   const leaf = normalized.slice(normalized.lastIndexOf("/") + 1);
@@ -177,7 +181,11 @@ function consumeWrapperOptions(
   return { index, ambiguous: false };
 }
 
-function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
+function shellInvocation(
+  words: string[],
+  depth = 0,
+  dataDriven = false,
+): ShellInvocationDetails | null {
   if (depth > 8) return null;
   let index = 0;
   const skipAssignments = () => {
@@ -287,7 +295,11 @@ function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
       }
       skipAssignments();
       if (splitCommand.length > 0) {
-        return shellInvocation([...splitCommand, ...words.slice(index)], depth + 1);
+        return shellInvocation(
+          [...splitCommand, ...words.slice(index)],
+          depth + 1,
+          dataDriven,
+        );
       }
       continue;
     }
@@ -389,6 +401,7 @@ function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
       const consumed = consumeWrapperOptions(words, index + 1, spec);
       if (consumed.ambiguous) return { name: "", args: [], ambiguous: true };
       index = consumed.index;
+      dataDriven ||= wrapper === "xargs";
       skipAssignments();
       continue;
     }
@@ -420,16 +433,23 @@ function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
   return {
     name: shellExecutableName(executable),
     args: words.slice(index + 1),
+    ...(dataDriven ? { dataDriven: true } : {}),
   };
 }
 
-export function shellCommandInvocations(command: string): ShellInvocation[] {
-  const invocations: ShellInvocation[] = [];
+function shellCommandInvocationDetails(command: string): ShellInvocationDetails[] {
+  const invocations: ShellInvocationDetails[] = [];
   for (const segment of shellCommandSegments(command)) {
     const invocation = shellInvocation(shellWords(segment));
     if (invocation) invocations.push(invocation);
   }
   return invocations;
+}
+
+export function shellCommandInvocations(command: string): ShellInvocation[] {
+  return shellCommandInvocationDetails(command).map(
+    ({ dataDriven: _dataDriven, ...invocation }) => invocation,
+  );
 }
 
 function shellWordAt(command: string, start: number): { word: string; end: number } | null {
@@ -536,6 +556,125 @@ function parseShellArgs(
   return { operands, options, optionValues };
 }
 
+function findTraversalRoots(args: string[]): string[] {
+  let index = 0;
+  while (["-H", "-L", "-P"].includes(args[index] ?? "")) index++;
+  while ((args[index] ?? "").startsWith("-D")) {
+    if (args[index] === "-D") index += 2;
+    else index++;
+  }
+  if (/^-O\d+$/.test(args[index] ?? "")) index++;
+
+  const roots: string[] = [];
+  for (; index < args.length; index++) {
+    const arg = args[index];
+    if (
+      arg === "!" ||
+      arg === "(" ||
+      arg === ")" ||
+      arg.startsWith("-") ||
+      arg === ","
+    ) {
+      break;
+    }
+    roots.push(arg);
+  }
+  return roots.length > 0 ? roots : ["."];
+}
+
+const STATIC_REMOVE_COMMANDS = new Set([
+  "rmdir",
+  "rd",
+  "del",
+  "erase",
+  "shred",
+  "remove-item",
+  "clear-item",
+  "ri",
+  "cli",
+]);
+
+const STATIC_MOVE_COMMANDS = new Set([
+  "move",
+  "rename",
+  "move-item",
+  "rename-item",
+  "mi",
+  "ren",
+  "rni",
+]);
+
+const STATIC_CONTENT_COMMANDS = new Set([
+  "set-item",
+  "new-item",
+  "set-content",
+  "add-content",
+  "clear-content",
+  "out-file",
+]);
+
+function attachedPathOptionValues(
+  args: string[],
+  pathOptions = new Set([
+    "path",
+    "literalpath",
+    "destination",
+    "newname",
+    "filepath",
+  ]),
+): string[] {
+  const out: string[] = [];
+  for (const arg of args) {
+    const match = arg.match(/^-{1,2}([^:=]+)[:=](.+)$/);
+    if (match && pathOptions.has(match[1].toLowerCase())) out.push(match[2]);
+  }
+  return out;
+}
+
+function invocationMayMutate(commandName: string, args: string[]): boolean {
+  if (
+    [
+      "cp",
+      "dd",
+      "install",
+      "mv",
+      "rm",
+      "rsync",
+      "tee",
+      "touch",
+      "truncate",
+      "unlink",
+      "copy-item",
+    ].includes(commandName) ||
+    STATIC_REMOVE_COMMANDS.has(commandName) ||
+    STATIC_MOVE_COMMANDS.has(commandName) ||
+    STATIC_CONTENT_COMMANDS.has(commandName)
+  ) {
+    return true;
+  }
+  if (commandName === "sed") {
+    const parsed = parseShellArgs(
+      args,
+      new Set(["-e", "-f", "-l"]),
+      new Set(["--expression", "--file", "--line-length"]),
+    );
+    return parsed.options.has("-i") || parsed.options.has("--in-place");
+  }
+  if (commandName === "perl") {
+    const parsed = parseShellArgs(
+      args,
+      new Set(["-E", "-F", "-I", "-M", "-e", "-m"]),
+    );
+    return parsed.options.has("-i") || parsed.options.has("--in-place");
+  }
+  return (
+    commandName === "find" &&
+    args.some((arg) =>
+      ["-delete", "-fprint", "-fprint0", "-fprintf", "-fls"].includes(arg)
+    )
+  );
+}
+
 /** Concrete filesystem targets of a mutation-capable shell command. */
 export function shellWriteTargets(command: string, cwd = process.cwd()): string[] {
   const out: string[] = [];
@@ -616,11 +755,17 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
   // Parse each command segment independently so a mutator never claims a
   // later read-only command's operands. Only destination/in-place operands are
   // candidates for commands that also have read-only source operands.
-  for (const { name: commandName, args, ambiguous } of shellCommandInvocations(command)) {
+  for (const {
+    name: commandName,
+    args,
+    ambiguous,
+    dataDriven,
+  } of shellCommandInvocationDetails(command)) {
     if (ambiguous) {
       add(cwd);
       continue;
     }
+    if (dataDriven && invocationMayMutate(commandName, args)) add(cwd);
     if (commandName === "dd") {
       for (const arg of args) if (arg.startsWith("of=")) add(arg);
       continue;
@@ -628,7 +773,14 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
 
     const basic = parseShellArgs(args);
     const { operands } = basic;
-    if (operands.length === 0) continue;
+    const attachedPaths = attachedPathOptionValues(args);
+    if (
+      operands.length === 0 &&
+      attachedPaths.length === 0 &&
+      commandName !== "find"
+    ) {
+      continue;
+    }
 
     if (commandName === "cp") {
       const parsed = parseShellArgs(
@@ -726,6 +878,36 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
       if (!parsed.options.has("-i") && !parsed.options.has("--in-place")) continue;
       const programFromOption = parsed.optionValues.has("-e") || parsed.optionValues.has("-E");
       for (const operand of parsed.operands.slice(programFromOption ? 0 : 1)) add(operand);
+    } else if (commandName === "find") {
+      if (args.includes("-delete")) {
+        for (const root of findTraversalRoots(args)) add(root);
+      }
+      for (let index = 0; index < args.length; index++) {
+        if (["-fprint", "-fprint0", "-fls"].includes(args[index])) {
+          add(args[++index]);
+        } else if (args[index] === "-fprintf") {
+          add(args[++index]);
+          index++;
+        }
+      }
+    } else if (
+      STATIC_REMOVE_COMMANDS.has(commandName) ||
+      STATIC_MOVE_COMMANDS.has(commandName) ||
+      STATIC_CONTENT_COMMANDS.has(commandName)
+    ) {
+      for (const operand of operands) add(operand);
+      for (const value of attachedPaths) add(value);
+    } else if (commandName === "copy-item") {
+      add(operands.at(-1));
+      for (const value of attachedPathOptionValues(args, new Set(["destination"]))) {
+        add(value);
+      }
+    } else if (commandName === "rsync") {
+      const destination = operands.at(-1);
+      add(destination);
+      if (basic.options.has("--remove-source-files")) {
+        for (const source of operands.slice(0, -1)) add(source);
+      }
     }
   }
 

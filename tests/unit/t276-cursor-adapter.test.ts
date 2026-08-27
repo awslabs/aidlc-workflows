@@ -3532,4 +3532,98 @@ if (import.meta.main) {
       expectAllowJson(result, command);
     }
   });
+
+  test("36: find traversal cannot erase delegated-agent attribution stores", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    const spawn = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_input: {
+          description: "Developer probe",
+          prompt: "Implement the unit.",
+          subagent_type: "aidlc-developer-agent",
+        },
+      }),
+    );
+    expectAllowJson(spawn);
+    expect(ledgerFilesFor(proj)).toHaveLength(1);
+    expect(witnessFilesFor(proj)).toHaveLength(1);
+
+    for (const command of [
+      "find aidlc -depth -delete",
+      "find aidlc -exec rm -rf {} +",
+      "find aidlc -execdir rm -rf {} +",
+      "find aidlc -print0 | xargs -0 rm -rf",
+      "Remove-Item aidlc -Recurse -Force",
+      "Remove-Item -Path:aidlc -Recurse -Force",
+      "Move-Item aidlc scratch",
+      "rd /s /q aidlc",
+      "rsync --delete scratch/ aidlc",
+    ]) {
+      const removal = runAdapter(
+        proj,
+        "guards",
+        payload("preToolUseShell", proj, {
+          conversation_id: "developer-find-child",
+          session_id: "developer-find-child",
+          tool_input: { command },
+        }),
+      );
+      const out = JSON.parse(removal.stdout) as {
+        permission?: string;
+        agent_message?: string;
+      };
+      expect(out.permission, command).toBe("deny");
+      expect(out.agent_message ?? "", command).toContain("attribution state");
+      expect(ledgerFilesFor(proj), command).toHaveLength(1);
+      expect(witnessFilesFor(proj), command).toHaveLength(1);
+    }
+
+    mkdirSync(join(proj, "scratch"), { recursive: true });
+    for (const command of [
+      "find scratch -depth -delete",
+      "Remove-Item scratch -Recurse -Force",
+      "Move-Item scratch ordinary",
+      "rsync --delete scratch/ ordinary",
+    ]) {
+      const safe = runAdapter(
+        proj,
+        "guards",
+        payload("preToolUseShell", proj, {
+          conversation_id: "developer-find-child",
+          session_id: "developer-find-child",
+          tool_input: { command },
+        }),
+      );
+      expectAllowJson(safe, command);
+    }
+
+    const nested = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        conversation_id: "developer-find-child",
+        session_id: "developer-find-child",
+        generation_id: "find-nested-generation",
+        tool_use_id: "find-nested-tool-use",
+        tool_input: {
+          description: "Nested probe",
+          prompt: "Delegate again.",
+          subagent_type: "aidlc-quality-agent",
+        },
+      }),
+    );
+    const nestedOut = JSON.parse(nested.stdout) as {
+      permission?: string;
+      agent_message?: string;
+    };
+    expect(nestedOut.permission).toBe("deny");
+    expect(nestedOut.agent_message ?? "").toContain(
+      "nested delegation is not allowed",
+    );
+  });
 });

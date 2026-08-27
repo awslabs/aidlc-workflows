@@ -2353,6 +2353,10 @@ export async function run(
                   ))) ||
               (hostExpression &&
                 directPowerShellHost.test(invocation.name)) ||
+              (invocation.name === "find" &&
+                invocation.args.some((arg) =>
+                  ["-exec", "-execdir", "-ok", "-okdir"].includes(arg)
+                )) ||
               invocation.name === "eval" ||
               invocation.name === "source" ||
               invocation.name === "."

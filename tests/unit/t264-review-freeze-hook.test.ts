@@ -345,6 +345,39 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(
       writeTargets("Bash", { command: "perl -pi -e 's/x/y/' /a/b.md /tmp/c.md" }),
     ).toEqual([hostPath("/a/b.md"), hostPath("/tmp/c.md")]);
+    expect(
+      writeTargets("Bash", { command: "find aidlc -depth -delete" }, "/p"),
+    ).toEqual([hostPath("/p/aidlc")]);
+    expect(
+      writeTargets("Bash", { command: "find -H -delete" }, "/p"),
+    ).toEqual([hostPath("/p")]);
+    expect(
+      writeTargets("Bash", { command: "find scratch -fprint /a/b.md" }, "/p"),
+    ).toEqual([hostPath("/a/b.md")]);
+    expect(
+      writeTargets("Bash", { command: "find scratch -fprintf /tmp/list '%p\\n'" }, "/p"),
+    ).toEqual([hostPath("/tmp/list")]);
+    expect(
+      writeTargets("Bash", { command: "find scratch -name '*.tmp'" }, "/p"),
+    ).toEqual([]);
+    expect(
+      writeTargets("Bash", { command: "Remove-Item aidlc -Recurse -Force" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "Remove-Item -Path:aidlc -Recurse" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "Move-Item aidlc scratch" }, "/p"),
+    ).toEqual(expect.arrayContaining([hostPath("/p/aidlc"), hostPath("/p/scratch")]));
+    expect(
+      writeTargets("Bash", { command: "rd /s /q aidlc" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "rsync --delete scratch/ aidlc" }, "/p"),
+    ).toContain(hostPath("/p/aidlc"));
+    expect(
+      writeTargets("Bash", { command: "find aidlc -print0 | xargs -0 rm -rf" }, "/p"),
+    ).toContain(hostPath("/p"));
     expect(writeTargets("Bash", { command: "sed -n '1p' /a/b.md" })).toEqual([]);
     expect(
       writeTargets("Bash", { command: "sed --version; cat /a/b.md" }),
