@@ -411,9 +411,10 @@ H2 headings. `linter` and `type-check` run against matching generated code,
 and `traceability` verifies the per-Unit coverage table and every `OK` target.
 
 `upstream-coverage` is intentionally NOT imported because the stage consumes a
-broad, scope-dependent design set. The `required-sections` floor does not
-apply to structured `source-manifest.json` or `traceability.json`; the engine
-and `traceability` sensor own those files respectively.
+broad, scope-dependent design set. `source-manifest.json` is
+engine-validated against its strict schema and source binding, while
+`traceability.json` is owned by the `traceability` sensor; neither structured
+file is subject to the `required-sections` floor.
 
 ## Learn
 
