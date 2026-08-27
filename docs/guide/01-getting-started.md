@@ -32,24 +32,46 @@ command -v bun    >/dev/null && echo "✓ bun installed"          || echo "✗ I
 
 ## AWS Bedrock Setup
 
-This implementation ships configured for **AWS Bedrock**. The shipped `.claude/settings.json` sets:
+The Claude Code distribution ships configured for **AWS Bedrock**. The shipped `.claude/settings.json` sets:
 
-### Why Bedrock is the shipped default
+### Why Claude Code ships with Bedrock by default
 
-The Claude distribution needs a predictable runtime baseline across the
-orchestrator and its tier-pinned subagents. Bedrock lets the distribution name
-exact global inference profiles and their context variants, so a workflow does
-not silently pick different model aliases or context windows on different
-machines. It also uses the standard AWS SDK credential chain and IAM controls,
-which lets teams manage access without committing provider keys to a project.
-The repository's live Claude test environment uses the same provider baseline.
+This rationale is specific to the Claude Code distribution. Provider setup is
+harness-specific: [Codex also defaults to Bedrock](harnesses/codex-cli.md#prerequisites),
+while [opencode takes its session model from global configuration but pins its
+tiered personas to a Bedrock model](harnesses/opencode.md#prerequisites).
+
+The Claude Code distribution needs a predictable runtime baseline across the
+orchestrator and its tier-pinned subagents. Bedrock lets the distribution pin
+exact global inference-profile IDs. Claude Code separately interprets model
+context selectors such as `[1m]` and strips them before sending the model ID to
+Bedrock. Together, those pins prevent a workflow from silently selecting
+different model aliases or context windows on different machines. Bedrock also
+uses the standard AWS SDK credential chain and IAM controls, which lets teams
+manage access without committing provider keys to a project. The repository's
+live Claude test environment uses the same provider and model/context baseline.
 
 This is a distribution default, not an AI-DLC methodology requirement. AI-DLC
 does not call the Bedrock API directly. To use the direct Anthropic API or
-another Claude Code-supported setup, remove the Bedrock-specific environment
-and model pins from the installed `.claude/settings.json`, then configure Claude
-Code normally. The workflow contract is unchanged; the selected models still
-need enough context for the orchestrator and delegated agents.
+another Claude Code-supported provider:
+
+1. In the installed `.claude/settings.json`, remove or replace
+   `env.CLAUDE_CODE_USE_BEDROCK`, `env.AWS_REGION`,
+   `env.ANTHROPIC_DEFAULT_FABLE_MODEL`,
+   `env.ANTHROPIC_DEFAULT_OPUS_MODEL`,
+   `env.ANTHROPIC_DEFAULT_SONNET_MODEL`,
+   `env.ANTHROPIC_DEFAULT_HAIKU_MODEL`, and the top-level `model`.
+2. Check `.claude/settings.local.json` and remove or replace any corresponding
+   overrides there. Local settings take precedence over the shared
+   `.claude/settings.json`.
+3. Run `claude` and select the target provider at the login prompt. If Claude
+   Code is already authenticated, run `/login` first. Complete the provider's
+   authentication flow as described in the
+   [Claude Code authentication guide](https://code.claude.com/docs/en/authentication).
+
+The AI-DLC stage protocol is provider-independent, but the repository ships and
+tests the Bedrock model/context baseline documented below. Alternate models
+still need enough context for the orchestrator and delegated agents.
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
