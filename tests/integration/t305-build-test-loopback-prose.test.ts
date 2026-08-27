@@ -262,9 +262,10 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(STAGE).toContain(modulePath);
     expect(CODE_GENERATION).toContain(modulePath);
     expect(RECOVERY).toContain(modulePath);
-    expect(STAGE).not.toContain("stage-protocol.md §1");
-    expect(CODE_GENERATION).not.toContain("stage-protocol.md §1");
-    expect(RECOVERY).not.toContain("stage-protocol.md\n§1");
+    const retiredMainProtocolReference = /stage-protocol\.md\s+§1(?!\d)/;
+    expect(STAGE).not.toMatch(retiredMainProtocolReference);
+    expect(CODE_GENERATION).not.toMatch(retiredMainProtocolReference);
+    expect(RECOVERY).not.toMatch(retiredMainProtocolReference);
   });
 
   test("replay ends with Modify at build-and-test's own re-use prompt + fresh Step 9", () => {
