@@ -61,6 +61,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
+  seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
@@ -144,6 +145,7 @@ function scratchProject(withState: boolean): string {
     join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
   );
   seedShell(dir);
+  seedAidlcMemory(dir);
   if (withState) {
     // State fixture into the default record so the active-intent cursor resolves.
     writeFileSync(

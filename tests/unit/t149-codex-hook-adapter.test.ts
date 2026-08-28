@@ -65,6 +65,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
+  seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
@@ -143,6 +144,7 @@ function scratchProject(withState: boolean): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "t149-")));
   cpSync(CODEX_TREE, join(dir, ".codex"), { recursive: true });
   seedShell(dir);
+  seedAidlcMemory(dir);
   if (withState) {
     writeFileSync(
       seededStateFile(dir),
