@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into

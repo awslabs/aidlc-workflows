@@ -67,6 +67,7 @@ function freshInstalledProject(): string {
     join(root, ".aidlc"),
     { recursive: true },
   );
+  seedAidlcMemory(root);
   return root;
 }
 

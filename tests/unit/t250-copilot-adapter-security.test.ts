@@ -106,6 +106,7 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
 // surface here, so the stubs are inert (state file absent → no append).
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\n`;
 const LIB_TOOL_STUB = `import { join } from "node:path";
+export const ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES = 2000;
 export function stateFilePath(projectDir: string): string {
   return join(projectDir, ".aidlc-state-absent.json");
 }

@@ -51,6 +51,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
+  seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
@@ -109,6 +110,7 @@ function scratchProject(withState: boolean): string {
   const dir = mkdtempSync(join(tmpdir(), "t147-"));
   cpSync(KIRO_TREE, join(dir, ".kiro"), { recursive: true });
   seedShell(dir);
+  seedAidlcMemory(dir);
   if (withState) {
     // State fixture into the default record so the active-intent cursor resolves.
     writeFileSync(
