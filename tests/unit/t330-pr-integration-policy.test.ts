@@ -18,6 +18,16 @@ import {
   stackingEligibility,
   type PullSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-pr.ts";
+
+type DetectionView = {
+  protection: {
+    tier?: string;
+    classicDetail?: string;
+    rulesetLayers?: number;
+    effective?: Record<string, unknown>;
+  };
+  merge: { methods?: string[] };
+};
 import { CLI_PROTECTED_EVENT_TYPES } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readIntegrationMode } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import {
@@ -182,7 +192,7 @@ describe("t330-pr-integration-policy", () => {
           required_status_checks: [{ context: "ruleset-ci" }],
         } },
       ],
-    }) as any;
+    }) as DetectionView;
     expect(result.protection.effective).toEqual({
       requiredApprovals: 2,
       dismissStaleReviews: true,
@@ -198,7 +208,7 @@ describe("t330-pr-integration-policy", () => {
       repository: { viewerPermission: "READ" },
       branchInfo: { protected: true },
       rules: [],
-    }) as any;
+    }) as DetectionView;
     expect(hidden.protection.tier).toBe("protected-details-unknown");
     expect(hidden.protection.classicDetail).toBe("unknown-below-admin");
 
@@ -207,7 +217,7 @@ describe("t330-pr-integration-policy", () => {
       repository: { viewerPermission: "ADMIN" },
       branchInfo: { protected: false },
       protectionUnavailable: true,
-    }) as any;
+    }) as DetectionView;
     expect(absent.protection.tier).toBe("absent-protection");
   });
 
@@ -221,7 +231,7 @@ describe("t330-pr-integration-policy", () => {
         parameters: { required_approving_review_count: 0 },
       }],
       classicProtection: null,
-    }) as any;
+    }) as DetectionView;
     expect(hidden.protection.tier).toBe("protected-details-unknown");
     expect(hidden.protection.classicDetail).toBe("unknown-below-admin");
     expect(hidden.protection.rulesetLayers).toBe(1);

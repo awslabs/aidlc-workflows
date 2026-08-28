@@ -176,11 +176,20 @@ function snapshot(unit: string, number: number): PullSnapshot {
   };
 }
 
-function next(proj: string): Record<string, any> {
+type IntegratingRow = { unit: string; prs: { url: string }[] };
+type NextDirective = {
+  kind: string;
+  stage?: string;
+  unit?: string;
+  gate?: boolean;
+  integrating_units: IntegratingRow[];
+};
+
+function next(proj: string): NextDirective {
   const result = runOrchestrateNext(ORCH, proj, [], { env: process.env });
   expect(result.status, result.out).toBe(0);
   expect(result.directive).not.toBeNull();
-  return result.directive as Record<string, any>;
+  return result.directive as unknown as NextDirective;
 }
 
 describe("t328-pr-integration-routing", () => {
@@ -241,7 +250,7 @@ describe("t328-pr-integration-routing", () => {
     const directive = next(proj);
     expect(directive.kind).toBe("awaiting-integration");
     expect(directive.stage).toBe("pr-integration");
-    expect(directive.integrating_units.map((row: any) => row.unit))
+    expect(directive.integrating_units.map((row) => row.unit))
       .toEqual(["alpha", "beta"]);
     expect(directive.integrating_units[0].prs[0].url)
       .toBe("https://github.com/example/service/pull/1");
