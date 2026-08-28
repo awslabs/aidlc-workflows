@@ -29,9 +29,11 @@ After Code Generation, PR Integration:
 
 1. Builds `pr-record.md` from the team's PR template and every artifact in the
    stage's live `consumes` list.
-2. Shows the exact branch push and PR commands before any outward write.
+2. Persists the fully rendered PR body and shows its digest plus the exact
+   branch push and PR commands before any outward write.
 3. Pushes and opens the PR only after the applicable publication gate.
-4. Reads the branch, PR body, base/head, coordination links, and human review
+4. Publishes those exact persisted body bytes, then reads the branch, PR body,
+   base/head, coordination marker, and human review
    requests back before recording success.
 5. Marks the Unit integrating and routes the next eligible Unit.
 
@@ -88,6 +90,11 @@ AI-DLC verifies GitHub's terminal merged state before it:
 - consolidates existing Bolt metadata;
 - retires the worktree with reason `integrated-via-pr`.
 
+The stage invokes finalization with `--execute` so an existing worktree is
+retired. A manual finalize without `--execute` still records verified merge
+and Unit completion locally, but preserves the worktree and reports
+`cleanup_pending`.
+
 A closed unmerged PR halts for a decision: reopen it, create a replacement, or
 abandon the Bolt explicitly.
 
@@ -98,6 +105,8 @@ repository does not delete branches automatically on merge. Children are
 retargeted before parent-branch deletion. Recovery for a closed child is:
 restore the parent ref at its old SHA, reopen the child, retarget it, then
 remove the restored ref.
+The detected delete-on-merge value must be supplied explicitly for a stacked
+open; unknown is refused.
 
 A Unit spanning repositories gets one coordinated PR per repository. The
 `AIDLC-Coordinated:` marker is authoritative. The Unit completes only when all
@@ -111,6 +120,10 @@ Every GitHub call has a ten-second bound. A sweep starts with one connectivity
 probe; if GitHub is unreachable, it stops immediately and shows the last-known
 audit state with its age. Hooks and ordinary `next` routing never use the
 network.
+
+Do not set `Integration Mode` back to absent while Units are integrating. The
+state tool refuses that transition until those Units are finalized or
+explicitly abandoned.
 
 ## Related
 

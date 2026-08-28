@@ -83,6 +83,13 @@ automatically. Never replace that enumeration with a hardcoded evidence
 section list. Record each present artifact's resolved path and digest, and mark
 an optional absent artifact as absent without inventing content.
 
+Write every detected template body to a local record file before the dry-run
+and pass it as `--template-file <owner/repo>=<path>` (a single shared template
+may use plain `--template-file <path>`). The dry-run persists the fully rendered
+body and its digest. That persisted body is the publication authority: do not
+edit it after the operator gate, and do not discover or recompose a different
+body during `--execute`.
+
 For a multi-repository Unit, compose one repository row per PR and include the
 authoritative `AIDLC-Coordinated:` marker. State the target branch, branch
 name, merge strategy, standing human reviewers, stacking decision, and every
@@ -101,7 +108,8 @@ commands from:
 ```bash
 bun .claude/tools/aidlc-pr.ts open \
   --stage pr-integration --unit <unit> --slug <bolt-slug> \
-  --repo <owner/repo> [--repo <owner/sibling>] [resolved flags]
+  --repo <owner/repo> [--repo <owner/sibling>] \
+  [--template-file <owner/repo>=<record-path>] [resolved flags]
 ```
 
 The initial push plus PR creation may use an already-affirmed autonomous
@@ -115,7 +123,8 @@ halts this Unit without opening a PR.
 #### Compartment: Published PRs
 
 After the Step 3 gate is satisfied, rerun the exact command with `--execute`.
-The tool must verify the remote branch, PR head/base/body, coordination links,
+The tool reads the persisted dry-run body bytes and must verify the remote
+branch, PR head/base/body, coordination marker,
 and requested human reviewers by reading them back before it emits
 `PR_OPENED` and `UNIT_INTEGRATING`.
 
@@ -169,6 +178,9 @@ verified merged.
   abandonment.
 - Stacked children must be retargeted before any parent-branch deletion. Use
   the surfaced restore-ref, reopen, retarget recovery when a child was closed.
+- A stacked open must pass the detected
+  `--delete-branch-on-merge true|false` value. Unknown is a refusal, never a
+  safe default.
 
 ### Step 8: Finalize the Unit
 
@@ -179,13 +191,17 @@ After Step 7 reports every PR merged, run:
 ```bash
 bun .claude/tools/aidlc-pr.ts finalize \
   --stage pr-integration --unit <unit> --slug <bolt-slug> \
-  --pr <owner/repo#number> [--pr <owner/sibling#number>] [resolved child flags]
+  --pr <owner/repo#number> [--pr <owner/sibling#number>] \
+  [resolved child flags] --execute
 ```
 
 `finalize` re-verifies settlement, emits `PR_MERGED`, commits the terminal
 Unit completion receipt, delegates existing Bolt metadata consolidation, and
 retires the worktree with reason `integrated-via-pr`. A failed finalization is
 not completion; preserve the worktree and retry the failed deterministic step.
+Without `--execute`, verified merge receipts and Unit completion remain local
+and authoritative, but an existing worktree is preserved and reported as
+`cleanup_pending`.
 
 Re-run `next`. The stage gate remains unavailable until every Unit has a
 verified completion receipt.

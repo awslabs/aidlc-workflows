@@ -430,7 +430,9 @@ written, and the next verified completion receipt removes the condition.
 Absent or unrecognized Integration Mode values retain the pre-integration
 four-event lifecycle reducer and routing predicates. `/aidlc --status` shows
 the local snapshot; `/aidlc --status --refresh` performs the sanctioned bounded
-network read.
+network read. `aidlc-state.ts set-integration-mode absent` refuses while any
+current Unit is integrating, preventing the knob from hiding an open external
+settlement wait.
 
 ### PR integration
 

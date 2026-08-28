@@ -4,15 +4,17 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  approvedPublicationBody,
   composePrBody,
   evaluateCoordinatedPulls,
   evaluateDetection,
   evaluatePullSnapshot,
   foldReviewHistory,
   inferBranchPattern,
+  reviewersFromPractices,
   stackingEligibility,
   type PullSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-pr.ts";
@@ -22,6 +24,8 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  seedAidlcMemory,
+  seedStateFile,
 } from "../harness/fixtures.ts";
 
 const tempDirs: string[] = [];
@@ -133,6 +137,16 @@ describe("t330-pr-integration-policy", () => {
     expect(group.message).toContain(merged.url);
   });
 
+  test("closed-unmerged groups halt instead of waiting forever", () => {
+    const closed = evaluatePullSnapshot(open({
+      state: "CLOSED",
+      merged: false,
+    }));
+    const group = evaluateCoordinatedPulls([closed]);
+    expect(group.state).toBe("halt-and-ask");
+    expect(group.message).toContain("replacement PR");
+  });
+
   test("detection unions classic and ruleset policy", () => {
     const result = evaluateDetection({
       repo: "example/service",
@@ -197,6 +211,22 @@ describe("t330-pr-integration-policy", () => {
     expect(absent.protection.tier).toBe("absent-protection");
   });
 
+  test("non-admin classic detail stays unknown even with visible rulesets", () => {
+    const hidden = evaluateDetection({
+      repo: "example/service",
+      repository: { viewerPermission: "WRITE" },
+      branchInfo: { protected: true },
+      rules: [{
+        type: "pull_request",
+        parameters: { required_approving_review_count: 0 },
+      }],
+      classicProtection: null,
+    }) as any;
+    expect(hidden.protection.tier).toBe("protected-details-unknown");
+    expect(hidden.protection.classicDetail).toBe("unknown-below-admin");
+    expect(hidden.protection.rulesetLayers).toBe(1);
+  });
+
   test("stacking requires preserved ancestry and no automatic branch deletion", () => {
     expect(stackingEligibility({ strategy: "merge", deleteBranchOnMerge: false }).allowed)
       .toBe(true);
@@ -204,6 +234,8 @@ describe("t330-pr-integration-policy", () => {
       .toBe(false);
     expect(stackingEligibility({ strategy: "rebase", deleteBranchOnMerge: true }).allowed)
       .toBe(false);
+    expect(stackingEligibility({ strategy: "merge", deleteBranchOnMerge: null }))
+      .toMatchObject({ allowed: false, reason: expect.stringContaining("unknown") });
   });
 
   test("observed branch names seed ticketed and simple patterns", () => {
@@ -229,6 +261,50 @@ describe("t330-pr-integration-policy", () => {
       body.indexOf("### plugin-attestation"),
     );
     expect(body).toContain("AIDLC-Coordinated:");
+  });
+
+  test("execute publishes the exact persisted dry-run body", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    const path = join(proj, "approved-body.md");
+    writeFileSync(path, "approved bytes\n", "utf-8");
+    expect(approvedPublicationBody(path, "late recomposition\n", true))
+      .toBe("approved bytes\n");
+    expect(approvedPublicationBody(path, "preview bytes\n", false))
+      .toBe("preview bytes\n");
+  });
+
+  test("Standing reviewers none and blank parse as empty", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    seedStateFile(proj, "state-construction.md");
+    const projectMemory = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "project.md",
+    );
+    writeFileSync(
+      projectMemory,
+      "# Project\n\n## Way of Working\n\n- **Standing reviewers**: NoNe\n",
+      "utf-8",
+    );
+    expect(reviewersFromPractices(proj)).toEqual([]);
+    writeFileSync(
+      projectMemory,
+      "# Project\n\n## Way of Working\n\n- **Standing reviewers**:\n",
+      "utf-8",
+    );
+    expect(reviewersFromPractices(proj)).toEqual([]);
+    writeFileSync(
+      projectMemory,
+      "# Project\n\n## Way of Working\n\n- **Standing reviewers**: alice, @bob\n",
+      "utf-8",
+    );
+    expect(reviewersFromPractices(proj)).toEqual(["alice", "bob"]);
   });
 
   test("Integration Mode reader activates only exact pr", () => {
@@ -261,6 +337,33 @@ describe("t330-pr-integration-policy", () => {
     }
   });
 
+  test("receipt-emitting finalize refuses fixtures outside the test seam", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    const fixturePath = join(proj, "merged.json");
+    writeFileSync(fixturePath, JSON.stringify([open({ state: "MERGED" })]));
+    const env = { ...process.env };
+    delete env.AIDLC_TEST_PR_FIXTURES;
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(AIDLC_SRC, "tools", "aidlc-pr.ts"),
+        "finalize",
+        "--unit",
+        "alpha",
+        "--fixture",
+        fixturePath,
+        "--project-dir",
+        proj,
+      ],
+      { encoding: "utf-8", env },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "--fixture is test-only for receipt-emitting finalize",
+    );
+  });
+
   test("source bans latestReviews and verifies every outward write by read-back", () => {
     const source = readFileSync(join(AIDLC_SRC, "tools", "aidlc-pr.ts"), "utf-8");
     expect(source).not.toContain("latestReviews");
@@ -268,5 +371,11 @@ describe("t330-pr-integration-policy", () => {
     expect(source).toContain("verifyOpen(plan, snapshot, plan.body)");
     expect(source).toContain("Review request read-back verification failed");
     expect(source).toContain("Child retarget read-back failed");
+    expect(source).not.toContain("branchProtectionRules(first:100)");
+    const utility = readFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
+      "utf-8",
+    );
+    expect(utility).toContain("timeout: PR_STATUS_REFRESH_TIMEOUT_MS");
   });
 });

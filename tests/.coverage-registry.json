@@ -32,7 +32,7 @@
     },
     "coveredByClass": {
       "function": 299,
-      "audit": 50,
+      "audit": 51,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -376,8 +376,13 @@
       "unitClass": "audit",
       "unitId": "PR_MERGED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t329-pr-integration-finalize.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -8306,6 +8311,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t329-pr-integration-finalize.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t114-orchestrate-next.test.ts",
           "mechanism": "cli"
         },
@@ -9039,6 +9048,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t329-pr-integration-finalize.test.ts",
           "mechanism": "cli"
         },
         {

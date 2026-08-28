@@ -10,6 +10,10 @@ Construction can now integrate through evidence-backed GitHub pull requests with
 * Integrating Units no longer block later eligible Units or open the stage gate early. When all remaining work is external, `awaiting-integration` ends the turn without Park or a resume ritual.
 * `/aidlc --status` shows audit-known PR URLs, state, and age; `/aidlc --status --refresh` performs one bounded sweep and reports live verdicts or an offline last-known fallback.
 * Formal `CHANGES_REQUESTED` reviews open revision rounds; comments remain findings data, fix pushes always gate, and closed-unmerged or partially merged coordinated PRs halt with explicit recovery choices.
+* Verified finalize completes a `UNIT_INTEGRATING` Unit without reclaiming its checkpoint, preserves another active Unit's cache, and exposes the stage gate after the final merge.
+* Receipt-emitting fixture paths require the test-only `AIDLC_TEST_PR_FIXTURES=1` seam; production finalize and feedback receipts cannot be minted from a local fixture file.
+* PR publication persists the operator-reviewed body during dry-run and `--execute` publishes those exact bytes; detected templates are passed explicitly, `Standing reviewers: none` stays empty, and hidden classic protection remains unknown below admin.
+* Status refresh has a 60-second subprocess bound. Stacking refuses unknown delete-on-merge policy, worktree cleanup is `--execute`-gated and reported honestly, and PR mode cannot be disabled while Units are integrating.
 
 ## [2.6.123] - 2026-08-28
 

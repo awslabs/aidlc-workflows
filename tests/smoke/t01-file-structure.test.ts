@@ -269,7 +269,7 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
   // producer to 72, then the plan-approval guard to 73. Re-drive the
   // data the loops drove and pin its length, so the migrated suite cannot
   // silently shrink the structural surface the .sh enforced.
-  test("asserts EXACTLY 78 shipped paths (prior 74 + 4 conditional protocol modules) [.sh L9]", () => {
+  test("asserts EXACTLY 79 shipped paths [.sh L9]", () => {
     const paths: string[] = [
       at("skills", "aidlc", "SKILL.md"), // 1
       at("aidlc-common", "protocols", "stage-protocol.md"), // 2
@@ -292,7 +292,7 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
       at("CLAUDE.md"),
     ];
     expect(paths.length).toBe(79);
-    // Every one of the 78 must exist — the .sh's full TAP plan, re-proven as a
+    // Every one of the 79 must exist — the .sh's full TAP plan, re-proven as a
     // single set so the count and the existence checks cannot drift apart.
     for (const p of paths) {
       expect(existsSync(p)).toBe(true);

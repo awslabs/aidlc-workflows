@@ -899,6 +899,17 @@ Use `bun <harness-dir>/tools/<tool>.ts <subcommand>`, where `<harness-dir>` is
 `.claude` on Claude Code, `.kiro` on Kiro CLI and Kiro IDE, and `.codex` on
 Codex CLI.
 
+### `aidlc-state set-integration-mode` - select PR integration routing
+
+```bash
+bun <harness-dir>/tools/aidlc-state.ts set-integration-mode pr
+bun <harness-dir>/tools/aidlc-state.ts set-integration-mode absent
+```
+
+Only exact `pr` activates `UNIT_INTEGRATING` routing. `absent` restores the
+legacy direct path, but the tool refuses that change while any Unit is still
+integrating; finalize or explicitly abandon those Units first.
+
 ### `aidlc-utility codekb-path` - resolve the code knowledge directory
 
 This is a **direct utility invocation**, not an `/aidlc codekb-path` command:

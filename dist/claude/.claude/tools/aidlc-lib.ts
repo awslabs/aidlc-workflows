@@ -20892,12 +20892,7 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       meta.skeleton = skeleton === "on";
     }
     const integration = scalarField(fm, "integration");
-    if (integration) {
-      if (integration !== "pr" && integration !== "direct") {
-        throw new Error(
-          `Scope file ${filePath} has invalid integration value "${integration}". Expected "pr" or "direct".`
-        );
-      }
+    if (integration === "pr" || integration === "direct") {
       meta.integration = integration;
     }
     if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;

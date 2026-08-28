@@ -26,11 +26,6 @@ import { buildMeta, renderMeta, type MetaCounts } from "./lib/bun-junit-to-meta.
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const BUN = process.execPath;
-// Bun defaults each test and lifecycle hook to 5 seconds. Under the supported
-// -P 8 profile, healthy subprocess-heavy files can exceed that while the host
-// is saturated. Keep a finite hang backstop without treating 5 seconds as a
-// performance budget.
-const BUN_TEST_TIMEOUT_MS = 30_000;
 
 // Platform null device, used for the system config after the protected
 // safe.directory entries have been copied into the suite's isolated config.
@@ -692,14 +687,7 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
 
   const run = await runSpawnCapture(
     BUN,
-    [
-      "test",
-      "--timeout",
-      String(BUN_TEST_TIMEOUT_MS),
-      file,
-      "--reporter=junit",
-      `--reporter-outfile=${junitXml}`,
-    ],
+    ["test", file, "--reporter=junit", `--reporter-outfile=${junitXml}`],
     env,
     debugPrefix,
   );

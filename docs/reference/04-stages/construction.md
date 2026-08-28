@@ -936,14 +936,19 @@ auto-merge; verified platform state settles the Unit.
 
 1. Resolve exact `Integration Mode: pr`, the scope integration default, and
    detected branch policy.
-2. Compose the team's PR template plus a collapsed evidence dossier by
-   enumerating the stage's live `consumes`.
-3. Present the outward publication gate, then run `aidlc-pr.ts open --execute`.
+2. Write each detected PR template to a local record file, compose the
+   collapsed evidence dossier by enumerating the stage's live `consumes`, and
+   persist the rendered body during the dry-run.
+3. Present the outward publication gate, then run `aidlc-pr.ts open --execute`;
+   execute publishes the exact persisted body bytes.
 4. Route other Units while the PR is open; terminal
    `awaiting-integration` ends a turn when nothing else is runnable.
 5. Open revision rounds only for formal `CHANGES_REQUESTED`; always gate a
    feedback-shaped fix push.
-6. Verify every coordinated PR merged, then run `aidlc-pr.ts finalize`.
+6. Verify every coordinated PR merged, then run
+   `aidlc-pr.ts finalize --execute`; execute retargets stacked children when
+   required and retires the worktree. Without execute, local completion is
+   authoritative but existing worktree cleanup remains pending.
 
 ### Outputs
 

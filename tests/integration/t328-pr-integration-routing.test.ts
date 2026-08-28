@@ -3,29 +3,41 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { latestMainWorkflowStageRunFloorForProject } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  emitOpenReceipts,
+  prIntegrationRunFloor,
+  type PullSnapshot,
+} from "../../dist/claude/.claude/tools/aidlc-pr.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
   runOrchestrateNext,
   seedBoltDag,
+  seedStateFile,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
+const DORMANT_GOLDEN = join(
+  import.meta.dir,
+  "..",
+  "fixtures",
+  "pr-integration-dormant-v2.json",
+);
 const projects: string[] = [];
 
 afterEach(() => {
   while (projects.length > 0) cleanupTestProject(projects.pop()!);
 });
 
-function state(mode?: string): string {
+function state(mode?: string, iteration?: "unit-major"): string {
   return `# AI-DLC State Tracking
 
 ## Project Information
@@ -44,6 +56,7 @@ function state(mode?: string): string {
 ## Runtime State
 - **Revision Count**: 0
 ${mode === undefined ? "" : `- **Integration Mode**: ${mode}\n`}
+${iteration === undefined ? "" : `- **Construction Iteration**: ${iteration}\n`}
 ## Phase Progress
 - **Initialization**: Verified
 - **Ideation**: Skipped
@@ -54,6 +67,10 @@ ${mode === undefined ? "" : `- **Integration Mode**: ${mode}\n`}
 ## Stage Progress
 
 ### CONSTRUCTION PHASE
+- [x] functional-design — EXECUTE
+- [x] nfr-requirements — EXECUTE
+- [x] nfr-design — EXECUTE
+- [x] infrastructure-design — EXECUTE
 - [x] code-generation — EXECUTE
 - [-] pr-integration — EXECUTE
 - [ ] build-and-test — EXECUTE
@@ -72,14 +89,43 @@ ${mode === undefined ? "" : `- **Integration Mode**: ${mode}\n`}
 `;
 }
 
-function project(mode?: string): string {
+function project(mode?: string, iteration?: "unit-major"): string {
   const proj = createOrchestrationTestProject();
   projects.push(proj);
-  writeFileSync(seededStateFile(proj), state(mode), "utf-8");
+  writeFileSync(seededStateFile(proj), state(mode, iteration), "utf-8");
   seedBoltDag(proj, ["alpha", "beta"], [["alpha", "beta"]]);
   appendAuditEntry("STAGE_STARTED", {
     Stage: "pr-integration",
     Agent: "aidlc-pipeline-deploy-agent",
+  }, proj);
+  return proj;
+}
+
+function legacyProject(): string {
+  const proj = createOrchestrationTestProject();
+  projects.push(proj);
+  seedStateFile(proj, "state-construction-bolt1.md");
+  seedBoltDag(proj, ["widget-cart"]);
+  appendAuditEntry("STAGE_STARTED", {
+    Stage: "functional-design",
+    Agent: "aidlc-architect-agent",
+  }, proj);
+  const floor = prIntegrationRunFloor(
+    proj,
+    "functional-design",
+    "widget-cart",
+  );
+  appendAuditEntry("UNIT_STARTED", {
+    Stage: "functional-design",
+    Unit: "widget-cart",
+    "Run floor": floor,
+  }, proj);
+  appendAuditEntry("UNIT_INTEGRATING", {
+    Stage: "functional-design",
+    Unit: "widget-cart",
+    "Run floor": floor,
+    Repos: "example/service",
+    "PR URLs": "https://github.com/example/service/pull/1",
   }, proj);
   return proj;
 }
@@ -94,12 +140,7 @@ function record(proj: string, unit: string): void {
 }
 
 function integrating(proj: string, unit: string, number: number): void {
-  const floor = latestMainWorkflowStageRunFloorForProject(
-    proj,
-    "pr-integration",
-    false,
-    unit,
-  );
+  const floor = prIntegrationRunFloor(proj, "pr-integration", unit);
   appendAuditEntry("UNIT_STARTED", {
     Stage: "pr-integration",
     Unit: unit,
@@ -124,6 +165,17 @@ function integrating(proj: string, unit: string, number: number): void {
   }, proj);
 }
 
+function snapshot(unit: string, number: number): PullSnapshot {
+  return {
+    repo: "example/service",
+    number,
+    url: `https://github.com/example/service/pull/${number}`,
+    state: "OPEN",
+    headRefName: `bolt-${unit}`,
+    baseRefName: "develop",
+  };
+}
+
 function next(proj: string): Record<string, any> {
   const result = runOrchestrateNext(ORCH, proj, [], { env: process.env });
   expect(result.status, result.out).toBe(0);
@@ -132,15 +184,26 @@ function next(proj: string): Record<string, any> {
 }
 
 describe("t328-pr-integration-routing", () => {
-  test("dormant knob values preserve identical legacy routing output", () => {
-    const absent = project();
-    const explicitAbsent = project("absent");
-    record(absent, "alpha");
-    record(explicitAbsent, "alpha");
-    integrating(absent, "alpha", 1);
-    integrating(explicitAbsent, "alpha", 1);
-    expect(next(absent)).toEqual(next(explicitAbsent));
-    expect(next(absent).unit).toBe("alpha");
+  test("knob-absent routing matches the normalized v2 directive sequence byte-for-byte", () => {
+    const proj = legacyProject();
+    const result = runOrchestrateNext(ORCH, proj, [], { env: process.env });
+    expect(result.status, result.out).toBe(0);
+    const normalize = (value: Record<string, unknown> | null) => {
+      const copy = structuredClone(value);
+      if (
+        copy !== null &&
+        typeof copy === "object" &&
+        "continue_token" in copy
+      ) {
+        copy.continue_token = "<opaque-token>";
+      }
+      return copy;
+    };
+    const actual = `${JSON.stringify([
+      ...result.steering.map(normalize),
+      normalize(result.directive),
+    ], null, 2)}\n`;
+    expect(actual).toBe(readFileSync(DORMANT_GOLDEN, "utf-8"));
   });
 
   test("integrating Unit is terminal to checkpoint and next Unit starts", () => {
@@ -152,6 +215,21 @@ describe("t328-pr-integration-routing", () => {
     expect(directive.stage).toBe("pr-integration");
     expect(directive.unit).toBe("beta");
     expect(directive.gate).toBe(false);
+  });
+
+  test("unit-major emitter stamps a visible integrating receipt and skips ahead", () => {
+    const proj = project("pr", "unit-major");
+    record(proj, "alpha");
+    emitOpenReceipts(
+      proj,
+      "pr-integration",
+      "alpha",
+      [snapshot("alpha", 11)],
+    );
+    const directive = next(proj);
+    expect(directive.kind).toBe("run-stage");
+    expect(directive.stage).toBe("pr-integration");
+    expect(directive.unit).toBe("beta");
   });
 
   test("all remaining integrating emits terminal shape and never opens gate", () => {
@@ -168,6 +246,21 @@ describe("t328-pr-integration-routing", () => {
     expect(directive.integrating_units[0].prs[0].url)
       .toBe("https://github.com/example/service/pull/1");
     expect(directive.gate).toBeUndefined();
+  });
+
+  test("PR mode cannot be disabled while a Unit is integrating", () => {
+    const proj = project("pr");
+    record(proj, "alpha");
+    integrating(proj, "alpha", 4);
+    const result = spawnSync(
+      process.execPath,
+      [STATE, "set-integration-mode", "absent", "--project-dir", proj],
+      { encoding: "utf-8", env: process.env },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Refusing to disable PR integration while Units are integrating",
+    );
   });
 
   test("status shows URL, last-known state, age, and refresh offer", () => {

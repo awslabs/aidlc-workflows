@@ -5,6 +5,8 @@
 // branch, create/update a PR, request human reviewers, or retarget a stacked
 // child are disabled unless --execute is present. Every gh call is bounded by
 // the external `timeout 10` wrapper because gh has no request-timeout setting.
+// Recorded fixtures are read-only by default. Receipt-emitting fixture paths
+// require AIDLC_TEST_PR_FIXTURES=1, which is reserved for deterministic tests.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -28,6 +30,7 @@ import {
   errorMessage,
   findAllEvents,
   getField,
+  isTeamUnitOwnership,
   latestMainWorkflowStageRunFloorForProject,
   loadStageGraphAll,
   readAllAuditShards,
@@ -172,7 +175,7 @@ export class GitHubOfflineError extends Error {
 function parseArgs(args: string[]): ParsedArgs {
   const positional: string[] = [];
   const flags = new Map<string, string[]>();
-  const booleanNames = new Set(["execute", "refresh", "emit-feedback"]);
+  const booleanNames = new Set(["execute", "emit-feedback"]);
   const booleans = new Set<string>();
   for (let index = 0; index < args.length; index++) {
     const value = args[index];
@@ -413,14 +416,16 @@ export function evaluateCoordinatedPulls(
       message: "All coordinated PRs are merged.",
     };
   }
-  if (merged.length > 0 && terminalProblem) {
+  if (terminalProblem) {
     return {
       state: "halt-and-ask",
       merged,
       outstanding,
       message:
-        `Integration is partially irreversible: already merged siblings: ${merged.join(", ")}; ` +
-        `blocked siblings: ${outstanding.join(", ")}. Reopen and revise, create a replacement PR, or abandon the remaining unit explicitly.`,
+        merged.length > 0
+          ? `Integration is partially irreversible: already merged siblings: ${merged.join(", ")}; ` +
+            `blocked siblings: ${outstanding.join(", ")}. Reopen and revise, create a replacement PR, or abandon the remaining unit explicitly.`
+          : `Integration cannot continue: ${outstanding.join(", ")}. Reopen and revise, create a replacement PR, or abandon the unit explicitly.`,
     };
   }
   if (merged.length > 0) {
@@ -441,7 +446,7 @@ export function evaluateCoordinatedPulls(
 
 export function stackingEligibility(input: {
   strategy: string;
-  deleteBranchOnMerge: boolean;
+  deleteBranchOnMerge: boolean | null;
 }): { allowed: boolean; reason: string | null; recovery: string } {
   const strategy = input.strategy.toLowerCase();
   if (strategy !== "merge" && strategy !== "rebase") {
@@ -450,6 +455,14 @@ export function stackingEligibility(input: {
       reason: `stacking requires ancestry-preserving merge or rebase; received ${input.strategy}`,
       recovery:
         "Wait for the parent to merge, then branch from the updated target. If a child already carries phantom parent commits, rebase --onto the merged target before review.",
+    };
+  }
+  if (input.deleteBranchOnMerge === null) {
+    return {
+      allowed: false,
+      reason: "stacking is disabled because deleteBranchOnMerge is unknown",
+      recovery:
+        "Run detection for the repository and pass the affirmed --delete-branch-on-merge true|false value before publishing a stacked child.",
     };
   }
   if (input.deleteBranchOnMerge) {
@@ -612,7 +625,6 @@ export function evaluateDetection(input: DetectionInput): Record<string, unknown
     : [];
   const detailUnknown =
     protectedFlag &&
-    pullRules.length === 0 &&
     classic === null &&
     permission !== "ADMIN";
   const tier = input.protectionUnavailable
@@ -716,7 +728,6 @@ function graphQlRepository(repo: string): Record<string, unknown> {
     defaultBranchRef{name} viewerPermission isPrivate
     autoMergeAllowed mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed deleteBranchOnMerge
     pullRequestTemplates{filename body}
-    branchProtectionRules(first:100){nodes{pattern requiredApprovingReviewCount dismissesStaleReviews requiresCodeOwnerReviews}}
   }}`;
   const value = ghJson([
     "api",
@@ -816,6 +827,35 @@ function detectLive(repo: string, branch?: string): Record<string, unknown> {
 
 function fixture(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf-8"));
+}
+
+function requireReceiptFixtureAuthority(
+  args: ParsedArgs,
+  operation: string,
+): void {
+  if (
+    one(args, "fixture") &&
+    process.env.AIDLC_TEST_PR_FIXTURES !== "1"
+  ) {
+    throw new Error(
+      `--fixture is test-only for receipt-emitting ${operation}; ` +
+        "set AIDLC_TEST_PR_FIXTURES=1 only in deterministic tests.",
+    );
+  }
+}
+
+export function prIntegrationRunFloor(
+  projectDir: string,
+  stage: string,
+  unit: string,
+): string {
+  const state = readStateFile(projectDir);
+  return latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    stage,
+    getField(state, "Construction Iteration")?.trim() === "unit-major",
+    isTeamUnitOwnership(state) ? unit : undefined,
+  );
 }
 
 function handleDetect(args: ParsedArgs): void {
@@ -939,12 +979,7 @@ function feedbackRows(
   unit: string,
   snapshots: readonly PullSnapshot[],
 ): AuditEntryInput[] {
-  const floor = latestMainWorkflowStageRunFloorForProject(
-    projectDir,
-    stage,
-    false,
-    unit,
-  );
+  const floor = prIntegrationRunFloor(projectDir, stage, unit);
   if (!floor) {
     throw new Error(`Cannot emit PR feedback without a current ${stage} run floor`);
   }
@@ -1058,11 +1093,19 @@ function sweepResult(
 
 function handleSweep(args: ParsedArgs, syncOnly = false): void {
   const projectDir = resolveProjectDir(one(args, "project-dir"));
+  const unit = one(args, "unit");
+  const emitsFeedback =
+    unit !== undefined && (syncOnly || args.booleans.has("emit-feedback"));
+  if (emitsFeedback) {
+    requireReceiptFixtureAuthority(
+      args,
+      syncOnly ? "sync-feedback" : "sweep --emit-feedback",
+    );
+  }
   try {
     const snapshots = pullSnapshots(args);
     let emitted = 0;
-    const unit = one(args, "unit");
-    if (unit && (syncOnly || args.booleans.has("emit-feedback"))) {
+    if (unit && emitsFeedback) {
       const rows = feedbackRows(
         projectDir,
         one(args, "stage") ?? DEFAULT_STAGE,
@@ -1117,10 +1160,15 @@ function branchName(
 }
 
 function humanReviewer(value: string): boolean {
-  return !/\[bot\]$|-bot$|^github-actions$/i.test(value.trim());
+  const reviewer = value.trim();
+  return (
+    reviewer.length > 0 &&
+    !/^none$/i.test(reviewer) &&
+    !/\[bot\]$|-bot$|^github-actions$/i.test(reviewer)
+  );
 }
 
-function reviewersFromPractices(projectDir: string): string[] {
+export function reviewersFromPractices(projectDir: string): string[] {
   let state = "";
   try {
     state = readStateFile(projectDir);
@@ -1262,6 +1310,25 @@ function repoPathMap(args: ParsedArgs): Map<string, string> {
   return out;
 }
 
+function templateFileMap(args: ParsedArgs): {
+  fallback: string | null;
+  perRepo: Map<string, string>;
+} {
+  let fallback: string | null = null;
+  const perRepo = new Map<string, string>();
+  for (const value of many(args, "template-file")) {
+    const separator = value.indexOf("=");
+    if (separator > 0 && value.slice(0, separator).includes("/")) {
+      const repo = value.slice(0, separator);
+      splitRepo(repo);
+      perRepo.set(repo, value.slice(separator + 1));
+    } else {
+      fallback = value;
+    }
+  }
+  return { fallback, perRepo };
+}
+
 function expectedRepoPath(
   projectDir: string,
   repo: string,
@@ -1287,10 +1354,24 @@ interface OpenPlan {
   base: string;
   head: string;
   title: string;
-  template: string;
   body: string;
   bodyFile: string;
   commands: string[];
+}
+
+export function approvedPublicationBody(
+  bodyFile: string,
+  renderedBody: string,
+  execute: boolean,
+): string {
+  if (!execute) return renderedBody;
+  if (!existsSync(bodyFile)) {
+    throw new Error(
+      `No approved dry-run body exists at ${bodyFile}. Run open without --execute, ` +
+        "review the rendered body, then rerun the exact command with --execute.",
+    );
+  }
+  return readFileSync(bodyFile, "utf-8");
 }
 
 function openPlans(args: ParsedArgs): {
@@ -1310,9 +1391,20 @@ function openPlans(args: ParsedArgs): {
   if (repos.length === 0) throw new Error("Supply at least one --repo owner/name");
   const parent = one(args, "parent-pr");
   if (parent) {
+    const deleteSetting = one(args, "delete-branch-on-merge");
+    if (
+      deleteSetting !== undefined &&
+      deleteSetting !== "true" &&
+      deleteSetting !== "false"
+    ) {
+      throw new Error(
+        `Invalid --delete-branch-on-merge "${deleteSetting}"; expected true or false.`,
+      );
+    }
     const eligibility = stackingEligibility({
       strategy: one(args, "strategy") ?? "squash",
-      deleteBranchOnMerge: one(args, "delete-branch-on-merge") === "true",
+      deleteBranchOnMerge:
+        deleteSetting === undefined ? null : deleteSetting === "true",
     });
     if (!eligibility.allowed) {
       throw new Error(`${eligibility.reason}. ${eligibility.recovery}`);
@@ -1325,10 +1417,7 @@ function openPlans(args: ParsedArgs): {
     one(args, "ticket"),
   );
   const title = one(args, "title") ?? `${unit}: integrate via PR`;
-  const explicitTemplate = one(args, "template-file");
-  const suppliedTemplate = explicitTemplate
-    ? readFileSync(explicitTemplate, "utf-8")
-    : null;
+  const templateFiles = templateFileMap(args);
   const evidence = evidenceEntries(projectDir, stage, unit);
   const marker = repos.length > 1
     ? `AIDLC-Coordinated: bolt=${slug} repos=${repos.map((repo) => splitRepo(repo)[1]).join(",")}`
@@ -1345,20 +1434,12 @@ function openPlans(args: ParsedArgs): {
   const plans = repos.map((repo, index) => {
     splitRepo(repo);
     const base = baseValues[index] ?? baseValues[0] ?? "main";
-    const repository = suppliedTemplate === null && args.booleans.has("execute")
-      ? graphQlRepository(repo)
+    const templatePath = templateFiles.perRepo.get(repo) ?? templateFiles.fallback;
+    const suppliedTemplate = templatePath
+      ? readFileSync(templatePath, "utf-8")
       : null;
-    const detectedTemplates = Array.isArray(repository?.pullRequestTemplates)
-      ? repository.pullRequestTemplates
-      : [];
-    const detectedBody =
-      detectedTemplates[0] &&
-      typeof detectedTemplates[0] === "object" &&
-      typeof (detectedTemplates[0] as { body?: unknown }).body === "string"
-        ? (detectedTemplates[0] as { body: string }).body
-        : null;
-    const template = suppliedTemplate ?? detectedBody ?? DEFAULT_TEMPLATE;
-    const body = composePrBody({
+    const template = suppliedTemplate ?? DEFAULT_TEMPLATE;
+    let body = composePrBody({
       template,
       title,
       unit,
@@ -1366,6 +1447,11 @@ function openPlans(args: ParsedArgs): {
       evidence,
     });
     const bodyFile = `${recordPath}.${splitRepo(repo)[1]}.body.md`;
+    body = approvedPublicationBody(
+      bodyFile,
+      body,
+      args.booleans.has("execute"),
+    );
     const repoPath = expectedRepoPath(projectDir, repo, mapping);
     const commands = [
       commandText("git", ["-C", repoPath, "push", "-u", "origin", head]),
@@ -1396,21 +1482,8 @@ function openPlans(args: ParsedArgs): {
             ]),
           ]
         : []),
-      ...(marker
-        ? [
-            commandText("gh", [
-              "pr",
-              "edit",
-              "<number>",
-              "-R",
-              repo,
-              "--body-file",
-              bodyFile,
-            ]),
-          ]
-        : []),
     ];
-    return { repo, repoPath, base, head, title, template, body, bodyFile, commands };
+    return { repo, repoPath, base, head, title, body, bodyFile, commands };
   });
   return { projectDir, stage, unit, slug, reviewers, marker, plans };
 }
@@ -1499,18 +1572,13 @@ function requestReviewers(
   return refreshed;
 }
 
-function emitOpenReceipts(
+export function emitOpenReceipts(
   projectDir: string,
   stage: string,
   unit: string,
   snapshots: readonly PullSnapshot[],
 ): void {
-  const floor = latestMainWorkflowStageRunFloorForProject(
-    projectDir,
-    stage,
-    false,
-    unit,
-  );
+  const floor = prIntegrationRunFloor(projectDir, stage, unit);
   if (!floor) throw new Error(`Cannot emit PR_OPENED without a current ${stage} run floor`);
   const attempt = claimAttemptFields(projectDir, unit);
   const entries: AuditEntryInput[] = snapshots.map((snapshot) => ({
@@ -1590,6 +1658,10 @@ function writePrRecord(
 function handleOpen(args: ParsedArgs): void {
   const planned = openPlans(args);
   if (!args.booleans.has("execute")) {
+    for (const plan of planned.plans) {
+      mkdirSync(dirname(plan.bodyFile), { recursive: true });
+      writeFileSync(plan.bodyFile, plan.body, "utf-8");
+    }
     json({
       execute: false,
       dry_run: true,
@@ -1604,6 +1676,7 @@ function handleOpen(args: ParsedArgs): void {
         head: plan.head,
         body_file: plan.bodyFile,
         body: plan.body,
+        body_sha256: createHash("sha256").update(plan.body).digest("hex"),
         commands: plan.commands,
       })),
     });
@@ -1630,39 +1703,6 @@ function handleOpen(args: ParsedArgs): void {
       verifyOpen(plan, snapshot, plan.body);
       snapshot = requestReviewers(snapshot, planned.reviewers);
       snapshots.push(snapshot);
-    }
-
-    if (snapshots.length > 1) {
-      for (let index = 0; index < snapshots.length; index++) {
-        const snapshot = snapshots[index];
-        const plan = planned.plans[index];
-        const siblingUrls = snapshots
-          .filter((value) => value.url !== snapshot.url)
-          .map((value) => value.url);
-        const finalBody = composePrBody({
-          template: plan.template,
-          title: plan.title,
-          unit: planned.unit,
-          marker: planned.marker,
-          siblingUrls,
-          evidence: evidenceEntries(planned.projectDir, planned.stage, planned.unit),
-        });
-        const bodyFile = join(temp, `${splitRepo(plan.repo)[1]}-coordinated.md`);
-        writeFileSync(bodyFile, finalBody, "utf-8");
-        const edited = runGh([
-          "pr",
-          "edit",
-          String(snapshot.number),
-          "-R",
-          snapshot.repo,
-          "--body-file",
-          bodyFile,
-        ]);
-        if (!edited.ok) throw new Error(edited.stderr.trim() || "PR body update failed");
-        const refreshed = fetchPull(snapshot.repo, snapshot.number);
-        verifyOpen(plan, refreshed, finalBody);
-        snapshots[index] = refreshed;
-      }
     }
 
     const record = writePrRecord(planned.projectDir, planned.unit, snapshots);
@@ -1719,18 +1759,22 @@ function runSibling(
 
 function latestBoltStart(
   projectDir: string,
-  slug: string,
+  slug: string | null,
   unit: string,
-): { name: string; batch: string } | null {
+): { slug: string; name: string; batch: string } | null {
   const rows = findAllEvents(readAllAuditShards(projectDir), "BOLT_STARTED")
     .filter((row) => {
       const recordedSlug = auditBlockField(row.block, "Bolt slug");
       const names = auditBlockField(row.block, "Bolt names") ?? "";
-      return recordedSlug === slug || names.split(",").map((name) => name.trim()).includes(unit);
+      return (
+        (slug !== null && recordedSlug === slug) ||
+        names.split(",").map((name) => name.trim()).includes(unit)
+      );
     });
   const row = rows.at(-1);
   if (!row) return null;
   return {
+    slug: auditBlockField(row.block, "Bolt slug") ?? slugify(unit),
     name: auditBlockField(row.block, "Bolt names") ?? unit,
     batch: auditBlockField(row.block, "Batch number") ?? "1",
   };
@@ -1774,6 +1818,7 @@ function handleFinalize(args: ParsedArgs): void {
   const projectDir = resolveProjectDir(one(args, "project-dir"));
   const stage = one(args, "stage") ?? DEFAULT_STAGE;
   const unit = required(args, "unit");
+  requireReceiptFixtureAuthority(args, "finalize");
   let snapshots: PullSnapshot[];
   try {
     snapshots = pullSnapshots(args);
@@ -1809,12 +1854,7 @@ function handleFinalize(args: ParsedArgs): void {
     });
     return;
   }
-  const floor = latestMainWorkflowStageRunFloorForProject(
-    projectDir,
-    stage,
-    false,
-    unit,
-  );
+  const floor = prIntegrationRunFloor(projectDir, stage, unit);
   if (!floor) throw new Error(`Cannot finalize without a current ${stage} run floor`);
   const attempt = claimAttemptFields(projectDir, unit);
   const mergeRows = snapshots
@@ -1840,8 +1880,15 @@ function handleFinalize(args: ParsedArgs): void {
     }));
   if (mergeRows.length > 0) appendAuditEntries(mergeRows, projectDir);
 
-  const slug = slugify(one(args, "slug") ?? unit);
-  const bolt = latestBoltStart(projectDir, slug, unit);
+  const requestedSlug = one(args, "slug");
+  const bolt = latestBoltStart(
+    projectDir,
+    requestedSlug ? slugify(requestedSlug) : null,
+    unit,
+  );
+  const slug = requestedSlug
+    ? slugify(requestedSlug)
+    : bolt?.slug ?? slugify(unit);
   runSibling(projectDir, "aidlc-state.ts", [
     "unit",
     "complete",
@@ -1850,6 +1897,7 @@ function handleFinalize(args: ParsedArgs): void {
     "--unit",
     unit,
   ]);
+  let metadataConsolidated = false;
   if (bolt && existsSync(worktreePath(projectDir, slug))) {
     runSibling(projectDir, "aidlc-bolt.ts", [
       "complete",
@@ -1861,8 +1909,10 @@ function handleFinalize(args: ParsedArgs): void {
       "--slug",
       slug,
     ]);
+    metadataConsolidated = true;
   }
-  if (existsSync(worktreePath(projectDir, slug))) {
+  const worktreePresentBefore = existsSync(worktreePath(projectDir, slug));
+  if (worktreePresentBefore && args.booleans.has("execute")) {
     runSibling(projectDir, "aidlc-worktree.ts", [
       "discard",
       "--slug",
@@ -1871,12 +1921,21 @@ function handleFinalize(args: ParsedArgs): void {
       "integrated-via-pr",
     ]);
   }
+  const worktreePresentAfter = existsSync(worktreePath(projectDir, slug));
   json({
     finalized: true,
     pulls: snapshots.map(evaluatePullSnapshot),
-    metadata_consolidated: bolt !== null,
+    metadata_consolidated: metadataConsolidated,
     unit_completed: true,
-    worktree_retired: !existsSync(worktreePath(projectDir, slug)),
+    worktree_retired: worktreePresentBefore && !worktreePresentAfter,
+    cleanup_pending: worktreePresentAfter,
+    ...(worktreePresentAfter
+      ? {
+          cleanup_command:
+            `bun ${fileURLToPath(new URL("./aidlc-worktree.ts", import.meta.url))} ` +
+            `discard --slug ${slug} --reason integrated-via-pr --project-dir ${projectDir}`,
+        }
+      : {}),
   });
 }
 

@@ -247,7 +247,9 @@ Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
 Practices Discovery is the only stage in AI-DLC that writes to both rows of
 the two-axis configuration model. It discovers a team's way of working,
 walking-skeleton stance, testing posture, deployment cadence, and code-style
-rules. Brownfield runs use repository and Reverse Engineering evidence;
+rules. The Way of Working result also records Integration mode, target branch,
+merge strategy, branch pattern, standing human reviewers, and whether pushes
+always require a gate. Brownfield runs use repository and Reverse Engineering evidence;
 greenfield runs seed the lead draft from active-space `org.md`. Both use the
 same subagent hub-and-spoke: pipeline-deploy lead draft, mutually blind
 quality/developer/devsecops contributions, human interview, then lead
@@ -310,7 +312,10 @@ On affirmation, content is promoted to:
 4. **Human Interview** -- Present structured questions after all three spokes
    return. Brownfield asks evidence gaps and policy judgments; greenfield asks
    all five practice areas with org defaults as suggestions. Re-runs pre-fill
-   prior affirmed statements. Log every question and exact answer.
+   prior affirmed statements. For integration, run per-repository PR-policy
+   detection and ask one confirmation question when detection succeeds;
+   protected-branch reality overrides a proposed direct path. Log every
+   question and exact answer.
 5. **Lead Integration** -- Dispatch the pipeline-deploy lead again with the
    draft, all three contribution paths, and the interview answers. The lead
    alone integrates the final artifacts and emits `PRACTICES_DISCOVERED`.
@@ -328,11 +333,13 @@ On affirmation, content is promoted to:
    leaves the stage `[?]` with the gate open, and does not report approval.
 8. **Verify Receipt, Then Report** -- Successful promotion atomically records
    `Practices Affirmed Timestamp` and the matching `PRACTICES_AFFIRMED` audit
-   receipt. Then call
+   receipt. Set Runtime State with
+   `aidlc-state.ts set-integration-mode pr|absent`, recompose PR Integration
+   into or out of the pending plan, and only then call
    `aidlc-orchestrate.ts report --stage practices-discovery --result
    approved --user-input "Approve"`. The engine verifies all three
    contribution files and the current-attempt receipt before completing and
-   routing.
+   routing. Disabling PR mode is refused while any Unit is integrating.
 
 ### Approval Gate
 

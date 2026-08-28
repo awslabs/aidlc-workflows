@@ -1489,6 +1489,8 @@ interface IntegrationStatusRow {
   ageMs: number;
 }
 
+const PR_STATUS_REFRESH_TIMEOUT_MS = 60_000;
+
 function integrationStatusSection(
   projectDir: string,
   content: string,
@@ -1570,6 +1572,7 @@ function integrationStatusSection(
         cwd: projectDir,
         encoding: "utf-8",
         env: process.env,
+        timeout: PR_STATUS_REFRESH_TIMEOUT_MS,
       },
     );
     if ((refreshed.status ?? 1) === 0) {
@@ -1609,8 +1612,13 @@ function integrationStatusSection(
         refreshNote = `Refresh:        invalid sweep response (${errorMessage(error)}); showing audit-known state`;
       }
     } else {
+      const failure =
+        refreshed.error?.message ||
+        refreshed.stderr ||
+        refreshed.stdout ||
+        `exit ${refreshed.status ?? 1}`;
       refreshNote =
-        `Refresh:        failed (${(refreshed.stderr || refreshed.stdout || `exit ${refreshed.status ?? 1}`).trim()}); ` +
+        `Refresh:        failed (${failure.trim()}); ` +
         "showing audit-known state";
     }
   }
@@ -1630,7 +1638,7 @@ function integrationStatusSection(
       ].join("\n");
     })
     .join("\n");
-  return `\nIntegrating Units:\n${rendered}\n${refreshNote}\n`;
+  return `Integrating Units:\n${rendered}\n${refreshNote}`;
 }
 
 function handleStatus(projectDir: string, flags: Record<string, string>): void {
@@ -1820,12 +1828,14 @@ To get started:
   }
 
   let integrationOutput = "";
-  try {
-    integrationOutput = integrationStatusSection(projectDir, content, flags);
-  } catch (error) {
-    integrationOutput =
-      `\nIntegrating Units: unavailable (${errorMessage(error)})\n` +
-      "Refresh:        /aidlc --status --refresh\n";
+  if (getField(content, "Integration Mode")?.trim() === "pr") {
+    try {
+      integrationOutput = integrationStatusSection(projectDir, content, flags);
+    } catch (error) {
+      integrationOutput =
+        `Integrating Units: unavailable (${errorMessage(error)})\n` +
+        "Refresh:        /aidlc --status --refresh";
+    }
   }
 
   const output = `AI-DLC Workflow Status
@@ -1840,8 +1850,7 @@ Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` — ${sk
 
 Phase Progress:
 ${phaseProgress}
-${integrationOutput}
-${validityOutput}
+${integrationOutput ? `${integrationOutput}\n` : ""}${validityOutput}
 Last Completed: ${lastCompleted}
 Next Stage:     ${nextStage}
 `;

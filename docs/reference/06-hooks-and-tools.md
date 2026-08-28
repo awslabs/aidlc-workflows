@@ -727,14 +727,18 @@ The tool never merges a PR and never enables auto-merge.
 | Verb | Behavior |
 |------|----------|
 | `detect --repo <owner/name> [--branch <name>]` | Reads effective rules, the branch protected bit, merge settings, PR templates, and CODEOWNERS. `--fixture <json>` evaluates a recorded response without network access. |
-| `open --unit <unit> --repo <owner/name>...` | Dry-run by default: prints the branch push, PR create, reviewer, and coordination-body commands. `--execute` performs them and verifies every write by reading it back before emitting `PR_OPENED` and `UNIT_INTEGRATING`. |
+| `open --unit <unit> --repo <owner/name>...` | Dry-run by default: persists the rendered body and prints its digest plus the branch push, PR create, and reviewer commands. Detected templates are passed with repeatable `--template-file <owner/repo>=<path>`. `--execute` publishes exactly the persisted bytes and verifies every write by reading it back before emitting `PR_OPENED` and `UNIT_INTEGRATING`. |
 | `sweep --pr <owner/name#number>...` | Opens with one connectivity probe, then folds full review history, timeline dismissals, stale approvals, mergeability, terminal state, and coordinated multi-repo settlement. `--emit-feedback` records newly observed feedback. |
 | `sync-feedback --pr <owner/name#number>... --unit <unit>` | Runs the sweep's feedback reader and emits only new `PR_FEEDBACK` rows. |
-| `finalize --pr <owner/name#number>... --unit <unit>` | Verifies every coordinated PR is merged, emits `PR_MERGED`, delegates existing Bolt metadata consolidation and `unit complete`, and retires the worktree with `--reason integrated-via-pr`. Stacked-child retarget writes require `--execute` and are read back before cleanup. |
+| `finalize --pr <owner/name#number>... --unit <unit>` | Verifies every coordinated PR is merged, emits `PR_MERGED`, delegates existing Bolt metadata consolidation and `unit complete`, and reports cleanup honestly. `--execute` is required for stacked-child retargets and worktree discard; without it, an existing worktree remains with `cleanup_pending`. |
 
-The PR body uses the repository's GraphQL-discovered template. Its collapsed
-evidence dossier enumerates the live `pr-integration` stage's `consumes`, so
-plugin-added consumes extend the body without a tool change.
+`detect` returns repository PR templates. The stage writes the selected body to
+a local template file before `open` so dry-run and execute use the same bytes.
+Its collapsed evidence dossier enumerates the live `pr-integration` stage's
+`consumes`, so plugin-added consumes extend the body without a tool change.
+`--fixture` remains available for read-only detection/sweep evaluation;
+receipt-emitting fixture paths require the test-only
+`AIDLC_TEST_PR_FIXTURES=1` seam.
 
 ---
 

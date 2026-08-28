@@ -7418,11 +7418,18 @@ function checkStageCompletionEvidence(
         };
       }
       if (pick !== null) {
+        const integrating = pick.uncovered.filter((unit) =>
+          ledger.integrating.has(unit)
+        );
         return {
           ok: false,
           message:
             `Cannot present "${slug}" for approval because ${pick.uncovered.length} of ` +
             `${units.length} work items are not complete (${pick.uncovered.join(", ")}). ` +
+            (integrating.length > 0
+              ? `${integrating.length} are awaiting verified PR merge receipts ` +
+                `(${integrating.join(", ")}). `
+              : "") +
             "Run `next` to finish the remaining work items, then try again.",
         };
       }
