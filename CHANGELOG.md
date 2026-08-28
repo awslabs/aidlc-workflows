@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.129] - 2026-08-28
+
+Stop-hook engine errors now surface their exact diagnostic once instead of being replaced by a generic forwarding-loop instruction, and each first delivery is recorded in the audit trail without making audit availability part of the stop decision. **Upgrade:** refresh your `dist/<harness>/` shell so the updated hook and Copilot directive transport are installed together.
+
+* The first distinct `error` directive for an intent, session, workflow-state digest, stage, and bounded message blocks once with the verbatim diagnostic; an identical repeat allows the stop, while changed state or message receives one new delivery.
+* Each first delivery appends `ERROR_LOGGED` with the stop-hook source, successful engine exit code, observer, and deterministic error fingerprint. Fingerprint or marker I/O fails open, and audit-write failure never changes the block-once decision.
+* Copilot active-directive evidence retains bounded error messages, unknown directive kinds fail open, and re-injected error diagnostics are excluded from conversational human-prompt detection.
+
 ## [2.6.122] - 2026-08-27
 
 Code Generation source-freshness receipts now bind supported non-Git and missing-Git workspaces without weakening per-Unit attribution or autonomous swarm Source Commits. **Upgrade:** refresh your `dist/<harness>/` shell. In-flight `workspace_requires` reviews from earlier versions must be reviewed once more before completion because the source identity format changed.

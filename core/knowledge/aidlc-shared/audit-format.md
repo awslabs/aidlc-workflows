@@ -211,7 +211,7 @@ would fill the ledger with non-changes and break reconstruction-from-the-ledger.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `ERROR_LOGGED` | Tool CLI exited non-zero via `error()` | Timestamp, Tool, Command, Error | `tools/aidlc-lib.ts emitError` (called by every tool's `error()` helper) |
+| `ERROR_LOGGED` | Tool CLI exited non-zero via `error()`, or the Stop hook first delivered a distinct engine error directive | Timestamp, Tool, Command, Error; optional Source, Exit Code, Observed By, Error Fingerprint | `tools/aidlc-lib.ts emitError` (called by every tool's `error()` helper) and `hooks/aidlc-continue-workflow.ts` |
 | `RECOVERY_COMPLETED` | User answered the compaction-awareness prompt | Timestamp, Choice, Current Stage | `tools/aidlc-state.ts acknowledge-compaction` |
 
 ### Construction Bolt Events (4 events)

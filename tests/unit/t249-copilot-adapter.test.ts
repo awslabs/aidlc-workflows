@@ -1347,6 +1347,69 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     ).toBe("");
   });
 
+  test("21aa: error output retains a bounded message for one Copilot Stop delivery", () => {
+    const dir = orchestrationProject();
+    const session = "error-directive-owner";
+    const attempt = "error-directive-attempt";
+    const spec = commandSpec(dir, "direct", ["next"]);
+    const rewritten = rewrittenCommand(runAdapter(
+      dir,
+      "guard-tool-call",
+      commandPayload(dir, session, spec.text, attempt),
+    ));
+    const message = "The selected workflow stage is unavailable.";
+    const post = runAdapter(
+      dir,
+      "post-tool",
+      commandPayload(
+        dir,
+        session,
+        rewritten,
+        attempt,
+        true,
+        JSON.stringify({ kind: "error", message }),
+      ),
+    );
+    expect(post.code).toBe(0);
+    expect(marker(dir)).toMatchObject({
+      kind: "error",
+      message,
+      delivery: "delivered",
+      active_attempt: { id: attempt, status: "settled" },
+    });
+    const first = runAdapter(dir, "continue-workflow", {
+      ...FIXTURES.stop,
+      cwd: dir,
+      session_id: session,
+    });
+    expect(
+      (JSON.parse(first.stdout) as { decision?: string }).decision,
+    ).toBe("block");
+    expect(first.stdout).toContain(message);
+    expect(runAdapter(dir, "continue-workflow", {
+      ...FIXTURES.stop,
+      cwd: dir,
+      session_id: session,
+    }).stdout).toBe("");
+
+    const oversized = orchestrationProject();
+    const oversizedSession = "oversized-error-owner";
+    driveToRunStage(oversized, oversizedSession);
+    rewriteMarker(oversized, (value) => {
+      value.kind = "error";
+      value.message = "x".repeat(2_001);
+      value.delivery = "delivered";
+      value.needs_rehydrate = false;
+    });
+    const recovered = runAdapter(oversized, "continue-workflow", {
+      ...FIXTURES.stop,
+      cwd: oversized,
+      session_id: oversizedSession,
+    });
+    expect(recovered.stdout).toContain("coordination evidence is missing or stale");
+    expect(recovered.stdout).not.toContain("x".repeat(100));
+  }, 30000);
+
   test.skipIf(COMPILED_BINARY === null)("21b: real compiled dispatcher normalizes next/continue and --resume shorthand", () => {
     const dir = orchestrationProject();
     const session = "real-compiled-owner";

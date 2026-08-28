@@ -203,9 +203,10 @@ future contributor additions from colliding with planned primitives.
 | `blocks_on` | Completion dependency without data read. Splits today's overloaded `requires_stage` (which conflates "I consume your output" with "I run after you") |
 | `timeout`, `retry` | Execution budgets. Homed in sensor bindings and loop config, not stage frontmatter (mirrors Claude Code's task-API design — no primitive-level retry/timeout) |
 
-Precedent for the reserved-namespace pattern:
-`docs/reference/06-hooks-and-tools.md` declares audit event names
-`ERROR_LOGGED` and `RECOVERY_COMPLETED` the same way.
+Precedent for the reserved-namespace pattern: the audit taxonomy in
+`docs/reference/06-hooks-and-tools.md` declares event names centrally before
+their owning tool or hook consumes them; `ERROR_LOGGED` and
+`RECOVERY_COMPLETED` are current owned examples.
 
 **Consumer contract for `mode`:** orchestrator code reading the `mode` field
 must handle `agent-team` explicitly. At minimum, throw "mode agent-team not

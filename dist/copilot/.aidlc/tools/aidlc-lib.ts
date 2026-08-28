@@ -4173,6 +4173,7 @@ export interface ActiveDirectiveMarker {
   code_generation_authority_revision?: number;
   cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
+  message?: string;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
   active_attempt?: ActiveDirectiveAttempt; resume?: ActiveDirectiveResume;
@@ -4182,6 +4183,7 @@ export interface ActiveDirectiveMarker {
 
 export interface CopilotDirectiveMetadata {
   kind: ActiveDirectiveKind; stage?: string; unit?: string;
+  message?: string;
   part?: number; parts?: number; continueToken?: string;
   resultSha256?: string;
 }
@@ -4211,6 +4213,7 @@ export type CopilotStopEvidence =
       stateSha256: string; tokenSha256: string; resumeStatus: string; resumeAction: string; ownerSession: string; ownerEpoch: number };
 
 const ACTIVE_DIRECTIVE_MAX_BYTES = 64 * 1024;
+export const ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES = 2_000;
 const ACTIVE_DIRECTIVE_LOCK = ".aidlc-active-directive.lock";
 
 export interface ActiveDirectiveTarget {
@@ -4663,6 +4666,10 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
       )) ||
     ("cursor_harness" in parsed &&
       (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
+    ("message" in parsed &&
+      (typeof parsed.message !== "string" ||
+        Buffer.byteLength(parsed.message, "utf-8") >
+          ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES)) ||
     typeof parsed.owner_session !== "string" || parsed.owner_session.length === 0 ||
     !integer(parsed.revision) || !integer(parsed.owner_epoch) || !integer(parsed.context_epoch) ||
     !integer(parsed.event_sequence) || !integer(parsed.human_sequence) || !integer(parsed.engine_sequence) ||
@@ -4885,6 +4892,7 @@ function crossActiveDirectiveBoundary(
   return { ...invalidateActiveDirectiveDelivery(marker), state_sha256: stateSha256,
     intent_uuid: intentUuid, state_present: statePresent,
     kind: "error",
+    message: undefined,
     part: undefined, parts: undefined, continue_token: undefined, continue_token_sha256: undefined,
     ...(supersedeResume && marker.resume ? { resume: { ...marker.resume, status: "superseded" } } : {}),
   };
@@ -4933,6 +4941,13 @@ export function writeActiveDirectiveMarker(
   }
   if (!/^[0-9a-f]{64}$/.test(marker.state_sha256)) {
     throw new Error("Invalid active-directive state digest");
+  }
+  if (
+    marker.message !== undefined &&
+    Buffer.byteLength(marker.message, "utf-8") >
+      ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES
+  ) {
+    throw new Error("Invalid active-directive message: too large");
   }
   if (
     invocation?.legacyPlanApprovalOffer !== undefined &&
@@ -5186,6 +5201,9 @@ export function writeActiveDirectiveMarker(
       state_sha256: marker.state_sha256,
       kind: marker.kind,
       stage: marker.stage,
+      ...(marker.message !== undefined
+        ? { message: marker.message }
+        : { message: undefined }),
       ...(codeGenerationSourceSha256
         ? { code_generation_source_sha256: codeGenerationSourceSha256 }
         : { code_generation_source_sha256: undefined }),
@@ -5604,6 +5622,9 @@ export function advanceContinuationCursor(
       state_sha256: successor.state_sha256,
       kind: successor.kind,
       stage: successor.stage,
+      ...(successor.message !== undefined
+        ? { message: successor.message }
+        : { message: undefined }),
       ...(codeGenerationSourceSha256
         ? { code_generation_source_sha256: codeGenerationSourceSha256 }
         : { code_generation_source_sha256: undefined }),
@@ -5663,6 +5684,7 @@ export function invalidateActiveDirectiveContext(
         ...invalidateActiveDirectiveDelivery(marker),
         context_epoch: (marker.context_epoch ?? 0) + 1,
         kind: "error",
+        message: undefined,
         part: undefined,
         parts: undefined,
         continue_token: undefined,
@@ -5877,7 +5899,7 @@ export function settleCopilotCommand(
         active_attempt: { ...attempt, status: "failed" },
       }, result: "settled" as const };
     }
-    const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked", "notice"].includes(directive.kind);
+    const retainedKind = ["load-steering", "run-stage", "ask", "error", "done", "parked", "notice"].includes(directive.kind);
     const enginePublished = (input.commandKind === "next" || input.commandKind === "continue") &&
       (directive.kind === "load-steering" || directive.kind === "run-stage");
     const resultBound = !enginePublished ||
@@ -5940,6 +5962,9 @@ export function settleCopilotCommand(
       state_sha256: context.stateSha256,
       kind: directive.kind,
       stage: directive.stage ?? marker.stage,
+      ...(directive.message !== undefined
+        ? { message: directive.message }
+        : { message: undefined }),
       ...(unit ? { unit } : { unit: undefined }),
       ...(directive.part ? { part: directive.part } : { part: undefined }),
       ...(directive.parts ? { parts: directive.parts } : { parts: undefined }),
@@ -6000,6 +6025,9 @@ export function copilotStopEvidence(
           ...(status === "directive" ? { directive: {
             kind: marker.kind,
             stage: marker.stage,
+            ...(marker.message !== undefined
+              ? { message: marker.message }
+              : {}),
             ...(marker.unit ? { unit: marker.unit } : {}),
             ...(marker.part ? { part: marker.part } : {}),
             ...(marker.parts ? { parts: marker.parts } : {}),

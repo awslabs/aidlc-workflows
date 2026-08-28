@@ -516,7 +516,7 @@ document's history across shards and make it unreconstructible.
 
 | Event | Emitter | Trigger |
 |---|---|---|
-| `ERROR_LOGGED` | `tools/aidlc-lib.ts` (via `emitError` from every tool's `error()`) | Any tool CLI that calls `error(msg)` to exit non-zero; best-effort — no-op if no workflow in cwd, guarded against recursion |
+| `ERROR_LOGGED` | `tools/aidlc-lib.ts` (via `emitError` from every tool's `error()`) and `hooks/aidlc-continue-workflow.ts` | Any tool CLI that calls `error(msg)` to exit non-zero, or the Stop hook's first delivery of a distinct engine error directive; both are best-effort and audit failure does not replace the caller's outcome |
 | `RECOVERY_COMPLETED` | `tools/aidlc-state.ts` | `acknowledge-compaction --choice <continue|review|restart>` called by the conductor after the user answers the compaction-awareness AskUserQuestion |
 
 ### Worktree
