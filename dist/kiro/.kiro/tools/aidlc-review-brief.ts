@@ -9,6 +9,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import {
   type AuditShardEvent,
+  attemptEventAfterFrontier,
+  attemptEventDefinitelyBefore,
   auditBlockField,
   extractMarkdownSection,
   findStageBySlug,
@@ -19,7 +21,9 @@ import {
   resolveProjectDir,
   type ReviewArtifactEntry,
   reviewArtifactEntries,
+  reviewInvalidationAttemptView,
   type ReviewFingerprintStage,
+  maximalAttemptEvents,
   toPosix,
 } from "./aidlc-lib.js";
 
@@ -542,31 +546,6 @@ function pathUnit(path: string, stageSlug: string): string | undefined {
   return match?.[2] === stageSlug ? match[1] : undefined;
 }
 
-function definitelyBefore(
-  first: Pick<AuditShardEvent, "timestamp" | "shard" | "pos">,
-  second: Pick<AuditShardEvent, "timestamp" | "shard" | "pos">,
-): boolean {
-  if (first.timestamp !== second.timestamp) {
-    return first.timestamp < second.timestamp;
-  }
-  return first.shard === second.shard && first.pos < second.pos;
-}
-
-function maximalEvents(events: AuditShardEvent[]): AuditShardEvent[] {
-  return events.filter((candidate, index) =>
-    !events.some((other, otherIndex) =>
-      otherIndex !== index && definitelyBefore(candidate, other)
-    )
-  );
-}
-
-function afterFrontier(
-  frontier: AuditShardEvent[],
-  event: AuditShardEvent,
-): boolean {
-  return frontier.every((boundary) => definitelyBefore(boundary, event));
-}
-
 function sourcePathDisplay(key: string): string | null {
   const separator = key.indexOf("\0");
   if (separator === -1 || key.indexOf("\0", separator + 1) !== -1) return null;
@@ -625,27 +604,13 @@ export function reviewInvalidationDetails(
   stage: ReviewFingerprintStage,
   contexts: ReviewArtifactContext[],
 ): ReviewInvalidationDetails {
-  const events = readAuditShardEvents(projectDir).sort((a, b) => {
-    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-    if (a.shard === b.shard) return a.pos - b.pos;
-    return a.shardIndex - b.shardIndex;
-  });
-
-  // Equal-second rows from different shards are causally unordered. Keep the
-  // maximal boundary frontier instead of resolving ties by shard filename.
-  const attemptFrontier = maximalEvents(
-    events.filter((event) =>
-      event.event === "WORKFLOW_STARTED" ||
-      event.event === "STAGE_JUMPED" ||
-      (
-        (event.event === "GATE_APPROVED" ||
-          event.event === "GATE_REJECTED") &&
-        auditBlockField(event.block, "Stage") === stage.slug
-      )
-    ),
+  const attemptView = reviewInvalidationAttemptView(
+    readAuditShardEvents(projectDir),
+    stage.slug,
   );
+  const { events, floor: attemptFrontier } = attemptView;
   const inAttempt = (event: AuditShardEvent): boolean =>
-    afterFrontier(attemptFrontier, event);
+    attemptEventAfterFrontier(attemptFrontier, event);
 
   const currentArtifacts = new Set(
     (reviewArtifactEntries(projectDir, stage) ?? []).map((entry) =>
@@ -676,8 +641,9 @@ export function reviewInvalidationDetails(
     for (const event of events) {
       if (
         !inAttempt(event) ||
-        !afterFrontier(reviewFrontier, event) ||
-        (before !== undefined && !definitelyBefore(event, before))
+        !attemptEventAfterFrontier(reviewFrontier, event) ||
+        (before !== undefined &&
+          !attemptEventDefinitelyBefore(event, before))
       ) {
         continue;
       }
@@ -730,13 +696,13 @@ export function reviewInvalidationDetails(
       continue;
     }
     const unit = auditBlockField(event.block, "Unit") ?? undefined;
-    const staleReviewFrontier = maximalEvents(
+    const staleReviewFrontier = maximalAttemptEvents(
       events.filter((candidate) =>
         inAttempt(candidate) &&
         candidate.event === "REVIEW_COMPLETED" &&
         auditBlockField(candidate.block, "Stage") === stage.slug &&
         (auditBlockField(candidate.block, "Unit") ?? undefined) === unit &&
-        definitelyBefore(candidate, event)
+        attemptEventDefinitelyBefore(candidate, event)
       ),
     );
     if (staleReviewFrontier.length === 0) continue;
@@ -797,7 +763,7 @@ export function reviewInvalidationDetails(
   }
   for (const [key, reviews] of reviewScopes) {
     collectArtifactChanges(
-      maximalEvents(reviews),
+      maximalAttemptEvents(reviews),
       undefined,
       key.length > 0 ? key : undefined,
     );
@@ -834,7 +800,7 @@ export function reviewInvalidationDetails(
       // Consume paths only when the gate is causally proven after the jump.
       // Equal-second cross-shard ties remain pending rather than hiding work
       // that may have been invalidated after that gate.
-      if (!definitelyBefore(boundary, event)) continue;
+      if (!attemptEventDefinitelyBefore(boundary, event)) continue;
       const consumedStageSlug = auditBlockField(event.block, "Stage");
       const consumedStage = consumedStageSlug
         ? findStageBySlug(consumedStageSlug)

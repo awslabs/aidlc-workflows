@@ -102,8 +102,6 @@ import {
   relativeRecordDir,
   reviewArtifactFingerprint,
   reviewArtifactBytesSnapshot,
-  reviewCompletionMatchesRequest,
-  reviewRequestBindingFromBlock,
   reviewedSourceRef,
   resolveAuditWorktreePath,
   resolveBoltDag,
@@ -112,7 +110,6 @@ import {
   resolveStage,
   sourceListingSha256,
   shapeSourceSnapshotIndex,
-  terminalReviewVerdict,
   sourceClaimCovers,
   sourceListingEntriesEqual,
   type SourceClaimModel,
@@ -126,6 +123,7 @@ import {
   workspaceSourceListing,
   workspaceSourceSnapshotPaths,
   worktreeStateFilePath,
+  worktreeReviewAttemptProjection,
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -397,49 +395,24 @@ function reviewerReceiptError(
     : auditBlockField(creationBlock, "Base Source Listing");
   const creationModern = creationBaseCommit !== null || creationBaseListing !== null;
 
-  const relevant = new Set([
-    "BOLT_STARTED",
-    "REVIEW_REQUESTED",
-    "REVIEW_COMPLETED",
-  ]);
-  const events = readAuditShardEvents(wt)
-    .filter((event) => relevant.has(event.event))
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      if (a.shard === b.shard) return a.pos - b.pos;
-      return a.shard < b.shard ? -1 : 1;
-    });
-  const crossShardTied = (index: number): boolean =>
-    events.some(
-      (candidate, other) =>
-        other !== index &&
-        candidate.timestamp === events[index].timestamp &&
-        candidate.shard !== events[index].shard,
-    );
-
-  let boltStart = -1;
-  for (let i = 0; i < events.length; i++) {
-    if (
-      events[i].event === "BOLT_STARTED" &&
-      auditBlockField(events[i].block, "Bolt slug") === boltSlug
-    ) {
-      if (crossShardTied(i)) {
-        let end = i;
-        while (end + 1 < events.length && events[end + 1].timestamp === events[i].timestamp) end++;
-        boltStart = end;
-        i = end;
-      } else {
-        boltStart = i;
-      }
-    }
-  }
-  if (boltStart === -1) {
+  const reviewAttempt = worktreeReviewAttemptProjection(
+    readAuditShardEvents(wt),
+    {
+      boltSlug,
+      unit,
+      stage,
+      reviewer,
+      reviewClass,
+      maxIterations,
+    },
+  );
+  if (reviewAttempt.boltStart === null) {
     return {
       error: `claimed converged but worktree audit has no BOLT_STARTED boundary for unit "${unit}"`,
     };
   }
 
-  const boltStartBlock = events[boltStart].block;
+  const boltStartBlock = reviewAttempt.boltStart.block;
   const baseCommit = auditBlockField(boltStartBlock, "Base commit");
   const baseSourceListing = auditBlockField(boltStartBlock, "Base Source Listing");
   if (
@@ -483,77 +456,13 @@ function reviewerReceiptError(
     }
   }
 
-  const pendingRequests = new Map<
-    string,
-    {
-      binding: ReturnType<typeof reviewRequestBindingFromBlock>;
-      recovery: boolean;
-      timestamp: string;
-      shard: string;
-    }
-  >();
-  let latestTerminal:
-    | {
-        block: string;
-        binding: NonNullable<
-          ReturnType<typeof reviewRequestBindingFromBlock>
-        >;
-      }
-    | null = null;
-  for (let i = boltStart + 1; i < events.length; i++) {
-    const event = events[i];
-    if (
-      event.event !== "REVIEW_REQUESTED" &&
-      event.event !== "REVIEW_COMPLETED"
-    ) {
-      continue;
-    }
-    if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) continue;
-    if (auditBlockField(event.block, "Stage") !== stage) continue;
-    if (auditBlockField(event.block, "Reviewer") !== reviewer) continue;
-    if (auditBlockField(event.block, "Unit") !== unit) continue;
-    const iteration = auditBlockField(event.block, "Iteration");
-    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
-    const requestKey = `${unit}\u0000${iteration}`;
-    if (event.event === "REVIEW_REQUESTED") {
-      if (crossShardTied(i)) continue;
-      const binding = reviewRequestBindingFromBlock(event.block);
-      if (binding === null) continue;
-      pendingRequests.set(requestKey, {
-        binding,
-        recovery: auditBlockField(event.block, "Recovery") === "stale-receipt",
-        timestamp: event.timestamp,
-        shard: event.shard,
-      });
-      continue;
-    }
-    if (crossShardTied(i)) {
-      pendingRequests.delete(requestKey);
-      continue;
-    }
-    const request = pendingRequests.get(requestKey);
-    if (
-      request === undefined ||
-      (request.timestamp === event.timestamp && request.shard !== event.shard) ||
-      !request.binding ||
-      !reviewCompletionMatchesRequest(request.binding, event.block)
-    ) {
-      continue;
-    }
-    pendingRequests.delete(requestKey);
-    const rawVerdict = auditBlockField(event.block, "Verdict");
-    const verdict = request.recovery
-      ? rawVerdict === "READY" || rawVerdict === "NOT-READY"
-        ? rawVerdict
-        : null
-      : terminalReviewVerdict(rawVerdict, iteration, reviewClass, maxIterations);
-    if (verdict !== null) {
-      latestTerminal = {
-        block: event.block,
-        binding: request.binding,
-      };
-    }
-  }
+  const latestTerminal =
+    reviewAttempt.terminal === null
+      ? null
+      : {
+          block: reviewAttempt.terminal.event.block,
+          binding: reviewAttempt.terminal.binding,
+        };
 
   if (latestTerminal === null) {
     return {
@@ -606,6 +515,15 @@ function reviewerReceiptError(
     currentSourceFp === null ||
     currentSourceFp !== recordedSourceFp
   ) {
+    if (recordedSourceFp === UNBINDABLE_FINGERPRINT) {
+      return {
+        error:
+          `claimed converged but the reviewed source boundary for stage "${stage}", ` +
+          `unit "${unit}" was unbindable. Repair .aidlc-source-paths.json or the ` +
+          "worktree source boundary, then re-invoke the reviewer and record a fresh " +
+          "verdict before finalizing",
+      };
+    }
     return {
       error:
         `claimed converged but the reviewed source no longer matches its worktree's ` +

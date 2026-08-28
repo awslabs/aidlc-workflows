@@ -6939,7 +6939,7 @@ type SummaryConfirmationStage = Pick<
 
 export type SummaryConfirmationEvidence =
   | { ok: true; required: boolean }
-  | { ok: false; message: string };
+  | { ok: false; message: string; refusal?: GuardRefusal };
 
 interface SummaryQuestionFile {
   path: string;
@@ -7029,6 +7029,39 @@ export function checkSummaryConfirmationEvidence(
     unit?: string;
   } = {},
 ): SummaryConfirmationEvidence {
+  const failure = (
+    code: string,
+    message: string,
+    summaryCoverage: "stale" | "missing",
+  ): SummaryConfirmationEvidence => {
+    if (options.stateContent === undefined || options.stateContent === null) {
+      return { ok: false, message };
+    }
+    return {
+      ok: false,
+      message,
+      refusal: evaluateGuardRefusal({
+        code,
+        blockedAction: "summary-confirmation",
+        stage: stage.slug,
+        ...(options.unit ? { unit: options.unit } : {}),
+        stateContent: options.stateContent,
+        invariant:
+          "Generated outputs descend from a current human-backed summary confirmation.",
+        userMessage: message,
+        attempt: {
+          recovery: "available",
+          summaryCoverage,
+          reviewCoverage: "missing",
+          sourceCoverage: "missing",
+        },
+        humanAuthority: {
+          freshTurn: false,
+          unattended: process.env.AIDLC_UNATTENDED === "1",
+        },
+      }),
+    };
+  };
   if (summaryConfirmationGuardDisabled()) {
     return { ok: true, required: false };
   }
@@ -7056,13 +7089,13 @@ export function checkSummaryConfirmationEvidence(
   if (questions.length === 0) {
     if (!declared) return { ok: true, required: false };
     const unitText = options.unit ? ` for unit "${options.unit}"` : "";
-    return {
-      ok: false,
-      message:
-        `Refusing to complete "${stage.slug}"${unitText}: its question flow has no ` +
+    return failure(
+      "SUMMARY_QUESTIONS_MISSING",
+      `Refusing to complete "${stage.slug}"${unitText}: its question flow has no ` +
         `${stage.slug}-questions.md file. Create and answer the stage questions, ` +
-        `then record the consolidated summary checkpoint before generating artifacts.`,
-    };
+        "then record the consolidated summary checkpoint before generating artifacts.",
+      "missing",
+    );
   }
   if (
     declared &&
@@ -7079,13 +7112,13 @@ export function checkSummaryConfirmationEvidence(
   ) {
     const resolution = resolveBoltDag(projectDir);
     if (resolution.state === "malformed") {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": its summary-confirmation unit ` +
+      return failure(
+        "SUMMARY_UNIT_SET_UNRESOLVED",
+        `Refusing to complete "${stage.slug}": its summary-confirmation unit ` +
           `set cannot be resolved because unit-of-work-dependency.md is ${resolution.reason} ` +
           `(${resolution.detail}).`,
-      };
+        "missing",
+      );
     }
     if (resolution.state === "ok") {
       const requiredUnits = resolution.units.filter((unit) =>
@@ -7102,12 +7135,12 @@ export function checkSummaryConfirmationEvidence(
       );
       const missing = requiredUnits.filter((unit) => !presentUnits.has(unit));
       if (missing.length > 0) {
-        return {
-          ok: false,
-          message:
-            `Refusing to complete "${stage.slug}": ${missing.length} applicable ` +
-          `units have no questions file or summary confirmation (${missing.join(", ")}).`,
-        };
+        return failure(
+          "SUMMARY_UNIT_EVIDENCE_MISSING",
+          `Refusing to complete "${stage.slug}": ${missing.length} applicable ` +
+            `units have no questions file or summary confirmation (${missing.join(", ")}).`,
+          "missing",
+        );
       }
       const requiredUnitSet = new Set(requiredUnits);
       questions = questions.filter(
@@ -7129,12 +7162,12 @@ export function checkSummaryConfirmationEvidence(
   const events = readAuditShardEvents(projectDir)
     .filter((entry) => relevant.has(entry.event));
   if (events.length === 0) {
-    return {
-      ok: false,
-      message:
-        `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
+    return failure(
+      "SUMMARY_RECEIPT_MISSING",
+      `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
         "summary confirmation receipt is recorded.",
-    };
+      "missing",
+    );
   }
 
   const latestFrontier = (candidates: AuditShardEvent[]): AuditShardEvent[] => {
@@ -7165,19 +7198,20 @@ export function checkSummaryConfirmationEvidence(
     evidence: string,
     timestamp: string,
     reconfirm = true,
-  ): SummaryConfirmationEvidence => ({
-    ok: false,
-    message:
+  ): SummaryConfirmationEvidence =>
+    failure(
+      "SUMMARY_ORDER_AMBIGUOUS",
       `Refusing to complete "${stage.slug}": ${evidence} share audit Timestamp ` +
-      `"${timestamp}" across different shards, so their causal order cannot be ` +
-      "proven. " +
-      (reconfirm
-        ? `Repeat the ${options.workflow === undefined ? "summary" : "isolated summary"} ` +
-          "confirmation after that second, then regenerate or re-save each artifact " +
-          "so the audit records a strictly later write."
-        : "Regenerate or re-save the artifact after that second so the audit " +
-          "records a strictly later write."),
-  });
+        `"${timestamp}" across different shards, so their causal order cannot be ` +
+        "proven. " +
+        (reconfirm
+          ? `Repeat the ${options.workflow === undefined ? "summary" : "isolated summary"} ` +
+            "confirmation after that second, then regenerate or re-save each artifact " +
+            "so the audit records a strictly later write."
+          : "Regenerate or re-save the artifact after that second so the audit " +
+            "records a strictly later write."),
+      "stale",
+    );
 
   const workflow = options.workflow;
   const unitMajor =
@@ -7264,13 +7298,13 @@ export function checkSummaryConfirmationEvidence(
   for (const question of questions) {
     const fileAnswer = summaryAnswerFromFile(question.path);
     if (fileAnswer !== "Looks correct") {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": ${question.path} must contain ` +
+      return failure(
+        "SUMMARY_ANSWER_INVALID",
+        `Refusing to complete "${stage.slug}": ${question.path} must contain ` +
           "exactly one `[Answer]: Looks correct` in its Consolidated Summary " +
           "Confirmation section.",
-      };
+        "stale",
+      );
     }
 
     const questionRelative = toPosix(relative(projectDir, question.path));
@@ -7329,16 +7363,16 @@ export function checkSummaryConfirmationEvidence(
       auditBlockField(receipt.block, "Details") !== "Looks correct"
     ) {
       const unitText = question.unit ? ` for unit "${question.unit}"` : "";
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}"${unitText}: no fresh human-backed ` +
+      return failure(
+        "SUMMARY_RECEIPT_MISSING",
+        `Refusing to complete "${stage.slug}"${unitText}: no fresh human-backed ` +
           "consolidated summary confirmation is recorded. Present the summary, " +
           "then run `aidlc-log.ts answer --checkpoint summary-confirmation " +
           `--stage ${stage.slug}${question.unit ? ` --unit "${question.unit}"` : ""}` +
           `${workflow ? " --single" : ""} --details "Looks correct"` +
           " after the human responds.",
-      };
+        "missing",
+      );
     }
 
     const hashScope = auditBlockField(receipt.block, "Hash Scope");
@@ -7381,12 +7415,12 @@ export function checkSummaryConfirmationEvidence(
       hashScope !== null &&
       hashScope !== SUMMARY_CONFIRMATION_HASH_SCOPE
     ) {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
+      return failure(
+        "SUMMARY_HASH_SCOPE_INVALID",
+        `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
           `Hash Scope "${hashScope}". ${recovery}`,
-      };
+        "stale",
+      );
     }
     const legacyRecovery =
       hashScope === null
@@ -7431,22 +7465,22 @@ export function checkSummaryConfirmationEvidence(
           readFileSync(question.path, "utf-8"),
         );
     } catch (e) {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": ${question.path} cannot be ` +
+      return failure(
+        "SUMMARY_FILE_UNREADABLE",
+        `Refusing to complete "${stage.slug}": ${question.path} cannot be ` +
           `validated against its summary confirmation: ${errorMessage(e)}. ${recoveryMessage}`,
-      };
+        "stale",
+      );
     }
     if (
       auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
     ) {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
+      return failure(
+        "SUMMARY_CONTENT_STALE",
+        `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
           `the human confirmed its summary. ${recoveryMessage}`,
-      };
+        "stale",
+      );
     }
 
     for (const artifact of summaryArtifactPaths(stage, question)) {
@@ -7520,13 +7554,13 @@ export function checkSummaryConfirmationEvidence(
             false,
           );
         }
-        return {
-          ok: false,
-          message:
-            `Refusing to continue "${stage.slug}": this stage's output document ` +
+        return failure(
+          "SUMMARY_ARTIFACT_ORDER_INVALID",
+          `Refusing to continue "${stage.slug}": this stage's output document ` +
             `${artifact} was not saved after the confirmed answers. Save the ` +
             "document after confirmation, then continue.",
-        };
+          "stale",
+        );
       }
     }
   }
@@ -7564,54 +7598,6 @@ export function hasPendingDecision(
   unit?: string,
   workflowAttempt = false,
 ): boolean {
-  if (!workflowAttempt) {
-    const audit = readAllAuditShards(projectDir);
-    if (audit.length === 0) return false;
-    const relevant = new Set([
-      "DECISION_RECORDED",
-      "QUESTION_ANSWERED",
-      ...(afterEvent ? [afterEvent] : []),
-    ]);
-    const events = audit
-      .replace(/\r\n/g, "\n")
-      .split(/\n---\n/)
-      .map((block, position) => ({
-        event: auditBlockField(block, "Event") ?? "",
-        stage: auditBlockField(block, "Stage"),
-        workflow: auditBlockField(block, "Workflow"),
-        timestamp: auditBlockField(block, "Timestamp") ?? "",
-        position,
-      }))
-      .filter((event) => relevant.has(event.event))
-      .sort((a, b) => {
-        if (a.timestamp !== b.timestamp) {
-          return a.timestamp < b.timestamp ? -1 : 1;
-        }
-        return a.position - b.position;
-      });
-    let start = 0;
-    if (afterEvent) {
-      const boundary = events.findLastIndex(
-        (event) =>
-          event.event === afterEvent &&
-          event.stage === stage &&
-          !event.workflow?.startsWith("single-stage:"),
-      );
-      if (boundary === -1) return false;
-      start = boundary + 1;
-    }
-    let pending = false;
-    for (const event of events.slice(start)) {
-      if (event.stage !== stage) continue;
-      if (event.event === "DECISION_RECORDED") {
-        pending = true;
-      } else if (event.event === "QUESTION_ANSWERED") {
-        pending = false;
-      }
-    }
-    return pending;
-  }
-
   const relevant = new Set([
     "DECISION_RECORDED",
     "QUESTION_ANSWERED",
@@ -8058,6 +8044,9 @@ export interface FreshReviewReceipts {
   newestSourceUnit: string | null;
   /** The newest modern source binding no longer proves the current workspace. */
   sourceStale: boolean;
+  /** Why the newest source binding is stale. An unbindable boundary is repaired
+   *  through source-boundary configuration, not by reverting application bytes. */
+  sourceStaleReason: "boundary-unbindable" | "fingerprint-mismatch" | null;
   /** Recovery ordinal/budget state associated with the newest source binding. */
   sourceStaleProgress: StaleReviewProgress | null;
   /** A workspace-global source-staleness recovery request has been emitted in
@@ -9435,6 +9424,85 @@ function auditEventIsCrossShardTied<
   );
 }
 
+export function sortAttemptEvents<T extends AuditShardEvent>(
+  rows: ReadonlyArray<T>,
+): T[] {
+  return [...rows].sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+    if (a.shard === b.shard) return a.pos - b.pos;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+}
+
+export function attemptEventIsCrossShardTied<T extends AuditShardEvent>(
+  events: ReadonlyArray<T>,
+  index: number,
+  ignoredEvents: ReadonlySet<string> = new Set(),
+): boolean {
+  const event = events[index];
+  return events.some(
+    (candidate, other) =>
+      other !== index &&
+      !ignoredEvents.has(candidate.event) &&
+      candidate.timestamp === event.timestamp &&
+      candidate.shard !== event.shard,
+  );
+}
+
+export function attemptEventDefinitelyBefore(
+  earlier: AuditShardEvent,
+  later: AuditShardEvent,
+): boolean {
+  if (earlier.shard === later.shard) return earlier.pos < later.pos;
+  return earlier.timestamp < later.timestamp;
+}
+
+export function maximalAttemptEvents<T extends AuditShardEvent>(
+  events: ReadonlyArray<T>,
+): T[] {
+  return events.filter(
+    (candidate, index) =>
+      !events.some(
+        (other, otherIndex) =>
+          otherIndex !== index &&
+          attemptEventDefinitelyBefore(candidate, other),
+      ),
+  );
+}
+
+export interface AttemptFrontierView {
+  events: AuditShardEvent[];
+  floor: AuditShardEvent[];
+}
+
+export function reviewInvalidationAttemptView(
+  rows: ReadonlyArray<AuditShardEvent>,
+  stageSlug: string,
+): AttemptFrontierView {
+  const events = sortAttemptEvents(rows);
+  const floor = maximalAttemptEvents(
+    events.filter(
+      (event) =>
+        event.event === "WORKFLOW_STARTED" ||
+        event.event === "STAGE_JUMPED" ||
+        ((event.event === "GATE_APPROVED" ||
+          event.event === "GATE_REJECTED") &&
+          auditBlockField(event.block, "Stage") === stageSlug),
+    ),
+  );
+  return { events, floor };
+}
+
+export function attemptEventAfterFrontier(
+  frontier: ReadonlyArray<AuditShardEvent>,
+  event: AuditShardEvent,
+): boolean {
+  return frontier.every((boundary) =>
+    attemptEventDefinitelyBefore(boundary, event)
+  );
+}
+
 const REVIEW_RECEIPT_EVENTS = new Set([
   "WORKFLOW_STARTED",
   "STAGE_STARTED",
@@ -9452,13 +9520,15 @@ const REVIEW_RECEIPT_EVENTS = new Set([
   "REVIEW_COMPLETED",
 ]);
 
-export interface ReviewAttemptWindow {
+export interface AttemptView {
   allEvents: AuditShardEvent[];
   events: AuditShardEvent[];
   floorIdx: number;
   mergedBoltUnits: Set<string>;
   openBoltUnits: Set<string>;
 }
+
+export type ReviewAttemptWindow = AttemptView;
 
 function boltEventUnits(event: AuditShardEvent): string[] {
   const field =
@@ -9484,15 +9554,11 @@ export function reviewAttemptWindow(
   projectDir: string,
   stateContent: string,
   stage: { slug: string; for_each?: string },
-): ReviewAttemptWindow {
+): AttemptView {
   const allEvents = readAuditShardEvents(projectDir);
-  const events = allEvents
-    .filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event))
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      if (a.shard === b.shard) return a.pos - b.pos;
-      return a.shardIndex - b.shardIndex;
-    });
+  const events = sortAttemptEvents(
+    allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event)),
+  );
   const perUnit = stage.for_each === "unit-of-work";
   const artifactPerUnit =
     perUnit &&
@@ -9695,6 +9761,585 @@ export function reviewAttemptWindow(
   };
 }
 
+export interface ReviewAttemptAccounting {
+  floor: string;
+  requestCount: number;
+  boltStarted: boolean;
+  boltBatch: string | null;
+  boltSlug: string | null;
+  pendingIterations: Set<number>;
+  pendingRequests: Map<
+    number,
+    {
+      binding: ReviewRequestBinding | null;
+      retried: boolean;
+    }
+  >;
+  recoveryIteration: number | null;
+  recoverySpent: boolean;
+  ambiguity: string | null;
+}
+
+const REVIEW_ACCOUNTING_EVENTS = new Set([
+  "WORKFLOW_STARTED",
+  "STAGE_STARTED",
+  "STAGE_COMPLETED",
+  "STAGE_JUMPED",
+  "GATE_REJECTED",
+  "BOLT_STARTED",
+  "BOLT_COMPLETED",
+  "BOLT_FAILED",
+  "REVIEW_REQUESTED",
+  "REVIEW_COMPLETED",
+]);
+
+export function reviewAttemptAccounting(
+  attemptView: AttemptView,
+  stateContent: string,
+  stage: { slug: string; for_each?: string; workspace_requires?: boolean },
+  reviewer: string,
+  unit: string | undefined,
+  workflow: string | undefined,
+  options: {
+    eventFilter?: (event: AuditShardEvent) => boolean;
+  } = {},
+): ReviewAttemptAccounting {
+  const events = sortAttemptEvents(
+    attemptView.allEvents.filter(
+      (row) =>
+        REVIEW_ACCOUNTING_EVENTS.has(row.event) &&
+        (options.eventFilter?.(row) ?? true),
+    ),
+  );
+  const tiedAcrossShards = (index: number): boolean =>
+    attemptEventIsCrossShardTied(events, index);
+  const tiedOnlyToWorkflowBoundary = (index: number): boolean => {
+    let sawBoundary = false;
+    for (let other = 0; other < events.length; other++) {
+      if (
+        other === index ||
+        events[other].timestamp !== events[index].timestamp ||
+        events[other].shard === events[index].shard
+      ) {
+        continue;
+      }
+      if (
+        events[other].event !== "WORKFLOW_STARTED" &&
+        events[other].event !== "STAGE_JUMPED"
+      ) {
+        return false;
+      }
+      sawBoundary = true;
+    }
+    return sawBoundary;
+  };
+
+  const unitMajor =
+    stage.for_each === "unit-of-work" &&
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const teamOwnership =
+    stage.for_each === "unit-of-work" &&
+    isTeamUnitOwnership(stateContent);
+  let floor = -1;
+  let boltStarted = false;
+  let boltBatch: string | null = null;
+  let boltSlug: string | null = null;
+  const expectedBoltSlug = unit === undefined ? null : boltSlugForUnit(unit);
+  let ambiguity: string | null = null;
+  for (let i = 0; i < events.length; i++) {
+    const entry = events[i];
+    if (workflow !== undefined) {
+      if (
+        entry.event === "STAGE_COMPLETED" &&
+        auditBlockField(entry.block, "Stage") === stage.slug &&
+        auditBlockField(entry.block, "Workflow") === workflow
+      ) {
+        floor = i;
+      }
+      continue;
+    }
+    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
+      if (teamOwnership && tiedAcrossShards(i)) {
+        ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
+      }
+      floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+      if (!teamOwnership || !tiedAcrossShards(i)) ambiguity = null;
+      continue;
+    }
+    if (entry.event === "BOLT_STARTED" && unit !== undefined) {
+      const names = (auditBlockField(entry.block, "Bolt names") ?? "")
+        .split(",")
+        .map((name) => name.trim());
+      const startedSlug = auditBlockField(entry.block, "Bolt slug");
+      if (
+        !names.includes(unit) ||
+        (startedSlug !== null && startedSlug !== expectedBoltSlug)
+      ) {
+        continue;
+      }
+      if (tiedAcrossShards(i)) {
+        ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
+      }
+      floor = i;
+      boltStarted = true;
+      boltBatch = auditBlockField(entry.block, "Batch number");
+      boltSlug = startedSlug;
+      if (!tiedAcrossShards(i)) ambiguity = null;
+      continue;
+    }
+    if (
+      (entry.event === "BOLT_COMPLETED" ||
+        entry.event === "BOLT_FAILED") &&
+      unit !== undefined
+    ) {
+      const terminalNames = (
+        auditBlockField(
+          entry.block,
+          entry.event === "BOLT_FAILED" ? "Failed Bolt" : "Bolt names",
+        ) ?? ""
+      )
+        .split(",")
+        .map((name) => name.trim());
+      const terminalSlug = auditBlockField(entry.block, "Bolt slug");
+      const paired =
+        boltSlug !== null && terminalSlug !== null
+          ? boltSlug === terminalSlug
+          : terminalNames.includes(unit);
+      if (!paired) continue;
+      const tied = tiedAcrossShards(i);
+      ambiguity = tied
+        ? `cross-shard Bolt boundary tie at ${entry.timestamp}`
+        : null;
+      floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+      continue;
+    }
+    if (entry.event === "GATE_REJECTED") {
+      const gateStages = (
+        auditBlockField(entry.block, "Gate Stages") ??
+          auditBlockField(entry.block, "Stage") ??
+          ""
+      )
+        .split(",")
+        .map((value) => value.trim());
+      if (!gateStages.includes(stage.slug)) continue;
+      const rejectedUnit = auditBlockField(entry.block, "Unit");
+      if (teamOwnership && unit !== undefined && rejectedUnit !== unit) continue;
+      if (teamOwnership && unit === undefined && rejectedUnit !== null) continue;
+      const tied = tiedAcrossShards(i);
+      ambiguity = tied
+        ? `cross-shard gate boundary tie at ${entry.timestamp}`
+        : null;
+      floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+    } else if (
+      auditBlockField(entry.block, "Stage") === stage.slug &&
+      entry.event === "STAGE_STARTED" &&
+      !unitMajor &&
+      !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+    ) {
+      const tied = tiedAcrossShards(i);
+      ambiguity = tied
+        ? `cross-shard stage boundary tie at ${entry.timestamp}`
+        : null;
+      floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+    }
+  }
+  if (
+    unit !== undefined &&
+    ambiguity?.startsWith("cross-shard Bolt boundary tie at ") &&
+    attemptView.mergedBoltUnits.has(unit) &&
+    !attemptView.openBoltUnits.has(unit)
+  ) {
+    const timestamp = ambiguity.slice(
+      "cross-shard Bolt boundary tie at ".length,
+    );
+    const tied = attemptView.events.filter(
+      (event) => event.timestamp === timestamp,
+    );
+    const tiedShards = new Set(tied.map((event) => event.shard));
+    const lifecycleOnly =
+      tied.length > 1 &&
+      tiedShards.size > 1 &&
+      tied.every((event) => {
+        if (event.event === "AUDIT_MERGED") return true;
+        if (
+          event.event !== "BOLT_STARTED" &&
+          event.event !== "BOLT_COMPLETED" &&
+          event.event !== "BOLT_FAILED"
+        ) {
+          return false;
+        }
+        const field =
+          event.event === "BOLT_FAILED"
+            ? auditBlockField(event.block, "Failed Bolt")
+            : auditBlockField(event.block, "Bolt names");
+        return (field ?? "")
+          .split(",")
+          .map((name) => name.trim())
+          .includes(unit);
+      });
+    if (lifecycleOnly) {
+      ambiguity = null;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+    }
+  }
+
+  let requestCount = 0;
+  let recoveryIteration: number | null = null;
+  let recoverySpent = false;
+  const pendingIterations = new Set<number>();
+  const pendingRequests = new Map<
+    number,
+    {
+      binding: ReviewRequestBinding | null;
+      retried: boolean;
+    }
+  >();
+  for (let i = floor + 1; i < events.length; i++) {
+    const entry = events[i];
+    if (
+      entry.event !== "REVIEW_REQUESTED" &&
+      entry.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
+    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    if (auditBlockField(entry.block, "Reviewer") !== reviewer) continue;
+    const eventUnit = auditBlockField(entry.block, "Unit") || undefined;
+    if (eventUnit !== unit) continue;
+    const eventWorkflow = auditBlockField(entry.block, "Workflow") || undefined;
+    if (
+      workflow !== undefined
+        ? eventWorkflow !== workflow
+        : eventWorkflow?.startsWith("single-stage:")
+    ) {
+      continue;
+    }
+    if (
+      tiedAcrossShards(i) &&
+      !(!teamOwnership && tiedOnlyToWorkflowBoundary(i))
+    ) {
+      ambiguity = `cross-shard review authority tie at ${entry.timestamp}`;
+      continue;
+    }
+    const rawIteration = auditBlockField(entry.block, "Iteration");
+    if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
+    const iteration = Number(rawIteration);
+    if (entry.event === "REVIEW_REQUESTED") {
+      const binding = reviewRequestBindingFromBlock(entry.block);
+      if (binding === null) continue;
+      if (auditBlockField(entry.block, "Retry") !== "pending-request") {
+        requestCount++;
+      }
+      if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
+        recoveryIteration = iteration;
+        recoverySpent = true;
+      }
+      pendingIterations.add(iteration);
+      const previous = pendingRequests.get(iteration);
+      const modernBinding =
+        binding.appendixArtifact !== null &&
+        binding.appendixOffset !== null &&
+        (binding.priorAppendixLength === null ||
+          binding.priorAppendixLength === 0 ||
+          binding.reviewChallenge !== null) &&
+        (!stage.workspace_requires || binding.sourceFingerprint !== null);
+      pendingRequests.set(iteration, {
+        binding,
+        retried:
+          previous?.retried === true ||
+          (auditBlockField(entry.block, "Retry") === "pending-request" &&
+            modernBinding),
+      });
+    } else {
+      const pending = pendingRequests.get(iteration);
+      if (
+        pending?.binding &&
+        reviewCompletionMatchesRequest(pending.binding, entry.block)
+      ) {
+        pendingIterations.delete(iteration);
+        pendingRequests.delete(iteration);
+      }
+    }
+  }
+  return {
+    floor:
+      floor < 0
+        ? ""
+        : `${events[floor].event}:${events[floor].timestamp}:${events[floor].shard}:${events[floor].pos}`,
+    requestCount,
+    boltStarted,
+    boltBatch,
+    boltSlug,
+    pendingIterations,
+    pendingRequests,
+    recoveryIteration,
+    recoverySpent,
+    ambiguity,
+  };
+}
+
+export interface WorktreeReviewAttemptProjection {
+  events: AuditShardEvent[];
+  boltStart: AuditShardEvent | null;
+  terminal: {
+    event: AuditShardEvent;
+    binding: ReviewRequestBinding;
+  } | null;
+}
+
+export function worktreeReviewAttemptProjection(
+  rows: ReadonlyArray<AuditShardEvent>,
+  options: {
+    boltSlug: string;
+    unit: string;
+    stage: string;
+    reviewer: string;
+    reviewClass: Exclude<ReviewClass, "none">;
+    maxIterations: number;
+  },
+): WorktreeReviewAttemptProjection {
+  const relevant = new Set([
+    "BOLT_STARTED",
+    "REVIEW_REQUESTED",
+    "REVIEW_COMPLETED",
+  ]);
+  const events = sortAttemptEvents(
+    rows.filter((event) => relevant.has(event.event)),
+  );
+  const crossShardTied = (index: number): boolean =>
+    attemptEventIsCrossShardTied(events, index);
+
+  let boltStart = -1;
+  for (let i = 0; i < events.length; i++) {
+    if (
+      events[i].event === "BOLT_STARTED" &&
+      auditBlockField(events[i].block, "Bolt slug") === options.boltSlug
+    ) {
+      if (crossShardTied(i)) {
+        let end = i;
+        while (
+          end + 1 < events.length &&
+          events[end + 1].timestamp === events[i].timestamp
+        ) {
+          end++;
+        }
+        boltStart = end;
+        i = end;
+      } else {
+        boltStart = i;
+      }
+    }
+  }
+  if (boltStart === -1) {
+    return { events, boltStart: null, terminal: null };
+  }
+
+  const pendingRequests = new Map<
+    string,
+    {
+      binding: ReviewRequestBinding | null;
+      recovery: boolean;
+      timestamp: string;
+      shard: string;
+    }
+  >();
+  let terminal: WorktreeReviewAttemptProjection["terminal"] = null;
+  for (let i = boltStart + 1; i < events.length; i++) {
+    const event = events[i];
+    if (
+      event.event !== "REVIEW_REQUESTED" &&
+      event.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
+    if (
+      auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")
+    ) {
+      continue;
+    }
+    if (auditBlockField(event.block, "Stage") !== options.stage) continue;
+    if (auditBlockField(event.block, "Reviewer") !== options.reviewer) continue;
+    if (auditBlockField(event.block, "Unit") !== options.unit) continue;
+    const iteration = auditBlockField(event.block, "Iteration");
+    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    const requestKey = `${options.unit}\u0000${iteration}`;
+    if (event.event === "REVIEW_REQUESTED") {
+      if (crossShardTied(i)) continue;
+      const binding = reviewRequestBindingFromBlock(event.block);
+      if (binding === null) continue;
+      pendingRequests.set(requestKey, {
+        binding,
+        recovery:
+          auditBlockField(event.block, "Recovery") === "stale-receipt",
+        timestamp: event.timestamp,
+        shard: event.shard,
+      });
+      continue;
+    }
+    if (crossShardTied(i)) {
+      pendingRequests.delete(requestKey);
+      continue;
+    }
+    const request = pendingRequests.get(requestKey);
+    if (
+      request === undefined ||
+      (request.timestamp === event.timestamp &&
+        request.shard !== event.shard) ||
+      request.binding === null ||
+      !reviewCompletionMatchesRequest(request.binding, event.block)
+    ) {
+      continue;
+    }
+    pendingRequests.delete(requestKey);
+    const rawVerdict = auditBlockField(event.block, "Verdict");
+    const verdict = request.recovery
+      ? rawVerdict === "READY" || rawVerdict === "NOT-READY"
+        ? rawVerdict
+        : null
+      : terminalReviewVerdict(
+          rawVerdict,
+          iteration,
+          options.reviewClass,
+          options.maxIterations,
+        );
+    if (verdict !== null) {
+      terminal = {
+        event,
+        binding: request.binding,
+      };
+    }
+  }
+
+  return {
+    events,
+    boltStart: events[boltStart],
+    terminal,
+  };
+}
+
+function candidateAttemptEventMatches(
+  event: AuditShardEvent,
+  unit: string,
+  generation: number,
+  stage: string,
+): boolean {
+  const gateStages = auditBlockField(event.block, "Gate Stages");
+  const stageMatches = gateStages
+    ? gateStages
+        .split(",")
+        .map((value) => value.trim())
+        .includes(stage)
+    : auditBlockField(event.block, "Stage") === stage;
+  return (
+    stageMatches &&
+    auditBlockField(event.block, "Unit") === unit &&
+    auditBlockField(event.block, "Attempt Generation") === String(generation)
+  );
+}
+
+export function candidateReviewCoverageProjection(
+  rows: ReadonlyArray<AuditShardEvent>,
+  options: {
+    unit: string;
+    generation: number;
+    stage: string;
+    reviewer: string | undefined;
+    artifactPrefix: string;
+    expectedFingerprint: string;
+  },
+): boolean {
+  const events = sortAttemptEvents(rows);
+  const relevantByTimestamp = new Map<string, Set<string>>();
+  for (const event of events) {
+    const file = auditBlockField(event.block, "File") ?? "";
+    const relevant =
+      event.event === "ARTIFACT_CREATED" ||
+      event.event === "ARTIFACT_UPDATED"
+        ? file.includes(options.artifactPrefix)
+        : (event.event === "REVIEW_REQUESTED" ||
+            event.event === "REVIEW_COMPLETED" ||
+            event.event === "GATE_REJECTED" ||
+            event.event === "STAGE_REVISING") &&
+          candidateAttemptEventMatches(
+            event,
+            options.unit,
+            options.generation,
+            options.stage,
+          );
+    if (!relevant) continue;
+    const shards = relevantByTimestamp.get(event.timestamp) ?? new Set<string>();
+    shards.add(event.shard);
+    relevantByTimestamp.set(event.timestamp, shards);
+  }
+  if ([...relevantByTimestamp.values()].some((shards) => shards.size > 1)) {
+    return false;
+  }
+
+  const pending = new Set<string>();
+  let ready = false;
+  for (const event of events) {
+    if (
+      event.event === "ARTIFACT_CREATED" ||
+      event.event === "ARTIFACT_UPDATED"
+    ) {
+      const file = auditBlockField(event.block, "File") ?? "";
+      if (file.includes(options.artifactPrefix)) ready = false;
+      continue;
+    }
+    if (
+      !candidateAttemptEventMatches(
+        event,
+        options.unit,
+        options.generation,
+        options.stage,
+      )
+    ) {
+      continue;
+    }
+    if (
+      event.event === "GATE_REJECTED" ||
+      event.event === "STAGE_REVISING"
+    ) {
+      pending.clear();
+      ready = false;
+      continue;
+    }
+    if (
+      event.event !== "REVIEW_REQUESTED" &&
+      event.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
+    if (auditBlockField(event.block, "Reviewer") !== options.reviewer) continue;
+    const iteration = auditBlockField(event.block, "Iteration");
+    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    if (event.event === "REVIEW_REQUESTED") {
+      pending.add(iteration);
+      continue;
+    }
+    if (!pending.delete(iteration)) continue;
+    ready =
+      auditBlockField(event.block, "Verdict") === "READY" &&
+      auditBlockField(event.block, "Artifact Fingerprint") ===
+        options.expectedFingerprint;
+  }
+  return ready;
+}
+
 export function freshReviewReceipts(
   projectDir: string,
   stateContent: string,
@@ -9724,6 +10369,7 @@ export function freshReviewReceipts(
     newestSourceFingerprint: null,
     newestSourceUnit: null,
     sourceStale: false,
+    sourceStaleReason: null,
     sourceStaleProgress: null,
     sourceRecoverySpent: false,
     unitStale: new Set(),
@@ -10238,6 +10884,11 @@ export function freshReviewReceipts(
     (newestSourceFingerprint === UNBINDABLE_FINGERPRINT ||
       currentSourceFingerprint === null ||
       currentSourceFingerprint !== newestSourceFingerprint);
+  const sourceStaleReason = !sourceStale
+    ? null
+    : newestSourceFingerprint === UNBINDABLE_FINGERPRINT
+      ? "boundary-unbindable"
+      : "fingerprint-mismatch";
 
   const freshUnitClaims = new Map<string, SourceClaimModel>();
   if (sourceFreshnessApplies && currentSourceListing !== null) {
@@ -10425,6 +11076,7 @@ export function freshReviewReceipts(
     newestSourceFingerprint,
     newestSourceUnit,
     sourceStale,
+    sourceStaleReason,
     sourceStaleProgress: sourceStale
       ? newestSourceProgress === null
         ? null
@@ -16733,59 +17385,572 @@ export function parseCheckboxes(content: string): CheckboxLine[] {
   return results;
 }
 
+export type GuardLifecycleState =
+  | "pending"
+  | "in-progress"
+  | "awaiting-approval"
+  | "revising"
+  | "completed"
+  | "skipped";
+
+export interface GuardRemedy {
+  action: string;
+  command?: string;
+  requiresHuman: boolean;
+  executableNow: boolean;
+}
+
+export interface GuardRefusal {
+  code: string;
+  blockedAction: string;
+  stage: string;
+  unit?: string;
+  state: GuardLifecycleState;
+  invariant: string;
+  userMessage: string;
+  remedies: GuardRemedy[];
+}
+
+export interface GuardAttemptState {
+  floor?: string;
+  reviewBudget?: {
+    used: number;
+    limit: number;
+  };
+  recovery: "available" | "pending" | "spent";
+  pendingReview?: {
+    iteration: number;
+    retryable: boolean;
+  };
+  summaryCoverage: "current" | "stale" | "missing";
+  reviewCoverage: "current" | "stale" | "missing";
+  sourceCoverage: "current" | "stale" | "missing" | "unbindable";
+}
+
+export interface GuardHumanAuthorityState {
+  freshTurn: boolean;
+  unattended: boolean;
+}
+
+export interface GuardRefusalInput {
+  code: string;
+  blockedAction: string;
+  stage: string;
+  unit?: string;
+  stateContent: string;
+  invariant: string;
+  userMessage: string;
+  attempt: GuardAttemptState;
+  humanAuthority: GuardHumanAuthorityState;
+  teamGateStatus?: "pending" | "awaiting-approval" | "revising" | "approved";
+  autonomousBolt?: {
+    unit: string;
+    slug: string | null;
+    batch: string | null;
+  };
+  terminal?: boolean;
+}
+
+function guardLifecycleState(
+  stateContent: string,
+  stageSlug: string,
+  teamGateStatus: GuardRefusalInput["teamGateStatus"],
+): GuardLifecycleState {
+  if (teamGateStatus === "pending") return "in-progress";
+  if (teamGateStatus === "awaiting-approval") return "awaiting-approval";
+  if (teamGateStatus === "revising") return "revising";
+  if (teamGateStatus === "approved") return "completed";
+  return (
+    parseCheckboxes(stateContent).find((entry) => entry.slug === stageSlug)
+      ?.state ?? "pending"
+  );
+}
+
+function restartStageRemedy(stage: string): GuardRemedy {
+  return {
+    action:
+      `Restart this stage with /aidlc --stage ${stage}; the recorded answers ` +
+      "survive, and the stage will ask for confirmation again.",
+    command: `/aidlc --stage ${stage}`,
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+function lifecycleResetRemedies(
+  input: GuardRefusalInput,
+  state: GuardLifecycleState,
+): GuardRemedy[] {
+  const stageEntry = parseCheckboxes(input.stateContent).find(
+    (entry) => entry.slug === input.stage,
+  );
+  if (stageEntry?.suffix.startsWith("SKIP")) {
+    return [
+      {
+        action:
+          "This stage is excluded from the current plan; change to a scope that " +
+          `includes it with /aidlc --scope <scope>, then restart ${input.stage}.`,
+        command: "/aidlc --scope <scope>",
+        requiresHuman: true,
+        executableNow: true,
+      },
+    ];
+  }
+  if (state === "pending" || state === "skipped") {
+    return [restartStageRemedy(input.stage)];
+  }
+  if (state === "in-progress" || state === "awaiting-approval") {
+    const command =
+      `aidlc-orchestrate.ts report --stage "${input.stage}" --result rejected ` +
+      '--user-input "Request Changes" --reason "<requested changes>"';
+    if (input.humanAuthority.unattended) {
+      return [
+        {
+          action:
+            "Halt unattended execution and ask a human what should change. " +
+            "Unset AIDLC_UNATTENDED, wait for their typed Request Changes choice, " +
+            "then record that decision without choosing for them.",
+          command,
+          requiresHuman: true,
+          executableNow: true,
+        },
+      ];
+    }
+    if (input.humanAuthority.freshTurn) {
+      return [
+        {
+          action:
+            "Record the human's fresh Request Changes choice with the report " +
+            "command, preserving their feedback verbatim.",
+          command,
+          requiresHuman: true,
+          executableNow: true,
+        },
+      ];
+    }
+    return [
+      {
+        action:
+          "To change this document, tell me what should change and I'll record your " +
+          "Request Changes decision (this works before the gate opens); that unlocks " +
+          "the file for revision and a fresh review.",
+        command,
+        requiresHuman: true,
+        executableNow: true,
+      },
+    ];
+  }
+  if (state === "revising") {
+    return [
+      {
+        action:
+          "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
+          `/aidlc --stage ${input.stage} (your recorded answers survive; you will ` +
+          "re-confirm the summary once).",
+        command: `/aidlc --stage ${input.stage}`,
+        requiresHuman: true,
+        executableNow: true,
+      },
+    ];
+  }
+  return [
+    {
+      action:
+        input.attempt.sourceCoverage === "unbindable"
+          ? "This stage is already approved; repair .aidlc-source-paths.json or the " +
+            "workspace source boundary so it can be fingerprinted, or jump back with " +
+            `/aidlc --stage ${input.stage} to redo it.`
+          : "This stage is already approved; restore the reviewed source state, or " +
+            `jump back with /aidlc --stage ${input.stage} to redo it.`,
+      command: `/aidlc --stage ${input.stage}`,
+      requiresHuman: true,
+      executableNow: true,
+    },
+  ];
+}
+
+export function evaluateGuardRefusal(
+  input: GuardRefusalInput,
+): GuardRefusal {
+  const state = guardLifecycleState(
+    input.stateContent,
+    input.stage,
+    input.teamGateStatus,
+  );
+  const remedies: GuardRemedy[] = [];
+
+  if (input.autonomousBolt) {
+    const slug = input.autonomousBolt.slug ?? input.autonomousBolt.unit;
+    const batch = input.autonomousBolt.batch
+      ? ` batch ${input.autonomousBolt.batch}`
+      : " the current batch";
+    remedies.push({
+      action:
+        `Halt and ask the human whether to restart autonomous Unit ` +
+        `"${input.autonomousBolt.unit}". On approval, abort and discard the old ` +
+        `attempt, then rerun the current prepare step in${batch} so a fresh ` +
+        "BOLT_STARTED boundary creates a new review allowance.",
+      command:
+        `aidlc-bolt.ts abort --name "${input.autonomousBolt.unit}" --slug ` +
+        `"${slug}" --reason "stale review recovery exhausted" --discard`,
+      requiresHuman: true,
+      executableNow: true,
+    });
+  } else {
+    if (
+      input.attempt.pendingReview &&
+      input.attempt.recovery === "pending"
+    ) {
+      remedies.push({
+        action: input.attempt.pendingReview.retryable
+          ? `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
+            "with --retry-pending, or record its verdict if the reviewer returned."
+          : `Record the verdict for pending review iteration ` +
+            `${input.attempt.pendingReview.iteration}.`,
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
+    if (
+      input.attempt.sourceCoverage === "unbindable" &&
+      state !== "revising"
+    ) {
+      remedies.push({
+        action:
+          "Repair .aidlc-source-paths.json or the workspace source boundary so " +
+          "the application source can be fingerprinted, then request a fresh review.",
+        requiresHuman: false,
+        executableNow: state !== "completed",
+      });
+    }
+    const reviewBudgetAvailable =
+      input.attempt.reviewBudget === undefined ||
+      input.attempt.reviewBudget.used < input.attempt.reviewBudget.limit;
+    if (
+      !reviewBudgetAvailable &&
+      input.attempt.reviewCoverage === "current" &&
+      (state === "in-progress" || state === "awaiting-approval")
+    ) {
+      remedies.push({
+        action:
+          "Present the unresolved review findings at the approval gate for the " +
+          "human instead of starting another review pass.",
+        requiresHuman: true,
+        executableNow: true,
+      });
+    }
+    if (
+      input.attempt.recovery === "available" &&
+      input.attempt.reviewCoverage === "stale" &&
+      !input.attempt.pendingReview
+    ) {
+      remedies.push({
+        action:
+          "Start the one stale-receipt recovery review against the current " +
+          "artifact and source state.",
+        requiresHuman: false,
+        executableNow:
+          state === "in-progress" || state === "awaiting-approval",
+      });
+    } else if (
+      reviewBudgetAvailable &&
+      input.attempt.reviewCoverage === "missing" &&
+      !input.attempt.pendingReview
+    ) {
+      remedies.push({
+        action: "Request the next permitted review for the current attempt.",
+        requiresHuman: false,
+        executableNow:
+          state === "in-progress" || state === "awaiting-approval",
+      });
+    }
+    if (
+      input.attempt.summaryCoverage !== "current" &&
+      input.attempt.reviewCoverage !== "current"
+    ) {
+      remedies.push({
+        action:
+          "Present the current consolidated summary, record the human's " +
+          "confirmation, then regenerate or re-save the produced artifacts.",
+        requiresHuman: true,
+        executableNow:
+          state === "in-progress" || state === "awaiting-approval",
+      });
+    }
+    remedies.push(...lifecycleResetRemedies(input, state));
+  }
+
+  return {
+    code: input.code,
+    blockedAction: input.blockedAction,
+    stage: input.stage,
+    ...(input.unit ? { unit: input.unit } : {}),
+    state,
+    invariant: input.invariant,
+    userMessage: input.userMessage,
+    remedies,
+  };
+}
+
+export function requestChangesResetIsExecutable(
+  stateContent: string,
+  stageSlug: string,
+  teamGateStatus?: GuardRefusalInput["teamGateStatus"],
+): boolean {
+  const state = guardLifecycleState(stateContent, stageSlug, teamGateStatus);
+  return state === "in-progress" || state === "awaiting-approval";
+}
+
+export const GUARD_REFUSAL_STREAK_CAP = 2;
+export const GUARD_RECOVERY_ASK_TYPE = "guard-recovery";
+
+interface GuardRefusalRecord {
+  version: 1;
+  stateSignature: string;
+  signature: string;
+  count: number;
+  codes: string[];
+  resetToken: string;
+  refusal: GuardRefusal;
+  updatedAt: string;
+}
+
+export interface GuardRecoveryAskData {
+  kind: "ask";
+  ask_type: typeof GUARD_RECOVERY_ASK_TYPE;
+  response_route: "execute-remedy";
+  question: string;
+  stage: string;
+  unit?: string;
+  reason_codes: string[];
+  remedies: GuardRemedy[];
+}
+
+function guardRefusalDir(projectDir: string): string {
+  return join(docsRoot(projectDir), ".aidlc-guard-refusals");
+}
+
+function guardRefusalPath(
+  projectDir: string,
+  stage: string,
+  unit?: string,
+): string {
+  const key = createHash("sha256")
+    .update(`${stage}\0${unit ?? ""}`, "utf-8")
+    .digest("hex");
+  return join(guardRefusalDir(projectDir), `${key}.json`);
+}
+
+function guardRefusalResetToken(
+  projectDir: string,
+  stage: string,
+  unit?: string,
+): string {
+  const resetEvents = sortAttemptEvents(
+    readAuditShardEvents(projectDir).filter((event) => {
+      if (
+        event.event === "SESSION_STARTED" ||
+        event.event === "SESSION_RESUMED" ||
+        event.event === "WORKFLOW_STARTED" ||
+        event.event === "STAGE_JUMPED"
+      ) {
+        return true;
+      }
+      if (event.event === "GATE_REJECTED") {
+        const stages = (
+          auditBlockField(event.block, "Gate Stages") ??
+            auditBlockField(event.block, "Stage") ??
+            ""
+        )
+          .split(",")
+          .map((value) => value.trim());
+        if (!stages.includes(stage)) return false;
+        const eventUnit = auditBlockField(event.block, "Unit") ?? undefined;
+        return eventUnit === undefined || eventUnit === unit;
+      }
+      if (event.event === "BOLT_STARTED" && unit !== undefined) {
+        return (auditBlockField(event.block, "Bolt names") ?? "")
+          .split(",")
+          .map((value) => value.trim())
+          .includes(unit);
+      }
+      return false;
+    }),
+  );
+  const latest = resetEvents.at(-1);
+  return latest === undefined
+    ? ""
+    : `${latest.event}\0${latest.timestamp}\0${latest.shard}\0${latest.pos}`;
+}
+
+function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (!isPlainObject(value) || value.version !== 1) return null;
+    if (
+      typeof value.stateSignature !== "string" ||
+      typeof value.signature !== "string" ||
+      typeof value.count !== "number" ||
+      !Number.isInteger(value.count) ||
+      value.count < 1 ||
+      !Array.isArray(value.codes) ||
+      !value.codes.every((code) => typeof code === "string") ||
+      typeof value.resetToken !== "string" ||
+      typeof value.updatedAt !== "string" ||
+      !isPlainObject(value.refusal)
+    ) {
+      return null;
+    }
+    return value as unknown as GuardRefusalRecord;
+  } catch {
+    return null;
+  }
+}
+
+export function resetGuardRefusalStreak(
+  projectDir: string,
+  stage: string,
+  unit?: string,
+): void {
+  try {
+    rmSync(guardRefusalPath(projectDir, stage, unit), { force: true });
+  } catch {
+    // A stale counter can only cause an earlier halt-and-ask, never authority.
+  }
+}
+
+export function recordGuardRefusal(
+  projectDir: string,
+  refusal: GuardRefusal,
+  attempt: GuardAttemptState,
+  resourceFingerprints: ReadonlyArray<string> = [],
+): {
+  count: number;
+  halt: boolean;
+  ask: GuardRecoveryAskData | null;
+} {
+  const path = guardRefusalPath(
+    projectDir,
+    refusal.stage,
+    refusal.unit,
+  );
+  const prior = readGuardRefusalRecord(path);
+  const resetToken = guardRefusalResetToken(
+    projectDir,
+    refusal.stage,
+    refusal.unit,
+  );
+  const stateSignature = createHash("sha256")
+    .update(
+      JSON.stringify({
+        stage: refusal.stage,
+        unit: refusal.unit ?? null,
+        state: refusal.state,
+        floor: attempt.floor ?? null,
+        reviewBudget: attempt.reviewBudget ?? null,
+        recovery: attempt.recovery,
+        pendingReview: attempt.pendingReview ?? null,
+        summaryCoverage: attempt.summaryCoverage,
+        reviewCoverage: attempt.reviewCoverage,
+        sourceCoverage: attempt.sourceCoverage,
+        resetToken,
+        resources: [...resourceFingerprints].sort(),
+      }),
+      "utf-8",
+    )
+    .digest("hex");
+  const codes =
+    prior?.stateSignature === stateSignature &&
+    prior.resetToken === resetToken
+      ? [...new Set([...prior.codes, refusal.code])].sort()
+      : [refusal.code];
+  const signature = createHash("sha256")
+    .update(JSON.stringify({ stateSignature, codes }), "utf-8")
+    .digest("hex");
+  const count = prior?.signature === signature ? prior.count + 1 : 1;
+  const record: GuardRefusalRecord = {
+    version: 1,
+    stateSignature,
+    signature,
+    count,
+    codes,
+    resetToken,
+    refusal,
+    updatedAt: isoTimestamp(),
+  };
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, "utf-8");
+  } catch {
+    // Persistence failure under-counts repetitions; it never relaxes a guard.
+  }
+  const executable = refusal.remedies.filter(
+    (remedy) => remedy.executableNow,
+  );
+  const halt = count > GUARD_REFUSAL_STREAK_CAP && executable.length > 0;
+  return {
+    count,
+    halt,
+    ask: halt
+      ? {
+          kind: "ask",
+          ask_type: GUARD_RECOVERY_ASK_TYPE,
+          response_route: "execute-remedy",
+          question:
+            `The same guard state for "${refusal.stage}" has refused ` +
+            `${refusal.blockedAction} ${count} times. Choose one ` +
+            "authority-preserving recovery action.",
+          stage: refusal.stage,
+          ...(refusal.unit ? { unit: refusal.unit } : {}),
+          reason_codes: codes,
+          remedies: executable,
+        }
+      : null,
+  };
+}
+
+export function guardRefusalOutput(
+  projectDir: string,
+  refusal: GuardRefusal,
+  attempt: GuardAttemptState,
+  resourceFingerprints: ReadonlyArray<string> = [],
+): string {
+  const streak = recordGuardRefusal(
+    projectDir,
+    refusal,
+    attempt,
+    resourceFingerprints,
+  );
+  return streak.ask === null
+    ? refusal.userMessage
+    : JSON.stringify(streak.ask);
+}
+
 export function recoveryGuidance(
   _projectDir: string,
   stateContent: string,
   stageSlug: string,
 ): string {
-  const stage = parseCheckboxes(stateContent).find(
-    (entry) => entry.slug === stageSlug,
-  );
-  if (stage?.suffix.startsWith("SKIP")) {
-    return (
-      "This stage is excluded from the current plan; change to a scope that " +
-      `includes it with /aidlc --scope <scope>, then restart ${stageSlug}.`
-    );
-  }
-  if (!stage || stage.state === "pending") {
-    return (
-      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
-      "answers survive, and the stage will ask for confirmation again."
-    );
-  }
-  if (stage.state === "skipped") {
-    return (
-      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
-      "answers survive, and the stage will ask for confirmation again."
-    );
-  }
-  if (
-    stage.state === "in-progress" ||
-    stage.state === "awaiting-approval"
-  ) {
-    return (
-      "To change this document, tell me what should change and I'll record your " +
-      "Request Changes decision (this works before the gate opens); that unlocks " +
-      "the file for revision and a fresh review."
-    );
-  }
-  if (stage.state === "revising") {
-    return (
-      "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
-      `/aidlc --stage ${stageSlug} (your recorded answers survive; you will ` +
-      "re-confirm the summary once)."
-    );
-  }
-  if (stage.state === "completed") {
-    return (
-      "This stage is already approved; restore the reviewed source state, or " +
-      `jump back with /aidlc --stage ${stageSlug} to redo it.`
-    );
-  }
-  return (
-    `Restart this stage with /aidlc --stage ${stageSlug}; the recorded answers ` +
-    "survive, and the stage will ask for confirmation again."
-  );
+  const refusal = evaluateGuardRefusal({
+    code: "REVIEW_RECOVERY_EXHAUSTED",
+    blockedAction: "review",
+    stage: stageSlug,
+    stateContent,
+    invariant: "A review attempt can be reset only through a sanctioned boundary.",
+    userMessage: "",
+    attempt: {
+      recovery: "spent",
+      summaryCoverage: "current",
+      reviewCoverage: "stale",
+      sourceCoverage: "stale",
+    },
+    humanAuthority: {
+      freshTurn: false,
+      unattended: process.env.AIDLC_UNATTENDED === "1",
+    },
+  });
+  return refusal.remedies.find((remedy) => remedy.executableNow)?.action ??
+    restartStageRemedy(stageSlug).action;
 }
 
 export function setCheckbox(
@@ -22261,7 +23426,17 @@ export function emitError(
       // Audit write failed — we're already in an error path, swallow.
     }
   }
-  console.error(JSON.stringify({ error: msg }));
+  let structuredGuardAsk = false;
+  try {
+    const parsed: unknown = JSON.parse(msg);
+    structuredGuardAsk =
+      isPlainObject(parsed) &&
+      parsed.kind === "ask" &&
+      parsed.ask_type === GUARD_RECOVERY_ASK_TYPE;
+  } catch {
+    // Ordinary error text is wrapped in the stable {error} envelope below.
+  }
+  console.error(structuredGuardAsk ? msg : JSON.stringify({ error: msg }));
   process.exit(1);
 }
 

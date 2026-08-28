@@ -929,6 +929,8 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       "--result",
       "rejected",
       "--user-input",
+      "Request Changes",
+      "--reason",
       "Change alpha only",
     ]);
     expect(rejected.kind).toBe("print");
@@ -937,6 +939,51 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const stage = findStageBySlug("functional-design")!;
     const reviews = freshReviewReceipts(proj, state(proj), stage);
     expect([...reviews.unitVerdicts.keys()]).toEqual(["beta"]);
+
+    expect(
+      runState(proj, [
+        "unit",
+        "start",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+      ]).rc,
+    ).toBe(0);
+    coverUnit(proj, "alpha", "functional-design");
+    expect(
+      runState(proj, [
+        "unit",
+        "complete",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+      ]).rc,
+    ).toBe(0);
+    logReviewReady(
+      proj,
+      "functional-design",
+      "alpha",
+      "aidlc-architecture-reviewer-agent",
+    );
+    const revised = runReport(proj, [
+      "--stage",
+      "functional-design",
+      "--unit",
+      "alpha",
+      "--result",
+      "revised",
+    ]);
+    expect(revised.kind, JSON.stringify(revised)).toBe("print");
+    expect(
+      unitGateStatus(
+        proj,
+        "functional-design",
+        "alpha",
+        "per-stage",
+      ),
+    ).toBe("awaiting-approval");
   }, 60000);
 
   test("team gates record review finding dispositions for only the gated Unit", () => {

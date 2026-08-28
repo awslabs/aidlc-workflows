@@ -550,6 +550,68 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(audit).toContain("**Hash Scope**: confirmed-content-v1");
     });
 
+    test("summary prompts do not survive workflow, jump, stage-start, or rejection floors", () => {
+      const boundaries: Array<{
+        event: string;
+        fields: Record<string, string>;
+      }> = [
+        { event: "WORKFLOW_STARTED", fields: { Scope: "feature" } },
+        {
+          event: "STAGE_JUMPED",
+          fields: { From: "feasibility", To: "feasibility" },
+        },
+        { event: "STAGE_STARTED", fields: { Stage: "feasibility" } },
+        { event: "GATE_REJECTED", fields: { Stage: "feasibility" } },
+      ];
+      for (let index = 0; index < boundaries.length; index++) {
+        if (index > 0) {
+          cleanupTestProject(proj);
+          proj = createTestProject();
+          seedStateFile(proj, MID_IDEATION);
+        }
+        const slug = field(proj, "Current Stage");
+        const questions = summaryQuestions(proj);
+        expect(
+          guardedLog(proj, [
+            "decision",
+            "--stage",
+            slug,
+            "--checkpoint",
+            "summary-confirmation",
+            "--questions-file",
+            questions,
+            "--decision",
+            "Does this all look correct?",
+            "--options",
+            "Looks correct,Request changes",
+          ]).rc,
+        ).toBe(0);
+        appendAuditEntry(
+          boundaries[index].event,
+          boundaries[index].fields,
+          proj,
+        );
+        summaryQuestions(proj, "Looks correct");
+        recordHumanTurn(proj);
+        const answer = guardedLog(proj, [
+          "answer",
+          "--stage",
+          slug,
+          "--checkpoint",
+          "summary-confirmation",
+          "--questions-file",
+          questions,
+          "--details",
+          "Looks correct",
+        ]);
+        expect(answer.rc, boundaries[index].event).not.toBe(0);
+        expect(answer.out).toContain(
+          "no matching unanswered summary question",
+        );
+        expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
+      }
+    });
+
     test("summary confirmation refuses a same-second cross-shard human turn", () => {
       const slug = field(proj, "Current Stage");
       const questions = summaryQuestions(proj, "Looks correct");
@@ -1060,6 +1122,53 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(readAllAuditShards(proj)).toContain(
         "**Details**: Reject option B, use A",
       );
+    });
+
+    test("a same-second cross-shard decision/resolution tie fails closed at an open gate", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      const dir = dirname(seededAuditShard(proj));
+      mkdirSync(dir, { recursive: true });
+      Bun.sleepSync(1100);
+      const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+      writeFileSync(
+        join(dir, "aaa-decision.md"),
+        [
+          "## Decision Recorded",
+          `**Timestamp**: ${timestamp}`,
+          "**Event**: DECISION_RECORDED",
+          `**Stage**: ${slug}`,
+          "",
+          "---",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(dir, "zzz-answer.md"),
+        [
+          "## Question Answered",
+          `**Timestamp**: ${timestamp}`,
+          "**Event**: QUESTION_ANSWERED",
+          `**Stage**: ${slug}`,
+          "",
+          "---",
+          "",
+        ].join("\n"),
+      );
+      Bun.sleepSync(1100);
+      recordHumanTurn(proj);
+      const before = eventCount(proj, "QUESTION_ANSWERED");
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "Reject option B, use A",
+      ]);
+      expect(answer.rc, answer.out).toBe(0);
+      expect(answer.out).toContain("approval-gate-report-owned");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(before);
     });
   });
 });

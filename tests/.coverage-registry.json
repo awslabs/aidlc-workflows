@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 817,
+    "total": 833,
     "enumeratedByClass": {
-      "function": 519,
+      "function": 535,
       "audit": 91,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 299,
+      "function": 313,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -1280,6 +1280,42 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:attemptEventAfterFrontier",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:attemptEventDefinitelyBefore",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:attemptEventIsCrossShardTied",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:auditBlockField",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1457,6 +1493,18 @@
         {
           "file": "tests/integration/t327-team-dispatcher.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:candidateReviewCoverageProjection",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -2340,6 +2388,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:evaluateGuardRefusal",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:eventMatchesClaimAttempt",
       "minMechanism": "none",
       "coveredBy": [
@@ -2559,6 +2619,32 @@
       "coveredBy": [
         {
           "file": "tests/unit/t213-scope-cost-summary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GUARD_RECOVERY_ASK_TYPE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GUARD_REFUSAL_STREAK_CAP",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRefusalOutput",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
           "mechanism": "none"
         }
       ],
@@ -3442,6 +3528,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:maximalAttemptEvents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:memoryDirFor",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4310,6 +4408,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recordGuardRefusal",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordHookDrop",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4496,6 +4606,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:requestChangesResetIsExecutable",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:requireLiveClaimForTeamUnit",
       "minMechanism": "none",
       "coveredBy": [
@@ -4532,6 +4654,18 @@
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resetGuardRefusalStreak",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -4801,6 +4935,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewAttemptAccounting",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewAttemptWindow",
       "minMechanism": "none",
       "coveredBy": [
@@ -4857,6 +5003,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewInvalidationAttemptView",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5197,6 +5355,18 @@
         },
         {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sortAttemptEvents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
           "mechanism": "none"
         }
       ],
@@ -6181,6 +6351,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t69.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:worktreeReviewAttemptProjection",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
           "mechanism": "none"
         }
       ],

@@ -277,8 +277,8 @@ describe("t291 stale review receipt recovery", () => {
     expect(spent.stderr).toContain(
       "one recovery review was already used",
     );
-    expect(spent.stderr).toContain("human Request Changes decision");
-    expect(spent.stderr).toContain("human's behalf");
+    expect(spent.stderr).not.toContain("human Request Changes decision");
+    expect(spent.stderr).not.toContain("human's behalf");
     expect(spent.stderr).toContain("restore the reviewed source state");
     expect(spent.stderr).toContain("/aidlc --stage requirements-analysis");
   });

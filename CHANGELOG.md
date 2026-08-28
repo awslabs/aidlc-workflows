@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.124] - 2026-08-28
+
+One systemic fix for the class of workflow dead ends where an integrity refusal prescribed a remedy that another guard refused. Every guard refusal now computes its recovery options from the live workflow state, a repeated identical refusal halts into a single recovery question instead of looping, and review/summary attempt state is derived through one shared reducer instead of five independent audit scans. **Upgrade:** re-copy your harness's `dist/<harness>/` tree into the project so the updated tools, review-freeze hook, and orchestrator skill replace the old copies.
+
+* Refusals from gate opening, revision, completion, review recording, and the review-freeze hook name only remedies executable in the current stage state: Request Changes before the gate opens, a redo jump from a revising stage, source restore or a backward jump from a completed stage, abort/discard plus a fresh Bolt for autonomous units. The "Only a human Request Changes decision resets the review attempt" sentence no longer appears in states where that decision is invalid.
+* When the same guard state refuses a third time without progress, the engine returns a structured `guard-recovery` question listing only executable recovery actions; it never records a decision for the human, restores a review budget, or mints a receipt.
+* Team unit gates: `report --result rejected` for a unit requires the exact "Request Changes" choice, and unit revise validates the unit gate ledger instead of the global stage checkbox, so team revision cycles no longer wedge on a checkbox that team gates never set.
+* An unanswered summary prompt no longer survives a workflow restart, stage jump, or rejection boundary, and pending-decision checks are shard-aware, failing closed on cross-shard timestamp ties.
+* Source-freshness refusals distinguish an unbindable source boundary (repair `.aidlc-source-paths.json` or the boundary) from real source drift (revert or re-review).
+* Unattended mode (`AIDLC_UNATTENDED=1`): the team released-attempt recovery refusal names the real exit (unset the flag, then answer) instead of demanding a human turn that unattended mode cannot mint.
+* A crashed Bolt worktree's "already exists" error points at finishing the existing Bolt's complete/merge and audit-merge path instead of suggesting nothing.
+
 ## [2.6.123] - 2026-08-28
 
 Cursor now preserves delegated-agent attribution and reviewer-state integrity across POSIX and Windows path dialects, shell wrappers, Git configuration surfaces, filesystem traversal, and executable lookup changes. **Upgrade:** re-copy `dist/cursor/` into the project so the updated Cursor adapter, shared review-freeze parser, and version metadata replace the vulnerable hooks.

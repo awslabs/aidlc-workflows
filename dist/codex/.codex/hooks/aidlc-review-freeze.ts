@@ -55,9 +55,12 @@ import {
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
+  checkSummaryConfirmationEvidence,
   errorMessage,
+  evaluateGuardRefusal,
   freshReviewReceipts,
   getField,
+  guardRefusalOutput,
   hooksHealthDir,
   intentRepos,
   isClaudeCodeHookInput,
@@ -71,6 +74,7 @@ import {
   recoveryGuidance,
   releaseAuditLock,
   resolveReviewClass,
+  reviewAttemptWindow,
   resolveProjectDirFromHook,
   type StageEntry,
 } from "../tools/aidlc-lib.ts";
@@ -291,6 +295,8 @@ export async function run(input: string): Promise<number> {
 
   let verdict: FreezeVerdict = { block: false };
   let stateContent = "";
+  let blockedReceipts: ReturnType<typeof freshReviewReceipts> | null = null;
+  let blockedStage: StageEntry | null = null;
   try {
     const content = readStateFile(projectDir);
     stateContent = content;
@@ -322,7 +328,11 @@ export async function run(input: string): Promise<number> {
           reviewClass,
         });
         verdict = judgeFreeze(stage, file, recordedRepos, receipts);
-        if (verdict.block) break;
+        if (verdict.block) {
+          blockedReceipts = receipts;
+          blockedStage = stage;
+          break;
+        }
       }
       if (verdict.block) break;
     }
@@ -363,12 +373,94 @@ export async function run(input: string): Promise<number> {
     // Advisory emission only.
   }
 
-  const guidance = reviewFreezeRecoveryGuidance(
+  const stage = blockedStage;
+  const receipts = blockedReceipts;
+  if (stage === null || receipts === null) {
+    process.stderr.write(`${blockReason(verdict)}\n`);
+    return 2;
+  }
+  const pending =
+    verdict.unit === undefined
+      ? receipts.stagePending
+      : receipts.unitPending.get(verdict.unit);
+  const stale =
+    verdict.unit === undefined
+      ? receipts.stageStaleProgress
+      : receipts.unitStaleProgress.get(verdict.unit);
+  const view = reviewAttemptWindow(projectDir, stateContent, stage);
+  const floor = view.events[view.floorIdx];
+  const summaryEvidence = checkSummaryConfirmationEvidence(
     projectDir,
-    stateContent,
-    verdict.stage ?? "",
+    stage,
+    { stateContent },
   );
-  process.stderr.write(`${blockReason(verdict, guidance)}\n`);
+  const attempt = {
+    floor:
+      floor === undefined
+        ? ""
+        : `${floor.event}:${floor.timestamp}:${floor.shard}:${floor.pos}`,
+    recovery: pending?.recovery
+      ? "pending" as const
+      : stale?.recoverySpent ||
+          receipts.sourceStaleProgress?.recoverySpent ||
+          receipts.sourceRecoverySpent
+        ? "spent" as const
+        : "available" as const,
+    ...(pending
+      ? {
+          pendingReview: {
+            iteration: pending.iteration,
+            retryable: pending.state === "retry-required",
+          },
+        }
+      : {}),
+    summaryCoverage: summaryEvidence.ok
+      ? "current" as const
+      : summaryEvidence.message.includes("no fresh human-backed")
+        ? "missing" as const
+        : "stale" as const,
+    reviewCoverage: "current" as const,
+    sourceCoverage:
+      receipts.sourceStaleReason === "boundary-unbindable"
+        ? "unbindable" as const
+        : receipts.sourceStale
+          ? "stale" as const
+          : receipts.newestSourceFingerprint
+            ? "current" as const
+            : "missing" as const,
+  };
+  const evaluated = evaluateGuardRefusal({
+    code: "REVIEW_FREEZE_ACTIVE",
+    blockedAction: `artifact-write:${verdict.target ?? ""}`,
+    stage: stage.slug,
+    ...(verdict.unit ? { unit: verdict.unit } : {}),
+    stateContent,
+    invariant: "A terminal review continues to cover the bytes it certified.",
+    userMessage: "",
+    attempt,
+    humanAuthority: {
+      freshTurn: false,
+      unattended: process.env.AIDLC_UNATTENDED === "1",
+    },
+  });
+  const guidance =
+    evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??
+    reviewFreezeRecoveryGuidance(projectDir, stateContent, stage.slug);
+  const refusal = {
+    ...evaluated,
+    userMessage: blockReason(verdict, guidance),
+  };
+  process.stderr.write(
+    `${guardRefusalOutput(projectDir, refusal, attempt, [
+      `source:${receipts.newestSourceFingerprint ?? "none"}`,
+      `stage-review:${receipts.stageIteration ?? "none"}`,
+      `unit-review:${
+        verdict.unit === undefined
+          ? "none"
+          : receipts.unitIterations.get(verdict.unit) ?? "none"
+      }`,
+    ])}\n`,
+  );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 

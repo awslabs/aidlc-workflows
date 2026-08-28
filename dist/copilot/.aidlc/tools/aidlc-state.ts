@@ -51,6 +51,7 @@ import {
   effectiveUnitGateRhythm,
   emitError,
   errorMessage,
+  evaluateGuardRefusal,
   eventMatchesClaimAttempt,
   extractMarkdownSection,
   filterProducesByKind,
@@ -60,6 +61,7 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  guardRefusalOutput,
   harnessDir,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
@@ -95,6 +97,7 @@ import {
   readUnitScopeStamp,
   recordDir,
   recoveryGuidance,
+  requestChangesResetIsExecutable,
   relativeCodekbDir,
   relativeMemoryPath,
   relativeRecordDir,
@@ -105,6 +108,7 @@ import {
   resolveBoltDag,
   requireLiveClaimForTeamUnit,
   reviewArtifactFingerprint,
+  reviewAttemptWindow,
   reviewerGateGuardDisabled,
   resolveReviewClass,
   resolveWorkflowSelection,
@@ -3327,22 +3331,32 @@ function verifyStageArtifacts(
   if (settledSwarm) return;
 
   if (!producesArtifactsExist(pd, stage)) {
-    error(
+    const message =
       `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
         `to produce output before the gate. Produce the artifacts before completing. ` +
-        `(declared: ${(stage.produces ?? []).join(", ") || "none"})`
-    );
+        `(declared: ${(stage.produces ?? []).join(", ") || "none"})`;
+    refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
+      code: "REQUIRED_ARTIFACTS_MISSING",
+      blockedAction: action,
+      invariant: "Every applicable required output exists before certification.",
+      userMessage: message,
+    });
   }
 
   if (stage.workspace_requires && !workspaceHasWork(pd)) {
-    error(
+    const message =
       `${reviewerPreconditionPrefix(stage.slug, action)}: it is a code-producing stage ` +
         `(workspace_requires) but no source work is evident outside the aidlc/ ` +
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
-        `do not satisfy ${stage.name} - write the code to the workspace.`
-    );
+        `do not satisfy ${stage.name} - write the code to the workspace.`;
+    refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
+      code: "REQUIRED_SOURCE_WORK_MISSING",
+      blockedAction: action,
+      invariant: "A workspace-producing stage contains application source work.",
+      userMessage: message,
+    });
   }
 }
 
@@ -3364,7 +3378,18 @@ function verifySummaryConfirmationPrecondition(
   const evidence = checkSummaryConfirmationEvidence(pd, stage, {
     stateContent: content,
   });
-  if (!evidence.ok) error(evidence.message);
+  if (!evidence.ok) {
+    refuseStateGuard(pd, content, stage, {
+      code: "SUMMARY_EVIDENCE_INVALID",
+      blockedAction: "summary-confirmation",
+      invariant:
+        "Generated outputs descend from a current human-backed summary confirmation.",
+      userMessage: evidence.message,
+      summaryCoverage: evidence.message.includes("no fresh human-backed")
+        ? "missing"
+        : "stale",
+    });
+  }
 }
 
 // --- Reviewer precondition (§12a / RFC Track 1) -----------------------------
@@ -3400,6 +3425,149 @@ function reviewerPreconditionPrefix(
   return action === "present-approval-gate"
     ? `Cannot present "${slug}" for approval`
     : `Cannot complete "${slug}"`;
+}
+
+function refuseStateGuard(
+  pd: string,
+  content: string,
+  stage: {
+    slug: string;
+    phase?: string;
+    for_each?: string;
+    reviewer?: string;
+    review_artifact?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
+  input: {
+    code: string;
+    blockedAction: string;
+    invariant: string;
+    userMessage: string;
+    unit?: string;
+    receipts?: ReturnType<typeof freshReviewReceipts>;
+    summaryCoverage?: "current" | "stale" | "missing";
+    teamGateStatus?: "pending" | "awaiting-approval" | "revising" | "approved";
+    autonomousBolt?: {
+      unit: string;
+      slug: string | null;
+      batch: string | null;
+    };
+  },
+): never {
+  const attemptView = reviewAttemptWindow(pd, content, stage);
+  const floorEvent = attemptView.events[attemptView.floorIdx];
+  let receipts = input.receipts;
+  if (
+    receipts === undefined &&
+    stage.reviewer !== undefined &&
+    stage.phase !== undefined
+  ) {
+    const reviewClass = resolveReviewClass(
+      stage.review_class ?? "adversarial",
+      getField(content, "Scope") ?? "",
+      content,
+    );
+    receipts = freshReviewReceipts(
+      pd,
+      content,
+      {
+        ...stage,
+        phase: stage.phase,
+      },
+      {
+        reviewClass,
+        attemptWindow: attemptView,
+      },
+    );
+  }
+  const unitVerdict =
+    input.unit === undefined
+      ? receipts?.stageVerdict ?? null
+      : receipts?.unitVerdicts.get(input.unit) ?? null;
+  const unitStale =
+    input.unit === undefined
+      ? receipts?.stageStale === true
+      : receipts?.unitStale.has(input.unit) === true;
+  const pending =
+    input.unit === undefined
+      ? receipts?.stagePending ?? null
+      : receipts?.unitPending.get(input.unit) ?? null;
+  const staleProgress =
+    input.unit === undefined
+      ? receipts?.stageStaleProgress ?? null
+      : receipts?.unitStaleProgress.get(input.unit) ?? null;
+  const recoverySpent =
+    staleProgress?.recoverySpent === true ||
+    receipts?.sourceStaleProgress?.recoverySpent === true ||
+    receipts?.sourceRecoverySpent === true;
+  const attempt = {
+    floor:
+      floorEvent === undefined
+        ? ""
+        : `${floorEvent.event}:${floorEvent.timestamp}:${floorEvent.shard}:${floorEvent.pos}`,
+    recovery: pending?.recovery
+      ? "pending" as const
+      : recoverySpent
+        ? "spent" as const
+        : "available" as const,
+    ...(pending
+      ? {
+          pendingReview: {
+            iteration: pending.iteration,
+            retryable: pending.state === "retry-required",
+          },
+        }
+      : {}),
+    summaryCoverage: input.summaryCoverage ?? "current" as const,
+    reviewCoverage:
+      unitVerdict !== null
+        ? "current" as const
+        : unitStale || receipts?.sourceStale
+          ? "stale" as const
+          : "missing" as const,
+    sourceCoverage:
+      receipts?.sourceStaleReason === "boundary-unbindable"
+        ? "unbindable" as const
+        : receipts?.sourceStale
+          ? "stale" as const
+          : receipts?.newestSourceFingerprint === null ||
+              receipts === undefined
+            ? "missing" as const
+            : "current" as const,
+  };
+  const refusal = evaluateGuardRefusal({
+    code: input.code,
+    blockedAction: input.blockedAction,
+    stage: stage.slug,
+    ...(input.unit ? { unit: input.unit } : {}),
+    stateContent: content,
+    invariant: input.invariant,
+    userMessage: input.userMessage,
+    attempt,
+    humanAuthority: {
+      freshTurn: humanActedSinceGate(pd),
+      unattended: process.env.AIDLC_UNATTENDED === "1",
+    },
+    ...(input.teamGateStatus
+      ? { teamGateStatus: input.teamGateStatus }
+      : {}),
+    ...(input.autonomousBolt ? { autonomousBolt: input.autonomousBolt } : {}),
+  });
+  const resources = [
+    `source:${receipts?.newestSourceFingerprint ?? "none"}`,
+    `stage-review:${receipts?.stageIteration ?? "none"}`,
+    `unit-review:${
+      input.unit === undefined
+        ? "none"
+        : receipts?.unitIterations.get(input.unit) ?? "none"
+    }`,
+  ];
+  error(guardRefusalOutput(pd, refusal, attempt, resources));
 }
 
 function verifyReviewerPrecondition(
@@ -3461,11 +3629,21 @@ function verifyReviewerPrecondition(
       pendingRecoveryUnits.length > 0
         ? ` for Unit${pendingRecoveryUnits.length === 1 ? "" : "s"} ${pendingRecoveryUnits.join(", ")}`
         : "";
-    error(
+    const message =
       `${reviewerPreconditionPrefix(stage.slug, action)}: the recovery review${scope} ` +
         "is still in progress. Finish that review and record its result before " +
-        "presenting the gate or completing the stage.",
-    );
+        "presenting the gate or completing the stage.";
+    refuseStateGuard(pd, content, stage, {
+      code: "REVIEW_RECOVERY_PENDING",
+      blockedAction: action,
+      invariant: "A pending recovery request receives its matching verdict.",
+      userMessage: message,
+      receipts,
+      unit:
+        pendingRecoveryUnits.length === 1
+          ? pendingRecoveryUnits[0]
+          : undefined,
+    });
   }
 
   // Source-state equality composes with v2's bounded stale-receipt recovery.
@@ -3548,9 +3726,10 @@ function verifyReviewerPrecondition(
     staleSourcePreconditionError(
       pd,
       content,
-      stage.slug,
+      stage,
       reviewer,
-      receipts.sourceStaleProgress?.recoverySpent === true,
+      receipts,
+      action,
     );
   }
 
@@ -3573,13 +3752,13 @@ function verifyReviewerPrecondition(
         staleReviewPreconditionError(
           pd,
           content,
-          stage.slug,
+          stage,
           reviewer,
-          receipts.stageStaleProgress?.recoverySpent === true,
+          receipts,
           action,
         );
       }
-      reviewerPreconditionError(stage.slug, reviewer, action);
+      reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
     }
     return;
   }
@@ -3598,7 +3777,7 @@ function verifyReviewerPrecondition(
   if (noDagObserved) {
     if (receipts.mergedBoltUnits.size === 0) {
       if (!sawStageReview) {
-        reviewerPreconditionError(stage.slug, reviewer, action);
+        reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
       }
       return;
     }
@@ -3606,7 +3785,7 @@ function verifyReviewerPrecondition(
     reviewUnits = [...receipts.mergedBoltUnits].sort();
   } else if (resolution.units.length === 0) {
     if (!sawStageReview) {
-      reviewerPreconditionError(stage.slug, reviewer, action);
+      reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
     }
     return;
   } else {
@@ -3660,7 +3839,9 @@ function verifyReviewerPrecondition(
         recoverySpent.length > 0
           ? ` Recovery was already spent for ${recoverySpent.join(", ")}. ` +
             recoveryGuidance(pd, content, stage.slug) +
-            " Only a human Request Changes decision resets that review attempt."
+            (requestChangesResetIsExecutable(content, stage.slug)
+              ? " Only a human Request Changes decision resets that review attempt."
+              : "")
           : "";
       error(
         `${reviewerPreconditionPrefix(stage.slug, action)}: merged Bolt ` +
@@ -3699,9 +3880,11 @@ function verifyReviewerPrecondition(
             `attempt restores one review allowance.`
           : `For units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
             `the one recovery review was already used and their output changed ` +
-            `again. ${recoveryGuidance(pd, content, stage.slug)} Only a human ` +
-            `Request Changes decision resets the review attempt; do not record ` +
-            `that rejection on the human's behalf.`,
+            `again. ${recoveryGuidance(pd, content, stage.slug)}` +
+            (requestChangesResetIsExecutable(content, stage.slug)
+              ? " Only a human Request Changes decision resets the review attempt; " +
+                "do not record that rejection on the human's behalf."
+              : ""),
       );
     }
     if (neverReviewed.length > 0) {
@@ -3764,24 +3947,73 @@ function verifyReviewerPrecondition(
 function staleSourcePreconditionError(
   pd: string,
   content: string,
-  slug: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    reviewer?: string;
+    review_artifact?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
   reviewer: string,
-  recoverySpent: boolean,
+  receipts: ReturnType<typeof freshReviewReceipts>,
+  action: ReviewerPreconditionAction,
 ): never {
+  const slug = stage.slug;
+  const recoverySpent =
+    receipts.sourceStaleProgress?.recoverySpent === true;
+  const reason = receipts.sourceStaleReason;
+  if (reason === "boundary-unbindable") {
+    const message =
+      `Refusing to complete "${slug}": the reviewed source boundary could not be ` +
+        "fingerprinted, so this is not evidence that application source changed. " +
+        "Repair .aidlc-source-paths.json or the workspace source boundary, then " +
+        `record a fresh review by ${reviewer}. ${recoveryGuidance(pd, content, slug)}` +
+        (recoverySpent && requestChangesResetIsExecutable(content, slug)
+          ? " Only a human Request Changes decision resets the review attempt; do not " +
+            "record that rejection on the human's behalf."
+          : "");
+    refuseStateGuard(pd, content, stage, {
+      code: "SOURCE_BOUNDARY_UNBINDABLE",
+      blockedAction: action,
+      invariant: "Reviewed source is bound to a reproducible workspace boundary.",
+      userMessage: message,
+      receipts,
+    });
+  }
   if (recoverySpent) {
-    error(
+    const message =
       `Refusing to complete "${slug}": the workspace source changed again after ` +
         `the one recovery review by ${reviewer} (source-fingerprint mismatch). ` +
         `${recoveryGuidance(pd, content, slug)} ` +
-        "Only a human Request Changes decision resets the review attempt; do not " +
-        "record that rejection on the human's behalf.",
-    );
+        (requestChangesResetIsExecutable(content, slug)
+          ? "Only a human Request Changes decision resets the review attempt; do not " +
+            "record that rejection on the human's behalf."
+          : "");
+    refuseStateGuard(pd, content, stage, {
+      code: "SOURCE_RECOVERY_SPENT",
+      blockedAction: action,
+      invariant: "The current source remains covered by the bounded review attempt.",
+      userMessage: message,
+      receipts,
+    });
   }
-  error(
+  const message =
     `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
       `reviewed it. Ask ${reviewer} to review the current source once more and record ` +
-      `the verdict, or revert the source change, then try again.`,
-  );
+      `the verdict, or revert the source change, then try again.`;
+  refuseStateGuard(pd, content, stage, {
+    code: "SOURCE_REVIEW_STALE",
+    blockedAction: action,
+    invariant: "The current source remains covered by reviewer evidence.",
+    userMessage: message,
+    receipts,
+  });
 }
 
 function verifyPipelineLinkPrecondition(
@@ -3805,33 +4037,62 @@ function verifyPipelineLinkPrecondition(
   const missing = evidence.missing.map(({ link, repo }) =>
     repo ? `${repo}:${link}` : link
   );
-  error(
+  const message =
     `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
       `recorded for the current run: ${missing.join(", ")}. Run aidlc-log.ts link after ` +
       `each agent returns` +
       `${evidence.repos.length > 0 ? " with --repo <repo>" : ""}, or set ` +
-      `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
-  );
+      `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`;
+  const content = readStateFile(pd);
+  refuseStateGuard(pd, content, stage, {
+    code: "PIPELINE_EVIDENCE_MISSING",
+    blockedAction: "complete",
+    invariant: "Every required pipeline handoff is recorded in the current attempt.",
+    userMessage: message,
+  });
 }
 
 function staleReviewPreconditionError(
   pd: string,
   content: string,
-  slug: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    reviewer?: string;
+    review_artifact?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
   reviewer: string,
-  recoverySpent: boolean,
+  receipts: ReturnType<typeof freshReviewReceipts>,
   action: ReviewerPreconditionAction = "complete",
 ): never {
+  const slug = stage.slug;
+  const recoverySpent =
+    receipts.stageStaleProgress?.recoverySpent === true;
   if (recoverySpent) {
-    error(
+    const message =
       `${reviewerPreconditionPrefix(slug, action)}: this stage's output document ` +
         `changed again after the one recovery review by ${reviewer}. ` +
         recoveryGuidance(pd, content, slug) +
-        " Only a human Request Changes decision resets the review attempt; do not " +
-        "record that rejection on the human's behalf."
-    );
+        (requestChangesResetIsExecutable(content, slug)
+          ? " Only a human Request Changes decision resets the review attempt; do not " +
+            "record that rejection on the human's behalf."
+          : "");
+    refuseStateGuard(pd, content, stage, {
+      code: "ARTIFACT_RECOVERY_SPENT",
+      blockedAction: action,
+      invariant: "The current output remains covered by the bounded review attempt.",
+      userMessage: message,
+      receipts,
+    });
   }
-  error(
+  const message =
     `${reviewerPreconditionPrefix(slug, action)} because an output document changed after ` +
       `${reviewer} reviewed it. Run ` +
       `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
@@ -3840,34 +4101,68 @@ function staleReviewPreconditionError(
       `review, stop editing this stage's output documents. If the recovery pass was already ` +
       `spent, present the situation to the human at the approval gate; a human ` +
       `Request Changes decision resets the review attempt. Do not record a rejection ` +
-      `on the human's behalf.`
-  );
+      `on the human's behalf.`;
+  refuseStateGuard(pd, content, stage, {
+    code: "ARTIFACT_REVIEW_STALE",
+    blockedAction: action,
+    invariant: "The current output remains covered by reviewer evidence.",
+    userMessage: message,
+    receipts,
+  });
 }
 
 function reviewerPreconditionError(
-  slug: string,
+  pd: string,
+  content: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    reviewer?: string;
+    review_artifact?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
   reviewer: string,
+  receipts: ReturnType<typeof freshReviewReceipts>,
   action: ReviewerPreconditionAction = "complete",
 ): never {
+  const slug = stage.slug;
   if (action === "present-approval-gate") {
-    error(
+    const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
         `current output. Apply any fixes first, then request the review with ` +
         `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
         `<next ordinal>\` and record its verdict with the same command plus ` +
         `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
         `this stage's output documents; include suggestions from a READY review in the ` +
-        `approval summary instead.`,
-    );
+        `approval summary instead.`;
+    refuseStateGuard(pd, content, stage, {
+      code: "REVIEW_EVIDENCE_MISSING",
+      blockedAction: action,
+      invariant: "Reviewer-bearing stages have current terminal review evidence.",
+      userMessage: message,
+      receipts,
+    });
   }
-  error(
+  const message =
     `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
       `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
       `${slug} --reviewer ${reviewer} --iteration <next ordinal>\` and record its verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
       `verdict, do not edit this stage's output documents; include suggestions from a ` +
-      `READY review in the approval summary instead.`
-  );
+      `READY review in the approval summary instead.`;
+  refuseStateGuard(pd, content, stage, {
+    code: "REVIEW_EVIDENCE_MISSING",
+    blockedAction: action,
+    invariant: "Reviewer-bearing stages have current terminal review evidence.",
+    userMessage: message,
+    receipts,
+  });
 }
 
 function reviewRecoverySpentInCurrentAttempt(
@@ -5409,12 +5704,33 @@ function handleRevise(args: string[]): void {
   const preflightContent = readStateFile(pd);
   const preflightStage = findStageBySlug(slug);
   if (!preflightStage) error(`Unknown stage: ${slug}`);
-  validateSlugInState(preflightContent, slug, "revising");
-  verifyGateOpeningGuards(
-    pd,
+  const preflightTeamGate = teamGateContext(
     preflightContent,
     preflightStage,
+    args.slice(1),
   );
+  if (preflightTeamGate) {
+    const status = unitGateStatus(
+      pd,
+      preflightStage.slug,
+      preflightTeamGate.unit,
+      preflightTeamGate.scope,
+    );
+    if (status !== "revising") {
+      error(
+        `Gate for unit "${preflightTeamGate.unit}" of "${preflightStage.slug}" is ${status}; ` +
+          "only a revising gate can re-enter approval.",
+      );
+    }
+    verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate);
+  } else {
+    validateSlugInState(preflightContent, slug, "revising");
+    verifyGateOpeningGuards(
+      pd,
+      preflightContent,
+      preflightStage,
+    );
+  }
   const gateSensorEvaluation = fireGateSensors(pd, preflightStage);
   enforceBlockingGateSensors(
     pd,

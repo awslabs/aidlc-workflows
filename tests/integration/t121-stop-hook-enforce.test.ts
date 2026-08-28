@@ -1716,25 +1716,35 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(drops).not.toContain("active stage code-generation");
   }, 30000);
 
-  test("(f2) solo cross-shard ties retain legacy filename/position ordering", () => {
-    const proj = makeProject();
-    seedInProgressWithQuestions(proj);
-    const ts = "2026-08-03T18:57:53Z";
-    writeFileSync(
-      join(seededAuditDir(proj), "aaaa-answer.md"),
-      `## STAGE_STARTED\n**Timestamp**: ${ts}\n**Event**: STAGE_STARTED\n` +
-        "**Stage**: requirements-analysis\n\n---\n" +
-        `## QUESTION_ANSWERED\n**Timestamp**: ${ts}\n**Event**: QUESTION_ANSWERED\n` +
-        "**Stage**: requirements-analysis\n\n---\n",
-    );
-    writeFileSync(
-      join(seededAuditDir(proj), "zzzz-decision.md"),
-      `## DECISION_RECORDED\n**Timestamp**: ${ts}\n**Event**: DECISION_RECORDED\n` +
-        "**Stage**: requirements-analysis\n\n---\n",
-    );
-    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
-    expect(r.rc).toBe(0);
-    expect(r.out).toBe("");
+  test("(f2) solo cross-shard decision ties fail closed regardless of filename order", () => {
+    for (const decisionFirst of [true, false]) {
+      const proj = makeProject();
+      seedInProgressWithQuestions(proj);
+      const ts = "2026-08-03T18:57:53Z";
+      writeFileSync(
+        join(
+          seededAuditDir(proj),
+          decisionFirst ? "zzzz-answer.md" : "aaaa-answer.md",
+        ),
+        `## STAGE_STARTED\n**Timestamp**: ${ts}\n**Event**: STAGE_STARTED\n` +
+          "**Stage**: requirements-analysis\n\n---\n" +
+          `## QUESTION_ANSWERED\n**Timestamp**: ${ts}\n**Event**: QUESTION_ANSWERED\n` +
+          "**Stage**: requirements-analysis\n\n---\n",
+      );
+      writeFileSync(
+        join(
+          seededAuditDir(proj),
+          decisionFirst ? "aaaa-decision.md" : "zzzz-decision.md",
+        ),
+        `## DECISION_RECORDED\n**Timestamp**: ${ts}\n**Event**: DECISION_RECORDED\n` +
+          "**Stage**: requirements-analysis\n\n---\n",
+      );
+      const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+      expect(r.rc).toBe(0);
+      expect((JSON.parse(r.out) as { decision?: string }).decision).toBe(
+        "block",
+      );
+    }
   }, 30000);
 
   test("(f2) team unit-major uses the later active stage for an unresolved logged decision", () => {

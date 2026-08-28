@@ -93,6 +93,7 @@ import {
   type AskDirective,
   type Directive,
   type ErrorDirective,
+  type GuardRecoveryAskDirective,
   GATE_UNRESOLVED,
   type GateValue,
   type LegacyPlanApprovalChoices,
@@ -6950,6 +6951,27 @@ function spawnState(
   };
 }
 
+function guardRecoveryAskFromToolOutput(
+  output: string,
+): GuardRecoveryAskDirective | null {
+  if (output.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return null;
+  }
+  const result = validateDirective(parsed);
+  if (
+    !result.valid ||
+    result.data.kind !== "ask" ||
+    result.data.ask_type !== "guard-recovery"
+  ) {
+    return null;
+  }
+  return result.data;
+}
+
 // The synthetic single-stage owner uses the internal append route because
 // STAGE_STARTED/STAGE_COMPLETED are protected lifecycle events.
 // appendAuditEntries validates the requested boundary before touching disk and
@@ -7798,7 +7820,18 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(["gate-start", slug, "--unit", unit]);
       } else if (flags.result === "rejected") {
-        const feedback = (flags.userInput ?? flags.reason)?.trim();
+        if (
+          process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1" &&
+          flags.userInput?.trim() !== "Request Changes"
+        ) {
+          emit(errorDirective(
+            `report --result rejected for unit "${unit}" of "${slug}" received reply ` +
+              `${formatReceivedReply(flags.userInput)} which did not match the offered ` +
+              'choice "Request Changes".',
+          ));
+          return;
+        }
+        const feedback = (flags.reason ?? flags.userInput)?.trim();
         if (!feedback) {
           emit(errorDirective(
             `report --result rejected for unit "${unit}" of "${slug}" requires nonblank --user-input or --reason feedback.`,
@@ -7806,6 +7839,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           return;
         }
         const rejectArgs = ["reject", slug, "--feedback", feedback, "--unit", unit];
+        if (flags.userInput) {
+          rejectArgs.push("--user-input", flags.userInput);
+        }
         for (const finding of flags.rejectFindings ?? []) {
           rejectArgs.push("--reject-finding", finding);
         }
@@ -7838,6 +7874,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const res = spawnState(pd, subArgs);
         if (res.exitCode !== 0) {
           const detail = (res.stderr || res.stdout).trim();
+          const guardAsk = guardRecoveryAskFromToolOutput(detail);
+          if (guardAsk !== null) {
+            emit(guardAsk);
+            return;
+          }
           emit(errorDirective(
             `Transition rejected by aidlc-state.ts ${subArgs[0]} for unit "${unit}" of "${slug}"` +
               (detail ? `: ${detail}` : "."),
@@ -8037,6 +8078,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const res = spawnState(pd, subArgs);
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout).trim();
+      const guardAsk = guardRecoveryAskFromToolOutput(detail);
+      if (guardAsk !== null) {
+        emit(guardAsk);
+        return;
+      }
       emit(errorDirective(
         `Could not update the approval status for "${slug}"` +
           (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
@@ -8184,6 +8230,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       // aidlc-state.ts rejected the transition (error() exits non-zero). Surface
       // its message verbatim so the rejection is a clear signal, not a silent miss.
       const detail = (res.stderr || res.stdout).trim();
+      const guardAsk = guardRecoveryAskFromToolOutput(detail);
+      if (guardAsk !== null) {
+        emit(guardAsk);
+        return;
+      }
       emit({
         kind: "error",
         message:

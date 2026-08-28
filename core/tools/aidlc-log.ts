@@ -18,11 +18,13 @@ import {
   claimAttemptFields,
   emitError,
   errorMessage,
+  evaluateGuardRefusal,
   eventMatchesClaimAttempt,
   formatReceivedReply,
   freshReviewReceipts,
   filterProducesByKind,
   getField,
+  guardRefusalOutput,
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
@@ -36,7 +38,6 @@ import {
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
-  readAllAuditShards,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -44,11 +45,11 @@ import {
   recordDir,
   relativeRecordDir,
   recoveryGuidance,
-  reviewCompletionMatchesRequest,
+  requestChangesResetIsExecutable,
+  reviewAttemptAccounting,
   reviewArtifactSnapshot,
   reviewAppendixDigest,
   reviewAppendixEvidenceBytes,
-  reviewRequestBindingFromBlock,
   resolveBoltDag,
   reviewAttemptWindow,
   resolveProjectDir,
@@ -71,9 +72,9 @@ import {
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
 import type {
-  AuditShardEvent,
+  GuardAttemptState,
+  GuardRefusal,
   ReviewClass,
-  ReviewRequestBinding,
   ReviewVerdict,
 } from "./aidlc-lib.js";
 import {
@@ -349,49 +350,74 @@ function handleDecision(args: string[]): void {
 // avoids guessing from gate-option words that may also begin substantive
 // answers. Caller holds the audit lock, so this snapshot cannot race an emit.
 function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
-  const audit = readAllAuditShards(pd);
-  if (audit.length === 0) return false;
-
   const relevant = new Set([
     "STAGE_AWAITING_APPROVAL",
     "DECISION_RECORDED",
     "QUESTION_ANSWERED",
     "SUMMARY_CONFIRMATION_RECORDED",
   ]);
-  const events = audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position) => ({
-      event: auditBlockField(block, "Event") ?? "",
-      stage: auditBlockField(block, "Stage"),
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-      position,
-    }))
+  const events = readAuditShardEvents(pd)
     .filter((event) => relevant.has(event.event))
+    .map((event) => ({
+      ...event,
+      stage: auditBlockField(event.block, "Stage"),
+    }))
     .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) {
-        return a.timestamp < b.timestamp ? -1 : 1;
-      }
-      return a.position - b.position;
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
     });
+  if (events.length === 0) return false;
 
   const gateOpen = events.findLastIndex(
     (event) =>
       event.event === "STAGE_AWAITING_APPROVAL" && event.stage === stage,
   );
   if (gateOpen === -1) return false;
+  let start = gateOpen + 1;
+  const gateTimestampShards = new Set(
+    events
+      .filter((event) => event.timestamp === events[gateOpen].timestamp)
+      .map((event) => event.shard),
+  );
+  if (gateTimestampShards.size > 1) {
+    while (
+      start < events.length &&
+      events[start].timestamp === events[gateOpen].timestamp
+    ) {
+      start++;
+    }
+  }
 
   let pending = false;
-  for (const event of events.slice(gateOpen + 1)) {
-    if (event.stage !== stage) continue;
-    if (event.event === "DECISION_RECORDED") {
-      pending = true;
-    } else if (
-      event.event === "QUESTION_ANSWERED" ||
-      event.event === "SUMMARY_CONFIRMATION_RECORDED"
+  for (let groupStart = start; groupStart < events.length;) {
+    let groupEnd = groupStart + 1;
+    while (
+      groupEnd < events.length &&
+      events[groupEnd].timestamp === events[groupStart].timestamp
     ) {
-      pending = false;
+      groupEnd++;
     }
+    const matching = events
+      .slice(groupStart, groupEnd)
+      .filter((event) => event.stage === stage);
+    const shards = new Set(matching.map((event) => event.shard));
+    const decisions = matching.some(
+      (event) => event.event === "DECISION_RECORDED",
+    );
+    const resolutions = matching.some(
+      (event) =>
+        event.event === "QUESTION_ANSWERED" ||
+        event.event === "SUMMARY_CONFIRMATION_RECORDED",
+    );
+    if (shards.size > 1 && decisions && resolutions) {
+      pending = false;
+    } else {
+      for (const event of matching) {
+        pending = event.event === "DECISION_RECORDED";
+      }
+    }
+    groupStart = groupEnd;
   }
   return pending;
 }
@@ -405,8 +431,43 @@ function pendingSummaryDecision(
 ): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
   const entries = readAuditShardEvents(pd).filter((entry) => {
     if (entry.event === "HUMAN_TURN") return true;
+    if (workflow === undefined) {
+      if (
+        entry.event === "WORKFLOW_STARTED" ||
+        entry.event === "STAGE_JUMPED"
+      ) {
+        return !auditBlockField(entry.block, "Workflow")?.startsWith(
+          "single-stage:",
+        );
+      }
+      if (
+        entry.event === "STAGE_STARTED" &&
+        auditBlockField(entry.block, "Stage") === stage
+      ) {
+        return !auditBlockField(entry.block, "Workflow")?.startsWith(
+          "single-stage:",
+        );
+      }
+      if (entry.event === "GATE_REJECTED") {
+        const gateStages = (
+          auditBlockField(entry.block, "Gate Stages") ??
+            auditBlockField(entry.block, "Stage") ??
+            ""
+        )
+          .split(",")
+          .map((value) => value.trim());
+        const eventUnit = auditBlockField(entry.block, "Unit") ?? undefined;
+        return (
+          gateStages.includes(stage) &&
+          (eventUnit === undefined || eventUnit === unit) &&
+          (eventUnit === undefined ||
+            eventMatchesClaimAttempt(pd, entry.block, eventUnit))
+        );
+      }
+    }
     if (entry.event === "STAGE_COMPLETED") {
       return (
+        workflow !== undefined &&
         auditBlockField(entry.block, "Stage") === stage &&
         (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow
       );
@@ -459,7 +520,13 @@ function pendingSummaryDecision(
     );
   };
   const floors = latestFrontier(
-    entries.filter((entry) => entry.event === "STAGE_COMPLETED"),
+    entries.filter((entry) =>
+      entry.event === "WORKFLOW_STARTED" ||
+      entry.event === "STAGE_JUMPED" ||
+      entry.event === "STAGE_STARTED" ||
+      entry.event === "GATE_REJECTED" ||
+      entry.event === "STAGE_COMPLETED"
+    ),
   );
   const afterFloor = (entry: Entry): true | false | null => {
     if (floors.length === 0) return true;
@@ -1017,338 +1084,6 @@ function handleLink(args: string[]): void {
 // PER UNIT, so pass --unit; the approve guard requires one review per unit.
 const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
 
-type ReviewAttemptSummary = {
-  requestCount: number;
-  boltStarted: boolean;
-  boltBatch: string | null;
-  boltSlug: string | null;
-  pendingIterations: Set<number>;
-  pendingRequests: Map<
-    number,
-    {
-      binding: ReviewRequestBinding | null;
-      retried: boolean;
-    }
-  >;
-  recoveryIteration: number | null;
-  recoverySpent: boolean;
-  ambiguity: string | null;
-};
-
-// Count requests in the current stage/unit attempt. The same chronological
-// floors used by receipt freshness reset the budget on workflow start, jump,
-// stage re-entry, or gate rejection. A matching BOLT_STARTED is a stronger
-// per-unit floor because the forked audit inherits the main workflow's prior
-// rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
-function reviewAttemptSummary(
-  rows: AuditShardEvent[],
-  stateContent: string,
-  stage: { slug: string; for_each?: string; workspace_requires?: boolean },
-  reviewer: string,
-  unit: string | undefined,
-  workflow: string | undefined,
-  attemptWindow?: ReturnType<typeof reviewAttemptWindow> | null,
-): ReviewAttemptSummary {
-  const relevant = new Set([
-    "WORKFLOW_STARTED",
-    "STAGE_STARTED",
-    "STAGE_COMPLETED",
-    "STAGE_JUMPED",
-    "GATE_REJECTED",
-    "BOLT_STARTED",
-    "BOLT_COMPLETED",
-    "BOLT_FAILED",
-    "REVIEW_REQUESTED",
-    "REVIEW_COMPLETED",
-  ]);
-  const events = rows
-    .filter((row) => relevant.has(row.event))
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      if (a.shard === b.shard) return a.pos - b.pos;
-      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-      return a.pos - b.pos;
-    });
-  const tiedAcrossShards = (index: number): boolean =>
-    events.some(
-      (row, other) =>
-        other !== index &&
-        row.timestamp === events[index].timestamp &&
-        row.shard !== events[index].shard,
-    );
-  const tiedOnlyToWorkflowBoundary = (index: number): boolean => {
-    let sawBoundary = false;
-    for (let other = 0; other < events.length; other++) {
-      if (
-        other === index ||
-        events[other].timestamp !== events[index].timestamp ||
-        events[other].shard === events[index].shard
-      ) {
-        continue;
-      }
-      if (
-        events[other].event !== "WORKFLOW_STARTED" &&
-        events[other].event !== "STAGE_JUMPED"
-      ) {
-        return false;
-      }
-      sawBoundary = true;
-    }
-    return sawBoundary;
-  };
-
-  const unitMajor =
-    stage.for_each === "unit-of-work" &&
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-  const teamOwnership =
-    stage.for_each === "unit-of-work" &&
-    isTeamUnitOwnership(stateContent);
-  let floor = -1;
-  let boltStarted = false;
-  let boltBatch: string | null = null;
-  let boltSlug: string | null = null;
-  const expectedBoltSlug = unit === undefined ? null : boltSlugForUnit(unit);
-  let ambiguity: string | null = null;
-  for (let i = 0; i < events.length; i++) {
-    const entry = events[i];
-    if (workflow !== undefined) {
-      if (
-        entry.event === "STAGE_COMPLETED" &&
-        auditBlockField(entry.block, "Stage") === stage.slug &&
-        auditBlockField(entry.block, "Workflow") === workflow
-      ) {
-        floor = i;
-      }
-      continue;
-    }
-    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
-      if (teamOwnership && tiedAcrossShards(i)) {
-        ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
-      }
-      floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-      if (!teamOwnership || !tiedAcrossShards(i)) ambiguity = null;
-      continue;
-    }
-    if (
-      entry.event === "BOLT_STARTED" &&
-      unit !== undefined
-    ) {
-      const names = (auditBlockField(entry.block, "Bolt names") ?? "")
-        .split(",")
-        .map((name) => name.trim());
-      const startedSlug = auditBlockField(entry.block, "Bolt slug");
-      if (
-        !names.includes(unit) ||
-        (startedSlug !== null && startedSlug !== expectedBoltSlug)
-      ) {
-        continue;
-      }
-      if (tiedAcrossShards(i)) ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
-      floor = i;
-      boltStarted = true;
-      boltBatch = auditBlockField(entry.block, "Batch number");
-      boltSlug = startedSlug;
-      if (!tiedAcrossShards(i)) ambiguity = null;
-      continue;
-    }
-    if (
-      (entry.event === "BOLT_COMPLETED" || entry.event === "BOLT_FAILED") &&
-      unit !== undefined
-    ) {
-      const terminalNames = (
-        auditBlockField(
-          entry.block,
-          entry.event === "BOLT_FAILED" ? "Failed Bolt" : "Bolt names",
-        ) ?? ""
-      )
-        .split(",")
-        .map((name) => name.trim());
-      const terminalSlug = auditBlockField(entry.block, "Bolt slug");
-      const paired =
-        boltSlug !== null && terminalSlug !== null
-          ? boltSlug === terminalSlug
-          : terminalNames.includes(unit);
-      if (!paired) continue;
-      const tied = tiedAcrossShards(i);
-      if (tied) ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
-      else ambiguity = null;
-      floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-      continue;
-    }
-    if (entry.event === "GATE_REJECTED") {
-      const gateStages = (
-        auditBlockField(entry.block, "Gate Stages") ??
-          auditBlockField(entry.block, "Stage") ??
-          ""
-      ).split(",").map((value) => value.trim());
-      if (!gateStages.includes(stage.slug)) continue;
-      const rejectedUnit = auditBlockField(entry.block, "Unit");
-      if (teamOwnership && unit !== undefined && rejectedUnit !== unit) continue;
-      if (teamOwnership && unit === undefined && rejectedUnit !== null) continue;
-      const tied = tiedAcrossShards(i);
-      if (tied) ambiguity = `cross-shard gate boundary tie at ${entry.timestamp}`;
-      else ambiguity = null;
-      floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-    } else if (
-      auditBlockField(entry.block, "Stage") === stage.slug &&
-      entry.event === "STAGE_STARTED" &&
-      !unitMajor &&
-      !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
-    ) {
-      const tied = tiedAcrossShards(i);
-      if (tied) ambiguity = `cross-shard stage boundary tie at ${entry.timestamp}`;
-      else ambiguity = null;
-      floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-    }
-  }
-  if (
-    unit !== undefined &&
-    ambiguity?.startsWith("cross-shard Bolt boundary tie at ") &&
-    attemptWindow?.mergedBoltUnits.has(unit) === true &&
-    !attemptWindow.openBoltUnits.has(unit)
-  ) {
-    const timestamp = ambiguity.slice(
-      "cross-shard Bolt boundary tie at ".length,
-    );
-    const tied = attemptWindow.events.filter(
-      (event) => event.timestamp === timestamp,
-    );
-    const tiedShards = new Set(tied.map((event) => event.shard));
-    const lifecycleOnly =
-      tied.length > 1 &&
-      tiedShards.size > 1 &&
-      tied.every((event) => {
-        // AUDIT_MERGED is referee merge plumbing (main-emitted, merge
-        // protected); it carries no reviewer authority and cannot make the
-        // tie ambiguous for this unit's lifecycle accounting.
-        if (event.event === "AUDIT_MERGED") return true;
-        if (
-          event.event !== "BOLT_STARTED" &&
-          event.event !== "BOLT_COMPLETED" &&
-          event.event !== "BOLT_FAILED"
-        ) {
-          return false;
-        }
-        const field =
-          event.event === "BOLT_FAILED"
-            ? auditBlockField(event.block, "Failed Bolt")
-            : auditBlockField(event.block, "Bolt names");
-        return (field ?? "")
-          .split(",")
-          .map((name) => name.trim())
-          .includes(unit);
-      });
-    if (lifecycleOnly) {
-      ambiguity = null;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-    }
-  }
-
-  let requestCount = 0;
-  let recoveryIteration: number | null = null;
-  let recoverySpent = false;
-  const pendingIterations = new Set<number>();
-  const pendingRequests = new Map<
-    number,
-    {
-      binding: ReviewRequestBinding | null;
-      retried: boolean;
-    }
-  >();
-  for (let i = floor + 1; i < events.length; i++) {
-    const entry = events[i];
-    if (
-      entry.event !== "REVIEW_REQUESTED" &&
-      entry.event !== "REVIEW_COMPLETED"
-    ) {
-      continue;
-    }
-    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
-    if (auditBlockField(entry.block, "Reviewer") !== reviewer) continue;
-    const eventUnit = auditBlockField(entry.block, "Unit") || undefined;
-    if (eventUnit !== unit) continue;
-    const eventWorkflow = auditBlockField(entry.block, "Workflow") || undefined;
-    if (
-      workflow !== undefined
-        ? eventWorkflow !== workflow
-        : eventWorkflow?.startsWith("single-stage:")
-    ) {
-      continue;
-    }
-    if (
-      tiedAcrossShards(i) &&
-      !(!teamOwnership && tiedOnlyToWorkflowBoundary(i))
-    ) {
-      ambiguity = `cross-shard review authority tie at ${entry.timestamp}`;
-      continue;
-    }
-    const rawIteration = auditBlockField(entry.block, "Iteration");
-    if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
-    const iteration = Number(rawIteration);
-    if (entry.event === "REVIEW_REQUESTED") {
-      const binding = reviewRequestBindingFromBlock(entry.block);
-      if (binding === null) continue;
-      if (auditBlockField(entry.block, "Retry") !== "pending-request") {
-        requestCount++;
-      }
-      if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
-        recoveryIteration = iteration;
-        recoverySpent = true;
-      }
-      pendingIterations.add(iteration);
-      const previous = pendingRequests.get(iteration);
-      const modernBinding =
-        binding.appendixArtifact !== null &&
-        binding.appendixOffset !== null &&
-        (binding.priorAppendixLength === null ||
-          binding.priorAppendixLength === 0 ||
-          binding.reviewChallenge !== null) &&
-        (!stage.workspace_requires || binding.sourceFingerprint !== null);
-      pendingRequests.set(iteration, {
-        binding,
-        retried:
-          previous?.retried === true ||
-          (auditBlockField(entry.block, "Retry") === "pending-request" &&
-            modernBinding),
-      });
-    } else {
-      const pending = pendingRequests.get(iteration);
-      if (
-        pending?.binding &&
-        reviewCompletionMatchesRequest(pending.binding, entry.block)
-      ) {
-        pendingIterations.delete(iteration);
-        pendingRequests.delete(iteration);
-      }
-    }
-  }
-  return {
-    requestCount,
-    boltStarted,
-    boltBatch,
-    boltSlug,
-    pendingIterations,
-    pendingRequests,
-    recoveryIteration,
-    recoverySpent,
-    ambiguity,
-  };
-}
-
 function reviewBudgetMessage(stage: string, ordinal: number, budget: number): string {
   return (
     `Cannot request review pass ${ordinal} for "${stage}" because this stage allows ` +
@@ -1367,6 +1102,7 @@ function reviewRecoverySpentMessage(
     slug: string | null;
     batch: string | null;
   },
+  requestChangesResetValid = true,
 ): string {
   const prefix =
     `Cannot start another review for "${stage}": the one recovery review was ` +
@@ -1392,8 +1128,10 @@ function reviewRecoverySpentMessage(
   return (
     prefix +
     (guidance ?? "") +
-    " Only a human Request Changes decision resets the review attempt; do not " +
-    "record that rejection on the human's behalf."
+    (requestChangesResetValid
+      ? " Only a human Request Changes decision resets the review attempt; do not " +
+        "record that rejection on the human's behalf."
+      : "")
   );
 }
 
@@ -1424,13 +1162,16 @@ function reviewRecoveryAlreadyRequestedMessage(
   stage: string,
   iteration: number,
   guidance: string,
+  requestChangesResetValid: boolean,
 ): string {
   return (
     `Cannot request another recovery review for "${stage}" because one already exists ` +
     `in this review attempt. If the reviewer has not returned, retry iteration ${iteration} ` +
-    `with --retry-pending. If its verdict was recorded, ${guidance} Only a human Request ` +
-    "Changes decision resets the review attempt; do not record that rejection on the " +
-    "human's behalf."
+    `with --retry-pending. If its verdict was recorded, ${guidance}` +
+    (requestChangesResetValid
+      ? " Only a human Request Changes decision resets the review attempt; do not record " +
+        "that rejection on the human's behalf."
+      : "")
   );
 }
 
@@ -1438,6 +1179,85 @@ class ReviewRefusal extends Error {}
 
 function refuseReview(message: string): never {
   throw new ReviewRefusal(message);
+}
+
+function reviewGuardAttemptState(
+  attempt: ReturnType<typeof reviewAttemptAccounting>,
+  budget: number | null,
+  receipts: ReturnType<typeof freshReviewReceipts> | null,
+  unit: string | undefined,
+  summaryCoverage: GuardAttemptState["summaryCoverage"] = "current",
+): GuardAttemptState {
+  const pendingIterations = [...attempt.pendingIterations].sort((a, b) => a - b);
+  const pending =
+    unit === undefined
+      ? receipts?.stagePending ?? null
+      : receipts?.unitPending.get(unit) ?? null;
+  const staleProgress =
+    unit === undefined
+      ? receipts?.stageStaleProgress ?? null
+      : receipts?.unitStaleProgress.get(unit) ?? null;
+  const reviewCurrent =
+    unit === undefined
+      ? receipts?.stageVerdict !== null && receipts?.stageVerdict !== undefined
+      : receipts?.unitVerdicts.has(unit) === true;
+  const reviewStale =
+    unit === undefined
+      ? receipts?.stageStale === true
+      : receipts?.unitStale.has(unit) === true;
+  const recoverySpent =
+    attempt.recoverySpent ||
+    staleProgress?.recoverySpent === true ||
+    receipts?.sourceRecoverySpent === true ||
+    receipts?.sourceStaleProgress?.recoverySpent === true;
+  return {
+    floor: attempt.floor,
+    ...(budget === null
+      ? {}
+      : {
+          reviewBudget: {
+            used: attempt.requestCount,
+            limit: budget,
+          },
+        }),
+    recovery:
+      pending?.recovery || pendingIterations.length > 0
+        ? "pending"
+        : recoverySpent
+          ? "spent"
+          : "available",
+    ...(pendingIterations.length > 0
+      ? {
+          pendingReview: {
+            iteration: pendingIterations[0],
+            retryable: true,
+          },
+        }
+      : {}),
+    summaryCoverage,
+    reviewCoverage: reviewCurrent
+      ? "current"
+      : reviewStale || receipts?.sourceStale
+        ? "stale"
+        : "missing",
+    sourceCoverage:
+      receipts?.sourceStaleReason === "boundary-unbindable"
+        ? "unbindable"
+        : receipts?.sourceStale
+          ? "stale"
+          : receipts?.newestSourceFingerprint
+            ? "current"
+            : "missing",
+  };
+}
+
+function refuseReviewGuard(
+  projectDir: string,
+  refusal: GuardRefusal,
+  attempt: GuardAttemptState,
+  resources: string[] = [],
+): never {
+  refuseReview(guardRefusalOutput(projectDir, refusal, attempt, resources));
 }
 
 function handleReview(args: string[]): void {
@@ -1497,13 +1317,16 @@ function handleReview(args: string[]): void {
     const teamOwnership = isTeamUnitOwnership(state);
     const unitResolution =
       node.for_each === "unit-of-work" ? resolveBoltDag(pd, intent, space) : null;
-    const attemptWindow =
-      node.for_each === "unit-of-work"
-        ? reviewAttemptWindow(pd, state, node)
-        : null;
-    const attempt = reviewAttemptSummary(
-      readAuditShardEvents(pd, intent, space).filter(
-        (row) => {
+    const attemptWindow = reviewAttemptWindow(pd, state, node);
+    const attempt = reviewAttemptAccounting(
+      attemptWindow,
+      state,
+      node,
+      flags.reviewer,
+      flags.unit,
+      fields.Workflow,
+      {
+        eventFilter: (row) => {
           if (!flags.unit || !teamOwnership) return true;
           const eventUnit = auditBlockField(row.block, "Unit");
           if (eventUnit !== null) {
@@ -1525,16 +1348,9 @@ function handleReview(args: string[]): void {
           }
           return true;
         },
-      ),
-      state,
-      node,
-      flags.reviewer,
-      flags.unit,
-      fields.Workflow,
-      attemptWindow,
+      },
     );
-    const mergedBoltUnits =
-      attemptWindow?.mergedBoltUnits ?? new Set<string>();
+    const mergedBoltUnits = attemptWindow.mergedBoltUnits;
     if (enforceAdmissibility && flags.unit) {
       const resolution = unitResolution ?? resolveBoltDag(pd, intent, space);
       if (resolution.state === "malformed") {
@@ -1547,7 +1363,7 @@ function handleReview(args: string[]): void {
       if (
         resolution.state === "none" &&
         !attempt.boltStarted &&
-        !attemptWindow?.mergedBoltUnits.has(flags.unit)
+        !attemptWindow.mergedBoltUnits.has(flags.unit)
       ) {
         refuseReview(
           `Cannot record review for "${flags.stage}" unit "${flags.unit}": no authoritative ` +
@@ -1612,7 +1428,7 @@ function handleReview(args: string[]): void {
         ? null
         : freshReviewReceipts(pd, state, node, {
             reviewClass,
-            attemptWindow: attemptWindow ?? undefined,
+            attemptWindow,
           });
     const requireRequiredArtifacts =
       process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1" &&
@@ -1705,12 +1521,56 @@ function handleReview(args: string[]): void {
           workflow: fields.Workflow,
         });
         if (!summaryEvidence.ok) {
-          refuseReview(
-            reviewSummaryEvidenceMessage(
-              flags.stage,
-              summaryEvidence.message,
-            ),
+          const message = reviewSummaryEvidenceMessage(
+            flags.stage,
+            summaryEvidence.message,
           );
+          const guardAttempt = reviewGuardAttemptState(
+            attempt,
+            budget,
+            receipts,
+            flags.unit,
+            summaryEvidence.message.includes("no fresh human-backed")
+              ? "missing"
+              : "stale",
+          );
+          const refusal =
+            summaryEvidence.refusal === undefined
+              ? evaluateGuardRefusal({
+                  code: "SUMMARY_EVIDENCE_INVALID",
+                  blockedAction: "review-request",
+                  stage: flags.stage,
+                  ...(flags.unit ? { unit: flags.unit } : {}),
+                  stateContent: state,
+                  invariant:
+                    "A review starts only after current human-backed summary authorization.",
+                  userMessage: message,
+                  attempt: guardAttempt,
+                  humanAuthority: {
+                    freshTurn: false,
+                    unattended: process.env.AIDLC_UNATTENDED === "1",
+                  },
+                })
+              : {
+                  ...summaryEvidence.refusal,
+                  blockedAction: "review-request",
+                  userMessage: message,
+                  remedies: evaluateGuardRefusal({
+                    code: summaryEvidence.refusal.code,
+                    blockedAction: "review-request",
+                    stage: flags.stage,
+                    ...(flags.unit ? { unit: flags.unit } : {}),
+                    stateContent: state,
+                    invariant: summaryEvidence.refusal.invariant,
+                    userMessage: message,
+                    attempt: guardAttempt,
+                    humanAuthority: {
+                      freshTurn: false,
+                      unattended: process.env.AIDLC_UNATTENDED === "1",
+                    },
+                  }).remedies,
+                };
+          refuseReviewGuard(pd, refusal, guardAttempt);
         }
         const expected = attempt.requestCount + 1;
         const sameSourceRecoveryScope =
@@ -1733,13 +1593,51 @@ function handleReview(args: string[]): void {
             receipts?.sourceStaleProgress?.recoverySpent === true);
         const recoverySpent =
           attempt.recoverySpent || sourceRecoverySpent;
+        const refuseAttemptGuard = (
+          code: string,
+          invariant: string,
+          message: string,
+        ): never => {
+          const guardAttempt = reviewGuardAttemptState(
+            attempt,
+            budget,
+            receipts,
+            flags.unit,
+          );
+          const autonomousBolt =
+            autonomousCandidate && attempt.boltStarted && flags.unit
+              ? {
+                  unit: flags.unit,
+                  slug: attempt.boltSlug,
+                  batch: attempt.boltBatch,
+                }
+              : undefined;
+          const refusal = evaluateGuardRefusal({
+            code,
+            blockedAction: "review-request",
+            stage: flags.stage,
+            ...(flags.unit ? { unit: flags.unit } : {}),
+            stateContent: state,
+            invariant,
+            userMessage: message,
+            attempt: guardAttempt,
+            humanAuthority: {
+              freshTurn: false,
+              unattended: process.env.AIDLC_UNATTENDED === "1",
+            },
+            ...(autonomousBolt ? { autonomousBolt } : {}),
+          });
+          refuseReviewGuard(pd, refusal, guardAttempt, [
+            `source:${receipts?.newestSourceFingerprint ?? "none"}`,
+            `artifact-stale:${artifactScopeStale}`,
+          ]);
+        };
         if (retryPending) {
           const pendingRequest = attempt.pendingRequests.get(iteration);
           if (!pendingRequest) {
             if (scopeStale) {
               if (recoverySpent) {
-                refuseReview(
-                  reviewRecoverySpentMessage(
+                const message = reviewRecoverySpentMessage(
                     flags.stage,
                     autonomousCandidate && attempt.boltStarted
                       ? null
@@ -1751,7 +1649,12 @@ function handleReview(args: string[]): void {
                           batch: attempt.boltBatch,
                         }
                       : undefined,
-                  ),
+                    requestChangesResetIsExecutable(state, flags.stage),
+                  );
+                refuseAttemptGuard(
+                  "REVIEW_RECOVERY_SPENT",
+                  "The stale-receipt recovery slot is single-use within an attempt.",
+                  message,
                 );
               }
               const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
@@ -1763,12 +1666,16 @@ function handleReview(args: string[]): void {
               );
             }
             if (recoverySpent) {
-              refuseReview(
-                reviewRecoveryAlreadyRequestedMessage(
+              const message = reviewRecoveryAlreadyRequestedMessage(
                   flags.stage,
                   attempt.recoveryIteration ?? iteration,
                   reviewRecoveryGuidance(pd, state, flags.stage),
-                ),
+                  requestChangesResetIsExecutable(state, flags.stage),
+                );
+              refuseAttemptGuard(
+                "REVIEW_RECOVERY_ALREADY_REQUESTED",
+                "Only one stale-receipt recovery request exists in an attempt.",
+                message,
               );
             }
             refuseReview(
@@ -1933,8 +1840,7 @@ function handleReview(args: string[]): void {
           attempt.pendingIterations.size === 0 &&
           !recoverySpent;
         if (scopeStale && recoverySpent) {
-          refuseReview(
-            reviewRecoverySpentMessage(
+          const message = reviewRecoverySpentMessage(
               flags.stage,
               autonomousCandidate && attempt.boltStarted
                 ? null
@@ -1946,27 +1852,46 @@ function handleReview(args: string[]): void {
                     batch: attempt.boltBatch,
                   }
                 : undefined,
-            ),
+              requestChangesResetIsExecutable(state, flags.stage),
+            );
+          refuseAttemptGuard(
+            "REVIEW_RECOVERY_SPENT",
+            "The stale-receipt recovery slot is single-use within an attempt.",
+            message,
           );
         }
         if (recoverySpent) {
-          refuseReview(
-            reviewRecoveryAlreadyRequestedMessage(
+          const message = reviewRecoveryAlreadyRequestedMessage(
               flags.stage,
               attempt.recoveryIteration ?? iteration,
               reviewRecoveryGuidance(pd, state, flags.stage),
-            ),
+              requestChangesResetIsExecutable(state, flags.stage),
+            );
+          refuseAttemptGuard(
+            "REVIEW_RECOVERY_ALREADY_REQUESTED",
+            "Only one stale-receipt recovery request exists in an attempt.",
+            message,
           );
         }
         if (!recoveryEligible && budget !== null && iteration > budget) {
-          refuseReview(reviewBudgetMessage(flags.stage, iteration, budget));
+          refuseAttemptGuard(
+            "REVIEW_BUDGET_EXHAUSTED",
+            "Review requests do not exceed the configured attempt budget.",
+            reviewBudgetMessage(flags.stage, iteration, budget),
+          );
         }
         if (!recoveryEligible && budget !== null && expected > budget) {
-          refuseReview(reviewBudgetMessage(flags.stage, expected, budget));
+          refuseAttemptGuard(
+            "REVIEW_BUDGET_EXHAUSTED",
+            "Review requests do not exceed the configured attempt budget.",
+            reviewBudgetMessage(flags.stage, expected, budget),
+          );
         }
         if (attempt.pendingIterations.size > 0) {
           const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
-          refuseReview(
+          refuseAttemptGuard(
+            "REVIEW_VERDICT_PENDING",
+            "A review request receives its verdict before another request starts.",
             `Cannot start another review for "${flags.stage}" because iteration ` +
               `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
               "repeat the same iteration with --retry-pending if the reviewer did not run.",

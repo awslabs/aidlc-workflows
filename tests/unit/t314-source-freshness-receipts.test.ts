@@ -1956,7 +1956,10 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     );
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("project source changed after");
+    expect(r.out).toContain("reviewed source boundary could not be fingerprinted");
+    expect(r.out).toContain(".aidlc-source-paths.json");
+    expect(r.out).not.toContain("project source changed after");
+    expect(r.out).not.toContain("revert the source change");
   }, 60_000);
 
   test("a true advance replay stays idempotent even if source later changes", () => {

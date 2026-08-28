@@ -1803,6 +1803,27 @@ describe("t326 pinned team Unit merge", () => {
     expect(directFold.status).not.toBe(0);
     expect(directFold.out).toContain("no land-bound claim authorization");
 
+    const unattended = run(
+      UNIT,
+      [
+        "land",
+        "alpha",
+        "--step",
+        "state",
+        "--accept-released-attempt",
+        "--user-input",
+        "I inspected the landed commit and accept completing this tombstoned attempt",
+      ],
+      seed,
+      true,
+      { AIDLC_UNATTENDED: "1" },
+    );
+    expect(unattended.status).not.toBe(0);
+    expect(unattended.out).toContain("fresh typed human turn");
+    expect(unattended.out).toContain("AIDLC_UNATTENDED=1");
+    expect(unattended.out).toContain("Unset AIDLC_UNATTENDED");
+    expect(readAllAuditShards(seed)).not.toContain("**Event**: UNIT_MERGED");
+
     const accepted = run(
       UNIT,
       [
