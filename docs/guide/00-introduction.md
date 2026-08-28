@@ -47,12 +47,12 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Metric | Value |
 |--------|-------|
 | Phases | 5 (Initialization, Ideation, Inception, Construction, Operation) |
-| Stages | 33 |
+| Stages | 34 |
 | Agents | 14 total: 11 domain experts, 2 reviewers, and the composer |
 | Scopes | 11 (enterprise through express, plus workshop) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
-| Audit event types | 91 |
+| Audit event types | 95 |
 
 ## Guide Map
 

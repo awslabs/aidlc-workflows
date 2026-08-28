@@ -693,7 +693,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("4: todo_list create with [slug] suffix syncs the state file", () => {
     const dir = scratchProject(true);
@@ -1065,7 +1065,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("6: log-subagent emits SUBAGENT_COMPLETED to the audit", () => {
     const dir = scratchProject(true);

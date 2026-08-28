@@ -107,7 +107,7 @@ projection table and the `tier_cap` override in
 | [aidlc-devsecops-agent](devsecops-agent.md) | (none) | practices-discovery, nfr-requirements, infrastructure-design, build-and-test, environment-provisioning | judgment | Bash |
 | [aidlc-developer-agent](developer-agent.md) | reverse-engineering (code scan), code-generation | practices-discovery, user-stories, functional-design, deployment-execution | judgment | Bash |
 | [aidlc-quality-agent](quality-agent.md) | build-and-test, performance-validation | practices-discovery, user-stories, nfr-requirements | judgment | Bash |
-| [aidlc-pipeline-deploy-agent](pipeline-deploy-agent.md) | practices-discovery, ci-pipeline, deployment-pipeline, deployment-execution | (none) | templated | Bash |
+| [aidlc-pipeline-deploy-agent](pipeline-deploy-agent.md) | practices-discovery, pr-integration, ci-pipeline, deployment-pipeline, deployment-execution | (none) | templated | Bash |
 | [aidlc-operations-agent](operations-agent.md) | observability-setup, incident-response, feedback-optimization | (none) | templated | Bash |
 
 ---
@@ -128,7 +128,7 @@ that inherited tool; it does not grant or withhold access.
 | aidlc-devsecops-agent | Yes | No | judgment | 0 | 5 | 5 |
 | aidlc-developer-agent | Yes | No | judgment | 2 | 4 | 6 |
 | aidlc-quality-agent | Yes | No | judgment | 2 | 3 | 5 |
-| aidlc-pipeline-deploy-agent | Yes | No | templated | 4 | 0 | 4 |
+| aidlc-pipeline-deploy-agent | Yes | No | templated | 5 | 0 | 5 |
 | aidlc-operations-agent | Yes | No | templated | 3 | 0 | 3 |
 
 **Observations:**
@@ -156,7 +156,7 @@ serve as lead (L) or support (S) in that phase.
 | aidlc-devsecops-agent | -- | -- | S (practices-discovery) | S (nfr-requirements, infrastructure-design, build-and-test) | S (environment-provisioning) |
 | aidlc-developer-agent | -- | -- | L (reverse-engineering), S (practices-discovery, user-stories) | L (code-generation), S (functional-design) | S (deployment-execution) |
 | aidlc-quality-agent | -- | -- | S (practices-discovery, user-stories) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
-| aidlc-pipeline-deploy-agent | -- | -- | L (practices-discovery) | L (ci-pipeline) | L (deployment-pipeline, deployment-execution) |
+| aidlc-pipeline-deploy-agent | -- | -- | L (practices-discovery) | L (pr-integration, ci-pipeline) | L (deployment-pipeline, deployment-execution) |
 | aidlc-operations-agent | -- | -- | -- | -- | L (observability-setup, incident-response, feedback-optimization) |
 
 ---

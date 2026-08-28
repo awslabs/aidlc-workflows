@@ -139,7 +139,7 @@ describe("t38 Lead Agent cross-check (migrated from t38-stage-agent-cross-check.
   // corpus guard so a dropped/added Stage Graph row fails loudly (test.each
   // over an empty/short table would otherwise pass vacuously).
   test("the Stage Graph table has the pinned 33 rows", () => {
-    expect(ROWS.length).toBe(33);
+    expect(ROWS.length).toBe(34);
   });
 
   // --- The 32 per-row Lead Agent assertions (one `ok`/`not_ok` each) ---------

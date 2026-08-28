@@ -465,7 +465,7 @@ function harnessRuntimeGate(
     sensors.status === 0 &&
       sensors.stdout.includes("required-sections") &&
       runners.status === 0 &&
-      runners.stdout.includes("30 runners") &&
+      runners.stdout.includes("31 runners") &&
       !runtimeCrash(output),
     {
       expected: `${distribution} packaged sensors and generated runners resolve`,

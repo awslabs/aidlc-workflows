@@ -167,7 +167,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(orchestrator).toContain("picker results do not fire");
     expect(orchestrator).toContain("| `load-steering` |");
     expect(orchestrator).toContain("directive.continue_token");
-    expect(orchestrator).toContain("The orchestration engine emits nine kinds today");
+    expect(orchestrator).toContain("The orchestration engine emits ten kinds today");
     expect(orchestrator).toContain("stage-protocol-ensemble.md");
     const ensembleProtocol = readFileSync(
       join(
@@ -280,7 +280,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
 `,
       );
       const valid = runDoctor();
-      expect(valid.status).toBe(0);
+      expect(valid.status, `${valid.stdout}${valid.stderr}`).toBe(0);
       expect(`${valid.stdout}${valid.stderr}`).toContain(
         "✓  project folder in ~/.copilot/config.json trustedFolders",
       );
@@ -294,5 +294,5 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });

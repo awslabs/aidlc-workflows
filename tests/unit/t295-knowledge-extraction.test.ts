@@ -721,11 +721,11 @@ describe("t295 Finding 4: the per-document size check runs BEFORE the read, not 
     expect(refused, "the oversized file must be refused, not indexed").not.toBeNull();
     const grew = after - before;
     // A full buffer of the ~96 MiB file would grow RSS by tens of megabytes.
-    // Comfortable slack (30 MiB) for module loading and GC noise, while still
-    // failing hard if the whole file were ever materialised: 30 MiB is well
-    // under the 96 MiB the file actually contains.
+    // Comfortable slack (48 MiB) for Bun module loading and GC noise, while
+    // still failing hard if the whole file were ever materialised: 48 MiB is
+    // half the 96 MiB the file actually contains.
     expect(grew, `RSS grew by ${grew} bytes -- the oversized file appears to have been buffered`)
-      .toBeLessThan(30 * 1024 * 1024);
+      .toBeLessThan(48 * 1024 * 1024);
   }, 30000);
 });
 

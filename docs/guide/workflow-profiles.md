@@ -21,17 +21,17 @@ and gate counts.
 
 | Workflow profile | Best for | Stages | Depth | Test strategy | Start with |
 |------------------|----------|--------|-------|---------------|------------|
-| **Classic** | General work using the established lifecycle without Ideation | 26 / 33 | Standard | Standard | `/aidlc classic` |
-| **Express** | The lightest requirements-to-code-and-test path | 10 / 33 | Minimal | Minimal | `/aidlc express` |
-| **Feature** | A production feature using the complete lifecycle | 33 / 33 | Standard | Standard | `/aidlc feature` |
-| **Enterprise** | Regulated or high-assurance work with full traceability | 33 / 33 | Comprehensive | Comprehensive | `/aidlc enterprise` |
-| **MVP** | A real first product increment without the Operation phase | 23 / 33 | Standard | Standard | `/aidlc mvp` |
-| **Proof of concept** | Testing feasibility with the smallest useful implementation path | 8 / 33 | Minimal | Minimal | `/aidlc poc` |
-| **Bugfix** | A known defect that needs a focused fix and regression test | 9 / 33 | Minimal | Minimal | `/aidlc bugfix` |
-| **Refactor** | Improving existing code without changing product behavior | 10 / 33 | Minimal | Minimal | `/aidlc refactor` |
-| **Infrastructure** | Environments, IaC, deployment foundations, or cost work | 13 / 33 | Standard | Standard | `/aidlc infra` |
-| **Security patch** | A CVE or focused vulnerability response | 10 / 33 | Minimal | Minimal | `/aidlc security-patch` |
-| **Workshop** | A facilitated training or group delivery session | 26 / 33 | Standard | Minimal | `/aidlc workshop` |
+| **Classic** | General work using the established lifecycle without Ideation | 26 / 34 | Standard | Standard | `/aidlc classic` |
+| **Express** | The lightest requirements-to-code-and-test path | 10 / 34 | Minimal | Minimal | `/aidlc express` |
+| **Feature** | A production feature using the complete lifecycle | 33 / 34 | Standard | Standard | `/aidlc feature` |
+| **Enterprise** | Regulated or high-assurance work with full traceability | 33 / 34 | Comprehensive | Comprehensive | `/aidlc enterprise` |
+| **MVP** | A real first product increment without the Operation phase | 23 / 34 | Standard | Standard | `/aidlc mvp` |
+| **Proof of concept** | Testing feasibility with the smallest useful implementation path | 8 / 34 | Minimal | Minimal | `/aidlc poc` |
+| **Bugfix** | A known defect that needs a focused fix and regression test | 9 / 34 | Minimal | Minimal | `/aidlc bugfix` |
+| **Refactor** | Improving existing code without changing product behavior | 10 / 34 | Minimal | Minimal | `/aidlc refactor` |
+| **Infrastructure** | Environments, IaC, deployment foundations, or cost work | 13 / 34 | Standard | Standard | `/aidlc infra` |
+| **Security patch** | A CVE or focused vulnerability response | 10 / 34 | Minimal | Minimal | `/aidlc security-patch` |
+| **Workshop** | A facilitated training or group delivery session | 26 / 34 | Standard | Minimal | `/aidlc workshop` |
 
 Stage counts describe the static route. A stage marked conditional can still
 self-skip when its condition does not apply, such as Reverse Engineering in a

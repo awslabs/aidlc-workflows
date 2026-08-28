@@ -79,6 +79,7 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
+import { compileFixtureRuntimeGraph } from "../harness/tui-fixtures.ts";
 import {
   activeSpace,
   readAllAuditShards,
@@ -177,6 +178,10 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
           "- **Project Root**: /tmp/aidlc-test",
           `- **Project Root**: ${proj}`,
         );
+        // The seeded state bypasses intent creation and stage entry. Compile the
+        // fixture runtime so the current RE attempt has its tool-owned
+        // WORKFLOW_STARTED/STAGE_STARTED authority before pipeline receipts.
+        compileFixtureRuntimeGraph(proj);
 
         const r = await driveAidlc("/aidlc", {
           projectDir: proj,

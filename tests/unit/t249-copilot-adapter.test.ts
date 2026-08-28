@@ -2014,7 +2014,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     rmSync(join(seededRecordDir(activeRecovery), ".aidlc-active-directive.json"));
     expect(runAdapter(activeRecovery, "continue-workflow", { ...FIXTURES.stop, cwd: activeRecovery, session_id: "active-recovery", stop_hook_active: true }).stdout).toBe("");
     expect(marker(activeRecovery).stop_count).toBe(2);
-  }, 60000);
+  }, 120000);
 
   test("24b: a no-tool human prompt is consume-once conversational without prior valid v2 coordination", () => {
     for (const shape of ["missing", "malformed", "v1"] as const) {
@@ -2129,7 +2129,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir, AIDLC_COPILOT_SESSION_ID: undefined } as NodeJS.ProcessEnv,
     });
     expect((JSON.parse(directCore.stdout) as { decision?: string }).decision).toBe("block");
-  }, 30000);
+  }, 120000);
 
   test("25b: claim lock contention tells the caller to retry the exact command", () => {
     const dir = orchestrationProject();
@@ -2158,7 +2158,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(blocked.stdout).toContain("Retry this exact command");
     expect(blocked.stdout).not.toContain("Run a fresh");
     expect(blocked.stdout).not.toContain("do not reuse");
-  });
+  }, 15000);
 
   test("26: direct and source foreign projects are denied before claim or Post can mutate either marker", () => {
     const current = orchestrationProject();

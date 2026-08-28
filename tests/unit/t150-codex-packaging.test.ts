@@ -437,11 +437,11 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     const dirs = readdirSync(skillsDir).filter((d) =>
       statSync(join(skillsDir, d)).isDirectory(),
     );
-    // 42 skills: orchestrator + 30 stage runners + init + compose + 5 scope runners
+    // 43 skills: orchestrator + 31 stage runners + init + compose + 5 scope runners
     // + 3 session + aidlc-knowledge. The last one only ships here because
     // harness/codex/emit.ts names it explicitly: codex does not enumerate
     // core/skills/, so this count is what catches a skill missing from that array.
-    expect(dirs.length).toBe(42);
+    expect(dirs.length).toBe(43);
     for (const d of dirs) {
       const guard = join(skillsDir, d, "agents", "openai.yaml");
       if (d === "aidlc") {
@@ -491,7 +491,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(unsupported.output).toContain("upgrade Codex CLI to 0.145.0 or later");
 
     const supported = runDoctorWithCodexVersion("0.145.0");
-    expect(supported.status).toBe(0);
+    expect(supported.status, supported.output).toBe(0);
     expect(supported.output).toContain("codex CLI version 0.145.0 >= 0.145.0");
     expect(supported.output).toContain("immediate compact-session reload");
   });

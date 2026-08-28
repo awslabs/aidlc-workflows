@@ -117,17 +117,17 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 
 | Scope | EXECUTE / Total | Depth | Test Strategy | Use Case |
 |-------|-----------------|-------|---------------|----------|
-| `enterprise` | 33 / 33 | Comprehensive | Comprehensive | Regulated enterprise feature, full audit trail |
-| `feature` | 33 / 33 | Standard | Standard | Full lifecycle for new features |
-| `mvp` | 23 / 33 | Standard | Standard | Greenfield, skip late operations |
-| `poc` | 8 / 33 | Minimal | Minimal | Prove feasibility fast |
-| `bugfix` | 9 / 33 | Minimal | Minimal | Fix and deploy a specific bug |
-| `refactor` | 10 / 33 | Minimal | Minimal | Clean up and deploy existing code |
-| `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
-| `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
-| `classic` | 26 / 33 | Standard | Standard | V1-style lifecycle without Ideation — the implicit default |
-| `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
-| `express` | 10 / 33 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
+| `enterprise` | 33 / 34 | Comprehensive | Comprehensive | Regulated enterprise feature, full audit trail |
+| `feature` | 33 / 34 | Standard | Standard | Full lifecycle for new features |
+| `mvp` | 23 / 34 | Standard | Standard | Greenfield, skip late operations |
+| `poc` | 8 / 34 | Minimal | Minimal | Prove feasibility fast |
+| `bugfix` | 9 / 34 | Minimal | Minimal | Fix and deploy a specific bug |
+| `refactor` | 10 / 34 | Minimal | Minimal | Clean up and deploy existing code |
+| `infra` | 13 / 34 | Standard | Standard | Infrastructure change |
+| `security-patch` | 10 / 34 | Minimal | Minimal | CVE response |
+| `classic` | 26 / 34 | Standard | Standard | V1-style lifecycle without Ideation — the implicit default |
+| `workshop` | 26 / 34 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
+| `express` | 10 / 34 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 
 Scopes differ by an order of magnitude in ceremony: `poc` runs a narrow single-pass path, while `feature` runs all 33 stock-scope stages with 29 gates and five design stages that fan out per Unit of Work in Construction. PR Integration is the dormant 34th stage and is promoted per intent after detection and affirmation. The scope confirmation line names the effective numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid and workspace scan, never estimated. Greenfield work excludes reverse engineering, and scopes that skip `units-generation` omit the per-unit clause because no Unit DAG exists. You know what you are consenting to before the workflow starts.

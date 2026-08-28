@@ -21698,6 +21698,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "requires_stage",
     "sensors",
     "scopes",
+    "required_sections",
     "inputs",
     "outputs",
   ] as const;

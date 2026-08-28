@@ -2485,10 +2485,6 @@
         "required": false
       },
       {
-        "artifact": "code-review",
-        "required": false
-      },
-      {
         "artifact": "code-generation-plan",
         "required": true
       },

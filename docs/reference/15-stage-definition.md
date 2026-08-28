@@ -75,13 +75,6 @@ run compile manually after editing stage YAML, and CI enforces `compile
 to a later PR. `stage-graph.json` is a compiled artifact — do not edit it
 by hand; edit the YAML and recompile.
 
-Core insertions that must preserve a published phase order also update the
-authored `tools/data/stage-number-pins.json` map. The compiler applies those
-pins after new-stage seeding, rejects unknown slugs, cross-phase numbers, and
-collisions, then runs the ordinary dependency-order invariant. Plugin stages
-cannot contribute number pins; their authored `number:` remains only a
-relative ordering hint within a batch of new plugin stages.
-
 ---
 
 ## Field reference — when to use

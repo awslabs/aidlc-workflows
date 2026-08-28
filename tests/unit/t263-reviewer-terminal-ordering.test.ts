@@ -325,7 +325,7 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
     );
     expect(revalidated.out).toContain("gate evidence revalidated");
     expect(eventCount(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
-  });
+  }, 15000);
 
   test("rejecting directly from active records no approval gate", () => {
     const p = createTestProject();

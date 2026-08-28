@@ -1,7 +1,5 @@
 ---
 slug: pr-integration
-number: "3.6"
-name: PR Integration
 phase: construction
 execution: CONDITIONAL
 condition: Executes only when the affirmed integration mode resolves to PR integration for this intent; protected-branch reality overrides a configured direct path.
@@ -23,8 +21,6 @@ consumes:
   - artifact: security-design
     required: false
   - artifact: infrastructure-specification
-    required: false
-  - artifact: code-review
     required: false
   - artifact: code-generation-plan
     required: true
@@ -65,7 +61,8 @@ detection record is absent or stale.
   detection confirms the target branch accepts it.
 - Protected-branch reality wins over a configured direct path.
 - If PR integration does not apply, report this CONDITIONAL stage as skipped
-  with the resolved reason. Do not create a branch, PR, or lifecycle receipt.
+  with `aidlc-orchestrate.ts report --stage pr-integration --result skipped`
+  and the resolved reason. Do not create a branch, PR, or lifecycle receipt.
 
 ### Step 2: Compose the PR Record
 
@@ -202,6 +199,8 @@ live `consumes` list, including plugin-added evidence.
 
 ## Learn
 
-Follow stage-protocol.md section 13. Keep operational lessons about templates,
+Follow stage-protocol.md §13. Keep operational lessons about templates,
 review policy, branch naming, and integration recovery in this stage's
-`memory.md`; persist only human-confirmed rules through the learning tool.
+`memory.md`; still ask the mandatory "Anything to add for next time?"
+question, and persist only human-confirmed rules through the learning tool.
+Use `aidlc-learnings.ts` for that persistence.

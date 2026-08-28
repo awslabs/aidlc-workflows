@@ -25,9 +25,9 @@
 //   .sh L38-40  3 initialization stages (loop)         -> "ships the 3 initialization stages"
 //   .sh L43-45  7 ideation stages (loop)               -> "ships the 7 ideation stages"
 //   .sh L48-50  8 inception stages (loop)              -> "ships the 8 inception stages"
-//   .sh L53-55  7 construction stages (loop)           -> "ships the 7 construction stages"
+//   .sh L53-55  8 construction stages (loop)           -> "ships the 8 construction stages"
 //   .sh L58-60  7 operation stages (loop)              -> "ships the 7 operation stages"
-//   .sh (all stages)                                   -> "ships EXACTLY 33 stage files across the 5 phases" (count strengthening)
+//   .sh (all stages)                                   -> "ships EXACTLY 34 stage files across the 5 phases" (count strengthening)
 //   .sh L63-64  settings.json + settings.local.json.example -> "ships settings.json and settings.local.json.example"
 //   .sh L67  state-template.md                          -> "ships knowledge/aidlc-shared/state-template.md"
 //   .sh L70-71  org + project rules                     -> "ships the org and project rule layers"
@@ -91,8 +91,7 @@ const HOOKS = [
   "aidlc-fold-usage.ts",
 ] as const;
 
-// The 32 stage files, partitioned by phase exactly as the .sh's per-phase loops
-// did (3 + 7 + 8 + 7 + 7 = 32).
+// The 34 stage files, partitioned by phase.
 const STAGES: Record<string, readonly string[]> = {
   initialization: ["workspace-scaffold", "workspace-detection", "state-init"],
   ideation: [
@@ -121,6 +120,7 @@ const STAGES: Record<string, readonly string[]> = {
     "nfr-design",
     "infrastructure-design",
     "code-generation",
+    "pr-integration",
     "build-and-test",
     "ci-pipeline",
   ],
@@ -207,7 +207,7 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
     }
   });
 
-  test("ships the 7 construction stages [.sh L53-55]", () => {
+  test("ships the 8 construction stages [.sh L53-55]", () => {
     for (const s of STAGES.construction) {
       expect(existsSync(at("aidlc-common", "stages", "construction", `${s}.md`))).toBe(
         true,
@@ -221,10 +221,10 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
     }
   });
 
-  // STRONGER: the 5 phase dirs together hold EXACTLY 32 .md stage files, and
+  // STRONGER: the 5 phase dirs together hold EXACTLY 34 .md stage files, and
   // each phase dir holds exactly its expected count. The .sh's per-phase loops
   // asserted membership; this also pins that no extra stage file ships.
-  test("ships EXACTLY 33 stage files across the 5 phases [.sh all stages — count strengthening]", () => {
+  test("ships EXACTLY 34 stage files across the 5 phases [.sh all stages — count strengthening]", () => {
     let total = 0;
     for (const [phase, stages] of Object.entries(STAGES)) {
       const dir = at("aidlc-common", "stages", phase);
@@ -234,7 +234,7 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
       expect(shipped).toEqual([...stages].map((s) => `${s}.md`).sort());
       total += shipped.length;
     }
-    expect(total).toBe(33);
+    expect(total).toBe(34);
   });
 
   test("ships settings.json and settings.local.json.example [.sh L63-64]", () => {
@@ -291,7 +291,7 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
       mem("project.md"),
       at("CLAUDE.md"),
     ];
-    expect(paths.length).toBe(78);
+    expect(paths.length).toBe(79);
     // Every one of the 78 must exist — the .sh's full TAP plan, re-proven as a
     // single set so the count and the existence checks cannot drift apart.
     for (const p of paths) {

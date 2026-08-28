@@ -20,19 +20,19 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 817,
+    "total": 824,
     "enumeratedByClass": {
-      "function": 519,
-      "audit": 91,
+      "function": 520,
+      "audit": 95,
       "scope": 11,
-      "stage": 33,
+      "stage": 34,
       "hook": 18,
-      "subcommand": 138,
+      "subcommand": 139,
       "render-surface": 7
     },
     "coveredByClass": {
       "function": 299,
-      "audit": 49,
+      "audit": 50,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -364,6 +364,27 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PR_FEEDBACK",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PR_MERGED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PR_OPENED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "audit",
@@ -850,6 +871,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t324-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_INTEGRATING",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t328-pr-integration-routing.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5715,6 +5748,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitIntegratingReceipts",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:unitLifecycleReceiptsInUse",
       "minMechanism": "none",
       "coveredBy": [
@@ -7235,6 +7275,13 @@
     },
     {
       "unitClass": "stage",
+      "unitId": "construction/pr-integration",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
       "unitId": "ideation/approval-handoff",
       "minMechanism": "none",
       "coveredBy": [
@@ -8255,6 +8302,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t328-pr-integration-routing.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t114-orchestrate-next.test.ts",
           "mechanism": "cli"
         },
@@ -8909,6 +8960,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-integration-mode",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "subcommand",
@@ -9825,6 +9883,10 @@
         {
           "file": "tests/integration/t20.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t328-pr-integration-routing.test.ts",
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t27.test.ts",

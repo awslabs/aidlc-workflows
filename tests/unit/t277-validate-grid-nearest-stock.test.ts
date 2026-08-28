@@ -147,7 +147,7 @@ describe("t277 nearestStockScopes (in-process, shipped grid)", () => {
     const validation = validateGrid(proposed, { strict: true });
     expect(validation.valid).toBe(true);
     expect(validation.summary?.execute).toBe(31);
-    expect(validation.summary?.skip).toBe(2);
+    expect(validation.summary?.skip).toBe(3);
     expect(validation.nearest_stock?.[0]).toEqual({
       scope: "enterprise",
       diff: 2,

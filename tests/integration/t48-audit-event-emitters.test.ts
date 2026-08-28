@@ -103,7 +103,8 @@ function hasEmission(event: string, text: string): boolean {
   const p1 = new RegExp(`${EMITTERS}\\([^)]*"${event}"`);
   const p2 = new RegExp(`eventType = [^;]*"${event}"`);
   const p3 = new RegExp(`^[ \\t]+"${event}"[ \\t]*(/\\*[^*]*\\*/)?[ \\t]*,`, "m");
-  return p1.test(live) || p2.test(live) || p3.test(live);
+  const p4 = new RegExp(`eventType:[ \\t]*"${event}"`);
+  return p1.test(live) || p2.test(live) || p3.test(live) || p4.test(live);
 }
 
 /** Read the emitter taxonomy registry rows from 12-state-machine.md.
@@ -197,6 +198,7 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
     const emitted = new Set<string>();
     const p1 = new RegExp(`${EMITTERS}\\([^)]*"[A-Z_]+"`, "g");
     const p2 = /eventType = [^;]*"[A-Z_]+"/g;
+    const p4 = /eventType:\s*"[A-Z_]+"/g;
     const litRe = /"([A-Z_]+)"/;
     const litReG = /"[A-Z_]+"/g;
     for (const f of ALL_SOURCE_FILES) {
@@ -209,6 +211,11 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
       }
       // Pattern 2: eventType = "EVENT" / ternary.
       for (const hit of live.match(p2) ?? []) {
+        for (const lit of hit.match(litReG) ?? []) {
+          emitted.add(lit.replace(/"/g, ""));
+        }
+      }
+      for (const hit of live.match(p4) ?? []) {
         for (const lit of hit.match(litReG) ?? []) {
           emitted.add(lit.replace(/"/g, ""));
         }
