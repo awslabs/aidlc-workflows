@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.124] - 2026-08-28
+
+Construction can now integrate through evidence-backed GitHub pull requests without idling other Units: repository policy is detected and affirmed in Practices Discovery, each Unit can enter a non-blocking integrating state, and verified platform merges settle the workflow without AI-DLC merging or enabling auto-merge. **Upgrade:** refresh your complete `dist/<harness>/` shell, then rerun Practices Discovery to affirm PR integration for an existing workflow; untouched and direct-integration workflows remain dormant.
+
+* `aidlc-pr.ts detect|open|sweep|sync-feedback|finalize` provides bounded GitHub reads, dry-run-first publication, full review-history evaluation, coordinated multi-repo state, stacking checks, and verified finalization.
+* PR Integration is Construction stage 3.6, promoted per intent only after detection and affirmation; Build and Test is now 3.7 and CI Pipeline 3.8.
+* Integrating Units no longer block later eligible Units or open the stage gate early. When all remaining work is external, `awaiting-integration` ends the turn without Park or a resume ritual.
+* `/aidlc --status` shows audit-known PR URLs, state, and age; `/aidlc --status --refresh` performs one bounded sweep and reports live verdicts or an offline last-known fallback.
+* Formal `CHANGES_REQUESTED` reviews open revision rounds; comments remain findings data, fix pushes always gate, and closed-unmerged or partially merged coordinated PRs halt with explicit recovery choices.
+
 ## [2.6.123] - 2026-08-28
 
 Cursor now preserves delegated-agent attribution and reviewer-state integrity across POSIX and Windows path dialects, shell wrappers, Git configuration surfaces, filesystem traversal, and executable lookup changes. **Upgrade:** re-copy `dist/cursor/` into the project so the updated Cursor adapter, shared review-freeze parser, and version metadata replace the vulnerable hooks.

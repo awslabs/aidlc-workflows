@@ -55,11 +55,11 @@ and verified receipt clear the wait automatically.
 Run:
 
 ```text
-/aidlc --status
+/aidlc --status --refresh
 ```
 
 to refresh PR state and see integrating Units. On Codex, use
-`$aidlc --status`.
+`$aidlc --status --refresh`.
 
 ## Review Feedback
 

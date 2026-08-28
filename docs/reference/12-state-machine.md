@@ -428,7 +428,9 @@ false. When every remaining Unit is integrating, `next` emits the terminal
 timestamps, and ages. The directive is self-clearing: no park/unpark field is
 written, and the next verified completion receipt removes the condition.
 Absent or unrecognized Integration Mode values retain the pre-integration
-four-event lifecycle reducer and routing predicates.
+four-event lifecycle reducer and routing predicates. `/aidlc --status` shows
+the local snapshot; `/aidlc --status --refresh` performs the sanctioned bounded
+network read.
 
 ### PR integration
 

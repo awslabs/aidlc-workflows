@@ -1403,7 +1403,7 @@ function awaitingIntegrationDirective(
     stage,
     reason:
       `All remaining work for "${stage}" is awaiting external PR integration. ` +
-      "Refresh with `/aidlc --status`; this wait clears automatically when verified merge receipts land.",
+      "Refresh with `/aidlc --status --refresh`; this wait clears automatically when verified merge receipts land.",
     integrating_units: units.map((unit) => ({
       unit,
       prs: [...(byUnit.get(unit)?.values() ?? [])],
@@ -7413,7 +7413,7 @@ function checkStageCompletionEvidence(
           message:
             `Cannot present "${slug}" for approval because ${pick.awaitingIntegration.length} ` +
             `work items are awaiting verified PR merge receipts ` +
-            `(${pick.awaitingIntegration.join(", ")}). Refresh with \`/aidlc --status\`; ` +
+            `(${pick.awaitingIntegration.join(", ")}). Refresh with \`/aidlc --status --refresh\`; ` +
             "the stage gate remains closed until every PR is verified merged.",
         };
       }

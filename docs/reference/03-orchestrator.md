@@ -83,8 +83,11 @@ Read-only command that inspects the current workflow without advancing it:
 
 1. Reads the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
 2. Displays: current phase, current stage, completion percentage, pending decisions, and active agent.
-3. If verification is needed, runs the phase boundary check per stage-protocol-governance.md section 13.
-4. Does NOT advance the workflow -- strictly read-only.
+3. Displays integrating Units with audit-known PR URL, state, and age. The
+   explicit `--refresh` form performs one bounded `aidlc-pr sweep` and overlays
+   live verdicts; the default form remains local-only.
+4. If verification is needed, runs the phase boundary check per stage-protocol-governance.md section 13.
+5. Does NOT advance or finalize the workflow -- status is observational.
 
 ### `/aidlc --stage <id>` / `/aidlc --phase <name>` -- Jump to Stage/Phase
 

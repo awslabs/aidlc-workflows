@@ -34,6 +34,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
 | `/aidlc --status` | Display a read-only status summary |
+| `/aidlc --status --refresh` | Refresh integrating PR state through one bounded GitHub sweep |
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
@@ -338,22 +339,25 @@ The `/aidlc-knowledge` skill is the same surface, typed as a command.
 
 ### `/aidlc --status` — Read-only status
 
-Display current workflow progress without modifying anything.
+Display current workflow progress. The default form is local-only; add
+`--refresh` to read current GitHub state for integrating PRs.
 
 **Syntax:**
 
 ```
 /aidlc --status
+/aidlc --status --refresh
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, and the stage progress list. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, and the stage progress list. Integrating Units include each PR URL, last-known state, and age from the audit trail, plus the explicit refresh command. With `--refresh`, status runs one bounded PR sweep for all listed PRs and overlays live verdicts; it never finalizes, merges, or enables auto-merge. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
 
 Under `Unit Ownership: team`, it appends a clearly labeled **Team Construction
 Snapshot** with the same board unscoped main renders: Unit Progress, locally
 observed claim refs (owner, generation, and observed movement rather than a push
 time), pinned merge readiness, claimable Units, and blockers. Scoped and
-unscoped checkouts render the same board. The command does not fetch or mutate
-state, cache, or audit. Explicit `--space` and `--intent` selectors bind the
+unscoped checkouts render the same board. The default command does not fetch or
+mutate state, cache, or audit; `--refresh` performs only the bounded PR read.
+Explicit `--space` and `--intent` selectors bind the
 header, Unit DAG, claims, and merge journals to the same selected identity.
 The board ends with concrete next actions for claiming available or released
 work, recording a pinned merge gate, or resuming `aidlc unit land`.
