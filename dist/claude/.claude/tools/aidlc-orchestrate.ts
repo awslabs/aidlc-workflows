@@ -2162,6 +2162,12 @@ function readAutonomyMode(stateContent: string | null): "autonomous" | null {
 // unrecognised value never activates the new order.
 const CONSTRUCTION_ITERATION_FIELD = "Construction Iteration";
 
+const INTEGRATION_MODE_FIELD = "Integration Mode";
+
+export function readIntegrationMode(stateContent: string): "pr" | null {
+  return getField(stateContent, INTEGRATION_MODE_FIELD)?.trim() === "pr" ? "pr" : null;
+}
+
 // Read the recorded Construction iteration mode, or null when it is not exactly
 // "unit-major". Any other value (including "stage-major") is stage-major.
 function readConstructionIteration(

@@ -220,7 +220,7 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 | Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy |
 | Workspace State | Project root, detected languages, frameworks, build system |
 | Execution Plan Summary | Total stages, completed count, in-progress stage |
-| Runtime State | Revision count plus optional Construction iteration, Unit ownership, and Unit gate rhythm |
+| Runtime State | Revision count plus optional Construction iteration, Integration Mode, Unit ownership, and Unit gate rhythm |
 | Phase Progress | Per-phase status |
 | Stage Progress | Per-stage checkboxes generated from the compiled graph, organized by phase (see below) |
 | Unit Progress | Present only for team-owned unit-major Construction; a derived DAG/artifact/receipt/gate projection rewritten on every `next` |

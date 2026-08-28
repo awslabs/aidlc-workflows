@@ -100,7 +100,14 @@ const VALID_EVENT_TYPES = new Set([
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
+  "UNIT_INTEGRATING",
   "UNIT_COMPLETED",
+  // Pull-request integration receipts. Emitted only by aidlc-pr.ts after it
+  // verifies the corresponding GitHub state; the public append CLI cannot
+  // mint them.
+  "PR_OPENED",
+  "PR_FEEDBACK",
+  "PR_MERGED",
   // Artifact events (hook-emitted)
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
@@ -234,7 +241,11 @@ const EVENT_HEADINGS: Record<string, string> = {
   UNIT_STARTED: "Unit Started",
   UNIT_PAUSED: "Unit Paused",
   UNIT_RESUMED: "Unit Resumed",
+  UNIT_INTEGRATING: "Unit Integrating",
   UNIT_COMPLETED: "Unit Completed",
+  PR_OPENED: "PR Opened",
+  PR_FEEDBACK: "PR Feedback",
+  PR_MERGED: "PR Merged",
   ARTIFACT_CREATED: "Artifact Created",
   ARTIFACT_UPDATED: "Artifact Updated",
   ARTIFACT_REUSED: "Artifact Reused",
@@ -386,8 +397,12 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
+  "UNIT_INTEGRATING",
   "UNIT_COMPLETED",
   "UNIT_MERGED",
+  "PR_OPENED",
+  "PR_FEEDBACK",
+  "PR_MERGED",
   // DocumentKB provenance: the knowledge tool emits these through the library
   // inside its catalog transaction. A CLI-forged DOCUMENT_INDEXED whose
   // Digest+Source match a real row would make the tool's idempotent
@@ -430,7 +445,11 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
+  "UNIT_INTEGRATING",
   "UNIT_COMPLETED",
+  "PR_OPENED",
+  "PR_FEEDBACK",
+  "PR_MERGED",
   // Referee/conductor bookkeeping, emitted against main only.
   "AUDIT_FORKED",
   "AUDIT_MERGED",

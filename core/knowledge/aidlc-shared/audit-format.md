@@ -131,7 +131,7 @@ timestamps are causally unordered. Completion fails closed when such a tie
 could change the current attempt, selected receipt, or whether an artifact was
 written after confirmation, and requires fresh evidence with a later timestamp.
 
-### Unit Configuration and Lifecycle Events (7 events — unit-major Construction)
+### Unit Configuration and Lifecycle Events (8 events — unit-major Construction)
 
 The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
 the completion receipt the engine's coverage walk prefers over bare artifact
@@ -151,8 +151,21 @@ their work can precede their own `STAGE_STARTED`.
 | `UNIT_STARTED` | A unit's work begins on an inline per-unit stage; refused while another unit of the stage is open | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit start` |
 | `UNIT_PAUSED` | A unit stops before completion; the checkpoint carries why and what comes next | Timestamp, Stage, Unit, Run floor, Reason, Next Action; optional Attempt Generation | `tools/aidlc-state.ts unit pause` |
 | `UNIT_RESUMED` | The paused unit is explicitly resumed (the engine hard-stops until this) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit resume` |
+| `UNIT_INTEGRATING` | The unit has one or more open PRs and is skipped by the work router while remaining unsettled | Timestamp, Stage, Unit, Run floor, Repos, PR URLs; optional Attempt Generation | `tools/aidlc-pr.ts open` |
 | `UNIT_COMPLETED` | The unit's work is done AND its required artifacts are regular files on disk (verified at emit) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit complete` |
 | `UNIT_MERGED` | Main landed the pinned candidate content and folded this Unit's row; transported receipts now satisfy main's floors | Timestamp, Unit, Owner, Pinned OID, Merge commit OID, Attempt Generation | `tools/aidlc-state.ts fold-unit-merge` |
+
+### PR Integration Events (3 events — tool-owned)
+
+These rows are the stable ledger contract for PR metrics and routing status.
+`aidlc-pr.ts` is observe-only: it emits a row only after reading back the
+corresponding GitHub state, and it never merges or arms auto-merge.
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `PR_OPENED` | A newly created PR was read back with the expected head, base, and body marker | Timestamp, Stage, Unit, Run floor, Repo, PR Number, PR URL, Head, Base; optional Coordination | `tools/aidlc-pr.ts open` |
+| `PR_FEEDBACK` | A sweep or feedback sync observes a new formal review or external comment | Timestamp, Stage, Unit, Run floor, Repo, PR Number, PR URL, Feedback Type, Actor, External ID, State, Created At; optional Path, Line, Body Digest | `tools/aidlc-pr.ts sweep` / `sync-feedback` |
+| `PR_MERGED` | A sweep or finalize read verifies that GitHub reports the PR merged | Timestamp, Stage, Unit, Run floor, Repo, PR Number, PR URL, Merge Commit, Merged At; optional Merged By | `tools/aidlc-pr.ts finalize` |
 
 ### Artifact Events (3 events — hook-emitted)
 
@@ -309,7 +322,7 @@ Six events emit from the swarm referee `aidlc-swarm.ts` — the deterministic ve
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`) — there is no longer a separate "free-form hook entry" format. A hook with no active workflow in `cwd` is a no-op; session events only append to a workflow's audit.md when one exists.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`), which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_INTEGRATING`, `UNIT_COMPLETED`, `UNIT_MERGED`, `PR_OPENED`, `PR_FEEDBACK`, `PR_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`), which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 

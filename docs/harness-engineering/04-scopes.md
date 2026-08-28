@@ -69,6 +69,14 @@ runs as a regular Bolt. Absence defaults to off, so composed/runtime-approved
 scopes and plugin scopes do not conjure a skeleton Bolt unless they opt in
 explicitly.
 
+### Integration default
+
+The optional `integration:` field records the scope-dependent integration
+stance. Accepted values are `pr` and `direct`. It is parsed for core and plugin
+scopes alike; the PR-integration stage resolves it only after the team's
+detected and affirmed Way of Working has enabled PR integration. Absence does
+not activate PR routing.
+
 **2. The membership tag — each stage's `scopes:` frontmatter.** A stage names the scopes it runs under in its own frontmatter, in `core/aidlc-common/stages/<phase>/<slug>.md`:
 
 ```yaml

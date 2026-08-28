@@ -127,6 +127,7 @@ export interface ScopeDefinition {
   plugin?: string;
   runner?: boolean;
   skeleton?: boolean;
+  integration?: "pr" | "direct";
 }
 
 export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
@@ -20723,6 +20724,7 @@ interface ScopeMetadata {
   testStrategy?: string;
   runner?: boolean;
   skeleton: boolean;
+  integration?: "pr" | "direct";
   /** Ceiling on how heavyweight stage reviews run under this scope:
    *  "adversarial" (no cap - stages run as declared), "advisory" (adversarial
    *  stages degrade to a single advisory pass), or "none" (no reviewer
@@ -20825,6 +20827,15 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
         );
       }
       meta.skeleton = skeleton === "on";
+    }
+    const integration = scalarField(fm, "integration");
+    if (integration) {
+      if (integration !== "pr" && integration !== "direct") {
+        throw new Error(
+          `Scope file ${filePath} has invalid integration value "${integration}". Expected "pr" or "direct".`
+        );
+      }
+      meta.integration = integration;
     }
     if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;
     const reviewCap = scalarField(fm, "review_cap");

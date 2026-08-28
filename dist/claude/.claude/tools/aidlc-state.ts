@@ -683,6 +683,9 @@ export function main(argv: string[]): void {
       case "set-construction-iteration":
         handleSetConstructionIteration(args.slice(1));
         break;
+      case "set-integration-mode":
+        handleSetIntegrationMode(args.slice(1));
+        break;
       case "set-unit-ownership":
         handleSetUnitOwnership(args.slice(1));
         break;
@@ -763,7 +766,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-integration-mode, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -911,6 +914,37 @@ function handleSetConstructionIteration(args: string[]): void {
   );
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, construction_iteration: value }));
+  });
+}
+
+// set-integration-mode <pr|absent>: record whether per-unit Construction uses
+// PR integration. Only the exact stored value `pr` activates routing; the
+// explicit `absent` value restores the dormant default without requiring a
+// direct state-file edit.
+function handleSetIntegrationMode(args: string[]): void {
+  const integrationModeValues = ["pr", "absent"];
+  if (args.length < 1) {
+    error(
+      `Usage: aidlc-state.ts set-integration-mode <${integrationModeValues.join("|")}>`,
+    );
+  }
+  const value = args[0];
+  if (!integrationModeValues.includes(value)) {
+    error(
+      `Invalid integration mode "${value}". Valid: ${integrationModeValues.join(", ")}.`,
+    );
+  }
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    const content = readStateFile(pd);
+    const updated = setOrInsertField(
+      content,
+      "## Runtime State",
+      "Integration Mode",
+      value,
+    );
+    writeStateFile(pd, updated);
+    console.log(JSON.stringify({ updated: true, integration_mode: value }));
   });
 }
 
