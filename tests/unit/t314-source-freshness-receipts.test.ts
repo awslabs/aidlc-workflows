@@ -1186,7 +1186,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   });
 
-  test("commit reconstruction ignores mutable smudge output", () => {
+  test("content-transformation attributes make commit reconstruction underivable before mutable smudge output is consulted", () => {
     seedGitRepo(dir);
     const external = mkdtempSync(join(tmpdir(), "t314-smudge-listing-"));
     try {
@@ -1219,12 +1219,10 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       ).stdout.trim();
 
       const before = gitCommitSourceListing(dir, head, true);
-      expect(before).not.toBeNull();
+      expect(before).toBeNull();
       writeFileSync(payload, "SMUDGED-TWO\n");
       const after = gitCommitSourceListing(dir, head, true);
-      expect([...(after ?? new Map()).entries()]).toEqual([
-        ...(before ?? new Map()).entries(),
-      ]);
+      expect(after).toBeNull();
     } finally {
       rmSync(external, { recursive: true, force: true });
     }
@@ -4451,7 +4449,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(existsSync(join(proj, "ignored-source.ts"))).toBe(false);
   }, 120000);
 
-  test("a tracked symlink matched by a broad clean filter stays a symlink through finalize and merge", () => {
+  test("content-transformed symlink source keeps its file type while merge authority refuses before mutation", () => {
     const proj = makeFixture();
     ensureDagUnit(proj, "link");
     git(proj, ["config", "core.symlinks", "true"]);
@@ -4470,17 +4468,34 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       "--check-cmd", `"${process.execPath}" -e "require('fs').lstatSync('link.txt').isSymbolicLink()||process.exit(1)"`,
     ]);
     expect(finalized.rc).toBe(0);
+    const beforeHead = spawnSync(
+      "git",
+      ["-C", proj, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const beforeStatus = spawnSync(
+      "git",
+      ["-C", proj, "status", "--porcelain=v1"],
+      { encoding: "utf-8" },
+    ).stdout;
     const merge = spawnSync(BUN, [
       WORKTREE_TOOL, "merge", "--slug", "link", "--target", "main",
       "--strategy", "squash", "--project-dir", proj,
     ], { cwd: proj, encoding: "utf-8" });
-    if (merge.status !== 0) {
-      throw new Error(`filtered symlink merge failed: ${merge.stdout ?? ""}${merge.stderr ?? ""}`);
-    }
-    expect(lstatSync(join(proj, "link.txt")).isSymbolicLink()).toBe(true);
-    expect(readlinkSync(join(proj, "link.txt"))).toBe("target.txt");
-    expect(readFileSync(join(proj, "target.txt"), "utf-8").replace(/\r\n/g, "\n"))
-      .toBe("reviewed target\n");
+    const output = `${merge.stdout ?? ""}${merge.stderr ?? ""}`;
+    expect(merge.status).not.toBe(0);
+    expect(output).toContain("reviewed commit");
+    expect(output).toContain("has no provable immutable source listing");
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(beforeHead);
+    expect(spawnSync("git", ["-C", proj, "status", "--porcelain=v1"], {
+      encoding: "utf-8",
+    }).stdout).toBe(beforeStatus);
+    expect(existsSync(join(proj, "link.txt"))).toBe(false);
+    expect(lstatSync(join(wt, "link.txt")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(wt, "link.txt"))).toBe("target.txt");
   }, 120000);
 
   test("mutable checkout filters are refused before target mutation or source-merge authority", () => {
@@ -4585,7 +4600,94 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(existsSync(wt)).toBe(true);
   }, 120000);
 
-  test("finalize merges a claimed unit whose worktree source is unchanged since its terminal review", () => {
+  test("target-side transformation attributes covering reviewed source refuse before merge mutation", () => {
+    const proj = makeFixture();
+    ensureDagUnit(proj, "combined-transform");
+    runSwarm(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "combined-transform",
+      "--base",
+      "main",
+    ]);
+    const wt = wtPath(proj, "combined-transform");
+    writeFileSync(
+      join(wt, "combined.ts"),
+      "export const combined = true;\n",
+      "utf-8",
+    );
+    recordReview(
+      wt,
+      "code-generation",
+      REVIEWER,
+      "combined-transform",
+    );
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "combined-transform",
+      "--claimed",
+      "combined-transform",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('combined.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    writeFileSync(
+      join(proj, ".gitattributes"),
+      "combined.ts text\n",
+      "utf-8",
+    );
+    git(proj, ["add", ".gitattributes"]);
+    git(proj, ["commit", "-qm", "target source attributes"]);
+    const beforeHead = spawnSync(
+      "git",
+      ["-C", proj, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const beforeStatus = spawnSync(
+      "git",
+      ["-C", proj, "status", "--porcelain=v1"],
+      { encoding: "utf-8" },
+    ).stdout;
+
+    const merge = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "combined-transform",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    const output = `${merge.stdout ?? ""}${merge.stderr ?? ""}`;
+    expect(merge.status).not.toBe(0);
+    expect(output).toMatch(
+      /main checkout source changed since the stage-entry baseline|combined commit .* has no provable immutable source listing/,
+    );
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(beforeHead);
+    expect(spawnSync("git", ["-C", proj, "status", "--porcelain=v1"], {
+      encoding: "utf-8",
+    }).stdout).toBe(beforeStatus);
+    expect(existsSync(join(proj, "combined.ts"))).toBe(false);
+    expect(existsSync(wt)).toBe(true);
+  }, 120000);
+
+  test("content-transformed source cannot produce merge authority when worktree bytes are unchanged", () => {
     const proj = makeFixture();
     ensureDagUnit(proj, "bar");
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "bar", "--base", "main"]);
@@ -4653,11 +4755,14 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       WORKTREE_TOOL, "merge", "--slug", "bar", "--target", "main",
       "--strategy", "squash", "--intent", originalIntent, "--project-dir", proj,
     ], { cwd: proj, encoding: "utf-8" });
-    expect(merge.status).toBe(0);
-    expect(readFileSync(join(proj, "bar.ts"), "utf-8").replace(/\r\n/g, "\n"))
-      .toBe("export const bar = 1;   \n");
+    const output = `${merge.stdout ?? ""}${merge.stderr ?? ""}`;
+    expect(merge.status).not.toBe(0);
+    expect(output).toContain("reviewed commit");
+    expect(output).toContain("has no provable immutable source listing");
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(existsSync(join(proj, "bar.ts"))).toBe(false);
     const afterMerge = spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef]);
-    expect(afterMerge.status).toBe(1);
+    expect(afterMerge.status).toBe(0);
   }, 120000);
 
   test("an explicit intent binds a normalized legacy Unit to that intent's convergence", () => {

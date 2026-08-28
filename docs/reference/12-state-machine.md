@@ -182,7 +182,8 @@ or receipt ambiguous. An open Bolt remains on the ordinary stage-level fallback
 path because
 its Unit artifacts still live outside the main tree. Merging that Bolt changes
 the fingerprint domain and intentionally invalidates an earlier stage-level
-receipt until its exact pending ordinal is rebound with `--retry-pending`.
+pending request. `--retry-pending` cannot replace that sealed subject, so the
+stage follows the emitted recovery guidance instead of rebaselining it.
 Per-Unit receipt filtering still recognizes both open and merged Units. A Unit
 may belong to both sets when an older attempt merged while a newer attempt
 remains open; merged membership drives gate demand and stage-level

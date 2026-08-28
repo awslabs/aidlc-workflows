@@ -114,6 +114,10 @@ reviewer agents themselves where the harness supports per-agent hooks (the
 Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of
 matching `agent_type`).
 
+An adapter that protects attribution-state stores must route its allow/deny
+decision through `tools/aidlc-guard-kernel.ts`; adapter-local name or token
+checks may add denials but cannot establish an allow.
+
 > **The one sanctioned `core/` edit: the doctor arm.** `/aidlc --doctor`
 > (`core/tools/aidlc-utility.ts`) health-checks an installed tree, and a new
 > harness adds a per-harness arm there for its own install surfaces (adapter +
