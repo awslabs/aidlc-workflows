@@ -2761,6 +2761,7 @@ function listConflictFiles(cwd?: string): string[] {
 //
 // Usage: aidlc-worktree discard --slug <slug> [--repo <name>]
 //                               [--intent <dir>] [--space <name>]
+//                               [--reason <text>]
 //
 // --repo (P7): the sibling repo the worktree was forked in — same resolution as
 // `create`. Idempotent: if neither directory nor branch exists, succeeds silently
@@ -2768,6 +2769,14 @@ function listConflictFiles(cwd?: string): string[] {
 function handleDiscard(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
+  const reason = flags.reason ?? "agent-discard";
+  if (
+    reason.length === 0 ||
+    reason.length > 200 ||
+    /[\r\n\u2028\u2029]/.test(reason)
+  ) {
+    error("Invalid --reason: expected 1-200 printable characters on one line.");
+  }
   const pd = resolveProjectDir(projectDir);
   const intentWasExplicit =
     flags.intent !== undefined || flags.space !== undefined;
@@ -2870,7 +2879,7 @@ function handleDiscard(args: string[]): void {
     auditTs = emitAudit(pd, "WORKTREE_DISCARDED", {
       "Bolt slug": slug,
       "Worktree path": auditWorktreePath(pd, wtPath),
-      Reason: "agent-discard",
+      Reason: reason,
     }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
@@ -2904,7 +2913,7 @@ function handleDiscard(args: string[]): void {
       emitted: "WORKTREE_DISCARDED",
       slug,
       worktree_path: wtPath,
-      reason: "agent-discard",
+      reason,
       audit_timestamp: auditTs,
     })
   );

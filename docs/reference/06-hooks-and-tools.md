@@ -717,6 +717,27 @@ Deterministic handlers avoid LLM overhead for operations that are pure computati
 
 ---
 
+## PR Integration Tool
+
+`aidlc-pr.ts` is the deterministic GitHub boundary for the conditional
+Construction PR stage. Every `gh` invocation runs through `timeout 10`;
+offline-shaped failures return the latest audit-known PR state and its age.
+The tool never merges a PR and never enables auto-merge.
+
+| Verb | Behavior |
+|------|----------|
+| `detect --repo <owner/name> [--branch <name>]` | Reads effective rules, the branch protected bit, merge settings, PR templates, and CODEOWNERS. `--fixture <json>` evaluates a recorded response without network access. |
+| `open --unit <unit> --repo <owner/name>...` | Dry-run by default: prints the branch push, PR create, reviewer, and coordination-body commands. `--execute` performs them and verifies every write by reading it back before emitting `PR_OPENED` and `UNIT_INTEGRATING`. |
+| `sweep --pr <owner/name#number>...` | Opens with one connectivity probe, then folds full review history, timeline dismissals, stale approvals, mergeability, terminal state, and coordinated multi-repo settlement. `--emit-feedback` records newly observed feedback. |
+| `sync-feedback --pr <owner/name#number>... --unit <unit>` | Runs the sweep's feedback reader and emits only new `PR_FEEDBACK` rows. |
+| `finalize --pr <owner/name#number>... --unit <unit>` | Verifies every coordinated PR is merged, emits `PR_MERGED`, delegates existing Bolt metadata consolidation and `unit complete`, and retires the worktree with `--reason integrated-via-pr`. Stacked-child retarget writes require `--execute` and are read back before cleanup. |
+
+The PR body uses the repository's GraphQL-discovered template. Its collapsed
+evidence dossier enumerates the live `pr-integration` stage's `consumes`, so
+plugin-added consumes extend the body without a tool change.
+
+---
+
 ## Sensor, Learning, and Runtime Tools
 
 Six further `aidlc-*.ts` tools back the data plane. Each is deterministic:
