@@ -8,6 +8,7 @@ keywords:
   - training
 description: Facilitated group session with mandatory gates
 skeleton: on
+integration: pr
 review_cap: advisory
 ---
 

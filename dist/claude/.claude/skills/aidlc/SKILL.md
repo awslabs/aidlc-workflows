@@ -79,6 +79,7 @@ For an isolated run's reviewer, add `--single` to both `aidlc-log.ts review` cal
 | `error` | Print `directive.message` verbatim and STOP. Do not recover, retry, or smooth it over — the message is the user-facing error. |
 | `done` | The workflow (or single-stage run) is complete. Present the completion summary and STOP the loop. |
 | `parked` | The workflow was parked at a clean inter-stage boundary (`directive.stage`) for a later session. Tell the user it is parked and how to resume (`/aidlc --resume`), then STOP the loop. No stage was advanced and nothing was marked complete. |
+| `awaiting-integration` | Show `directive.reason` and the PR state/age rows in `directive.integrating_units`, offer `/aidlc --status --refresh`, then STOP. This is a self-clearing external wait: do not park, report, or run `next` again in this turn. |
 | `load-steering` | Apply `directive.rules_content` in array order and retain it as the active stage's rule bundle. Do not print a progress message or mention chunking to the user, and do not put a sentence of your own where the progress message would have gone: loading rules is not an event in the user's project, so no wording of it, however plain, belongs in the transcript. Immediately run `bun .claude/tools/aidlc-orchestrate.ts continue "<directive.continue_token>"` and act on the returned directive; do not call `report`. Repeat until `run-stage`. |
 | `run-stage` | The preceding `load-steering` sequence delivered every substantive active-space rule as content; `directive.rules_in_context` is its ordered path manifest. **STOP: unless `directive.swarm_settled === true`, the first tool calls after receiving `run-stage` are file reads for every path in `directive.inline_context_paths`; do not batch those reads with later stage reads.** Show any `context_warnings` verbatim, then read the required paths: lead + supports on `inline`, the lead only on `mob`, and none on fully dispatched `subagent`/`pipeline`. Agent names alone are not loaded context. This is a **blocking context-load precondition**, not a path hint: wait for every read result before reading `stage_file` or `consumes`, initializing the diary, running the stage body, dispatching mob supports, or writing artifacts. A mob MUST explicitly read its lead persona path first; the path's presence in `inline_context_paths` is not evidence that the persona is loaded. Then read `directive.stage_file` and `consumes`, initialize the diary at `directive.memory_path`, and **branch on `directive.swarm_settled` first, then `directive.single`, then `directive.wave` when present, otherwise `directive.gate`, before running the stage body or writing `produces`**. Each branch below defines when artifact generation may begin. When a branch runs a dispatched topology, paste the accumulated rule bundle verbatim into every agent brief. If `consumes_absent` is present, an entry with `expected: true` is absent by scope design or a recorded conditional skip; an entry with `expected: false` is a real gap to surface per the recovery protocol. |
 | `ask` | Render `directive.question` via `AskUserQuestion` (this harness's binding for the protocol's structured questions — see `question-rendering.md` beside this file), then branch on the typed response contract. When `directive.ask_type === "new-work-routing"` and `response_route === "next"`, never call `report`: part of the active work = re-run bare `next`; separate work = `next --new-intent --scope <directive.proposed_scope, or the human's correction> "<directive.new_work_description>"`; reshape = `next compose "<the human's words>"`. For every other ask, feed the human's answer back on the next `report` via `--user-input "<answer>"`. For ANY answer to the resume menu (resume / redo / jump / start fresh), call `report --result resumed --user-input "<answer>"`, then act on the returned per-choice `print` (it names the exact command or follow-up for that choice). The engine never calls `AskUserQuestion` itself — it defers the human turn to you. |
@@ -90,7 +91,7 @@ For an isolated run's reviewer, add `--single` to both `aidlc-log.ts review` cal
 
 **Autonomous reviewer boundary.** The complete autonomous review and receipt contract moved to `aidlc-common/protocols/stage-protocol-swarm.md`; load it for every `invoke-swarm` directive, skipping it only if already loaded in this session.
 
-The orchestration engine emits eight kinds today: `load-steering`, `run-stage`, `invoke-swarm`, `ask`, `print`, `error`, `done`, `parked` (`invoke-swarm` is emitted only for an eligible Construction batch under an `autonomous` grant; `invoke-swarm` is an orthogonal directive kind, NOT the reserved `agent-team` stage `mode`). The `dispatch-subagent` and `present-gate` arms remain documented placeholders so the loop is complete-shaped; until the engine emits those two, you will only ever act on the eight. Do not implement those two placeholder behaviours speculatively.
+The orchestration engine emits nine kinds today: `load-steering`, `run-stage`, `invoke-swarm`, `ask`, `print`, `error`, `done`, `parked`, `awaiting-integration` (`invoke-swarm` is emitted only for an eligible Construction batch under an `autonomous` grant; `invoke-swarm` is an orthogonal directive kind, NOT the reserved `agent-team` stage `mode`). The `dispatch-subagent` and `present-gate` arms remain documented placeholders so the loop is complete-shaped; until the engine emits those two, you will only ever act on the nine. Do not implement those two placeholder behaviours speculatively.
 
 **Parking a workflow.** A long workflow (enterprise scope spans many stages) need not finish in one session. Park when the user wants to stop and continue later: run `bun .claude/tools/aidlc-orchestrate.ts park` to park the workflow cleanly at the current inter-stage boundary; it emits a `parked` directive you act on as above. **Do not park because context *feels* heavy.** You cannot measure your own context window, and a conversation that feels long is routinely under half full — a 32-stage run that felt heavy has been measured at 37% used. Park for context only when the harness has actually surfaced a usage figure at or above 80%; absent such a figure you have no grounds to park, so keep running stages. Never advance or approve stages you did not actually run just to reach `done`: park instead. Tell the user their work is saved and how to pick it back up. The next session resumes with `/aidlc --resume` (the engine clears the park marker before continuing).
 
@@ -181,17 +182,17 @@ Source of truth: one file per scope under `.claude/scopes/aidlc-<name>.md` (iden
 
 | Scope          | Depth         | TestStrategy | EXECUTE / Total |
 |----------------|---------------|--------------|-----------------|
-| bugfix         | Minimal       | (default)    | 9 / 33          |
-| classic        | Standard      | (default)    | 26 / 33         |
-| enterprise     | Comprehensive | (default)    | 33 / 33         |
-| express        | Minimal       | (default)    | 10 / 33         |
-| feature        | Standard      | (default)    | 33 / 33         |
-| infra          | Standard      | (default)    | 13 / 33         |
-| mvp            | Standard      | (default)    | 23 / 33         |
-| poc            | Minimal       | (default)    | 8 / 33          |
-| refactor       | Minimal       | (default)    | 10 / 33         |
-| security-patch | Minimal       | (default)    | 10 / 33         |
-| workshop       | Standard      | Minimal      | 26 / 33         |
+| bugfix         | Minimal       | (default)    | 9 / 34          |
+| classic        | Standard      | (default)    | 26 / 34         |
+| enterprise     | Comprehensive | (default)    | 33 / 34         |
+| express        | Minimal       | (default)    | 10 / 34         |
+| feature        | Standard      | (default)    | 33 / 34         |
+| infra          | Standard      | (default)    | 13 / 34         |
+| mvp            | Standard      | (default)    | 23 / 34         |
+| poc            | Minimal       | (default)    | 8 / 34          |
+| refactor       | Minimal       | (default)    | 10 / 34         |
+| security-patch | Minimal       | (default)    | 10 / 34         |
+| workshop       | Standard      | Minimal      | 26 / 34         |
 
 <!-- END: compiled scope grid -->
 
@@ -229,8 +230,9 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 | nfr-design | 3.3 | NFR Design | Construction | CONDITIONAL | aidlc-architect-agent | aidlc-aws-platform-agent | inline |
 | infrastructure-design | 3.4 | Infrastructure Design | Construction | CONDITIONAL | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | inline |
 | code-generation | 3.5 | Code Generation | Construction | ALWAYS | aidlc-developer-agent | — | subagent |
-| build-and-test | 3.6 | Build and Test | Construction | ALWAYS | aidlc-quality-agent | aidlc-devsecops-agent | inline |
-| ci-pipeline | 3.7 | CI Pipeline | Construction | CONDITIONAL | aidlc-pipeline-deploy-agent | — | inline |
+| pr-integration | 3.6 | PR Integration | Construction | CONDITIONAL | aidlc-pipeline-deploy-agent | — | inline |
+| build-and-test | 3.7 | Build and Test | Construction | ALWAYS | aidlc-quality-agent | aidlc-devsecops-agent | inline |
+| ci-pipeline | 3.8 | CI Pipeline | Construction | CONDITIONAL | aidlc-pipeline-deploy-agent | — | inline |
 | deployment-pipeline | 4.1 | Deployment Pipeline | Operation | CONDITIONAL | aidlc-pipeline-deploy-agent | — | inline |
 | environment-provisioning | 4.2 | Environment Provisioning | Operation | CONDITIONAL | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | inline |
 | deployment-execution | 4.3 | Deployment Execution | Operation | CONDITIONAL | aidlc-pipeline-deploy-agent | aidlc-developer-agent | inline |

@@ -7,6 +7,7 @@ keywords:
   - infra
 description: Infrastructure changes
 skeleton: on
+integration: pr
 ---
 
 # infra scope

@@ -122,6 +122,7 @@ import {
   stagesInScope,
   swarmConvergedUnits,
   unitCompletedReceipts,
+  unitIntegratingReceipts,
   unitGateStatus,
   unitMajorConstructionStageSlugs,
   unitParkedPath,
@@ -683,6 +684,9 @@ export function main(argv: string[]): void {
       case "set-construction-iteration":
         handleSetConstructionIteration(args.slice(1));
         break;
+      case "set-integration-mode":
+        handleSetIntegrationMode(args.slice(1));
+        break;
       case "set-unit-ownership":
         handleSetUnitOwnership(args.slice(1));
         break;
@@ -763,7 +767,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-integration-mode, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -911,6 +915,49 @@ function handleSetConstructionIteration(args: string[]): void {
   );
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, construction_iteration: value }));
+  });
+}
+
+// set-integration-mode <pr|absent>: record whether per-unit Construction uses
+// PR integration. Only the exact stored value `pr` activates routing; the
+// explicit `absent` value restores the dormant default without requiring a
+// direct state-file edit.
+function handleSetIntegrationMode(args: string[]): void {
+  const integrationModeValues = ["pr", "absent"];
+  if (args.length < 1) {
+    error(
+      `Usage: aidlc-state.ts set-integration-mode <${integrationModeValues.join("|")}>`,
+    );
+  }
+  const value = args[0];
+  if (!integrationModeValues.includes(value)) {
+    error(
+      `Invalid integration mode "${value}". Valid: ${integrationModeValues.join(", ")}.`,
+    );
+  }
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    const content = readStateFile(pd);
+    if (
+      value === "absent" &&
+      getField(content, "Integration Mode")?.trim() === "pr"
+    ) {
+      const integrating = unitIntegratingReceipts(pd, "pr-integration");
+      if (integrating.size > 0) {
+        error(
+          "Refusing to disable PR integration while Units are integrating " +
+            `(${[...integrating].sort().join(", ")}). Finalize or explicitly abandon those Units first.`,
+        );
+      }
+    }
+    const updated = setOrInsertField(
+      content,
+      "## Runtime State",
+      "Integration Mode",
+      value,
+    );
+    writeStateFile(pd, updated);
+    console.log(JSON.stringify({ updated: true, integration_mode: value }));
   });
 }
 
@@ -1886,6 +1933,10 @@ function handleUnit(args: string[]): void {
     }
 
     const checkpoint = activeUnitCheckpoint(pd, slug);
+    const integratingCompletion =
+      action === "complete" &&
+      getField(content, "Integration Mode")?.trim() === "pr" &&
+      unitIntegratingReceipts(pd, slug).has(unit);
 
     if (waveMode) {
       if (checkpoint) {
@@ -1911,14 +1962,24 @@ function handleUnit(args: string[]): void {
         return;
       }
       requireEngineRoutedUnit(pd, slug, unit);
-    } else if (action === "pause" || action === "complete") {
+    } else if (action === "pause") {
       if (!checkpoint || checkpoint.unit !== unit) {
         error(
-          `Refusing to ${action} unit "${unit}" for "${slug}": it is not the active unit` +
+          `Refusing to pause unit "${unit}" for "${slug}": it is not the active unit` +
             `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active — start it first)"}.`,
         );
       }
-      if (action === "complete" && checkpoint.state === "paused") {
+    } else if (action === "complete") {
+      if (
+        (!checkpoint || checkpoint.unit !== unit) &&
+        !integratingCompletion
+      ) {
+        error(
+          `Refusing to complete unit "${unit}" for "${slug}": it is neither the active unit nor a current integrating unit` +
+            `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active — start it first)"}.`,
+        );
+      }
+      if (checkpoint?.unit === unit && checkpoint.state === "paused") {
         error(
           `Refusing to complete unit "${unit}" for "${slug}": it is paused` +
             `${checkpoint.reason ? ` (reason: ${checkpoint.reason})` : ""}. Resume it first ` +
@@ -2001,10 +2062,12 @@ function handleUnit(args: string[]): void {
     // Parked / Parked At Stage).
     const timestamp = isoTimestamp();
     if (action === "complete") {
-      content = removeField(content, "Active Unit");
-      content = removeField(content, "Unit State");
-      content = removeField(content, "Unit Pause Reason");
-      content = removeField(content, "Unit Next Action");
+      if (!checkpoint || checkpoint.unit === unit) {
+        content = removeField(content, "Active Unit");
+        content = removeField(content, "Unit State");
+        content = removeField(content, "Unit Pause Reason");
+        content = removeField(content, "Unit Next Action");
+      }
     } else {
       content = setOrInsertField(content, "## Runtime State", "Active Unit", unit);
       content = setOrInsertField(
@@ -2343,7 +2406,7 @@ function handleCount(args: string[]): void {
 //
 // The state machine's transitions were purely ceremonial: approve/advance
 // marked a stage [x] without verifying ANY work landed on disk, so an agent
-// could rubber-stamp all 33 stages (gate-start->approve, or pure advance) with
+// could rubber-stamp all 34 stages (gate-start->approve, or pure advance) with
 // zero artifacts. This guard makes a forward stage-completion CONTINGENT on
 // evidence of work - the same principle the swarm referee already applies at
 // the merge gate (aidlc-swarm.ts finalize is authoritative, so a red unit

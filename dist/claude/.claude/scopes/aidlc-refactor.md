@@ -7,6 +7,7 @@ keywords:
   - simplify
 description: Clean up existing code
 skeleton: off
+integration: pr
 ---
 
 # refactor scope

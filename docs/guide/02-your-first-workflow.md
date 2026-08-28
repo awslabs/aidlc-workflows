@@ -106,7 +106,7 @@ The orchestrator writes the intent's `aidlc-state.md` (under its record dir) wit
 
 ```
 ─── Scope Detection ───────────────────────────────────────────────────────────
-Detected scope: feature (Standard depth, Standard test strategy, all 33 stages)
+Detected scope: feature (Standard depth, Standard test strategy, 33 of 34 stages; PR integration resolved from practices)
 ▸ Approve scope? [Yes / Change scope / Change depth / Change test strategy]
 > Yes
 ```
@@ -237,7 +237,9 @@ Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and 
 
 Units whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
 
-After every Unit's per-unit stages settle, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
+After every Unit's per-unit stages settle, stages 3.7 (Build and Test) and 3.8
+(CI Pipeline) run once across the whole solution. When Practices Discovery
+affirmed PR integration, stage 3.6 ran per Unit before that backstop.
 
 ---
 
@@ -344,7 +346,7 @@ Throughout the workflow on Claude Code, the custom AI-DLC status line shows your
 ## Next Steps
 
 - [Spaces and Intents](03-spaces-and-intents.md) — how the workspace holds many runs, and how to start and switch between them
-- [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 33 stages
+- [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 34 stages
 - [Interaction Modes](07-interaction-modes.md) — Guide Me, Edit File, and Chat explained
 - [Session Management](11-session-management.md) — resuming, redoing, and jumping between stages
 - [Glossary](glossary.md) — terminology reference

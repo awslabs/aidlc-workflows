@@ -15,7 +15,7 @@ This document contains all Mermaid diagrams that visualize the AI-DLC (AI-Driven
 
 ## 1. End-to-End Lifecycle
 
-The AI-DLC methodology organizes work into five sequential phases. Each phase has a verification gate at its boundary that must pass before the next phase begins. The full lifecycle spans 33 stages across the five phases, with scope determining which stages actually execute.
+The AI-DLC methodology organizes work into five sequential phases. Each phase has a verification gate at its boundary that must pass before the next phase begins. The full lifecycle spans 34 stages across the five phases, with scope and affirmed integration practice determining which stages actually execute.
 
 ```mermaid
 graph LR
@@ -37,10 +37,10 @@ graph LR
         N1 -.->|"9 stages"| N7
     end
 
-    subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.7)"]
+    subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.8)"]
         C1["Functional Design"]
         C7["CI Pipeline"]
-        C1 -.->|"3.1–3.5 stage-major per Unit; 3.6–3.7 once after all Units"| C7
+        C1 -.->|"3.1–3.6 per Unit when PR mode is affirmed; 3.7–3.8 once after all Units"| C7
     end
 
     subgraph OPERATION["OPERATION (4.1-4.7)"]
@@ -165,7 +165,7 @@ flowchart TD
 
 ## 4. Construction Flow
 
-The Construction phase's **default walk is stage-major**: one in-scope stage runs for every Unit, then the next stage. Runtime batches come from `unit-of-work-dependency.md` (2.7). `bolt-plan.md` is the 2.9 planning artifact — not the walk source. The walking-skeleton gate is the first in-scope Construction EXECUTE stage; later Units may run in parallel batches as the DAG allows. After every per-unit stage settles, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once. Stage 3.5 (Code Generation) runs as a subagent and is shown in a hexagonal shape.
+The Construction phase's **default walk is stage-major**: one in-scope stage runs for every Unit, then the next stage. Runtime batches come from `unit-of-work-dependency.md` (2.7). `bolt-plan.md` is the 2.9 planning artifact — not the walk source. The walking-skeleton gate is the first in-scope Construction EXECUTE stage; later Units may run in parallel batches as the DAG allows. PR Integration (3.6) joins the per-Unit block only after affirmation. After every per-unit stage settles, stages 3.7 (Build and Test) and 3.8 (CI Pipeline) run once. Stage 3.5 (Code Generation) runs as a subagent and is shown in a hexagonal shape.
 
 ```mermaid
 flowchart TD
@@ -188,13 +188,16 @@ flowchart TD
     START --> PER_STAGE
     PER_STAGE --> S36
 
-    S36["3.6 Build and Test\n(aidlc-quality-agent)\nALWAYS"]
-    S37["3.7 CI Pipeline\n(aidlc-pipeline-deploy-agent)\nCONDITIONAL"]
+    S36["3.6 PR Integration\n(aidlc-pipeline-deploy-agent)\nCONDITIONAL per Unit"]
+    S37["3.7 Build and Test\n(aidlc-quality-agent)\nALWAYS"]
+    S38["3.8 CI Pipeline\n(aidlc-pipeline-deploy-agent)\nCONDITIONAL"]
     VG3{{"Verification Gate:\nConstruction --> Operation"}}
 
     S36 ==> S37
-    S36 -.->|"skip CI if\nnot in scope"| VG3
-    S37 -.-> VG3
+    S36 -.->|"skip PR if\nnot affirmed"| S37
+    S37 ==> S38
+    S37 -.->|"skip CI if\nnot in scope"| VG3
+    S38 -.-> VG3
 
     style PER_STAGE fill:#fff3e0,stroke:#e65100
     style S35 fill:#bbdefb,stroke:#1565c0
@@ -203,7 +206,8 @@ flowchart TD
     style S33 fill:#fff9c4,stroke:#f9a825
     style S34 fill:#fff9c4,stroke:#f9a825
     style S36 fill:#c8e6c9,stroke:#388e3c
-    style S37 fill:#fff9c4,stroke:#f9a825
+    style S37 fill:#c8e6c9,stroke:#388e3c
+    style S38 fill:#fff9c4,stroke:#f9a825
     style VG3 fill:#ef9a9a,stroke:#c62828
 ```
 
@@ -655,8 +659,9 @@ This reference table maps every stage to its execution mode and lead agent for q
 | 3.3 | NFR Design | inline | aidlc-architect-agent |
 | 3.4 | Infrastructure Design | inline | aidlc-aws-platform-agent |
 | 3.5 | Code Generation | subagent (aidlc-developer-agent) | aidlc-developer-agent |
-| 3.6 | Build and Test | inline | aidlc-quality-agent |
-| 3.7 | CI Pipeline | inline | aidlc-pipeline-deploy-agent |
+| 3.6 | PR Integration | inline | aidlc-pipeline-deploy-agent |
+| 3.7 | Build and Test | inline | aidlc-quality-agent |
+| 3.8 | CI Pipeline | inline | aidlc-pipeline-deploy-agent |
 | 4.1 | Deployment Pipeline | inline | aidlc-pipeline-deploy-agent |
 | 4.2 | Environment Provisioning | inline | aidlc-aws-platform-agent |
 | 4.3 | Deployment Execution | inline | aidlc-pipeline-deploy-agent |

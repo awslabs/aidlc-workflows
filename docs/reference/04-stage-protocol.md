@@ -69,7 +69,7 @@ stage), not by a separate governance flow.
 ## Overview
 
 The stage protocol is the mandatory behavioral contract governing how every
-stage in the AI-DLC workflow executes. All 33 stages across five phases
+stage in the AI-DLC workflow executes. All 34 stages across five phases
 (Initialization, Ideation, Inception, Construction, Operation) follow this protocol without
 exception. The conductor (`SKILL.md`) hands stage execution to agent
 personas; the protocol stays independent of phase and agent, defining
@@ -487,7 +487,7 @@ Before beginning any stage, transition sidebar tasks:
 2. Current stage task -> mark `in_progress` with `activeForm: "Running [Stage Name]"`
 
 Rules: task must be `in_progress` for spinner to display. Update BEFORE
-reading stage file. Applies to all 33 stages. If task IDs lost (compaction),
+reading stage file. Applies to all 34 stages. If task IDs lost (compaction),
 use `TaskList` to find by subject. For skipped stages:
 `TaskUpdate({ taskId: [ID], status: "completed", description: "[original] -- Skipped: [reason]" })`
 
@@ -873,7 +873,7 @@ brief analysis, skip optional stages:
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Code Generation) |
 | **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) |
 | **Depth** | Artifact detail scale: Minimal, Standard, or Comprehensive |
-| **Unit of Work** | An independently implementable package of features; the Construction iteration unit. One pass through stages 3.1-3.7. |
+| **Unit of Work** | An independently implementable package of features; the Construction iteration unit. One pass through the applicable per-Unit stages 3.1-3.6. |
 | **Service** | A deployable process or container (API server, worker, frontend app) |
 | **Module** | Code-level organizational boundary within a service (package, namespace) |
 | **Component** | Logical building block within a module (class, function group, UI component) |

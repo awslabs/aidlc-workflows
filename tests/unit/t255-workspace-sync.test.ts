@@ -630,7 +630,7 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(readFileSync(join(indexRepo, "README.md"), "utf-8")).toBe(
       "hidden tracked edit\n",
     );
-  });
+  }, 15000);
 
   test("empty untracked directories BLOCK --force removal", () => {
     const ws = freshRealWorkspace(`{

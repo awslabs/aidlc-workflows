@@ -315,7 +315,7 @@ conductor runs the same forwarding loop as \`/aidlc\`.
 // emits byte-identical SKILL.md files. Also PRUNES any stale init-phase
 // stage-runner dir (aidlc-state-init, aidlc-workspace-detection,
 // aidlc-workspace-scaffold) left by an earlier generation that emitted runners
-// for all 33 stages. Returns the slugs written.
+// for all 34 stages. Returns the slugs written.
 function handleWrite(): string[] {
   const skillsDir = defaultSkillsDir(true);
   const slugs = stageSlugs();

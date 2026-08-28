@@ -24,6 +24,7 @@ consumes:
     required: true
 requires_stage:
   - code-generation
+  - pr-integration
 sensors:
   - required-sections
   - upstream-coverage

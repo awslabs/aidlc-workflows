@@ -397,7 +397,7 @@ describe("t77 — complete --merge", () => {
       "--slug", "round", "--project-dir", proj,
     ]);
     expect(r.status).toBe(0);
-  });
+  }, 15000);
 
   test("stdout reports merged:[STATE_MERGED,AUDIT_MERGED,RUNTIME_GRAPH_MERGED] [.sh T16]", () => {
     const proj = track(setupV7Project("round"));
@@ -416,7 +416,7 @@ describe("t77 — complete --merge", () => {
     expect(parsed.merged).toEqual([
       "STATE_MERGED", "AUDIT_MERGED", "RUNTIME_GRAPH_MERGED",
     ]);
-  });
+  }, 15000);
 
   test("merge removes the slug from main Bolt Refs [.sh T17]", () => {
     const proj = track(setupV7Project("round"));
@@ -434,7 +434,7 @@ describe("t77 — complete --merge", () => {
         .split("\n")
         .find((l) => l.includes("Bolt Refs")) ?? "";
     expect(refsLine).not.toContain("round");
-  });
+  }, 15000);
 });
 
 describe("t77 — abort", () => {

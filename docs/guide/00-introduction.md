@@ -24,13 +24,13 @@ This mirrors how effective human teams work: a mob of 3-5 people covers an entir
 
 At its core, AI-DLC runs a simple loop. A deterministic **engine** decides what happens next; the **conductor** (the `/aidlc` session, `SKILL.md`) carries it out, then asks the engine for the next move. Across that loop the framework:
 
-1. **Reads stage files** — 33 stage definitions across 5 phases, each specifying inputs, steps, outputs, and the lead agent
+1. **Reads stage files** — 34 stage definitions across 5 phases, each specifying inputs, steps, outputs, and the lead agent
 2. **Loads agent personas** — Activates domain-expert perspectives (architect, developer, product manager, etc.) with specialized knowledge
 3. **Manages state and audit** — Tracks progress in `aidlc-state.md` and logs every decision to the intent's `audit/` shards for traceability
 4. **Delegates across stage topologies** — For focused autonomous work and multi-agent collaboration, dispatches subagents as a hub-and-spoke, pipeline, or mob
 5. **Presents approval gates** — After each stage, you review and approve before the workflow advances
 
-The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Four stages use dispatched topologies: Practices Discovery and Code Generation run as `subagent` hubs, Reverse Engineering as a two-link `pipeline`, and User Stories as a `mob`. The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
+The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Four stages use dispatched topologies: Practices Discovery and Code Generation run as `subagent` hubs, Reverse Engineering as a two-link `pipeline`, and User Stories as a `mob`. The complete topology is 30 inline / 2 subagent / 1 pipeline / 1 mob. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
 
 ## Who This Guide Is For
 
@@ -47,12 +47,12 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Metric | Value |
 |--------|-------|
 | Phases | 5 (Initialization, Ideation, Inception, Construction, Operation) |
-| Stages | 33 |
+| Stages | 34 |
 | Agents | 14 total: 11 domain experts, 2 reviewers, and the composer |
 | Scopes | 11 (enterprise through express, plus workshop) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
-| Audit event types | 91 |
+| Audit event types | 95 |
 
 ## Guide Map
 
@@ -62,7 +62,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Workflow Profiles](workflow-profiles.md) | Classic, Express, and the other workflow choices explained |
 | [Your First Workflow](02-your-first-workflow.md) | Annotated walkthrough of a complete run |
 | [Spaces and Intents](03-spaces-and-intents.md) | The workspace layout: running many pieces of work across spaces and intents |
-| [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 33 stages explained |
+| [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 34 stages explained |
 | [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |
 | [Agents](06-agents.md) | The 14-agent roster: 11 domain experts, 2 reviewers, and the composer |
 | [Agent deep dives](agents/README.md) | Per-agent reference pages: responsibilities, stages, knowledge |
@@ -72,6 +72,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [State and Audit](10-state-and-audit.md) | How progress and decisions are tracked |
 | [Session Management](11-session-management.md) | Resume, redo, jump, recovery, and session reporting skills |
 | [CLI Commands](12-cli-commands.md) | Complete flag reference with examples |
+| [PR-Based Integration](18-pr-based-integration.md) | Protected-branch PR creation, review rounds, and merge settlement |
 | [Customization](13-customization.md) | Settings, scope config, agent tuning |
 | [Artifacts Reference](14-artifacts-reference.md) | The per-intent record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`) explained |
 | [Troubleshooting](15-troubleshooting.md) | Symptom-based problem solving |

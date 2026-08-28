@@ -6,6 +6,7 @@ keywords:
   - lightweight
 description: "Lightest run: requirements to deploy, no design pass, no reviewers"
 skeleton: off
+integration: direct
 runner: true
 review_cap: none
 ---

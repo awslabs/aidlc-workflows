@@ -4,6 +4,7 @@ depth: Standard
 keywords: []
 description: "V1-style lifecycle without ideation ceremony — the implicit default"
 skeleton: on
+integration: pr
 review_cap: advisory
 ---
 

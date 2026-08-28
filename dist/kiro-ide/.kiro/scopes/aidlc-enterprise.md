@@ -4,6 +4,7 @@ depth: Comprehensive
 keywords: []
 description: Regulated enterprise feature, full audit trail
 skeleton: on
+integration: pr
 ---
 
 # enterprise scope
@@ -25,7 +26,8 @@ performance-validation) on the back end.
 
 ## Membership
 
-`enterprise` is the only scope that marks every one of the 33 stages
-EXECUTE. It is the reference column for the EXECUTE/SKIP grid — every other
-scope is a subset of this one. There are no keyword triggers; the scope is
-chosen deliberately, not inferred from a description.
+`enterprise` marks all 33 stock-scope stages EXECUTE. PR Integration is the
+dormant 34th stage and is promoted per intent after repository detection and
+practice affirmation. It is the reference column for the static EXECUTE/SKIP
+grid. There are no keyword triggers; the scope is chosen deliberately, not
+inferred from a description.

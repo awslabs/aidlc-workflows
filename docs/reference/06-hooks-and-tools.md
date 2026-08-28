@@ -50,7 +50,7 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `fold-usage.ts` | PreToolUse + PostToolUse | Project-wide (settings.json) | (empty) | **Claude-only.** Fold the transcript's new token usage into the durable usage ledger every llm call: PreToolUse seals the completing main call and, before an engine boundary, every completed subagent call so lifecycle rollups are current; PostToolUse supplies the normal holdback fallback. Observe-only, never blocks; the Claude-Code transcript reader is wired only in the Claude harness, so on Kiro/Codex/opencode no producer runs and the ledger stays empty (every usage consumer degrades to no-data). `AIDLC_DISABLE_USAGE_TRACKING=1` disables it. See "Token usage and cost tracking" below |
 | `validate-state.ts` | PreCompact | Project-wide (settings.json) | (empty) | Validate state file, write recovery breadcrumb |
 | `log-subagent.ts` | SubagentStop | Project-wide (settings.json) | (empty) | Remove one background-subagent ledger entry for the completing session and log subagent completion events |
-| `aidlc-continue-workflow.ts` | Stop | Project-wide (settings.json) | (empty) | **Flow-altering.** Enforce the forwarding loop on turn-end: run `aidlc-orchestrate next`; on `done`, `parked`, or informational `notice` allow the stop, on a pending directive block the stop and inject the next move back via `reason`. Also allows the exact one-shot post-`intent-create` fresh-session handoff when the session's original UUID and newly active UUID match the PostToolUse receipt. Allows legitimate turn stops when the current stage or active team Unit gate is awaiting approval/revision, or `[-]` in-progress with either an unanswered question in the active directive's canonical or per-unit `<slug>-questions.md` or an unresolved logged `DECISION_RECORDED`; a fresh in-flight compose marker, a fresh background-subagent entry for the current session, and conversational turns are also allowed. Foreign-session, stale, and malformed background entries do not authorize a stop. The compose, background, logged-decision, and conversational carve-outs are suppressed under autonomous Construction; the pending-file carve-out is suppressed except for unit-major code-generation's mandatory Plan Approval. Recursion-bounded (no-progress counter + `stop_hook_active` under `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`; default 2 in an interactive run and 8 under autonomous Construction). No-op outside an AIDLC workflow |
+| `aidlc-continue-workflow.ts` | Stop | Project-wide (settings.json) | (empty) | **Flow-altering.** Enforce the forwarding loop on turn-end: run `aidlc-orchestrate next`; on `done`, `parked`, `awaiting-integration`, or informational `notice` allow the stop, on a pending directive block the stop and inject the next move back via `reason`. `awaiting-integration` remains allowed under autonomous Construction because it is a self-clearing external wait with no runnable Unit and no resume ritual. Also allows the exact one-shot post-`intent-create` fresh-session handoff when the session's original UUID and newly active UUID match the PostToolUse receipt. Allows legitimate turn stops when the current stage or active team Unit gate is awaiting approval/revision, or `[-]` in-progress with either an unanswered question in the active directive's canonical or per-unit `<slug>-questions.md` or an unresolved logged `DECISION_RECORDED`; a fresh in-flight compose marker, a fresh background-subagent entry for the current session, and conversational turns are also allowed. Foreign-session, stale, and malformed background entries do not authorize a stop. The compose, background, logged-decision, and conversational carve-outs are suppressed under autonomous Construction; the pending-file carve-out is suppressed except for unit-major code-generation's mandatory Plan Approval. Recursion-bounded (no-progress counter + `stop_hook_active` under `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`; default 2 in an interactive run and 8 under autonomous Construction). No-op outside an AIDLC workflow |
 | `session-start.ts` | SessionStart | Project-wide (settings.json) | (empty) | Inject workflow context on session resume |
 | `session-end.ts` | SessionEnd | Project-wide (settings.json) | (empty) | Emit `SESSION_ENDED` on graceful exit to the intent recorded for that exact session; fail closed instead of using the shared active cursor when a UUID-backed workflow has no session binding |
 | `aidlc-statusline.ts` | statusLine | Project-wide (settings.json) | -- | Show real-time progress in terminal |
@@ -570,7 +570,8 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-create` |
 | **Interaction** | 9 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts` |
 | **Navigation** | 7 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `PLUGIN_SELECTION_CHANGED` | `aidlc-utility.ts` |
-| **Unit configuration/lifecycle** | 7 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED` | `aidlc-state.ts`, `aidlc-unit.ts` |
+| **Unit configuration/lifecycle** | 8 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_INTEGRATING`, `UNIT_COMPLETED`, `UNIT_MERGED` | `aidlc-state.ts`, `aidlc-pr.ts`, `aidlc-unit.ts` |
+| **PR integration** | 3 | `PR_OPENED`, `PR_FEEDBACK`, `PR_MERGED` | `aidlc-pr.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact` |
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
@@ -713,6 +714,31 @@ command.
 ### Design Rationale
 
 Deterministic handlers avoid LLM overhead for operations that are pure computation: printing text, reading/formatting files, checking prerequisites, creating directories. They run in under a second, require no task tracking, and handle their own audit logging via shared helpers from `lib.ts`.
+
+---
+
+## PR Integration Tool
+
+`aidlc-pr.ts` is the deterministic GitHub boundary for the conditional
+Construction PR stage. Every `gh` invocation runs through `timeout 10`;
+offline-shaped failures return the latest audit-known PR state and its age.
+The tool never merges a PR and never enables auto-merge.
+
+| Verb | Behavior |
+|------|----------|
+| `detect --repo <owner/name> [--branch <name>]` | Reads effective rules, the branch protected bit, merge settings, PR templates, and CODEOWNERS. `--fixture <json>` evaluates a recorded response without network access. |
+| `open --unit <unit> --repo <owner/name>...` | Dry-run by default: persists the rendered body and prints its digest plus the branch push, PR create, and reviewer commands. Detected templates are passed with repeatable `--template-file <owner/repo>=<path>`. `--execute` publishes exactly the persisted bytes and verifies every write by reading it back before emitting `PR_OPENED` and `UNIT_INTEGRATING`. |
+| `sweep --pr <owner/name#number>...` | Opens with one connectivity probe, then folds full review history, timeline dismissals, stale approvals, mergeability, terminal state, and coordinated multi-repo settlement. `--emit-feedback` records newly observed feedback. |
+| `sync-feedback --pr <owner/name#number>... --unit <unit>` | Runs the sweep's feedback reader and emits only new `PR_FEEDBACK` rows. |
+| `finalize --pr <owner/name#number>... --unit <unit>` | Verifies every coordinated PR is merged, emits `PR_MERGED`, delegates existing Bolt metadata consolidation and `unit complete`, and reports cleanup honestly. `--execute` is required for stacked-child retargets and worktree discard; without it, an existing worktree remains with `cleanup_pending`. |
+
+`detect` returns repository PR templates. The stage writes the selected body to
+a local template file before `open` so dry-run and execute use the same bytes.
+Its collapsed evidence dossier enumerates the live `pr-integration` stage's
+`consumes`, so plugin-added consumes extend the body without a tool change.
+`--fixture` remains available for read-only detection/sweep evaluation;
+receipt-emitting fixture paths require the test-only
+`AIDLC_TEST_PR_FIXTURES=1` seam.
 
 ---
 

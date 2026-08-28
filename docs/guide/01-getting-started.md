@@ -409,7 +409,7 @@ Run the health check to confirm everything is in place:
 ✓ Cycle detection: 0 cycles
 ✓ Orphan stage files: 33 graph entries all have files
 ✓ Scope validation: 11 scopes valid
-✓ Schema validation: 33/33 stages valid
+✓ Schema validation: 34/34 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
 ✓ Duplicate producers: every consumed artifact has a single producer
 ✓ Keyword overlap: no conflicts

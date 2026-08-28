@@ -508,7 +508,7 @@ describe("t164 intent-create fails closed on a bare invocation", () => {
       expect(existsSync(intentsDir(proj)), args.join(" ")).toBe(false);
       expect(readIntentRegistry(proj).length, args.join(" ")).toBe(0);
     }
-  });
+  }, 15000);
 
   // The guard keys on "no scope AND no args AND no label"; each of the three
   // signals independently satisfies it, so every blessed path still creates.

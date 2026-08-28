@@ -1,6 +1,6 @@
 # Phases and Stages
 
-The AI-DLC lifecycle is organized into 5 phases containing 33 stages. This chapter explains each phase, lists its stages, and shows how they connect.
+The AI-DLC lifecycle is organized into 5 phases containing 34 stages. This chapter explains each phase, lists its stages, and shows how they connect.
 
 > **Harness note.** The methodology — the phases, stages, agents, and gates this
 > guide describes — is identical on every harness. Where a mechanic differs by
@@ -33,10 +33,10 @@ graph LR
         N1 -.->|"9 stages"| N7
     end
 
-    subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.7)"]
+    subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.8)"]
         C1["Functional Design"]
         C7["CI Pipeline"]
-        C1 -.->|"3.1–3.5 stage-major per Unit; 3.6–3.7 once after all Units"| C7
+        C1 -.->|"3.1–3.6 per Unit when PR mode is affirmed; 3.7–3.8 once after all Units"| C7
     end
 
     subgraph OPERATION["OPERATION (4.1-4.7)"]
@@ -58,7 +58,7 @@ graph LR
     style OPERATION fill:#fce4ec,stroke:#e91e63
 ```
 
-<!-- Text fallback: Linear flow: INITIALIZATION (0.1-0.3) auto-proceeds to IDEATION (1.1-1.7), which passes through Verification Gate 1 to INCEPTION (2.1-2.9), through Verification Gate 2 to CONSTRUCTION (3.1-3.7), through Verification Gate 3 to OPERATION (4.1-4.7). A feedback loop returns from 4.7 back to 1.1. -->
+<!-- Text fallback: Linear flow: INITIALIZATION (0.1-0.3) auto-proceeds to IDEATION (1.1-1.7), which passes through Verification Gate 1 to INCEPTION (2.1-2.9), through Verification Gate 2 to CONSTRUCTION (3.1-3.8), through Verification Gate 3 to OPERATION (4.1-4.7). A feedback loop returns from 4.7 back to 1.1. -->
 
 Phases execute sequentially. At each phase boundary (except Initialization → Ideation), a **verification gate** runs automated traceability checks to catch missing links, orphaned artifacts, or inconsistencies before downstream stages build on them.
 
@@ -229,7 +229,7 @@ Construction used to run stage-by-stage per [unit of work](glossary.md), with an
 
 The first fix batched all questions, all design artifacts, then all code generation across every unit — one review at the end. That swung the pendulum the other way. A 15-unit run could land 15,000 lines of code at the build-and-test gate. Too much to verify in a single review.
 
-The current shape is the middle path: Construction's **default walk is stage-major** — one stage runs for every Unit, then the next stage. A [Bolt](glossary.md) is the planned Construction delivery slice from 2.9 (one or more Units, DoD, confidence hypothesis, ownership). `bolt-plan.md` is planning content; the engine does not consume it for Unit grouping or walk order. Runtime batches come from `unit-of-work-dependency.md` (2.7). `Construction Iteration: unit-major` is the opt-in walk older docs described as the default. The **walking skeleton** is the planned first Bolt; under the default walk that gate is the first in-scope Construction EXECUTE stage. Once that gate approves, the **ladder prompt** fires exactly once. Your answer is recorded in state and governs the remaining Construction *stage* gates. Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once at the end across everything.
+The current shape is the middle path: Construction's **default walk is stage-major** — one stage runs for every Unit, then the next stage. A [Bolt](glossary.md) is the planned Construction delivery slice from 2.9 (one or more Units, DoD, confidence hypothesis, ownership). `bolt-plan.md` is planning content; the engine does not consume it for Unit grouping or walk order. Runtime batches come from `unit-of-work-dependency.md` (2.7). `Construction Iteration: unit-major` is the opt-in walk older docs described as the default. The **walking skeleton** is the planned first Bolt; under the default walk that gate is the first in-scope Construction EXECUTE stage. Once that gate approves, the **ladder prompt** fires exactly once. Your answer is recorded in state and governs the remaining Construction *stage* gates. PR Integration (3.6) is promoted per intent only when detected and affirmed; Build and Test (3.7) and CI Pipeline (3.8) run once at the end across everything.
 
 The shape gives you an early confidence checkpoint and a deliberate autonomy choice. Reviewable delivery slices are still planned as Bolts in 2.9; the shipped walk does not yet use those slices as runtime boundaries.
 
@@ -251,8 +251,8 @@ flowchart TD
     GATE_N{{"Per-stage gate\n(skipped if autonomous)"}}
     MORE{"More per-unit stages?"}
 
-    S36["3.6 Build and Test\n(aidlc-quality-agent)\nALWAYS — once"]
-    S37["3.7 CI Pipeline\n(aidlc-pipeline-deploy-agent)\nCONDITIONAL — once"]
+    S37["3.7 Build and Test\n(aidlc-quality-agent)\nALWAYS — once"]
+    S38["3.8 CI Pipeline\n(aidlc-pipeline-deploy-agent)\nCONDITIONAL — once"]
     VG3{{"Verification Gate:\nConstruction → Operation"}}
 
     START --> READ --> STAGE1 --> GATE1 --> LADDER
@@ -263,10 +263,10 @@ flowchart TD
     NEXT --> GATE_N
     GATE_N --> MORE
     MORE -->|"Yes"| NEXT
-    MORE -->|"No"| S36
-    S36 ==> S37
-    S36 -.->|"skip CI if\nnot in scope"| VG3
-    S37 -.-> VG3
+    MORE -->|"No"| S37
+    S37 ==> S38
+    S37 -.->|"skip CI if\nnot in scope"| VG3
+    S38 -.-> VG3
 
     style STAGE1 fill:#bbdefb,stroke:#1565c0
     style GATE1 fill:#ffcc80,stroke:#e65100
@@ -274,12 +274,12 @@ flowchart TD
     style MODE_AUTO fill:#c8e6c9,stroke:#388e3c
     style MODE_GATED fill:#f8bbd0,stroke:#c2185b
     style NEXT fill:#bbdefb,stroke:#1565c0
-    style S36 fill:#c8e6c9,stroke:#388e3c
-    style S37 fill:#fff9c4,stroke:#f9a825
+    style S37 fill:#c8e6c9,stroke:#388e3c
+    style S38 fill:#fff9c4,stroke:#f9a825
     style VG3 fill:#ef9a9a,stroke:#c62828
 ```
 
-<!-- Text fallback: Begin Construction → read unit-of-work-dependency.md for the Unit DAG (bolt-plan.md is planning) → run the first in-scope Construction EXECUTE stage for every Unit → walking-skeleton gate → ladder prompt (autonomous skips remaining stage gates; gated keeps them) → remaining stages stage-major, Code Generation last → 3.6 Build and Test then optionally 3.7 CI Pipeline → Verification Gate 3. -->
+<!-- Text fallback: Begin Construction → read unit-of-work-dependency.md for the Unit DAG (bolt-plan.md is planning) → run the first in-scope Construction EXECUTE stage for every Unit → walking-skeleton gate → ladder prompt (autonomous skips remaining stage gates; gated keeps them) → remaining stages stage-major → optional 3.6 PR Integration per Unit → 3.7 Build and Test then optionally 3.8 CI Pipeline → Verification Gate 3. -->
 
 ### Parallel Unit batches
 
@@ -336,13 +336,15 @@ Failures always stop Construction, even in autonomous mode. The other autonomous
 | 3.3 | NFR Design | aidlc-architect-agent | aidlc-aws-platform-agent | NFR design specifications | Per Unit (CONDITIONAL) |
 | 3.4 | Infrastructure Design | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | Infrastructure specifications, IaC designs | Per Unit (CONDITIONAL) |
 | 3.5 | Code Generation | aidlc-developer-agent | — | Application code + code docs | Per Unit (ALWAYS) |
-| 3.6 | Build and Test | aidlc-quality-agent | aidlc-devsecops-agent | Test results, quality report | ALWAYS, once at end |
-| 3.7 | CI Pipeline | aidlc-pipeline-deploy-agent | — | CI config, quality gates | CONDITIONAL, once at end |
+| 3.6 | PR Integration | aidlc-pipeline-deploy-agent | — | `pr-record.md`, PR lifecycle receipts | Per Unit (CONDITIONAL, affirmed per intent) |
+| 3.7 | Build and Test | aidlc-quality-agent | aidlc-devsecops-agent | Test results, quality report | ALWAYS, once at end |
+| 3.8 | CI Pipeline | aidlc-pipeline-deploy-agent | — | CI config, quality gates | CONDITIONAL, once at end |
 
 **Key behaviors:**
 
 - Default walk is stage-major: questions and artifacts for a stage run for every Unit, then the next stage. There is no Bolt-level answers gate on the shipped walk.
 - The per-Unit completion gate inside `stages/construction/code-generation.md` is **suppressed by the conductor** during normal Construction. A single stage-level gate replaces it after the last Unit settles; under swarm, that gate waits for the final DAG batch.
+- PR Integration is SKIP in every stock scope until Practices Discovery promotes it for the current intent. Integrating Units are skipped for routing but remain unsettled, so another Unit may run and the gate cannot fire early.
 - The ladder prompt fires exactly once per workflow — after the first Construction EXECUTE-stage gate. Your answer is recorded as `Construction Autonomy Mode` in `aidlc-state.md` and honoured on session resume. On the default walk, `autonomous` skips remaining stage gates except halt-and-ask, the Build-and-Test loop-back's rung 4, and the swarm settle re-entry (auto-approved under autonomy). Unit-major suppresses swarm but **keeps** the per-stage gate cascade.
 - Parallel Code Generation batches require multiple `Task`-capable subagent slots — see [Agents](06-agents.md) for concurrency constraints.
 
@@ -425,7 +427,7 @@ If verification fails, the conductor reports the issues and asks whether to proc
 | Pipeline (2-link) | 2.1 | Approval gate only | Developer scan, then architect synthesis-and-write |
 | Mob | 2.4 | Mid-stage judgment questions + approval gate | Lead drafts; design/developer/quality collaborate in parallel via contribution files |
 
-Across all 33 stages, the topology count is **29 inline / 2 subagent / 1 pipeline / 1 mob**.
+Across all 34 stages, the topology count is **30 inline / 2 subagent / 1 pipeline / 1 mob**.
 
 ---
 

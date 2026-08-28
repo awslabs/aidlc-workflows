@@ -106,6 +106,18 @@ describe("t257 resolveDefaultScope bundle-aware default", () => {
     });
   });
 
+  test("unknown integration metadata reads as absent instead of aborting", () => {
+    const env = fixtureEnv({
+      "bundle-validate.md": scopeMd(
+        "bundle-validate",
+        "plugin: demo\nintegration: custom-host-meaning\n",
+      ),
+    });
+    withEnvAndFreshCaches(env, () => {
+      expect(loadScopeMetadata()["bundle-validate"].integration).toBeUndefined();
+    });
+  });
+
   test("compile rejects multiple enabled freeform_default nominations", () => {
     const env = fixtureEnv({
       "bundle-all.md": scopeMd("bundle-all", "plugin: demo\nfreeform_default: true\n"),

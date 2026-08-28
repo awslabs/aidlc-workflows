@@ -66,7 +66,7 @@ When the argument is freeform text (not a known scope keyword):
      cold-start path offers composition first for no-match or rich prose
 3. Disambiguation rule: if the text contains BOTH a scope keyword AND a longer project description (more than 5 words), the match is treated as incidental and the COMPOSE OFFER fires instead of a silent default.
 4. On a clear keyword match, confirms with the user, naming the effective ceremony from the compiled grid and workspace scan: `Starting a "[scope]" workflow for: "[text]" - [N] of [T] stages, [G] approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.` Greenfield previews apply the same reverse-engineering skip as intent creation. A per-unit clause is appended only when the scope executes `units-generation` and its Construction stages fan out over the resulting Unit DAG.
-5. On no match / rich prose, offers the adaptive composer: the composer agent estimates the task's implementation entropy and proposes the minimum viable EXECUTE/SKIP grid, human-gated (see the compose surfaces below). The offer's example scope list carries counts too (`express = 10 of 33 stages, classic = 26, feature = all 33`) so the magnitude difference is visible before choosing.
+5. On no match / rich prose, offers the adaptive composer: the composer agent estimates the task's implementation entropy and proposes the minimum viable EXECUTE/SKIP grid, human-gated (see the compose surfaces below). The offer's example scope list carries counts too (`express = 10 of 34 stages, classic = 26, feature = 33 stock stages`) so the magnitude difference is visible before choosing.
 6. On confirmation, proceeds as with an explicit scope. The original freeform text is stored as `Initial Intent` in `aidlc-state.md`.
 7. If the user overrides the detected scope, uses the user's chosen scope instead.
 
@@ -83,8 +83,11 @@ Read-only command that inspects the current workflow without advancing it:
 
 1. Reads the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
 2. Displays: current phase, current stage, completion percentage, pending decisions, and active agent.
-3. If verification is needed, runs the phase boundary check per stage-protocol-governance.md section 13.
-4. Does NOT advance the workflow -- strictly read-only.
+3. Displays integrating Units with audit-known PR URL, state, and age. The
+   explicit `--refresh` form performs one bounded `aidlc-pr sweep` and overlays
+   live verdicts; the default form remains local-only.
+4. If verification is needed, runs the phase boundary check per stage-protocol-governance.md section 13.
+5. Does NOT advance or finalize the workflow -- status is observational.
 
 ### `/aidlc --stage <id>` / `/aidlc --phase <name>` -- Jump to Stage/Phase
 
@@ -220,7 +223,7 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 | Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy |
 | Workspace State | Project root, detected languages, frameworks, build system |
 | Execution Plan Summary | Total stages, completed count, in-progress stage |
-| Runtime State | Revision count plus optional Construction iteration, Unit ownership, and Unit gate rhythm |
+| Runtime State | Revision count plus optional Construction iteration, Integration Mode, Unit ownership, and Unit gate rhythm |
 | Phase Progress | Per-phase status |
 | Stage Progress | Per-stage checkboxes generated from the compiled graph, organized by phase (see below) |
 | Unit Progress | Present only for team-owned unit-major Construction; a derived DAG/artifact/receipt/gate projection rewritten on every `next` |
@@ -289,7 +292,7 @@ On bare `/aidlc` session re-entry, the conductor presents four options. The cond
 
 ## Scope-to-Stage Mapping
 
-The scope determines which of the 33 stages execute and at what depth. Stages not in scope are skipped entirely -- no task is created, no approval gate is presented. All scopes begin with the Initialization phase (0.1-0.3).
+The scope determines which of the 34 stages execute and at what depth. Stages not in scope are skipped entirely -- no task is created, no approval gate is presented. All scopes begin with the Initialization phase (0.1-0.3).
 
 ### Complete Mapping
 
@@ -297,22 +300,22 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 
 | Scope | Stages Included | EXECUTE / Total | Depth | Test Strategy |
 |---|---|---|---|---|
-| `enterprise` | All: 0.1-0.3, 1.1-1.7, 2.1-2.9, 3.1-3.7, 4.1-4.7 | 33 / 33 | Comprehensive | Comprehensive |
-| `feature` | All: 0.1-0.3, 1.1-1.7, 2.1-2.9, 3.1-3.7, 4.1-4.7 | 33 / 33 | Standard | Standard |
-| `mvp` | 0.1-0.3, 1.1, 1.3 (light), 1.4, 2.1 (if brownfield), 2.2, 2.3, 2.4, 2.5 (if UI), 2.6, 2.7, 2.8, 2.9, 3.1-3.7 | 23 / 33 | Standard | Standard |
-| `poc` | 0.1-0.3, 1.1 (minimal), 2.1 (if brownfield), 2.3 (minimal), 3.5, 3.6 | 8 / 33 | Minimal | Minimal |
-| `bugfix` | 0.1-0.3, 2.1 (always), 2.3 (minimal), 3.5, 3.6, 4.1, 4.3 | 9 / 33 | Minimal | Minimal |
-| `refactor` | 0.1-0.3, 2.1 (always), 2.3 (minimal), 3.1 (refactoring plan), 3.5, 3.6, 4.1, 4.3 | 10 / 33 | Minimal | Minimal |
-| `infra` | 0.1-0.3, 2.2, 2.3 (infra requirements), 3.2, 3.3, 3.4, 3.7, 4.1, 4.2, 4.3, 4.4 | 13 / 33 | Standard | Standard |
-| `security-patch` | 0.1-0.3, 2.1 (find vulnerability context), 2.3 (minimal), 3.2, 3.5, 3.6, 4.1, 4.3 | 10 / 33 | Minimal | Minimal |
-| `classic` | 0.1-0.3, 2.1-2.9, 3.1-3.7, 4.1-4.7 (skips all ideation 1.1-1.7) | 26 / 33 | Standard | Standard |
-| `workshop` | 0.1-0.3, 2.1-2.9, 3.1-3.7, 4.1-4.7 (skips all ideation 1.1-1.7) | 26 / 33 | Standard | Minimal |
-| `express` | 0.1-0.3, 2.1 (if brownfield), 2.3, 3.5, 3.6, 4.1, 4.3, 4.4 | 10 / 33 | Minimal | Minimal |
+| `enterprise` | All stock rows: 0.1-0.3, 1.1-1.7, 2.1-2.9, 3.1-3.5, 3.7-3.8, 4.1-4.7 | 33 / 34 | Comprehensive | Comprehensive |
+| `feature` | All stock rows: 0.1-0.3, 1.1-1.7, 2.1-2.9, 3.1-3.5, 3.7-3.8, 4.1-4.7 | 33 / 34 | Standard | Standard |
+| `mvp` | 0.1-0.3, 1.1, 1.3 (light), 1.4, 2.1 (if brownfield), 2.2, 2.3, 2.4, 2.5 (if UI), 2.6, 2.7, 2.8, 2.9, 3.1-3.5, 3.7-3.8 | 23 / 34 | Standard | Standard |
+| `poc` | 0.1-0.3, 1.1 (minimal), 2.1 (if brownfield), 2.3 (minimal), 3.5, 3.7 | 8 / 34 | Minimal | Minimal |
+| `bugfix` | 0.1-0.3, 2.1 (always), 2.3 (minimal), 3.5, 3.7, 4.1, 4.3 | 9 / 34 | Minimal | Minimal |
+| `refactor` | 0.1-0.3, 2.1 (always), 2.3 (minimal), 3.1 (refactoring plan), 3.5, 3.7, 4.1, 4.3 | 10 / 34 | Minimal | Minimal |
+| `infra` | 0.1-0.3, 2.2, 2.3 (infra requirements), 3.2, 3.3, 3.4, 3.8, 4.1, 4.2, 4.3, 4.4 | 13 / 34 | Standard | Standard |
+| `security-patch` | 0.1-0.3, 2.1 (find vulnerability context), 2.3 (minimal), 3.2, 3.5, 3.7, 4.1, 4.3 | 10 / 34 | Minimal | Minimal |
+| `classic` | 0.1-0.3, 2.1-2.9, 3.1-3.5, 3.7-3.8, 4.1-4.7 (skips all ideation 1.1-1.7) | 26 / 34 | Standard | Standard |
+| `workshop` | 0.1-0.3, 2.1-2.9, 3.1-3.5, 3.7-3.8, 4.1-4.7 (skips all ideation 1.1-1.7) | 26 / 34 | Standard | Minimal |
+| `express` | 0.1-0.3, 2.1 (if brownfield), 2.3, 3.5, 3.7, 4.1, 4.3, 4.4 | 10 / 34 | Minimal | Minimal |
 
 ### Detailed Scope Breakdown
 
-- **enterprise** -- All 33 stages with comprehensive depth. Every stage executes with full artifact detail, deep analysis, and all optional stages included. Suitable for regulated enterprise features requiring complete traceability.
-- **feature** -- The full lifecycle: all 33 stages with standard depth. Same stage set as enterprise but with moderate artifact detail. Available explicitly through `--scope feature` and `/aidlc-feature`, or as the project default via `AWS_AIDLC_DEFAULT_SCOPE=feature`.
+- **enterprise** -- All 33 stock-scope stages with comprehensive depth. PR Integration is promoted per intent when affirmed. Suitable for regulated enterprise features requiring complete traceability.
+- **feature** -- The full stock lifecycle: 33 stages with standard depth, plus PR Integration when affirmed. Same static stage set as enterprise but with moderate artifact detail. Available explicitly through `--scope feature` and `/aidlc-feature`, or as the project default via `AWS_AIDLC_DEFAULT_SCOPE=feature`.
 - **mvp** -- Skips most of Ideation (keeps only Intent Capture, light Feasibility, and Scope Definition). Runs all of Inception and Construction. Operation stages optional.
 - **poc** -- Minimal Ideation (only Intent Capture). Core Inception. Only Code Generation and Build and Test from Construction. No Operation.
 - **bugfix** -- No Ideation. Reverse Engineering always included (to find the bug) plus minimal Requirements Analysis. Code Generation, Build and Test, Deployment Pipeline, and Deployment Execution complete the fix path.
@@ -361,7 +364,7 @@ sequenceDiagram
     O->>S: 4. Engine activates stage as [-]
     S->>AU: Emit STAGE_STARTED
 
-    alt Inline Stage (29 of 33)
+    alt Inline Stage (30 of 34)
         O->>U: Execute stage work in conversation
         U-->>O: Answer questions, provide feedback
         O->>U: Present 5-part completion message
@@ -388,7 +391,7 @@ sequenceDiagram
 
 ### Inline Execution
 
-Inline stages run directly in the orchestrator conversation. The user can interact with the stage in real time. Twenty-nine of 33 stages are inline; the other four are dispatched (practices-discovery and code-generation subagents, reverse-engineering pipeline, user-stories mob).
+Inline stages run directly in the orchestrator conversation. The user can interact with the stage in real time. Thirty of 34 stages are inline; the other four are dispatched (practices-discovery and code-generation subagents, reverse-engineering pipeline, user-stories mob).
 
 The 6-step process:
 
@@ -473,7 +476,7 @@ current-attempt receipts cannot enter or complete approval.
 
 ### Construction Execution <a id="construction-execution"></a>
 
-Construction (stages 3.1–3.7) still uses the standard per-stage engine loop, with a per-Unit inner walk. The **default walk is stage-major**: one in-scope Construction stage runs for every Unit, then the next stage, with Code Generation last. Runtime batches are computed from `<record>/inception/units-generation/unit-of-work-dependency.md`. `<record>/inception/delivery-planning/bolt-plan.md` is the approved 2.9 planning artifact (sequence, multi-Unit grouping, DoD, confidence hypothesis, ownership) — the engine does not consume it for Unit grouping or walk order.
+Construction (stages 3.1–3.8) still uses the standard per-stage engine loop, with a per-Unit inner walk. The **default walk is stage-major**: one in-scope Construction stage runs for every Unit, then the next stage. Code Generation is followed by PR Integration only when practices promote it. Runtime batches are computed from `<record>/inception/units-generation/unit-of-work-dependency.md`. `<record>/inception/delivery-planning/bolt-plan.md` is the approved 2.9 planning artifact (sequence, multi-Unit grouping, DoD, confidence hypothesis, ownership) — the engine does not consume it for Unit grouping or walk order.
 
 Shipped per-stage structure:
 
@@ -488,6 +491,14 @@ Units eligible to run in parallel (dependency prerequisites satisfied, no mutual
 The engine-driven per-unit loop for the design stages (3.1–3.4) and non-autonomous code-generation hands the conductor concrete Unit paths with `gate: false` while work remains. On the default stage-major walk, the four inline design stages may also carry `directive.wave`: complete per-Unit entries for the first unsettled batch, derived from one cache-validated, self-healed DAG snapshot. Each entry identifies its Unit and kind, present/absent consumes, all produces, the kind-applicable required produce subset, Unit-local memory path, build state, completion-receipt state, and paired fingerprint-bound review state. The conductor never reads or reconstructs the DAG.
 
 Wave builders inherit the parent directive's stage metadata, inline persona/knowledge roster, context warnings, accumulated steering content, and effective review class. They use only their entry's paths and do not enter the serial single-active-Unit lifecycle. Instead, after build and paired review settlement, `aidlc-state.ts unit complete --wave` verifies the live entry, copies its Unit diary into the parent diary with deterministic deduplication, and emits `UNIT_COMPLETED`. The engine keeps a batch active until every applicable Unit has artifacts, valid summary confirmation, terminal review evidence when required, memory fan-in, and a completion receipt; dependent batches and the single stage gate cannot overtake any of them. Code-generation remains excluded because it writes the shared workspace and carries a mandatory Plan Approval hard stop. Unit-major iteration remains serial. See `stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
+
+When exact Runtime State `Integration Mode: pr` is active, an
+`UNIT_INTEGRATING` row makes that Unit non-runnable but still unsettled.
+Stage-major and unit-major routing continue with the next eligible Unit. If
+everything left is integrating, the engine emits `awaiting-integration`, a
+turn-terminal directive carrying only audit-known PR state. The Stop hook
+allows the turn to end for this directive even under autonomous Construction;
+no hook or `next` path performs network I/O.
 
 Failure handling is **halt-and-ask** and runs regardless of autonomy mode:
 
@@ -522,10 +533,10 @@ sequenceDiagram
     O->>O: BOLT_COMPLETED per Unit/worktree; SWARM_COMPLETED closes the batch
     Note over O,U: Swarm presents one Code Generation stage gate after the FINAL batch.
 
-    O->>O: All Units done → run 3.6 Build and Test, then 3.7 CI Pipeline
+    O->>O: All Units done → run 3.7 Build and Test, then 3.8 CI Pipeline
 ```
 
-<!-- Text fallback: The orchestrator reads unit-of-work-dependency.md. It runs the first Construction EXECUTE stage for every Unit, the user approves that walking-skeleton gate, and the ladder prompt fires once. User picks "Continue autonomously". Remaining stages run stage-major. For Units B and C (eligible in parallel at Code Generation), the orchestrator issues both Task calls in a single message. Each Unit/worktree may emit BOLT_COMPLETED; SWARM_COMPLETED closes the batch. The swarm presents one Code Generation stage gate after the final DAG batch. Then 3.6 and 3.7 run once. -->
+<!-- Text fallback: The orchestrator reads unit-of-work-dependency.md. It runs the first Construction EXECUTE stage for every Unit, the user approves that walking-skeleton gate, and the ladder prompt fires once. User picks "Continue autonomously". Remaining stages run stage-major. For Units B and C (eligible in parallel at Code Generation), the orchestrator issues both Task calls in a single message. Each Unit/worktree may emit BOLT_COMPLETED; SWARM_COMPLETED closes the batch. The swarm presents one Code Generation stage gate after the final DAG batch. Affirmed PR Integration runs per Unit, then 3.7 and 3.8 run once. -->
 
 State and audit safety under parallel dispatch: `aidlc-audit.ts` uses mkdir-based locking so concurrent appends are safe. Lifecycle writes happen only after all required Task results return and the conductor reports one outcome; the engine serialises the internal state transition. No state-race risk.
 
@@ -718,7 +729,7 @@ If user inputs from different stages contradict each other:
 
 ## Appendix A: Stage Graph Reference
 
-Complete reference of all 33 stages with execution metadata. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` — not a stage.
+Complete reference of all 34 stages with execution metadata. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` — not a stage.
 
 | # | Stage | Phase | Execution | Lead Agent | Support Agents | Mode |
 |---|---|---|---|---|---|---|
@@ -746,8 +757,9 @@ Complete reference of all 33 stages with execution metadata. The welcome message
 | 3.3 | NFR Design | Construction | CONDITIONAL | aidlc-architect-agent | aidlc-aws-platform-agent | inline |
 | 3.4 | Infrastructure Design | Construction | CONDITIONAL | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | inline |
 | 3.5 | Code Generation | Construction | ALWAYS | aidlc-developer-agent | -- | subagent (aidlc-developer-agent) |
-| 3.6 | Build and Test | Construction | ALWAYS | aidlc-quality-agent | aidlc-devsecops-agent | inline |
-| 3.7 | CI Pipeline | Construction | CONDITIONAL | aidlc-pipeline-deploy-agent | -- | inline |
+| 3.6 | PR Integration | Construction | CONDITIONAL | aidlc-pipeline-deploy-agent | -- | inline |
+| 3.7 | Build and Test | Construction | ALWAYS | aidlc-quality-agent | aidlc-devsecops-agent | inline |
+| 3.8 | CI Pipeline | Construction | CONDITIONAL | aidlc-pipeline-deploy-agent | -- | inline |
 | 4.1 | Deployment Pipeline | Operation | CONDITIONAL | aidlc-pipeline-deploy-agent | -- | inline |
 | 4.2 | Environment Provisioning | Operation | CONDITIONAL | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | inline |
 | 4.3 | Deployment Execution | Operation | CONDITIONAL | aidlc-pipeline-deploy-agent | aidlc-developer-agent | inline |

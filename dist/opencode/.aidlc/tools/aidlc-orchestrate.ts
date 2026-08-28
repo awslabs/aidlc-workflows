@@ -90,6 +90,7 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type AwaitingIntegrationDirective,
   type AskDirective,
   type Directive,
   type ErrorDirective,
@@ -185,6 +186,7 @@ import {
   unitParticipantPath,
   swarmConvergedUnits,
   unitCompletedReceipts,
+  unitIntegratingReceipts,
   unitGateStatus,
   type UnitGateRhythm,
   unitLifecycleReceiptsInUse,
@@ -1331,6 +1333,86 @@ function parkedDirective(reason: string, stage: string): ParkedDirective {
   };
 }
 
+function awaitingIntegrationDirective(
+  stage: string,
+  units: string[],
+  projectDir: string,
+): AwaitingIntegrationDirective {
+  const wanted = new Set(units);
+  const byUnit = new Map<
+    string,
+    Map<
+      string,
+      {
+        repo: string;
+        url: string;
+        state: string;
+        observed_at: string;
+        age_seconds: number;
+      }
+    >
+  >();
+  const rows = readAuditShardEvents(projectDir)
+    .filter(
+      (row) =>
+        (row.event === "PR_OPENED" ||
+          row.event === "PR_FEEDBACK" ||
+          row.event === "PR_MERGED") &&
+        wanted.has(auditBlockField(row.block, "Unit") ?? ""),
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  for (const row of rows) {
+    const unit = auditBlockField(row.block, "Unit");
+    const repo = auditBlockField(row.block, "Repo");
+    const number = auditBlockField(row.block, "PR Number");
+    const url = auditBlockField(row.block, "PR URL");
+    if (!unit || !repo || !number || !url) continue;
+    const prs = byUnit.get(unit) ?? new Map();
+    const key = `${repo}#${number}`;
+    const current = prs.get(key);
+    if (current?.state === "MERGED" && row.event !== "PR_MERGED") continue;
+    const feedbackState = auditBlockField(row.block, "State");
+    const state =
+      row.event === "PR_MERGED"
+        ? "MERGED"
+        : row.event === "PR_OPENED"
+          ? "OPEN"
+          : feedbackState === "CHANGES_REQUESTED" ||
+              feedbackState === "APPROVED"
+            ? feedbackState
+            : current?.state ?? "OPEN";
+    const age = Math.max(
+      0,
+      Math.floor((Date.now() - Date.parse(row.timestamp)) / 1000),
+    );
+    prs.set(key, {
+      repo,
+      url,
+      state,
+      observed_at: row.timestamp,
+      age_seconds: Number.isFinite(age) ? age : 0,
+    });
+    byUnit.set(unit, prs);
+  }
+  return {
+    kind: "awaiting-integration",
+    stage,
+    reason:
+      `All remaining work for "${stage}" is awaiting external PR integration. ` +
+      "Refresh with `/aidlc --status --refresh`; this wait clears automatically when verified merge receipts land.",
+    integrating_units: units.map((unit) => ({
+      unit,
+      prs: [...(byUnit.get(unit)?.values() ?? [])],
+    })),
+    narration:
+      "All runnable work is complete for now; the remaining units are waiting on external PR review or merge.",
+  };
+}
+
 // Workspace detection can serve several scope examples in one routing answer;
 // cache it so a process scans each project root at most once.
 const workspaceProjectType = new Map<string, string | null>();
@@ -2161,6 +2243,12 @@ function readAutonomyMode(stateContent: string | null): "autonomous" | null {
 // safe default). Deliberately strict, mirroring readAutonomyMode: an empty or
 // unrecognised value never activates the new order.
 const CONSTRUCTION_ITERATION_FIELD = "Construction Iteration";
+
+const INTEGRATION_MODE_FIELD = "Integration Mode";
+
+export function readIntegrationMode(stateContent: string): "pr" | null {
+  return getField(stateContent, INTEGRATION_MODE_FIELD)?.trim() === "pr" ? "pr" : null;
+}
 
 // Read the recorded Construction iteration mode, or null when it is not exactly
 // "unit-major". Any other value (including "stage-major") is stage-major.
@@ -5013,6 +5101,7 @@ function unitCovered(
 // in-flight upgrades do not break until the stage adopts lifecycle receipts.
 type UnitLedger = {
   receipts: Set<string>;
+  integrating: Set<string>;
   checkpoint: ReturnType<typeof activeUnitCheckpoint>;
   inUse: boolean;
   mode: ReturnType<typeof currentUnitLifecycleMode>;
@@ -5027,9 +5116,11 @@ function unitLedgerFor(
     return unitLifecycleSnapshot(projectDir, slug, auditRows, stateContent);
   }
   const receipts = unitCompletedReceipts(projectDir, slug);
+  const integrating = unitIntegratingReceipts(projectDir, slug);
   const checkpoint = activeUnitCheckpoint(projectDir, slug);
   return {
     receipts,
+    integrating,
     checkpoint,
     inUse: unitLifecycleReceiptsInUse(projectDir, slug),
     mode: currentUnitLifecycleMode(projectDir, slug),
@@ -5074,6 +5165,12 @@ function unitSettled(
 // complete; the caller then presents the final gate, see emitPerUnitRunStage).
 // Order is the topo order from orderedUnits, so the engine produces unit
 // dependencies before their dependents.
+type NextUncoveredUnit =
+  | { unit: string; uncovered: string[] }
+  | { awaitingIntegration: string[]; uncovered: string[] }
+  | { error: string }
+  | null;
+
 function nextUncoveredUnit(
   projectDir: string,
   node: GraphStage,
@@ -5083,7 +5180,7 @@ function nextUncoveredUnit(
   kinds: Map<string, string> | null,
   stateContent: string | null,
   ledger: UnitLedger,
-): { unit: string; uncovered: string[] } | { error: string } | null {
+): NextUncoveredUnit {
   const uncovered: string[] = [];
   for (const unit of units) {
     if (
@@ -5110,15 +5207,27 @@ function nextUncoveredUnit(
     if (!confirmation.ok) return { error: confirmation.message };
   }
   if (uncovered.length === 0) return null;
+  const integrating =
+    readIntegrationMode(stateContent ?? "") === "pr"
+      ? uncovered.filter((unit) => ledger.integrating.has(unit))
+      : [];
+  const integratingSet = new Set(integrating);
+  const routable =
+    integrating.length === 0
+      ? uncovered
+      : uncovered.filter((unit) => !integratingSet.has(unit));
   // An in-flight unit (UNIT_STARTED/RESUMED without a terminal receipt) routes
   // FIRST regardless of topo position: the single-active-unit invariant means
   // new work must not begin while one unit is open (a crashed session's active
   // unit is picked up before anything else).
   const active = ledger.checkpoint;
-  if (active && uncovered.includes(active.unit)) {
+  if (active && routable.includes(active.unit)) {
     return { unit: active.unit, uncovered };
   }
-  return { unit: uncovered[0], uncovered };
+  if (routable.length === 0) {
+    return { awaitingIntegration: integrating, uncovered };
+  }
+  return { unit: routable[0], uncovered };
 }
 
 const WAVE_ELIGIBLE_STAGES: ReadonlySet<string> = new Set([
@@ -5512,6 +5621,10 @@ function emitPerUnitRunStage(
   );
   if (pick !== null && "error" in pick) {
     emit(errorDirective(pick.error));
+    return;
+  }
+  if (pick !== null && "awaitingIntegration" in pick) {
+    emit(awaitingIntegrationDirective(node.slug, pick.awaitingIntegration, projectDir));
     return;
   }
   if (pick === null) {
@@ -6353,6 +6466,7 @@ function emitUnitMajorRunStage(
   const ledgers = new Map<string, UnitLedger>(
     block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
   );
+  const integrationActive = readIntegrationMode(stateContent ?? "") === "pr";
   for (const k of block) {
     const cp = ledgers.get(k.slug)?.checkpoint;
     if (cp?.state === "paused") {
@@ -6367,10 +6481,15 @@ function emitUnitMajorRunStage(
       return;
     }
   }
+  const awaitingIntegration = new Set<string>();
   for (const u of units) {
     for (const k of block) {
       const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
       if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
+        if (integrationActive && ledger.integrating.has(u)) {
+          awaitingIntegration.add(u);
+          break;
+        }
         const directive = buildRunStageDirective(
           k, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
           kinds?.get(u) ?? null,
@@ -6390,6 +6509,16 @@ function emitUnitMajorRunStage(
         return;
       }
     }
+  }
+  if (awaitingIntegration.size > 0) {
+    emit(
+      awaitingIntegrationDirective(
+        node.slug,
+        units.filter((unit) => awaitingIntegration.has(unit)),
+        projectDir,
+      ),
+    );
+    return;
   }
 
   // The whole (stage x unit) grid is covered: delegate to the stage-major path
@@ -7278,12 +7407,29 @@ function checkStageCompletionEvidence(
       if (pick !== null && "error" in pick) {
         return { ok: false, message: pick.error };
       }
+      if (pick !== null && "awaitingIntegration" in pick) {
+        return {
+          ok: false,
+          message:
+            `Cannot present "${slug}" for approval because ${pick.awaitingIntegration.length} ` +
+            `work items are awaiting verified PR merge receipts ` +
+            `(${pick.awaitingIntegration.join(", ")}). Refresh with \`/aidlc --status --refresh\`; ` +
+            "the stage gate remains closed until every PR is verified merged.",
+        };
+      }
       if (pick !== null) {
+        const integrating = pick.uncovered.filter((unit) =>
+          ledger.integrating.has(unit)
+        );
         return {
           ok: false,
           message:
             `Cannot present "${slug}" for approval because ${pick.uncovered.length} of ` +
             `${units.length} work items are not complete (${pick.uncovered.join(", ")}). ` +
+            (integrating.length > 0
+              ? `${integrating.length} are awaiting verified PR merge receipts ` +
+                `(${integrating.join(", ")}). `
+              : "") +
             "Run `next` to finish the remaining work items, then try again.",
         };
       }

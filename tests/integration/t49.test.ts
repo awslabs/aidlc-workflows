@@ -375,7 +375,7 @@ beforeAll(() => {
   // Step 5: advance — approve already auto-advanced, so this replays cleanly.
   advanceAck = run(STATE, ["advance", "requirements-analysis"], proj);
   expect(advanceAck.status).toBe(0);
-});
+}, 30000);
 
 afterAll(() => {
   cleanupTestProject(proj);

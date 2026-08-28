@@ -120,6 +120,11 @@
     "action": "EXECUTE"
   },
   {
+    "slug": "pr-integration",
+    "phase": "construction",
+    "action": "SKIP"
+  },
+  {
     "slug": "build-and-test",
     "phase": "construction",
     "action": "EXECUTE"

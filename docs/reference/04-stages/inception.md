@@ -247,7 +247,9 @@ Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
 Practices Discovery is the only stage in AI-DLC that writes to both rows of
 the two-axis configuration model. It discovers a team's way of working,
 walking-skeleton stance, testing posture, deployment cadence, and code-style
-rules. Brownfield runs use repository and Reverse Engineering evidence;
+rules. The Way of Working result also records Integration mode, target branch,
+merge strategy, branch pattern, standing human reviewers, and whether pushes
+always require a gate. Brownfield runs use repository and Reverse Engineering evidence;
 greenfield runs seed the lead draft from active-space `org.md`. Both use the
 same subagent hub-and-spoke: pipeline-deploy lead draft, mutually blind
 quality/developer/devsecops contributions, human interview, then lead
@@ -310,7 +312,10 @@ On affirmation, content is promoted to:
 4. **Human Interview** -- Present structured questions after all three spokes
    return. Brownfield asks evidence gaps and policy judgments; greenfield asks
    all five practice areas with org defaults as suggestions. Re-runs pre-fill
-   prior affirmed statements. Log every question and exact answer.
+   prior affirmed statements. For integration, run per-repository PR-policy
+   detection and ask one confirmation question when detection succeeds;
+   protected-branch reality overrides a proposed direct path. Log every
+   question and exact answer.
 5. **Lead Integration** -- Dispatch the pipeline-deploy lead again with the
    draft, all three contribution paths, and the interview answers. The lead
    alone integrates the final artifacts and emits `PRACTICES_DISCOVERED`.
@@ -328,11 +333,13 @@ On affirmation, content is promoted to:
    leaves the stage `[?]` with the gate open, and does not report approval.
 8. **Verify Receipt, Then Report** -- Successful promotion atomically records
    `Practices Affirmed Timestamp` and the matching `PRACTICES_AFFIRMED` audit
-   receipt. Then call
+   receipt. Set Runtime State with
+   `aidlc-state.ts set-integration-mode pr|absent`, recompose PR Integration
+   into or out of the pending plan, and only then call
    `aidlc-orchestrate.ts report --stage practices-discovery --result
    approved --user-input "Approve"`. The engine verifies all three
    contribution files and the current-attempt receipt before completing and
-   routing.
+   routing. Disabling PR mode is refused while any Unit is integrating.
 
 ### Approval Gate
 
@@ -783,7 +790,7 @@ Standard 2-option gate: **Approve** / **Request Changes**.
 - The mockups produced here feed into Domain Design (2.6) and ultimately
   into Construction's Code Generation (3.5) for UI components.
 - The accessibility checklist provides testable criteria that feed into Build
-  and Test (3.6).
+  and Test (3.7).
 
 ---
 
@@ -1120,7 +1127,7 @@ order.
 Per the canonical Glossary in `stage-protocol.md`, a **Bolt** is the
 planned Construction delivery slice from this stage (2.9): one or more
 Units with a Definition of Done, a confidence hypothesis, and ownership.
-(Stages 3.6 build-and-test and 3.7 ci-pipeline run once at end across
+(Stages 3.7 build-and-test and 3.8 ci-pipeline run once at end across
 all Units, not per-Bolt.)
 
 Economic value cannot be derived from the DAG — AI agents can topologically
@@ -1241,7 +1248,7 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
 ### Notes
 
 - **Phase boundary stage.** This is the second of three phase boundary stages
-  (after 1.7 and before 3.7). The verification check validates
+  (after 1.7 and before 3.8). The verification check validates
   Requirements-to-Stories-to-Architecture alignment.
 - **Economic vs topological sequencing.** Stage 2.7 produces the dependency
   DAG (topological order falls out as descriptive geometry). Stage 2.9
@@ -1251,8 +1258,9 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
   in `risk-and-sequencing-rationale.md`.
 - **Bolt ≠ sprint ≠ MMF.** Per the canonical Glossary, a Bolt is the
   planned Construction delivery slice from 2.9: one or more Units with a
-  Definition of Done, a confidence hypothesis, and ownership. Stages 3.6
-  (Build and Test) and 3.7 (CI Pipeline) run once after all Bolts.
+  Definition of Done, a confidence hypothesis, and ownership. Stage 3.6 PR
+  Integration runs per Unit when affirmed; stages 3.7 (Build and Test) and 3.8
+  (CI Pipeline) run once after all Bolts.
   Sequencing heuristics (walking skeleton, WSJF) apply to Bolt order;
   they do not redefine what a Bolt is.
 - **Deliberate deviation from upstream.** The upstream reference calls this
@@ -1331,8 +1339,9 @@ per-stage gate cascade.
 4. **3.4 Infrastructure Design** (conditional) — every Unit
 5. **3.5 Code Generation** (always) — every Unit; under an autonomous swarm,
    one stage gate after the final DAG batch
-6. **3.6 Build and Test** (always) — once at the end
-7. **3.7 CI Pipeline** (conditional) — once at the end
+6. **3.6 PR Integration** (conditional on affirmed PR mode) — every Unit
+7. **3.7 Build and Test** (always) — once at the end
+8. **3.8 CI Pipeline** (conditional) — once at the end
 
 See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
 

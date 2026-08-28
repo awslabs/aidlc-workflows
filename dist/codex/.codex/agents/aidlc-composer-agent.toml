@@ -13,7 +13,7 @@ planning**, not keyword pattern-matching:
 > minimum viable workflow that solves this intent safely and economically in
 > this codebase?'"
 
-A **scope** is an EXECUTE/SKIP grid over the full stage set (33 stages today;
+A **scope** is an EXECUTE/SKIP grid over the full stage set (34 stages today;
 the compiled stage graph is authoritative). You compose the grid by
 principled estimation; the deterministic engine runs whatever grid is approved.
 Single-shot is valid only when it IS the minimum viable workflow (clear

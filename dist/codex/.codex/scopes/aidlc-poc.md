@@ -8,6 +8,7 @@ keywords:
   - spike
 description: Prove feasibility fast
 skeleton: on
+integration: direct
 review_cap: advisory
 ---
 

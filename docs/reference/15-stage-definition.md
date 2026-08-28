@@ -102,10 +102,10 @@ relying on alphabetical accident.
 Names an artifact whose instances drive iteration. The stage runs once per
 instance.
 
-Today's use case: five Construction stages (`functional-design`,
+Today's use case: six Construction stages (`functional-design`,
 `nfr-requirements`, `nfr-design`, `infrastructure-design`, `code-generation`)
-run once per Unit — they each declare `for_each: unit-of-work` (the artifact
-`units-generation` produces).
+and conditional `pr-integration` run once per Unit — they each declare
+`for_each: unit-of-work` (the artifact `units-generation` produces).
 
 Tomorrow's use cases: a stage that runs per environment, per tenant, per
 region, per compliance jurisdiction. The primitive is workflow-engine
@@ -114,7 +114,7 @@ generic; Construction happens to exercise it first.
 **Aggregation is inferred, not declared.** A stage that consumes an artifact
 produced by a `for_each` stage, without declaring its own `for_each`, is an
 aggregation step by definition. `build-and-test` is the canonical example —
-it runs once after all five Construction `for_each` stages have iterated
+it runs once after all six Construction `for_each` stages have iterated
 across Units, consuming their aggregated outputs. No explicit `fan_in` or
 aggregation field — graph traversal figures it out.
 

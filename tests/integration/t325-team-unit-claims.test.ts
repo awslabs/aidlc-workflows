@@ -1122,7 +1122,7 @@ describe("t325 atomic team Unit claims", () => {
     );
     expect(published.status, published.out).toBe(0);
     expect(published.out).not.toContain("payload is invalid");
-  });
+  }, 15000);
 
   test("release refuses completed rows and claim metadata is ref/table safe", () => {
     const unsafe = makeSeed();

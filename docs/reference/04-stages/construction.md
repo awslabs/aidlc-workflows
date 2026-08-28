@@ -1,11 +1,12 @@
-# Construction Phase -- Stage Reference (3.1-3.7)
+# Construction Phase -- Stage Reference (3.1-3.8)
 
 ## Phase Overview
 
 The Construction phase transforms design artifacts from Inception into working,
-tested software. It covers seven stages (3.1 through 3.7) that span functional
+tested software. It covers eight stages (3.1 through 3.8) that span functional
 design, non-functional requirements and design, infrastructure design, code
-generation, build/test verification, and CI pipeline configuration.
+generation, PR integration, build/test verification, and CI pipeline
+configuration.
 
 Construction is the fourth of five phases in the AI-DLC methodology. The
 compiled scope grid determines which stages execute and which are skipped.
@@ -36,7 +37,7 @@ A [Bolt](../../guide/glossary.md) is the planned Construction delivery
 slice from Delivery Planning (2.9): one or more Units with a Definition
 of Done, a confidence hypothesis, and ownership. Construction's
 **default walk is stage-major**: one stage runs for every Unit, then the
-next stage, with code-generation last. That walk does not yet treat the
+next stage, with code-generation followed by affirmed PR Integration. That walk does not yet treat the
 2.9 plan as a runtime boundary. The opt-in
 `Construction Iteration: unit-major` walk (one Unit through every
 per-unit stage, then the next Unit) is closer to a per-Unit Bolt.
@@ -51,7 +52,8 @@ statement wins); the bolt-plan marker is advisory against that resolved
 stance (`PRACTICES_OVERRIDE` / `bolt-plan-marker-conflict`). Under the
 default walk, the walking-skeleton gate is the first in-scope
 Construction EXECUTE stage.
-Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** at the
+PR Integration (3.6) is per-Unit but dormant until affirmed. Stages 3.7
+(Build and Test) and 3.8 (CI Pipeline) run **once** at the
 end across all Units.
 
 ```
@@ -59,14 +61,14 @@ Default walk (stage-major):
   First in-scope Construction EXECUTE stage for every Unit
   → Walking-skeleton gate
   → Ladder prompt (fires once): "Continue autonomously" or "Gate every Bolt"
-  Then the next stage for every Unit, code-generation last
+  Then the next stage for every Unit, followed by affirmed PR Integration
 
 Opt-in (`Construction Iteration: unit-major`):
   Each Unit through every per-unit stage, then the next Unit
 
 After all Units:
-  3.6 Build and Test (runs once across the full codebase)
-  3.7 CI Pipeline    (runs once, conditional)
+  3.7 Build and Test (runs once across the full codebase)
+  3.8 CI Pipeline    (runs once, conditional)
 ```
 
 Each design stage file (3.1–3.4) supports QUESTION-ONLY and ARTIFACT-ONLY
@@ -181,8 +183,9 @@ for the canonical specification.
 | 3.3   | NFR Design            | CONDITIONAL | NFR Requirements was executed and NFR patterns need design                                          | aidlc-architect-agent     | aidlc-aws-platform-agent| inline                      | Yes      |
 | 3.4   | Infrastructure Design | CONDITIONAL | Infrastructure services need mapping, deployment architecture required, or cloud resources needed   | aidlc-aws-platform-agent  | aidlc-devsecops-agent, aidlc-compliance-agent   | inline                      | Yes      |
 | 3.5   | Code Generation       | ALWAYS      | Always executes for every unit in the execution plan                                               | aidlc-developer-agent     | (none)            | subagent (aidlc-developer-agent)  | Yes      |
-| 3.6   | Build and Test        | ALWAYS      | Always executes once after all per-unit stages are finished                                         | aidlc-quality-agent       | aidlc-devsecops-agent   | inline                      | No       |
-| 3.7   | CI Pipeline           | CONDITIONAL | Execute when CI pipeline needs creation or significant modification                                | aidlc-pipeline-deploy-agent| (none)           | inline                      | No       |
+| 3.6   | PR Integration        | CONDITIONAL | Affirmed Integration Mode is PR, with protected-branch reality overriding direct                    | aidlc-pipeline-deploy-agent| (none)           | inline                      | Yes      |
+| 3.7   | Build and Test        | ALWAYS      | Always executes once after all per-unit stages are finished                                         | aidlc-quality-agent       | aidlc-devsecops-agent   | inline                      | No       |
+| 3.8   | CI Pipeline           | CONDITIONAL | Execute when CI pipeline needs creation or significant modification                                | aidlc-pipeline-deploy-agent| (none)           | inline                      | No       |
 
 ---
 
@@ -893,7 +896,7 @@ Strictly 2-option: Approve / Request Changes.
   the subagent. Inception-phase artifacts are summarized in 1-2 lines with
   file paths so the subagent can selectively Read what it needs.
 - **Mandatory test file inclusion**: Test files MUST be part of the code
-  generation plan. Stage 3.6 (Build and Test) verifies and extends tests but
+  generation plan. Stage 3.7 (Build and Test) verifies and extends tests but
   does not create them from scratch.
 - **Source-manifest enforcement**: `source-manifest.json` is engine-validated,
   not a Markdown `required-sections` target. Its strict schema and
@@ -908,13 +911,67 @@ Strictly 2-option: Approve / Request Changes.
 
 ---
 
-## Stage 3.6: Build and Test
+## Stage 3.6: PR Integration
+
+### Metadata
+
+| Property | Value |
+|----------|-------|
+| Stage | 3.6 |
+| Phase | Construction |
+| Execution | CONDITIONAL; promoted per intent after practices affirmation |
+| Per-Unit | Yes |
+| Lead Agent | aidlc-pipeline-deploy-agent |
+| mode | inline |
+| Inputs | Affirmed Way of Working, repository detection, and the stage's live consumes list |
+| Outputs | `<record>/construction/{unit-name}/pr-integration/pr-record.md` plus PR lifecycle receipts |
+
+### Purpose
+
+Publish each completed Unit through the repository's pull-request process
+without idling the rest of Construction. The tool never merges or enables
+auto-merge; verified platform state settles the Unit.
+
+### Steps
+
+1. Resolve exact `Integration Mode: pr`, the scope integration default, and
+   detected branch policy.
+2. Write each detected PR template to a local record file, compose the
+   collapsed evidence dossier by enumerating the stage's live `consumes`, and
+   persist the rendered body during the dry-run.
+3. Present the outward publication gate, then run `aidlc-pr.ts open --execute`;
+   execute publishes the exact persisted body bytes.
+4. Route other Units while the PR is open; terminal
+   `awaiting-integration` ends a turn when nothing else is runnable.
+5. Open revision rounds only for formal `CHANGES_REQUESTED`; always gate a
+   feedback-shaped fix push.
+6. Verify every coordinated PR merged, then run
+   `aidlc-pr.ts finalize --execute`; execute retargets stacked children when
+   required and retires the worktree. Without execute, local completion is
+   authoritative but existing worktree cleanup remains pending.
+
+### Outputs
+
+- `pr-record.md` with PR Summary, Publication Plan, Evidence Dossier, and
+  Integration Status sections
+- Tool-owned `PR_OPENED`, `PR_FEEDBACK`, `PR_MERGED`, and
+  `UNIT_INTEGRATING` audit rows
+
+### Approval Gate
+
+The stage-level gate remains closed while any Unit is integrating. PR
+approvals happen on the platform; the workflow gate fires once after every
+Unit has a verified terminal completion receipt.
+
+---
+
+## Stage 3.7: Build and Test
 
 ### Metadata
 
 | Property          | Value                                                                                             |
 |-------------------|---------------------------------------------------------------------------------------------------|
-| Stage             | 3.6                                                                                               |
+| Stage             | 3.7                                                                                               |
 | Phase             | Construction                                                                                      |
 | Execution         | ALWAYS (after ALL units complete)                                                                 |
 | Condition         | Always executes once after all per-unit stages are finished.                                      |
@@ -1136,22 +1193,22 @@ Strictly 2-option: Approve / Request Changes.
   tests, E2E tests, and accessibility tests are only generated when relevant
   conditions are met (NFR requirements exist, microservice architecture,
   UI-driven application, user-facing interfaces).
-- **Cross-unit scope**: Unlike stages 3.1-3.5 which are per-unit, Build and
+- **Cross-unit scope**: Unlike stages 3.1-3.6 which are per-unit, Build and
   Test runs once across all code produced by all units. It validates the
   integrated codebase, not individual units.
-- **Phase completion**: This stage (along with 3.7 if applicable) marks the
+- **Phase completion**: This stage (along with 3.8 if applicable) marks the
   end of the Construction phase. The final approved report makes the engine
   mark Construction complete and route to Operation atomically.
 
 ---
 
-## Stage 3.7: CI Pipeline
+## Stage 3.8: CI Pipeline
 
 ### Metadata
 
 | Property          | Value                                                                                             |
 |-------------------|---------------------------------------------------------------------------------------------------|
-| Stage             | 3.7                                                                                               |
+| Stage             | 3.8                                                                                               |
 | Phase             | Construction                                                                                      |
 | Execution         | CONDITIONAL (skip if CI already exists and is adequate)                                           |
 | Condition         | Execute when CI pipeline needs creation or significant modification                               |
@@ -1159,7 +1216,7 @@ Strictly 2-option: Approve / Request Changes.
 | Lead Agent        | aidlc-pipeline-deploy-agent                                                                             |
 | support_agents    | (none)                                                                                            |
 | mode              | inline                                                                                            |
-| Inputs            | Code generation output from Stage 3.5, build/test results from Stage 3.6                         |
+| Inputs            | Code generation output from Stage 3.5, build/test results from Stage 3.7                         |
 | Outputs           | `<record>/construction/ci-pipeline/` -- ci-config.md, quality-gates.md, ci-pipeline-questions.md |
 
 ### Purpose
@@ -1232,7 +1289,7 @@ Strictly 2-option: Approve / Request Changes.
 - **Conditional execution**: This stage is skipped if the project already has
   an adequate CI pipeline. The execution plan from Delivery Planning determines
   whether it runs.
-- **Post-unit execution**: Like Stage 3.6, this stage runs once after all
+- **Post-unit execution**: Like Stage 3.7, this stage runs once after all
   per-unit work is complete, not per-unit.
 
 ---
@@ -1242,7 +1299,7 @@ Strictly 2-option: Approve / Request Changes.
 The Construction phase transforms Inception designs into working software
 through a phased construction flow:
 
-**Per-unit stages (3.1-3.5):**
+**Per-unit stages (3.1-3.6):**
 - 3.1 Functional Design -- Business logic, domain models, rules (architect-led)
 - 3.2 NFR Requirements -- Performance, security, scalability, reliability,
   observability, tech stack (architect-led)
@@ -1251,15 +1308,18 @@ through a phased construction flow:
   (aws-platform-led)
 - 3.5 Code Generation -- Two-part planning + generation via subagent
   (developer-led)
+- 3.6 PR Integration -- Evidence-rich PR publication, external review, and
+  verified merge settlement (pipeline-deploy-led; conditional per intent)
 
-**Post-unit stages (3.6-3.7):**
-- 3.6 Build and Test -- Instruction generation + actual Bash execution with
+**Post-unit stages (3.7-3.8):**
+- 3.7 Build and Test -- Instruction generation + actual Bash execution with
   failure diagnosis (quality-led)
-- 3.7 CI Pipeline -- CI configuration + phase boundary verification
+- 3.8 CI Pipeline -- CI configuration + phase boundary verification
   (pipeline-deploy-led)
 
 **Key characteristics:**
-- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 ALWAYS execute; 3.7 is CONDITIONAL
+- Stages 3.1-3.4 are plan-conditional; 3.5 always executes; 3.6 is
+  affirmation-conditional; 3.7 always executes; 3.8 is conditional
 - All conditional stages follow the execution plan from Delivery Planning
 - Default walk is stage-major (a stage for every Unit, then the next stage);
   the opt-in `unit-major` walk runs one Unit through every per-unit stage

@@ -278,7 +278,7 @@ describe("t184 stage-graph drift detection (issue #364)", () => {
       expect(r.out).toContain("aidlc-graph.ts compile");
       // ADVISORY: an uncompiled stage alone must NOT fail the health check.
       // (A clean sandbox doctor exits 0; injecting only this drift keeps it 0.)
-      expect(r.status).toBe(0);
+      expect(r.status, r.out).toBe(0);
     }, 30000);
   });
 

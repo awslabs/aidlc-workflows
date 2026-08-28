@@ -247,7 +247,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
   });
 
   // --- Test 3: canonical event count includes both new receipts -------------
-  test("3: framework event count pinned at 91", () => {
+  test("3: framework event count pinned at 95", () => {
     // The .sh read t28's pinned $TS_COUNT. Under milestone 4, t28 is now a
     // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
     // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in
@@ -271,7 +271,8 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // indexing lifecycle, +3) = 85, plus UNIT_OWNERSHIP_SET and
     // UNIT_GATE_RHYTHM_SET (+2) = 87; UNIT_MERGED = 88;
     // PIPELINE_LINK_COMPLETED = 89; SWARM_SOURCE_MERGED = 90; and
-    // PLAN_APPROVAL_RECORDED = 91.
+    // PLAN_APPROVAL_RECORDED = 91; PR_OPENED, PR_FEEDBACK, PR_MERGED, and
+    // UNIT_INTEGRATING take the framework total to 95.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -279,7 +280,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(91);
+    expect(count).toBe(95);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---
