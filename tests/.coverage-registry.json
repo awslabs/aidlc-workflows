@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 966,
+    "total": 973,
     "enumeratedByClass": {
-      "function": 657,
+      "function": 664,
       "audit": 98,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 391,
+      "function": 398,
       "audit": 56,
       "scope": 11,
       "stage": 11,
@@ -2153,6 +2153,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:commitCarriesContentTransformation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:compileStageGraph",
       "minMechanism": "none",
       "coveredBy": [
@@ -2920,6 +2932,10 @@
         {
           "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -3320,6 +3336,54 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:immutableBlobBytes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:immutableBlobSha256",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:immutableCommitSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:immutableGit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-guard-kernel-immutable-evidence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4820,6 +4884,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:protectedStoreBarrier",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-kernel-write-barrier.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:READ_ONLY_FLAGS",
       "minMechanism": "none",
       "coveredBy": [
@@ -5698,6 +5774,18 @@
         {
           "file": "tests/unit/t295-config-choices.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveProtectedStore",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-kernel-write-barrier.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -9825,6 +9913,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t333-guard-kernel-call-sites.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
         }
@@ -11602,6 +11694,10 @@
         },
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-guard-kernel-call-sites.test.ts",
           "mechanism": "cli"
         }
       ],

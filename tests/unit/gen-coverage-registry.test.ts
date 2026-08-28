@@ -1120,6 +1120,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t334-change-control-plan-approval.test.ts",
     "unit/t335-change-control-review-summary.test.ts",
     "unit/t336-change-control-surfaces.test.ts",
+    "unit/t333-guard-kernel-call-sites.test.ts",
     "unit/t34.test.ts",
     "unit/t35.test.ts",
     "unit/t36.test.ts",
