@@ -420,6 +420,16 @@ legacy Unit-less rows retain stage-global behavior.
 | `UNIT_COMPLETED` | `tools/aidlc-state.ts` | Serial `unit complete` verifies the active unit's required artifacts. Wave `unit complete --wave` instead verifies the engine still exposes that entry as build-complete/review-settled, copies new Unit diary entries into the parent diary with deterministic markers, binds the receipt to the final artifact fingerprint, then commits without opening a single-active checkpoint. All lifecycle rows carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token); receipt mode stays enabled across attempts, so stale, changed, ambiguous, reopened, or not-yet-fanned-in Units block the gate until they complete again. |
 | `UNIT_MERGED` | `tools/aidlc-state.ts` | Main landed the pinned candidate content, received the team's audit shard, and folded this Unit's derived row. Fields bind the row to Unit, owner, pinned candidate OID, merge commit OID, and attempt generation. |
 
+`UNIT_INTEGRATING` participates only while Runtime State contains the exact
+value `Integration Mode: pr`. The serial and unit-major walks skip integrating
+Units and continue to the next eligible pair, while `unitSettled` remains
+false. When every remaining Unit is integrating, `next` emits the terminal
+`awaiting-integration` directive with audit-derived PR URLs, last-known states,
+timestamps, and ages. The directive is self-clearing: no park/unpark field is
+written, and the next verified completion receipt removes the condition.
+Absent or unrecognized Integration Mode values retain the pre-integration
+four-event lifecycle reducer and routing predicates.
+
 ### PR integration
 
 | Event | Emitter | Trigger |

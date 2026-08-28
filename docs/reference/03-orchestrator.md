@@ -489,6 +489,14 @@ The engine-driven per-unit loop for the design stages (3.1–3.4) and non-autono
 
 Wave builders inherit the parent directive's stage metadata, inline persona/knowledge roster, context warnings, accumulated steering content, and effective review class. They use only their entry's paths and do not enter the serial single-active-Unit lifecycle. Instead, after build and paired review settlement, `aidlc-state.ts unit complete --wave` verifies the live entry, copies its Unit diary into the parent diary with deterministic deduplication, and emits `UNIT_COMPLETED`. The engine keeps a batch active until every applicable Unit has artifacts, valid summary confirmation, terminal review evidence when required, memory fan-in, and a completion receipt; dependent batches and the single stage gate cannot overtake any of them. Code-generation remains excluded because it writes the shared workspace and carries a mandatory Plan Approval hard stop. Unit-major iteration remains serial. See `stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
 
+When exact Runtime State `Integration Mode: pr` is active, an
+`UNIT_INTEGRATING` row makes that Unit non-runnable but still unsettled.
+Stage-major and unit-major routing continue with the next eligible Unit. If
+everything left is integrating, the engine emits `awaiting-integration`, a
+turn-terminal directive carrying only audit-known PR state. The Stop hook
+allows the turn to end for this directive even under autonomous Construction;
+no hook or `next` path performs network I/O.
+
 Failure handling is **halt-and-ask** and runs regardless of autonomy mode:
 
 - Solo Code Generation failure: halt, emit `BOLT_FAILED` on the swarm/worktree path, present retry / skip / abort.

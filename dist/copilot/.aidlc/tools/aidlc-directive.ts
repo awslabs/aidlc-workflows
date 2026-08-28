@@ -1,7 +1,7 @@
 // Directive schema — the frozen engine↔conductor interface. The engine
 // (aidlc-orchestrate.ts) answers "what's next?" with exactly one typed
 // `Directive`; the conductor reads its `kind` and does the one move it names.
-// This module defines the discriminated union over the 11 kinds the engine can
+// This module defines the discriminated union over the 12 kinds the engine can
 // emit, plus a runtime validator. Sibling of aidlc-stage-schema.ts and
 // aidlc-sensor-schema.ts — same tool-boundary discipline: a refused or
 // malformed directive is a clear signal, not a silent miss.
@@ -67,7 +67,7 @@ export const VALID_PROTOCOL_MODULES = [
 ] as const;
 export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
 
-// The 11 kinds, keyed on the `kind` discriminator.
+// The 12 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
   | "load-steering"
   | "run-stage"
@@ -79,6 +79,7 @@ export type DirectiveKind =
   | "error"
   | "done"
   | "parked"
+  | "awaiting-integration"
   | "notice";
 
 // load-steering - one bounded part of the active stage's deterministic rule
@@ -460,6 +461,24 @@ export interface ParkedDirective {
   stage: string;
 }
 
+export interface AwaitingIntegrationDirective {
+  kind: "awaiting-integration";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
+  reason: string;
+  stage: string;
+  integrating_units: Array<{
+    unit: string;
+    prs: Array<{
+      repo: string;
+      url: string;
+      state: string;
+      observed_at: string;
+      age_seconds: number;
+    }>;
+  }>;
+}
+
 export interface StageValidityAdvisory {
   state: "drifted" | "untracked" | "unavailable";
   directly_stale: string[];
@@ -487,6 +506,7 @@ type DirectivePayload =
   | ErrorDirective
   | DoneDirective
   | ParkedDirective
+  | AwaitingIntegrationDirective
   | NoticeDirective;
 
 /** `stage_validity` is universal and advisory; `kind` still owns routing. */
@@ -500,7 +520,7 @@ export type ValidationResult =
 
 // --- Exported constants (imported by tests) ---
 
-// The 11 kinds, in the engine design's catalogue order. Used both for the unknown-kind
+// The 12 kinds, in the engine design's catalogue order. Used both for the unknown-kind
 // error message and as the discriminator allowlist.
 export const VALID_KINDS = [
   "load-steering",
@@ -513,6 +533,7 @@ export const VALID_KINDS = [
   "error",
   "done",
   "parked",
+  "awaiting-integration",
   "notice",
 ] as const;
 
@@ -615,10 +636,16 @@ const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
+const AWAITING_INTEGRATION_FIELDS = [
+  "kind",
+  "reason",
+  "stage",
+  "integrating_units",
+] as const;
 const NOTICE_FIELDS = ["kind", "message"] as const;
 
 // `narration` is legal on EVERY kind, so it is folded into each allowed-key set
-// centrally rather than repeated in eleven literals. A presentation field carries no
+// centrally rather than repeated in twelve literals. A presentation field carries no
 // per-kind meaning: the conductor speaks it when present and works silently when
 // absent, on any kind. Folding it here also means a future emission point can
 // attach a line without touching this file.
@@ -642,6 +669,7 @@ const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> =
   error: withNarration(ERROR_FIELDS),
   done: withNarration(DONE_FIELDS),
   parked: withNarration(PARKED_FIELDS),
+  "awaiting-integration": withNarration(AWAITING_INTEGRATION_FIELDS),
   notice: withNarration(NOTICE_FIELDS),
 };
 
@@ -665,7 +693,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   const o = obj;
   const errors: string[] = [];
 
-  // Rule 2: kind discriminator. Must be present and a string, and one of the 8.
+  // Rule 2: kind discriminator. Must be present and a string, and one of the 12.
   if (!("kind" in o) || typeof o.kind !== "string") {
     errors.push("missing or non-string required field: kind");
     return { valid: false, errors };
@@ -687,7 +715,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   }
 
   // Rule 3b: narration is legal on every kind, so it is type-checked once here
-  // rather than in each of the eleven switch arms. Optional: absent is the normal
+  // rather than in each of the twelve switch arms. Optional: absent is the normal
   // case and never an error; present-but-not-a-string is, because the conductor
   // would otherwise be handed a non-sentence to speak.
   checkOptionalString(o, NARRATION_FIELD, kind, errors);
@@ -871,6 +899,11 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkString(o, "reason", kind, errors);
       checkString(o, "stage", kind, errors);
       break;
+    case "awaiting-integration":
+      checkString(o, "reason", kind, errors);
+      checkString(o, "stage", kind, errors);
+      checkAwaitingIntegrationUnits(o, kind, errors);
+      break;
     case "notice":
       checkString(o, "message", kind, errors);
       break;
@@ -972,6 +1005,78 @@ function checkRunStageShared(
 }
 
 // --- Helpers (mirror aidlc-stage-schema.ts: presence first, then type) ---
+
+function checkAwaitingIntegrationUnits(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  const rows = o.integrating_units;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    errors.push(`${kind}: integrating_units must be a non-empty array`);
+    return;
+  }
+  rows.forEach((row, rowIndex) => {
+    if (!isPlainObject(row)) {
+      errors.push(`${kind}: integrating_units[${rowIndex}] must be object`);
+      return;
+    }
+    for (const key of Object.keys(row)) {
+      if (key !== "unit" && key !== "prs") {
+        errors.push(
+          `${kind}: integrating_units[${rowIndex}] unknown key: ${key}`,
+        );
+      }
+    }
+    if (typeof row.unit !== "string" || row.unit.length === 0) {
+      errors.push(
+        `${kind}: integrating_units[${rowIndex}].unit must be non-empty string`,
+      );
+    }
+    if (!Array.isArray(row.prs)) {
+      errors.push(`${kind}: integrating_units[${rowIndex}].prs must be array`);
+      return;
+    }
+    row.prs.forEach((pr, prIndex) => {
+      if (!isPlainObject(pr)) {
+        errors.push(
+          `${kind}: integrating_units[${rowIndex}].prs[${prIndex}] must be object`,
+        );
+        return;
+      }
+      const allowed = new Set([
+        "repo",
+        "url",
+        "state",
+        "observed_at",
+        "age_seconds",
+      ]);
+      for (const key of Object.keys(pr)) {
+        if (!allowed.has(key)) {
+          errors.push(
+            `${kind}: integrating_units[${rowIndex}].prs[${prIndex}] unknown key: ${key}`,
+          );
+        }
+      }
+      for (const field of ["repo", "url", "state", "observed_at"] as const) {
+        if (typeof pr[field] !== "string") {
+          errors.push(
+            `${kind}: integrating_units[${rowIndex}].prs[${prIndex}].${field} must be string`,
+          );
+        }
+      }
+      if (
+        typeof pr.age_seconds !== "number" ||
+        !Number.isFinite(pr.age_seconds) ||
+        pr.age_seconds < 0
+      ) {
+        errors.push(
+          `${kind}: integrating_units[${rowIndex}].prs[${prIndex}].age_seconds must be a non-negative number`,
+        );
+      }
+    });
+  });
+}
 
 function describe(v: unknown): string {
   if (v === null) return "null";
@@ -1591,10 +1696,10 @@ function checkUnitClaimRows(
 
 // --- CLI self-check ---
 //
-// `bun aidlc-directive.ts` constructs one well-formed example of each of the 11
+// `bun aidlc-directive.ts` constructs one well-formed example of each of the 12
 // kinds, validates each, prints one line per kind ("<kind>: VALID" or the
-// errors), and exits 0 iff all 11 validate. Satisfies the acceptance check
-// "bun .../aidlc-directive.ts validates the 11 kinds".
+// errors), and exits 0 iff all 12 validate. Satisfies the acceptance check
+// "bun .../aidlc-directive.ts validates the 12 kinds".
 if (import.meta.main) {
   // One well-formed example per kind. run-stage mirrors the engine design's example
   // directive verbatim (domain-design); the others follow the same catalogue table.
@@ -1677,6 +1782,21 @@ if (import.meta.main) {
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
     { kind: "done", reason: "Workflow complete — all in-scope stages approved." },
     { kind: "parked", reason: 'Workflow parked at "feasibility". Resume with /aidlc --resume.', stage: "feasibility" },
+    {
+      kind: "awaiting-integration",
+      reason: "All remaining work is awaiting external PR integration.",
+      stage: "pr-integration",
+      integrating_units: [{
+        unit: "auth",
+        prs: [{
+          repo: "example/service",
+          url: "https://github.com/example/service/pull/42",
+          state: "OPEN",
+          observed_at: "2026-08-28T00:00:00Z",
+          age_seconds: 60,
+        }],
+      }],
+    },
     { kind: "notice", message: "Team Unit fan-out is active." },
     // The classify-round-trip skeleton case: gate is the unresolved sentinel,
     // and the first run-stage of a workflow also carries the conductor persona.

@@ -45,7 +45,7 @@
 //      directive advances, the signature changes and the counter resets to 0,
 //      so a healthy loop is never throttled.
 //
-// Eight turn-stop carve-outs keep the hook from punishing a turn that ended
+// Nine turn-stop carve-outs keep the hook from punishing a turn that ended
 // for a legitimate wait (human input, background work, or conversation):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
@@ -112,6 +112,10 @@
 //      own sessionless directive and can overwrite the `ask` kind. We ALLOW the
 //      stop while the human chooses how to resume. Autonomous Construction is
 //      guarded and falls through to the cap-bounded block.
+//   9. `awaiting-integration` is an engine-derived external PR wait. It is
+//      terminal for the turn, self-clears when verified receipts land, and is
+//      allowed even under autonomous Construction because no runnable work
+//      remains and no human resume ritual is required.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -1402,6 +1406,14 @@ if (kind === "done") {
 }
 
 if (kind === "notice") {
+  resetGuard(projectDir);
+  return allowStop();
+}
+
+// This external wait self-clears when a later sweep records merged receipts.
+// It is not a human park, so there is no resume ritual and autonomous
+// Construction may stop here without stranding a runnable unit.
+if (kind === "awaiting-integration") {
   resetGuard(projectDir);
   return allowStop();
 }
