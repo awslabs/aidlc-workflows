@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
@@ -1383,6 +1383,106 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       }).stdout,
     ).toBe("");
   });
+
+  test("21aa: error output retains a bounded message for one Copilot Stop delivery", () => {
+    const dir = orchestrationProject();
+    const session = "error-directive-owner";
+    const attempt = "error-directive-attempt";
+    const spec = commandSpec(dir, "direct", ["next"]);
+    const rewritten = rewrittenCommand(runAdapter(
+      dir,
+      "guard-tool-call",
+      commandPayload(dir, session, spec.text, attempt),
+    ));
+    const message = "The selected workflow stage is unavailable.";
+    const post = runAdapter(
+      dir,
+      "post-tool",
+      commandPayload(
+        dir,
+        session,
+        rewritten,
+        attempt,
+        true,
+        JSON.stringify({ kind: "error", message }),
+      ),
+    );
+    expect(post.code).toBe(0);
+    expect(marker(dir)).toMatchObject({
+      kind: "error",
+      message,
+      delivery: "delivered",
+      active_attempt: { id: attempt, status: "settled" },
+    });
+    const first = runAdapter(dir, "continue-workflow", {
+      ...FIXTURES.stop,
+      cwd: dir,
+      session_id: session,
+    });
+    expect(
+      (JSON.parse(first.stdout) as { decision?: string }).decision,
+    ).toBe("block");
+    expect(first.stdout).toContain(message);
+    expect(runAdapter(dir, "continue-workflow", {
+      ...FIXTURES.stop,
+      cwd: dir,
+      session_id: session,
+    }).stdout).toBe("");
+
+    const oversized = orchestrationProject();
+    const oversizedSession = "oversized-error-owner";
+    driveToRunStage(oversized, oversizedSession);
+    rewriteMarker(oversized, (value) => {
+      value.kind = "error";
+      value.message = "x".repeat(2_001);
+      value.delivery = "delivered";
+      value.needs_rehydrate = false;
+    });
+    const recovered = runAdapter(oversized, "continue-workflow", {
+      ...FIXTURES.stop,
+      cwd: oversized,
+      session_id: oversizedSession,
+    });
+    expect(recovered.stdout).toContain("coordination evidence is missing or stale");
+    expect(recovered.stdout).not.toContain("x".repeat(100));
+  }, 30000);
+
+  test.each([
+    ["501-emoji", "\u{1f600}".repeat(501), "\u{1f600}".repeat(500)],
+    ["2,000-character ASCII", "x".repeat(2_000), "x".repeat(2_000)],
+  ])("21ab: %s diagnostic has the same UTF-8 bound through direct and Copilot Stop", (label, message, expected) => {
+    const directive = JSON.stringify({ kind: "error", stage: "requirements-analysis", message });
+    const direct = scratchProject(true);
+    writeFileSync(join(direct, ".aidlc", "tools", "aidlc-orchestrate.ts"), `console.log(${JSON.stringify(directive)});\n`);
+    const probed = spawnSync("bun", [join(direct, ".aidlc", "hooks", "aidlc-continue-workflow.ts")], {
+      cwd: direct,
+      input: JSON.stringify({ cwd: direct, session_id: "direct-utf8" }),
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: undefined,
+        CLAUDE_PROJECT_DIR: undefined,
+        AIDLC_COPILOT_SESSION_ID: undefined,
+        AIDLC_HARNESS_DIR: ".aidlc",
+      },
+    });
+    expect(probed.status, probed.stderr).toBe(0);
+    const directReason = JSON.parse(probed.stdout).reason;
+
+    const dir = orchestrationProject();
+    const session = "copilot-utf8";
+    const attempt = "copilot-utf8-attempt";
+    const spec = commandSpec(dir, "direct", ["next"]);
+    const command = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt)));
+    const post = runAdapter(dir, "post-tool", commandPayload(dir, session, command, attempt, true, directive));
+    expect(post.code, post.stderr).toBe(0);
+    const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    const copilotReason = JSON.parse(stopped.stdout).reason;
+    expect(copilotReason, `${label} Copilot diagnostic must equal the direct hook's UTF-8-bounded diagnostic`).toBe(directReason);
+    const diagnostic = copilotReason.split("--- begin engine diagnostic ---\n")[1].split("\n--- end engine diagnostic ---")[0];
+    expect(diagnostic).toBe(expected);
+    expect(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout).toBe("");
+  }, 30000);
 
   test.skipIf(COMPILED_BINARY === null)("21b: real compiled dispatcher normalizes next/continue and --resume shorthand", () => {
     const dir = orchestrationProject();

@@ -1,4 +1,5 @@
 // covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:hasCurrentSharedResumeWait, function:hasPendingDecision
+// covers: function:boundDirectiveMessage
 //
 // Behavioural contract for the Stop hook `aidlc-continue-workflow.ts` — the framework's
 // FIRST flow-altering hook. Migrated from tests/integration/t121-stop-hook-enforce.sh
@@ -186,7 +187,12 @@ function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): 
 }
 
 const COPILOT_SESSION = "t121-copilot-owner";
-function seedCopilotDirective(proj: string, kind = "run-stage", unit?: string): void {
+function seedCopilotDirective(
+  proj: string,
+  kind = "run-stage",
+  unit?: string,
+  message?: string,
+): void {
   const state = readFileSync(seededStateFile(proj), "utf-8");
   const digest = stateDigest(state);
   const commandDigest = createHash("sha256").update("next").digest("hex");
@@ -205,6 +211,7 @@ function seedCopilotDirective(proj: string, kind = "run-stage", unit?: string): 
       kind,
       stage: "requirements-analysis",
       ...(unit ? { unit } : {}),
+      ...(message !== undefined ? { message } : {}),
       delivery: "delivered",
       needs_rehydrate: false,
       active_attempt: {
@@ -325,6 +332,7 @@ try {
 } catch { /* the witness is diagnostic; never fail the mock over it */ }
 const kind = process.env.MOCK_KIND ?? "run-stage";
 const stage = process.env.MOCK_STAGE ?? "requirements-analysis";
+const message = process.env.MOCK_MESSAGE ?? "The requirements source could not be read.";
 const unit = process.env.MOCK_UNIT ?? "";
 const part = Number(process.env.MOCK_PART ?? "1");
 const parts = Number(process.env.MOCK_PARTS ?? "2");
@@ -339,6 +347,8 @@ if (process.env.MOCK_REWRITE_MARKER === "1") {
     marker.revision = (marker.revision ?? 0) + 1;
     marker.kind = kind;
     marker.stage = stage;
+    if (kind === "error") marker.message = message;
+    else delete marker.message;
     if (unit) marker.unit = unit;
     else delete marker.unit;
     writeFileSync(markerPath, JSON.stringify(marker, null, 2) + "\\n", "utf-8");
@@ -351,6 +361,8 @@ if (kind === "done") {
 } else if (kind === "__nonzero__") {
   process.stderr.write("mock engine failure\\n");
   process.exit(1);
+} else if (kind === "error") {
+  console.log(JSON.stringify({ kind, stage, message }));
 } else if (kind === "load-steering") {
   console.log(JSON.stringify({
     kind,
@@ -1078,6 +1090,289 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(firstApplyAt).toBeGreaterThan(holdCommandAt);
     expect(secondRunAt).toBeGreaterThan(firstApplyAt);
     expect(reasonText).not.toContain("as you go");
+  }, 30000);
+
+  test("(a2) first error directive blocks once with the exact diagnostic and no forwarding-loop instruction", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const message =
+      'Requirements validation failed: expected "owner" in intent metadata.';
+    const first = runHook(
+      proj,
+      '{"session_id":"error-once","stop_hook_active":false}',
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: message },
+    );
+    const parsed = JSON.parse(first.out) as {
+      decision?: string;
+      reason?: string;
+    };
+    expect(first.rc).toBe(0);
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain(message);
+    expect(parsed.reason).not.toMatch(/\breport\b/i);
+    expect(parsed.reason).not.toMatch(/repeat until/i);
+    expect(parsed.reason).not.toContain("repeat-until-done");
+    expect(/ignore|override|disregard|bypass/i.test(parsed.reason ?? "")).toBe(
+      false,
+    );
+  }, 30000);
+
+  test("(a2) identical error fingerprint allows the second stop; changed message blocks once again", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const payload =
+      '{"session_id":"error-dedupe","stop_hook_active":false}';
+    const first = runHook(
+      proj,
+      payload,
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: "first diagnostic" },
+    );
+    const duplicate = runHook(
+      proj,
+      payload,
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: "first diagnostic" },
+    );
+    const changed = runHook(
+      proj,
+      payload,
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: "second diagnostic" },
+    );
+    expect((JSON.parse(first.out) as { decision?: string }).decision).toBe(
+      "block",
+    );
+    expect(duplicate.out).toBe("");
+    expect((JSON.parse(changed.out) as { decision?: string }).decision).toBe(
+      "block",
+    );
+    expect(
+      (JSON.parse(changed.out) as { reason?: string }).reason,
+    ).toContain("second diagnostic");
+    expect(runHook(
+      proj,
+      payload,
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: "second diagnostic" },
+    ).out).toBe("");
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8") +
+        "- **State Change**: new fingerprint\n",
+      "utf-8",
+    );
+    expect(
+      (JSON.parse(runHook(
+        proj,
+        payload,
+        "error",
+        "",
+        "",
+        "requirements-analysis",
+        "",
+        false,
+        { MOCK_MESSAGE: "second diagnostic" },
+      ).out) as { decision?: string }).decision,
+    ).toBe("block");
+  }, 30000);
+
+  test("(a2) A -> B -> A delivers and audits each diagnostic only once", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    const outputs = ["diagnostic A", "diagnostic B", "diagnostic A"].map((message) =>
+      runHook(proj, '{"session_id":"error-aba"}', "error", "", "", "requirements-analysis", "", false, { MOCK_MESSAGE: message }).out
+    );
+    expect(JSON.parse(outputs[0]).decision).toBe("block");
+    expect(JSON.parse(outputs[1]).decision).toBe("block");
+    expect(outputs[2], "A -> B -> A must not deliver A twice").toBe("");
+    const audit = readFileSync(pinnedShardPath(proj), "utf-8");
+    expect(audit.match(/^\*\*Error\*\*: diagnostic A$/gm)).toHaveLength(1);
+    expect(audit.match(/^\*\*Error\*\*: diagnostic B$/gm)).toHaveLength(1);
+  }, 30000);
+
+  test("(a2) interleaved sessions each receive the same diagnostic exactly once", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    const outputs = ["session-a", "session-b", "session-a", "session-b"].map((session) =>
+      runHook(proj, JSON.stringify({ session_id: session }), "error", "", "", "requirements-analysis", "", false, { MOCK_MESSAGE: "shared diagnostic" }).out
+    );
+    expect(JSON.parse(outputs[0]).decision).toBe("block");
+    expect(JSON.parse(outputs[1]).decision).toBe("block");
+    expect(outputs.slice(2)).toEqual(["", ""]);
+    expect(readFileSync(pinnedShardPath(proj), "utf-8").match(/^\*\*Event\*\*: ERROR_LOGGED$/gm)).toHaveLength(2);
+  }, 30000);
+
+  test("(a2) the 32-fingerprint FIFO bound permits redelivery only after eviction", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    const deliver = (message: string) => runHook(
+      proj, '{"session_id":"error-bound"}', "error", "", "", "requirements-analysis", "", false, { MOCK_MESSAGE: message },
+    ).out;
+    for (let index = 0; index < 32; index++) {
+      expect(JSON.parse(deliver(`diagnostic ${index}`)).decision).toBe("block");
+    }
+    expect(deliver("diagnostic 0")).toBe("");
+    expect(JSON.parse(deliver("diagnostic 32")).decision).toBe("block");
+    expect(deliver("diagnostic 1")).toBe("");
+    expect(JSON.parse(deliver("diagnostic 0")).decision).toBe("block");
+    const audit = readFileSync(pinnedShardPath(proj), "utf-8");
+    expect(audit.match(/^\*\*Event\*\*: ERROR_LOGGED$/gm)).toHaveLength(34);
+    expect(audit.match(/^\*\*Error\*\*: diagnostic 0$/gm)).toHaveLength(2);
+    expect(audit.match(/^\*\*Error\*\*: diagnostic 1$/gm)).toHaveLength(1);
+  }, 30000);
+
+  test.each([
+    ["ASCII boundary", "x".repeat(2_000), "x".repeat(2_000)],
+    ["501-emoji boundary", "\u{1f600}".repeat(501), "\u{1f600}".repeat(500)],
+    ["partial code point", `${"x".repeat(1_999)}\u{1f600}`, "x".repeat(1_999)],
+  ])("(a2) %s preserves the diagnostic within 2,000 UTF-8 bytes", (_label, message, expected) => {
+    const proj = makeProject();
+    seedActive(proj);
+    const result = runHook(proj, '{"session_id":"error-utf8"}', "error", "", "", "requirements-analysis", "", false, { MOCK_MESSAGE: message });
+    const diagnostic = JSON.parse(result.out).reason.split("--- begin engine diagnostic ---\n")[1].split("\n--- end engine diagnostic ---")[0];
+    expect(diagnostic).toBe(expected);
+    expect(readFileSync(pinnedShardPath(proj), "utf-8")).toContain(`**Error**: ${expected}\n`);
+  });
+
+  test("(a2) ERROR_LOGGED is appended exactly once per error fingerprint with stop-hook fields", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const message = "The graph contains an unresolved stage reference.";
+    const payload =
+      '{"session_id":"error-audit","stop_hook_active":false}';
+    const first = runHook(
+      proj,
+      payload,
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: message },
+    );
+    const duplicate = runHook(
+      proj,
+      payload,
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: message },
+    );
+    expect((JSON.parse(first.out) as { decision?: string }).decision).toBe(
+      "block",
+    );
+    expect(duplicate.out).toBe("");
+    const audit = readFileSync(pinnedShardPath(proj), "utf-8");
+    expect(audit.match(/^\*\*Event\*\*: ERROR_LOGGED$/gm)).toHaveLength(1);
+    expect(audit).toContain("**Tool**: aidlc-orchestrate");
+    expect(audit).toContain("**Command**: next (stop-hook probe)");
+    expect(audit).toContain(`**Error**: ${message}`);
+    expect(audit).toContain("**Source**: error-directive");
+    expect(audit).toContain("**Exit Code**: 0");
+    expect(audit).toContain("**Observed By**: aidlc-continue-workflow");
+    expect(audit).toMatch(
+      /\*\*Error Fingerprint\*\*: [0-9a-f]{64}/,
+    );
+  }, 30000);
+
+  test("(a2) audit-write failure does not change first-block/duplicate-allow decisions", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    rmSync(seededAuditDir(proj), { recursive: true, force: true });
+    writeFileSync(seededAuditDir(proj), "audit path is not a directory\n");
+    const payload =
+      '{"session_id":"error-audit-failure","stop_hook_active":false}';
+    const first = runHook(
+      proj,
+      payload,
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: "audit-independent diagnostic" },
+    );
+    const duplicate = runHook(
+      proj,
+      payload,
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: "audit-independent diagnostic" },
+    );
+    expect((JSON.parse(first.out) as { decision?: string }).decision).toBe(
+      "block",
+    );
+    expect(duplicate.out).toBe("");
+  }, 30000);
+
+  test("(a2) error-fingerprint persistence failure is fail-open", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    writeFileSync(
+      join(seededRecordDir(proj), ".aidlc-stop-hook"),
+      "not a directory\n",
+    );
+    const stopped = runHook(
+      proj,
+      '{"session_id":"error-persistence-failure","stop_hook_active":false}',
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: "persistence-independent diagnostic" },
+    );
+    expect(stopped.rc).toBe(0);
+    expect(stopped.out).toBe("");
+  }, 30000);
+
+  test("(a3) unknown engine directive kind fails open", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const stopped = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "mystery",
+    );
+    expect(stopped.rc).toBe(0);
+    expect(stopped.out).toBe("");
   }, 30000);
 
   // =========================================================================
@@ -2900,6 +3195,40 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     "You have not finished the workflow loop yet. Run `bun .claude/tools/aidlc-orchestrate.ts next`, " +
     "do what the step it prints asks, then report.";
 
+  test("(i) a RAW error diagnostic reason does NOT reset the human anchor; the engaged turn still BLOCKS", () => {
+    const diagnosticProject = makeProject();
+    seedActive(diagnosticProject, "requirements-analysis");
+    const diagnostic = runHook(
+      diagnosticProject,
+      '{"session_id":"error-feedback-source","stop_hook_active":false}',
+      "error",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_MESSAGE: "source diagnostic for transcript classification" },
+    );
+    const reason = (JSON.parse(diagnostic.out) as { reason: string }).reason;
+
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const tp = seedTranscriptEntries(proj, "codex", [
+      { kind: "human", text: "continue" },
+      { kind: "bash", command: "bun .codex/tools/aidlc-orchestrate.ts next" },
+      { kind: "userText", text: reason },
+    ]);
+    const stopped = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(stopped.rc).toBe(0);
+    expect(
+      (JSON.parse(stopped.out) as { decision?: string }).decision,
+    ).toBe("block");
+  }, 30000);
+
   test("(i) Claude: a RAW continuation body (no 'Stop hook feedback:' wrapper) does NOT reset the human anchor; the engaged turn still BLOCKS", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
@@ -2967,6 +3296,23 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     seedActiveWithCheckbox(inProgress, "-");
     seedCopilotDirective(inProgress);
     expect((JSON.parse(runCopilotStop(inProgress).out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(j) a retained Copilot error carries its message and is delivered once", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    const message = "Copilot retained this exact engine diagnostic.";
+    seedCopilotDirective(proj, "error", undefined, message);
+    const first = runCopilotStop(proj);
+    const parsed = JSON.parse(first.out) as {
+      decision?: string;
+      reason?: string;
+    };
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain(message);
+    expect(parsed.reason).not.toMatch(/\breport\b/i);
+    expect(parsed.reason).not.toMatch(/repeat until/i);
+    expect(runCopilotStop(proj).out).toBe("");
   }, 30000);
 
   test("(j) a supplied Copilot directive preserves pending question, decision, compose, and every inverse", () => {

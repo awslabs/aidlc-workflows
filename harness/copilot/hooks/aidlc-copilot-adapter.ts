@@ -66,6 +66,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  boundDirectiveMessage,
   claimCopilotCommand,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
@@ -541,6 +542,9 @@ export async function run(
       const directive: CopilotDirectiveMetadata = {
         kind: value.kind as CopilotDirectiveMetadata["kind"],
         ...(typeof value.stage === "string" && /^[a-z][a-z0-9-]*$/.test(value.stage) ? { stage: value.stage } : {}),
+        ...(value.kind === "error" && typeof value.message === "string"
+          ? { message: boundDirectiveMessage(value.message) }
+          : {}),
         ...(typeof value.unit === "string" && Buffer.byteLength(value.unit) <= 4 * 1024 ? { unit: value.unit } : {}),
         ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
         ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
@@ -549,6 +553,7 @@ export async function run(
       };
       if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;
       if (directive.kind === "run-stage" && !directive.stage) return null;
+      if (directive.kind === "error" && directive.message === undefined) return null;
       return directive;
     } catch { return null; }
   }

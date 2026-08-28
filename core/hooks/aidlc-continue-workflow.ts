@@ -125,6 +125,7 @@ import { join } from "node:path";
 import {
   ActiveDirectiveLockContendedError,
   clearSessionIntentHandoff,
+  boundDirectiveMessage,
   composeMarkerPath,
   consumeCopilotConversation,
   copilotStopEvidence,
@@ -141,6 +142,7 @@ import {
   isEngineToolCall,
   hooksHealthDir,
   isoTimestamp,
+  intentUuidForSelection,
   isTeamUnitOwnership,
   matchSubagentInflight,
   parseCheckboxes,
@@ -160,6 +162,8 @@ import {
   SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
   unitGateStatus,
+  withAuditLock,
+  writeFileAtomic,
 } from "../tools/aidlc-lib.ts";
 import {
   foldTranscriptIntoLedger,
@@ -207,6 +211,23 @@ const INTERACTIVE_BLOCK_CAP = 2;
 // headroom. On timeout the spawn returns non-zero and runEngineNextDirective fails
 // OPEN (allows the stop).
 const ENGINE_TIMEOUT_MS = 10_000;
+const ERROR_DIRECTIVE_FINGERPRINT_LIMIT = 32;
+const ERROR_DIRECTIVE_REASON_PREFIX =
+  "The AIDLC workflow returned an error diagnostic";
+const KNOWN_DIRECTIVE_KINDS = new Set([
+  "load-steering",
+  "run-stage",
+  "dispatch-subagent",
+  "invoke-swarm",
+  "present-gate",
+  "ask",
+  "print",
+  "error",
+  "done",
+  "parked",
+  "notice",
+  "rehydrate",
+]);
 
 // Allow the stop: emit nothing, exit 0. This is the precedent non-blocking
 // pattern shared by every other framework hook. The conductor's turn ends.
@@ -246,6 +267,127 @@ interface GuardRecord {
 
 function guardFilePath(projectDir: string): string {
   return join(stopHookDir(projectDir), "block-count.json");
+}
+
+interface ErrorDirectiveRecord {
+  fingerprints: string[];
+}
+
+function errorDirectiveFilePath(
+  projectDir: string,
+  intent: string | null,
+  space: string,
+): string {
+  return join(
+    stopHookDir(projectDir, intent ?? undefined, space),
+    "error-directive.json",
+  );
+}
+
+function claimErrorDirectiveDelivery(
+  projectDir: string,
+  intent: string | null,
+  space: string,
+  fingerprint: string,
+): "deliver" | "duplicate" | "failed" {
+  try {
+    // Serialize read-modify-write across sessions; atomic replacement alone
+    // prevents torn JSON, not one session losing another's delivered errors.
+    return withAuditLock(projectDir, () => {
+      const path = errorDirectiveFilePath(projectDir, intent, space);
+      let fingerprints: string[] = [];
+      if (existsSync(path)) {
+        const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+        if (
+          parsed === null ||
+          typeof parsed !== "object" ||
+          !("fingerprints" in parsed) ||
+          !Array.isArray(parsed.fingerprints) ||
+          parsed.fingerprints.length > ERROR_DIRECTIVE_FINGERPRINT_LIMIT ||
+          !parsed.fingerprints.every(
+            (entry: unknown) => typeof entry === "string" && /^[0-9a-f]{64}$/.test(entry),
+          )
+        ) {
+          return "failed";
+        }
+        fingerprints = parsed.fingerprints;
+        if (fingerprints.includes(fingerprint)) return "duplicate";
+      }
+      // FIFO, not LRU: repeats never refresh a delivered diagnostic. Once 32
+      // newer errors evict an entry, that diagnostic may be delivered again.
+      if (fingerprints.length === ERROR_DIRECTIVE_FINGERPRINT_LIMIT) fingerprints.shift();
+      fingerprints.push(fingerprint);
+      mkdirSync(stopHookDir(projectDir, intent ?? undefined, space), { recursive: true });
+      writeFileAtomic(path, JSON.stringify({ fingerprints } satisfies ErrorDirectiveRecord));
+      return "deliver";
+    }, intent ?? undefined, space);
+  } catch {
+    return "failed";
+  }
+}
+
+function errorDirectiveFingerprint(
+  intentUuid: string | null,
+  sessionId: string,
+  stateContent: string,
+  stage: string,
+  message: string,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        intent_uuid: intentUuid ?? "",
+        session_id: sessionId,
+        state_sha256: createHash("sha256")
+          .update(stateContent, "utf-8")
+          .digest("hex"),
+        stage,
+        message,
+      }),
+      "utf-8",
+    )
+    .digest("hex");
+}
+
+async function emitErrorDirectiveAudit(
+  projectDir: string,
+  intent: string | null,
+  space: string,
+  message: string,
+  fingerprint: string,
+): Promise<void> {
+  try {
+    // Lazy import mirrors aidlc-lib.ts emitError and avoids loading the audit
+    // module unless the hook is delivering a new engine error diagnostic.
+    const audit = await import("../tools/aidlc-audit.ts");
+    audit.appendAuditEntry("ERROR_LOGGED", {
+      Tool: "aidlc-orchestrate",
+      Command: "next (stop-hook probe)",
+      Error: message,
+      Source: "error-directive",
+      "Exit Code": "0",
+      "Observed By": "aidlc-continue-workflow",
+      "Error Fingerprint": fingerprint,
+    }, projectDir, intent ?? undefined, space);
+  } catch (error) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      `ERROR_LOGGED emission failed for error directive: ${errorMessage(error)}`,
+    );
+  }
+}
+
+function errorDirectiveReason(stage: string, message: string): string {
+  const where = stage.length > 0 ? ` for "${stage}"` : "";
+  return (
+    `${ERROR_DIRECTIVE_REASON_PREFIX}${where}. ` +
+    "The exact engine message is quoted verbatim below:\n\n" +
+    "--- begin engine diagnostic ---\n" +
+    `${message}\n` +
+    "--- end engine diagnostic ---\n\n" +
+    "This diagnostic is delivered once for the current workflow state."
+  );
 }
 
 // The Current Stage slug from the state file. Factored from the regex the
@@ -768,19 +910,23 @@ function isPendingSubagentStop(
 // injected continuation (a re-prompt after a block), not the human talking.
 // Two shapes: Claude Code wraps the block reason as "Stop hook feedback: ..."
 // (isMeta:true), but other harnesses (Codex) may re-inject the RAW reason text
-// with no wrapper. continuationReason() (below) always opens with "The AIDLC
-// workflow has a pending step" and names "the workflow loop", so match either
-// signature. Excluding these is what keeps an engine-engaged turn whose last
+// with no wrapper. continuationReason() (below) opens with "The AIDLC workflow
+// has a pending step" and names "the workflow loop"; errorDirectiveReason()
+// opens with ERROR_DIRECTIVE_REASON_PREFIX and identifies the verbatim engine
+// diagnostic. Excluding these is what keeps an engine-engaged turn whose last
 // user entry is the hook's nudge from being misread as a fresh human prompt.
-// The two phrases MUST stay in step with continuationReason(): if its wording
-// changes without this matcher changing too, an injected nudge reads as a fresh
-// human prompt and the conversational carve-out silently mis-allows the stop.
+// These phrases MUST stay in step with both reason builders: if their wording
+// changes without this matcher changing too, an injected reason reads as a
+// fresh human prompt and the conversational carve-out silently mis-allows the
+// stop.
 function isInjectedHookFeedback(text: string): boolean {
   const t = text.trimStart();
   return (
     t.startsWith("Stop hook feedback:") ||
     (t.startsWith("The AIDLC workflow has a pending step") &&
-      /workflow loop/.test(t))
+      /workflow loop/.test(t)) ||
+    (t.startsWith(ERROR_DIRECTIVE_REASON_PREFIX) &&
+      /exact engine message is quoted verbatim/.test(t))
   );
 }
 
@@ -1087,6 +1233,7 @@ function isConversationalStop(
 interface EngineDirective {
   kind: string;
   stage?: string;
+  message?: string;
   unit?: string;
   continueToken?: string;
   part?: number;
@@ -1158,6 +1305,10 @@ function runEngineNextDirective(
         "stage" in parsed && typeof (parsed as { stage?: unknown }).stage === "string"
           ? (parsed as { stage: string }).stage.trim()
           : "";
+      const message =
+        "message" in parsed && typeof parsed.message === "string"
+          ? boundDirectiveMessage(parsed.message)
+          : undefined;
       const unit =
         "unit" in parsed && typeof (parsed as { unit?: unknown }).unit === "string"
           ? (parsed as { unit: string }).unit.trim()
@@ -1213,6 +1364,7 @@ function runEngineNextDirective(
       return {
         kind,
         ...(stage.length > 0 ? { stage } : {}),
+        ...(message !== undefined ? { message } : {}),
         ...(unit.length > 0 ? { unit } : {}),
         ...(continueToken.length > 0 ? { continueToken } : {}),
         ...(part !== undefined ? { part } : {}),
@@ -1526,6 +1678,84 @@ if (kind === "ask") {
   return allowStop();
 }
 
+// `error` is a diagnostic, not pending workflow work. Deliver its exact bounded
+// message once for this intent/session/state/stage tuple, record it best-effort,
+// then release every identical repeat. Persistence is the safety boundary: if
+// the hook cannot read or store the delivered-fingerprint set it fails open
+// rather than risking an unbounded diagnostic loop.
+if (kind === "error") {
+  const message = directive.message;
+  if (message === undefined || message.length === 0) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "error directive carried no message; allowing stop",
+    );
+    return allowStop();
+  }
+  const stage = activeStage ?? currentStageSlug(stateContent);
+  let intentUuid: string | null;
+  try {
+    intentUuid = intentUuidForSelection(projectDir, selection);
+  } catch (error) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      `error directive intent resolution failed: ${errorMessage(error)}; allowing stop`,
+    );
+    return allowStop();
+  }
+  const fingerprint = errorDirectiveFingerprint(
+    intentUuid,
+    sessionId,
+    stateContent,
+    stage,
+    message,
+  );
+  const delivery = claimErrorDirectiveDelivery(
+    projectDir,
+    selection.intent,
+    selection.space,
+    fingerprint,
+  );
+  if (delivery === "failed") {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "error-directive fingerprint persistence failed; allowing stop",
+    );
+    return allowStop();
+  }
+  if (delivery === "duplicate") {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      `error directive ${fingerprint} was already delivered; allowing stop`,
+    );
+    return allowStop();
+  }
+  await emitErrorDirectiveAudit(
+    projectDir,
+    selection.intent,
+    selection.space,
+    message,
+    fingerprint,
+  );
+  return blockStop(errorDirectiveReason(stage, message));
+}
+
+// Future or malformed directive kinds have no safe continuation semantics.
+// Treat the 11 public DirectiveKind values plus this hook's internal recovery
+// sentinel as the complete allow/block vocabulary; everything else fails open.
+if (!KNOWN_DIRECTIVE_KINDS.has(kind)) {
+  recordHookDrop(
+    projectDir,
+    HOOK_NAME,
+    `unknown engine directive kind "${kind}"; allowing stop`,
+  );
+  return allowStop();
+}
+
 // Human-wait carve-out: the engine returns a pending directive, but the current
 // stage is positively at [?] awaiting-approval or [R] revising — the conductor
 // is correctly parked on the human (an approval gate or the Request-Changes
@@ -1630,8 +1860,8 @@ if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFor
   return allowStop();
 }
 
-// A directive is PENDING (run-stage / dispatch-subagent / invoke-swarm /
-// present-gate / ask / print / error). Decide whether to block, honouring the
+// A known directive is PENDING (run-stage / dispatch-subagent / invoke-swarm /
+// present-gate / print / rehydrate). Decide whether to block, honouring the
 // recursion bounds. When the bounds say release, LET GO — a stuck loop must
 // never trap the session.
 let markerCount: { shouldBlock: boolean; count: number } | null = null;
