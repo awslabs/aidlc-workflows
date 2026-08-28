@@ -75,6 +75,13 @@ run compile manually after editing stage YAML, and CI enforces `compile
 to a later PR. `stage-graph.json` is a compiled artifact — do not edit it
 by hand; edit the YAML and recompile.
 
+Core insertions that must preserve a published phase order also update the
+authored `tools/data/stage-number-pins.json` map. The compiler applies those
+pins after new-stage seeding, rejects unknown slugs, cross-phase numbers, and
+collisions, then runs the ordinary dependency-order invariant. Plugin stages
+cannot contribute number pins; their authored `number:` remains only a
+relative ordering hint within a batch of new plugin stages.
+
 ---
 
 ## Field reference — when to use
@@ -102,10 +109,10 @@ relying on alphabetical accident.
 Names an artifact whose instances drive iteration. The stage runs once per
 instance.
 
-Today's use case: five Construction stages (`functional-design`,
+Today's use case: six Construction stages (`functional-design`,
 `nfr-requirements`, `nfr-design`, `infrastructure-design`, `code-generation`)
-run once per Unit — they each declare `for_each: unit-of-work` (the artifact
-`units-generation` produces).
+and conditional `pr-integration` run once per Unit — they each declare
+`for_each: unit-of-work` (the artifact `units-generation` produces).
 
 Tomorrow's use cases: a stage that runs per environment, per tenant, per
 region, per compliance jurisdiction. The primitive is workflow-engine
@@ -114,7 +121,7 @@ generic; Construction happens to exercise it first.
 **Aggregation is inferred, not declared.** A stage that consumes an artifact
 produced by a `for_each` stage, without declaring its own `for_each`, is an
 aggregation step by definition. `build-and-test` is the canonical example —
-it runs once after all five Construction `for_each` stages have iterated
+it runs once after all six Construction `for_each` stages have iterated
 across Units, consuming their aggregated outputs. No explicit `fan_in` or
 aggregation field — graph traversal figures it out.
 

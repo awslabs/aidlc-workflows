@@ -7,6 +7,7 @@ keywords:
   - broken
 description: Fix a specific bug
 skeleton: off
+integration: pr
 runner: true
 review_cap: advisory
 ---

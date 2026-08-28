@@ -8,6 +8,7 @@ keywords:
   - patch
 description: CVE response
 skeleton: off
+integration: pr
 runner: true
 ---
 

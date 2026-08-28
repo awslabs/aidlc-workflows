@@ -233,6 +233,33 @@ function mutableDataDir(projectDir: string): string {
   return resolveHarnessPath(["tools", "data"], { mutable: true, projectDir });
 }
 
+function stageNumberPins(): Record<string, string> {
+  const path = join(resolveDataDir(), "stage-number-pins.json");
+  if (!existsSync(path)) return {};
+  const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed)
+  ) {
+    throw new Error(`${path}: expected an object mapping stage slugs to numbers`);
+  }
+  const pins: Record<string, string> = {};
+  for (const [slug, number] of Object.entries(parsed)) {
+    if (
+      !/^[a-z][a-z0-9-]*$/.test(slug) ||
+      typeof number !== "string" ||
+      !/^[0-9]+\.[0-9]+$/.test(number)
+    ) {
+      throw new Error(
+        `${path}: invalid stage number pin ${JSON.stringify(slug)}=${JSON.stringify(number)}`,
+      );
+    }
+    pins[slug] = number;
+  }
+  return pins;
+}
+
 function requireInstalledHarness(projectDir: string): void {
   const installedLib = resolveHarnessPath(
     ["tools", "aidlc-lib.ts"],
@@ -1932,6 +1959,33 @@ export function compileStageGraph(): {
       maxIndexByPhasePrefix.set(prefix, nextIndex);
       stages.push(buildGraphStage(e.data, e.phase, `${prefix}.${nextIndex}`, e.name));
     }
+  }
+
+  const pins = stageNumberPins();
+  const bySlug = new Map(stages.map((stage) => [stage.slug, stage]));
+  for (const [slug, number] of Object.entries(pins)) {
+    const stage = bySlug.get(slug);
+    if (!stage) {
+      throw new Error(`stage-number-pins.json names unknown stage "${slug}"`);
+    }
+    const expectedPrefix = PHASES.indexOf(stage.phase as Phase);
+    const actualPrefix = Number.parseInt(number.split(".")[0], 10);
+    if (actualPrefix !== expectedPrefix) {
+      throw new Error(
+        `stage-number-pins.json assigns "${slug}" (${stage.phase}) to ${number}; expected phase prefix ${expectedPrefix}`,
+      );
+    }
+    stage.number = number;
+  }
+  const numberOwners = new Map<string, string>();
+  for (const stage of stages) {
+    const owner = numberOwners.get(stage.number);
+    if (owner) {
+      throw new Error(
+        `Duplicate stage number ${stage.number}: "${owner}" and "${stage.slug}"`,
+      );
+    }
+    numberOwners.set(stage.number, stage.slug);
   }
 
   // Sort by numeric order (phase-prefix.index).

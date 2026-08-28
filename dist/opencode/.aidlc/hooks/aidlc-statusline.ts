@@ -93,6 +93,7 @@ const STAGE_DISPLAY: Record<string, string> = {
   "nfr-design": "NFR Design",
   "infrastructure-design": "Infrastructure Design",
   "code-generation": "Code Generation",
+  "pr-integration": "PR Integration",
   "build-and-test": "Build and Test",
   "ci-pipeline": "CI Pipeline",
   "deployment-pipeline": "Deployment Pipeline",

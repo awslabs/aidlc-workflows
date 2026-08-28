@@ -783,7 +783,7 @@ Standard 2-option gate: **Approve** / **Request Changes**.
 - The mockups produced here feed into Domain Design (2.6) and ultimately
   into Construction's Code Generation (3.5) for UI components.
 - The accessibility checklist provides testable criteria that feed into Build
-  and Test (3.6).
+  and Test (3.7).
 
 ---
 
@@ -1120,7 +1120,7 @@ order.
 Per the canonical Glossary in `stage-protocol.md`, a **Bolt** is the
 planned Construction delivery slice from this stage (2.9): one or more
 Units with a Definition of Done, a confidence hypothesis, and ownership.
-(Stages 3.6 build-and-test and 3.7 ci-pipeline run once at end across
+(Stages 3.7 build-and-test and 3.8 ci-pipeline run once at end across
 all Units, not per-Bolt.)
 
 Economic value cannot be derived from the DAG — AI agents can topologically
@@ -1241,7 +1241,7 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
 ### Notes
 
 - **Phase boundary stage.** This is the second of three phase boundary stages
-  (after 1.7 and before 3.7). The verification check validates
+  (after 1.7 and before 3.8). The verification check validates
   Requirements-to-Stories-to-Architecture alignment.
 - **Economic vs topological sequencing.** Stage 2.7 produces the dependency
   DAG (topological order falls out as descriptive geometry). Stage 2.9
@@ -1251,8 +1251,9 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
   in `risk-and-sequencing-rationale.md`.
 - **Bolt ≠ sprint ≠ MMF.** Per the canonical Glossary, a Bolt is the
   planned Construction delivery slice from 2.9: one or more Units with a
-  Definition of Done, a confidence hypothesis, and ownership. Stages 3.6
-  (Build and Test) and 3.7 (CI Pipeline) run once after all Bolts.
+  Definition of Done, a confidence hypothesis, and ownership. Stage 3.6 PR
+  Integration runs per Unit when affirmed; stages 3.7 (Build and Test) and 3.8
+  (CI Pipeline) run once after all Bolts.
   Sequencing heuristics (walking skeleton, WSJF) apply to Bolt order;
   they do not redefine what a Bolt is.
 - **Deliberate deviation from upstream.** The upstream reference calls this
@@ -1331,8 +1332,9 @@ per-stage gate cascade.
 4. **3.4 Infrastructure Design** (conditional) — every Unit
 5. **3.5 Code Generation** (always) — every Unit; under an autonomous swarm,
    one stage gate after the final DAG batch
-6. **3.6 Build and Test** (always) — once at the end
-7. **3.7 CI Pipeline** (conditional) — once at the end
+6. **3.6 PR Integration** (conditional on affirmed PR mode) — every Unit
+7. **3.7 Build and Test** (always) — once at the end
+8. **3.8 CI Pipeline** (conditional) — once at the end
 
 See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
 

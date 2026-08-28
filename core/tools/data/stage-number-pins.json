@@ -1,0 +1,5 @@
+{
+  "pr-integration": "3.6",
+  "build-and-test": "3.7",
+  "ci-pipeline": "3.8"
+}

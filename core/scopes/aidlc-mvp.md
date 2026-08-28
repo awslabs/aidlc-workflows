@@ -6,6 +6,7 @@ keywords:
   - minimum viable
 description: Skip operations, ship the core
 skeleton: on
+integration: pr
 runner: true
 ---
 

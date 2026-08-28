@@ -146,6 +146,7 @@ export interface DetectionInput {
   classicError?: string | null;
   codeowners?: { path: string; content: string } | null;
   protectionUnavailable?: boolean;
+  observedBranches?: string[];
 }
 
 interface ParsedArgs {
@@ -489,6 +490,40 @@ function booleanValue(value: unknown): boolean {
   return value === true;
 }
 
+export function inferBranchPattern(branches: readonly string[]): string {
+  const candidates = branches.filter(
+    (branch) =>
+      branch !== "main" &&
+      branch !== "master" &&
+      branch !== "develop" &&
+      branch !== "development",
+  );
+  const ticketed = candidates
+    .map((branch) =>
+      /^([^/]+)\/([A-Z][A-Z0-9]+-[0-9]+)-.+$/.exec(branch)
+    )
+    .filter((match): match is RegExpExecArray => match !== null);
+  if (ticketed.length > 0) {
+    const prefix = ticketed
+      .map((match) => match[1])
+      .sort((a, b) => a.localeCompare(b))[0];
+    return `${prefix}/{ticket}-{slug}`;
+  }
+  const prefixed = candidates
+    .map((branch) => /^([^/]+)\/.+$/.exec(branch))
+    .filter((match): match is RegExpExecArray => match !== null);
+  if (prefixed.length > 0) {
+    const counts = new Map<string, number>();
+    for (const match of prefixed) {
+      counts.set(match[1], (counts.get(match[1]) ?? 0) + 1);
+    }
+    const prefix = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0];
+    if (prefix) return `${prefix}/{slug}`;
+  }
+  return "bolt-{slug}";
+}
+
 export function evaluateDetection(input: DetectionInput): Record<string, unknown> {
   const repository = input.repository ?? {};
   const defaultBranch =
@@ -616,6 +651,7 @@ export function evaluateDetection(input: DetectionInput): Record<string, unknown
     },
     pullRequestTemplates: templates,
     codeowners: input.codeowners,
+    branchPattern: inferBranchPattern(input.observedBranches ?? []),
   };
 }
 
@@ -748,6 +784,22 @@ function detectLive(repo: string, branch?: string): Record<string, unknown> {
     codeowners = { path, content: decodeContent(response) };
     break;
   }
+  const observed = ghJson([
+    "api",
+    `repos/${repo}/branches?per_page=100`,
+    "--paginate",
+  ], true);
+  const observedBranches = Array.isArray(observed)
+    ? observed
+        .map((branch) =>
+          branch &&
+          typeof branch === "object" &&
+          typeof (branch as { name?: unknown }).name === "string"
+            ? (branch as { name: string }).name
+            : null
+        )
+        .filter((branch): branch is string => branch !== null)
+    : [];
   return evaluateDetection({
     repo,
     branch: defaultBranch,
@@ -758,6 +810,7 @@ function detectLive(repo: string, branch?: string): Record<string, unknown> {
     classicError,
     codeowners,
     protectionUnavailable,
+    observedBranches,
   });
 }
 
@@ -1500,15 +1553,34 @@ function writePrRecord(
   const body = [
     "# PR Record",
     "",
+    "## PR Summary",
+    "",
+    `Unit \`${unit}\` opened ${snapshots.length} coordinated PR${snapshots.length === 1 ? "" : "s"}.`,
+    "",
+    "## Publication Plan",
+    "",
     ...snapshots.flatMap((snapshot) => [
-      `## ${snapshot.repo}#${snapshot.number}`,
+      `### ${snapshot.repo}#${snapshot.number}`,
       "",
       `- URL: ${snapshot.url}`,
       `- Head: ${snapshot.headRefName}`,
       `- Base: ${snapshot.baseRefName}`,
-      `- State: ${snapshot.state}`,
       "",
     ]),
+    "## Evidence Dossier",
+    "",
+    ...snapshots.map((snapshot) =>
+      `- ${snapshot.repo} body SHA-256: \`${createHash("sha256")
+        .update(snapshot.body ?? "")
+        .digest("hex")}\``
+    ),
+    "",
+    "## Integration Status",
+    "",
+    ...snapshots.map((snapshot) =>
+      `- ${snapshot.repo}#${snapshot.number}: ${snapshot.state}`
+    ),
+    "",
   ].join("\n");
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body, "utf-8");

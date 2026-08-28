@@ -182,17 +182,17 @@ Source of truth: one file per scope under `.claude/scopes/aidlc-<name>.md` (iden
 
 | Scope          | Depth         | TestStrategy | EXECUTE / Total |
 |----------------|---------------|--------------|-----------------|
-| bugfix         | Minimal       | (default)    | 9 / 33          |
-| classic        | Standard      | (default)    | 26 / 33         |
-| enterprise     | Comprehensive | (default)    | 33 / 33         |
-| express        | Minimal       | (default)    | 10 / 33         |
-| feature        | Standard      | (default)    | 33 / 33         |
-| infra          | Standard      | (default)    | 13 / 33         |
-| mvp            | Standard      | (default)    | 23 / 33         |
-| poc            | Minimal       | (default)    | 8 / 33          |
-| refactor       | Minimal       | (default)    | 10 / 33         |
-| security-patch | Minimal       | (default)    | 10 / 33         |
-| workshop       | Standard      | Minimal      | 26 / 33         |
+| bugfix         | Minimal       | (default)    | 9 / 34          |
+| classic        | Standard      | (default)    | 26 / 34         |
+| enterprise     | Comprehensive | (default)    | 33 / 34         |
+| express        | Minimal       | (default)    | 10 / 34         |
+| feature        | Standard      | (default)    | 33 / 34         |
+| infra          | Standard      | (default)    | 13 / 34         |
+| mvp            | Standard      | (default)    | 23 / 34         |
+| poc            | Minimal       | (default)    | 8 / 34          |
+| refactor       | Minimal       | (default)    | 10 / 34         |
+| security-patch | Minimal       | (default)    | 10 / 34         |
+| workshop       | Standard      | Minimal      | 26 / 34         |
 
 <!-- END: compiled scope grid -->
 
@@ -230,8 +230,9 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 | nfr-design | 3.3 | NFR Design | Construction | CONDITIONAL | aidlc-architect-agent | aidlc-aws-platform-agent | inline |
 | infrastructure-design | 3.4 | Infrastructure Design | Construction | CONDITIONAL | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | inline |
 | code-generation | 3.5 | Code Generation | Construction | ALWAYS | aidlc-developer-agent | — | subagent |
-| build-and-test | 3.6 | Build and Test | Construction | ALWAYS | aidlc-quality-agent | aidlc-devsecops-agent | inline |
-| ci-pipeline | 3.7 | CI Pipeline | Construction | CONDITIONAL | aidlc-pipeline-deploy-agent | — | inline |
+| pr-integration | 3.6 | PR Integration | Construction | CONDITIONAL | aidlc-pipeline-deploy-agent | — | inline |
+| build-and-test | 3.7 | Build and Test | Construction | ALWAYS | aidlc-quality-agent | aidlc-devsecops-agent | inline |
+| ci-pipeline | 3.8 | CI Pipeline | Construction | CONDITIONAL | aidlc-pipeline-deploy-agent | — | inline |
 | deployment-pipeline | 4.1 | Deployment Pipeline | Operation | CONDITIONAL | aidlc-pipeline-deploy-agent | — | inline |
 | environment-provisioning | 4.2 | Environment Provisioning | Operation | CONDITIONAL | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | inline |
 | deployment-execution | 4.3 | Deployment Execution | Operation | CONDITIONAL | aidlc-pipeline-deploy-agent | aidlc-developer-agent | inline |

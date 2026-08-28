@@ -73,8 +73,9 @@ work. Its speed comes from intentionally removing those decision surfaces.
 **Choose Feature when:** you are building a production feature and want the
 complete lifecycle at practical depth.
 
-Feature runs all 33 stages at Standard depth, from intent discovery through
-design, implementation, deployment, and feedback. It gives the workflow the
+Feature runs all 33 stock-scope stages at Standard depth, from intent
+discovery through design, implementation, deployment, and feedback. PR
+Integration is added per intent when affirmed. It gives the workflow the
 widest opportunity to surface unknowns without the heavier documentation floor
 of Enterprise.
 
@@ -83,10 +84,11 @@ of Enterprise.
 **Choose Enterprise when:** the work is regulated, high risk, audit-sensitive,
 or requires formal compliance and operational evidence.
 
-Enterprise runs all 33 stages at Comprehensive depth. It retains market,
-compliance, security, design, observability, incident-response, and performance
-work because the cost of an undocumented decision is higher than the cost of
-the additional ceremony.
+Enterprise runs all 33 stock-scope stages at Comprehensive depth, with PR
+Integration added per intent when affirmed. It retains market, compliance,
+security, design, observability, incident-response, and performance work
+because the cost of an undocumented decision is higher than the cost of the
+additional ceremony.
 
 ## `mvp`
 

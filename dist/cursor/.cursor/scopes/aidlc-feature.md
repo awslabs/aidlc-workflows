@@ -4,6 +4,7 @@ depth: Standard
 keywords: []
 description: Full lifecycle for new features, practical depth
 skeleton: on
+integration: pr
 runner: true
 ---
 
@@ -24,6 +25,8 @@ bodies and the org/team rule layers, not in which stages run.
 
 ## Membership
 
-`feature` marks all 33 stages EXECUTE. It remains the implicit freeform fallback
-and is also available through `--scope feature` and the `/aidlc-feature` runner.
+`feature` marks the 33 stock-scope stages EXECUTE. PR Integration is the
+dormant 34th stage and is promoted per intent only after repository detection
+and practice affirmation. It remains the implicit freeform fallback and is
+also available through `--scope feature` and the `/aidlc-feature` runner.
 There are no keyword triggers of its own.

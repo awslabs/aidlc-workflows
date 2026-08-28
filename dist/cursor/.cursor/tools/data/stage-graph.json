@@ -2446,8 +2446,111 @@
     ]
   },
   {
-    "slug": "build-and-test",
+    "slug": "pr-integration",
     "number": "3.6",
+    "name": "PR Integration",
+    "phase": "construction",
+    "execution": "CONDITIONAL",
+    "condition": "Executes only when the affirmed integration mode resolves to PR integration for this intent; protected-branch reality overrides a configured direct path.",
+    "lead_agent": "aidlc-pipeline-deploy-agent",
+    "support_agents": [],
+    "mode": "inline",
+    "for_each": "unit-of-work",
+    "produces": [
+      "pr-record"
+    ],
+    "consumes": [
+      {
+        "artifact": "requirements",
+        "required": false
+      },
+      {
+        "artifact": "unit-of-work",
+        "required": false
+      },
+      {
+        "artifact": "functional-spec",
+        "required": false
+      },
+      {
+        "artifact": "performance-design",
+        "required": false
+      },
+      {
+        "artifact": "security-design",
+        "required": false
+      },
+      {
+        "artifact": "infrastructure-specification",
+        "required": false
+      },
+      {
+        "artifact": "code-review",
+        "required": false
+      },
+      {
+        "artifact": "code-generation-plan",
+        "required": true
+      },
+      {
+        "artifact": "unit-test-instructions",
+        "required": true
+      },
+      {
+        "artifact": "code-summary",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "code-generation"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [],
+    "inputs": "Affirmed integration practices, repository policy detection, and every resolved artifact in this stage's consumes list",
+    "outputs": "pr-record.md under this stage's per-unit record dir, plus tool-owned PR audit and lifecycle receipts",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/construction.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".cursor/sensors/aidlc-required-sections.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "build-and-test",
+    "number": "3.7",
     "name": "Build and Test",
     "phase": "construction",
     "execution": "ALWAYS",
@@ -2481,7 +2584,8 @@
       }
     ],
     "requires_stage": [
-      "code-generation"
+      "code-generation",
+      "pr-integration"
     ],
     "sensors": [
       "required-sections",
@@ -2549,7 +2653,7 @@
   },
   {
     "slug": "ci-pipeline",
-    "number": "3.7",
+    "number": "3.8",
     "name": "CI Pipeline",
     "phase": "construction",
     "execution": "CONDITIONAL",

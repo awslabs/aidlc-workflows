@@ -134,7 +134,7 @@ your plugin's new stages are ordered by their own `requires_stage` edges,
 using your authored `number:` values only to break ties among independent
 stages, and given the next free indices in their phase. So author numbers
 that read sensibly and agree with your edges (`test-pro-integration` is
-`3.85`, after `build-and-test` at `3.6`) — the RELATIVE order is what
+`3.85`, after `build-and-test` at `3.7`) — the RELATIVE order is what
 carries — but the absolute values never land in the graph, inserting a stage
 never renumbers core, and you claim no range (which is why two uncoordinated
 plugins can never collide on numbers).

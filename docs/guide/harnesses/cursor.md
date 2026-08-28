@@ -192,7 +192,7 @@ Installed and verified? The methodology is the same on every harness - keep
 going with the neutral chapters:
 
 - [Your First Workflow](../02-your-first-workflow.md) - an annotated end-to-end run.
-- [Phases and Stages](../04-phases-and-stages.md) - the 5 phases and 33 stages.
+- [Phases and Stages](../04-phases-and-stages.md) - the 5 phases and 34 stages.
 - [Scopes, Depth, and Test Strategy](../05-scopes-and-depth.md) - right-sizing a run.
 - [Glossary](../glossary.md) - every term defined.
 

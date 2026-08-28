@@ -2377,7 +2377,7 @@ function handleCount(args: string[]): void {
 //
 // The state machine's transitions were purely ceremonial: approve/advance
 // marked a stage [x] without verifying ANY work landed on disk, so an agent
-// could rubber-stamp all 33 stages (gate-start->approve, or pure advance) with
+  // could rubber-stamp all 34 stages (gate-start->approve, or pure advance) with
 // zero artifacts. This guard makes a forward stage-completion CONTINGENT on
 // evidence of work - the same principle the swarm referee already applies at
 // the merge gate (aidlc-swarm.ts finalize is authoritative, so a red unit

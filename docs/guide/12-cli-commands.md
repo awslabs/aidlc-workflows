@@ -155,7 +155,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 ```
 /aidlc Fix the null pointer in ProfileSerializer
-> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 8 of 33 stages, 5 approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
+> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 8 of 34 stages, 5 approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
 ```
 
 ---
@@ -597,7 +597,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 ✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=33
 ✓ Composed plugin surface: all enabled plugin stages and recorded contributions are present
 ✓ Scope validation: 11 scopes valid
-✓ Schema validation: 33/33 stages valid
+✓ Schema validation: 34/34 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
 ✓ Duplicate producers: every consumed artifact has a single producer
 ✓ Keyword overlap: no conflicts

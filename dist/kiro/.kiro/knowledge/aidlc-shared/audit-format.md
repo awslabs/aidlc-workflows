@@ -22,7 +22,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (91 events, 22 categories)
+## Event Registry (95 events, 23 categories)
 
 ### Workflow Lifecycle (4 events)
 

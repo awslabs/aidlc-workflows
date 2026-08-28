@@ -53,8 +53,8 @@ outputs: "team-practices.md, discovered-rules.md, evidence.md, practices-discove
 
 # Practices Discovery
 
-This stage discovers how the team works: way of working, walking-skeleton
-stance, testing posture, deployment, and code style. It is a hub-and-spoke
+This stage discovers how the team works: way of working and integration,
+walking-skeleton stance, testing posture, deployment, and code style. It is a hub-and-spoke
 ensemble. The pipeline-deploy lead drafts; quality, developer, and devsecops
 inspect the draft independently; the human resolves the practice choices; and
 the lead integrates the result.
@@ -70,9 +70,23 @@ is not committed until that promotion succeeds.
 Read `<record>/aidlc-state.md` to determine project type and active space:
 
 - **Brownfield:** use available reverse-engineering artifacts and workspace
-  configuration as evidence.
+  configuration as evidence. For every registered repository, run:
+
+  ```bash
+  bun .aidlc/tools/aidlc-pr.ts detect --repo <owner/repo>
+  ```
+
+  Treat the result as repository fact: protection, required reviews/checks,
+  merge methods, auto-merge availability, delete-branch-on-merge, PR template,
+  CODEOWNERS, and observed branch naming. Classic protection detail may remain
+  unknown below admin; never translate that silence into "unprotected".
 - **Greenfield:** use
   `aidlc/spaces/<active-space>/memory/org.md` as the default-practice source.
+  If a remote repository already exists, run the same detection: detection,
+  not the greenfield label, decides whether the project conforms to existing
+  policy. When no policy exists, record establishment candidates for the
+  graduation moments owned by CI Pipeline, team mode activation, or scope
+  promotion; do not create protection, templates, or CODEOWNERS in this stage.
 
 If `aidlc/spaces/<active-space>/memory/team.md` already contains affirmed
 content, use it as re-run context for either project type. Steps 2-8 run for
@@ -89,6 +103,8 @@ persona and knowledge; pass paths, not pasted persona prose.
 - **Brownfield:** inspect git history, CI/deployment configuration, and the
   available reverse-engineering artifact paths. Infer branching strategy,
   deployment cadence, environment topology, and visible team conventions.
+  Incorporate the deterministic PR detection result and distinguish facts from
+  hidden classic-protection detail that still needs confirmation.
 - **Greenfield:** read the five matching sections from
   `aidlc/spaces/<active-space>/memory/org.md` and treat them as suggested
   defaults, not established team facts.
@@ -136,6 +152,18 @@ Working, Walking Skeleton, Testing Posture, Deployment, and Code Style.
   sections as suggested answers.
 - **Re-run:** show the matching `memory/team.md` content as the default.
 
+For integration inside the Way of Working area:
+
+- When detection succeeds, ask exactly one confirmation question summarizing
+  the target branch, whether it is protected, visible approval/check policy,
+  merge strategy, PR template, CODEOWNERS, observed branch pattern, and
+  standing reviewers. Propose `pr` whenever the branch rejects direct
+  integration; otherwise apply the active scope's `integration: pr|direct`
+  default. Keep hidden classic detail explicit in that one question.
+- When detection is unavailable, ask only the minimum facts needed to choose
+  `pr` or `direct`; do not guess.
+- A direct answer cannot override a protected target branch.
+
 The `memory/*.md` sections you draw the suggested answers from are written for
 this framework's own resolution rules, so they carry vocabulary the person
 answering has no reason to know. Two obligations follow, and they apply to the
@@ -175,6 +203,17 @@ file. The lead alone updates the four declared artifacts:
    before implementation with lower-level unit tests after implementation).
    Keep coverage, tooling, test-type, and scope notes as additional bullets;
    they do not replace the two structured fields.
+   `## Way of Working` MUST include:
+   - `- **Integration mode**: pr | direct`
+   - `- **Integration branch**: <branch>`
+   - `- **Merge strategy**: merge | rebase | squash`
+   - `- **Branch pattern**: <pattern with {slug} and optional {ticket}>`
+   - `- **Standing reviewers**: <comma-separated human logins or none>`
+   - `- **Always gate pushes**: true | false`
+
+   Preserve detected templates and CODEOWNERS as evidence, not copied policy
+   prose. A brownfield result conforms to the repository; a greenfield result
+   may record the later establishment offer.
 2. **discovered-rules.md** - `## Mandated` rules in `ALWAYS ...` form and
    `## Forbidden` rules in `NEVER ...` form, only for human-stated hard
    constraints.
@@ -251,7 +290,23 @@ stage remains at its open gate until promotion succeeds.
 After Step 7 prints `{"emitted":"PRACTICES_AFFIRMED",...}` and exits 0:
 
 1. Do not emit `PRACTICES_AFFIRMED` again.
-2. Commit the held approval:
+2. Read the affirmed `Integration mode` field. For `pr`, run:
+
+   ```bash
+   bun .aidlc/tools/aidlc-state.ts set-integration-mode pr
+   bun .aidlc/tools/aidlc-utility.ts recompose --add pr-integration
+   ```
+
+   For `direct`, run:
+
+   ```bash
+   bun .aidlc/tools/aidlc-state.ts set-integration-mode absent
+   bun .aidlc/tools/aidlc-utility.ts recompose --skip pr-integration
+   ```
+
+   If the stage is already SKIP, the second command is a clean no-op. If the
+   detected target is protected, refuse `direct` and return to revision.
+3. Commit the held approval:
    `bun .aidlc/tools/aidlc-orchestrate.ts report --stage
    practices-discovery --result approved --user-input "Approve"`.
 

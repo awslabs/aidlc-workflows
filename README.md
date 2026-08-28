@@ -35,7 +35,8 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 ## Key Features
 
-- **[5 phases, 33 stages](docs/guide/04-phases-and-stages.md)** — Initialization, Ideation, Inception, Construction, Operation
+- **[5 phases, 34 stages](docs/guide/04-phases-and-stages.md)** — Initialization, Ideation, Inception, Construction, Operation
+- **[PR-based integration](docs/guide/18-pr-based-integration.md)** — protected-branch detection, evidence-rich PRs, review rounds, and merge receipts
 - **[14-agent roster](docs/guide/06-agents.md)** — 11 domain experts, 2 quality-gate reviewers, and the adaptive-workflows composer
 - **[11 adaptive scopes](docs/guide/05-scopes-and-depth.md)** (enterprise through express, with the v1-style classic default — `AWS_AIDLC_DEFAULT_SCOPE` overrides it — the full-lifecycle feature scope, and workshop retained for facilitated sessions) plus an **[adaptive composer](docs/guide/05-scopes-and-depth.md#the-adaptive-composer)** (`/aidlc compose`) that proposes a tailored stage plan from your task, a scan report, or the running workflow
 - **[3 depth levels](docs/guide/05-scopes-and-depth.md#the-3-depth-levels)** (Minimal/Standard/Comprehensive) — control artifact detail per stage
@@ -44,7 +45,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 - **[Approval gates at every stage](docs/guide/07-interaction-modes.md)** — you stay in control of all decisions
 - **[Two-tier knowledge system](docs/guide/08-knowledge.md)** — methodology knowledge ships with the framework; team knowledge is user-managed
 - **[Rules and a learning loop](docs/guide/09-rules-and-the-learning-loop.md)** — human corrections become persistent behavioral rules
-- **[91-event audit trail](docs/guide/10-state-and-audit.md)** - structured logging for enterprise traceability
+- **[95-event audit trail](docs/guide/10-state-and-audit.md)** - structured logging for enterprise traceability
 - **[Session resume](docs/guide/11-session-management.md)** — continue from checkpoint, redo, jump to stage, or start fresh
 
 ## Methodology and implementation
@@ -375,7 +376,7 @@ aidlc-claude/
 │  ─────────── HAND-AUTHORED SOURCE — edit here ───────────
 ├── core/                       # ONE harness-neutral source of truth
 │   ├── tools/                  #   48 aidlc-*.ts engine and authoring tools
-│   ├── aidlc-common/           #   stage protocol + 33 stage files + conductor
+│   ├── aidlc-common/           #   stage protocol + 34 stage files + conductor
 │   ├── agents/                 #   14 agents: 11 domain + 2 reviewers + composer
 │   ├── knowledge/ memory/ scopes/ sensors/ hooks/
 │   ├── skills/                 #   3 session skills (session-cost, replay, outcomes-pack)

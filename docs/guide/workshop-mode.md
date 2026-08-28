@@ -30,7 +30,7 @@ For the Workshop scope's stage grid and Minimal test floor, see
 | Role | Responsibility |
 |------|----------------|
 | **Integration lead** | Drives Inception and any required walking skeleton on main, monitors claims, pins completed candidates, presents merge gates, and lands approved Units |
-| **Unit team** | Claims one dependency-ready Unit, runs its scoped 3.1-3.5 chain, commits the artifacts/receipts/source, and publishes the candidate |
+| **Unit team** | Claims one dependency-ready Unit, runs its scoped 3.1-3.5 chain, commits the artifacts/receipts/source, and publishes the candidate. PR integration joins this path only in the later team-mode fusion. |
 | **Review group** | Answers the Unit's selected team gates and the main-side pinned merge gate |
 
 Two topologies use the same commands and evidence:
@@ -276,8 +276,8 @@ git push origin main
 ```
 
 Dependents become claimable from the merged row. After the last row merges,
-the per-Unit block settles and main routes Build and Test (3.6), then CI
-Pipeline (3.7), exactly as solo Construction does.
+the per-Unit block settles and main routes Build and Test (3.7), then CI
+Pipeline (3.8). PR-based team-mode fusion remains a later integration seam.
 
 ---
 
@@ -370,7 +370,8 @@ registry.
 1. The facilitator runs Inception with the group.
 2. If enabled, the facilitator builds and gates the walking skeleton on main.
 3. Alice claims `billing`; Bob claims `notifications`.
-4. Each team runs its scoped 3.1-3.5 chain and team gates.
+4. Each team runs its scoped 3.1-3.5 chain and team gates; PR integration
+   remains on the named later fusion seam.
 5. Each team commits and runs `aidlc unit publish`.
 
 ### Day 2
