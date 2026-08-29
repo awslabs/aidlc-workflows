@@ -34,10 +34,10 @@ flowchart TD
     TK_SHARED -->|"Step 4"| AC
     TK_AGENT -->|"Step 5"| AC
 
-    style TIER1 fill:#e3f2fd,stroke:#1565c0
-    style TIER2 fill:#e8f5e9,stroke:#388e3c
-    style RULES fill:#fce4ec,stroke:#c62828
-    style CONTEXT fill:#f3e5f5,stroke:#7b1fa2
+    style TIER1 fill:#e3f2fd,stroke:#1565c0,color:#000
+    style TIER2 fill:#e8f5e9,stroke:#388e3c,color:#000
+    style RULES fill:#fce4ec,stroke:#c62828,color:#000
+    style CONTEXT fill:#f3e5f5,stroke:#7b1fa2,color:#000
 ```
 
 <!-- Text fallback: The resolved rule chain loads first, then Tier 1 methodology knowledge (shared, then agent-specific), then Tier 2 team knowledge (shared, then agent-specific). All feed into the agent context for stage execution. -->

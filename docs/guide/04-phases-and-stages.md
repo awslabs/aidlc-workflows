@@ -51,11 +51,11 @@ graph LR
     C7 -->|"Verification Gate 3"| O1
     O7 -.->|"Feedback Loop"| I1
 
-    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
-    style INCEPTION fill:#e3f2fd,stroke:#2196f3
-    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800
-    style OPERATION fill:#fce4ec,stroke:#e91e63
+    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
+    style INCEPTION fill:#e3f2fd,stroke:#2196f3,color:#000
+    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800,color:#000
+    style OPERATION fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 <!-- Text fallback: Linear flow: INITIALIZATION (0.1-0.3) auto-proceeds to IDEATION (1.1-1.7), which passes through Verification Gate 1 to INCEPTION (2.1-2.9), through Verification Gate 2 to CONSTRUCTION (3.1-3.7), through Verification Gate 3 to OPERATION (4.1-4.7). A feedback loop returns from 4.7 back to 1.1. -->
@@ -110,14 +110,14 @@ flowchart TD
     S16 -.->|CONDITIONAL| S17
     S17 ==>|ALWAYS| VG1
 
-    style S11 fill:#c8e6c9,stroke:#388e3c
-    style S14 fill:#c8e6c9,stroke:#388e3c
-    style S17 fill:#c8e6c9,stroke:#388e3c
-    style S12 fill:#fff9c4,stroke:#f9a825
-    style S13 fill:#fff9c4,stroke:#f9a825
-    style S15 fill:#fff9c4,stroke:#f9a825
-    style S16 fill:#fff9c4,stroke:#f9a825
-    style VG1 fill:#ef9a9a,stroke:#c62828
+    style S11 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S14 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S17 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S12 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S13 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S15 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S16 fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG1 fill:#ef9a9a,stroke:#c62828,color:#000
 ```
 
 <!-- Text fallback: 1.1 Intent Capture (ALWAYS) flows to 1.2 Market Research (CONDITIONAL) or directly to 1.4. 1.2 flows to 1.3 Feasibility (CONDITIONAL) or to 1.4. 1.3 flows to 1.4 Scope Definition (ALWAYS). 1.4 flows to 1.5 Team Formation (CONDITIONAL) or to 1.7. 1.5 flows to 1.6 Rough Mockups (CONDITIONAL, skip if no UI) or to 1.7. 1.6 flows to 1.7 Approval & Handoff (ALWAYS), then Verification Gate 1. -->
@@ -188,17 +188,17 @@ flowchart TD
     S2C ==>|ALWAYS| S27
     S27 ==>|ALWAYS| VG2
 
-    style S21 fill:#bbdefb,stroke:#1565c0
-    style S2P fill:#fff9c4,stroke:#f9a825
-    style S22 fill:#c8e6c9,stroke:#388e3c
-    style S26 fill:#c8e6c9,stroke:#388e3c
-    style S27 fill:#c8e6c9,stroke:#388e3c
-    style S23 fill:#fff9c4,stroke:#f9a825
-    style S24 fill:#fff9c4,stroke:#f9a825
-    style S25 fill:#fff9c4,stroke:#f9a825
-    style S2C fill:#fff9c4,stroke:#f9a825
-    style VG2 fill:#ef9a9a,stroke:#c62828
-    style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5
+    style S21 fill:#bbdefb,stroke:#1565c0,color:#000
+    style S2P fill:#fff9c4,stroke:#f9a825,color:#000
+    style S22 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S26 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S27 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S23 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S24 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S25 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S2C fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG2 fill:#ef9a9a,stroke:#c62828,color:#000
+    style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5,color:#000
 ```
 
 <!-- Text fallback: Brownfield check (from stage 0.3). If yes, 2.1 Reverse Engineering runs as a two-link pipeline (developer code scan then architect synthesis-and-write). Then 2.2 Practices Discovery runs as a hub-and-spoke on every included scope (lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration) and promotes affirmed work to active-space memory. Next are 2.3 Requirements Analysis (ALWAYS), optional 2.4 User Stories mob, optional 2.5 Refined Mockups, optional 2.6 Domain Design, 2.7 Units Generation (ALWAYS), optional 2.8 Contract Design, and 2.9 Delivery Planning (ALWAYS), followed by Verification Gate 2. -->
@@ -268,15 +268,15 @@ flowchart TD
     S36 -.->|"skip CI if\nnot in scope"| VG3
     S37 -.-> VG3
 
-    style STAGE1 fill:#bbdefb,stroke:#1565c0
-    style GATE1 fill:#ffcc80,stroke:#e65100
-    style LADDER fill:#fff59d,stroke:#f57f17
-    style MODE_AUTO fill:#c8e6c9,stroke:#388e3c
-    style MODE_GATED fill:#f8bbd0,stroke:#c2185b
-    style NEXT fill:#bbdefb,stroke:#1565c0
-    style S36 fill:#c8e6c9,stroke:#388e3c
-    style S37 fill:#fff9c4,stroke:#f9a825
-    style VG3 fill:#ef9a9a,stroke:#c62828
+    style STAGE1 fill:#bbdefb,stroke:#1565c0,color:#000
+    style GATE1 fill:#ffcc80,stroke:#e65100,color:#000
+    style LADDER fill:#fff59d,stroke:#f57f17,color:#000
+    style MODE_AUTO fill:#c8e6c9,stroke:#388e3c,color:#000
+    style MODE_GATED fill:#f8bbd0,stroke:#c2185b,color:#000
+    style NEXT fill:#bbdefb,stroke:#1565c0,color:#000
+    style S36 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S37 fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG3 fill:#ef9a9a,stroke:#c62828,color:#000
 ```
 
 <!-- Text fallback: Begin Construction → read unit-of-work-dependency.md for the Unit DAG (bolt-plan.md is planning) → run the first in-scope Construction EXECUTE stage for every Unit → walking-skeleton gate → ladder prompt (autonomous skips remaining stage gates; gated keeps them) → remaining stages stage-major, Code Generation last → 3.6 Build and Test then optionally 3.7 CI Pipeline → Verification Gate 3. -->
@@ -306,14 +306,14 @@ flowchart LR
     B --> GBC
     C --> GBC
 
-    style S1 fill:#bbdefb,stroke:#1565c0
-    style GA fill:#ffcc80,stroke:#e65100
-    style L fill:#fff59d,stroke:#f57f17
-    style A fill:#bbdefb,stroke:#1565c0
-    style B fill:#bbdefb,stroke:#1565c0
-    style C fill:#bbdefb,stroke:#1565c0
-    style CG fill:#fff3e0,stroke:#e65100
-    style GBC fill:#ffcc80,stroke:#e65100
+    style S1 fill:#bbdefb,stroke:#1565c0,color:#000
+    style GA fill:#ffcc80,stroke:#e65100,color:#000
+    style L fill:#fff59d,stroke:#f57f17,color:#000
+    style A fill:#bbdefb,stroke:#1565c0,color:#000
+    style B fill:#bbdefb,stroke:#1565c0,color:#000
+    style C fill:#bbdefb,stroke:#1565c0,color:#000
+    style CG fill:#fff3e0,stroke:#e65100,color:#000
+    style GBC fill:#ffcc80,stroke:#e65100,color:#000
 ```
 
 <!-- Text fallback: The first Construction EXECUTE stage runs for every eligible Unit, then one walking-skeleton gate and the ladder prompt. Remaining design stages stay stage-major. At Code Generation, Unit A can unblock B and C so those two may run as a parallel batch. Under an autonomous swarm, one Code Generation stage gate covers the stage after the final DAG batch converges. -->
@@ -372,15 +372,15 @@ flowchart TD
     S47 -->|"Approve"| DONE(["Workflow Complete"])
     S47 -->|"Start New Cycle"| IDEATION(["Return to Ideation 1.1"])
 
-    style S41 fill:#fce4ec,stroke:#c62828
-    style S42 fill:#fce4ec,stroke:#c62828
-    style S43 fill:#fce4ec,stroke:#c62828
-    style S44 fill:#fce4ec,stroke:#c62828
-    style S45 fill:#fce4ec,stroke:#c62828
-    style S46 fill:#fce4ec,stroke:#c62828
-    style S47 fill:#fce4ec,stroke:#c62828
-    style DONE fill:#a5d6a7,stroke:#2e7d32
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
+    style S41 fill:#fce4ec,stroke:#c62828,color:#000
+    style S42 fill:#fce4ec,stroke:#c62828,color:#000
+    style S43 fill:#fce4ec,stroke:#c62828,color:#000
+    style S44 fill:#fce4ec,stroke:#c62828,color:#000
+    style S45 fill:#fce4ec,stroke:#c62828,color:#000
+    style S46 fill:#fce4ec,stroke:#c62828,color:#000
+    style S47 fill:#fce4ec,stroke:#c62828,color:#000
+    style DONE fill:#a5d6a7,stroke:#2e7d32,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
 ```
 
 <!-- Text fallback: All Operation stages are CONDITIONAL. 4.1 through 4.7 flow sequentially. Stage 4.7 can either complete the workflow or loop back to start a new Ideation cycle at 1.1. -->
