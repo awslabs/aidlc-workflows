@@ -765,6 +765,29 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
+  test("Devin hooks.v1.json wires the adapter's reviewer-scope target on PreToolUse", () => {
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "devin-hooks",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      // hooks.v1.json is the whole hooks object (no "hooks" wrapper key).
+      const wiring = JSON.parse(
+        readFileSync(join(harness.engineRoot, "hooks.v1.json"), "utf-8"),
+      ) as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+      const pre = wiring.PreToolUse ?? [];
+      expect(
+        pre.some((g) =>
+          g.hooks.some((h) =>
+            h.command.includes("aidlc-devin-adapter.ts") &&
+            h.command.endsWith("reviewer-scope"),
+          ),
+        ),
+        harness.name,
+      ).toBe(true);
+    }
+  });
+
   test("reviewer protocol module carries the dispatch-record write and delete", () => {
     const body = readFileSync(
       join(

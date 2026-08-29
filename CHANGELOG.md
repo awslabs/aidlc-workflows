@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.124] - 2026-08-29
+
+AI-DLC now runs natively on the **Devin CLI** harness — the eighth distribution from the one harness-neutral core. **Upgrade:** no action needed for existing harnesses; to use Devin, copy `dist/devin/` into your project, approve its hooks via `/hooks`, then fully restart Devin CLI.
+
+* The Devin shell ships in `.devin/`: a stdin adapter shim (`aidlc-devin-adapter.ts`) normalizes Devin's hook payloads onto the shared core hooks, `hooks.v1.json` wires Devin's seven events (SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostCompaction, Stop) to the adapter, `config.json` pre-approves the tools AIDLC workflows run, `mcp_config.json` declares the five MCP servers (context7 + four AWS), and `rules/aidlc.md` is the auto-loaded method pointer (no `@`-import — Devin loads `.devin/rules/*.md` automatically).
+* `/aidlc` invokes the orchestrator; `/aidlc --doctor` validates the Devin setup (adapter presence, the four wiring files, a `devin` CLI version floor of 3000.3.0, and a hook-approval advisory); `/aidlc --status` substitutes for the statusline Devin does not have.
+* Structured gates render via Devin's native `ask_user_question` tool; subagent dispatch uses `run_subagent`; the engine binary is invoked via `exec` (`bun .devin/tools/...`).
+* The doctor's `.devin` arm and the dual-harness coexistence list now recognize `.devin`; the test matrix (`tests/harness/harness-matrix.ts`) registers `devin` with `memoryInclude: "devin-rules"` and `reviewerScopeRegistration: "devin-hooks"`, and `tests/unit/t331-devin-packaging.test.ts` pins the dist parity, wiring shape, and doctor smoke.
+
 ## [2.6.123] - 2026-08-28
 
 Cursor now preserves delegated-agent attribution and reviewer-state integrity across POSIX and Windows path dialects, shell wrappers, Git configuration surfaces, filesystem traversal, and executable lookup changes. **Upgrade:** re-copy `dist/cursor/` into the project so the updated Cursor adapter, shared review-freeze parser, and version metadata replace the vulnerable hooks.

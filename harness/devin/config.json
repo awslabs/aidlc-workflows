@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "edit",
+      "write",
+      "grep",
+      "glob",
+      "Exec(bun)",
+      "Exec(git)",
+      "Exec(node)",
+      "Exec(npm)",
+      "Exec(npx)",
+      "Exec(uvx)",
+      "run_subagent",
+      "ask_user_question",
+      "webfetch",
+      "mcp__*"
+    ],
+    "deny": [
+      "Exec(sudo)",
+      "Exec(rm -rf)",
+      "Write(.env*)"
+    ]
+  },
+  "read_config_from": {
+    "cursor": false,
+    "windsurf": false,
+    "claude": false
+  }
+}

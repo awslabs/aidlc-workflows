@@ -110,6 +110,10 @@ export type TierProjection = {
    *  accounts reject every named model), so a pinned id would hard-fail
    *  installs on lower plans; agents inherit the session model instead. */
   cursor: { model: string | null };
+  /** Devin CLI agent surfaces: model-only BY DESIGN, like copilot — the
+   *  harness inherits the session model and there is no pinnable value, so
+   *  every tier ships null. */
+  devin: { model: null };
 };
 
 export type Harness = keyof TierProjection;
@@ -126,6 +130,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
+    devin: { model: null },
   },
   balanced: {
     // Effort pinned to medium (was: inherit the session effort). Balanced is
@@ -139,6 +144,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
     copilot: { model: null },
+    devin: { model: null },
   },
   templated: {
     // The pattern-following tier. It currently shares balanced's smaller-model,
@@ -149,6 +155,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
     copilot: { model: null },
     cursor: { model: null },
+    devin: { model: null },
   },
 };
 

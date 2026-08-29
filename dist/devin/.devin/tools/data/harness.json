@@ -1,0 +1,5 @@
+{
+  "name": "devin",
+  "harnessDir": ".devin",
+  "rulesSubdir": "rules"
+}

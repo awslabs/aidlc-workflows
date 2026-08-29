@@ -215,6 +215,7 @@ const FRESH_SESSION_TOKENS: Record<string, string[]> = {
   opencode: ["restart OpenCode", "`/aidlc`"],
   copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
   cursor: ["new Cursor chat", "`/aidlc`"],
+  devin: ["restart Devin CLI", "`/aidlc`"],
 };
 
 function stageTableRows(body: string): string[] {

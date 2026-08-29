@@ -2473,6 +2473,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       );
     }
     if (harness === ".cursor") tsHooks.push("aidlc-cursor-adapter");
+    if (harness === ".devin") tsHooks.push("aidlc-devin-adapter");
     for (const h of tsHooks) {
       const hookPath = join(projectDir, harness, "hooks", `${h}.ts`);
       results.push({
@@ -2710,6 +2711,57 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       label: ".opencode/command/aidlc.md present (/aidlc entry point)",
       fix: "copy from `dist/opencode/.opencode/command/aidlc.md`",
     });
+  } else if (harness === ".devin") {
+    for (const [file, what, from] of [
+      ["hooks.v1.json", "hook wiring", "dist/devin/.devin/hooks.v1.json"],
+      ["config.json", "permissions + read_config_from", "dist/devin/.devin/config.json"],
+      ["mcp_config.json", "MCP servers", "dist/devin/.devin/mcp_config.json"],
+      ["rules/aidlc.md", "standing method rule (auto-loaded pointer)", "dist/devin/.devin/rules/aidlc.md"],
+    ] as const) {
+      results.push({
+        pass: existsSync(join(projectDir, harness, file)),
+        label: `${file} present (${what})`,
+        fix: `copy from \`${from}\``,
+      });
+    }
+    // Minimum Devin CLI version pin: v3000.3 introduced the dedicated
+    // mcp_config.json files and the modern .devin/ config layout this port
+    // relies on (hooks.v1.json as the whole-hooks-object file, project
+    // config limited to permissions/read_config_from/hooks). Older versions
+    // store MCP servers under the main config's mcpServers key and use a
+    // different hooks file shape — the wiring would silently no-op.
+    const MIN_DEVIN = [3000, 3, 0] as const;
+    const devinBin = Bun.which("devin");
+    const devinVer = devinBin
+      ? Bun.spawnSync([devinBin, "--version"], { stdout: "pipe", stderr: "ignore" })
+      : null;
+    const devinVerText = (devinVer?.stdout?.toString() ?? "").trim();
+    const devinVerMatch = devinVerText.match(/(\d+)\.(\d+)\.(\d+)/);
+    if (!devinVerMatch) {
+      results.push({
+        pass: false,
+        label: "devin CLI on PATH",
+        fix: "install Devin CLI >= 3000.3.0 (https://devin.ai)",
+      });
+    } else {
+      const v = [Number(devinVerMatch[1]), Number(devinVerMatch[2]), Number(devinVerMatch[3])];
+      const ok =
+        v[0] > MIN_DEVIN[0] ||
+        (v[0] === MIN_DEVIN[0] &&
+          (v[1] > MIN_DEVIN[1] || (v[1] === MIN_DEVIN[1] && v[2] >= MIN_DEVIN[2])));
+      results.push({
+        pass: ok,
+        label: `devin CLI version ${devinVerMatch[0]} >= 3000.3.0 (modern .devin/ config layout: hooks.v1.json + dedicated mcp_config.json)`,
+        fix: "upgrade Devin CLI to 3000.3.0 or later",
+      });
+    }
+    // Hook approval reminder (advisory pass-with-label): Devin CLI prompts to
+    // approve project hooks on first run; unapproved hooks never fire.
+    results.push({
+      pass: true,
+      label:
+        "hook approval: approve the project's hooks via /hooks then fully restart Devin CLI (/clear is not enough — unapproved hooks silently no-op)",
+    });
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
@@ -2722,7 +2774,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"].filter(
+  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor", ".devin"].filter(
     (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
   );
   if (

@@ -1,0 +1,33 @@
+{
+  "SessionStart": [
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" session-start" }] }
+  ],
+  "SessionEnd": [
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" session-end" }] }
+  ],
+  "UserPromptSubmit": [
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" record-human-turn" }] }
+  ],
+  "PreToolUse": [
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" state-transition-guard" }] },
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" reviewer-scope" }] },
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" review-freeze" }] },
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" plan-approval-guard" }] },
+    { "matcher": "run_subagent", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" deliver-stage-rules" }] },
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" fold-usage" }] }
+  ],
+  "PostToolUse": [
+    { "matcher": "edit|write|apply_patch", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" audit-and-sensors" }] },
+    { "matcher": "todo_write", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" sync-workflow-state" }] },
+    { "matcher": "run_subagent", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" log-subagent" }] },
+    { "matcher": "ask_user_question", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" record-human-turn" }] },
+    { "matcher": "exec", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" rebuild-stage-graph" }] },
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" fold-usage" }] }
+  ],
+  "PostCompaction": [
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" validate-state" }] }
+  ],
+  "Stop": [
+    { "matcher": "", "hooks": [{ "type": "command", "command": "bun \"$DEVIN_PROJECT_DIR/.devin/hooks/aidlc-devin-adapter.ts\" continue-workflow" }] }
+  ]
+}
