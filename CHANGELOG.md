@@ -22,6 +22,16 @@ This release also folds in the previously unreleased native install and lifecycl
 * Added side-effect-free command help, contextual usage errors, non-TTY-safe output, restrained terminal color, and end-to-end copy/native channel acceptance coverage on Linux and Windows.
 * Hardened release publication, projection descriptor handling, dispatcher project routing, mutation-root enforcement, first-run atomicity, retained-runtime validation, and lifecycle/global-settings rollback after focused security review.
 
+## [2.6.124] - 2026-08-28
+
+Stop committing machine-local absolute paths in `aidlc-state.md`. The `Project Root` and `Worktree Path` state fields are now written in project-relative form (`.` for the root; a `relative(projectDir, worktreePath)` breadcrumb for a worktree), so a state file shared across machines or checkouts no longer carries a host-specific absolute path. Closes #937.
+
+**Upgrade / scope:** this changes only what is written **from now on** — newly created or next-updated state records. Re-copying `dist/<harness>/` refreshes the tools but does **not** rewrite any existing `aidlc/**/aidlc-state.md` in a project; an existing state file keeps its previous absolute `Project Root` / `Worktree Path` until the engine next writes those fields in the normal course of a run. No migration is performed and none is required: both fields are re-derived at runtime (`projectRootFor` walks up to the real `aidlc/` dir; the committed `Project Root` is an unreached fallback and `Worktree Path` is a decorative breadcrumb), so a stale absolute value is inert until it is overwritten.
+
+* `Project Root` template + writer emit project-relative `.` instead of an absolute `${projectDir}`.
+* `Worktree Path` writer emits `relative(projectDir, worktreePath)` (forward-slashed), matching the audit log's existing relative form.
+* Regression coverage: `t78` pins a forked worktree's `Worktree Path` to the project-relative `.aidlc/worktrees/bolt-<slug>` (never an absolute path); `t70` and the `t152` Windows-portability guard pin `Project Root` = `.`.
+
 ## [2.6.123] - 2026-08-28
 
 Cursor now preserves delegated-agent attribution and reviewer-state integrity across POSIX and Windows path dialects, shell wrappers, Git configuration surfaces, filesystem traversal, and executable lookup changes. **Upgrade:** re-copy `dist/cursor/` into the project so the updated Cursor adapter, shared review-freeze parser, and version metadata replace the vulnerable hooks.

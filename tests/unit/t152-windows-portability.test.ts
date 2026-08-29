@@ -81,7 +81,7 @@ describe("t152 Windows portability guard", () => {
 
     const asserts = read("tests/harness/assert.ts");
     expect(asserts).toContain("assertStateFieldPath");
-    expect(read("tests/integration/t70.test.ts")).toContain('assertStateFieldPath(r, "Project Root", proj)');
+    expect(read("tests/integration/t70.test.ts")).toContain('assertStateFieldPath(r, "Project Root", ".")');
   });
 
   test("sibling TypeScript tools are resolved with fileURLToPath on Windows", () => {

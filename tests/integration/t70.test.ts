@@ -160,10 +160,12 @@ describe("t70 /aidlc creation on a greenfield stub (sdk)", () => {
         // .sh test 7: State Version is 7. Exact (the template hard-codes `7` :2051).
         assertStateField(r, "State Version", STATE_VERSION);
 
-        // .sh test 6: Project Root is populated. The template writes the literal
-        // projectDir (:2064) — assert exact equality (stronger than "not the
-        // em-dash placeholder").
-        assertStateFieldPath(r, "Project Root", proj);
+        // .sh test 6: Project Root is populated. The template now writes a
+        // project-relative marker (`.`) rather than the absolute projectDir, so
+        // the committed state carries no machine-local absolute path (#937). The
+        // real root is re-derived at runtime; the field is only an unreached
+        // fallback that resolve()s relative to cwd.
+        assertStateFieldPath(r, "Project Root", ".");
 
         // .sh test 2 + test 5: the Completed counter equals the [x] count AND
         // that count is >= 3 (all three init stages complete after --force reinit).

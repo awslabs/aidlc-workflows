@@ -143,9 +143,9 @@ flowchart LR
 
     CREATE --> REVIEW --> COMMIT --> CONSUME --> VERIFY
 
-    style CREATE fill:#e3f2fd,stroke:#2196f3
-    style REVIEW fill:#fff3e0,stroke:#ff9800
-    style VERIFY fill:#fce4ec,stroke:#e91e63
+    style CREATE fill:#e3f2fd,stroke:#2196f3,color:#000
+    style REVIEW fill:#fff3e0,stroke:#ff9800,color:#000
+    style VERIFY fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 <!-- Text fallback: Stage creates artifact, reviewed at approval gate, committed to version control, consumed by downstream stages, verified at phase boundary. -->
