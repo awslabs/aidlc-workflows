@@ -266,9 +266,9 @@ function seedGateFor(sandbox: string, slug: string): void {
   const reviewArgs = [
     "review",
     "--stage",
-    COMMITTED_SLUG,
+    slug,
     "--reviewer",
-    "aidlc-product-lead-agent",
+    reviewer,
     "--iteration",
     "1",
   ];
@@ -292,7 +292,7 @@ function seedGateFor(sandbox: string, slug: string): void {
     ].join("\n"),
   );
   runSetupTool(sandbox, "aidlc-log.ts", [...reviewArgs, "--verdict", "READY"]);
-  runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", COMMITTED_SLUG]);
+  runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", slug]);
 }
 
 function skipReason(): string | null {
