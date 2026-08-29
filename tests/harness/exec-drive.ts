@@ -18,11 +18,13 @@ const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
+const DEVIN_DIST = join(REPO_ROOT, "dist", "devin");
 
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const COPILOT_BIN = process.env.AIDLC_COPILOT_BIN ?? "copilot";
 const OPENCODE_BIN = process.env.AIDLC_OPENCODE_BIN ?? "opencode";
 const CURSOR_BIN = process.env.AIDLC_CURSOR_BIN ?? "agent";
+const DEVIN_BIN = process.env.AIDLC_DEVIN_BIN ?? "devin";
 
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
@@ -248,6 +250,48 @@ export function runCursor(proj: string, promptText: string): ExecResult {
       "--output-format",
       "text",
     ],
+    {
+      cwd: proj,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PWD: proj },
+      timeout: TEST_TIMEOUT_MS,
+    },
+  );
+  return {
+    rc: result.status ?? -1,
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+  };
+}
+
+export interface DevinProject {
+  proj: string;
+  root: string;
+}
+
+// A scratch install: dist/devin copied verbatim (.devin/ engine + aidlc/
+// workspace shell + AGENTS.md), then git-initialized (Devin resolves project
+// context from the git root, same as every harness).
+export function setupDevinProject(): DevinProject {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "devin-exec-")));
+  const proj = join(root, "proj");
+  cpSync(DEVIN_DIST, proj, { recursive: true });
+  initializeGit(proj);
+  return { proj, root };
+}
+
+// `devin -p "<prompt>"` is Devin CLI's headless print mode (confirmed via
+// `devin --help`: no `exec` subcommand exists; -p/--print runs non-interactively,
+// processes the prompt, and exits — the analogue of copilot's `-p` and cursor's
+// `agent -p`). The /aidlc text rides the prompt (slash-skill invocation, same
+// as codex/copilot/cursor). --respect-workspace-trust false skips the trust
+// prompt that non-interactive mode cannot show on a scratch dir (the analogue
+// of cursor's --trust). The default permission-mode "auto" auto-approves
+// read-only tools, which is all the status path needs.
+export function runDevin(proj: string, prompt: string): ExecResult {
+  const result = spawnSync(
+    DEVIN_BIN,
+    ["-p", prompt, "--respect-workspace-trust", "false"],
     {
       cwd: proj,
       encoding: "utf-8",

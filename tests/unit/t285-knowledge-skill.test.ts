@@ -78,6 +78,7 @@ const SKILL_REL: Record<string, string> = {
   codex: ".agents/skills",
   copilot: ".github/skills",
   cursor: ".cursor/skills",
+  devin: ".devin/skills",
   kiro: ".kiro/skills",
   "kiro-ide": ".kiro/skills",
   opencode: ".aidlc/skills",
