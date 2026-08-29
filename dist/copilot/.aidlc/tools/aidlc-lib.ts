@@ -6939,7 +6939,12 @@ type SummaryConfirmationStage = Pick<
 
 export type SummaryConfirmationEvidence =
   | { ok: true; required: boolean }
-  | { ok: false; message: string; refusal?: GuardRefusal };
+  | {
+      ok: false;
+      message: string;
+      summaryCoverage: "stale" | "missing";
+      refusal?: GuardRefusal;
+    };
 
 interface SummaryQuestionFile {
   path: string;
@@ -7035,11 +7040,12 @@ export function checkSummaryConfirmationEvidence(
     summaryCoverage: "stale" | "missing",
   ): SummaryConfirmationEvidence => {
     if (options.stateContent === undefined || options.stateContent === null) {
-      return { ok: false, message };
+      return { ok: false, message, summaryCoverage };
     }
     return {
       ok: false,
       message,
+      summaryCoverage,
       refusal: evaluateGuardRefusal({
         code,
         blockedAction: "summary-confirmation",
@@ -17422,6 +17428,12 @@ export interface GuardAttemptState {
     iteration: number;
     retryable: boolean;
   };
+  repairReview?: {
+    iteration: number;
+  };
+  nextReview?: {
+    iteration: number;
+  };
   summaryCoverage: "current" | "stale" | "missing";
   reviewCoverage: "current" | "stale" | "missing";
   sourceCoverage: "current" | "stale" | "missing" | "unbindable";
@@ -17442,7 +17454,7 @@ export interface GuardRefusalInput {
   userMessage: string;
   attempt: GuardAttemptState;
   humanAuthority: GuardHumanAuthorityState;
-  teamGateStatus?: "pending" | "awaiting-approval" | "revising" | "approved";
+  teamGate?: TeamUnitGateResolution;
   autonomousBolt?: {
     unit: string;
     slug: string | null;
@@ -17454,8 +17466,9 @@ export interface GuardRefusalInput {
 function guardLifecycleState(
   stateContent: string,
   stageSlug: string,
-  teamGateStatus: GuardRefusalInput["teamGateStatus"],
+  teamGate: GuardRefusalInput["teamGate"],
 ): GuardLifecycleState {
+  const teamGateStatus = teamGate?.resolved ? teamGate.status : undefined;
   if (teamGateStatus === "pending") return "in-progress";
   if (teamGateStatus === "awaiting-approval") return "awaiting-approval";
   if (teamGateStatus === "revising") return "revising";
@@ -17477,6 +17490,20 @@ function restartStageRemedy(stage: string): GuardRemedy {
   };
 }
 
+function unresolvedTeamGateRemedy(
+  resolution: Extract<TeamUnitGateResolution, { resolved: false }>,
+): GuardRemedy {
+  return {
+    action:
+      "This Unit's gate cannot be resolved: no active per-Unit Construction " +
+      `gate stage exists in the current plan (${resolution.reason}). Restore a ` +
+      "valid Scope that includes at least one active per-Unit Construction " +
+      "stage, then retry.",
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
 function lifecycleResetRemedies(
   input: GuardRefusalInput,
   state: GuardLifecycleState,
@@ -17485,23 +17512,33 @@ function lifecycleResetRemedies(
     (entry) => entry.slug === input.stage,
   );
   if (stageEntry?.suffix.startsWith("SKIP")) {
-    return [
-      {
-        action:
-          "This stage is excluded from the current plan; change to a scope that " +
-          `includes it with /aidlc --scope <scope>, then restart ${input.stage}.`,
-        command: "/aidlc --scope <scope>",
-        requiresHuman: true,
-        executableNow: true,
-      },
-    ];
+    const scopeRemedy = {
+      action:
+        "This stage is excluded from the current plan; change to a scope that " +
+        `includes it with /aidlc --scope <scope>, then restart ${input.stage}.`,
+      command: "/aidlc --scope <scope>",
+      requiresHuman: true,
+      executableNow: true,
+    };
+    return input.teamGate?.resolved === false
+      ? [unresolvedTeamGateRemedy(input.teamGate), scopeRemedy]
+      : [scopeRemedy];
+  }
+  if (input.teamGate?.resolved === false) {
+    return [unresolvedTeamGateRemedy(input.teamGate)];
   }
   if (state === "pending" || state === "skipped") {
     return [restartStageRemedy(input.stage)];
   }
   if (state === "in-progress" || state === "awaiting-approval") {
+    const reportStage =
+      input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
+    const unitArg =
+      input.teamGate?.resolved === true && input.unit
+        ? ` --unit "${input.unit}"`
+        : "";
     const command =
-      `aidlc-orchestrate.ts report --stage "${input.stage}" --result rejected ` +
+      `aidlc-orchestrate.ts report --stage "${reportStage}"${unitArg} --result rejected ` +
       '--user-input "Request Changes" --reason "<requested changes>"';
     if (input.humanAuthority.unattended) {
       return [
@@ -17575,7 +17612,7 @@ export function evaluateGuardRefusal(
   const state = guardLifecycleState(
     input.stateContent,
     input.stage,
-    input.teamGateStatus,
+    input.teamGate,
   );
   const remedies: GuardRemedy[] = [];
 
@@ -17597,18 +17634,44 @@ export function evaluateGuardRefusal(
       executableNow: true,
     });
   } else {
-    if (
-      input.attempt.pendingReview &&
-      input.attempt.recovery === "pending"
-    ) {
+    if (input.attempt.pendingReview) {
       remedies.push({
-        action: input.attempt.pendingReview.retryable
-          ? `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
-            "with --retry-pending, or record its verdict if the reviewer returned."
-          : `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration}.`,
+        action:
+          `Record the verdict for pending review iteration ` +
+          `${input.attempt.pendingReview.iteration} if the reviewer returned.`,
         requiresHuman: false,
         executableNow: true,
+      });
+      if (input.attempt.pendingReview.retryable) {
+        remedies.push({
+          action:
+            `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
+            "with --retry-pending.",
+          requiresHuman: false,
+          executableNow: input.attempt.summaryCoverage === "current",
+        });
+      }
+    }
+    if (input.attempt.repairReview) {
+      remedies.push({
+        action:
+          "Apply the reviewer's requested repairs, then request review iteration " +
+          `${input.attempt.repairReview.iteration + 1}.`,
+        requiresHuman: false,
+        executableNow:
+          input.attempt.summaryCoverage === "current" &&
+          (state === "in-progress" || state === "awaiting-approval"),
+      });
+    }
+    if (input.attempt.nextReview) {
+      remedies.push({
+        action:
+          `Request review iteration ${input.attempt.nextReview.iteration} ` +
+          "against the current artifact and source bytes.",
+        requiresHuman: false,
+        executableNow:
+          input.attempt.summaryCoverage === "current" &&
+          (state === "in-progress" || state === "awaiting-approval"),
       });
     }
     if (
@@ -17642,7 +17705,9 @@ export function evaluateGuardRefusal(
     if (
       input.attempt.recovery === "available" &&
       input.attempt.reviewCoverage === "stale" &&
-      !input.attempt.pendingReview
+      !input.attempt.pendingReview &&
+      !input.attempt.repairReview &&
+      !input.attempt.nextReview
     ) {
       remedies.push({
         action:
@@ -17650,18 +17715,22 @@ export function evaluateGuardRefusal(
           "artifact and source state.",
         requiresHuman: false,
         executableNow:
-          state === "in-progress" || state === "awaiting-approval",
+          input.attempt.summaryCoverage === "current" &&
+          (state === "in-progress" || state === "awaiting-approval"),
       });
     } else if (
       reviewBudgetAvailable &&
       input.attempt.reviewCoverage === "missing" &&
-      !input.attempt.pendingReview
+      !input.attempt.pendingReview &&
+      !input.attempt.repairReview &&
+      !input.attempt.nextReview
     ) {
       remedies.push({
         action: "Request the next permitted review for the current attempt.",
         requiresHuman: false,
         executableNow:
-          state === "in-progress" || state === "awaiting-approval",
+          input.attempt.summaryCoverage === "current" &&
+          (state === "in-progress" || state === "awaiting-approval"),
       });
     }
     if (
@@ -17695,9 +17764,10 @@ export function evaluateGuardRefusal(
 export function requestChangesResetIsExecutable(
   stateContent: string,
   stageSlug: string,
-  teamGateStatus?: GuardRefusalInput["teamGateStatus"],
+  teamGate?: TeamUnitGateResolution,
 ): boolean {
-  const state = guardLifecycleState(stateContent, stageSlug, teamGateStatus);
+  if (teamGate?.resolved === false) return false;
+  const state = guardLifecycleState(stateContent, stageSlug, teamGate);
   return state === "in-progress" || state === "awaiting-approval";
 }
 
@@ -17850,6 +17920,8 @@ export function recordGuardRefusal(
         reviewBudget: attempt.reviewBudget ?? null,
         recovery: attempt.recovery,
         pendingReview: attempt.pendingReview ?? null,
+        repairReview: attempt.repairReview ?? null,
+        nextReview: attempt.nextReview ?? null,
         summaryCoverage: attempt.summaryCoverage,
         reviewCoverage: attempt.reviewCoverage,
         sourceCoverage: attempt.sourceCoverage,
@@ -17888,24 +17960,38 @@ export function recordGuardRefusal(
     (remedy) => remedy.executableNow,
   );
   const halt = count > GUARD_REFUSAL_STREAK_CAP && executable.length > 0;
+  const ask = guardRecoveryAskForRefusal(
+    refusal,
+    `The same guard state for "${refusal.stage}" has refused ` +
+      `${refusal.blockedAction} ${count} times. Choose one ` +
+      "authority-preserving recovery action.",
+  );
   return {
     count,
     halt,
-    ask: halt
-      ? {
-          kind: "ask",
-          ask_type: GUARD_RECOVERY_ASK_TYPE,
-          response_route: "execute-remedy",
-          question:
-            `The same guard state for "${refusal.stage}" has refused ` +
-            `${refusal.blockedAction} ${count} times. Choose one ` +
-            "authority-preserving recovery action.",
-          stage: refusal.stage,
-          ...(refusal.unit ? { unit: refusal.unit } : {}),
-          reason_codes: codes,
-          remedies: executable,
-        }
+    ask: halt && ask !== null
+      ? { ...ask, reason_codes: codes }
       : null,
+  };
+}
+
+export function guardRecoveryAskForRefusal(
+  refusal: GuardRefusal,
+  question =
+    `The next action for "${refusal.stage}" would be refused. Choose one ` +
+    "authority-preserving recovery action.",
+): GuardRecoveryAskData | null {
+  const remedies = refusal.remedies.filter((remedy) => remedy.executableNow);
+  if (remedies.length === 0) return null;
+  return {
+    kind: "ask",
+    ask_type: GUARD_RECOVERY_ASK_TYPE,
+    response_route: "execute-remedy",
+    question,
+    stage: refusal.stage,
+    ...(refusal.unit ? { unit: refusal.unit } : {}),
+    reason_codes: [refusal.code],
+    remedies,
   };
 }
 
@@ -17930,11 +18016,16 @@ export function recoveryGuidance(
   _projectDir: string,
   stateContent: string,
   stageSlug: string,
+  options: {
+    unit?: string;
+    teamGate?: TeamUnitGateResolution;
+  } = {},
 ): string {
   const refusal = evaluateGuardRefusal({
     code: "REVIEW_RECOVERY_EXHAUSTED",
     blockedAction: "review",
     stage: stageSlug,
+    ...(options.unit ? { unit: options.unit } : {}),
     stateContent,
     invariant: "A review attempt can be reset only through a sanctioned boundary.",
     userMessage: "",
@@ -17948,9 +18039,14 @@ export function recoveryGuidance(
       freshTurn: false,
       unattended: process.env.AIDLC_UNATTENDED === "1",
     },
+    ...(options.teamGate
+      ? { teamGate: options.teamGate }
+      : {}),
   });
   return refusal.remedies.find((remedy) => remedy.executableNow)?.action ??
-    restartStageRemedy(stageSlug).action;
+    (options.teamGate?.resolved === false
+      ? unresolvedTeamGateRemedy(options.teamGate).action
+      : restartStageRemedy(stageSlug).action);
 }
 
 export function setCheckbox(
@@ -20730,6 +20826,63 @@ export function unitGateStatus(
     start = end;
   }
   return status;
+}
+
+export type TeamUnitGateResolution =
+  | {
+      resolved: true;
+      scope: UnitGateScope;
+      status: UnitGateStatus;
+      gateStage: string;
+    }
+  | {
+      resolved: false;
+      scope: "unit-end";
+      reason: "no-active-gate-stage";
+    };
+
+export function teamUnitGateStatus(
+  projectDir: string,
+  stateContent: string,
+  stageSlug: string,
+  unit: string | undefined,
+): TeamUnitGateResolution | undefined {
+  const stage = findStageBySlug(stageSlug);
+  if (
+    !unit ||
+    !isTeamUnitOwnership(stateContent) ||
+    stage?.phase !== "construction" ||
+    stage.for_each !== "unit-of-work"
+  ) {
+    return undefined;
+  }
+  const scope = effectiveUnitGateRhythm(projectDir, stateContent);
+  if (scope === "per-stage") {
+    return {
+      resolved: true,
+      scope,
+      status: unitGateStatus(projectDir, stageSlug, unit, scope),
+      gateStage: stageSlug,
+    };
+  }
+  const gateStage = unitMajorConstructionStageSlugs(
+    getField(stateContent, "Scope") ?? "",
+    stateContent,
+    true,
+  ).at(-1);
+  if (!gateStage) {
+    return {
+      resolved: false,
+      scope,
+      reason: "no-active-gate-stage",
+    };
+  }
+  return {
+    resolved: true,
+    scope,
+    status: unitGateStatus(projectDir, gateStage, unit, scope),
+    gateStage,
+  };
 }
 
 // Exact identity for the current main-workflow attempt of one stage. The token

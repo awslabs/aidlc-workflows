@@ -110,6 +110,13 @@ interface Directive {
   gate?: unknown;
   unit_gate?: string;
   reviewer?: string;
+  ask_type?: string;
+  reason_codes?: string[];
+  remedies?: Array<{
+    action: string;
+    command?: string;
+    executableNow: boolean;
+  }>;
   message?: string;
   [key: string]: unknown;
 }
@@ -280,11 +287,13 @@ function addReviewFinding(
 // requesting and appends a fresh, distinct section afterwards.
 let reviewPass = 0;
 
-function logReviewReady(
+function logReviewVerdict(
   proj: string,
   stage: string,
   unit: string,
   reviewer: string,
+  verdict: "READY" | "NOT-READY",
+  iteration = 1,
 ): void {
   const reviewArtifact = join(
     seededRecordDir(proj),
@@ -311,7 +320,7 @@ function logReviewReady(
     "--unit",
     unit,
     "--iteration",
-    "1",
+    String(iteration),
     "--project-dir",
     proj,
   ];
@@ -322,18 +331,27 @@ function logReviewReady(
   appendFileSync(
     reviewArtifact,
     "\n## Review\n\n" +
-      "**Verdict:** READY\n" +
+      `**Verdict:** ${verdict}\n` +
       `**Reviewer:** ${reviewer}\n` +
-      "**Iteration:** 1\n\n" +
+      `**Iteration:** ${iteration}\n\n` +
       `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
   );
-  const completed = spawnSync(BUN, [...base, "--verdict", "READY"], {
+  const completed = spawnSync(BUN, [...base, "--verdict", verdict], {
     encoding: "utf-8",
     env: ENV,
   });
   if ((completed.status ?? -1) !== 0) {
     throw new Error(`review failed: ${completed.stdout}${completed.stderr}`);
   }
+}
+
+function logReviewReady(
+  proj: string,
+  stage: string,
+  unit: string,
+  reviewer: string,
+): void {
+  logReviewVerdict(proj, stage, unit, reviewer, "READY");
 }
 
 function settleBody(proj: string, directive: Directive): void {
@@ -513,6 +531,223 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       .toBe(true);
     expect(unitGates.every((gate) => typeof gate.unit === "string")).toBe(true);
   }, 120000);
+
+  test("team summary asks carry a routable Unit rejection command", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    const body = runNext(proj);
+    expect(body).toMatchObject({
+      stage: "functional-design",
+      unit: "alpha",
+      gate: false,
+    });
+    expect(
+      runState(proj, [
+        "unit",
+        "start",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+      ]).rc,
+    ).toBe(0);
+    coverUnit(proj, "alpha", "functional-design");
+    expect(
+      runState(proj, [
+        "unit",
+        "complete",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+      ]).rc,
+    ).toBe(0);
+
+    const summaryEnv = { ...ENV };
+    delete summaryEnv.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+    const ask = runNextWithEnv(proj, summaryEnv);
+    expect(ask).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      stage: "functional-design",
+      unit: "alpha",
+      reason_codes: ["SUMMARY_QUESTIONS_MISSING"],
+    });
+    expect(
+      ask.remedies?.some(
+        (remedy) =>
+          remedy.executableNow &&
+          remedy.command?.includes(
+            'report --stage "functional-design" --unit "alpha" --result rejected',
+          ),
+      ),
+    ).toBe(true);
+  }, 30000);
+
+  test("below-cap NOT-READY gate asks for repairs and the next iteration", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    const body = runNext(proj);
+    expect(body).toMatchObject({
+      stage: "functional-design",
+      unit: "alpha",
+      gate: false,
+    });
+    expect(
+      runState(proj, [
+        "unit",
+        "start",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+      ]).rc,
+    ).toBe(0);
+    coverUnit(proj, "alpha", "functional-design");
+    expect(
+      runState(proj, [
+        "unit",
+        "complete",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+      ]).rc,
+    ).toBe(0);
+    logReviewVerdict(
+      proj,
+      "functional-design",
+      "alpha",
+      body.reviewer!,
+      "NOT-READY",
+    );
+    expect(
+      freshReviewReceipts(
+        proj,
+        state(proj),
+        findStageBySlug("functional-design")!,
+      ).unitPending.get("alpha"),
+    ).toMatchObject({
+      state: "repair-required",
+      iteration: 1,
+    });
+
+    const ask = runReport(proj, [
+      "--stage",
+      "functional-design",
+      "--unit",
+      "alpha",
+      "--result",
+      "awaiting-approval",
+    ]);
+    expect(ask).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      stage: "functional-design",
+      unit: "alpha",
+      reason_codes: ["REVIEW_EVIDENCE_MISSING"],
+    });
+    const executable = ask.remedies?.filter((remedy) => remedy.executableNow) ?? [];
+    expect(
+      executable.some((remedy) =>
+        remedy.action.includes(
+          "Apply the reviewer's requested repairs, then request review iteration 2",
+        )
+      ),
+    ).toBe(true);
+    expect(
+      executable.some((remedy) =>
+        remedy.action.includes("Record the verdict for pending review") ||
+        remedy.action.includes("--retry-pending")
+      ),
+    ).toBe(false);
+  }, 30000);
+
+  test("post-verdict drift gate asks to request the stored next iteration", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    const body = runNext(proj);
+    expect(body).toMatchObject({
+      stage: "functional-design",
+      unit: "alpha",
+      gate: false,
+    });
+    expect(
+      runState(proj, [
+        "unit",
+        "start",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+      ]).rc,
+    ).toBe(0);
+    coverUnit(proj, "alpha", "functional-design");
+    expect(
+      runState(proj, [
+        "unit",
+        "complete",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+      ]).rc,
+    ).toBe(0);
+    logReviewVerdict(
+      proj,
+      "functional-design",
+      "alpha",
+      body.reviewer!,
+      "NOT-READY",
+    );
+    appendFileSync(
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "alpha",
+        "functional-design",
+        artifactFilename(PRODUCES["functional-design"][0]),
+      ),
+      "\nChanged after the iteration-1 verdict.\n",
+    );
+    expect(
+      freshReviewReceipts(
+        proj,
+        state(proj),
+        findStageBySlug("functional-design")!,
+      ).unitPending.get("alpha"),
+    ).toMatchObject({
+      state: "outstanding",
+      iteration: 2,
+    });
+
+    const ask = runReport(proj, [
+      "--stage",
+      "functional-design",
+      "--unit",
+      "alpha",
+      "--result",
+      "awaiting-approval",
+    ]);
+    expect(ask).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      stage: "functional-design",
+      unit: "alpha",
+      reason_codes: ["REVIEW_EVIDENCE_MISSING"],
+    });
+    const executable = ask.remedies?.filter((remedy) => remedy.executableNow) ?? [];
+    expect(
+      executable.some((remedy) =>
+        remedy.action.includes(
+          "Request review iteration 2 against the current artifact and source bytes",
+        )
+      ),
+    ).toBe(true);
+    expect(
+      executable.some((remedy) =>
+        remedy.action.includes("Record the verdict for pending review") ||
+        remedy.action.includes("--retry-pending")
+      ),
+    ).toBe(false);
+  }, 30000);
 
   test("unit-end rhythm emits one chain gate after code-generation", () => {
     const proj = seedProject(

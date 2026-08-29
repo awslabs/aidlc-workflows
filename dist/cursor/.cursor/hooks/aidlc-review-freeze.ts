@@ -76,6 +76,7 @@ import {
   resolveReviewClass,
   reviewAttemptWindow,
   resolveProjectDirFromHook,
+  teamUnitGateStatus,
   type StageEntry,
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
@@ -387,12 +388,23 @@ export async function run(input: string): Promise<number> {
     verdict.unit === undefined
       ? receipts.stageStaleProgress
       : receipts.unitStaleProgress.get(verdict.unit);
+  const reviewCurrent =
+    verdict.unit === undefined
+      ? receipts.stageVerdict !== null
+      : receipts.unitVerdicts.has(verdict.unit);
+  const reviewStale =
+    verdict.unit === undefined
+      ? receipts.stageStale
+      : receipts.unitStale.has(verdict.unit);
   const view = reviewAttemptWindow(projectDir, stateContent, stage);
   const floor = view.events[view.floorIdx];
   const summaryEvidence = checkSummaryConfirmationEvidence(
     projectDir,
     stage,
-    { stateContent },
+    {
+      stateContent,
+      ...(verdict.unit ? { unit: verdict.unit } : {}),
+    },
   );
   const attempt = {
     floor:
@@ -406,20 +418,28 @@ export async function run(input: string): Promise<number> {
           receipts.sourceRecoverySpent
         ? "spent" as const
         : "available" as const,
-    ...(pending
-      ? {
-          pendingReview: {
-            iteration: pending.iteration,
-            retryable: pending.state === "retry-required",
-          },
-        }
-      : {}),
+    ...(pending?.state === "repair-required"
+      ? { repairReview: { iteration: pending.iteration } }
+      : pending?.state === "outstanding"
+        ? { nextReview: { iteration: pending.iteration } }
+      : pending
+        ? {
+            pendingReview: {
+              iteration: pending.iteration,
+              retryable: true,
+            },
+          }
+        : {}),
     summaryCoverage: summaryEvidence.ok
       ? "current" as const
       : summaryEvidence.message.includes("no fresh human-backed")
         ? "missing" as const
         : "stale" as const,
-    reviewCoverage: "current" as const,
+    reviewCoverage: reviewCurrent
+      ? "current" as const
+      : reviewStale || receipts.sourceStale
+        ? "stale" as const
+        : "missing" as const,
     sourceCoverage:
       receipts.sourceStaleReason === "boundary-unbindable"
         ? "unbindable" as const
@@ -429,6 +449,12 @@ export async function run(input: string): Promise<number> {
             ? "current" as const
             : "missing" as const,
   };
+  const teamGate = teamUnitGateStatus(
+    projectDir,
+    stateContent,
+    stage.slug,
+    verdict.unit,
+  );
   const evaluated = evaluateGuardRefusal({
     code: "REVIEW_FREEZE_ACTIVE",
     blockedAction: `artifact-write:${verdict.target ?? ""}`,
@@ -442,6 +468,7 @@ export async function run(input: string): Promise<number> {
       freshTurn: false,
       unattended: process.env.AIDLC_UNATTENDED === "1",
     },
+    ...(teamGate ? { teamGate } : {}),
   });
   const guidance =
     evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??

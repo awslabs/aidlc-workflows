@@ -384,7 +384,7 @@ describe("t208 engine unit-kind pruning", () => {
   test("4: a packaging unit on functional-design is vacuously covered", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "pack", kind: "packaging" }]);
-    const d = runNext(proj, true);
+    const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
     // pack owes nothing; every unit is covered -> the all-covered re-entry

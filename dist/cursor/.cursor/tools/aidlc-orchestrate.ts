@@ -123,11 +123,14 @@ import {
   currentUnitLifecycleMode,
   effectivePlanAction,
   errorMessage,
+  evaluateGuardRefusal,
   filterProducesByKind,
   firstInScopeStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  type GuardRefusal,
+  guardRecoveryAskForRefusal,
   gridCostSummary,
   hasAnyUnitClaimRefs,
   installedHarnessName,
@@ -162,6 +165,7 @@ import {
   readApplicableTeamUnitScopeStamp,
   readStateFile,
   recordHookDrop,
+  recoveryGuidance,
   markEngineTouch,
   kiroIdeLegacyPlanApprovalSessionId,
   relativeCodekbDir,
@@ -181,6 +185,7 @@ import {
   stateFilePath,
   STOP_HOOK_PROBE_ENV,
   stateFilePathForSelection,
+  teamUnitGateStatus,
   unitDependencyPath,
   unitParkedPath,
   unitParticipantPath,
@@ -207,7 +212,9 @@ import {
   classifyStateVersion,
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
+  requestChangesResetIsExecutable,
 } from "./aidlc-lib.ts";
+import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
   cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
@@ -4622,6 +4629,21 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   }
 
   if (currentIsInFlight) {
+    if (currentState === "awaiting-approval") {
+      const currentNode = nodeForSlug(currentSlug);
+      if (currentNode !== undefined) {
+        const preflight = preflightDirective(
+          pd,
+          stateContent,
+          currentNode,
+          { action: "present-approval-gate" },
+        );
+        if (preflight !== null) {
+          emit(preflight);
+          return;
+        }
+      }
+    }
     // Under an autonomy grant, an eligible per-unit build stage fans out as a
     // swarm batch instead of a single run-stage. tryEmitSwarm advances the swarm
     // one batch per `next` (the first batch with an unconverged unit, then the
@@ -4851,6 +4873,18 @@ function tryEmitSwarm(
     // Gate-only resume surface: every Unit body and reviewer already converged
     // inside the swarm. Keep that fact explicit across fresh sessions and remove
     // the ordinary body/reviewer modules so settlement cannot repeat work.
+    const preflight = stateContent === null
+      ? null
+      : preflightDirective(
+          projectDir,
+          stateContent,
+          node,
+          { action: "present-approval-gate" },
+        );
+    if (preflight !== null) {
+      emit(preflight);
+      return true;
+    }
     emit(applySettledSwarmShape(directive));
     return true;
   }
@@ -5142,7 +5176,60 @@ function waveEligible(node: GraphStage): boolean {
 type ActiveWave =
   | { state: "active"; unit: string; wave: RunStageWave }
   | { state: "settled" }
+  | { state: "refusal"; refusal: GuardRefusal }
   | { state: "error"; message: string };
+
+function summaryRefusalForRouting(
+  projectDir: string,
+  stateContent: string,
+  stage: StageEntry,
+  unit: string,
+  confirmation: Extract<
+    ReturnType<typeof checkSummaryConfirmationEvidence>,
+    { ok: false }
+  >,
+): GuardRefusal | undefined {
+  const attached = confirmation.refusal;
+  if (attached === undefined) return undefined;
+  const teamGate = teamUnitGateStatus(
+    projectDir,
+    stateContent,
+    stage.slug,
+    unit,
+  );
+  if (teamGate === undefined) {
+    return {
+      ...attached,
+      blockedAction: "review-request",
+    };
+  }
+  const evaluated = evaluateGuardRefusal({
+    code: attached.code,
+    blockedAction: "review-request",
+    stage: stage.slug,
+    unit,
+    stateContent,
+    invariant: attached.invariant,
+    userMessage: attached.userMessage,
+    attempt: {
+      recovery: "available",
+      summaryCoverage: confirmation.summaryCoverage,
+      reviewCoverage: "missing",
+      sourceCoverage: "missing",
+    },
+    humanAuthority: {
+      freshTurn: false,
+      unattended: process.env.AIDLC_UNATTENDED === "1",
+    },
+    teamGate,
+  });
+  return {
+    ...attached,
+    blockedAction: "review-request",
+    state: evaluated.state,
+    remedies: evaluated.remedies,
+  };
+}
 
 function waveEntry(
   node: GraphStage,
@@ -5291,7 +5378,22 @@ function activePerUnitWave(
           stateContent,
           unit,
         });
-        if (!confirmation.ok) return { state: "error", message: confirmation.message };
+        if (!confirmation.ok) {
+          const refusal = summaryRefusalForRouting(
+            projectDir,
+            stateContent ?? "",
+            node,
+            unit,
+            confirmation,
+          );
+          if (refusal !== undefined) {
+            return {
+              state: "refusal",
+              refusal,
+            };
+          }
+          return { state: "error", message: confirmation.message };
+        }
       }
       const terminalVerdict = reviewProgress?.unitVerdicts.get(unit);
       const pendingReview = reviewProgress?.unitPending.get(unit);
@@ -5310,6 +5412,68 @@ function activePerUnitWave(
         : terminalVerdict
           ? (reviewProgress?.unitIterations.get(unit) ?? null)
           : (pendingReview?.iteration ?? staleReview?.nextIteration ?? 1);
+      if (staleReview?.recoverySpent === true) {
+        const teamGate = teamUnitGateStatus(
+          projectDir,
+          stateContent ?? "",
+          node.slug,
+          unit,
+        );
+        let guidance: string;
+        try {
+          guidance = recoveryGuidance(
+            projectDir,
+            stateContent ?? "",
+            node.slug,
+            {
+              unit,
+              ...(teamGate ? { teamGate } : {}),
+            },
+          );
+        } catch {
+          guidance = `Restart this stage with /aidlc --stage ${node.slug}.`;
+        }
+        return {
+          state: "refusal",
+          refusal: evaluateGuardRefusal({
+            code: "REVIEW_RECOVERY_SPENT",
+            blockedAction: "review-request",
+            stage: node.slug,
+            unit,
+            stateContent: stateContent ?? "",
+            invariant:
+              "The stale-receipt recovery slot is single-use within an attempt.",
+            userMessage: reviewRecoverySpentMessage(
+              node.slug,
+              guidance,
+              undefined,
+              requestChangesResetIsExecutable(
+                stateContent ?? "",
+                node.slug,
+                teamGate,
+              ),
+            ),
+            attempt: {
+              recovery: "spent",
+              summaryCoverage: "current",
+              reviewCoverage: "stale",
+              sourceCoverage:
+                reviewProgress?.sourceStaleReason === "boundary-unbindable"
+                  ? "unbindable"
+                  : reviewProgress?.sourceStale
+                    ? "stale"
+                    : reviewProgress?.newestSourceFingerprint
+                      ? "current"
+                      : "missing",
+            },
+            humanAuthority: {
+              freshTurn: false,
+              unattended: process.env.AIDLC_UNATTENDED === "1",
+            },
+            ...(teamGate ? { teamGate } : {}),
+          }),
+        };
+      }
       const buildRequired = !covered;
       // Wave entries always settle through an explicit `unit complete --wave`
       // receipt. This is the parallel counterpart to the serial start/complete
@@ -5475,6 +5639,16 @@ function emitPerUnitRunStage(
       emit(errorDirective(wave.message));
       return;
     }
+    if (wave.state === "refusal") {
+      const directive = directiveForPreflightRefusal(
+        wave.refusal,
+        "review-request",
+      );
+      if (directive !== null) {
+        emit(directive);
+        return;
+      }
+    }
     if (wave.state === "active") {
       const unitKind = r.unitKinds?.get(wave.unit) ?? null;
       const directive = buildRunStageDirective(
@@ -5531,6 +5705,18 @@ function emitPerUnitRunStage(
       kinds?.get(lastUnit) ?? null,
     );
     directive.unit = lastUnit;
+    if (stateContent !== null) {
+      const preflight = preflightDirective(
+        projectDir,
+        stateContent,
+        node,
+        { action: "present-approval-gate" },
+      );
+      if (preflight !== null) {
+        emit(preflight);
+        return;
+      }
+    }
     emit(directive);
     return;
   }
@@ -6116,7 +6302,21 @@ function emitTeamUnitMajorRunStage(
         unit,
       });
       if (!confirmation.ok) {
-        emit(errorDirective(confirmation.message));
+        const refusal = summaryRefusalForRouting(
+          projectDir,
+          refreshedState,
+          stage,
+          unit,
+          confirmation,
+        );
+        const directive = refusal === undefined
+          ? errorDirective(confirmation.message)
+          : directiveForPreflightRefusal(
+              refusal,
+              "review-request",
+            );
+        if (directive !== null) emit(directive);
+        else emit(errorDirective(confirmation.message));
         return;
       }
       if (
@@ -6143,6 +6343,16 @@ function emitTeamUnitMajorRunStage(
         directive.gate = true;
         directive.unit = unit;
         directive.unit_gate = "per-stage";
+        const preflight = preflightDirective(
+          projectDir,
+          refreshedState,
+          stage,
+          { action: "present-approval-gate", unit },
+        );
+        if (preflight !== null) {
+          emit(preflight);
+          return;
+        }
         emit(directive);
         return;
       }
@@ -6172,6 +6382,16 @@ function emitTeamUnitMajorRunStage(
       directive.gate = true;
       directive.unit = unit;
       directive.unit_gate = "unit-end";
+      const preflight = preflightDirective(
+        projectDir,
+        refreshedState,
+        finalStage,
+        { action: "present-approval-gate", unit },
+      );
+      if (preflight !== null) {
+        emit(preflight);
+        return;
+      }
       emit(directive);
       return;
     }
@@ -6387,7 +6607,21 @@ function emitUnitMajorRunStage(
         unit: u,
       });
       if (!confirmation.ok) {
-        emit(errorDirective(confirmation.message));
+        const refusal = summaryRefusalForRouting(
+          projectDir,
+          stateContent ?? "",
+          k,
+          u,
+          confirmation,
+        );
+        const directive = refusal === undefined
+          ? errorDirective(confirmation.message)
+          : directiveForPreflightRefusal(
+              refusal,
+              "review-request",
+            );
+        if (directive !== null) emit(directive);
+        else emit(errorDirective(confirmation.message));
         return;
       }
     }
@@ -6970,6 +7204,133 @@ function guardRecoveryAskFromToolOutput(
     return null;
   }
   return result.data;
+}
+
+type GuardPreflightOptions = {
+  action:
+    | "present-approval-gate"
+    | "revise"
+    | "complete"
+    | "review-request";
+  unit?: string;
+  entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
+};
+
+function guardPreflightResult(
+  projectDir: string,
+  stateContent: string,
+  stage: StageEntry,
+  options: GuardPreflightOptions,
+):
+  | { executable: true }
+  | { executable: false; refusal: GuardRefusal } {
+  try {
+    const state = require("./aidlc-state.ts") as {
+      guardPreflight: (
+        projectDir: string,
+        stateContent: string,
+        stage: StageEntry,
+        options: GuardPreflightOptions,
+      ) =>
+        | { executable: true }
+        | { executable: false; refusal: GuardRefusal };
+    };
+    return state.guardPreflight(projectDir, stateContent, stage, options);
+  } catch {
+    return { executable: true };
+  }
+}
+
+function remedyRepeatsPreflightedAction(
+  action: GuardPreflightOptions["action"],
+  remedy: GuardRecoveryAskDirective["remedies"][number],
+): boolean {
+  if (action === "present-approval-gate") {
+    return remedy.action.includes("Present the unresolved review findings at the approval gate");
+  }
+  if (action === "review-request") {
+    return (
+      remedy.action.startsWith("Request the next permitted review") ||
+      remedy.action.startsWith("Start the one stale-receipt recovery review")
+    );
+  }
+  return false;
+}
+
+function directiveForPreflightRefusal(
+  refusal: GuardRefusal,
+  action: GuardPreflightOptions["action"],
+): GuardRecoveryAskDirective | ErrorDirective | null {
+  const ask = guardRecoveryAskForRefusal(refusal);
+  if (ask === null) return errorDirective(refusal.userMessage);
+  if (
+    ask.remedies.every((remedy) =>
+      remedyRepeatsPreflightedAction(action, remedy)
+    )
+  ) {
+    return null;
+  }
+  return ask;
+}
+
+function preflightDirective(
+  projectDir: string,
+  stateContent: string,
+  stage: StageEntry,
+  options: GuardPreflightOptions,
+): GuardRecoveryAskDirective | ErrorDirective | null {
+  const result = guardPreflightResult(
+    projectDir,
+    stateContent,
+    stage,
+    options,
+  );
+  return result.executable
+    ? null
+    : directiveForPreflightRefusal(result.refusal, options.action);
+}
+
+function preflightSequenceDirective(
+  projectDir: string,
+  stateContent: string,
+  stage: StageEntry,
+  sequence: ReadonlyArray<ReadonlyArray<string>>,
+  unit?: string,
+): GuardRecoveryAskDirective | ErrorDirective | null {
+  for (const subArgs of sequence) {
+    const verb = subArgs[0];
+    let options: GuardPreflightOptions | null = null;
+    if (verb === "gate-start") {
+      options = { action: "present-approval-gate", ...(unit ? { unit } : {}) };
+    } else if (verb === "revise") {
+      options = { action: "revise", ...(unit ? { unit } : {}) };
+    } else if (verb === "approve") {
+      options = {
+        action: "complete",
+        entrypoint: "approve",
+        ...(unit ? { unit } : {}),
+      };
+    } else if (
+      verb === "advance" ||
+      verb === "finalize" ||
+      verb === "complete-workflow"
+    ) {
+      options = {
+        action: "complete",
+        entrypoint: verb,
+        ...(unit ? { unit } : {}),
+      };
+    }
+    if (options === null) continue;
+    const directive = preflightDirective(
+      projectDir,
+      stateContent,
+      stage,
+      options,
+    );
+    if (directive !== null) return directive;
+  }
+  return null;
 }
 
 // The synthetic single-stage owner uses the internal append route because
@@ -7869,6 +8230,17 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(approveArgs(slug, flags));
       }
+      const preflight = preflightSequenceDirective(
+        pd,
+        stateContent,
+        node,
+        sequence,
+        unit,
+      );
+      if (preflight !== null) {
+        emit(preflight);
+        return;
+      }
       const committed: string[] = [];
       for (const subArgs of sequence) {
         const res = spawnState(pd, subArgs);
@@ -8075,6 +8447,16 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
     }
 
+    const preflight = preflightSequenceDirective(
+      pd,
+      stateContent,
+      node,
+      [subArgs],
+    );
+    if (preflight !== null) {
+      emit(preflight);
+      return;
+    }
     const res = spawnState(pd, subArgs);
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout).trim();
@@ -8223,6 +8605,16 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     sequence.push(["advance", slug]);
   }
 
+  const preflight = preflightSequenceDirective(
+    pd,
+    stateContent,
+    node,
+    sequence,
+  );
+  if (preflight !== null) {
+    emit(preflight);
+    return;
+  }
   const committed: string[] = [];
   for (const subArgs of sequence) {
     const res = spawnState(pd, subArgs);

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 833,
+    "total": 835,
     "enumeratedByClass": {
-      "function": 535,
+      "function": 537,
       "audit": 91,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 313,
+      "function": 315,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -1285,7 +1285,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1297,7 +1297,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1309,7 +1309,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1504,7 +1504,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2393,7 +2393,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2640,12 +2640,24 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardRecoveryAskForRefusal",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardRefusalOutput",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3533,7 +3545,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4413,7 +4425,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4611,7 +4623,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4665,7 +4677,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4940,7 +4952,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5011,7 +5023,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5367,7 +5379,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5656,6 +5668,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:teamUnitGateStatus",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t278-per-unit-wave.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6363,7 +6387,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

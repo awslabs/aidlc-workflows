@@ -61,6 +61,8 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  type GuardAttemptState,
+  type GuardRefusal,
   guardRefusalOutput,
   harnessDir,
   hasUnsafeSingleLineCharacter,
@@ -125,6 +127,7 @@ import {
   singleStageAttemptIsOpen,
   stagesInScope,
   swarmConvergedUnits,
+  teamUnitGateStatus,
   unitCompletedReceipts,
   unitGateStatus,
   unitMajorConstructionStageSlugs,
@@ -619,6 +622,19 @@ let projectDir: string | undefined;
 let lockIntent: string | undefined;
 let lockSpace: string | undefined;
 let stateSessionOverride: string | undefined;
+let guardPreflightActive = false;
+
+class StateGuardRefusalError extends Error {
+  constructor(
+    readonly refusal: GuardRefusal,
+    readonly attempt: GuardAttemptState,
+    readonly resourceFingerprints: string[],
+  ) {
+    super(refusal.userMessage);
+  }
+}
+
+class GuardPreflightUncertainError extends Error {}
 
 export function main(argv: string[]): void {
   const args = [...argv];
@@ -771,6 +787,17 @@ export function main(argv: string[]): void {
         );
     }
   } catch (e) {
+    if (e instanceof StateGuardRefusalError) {
+      const pd = resolveProjectDir(projectDir);
+      error(
+        guardRefusalOutput(
+          pd,
+          e.refusal,
+          e.attempt,
+          e.resourceFingerprints,
+        ),
+      );
+    }
     error(errorMessage(e));
   }
 }
@@ -3451,7 +3478,6 @@ function refuseStateGuard(
     unit?: string;
     receipts?: ReturnType<typeof freshReviewReceipts>;
     summaryCoverage?: "current" | "stale" | "missing";
-    teamGateStatus?: "pending" | "awaiting-approval" | "revising" | "approved";
     autonomousBolt?: {
       unit: string;
       slug: string | null;
@@ -3510,19 +3536,23 @@ function refuseStateGuard(
       floorEvent === undefined
         ? ""
         : `${floorEvent.event}:${floorEvent.timestamp}:${floorEvent.shard}:${floorEvent.pos}`,
-    recovery: pending?.recovery
+    recovery: pending?.recovery === true
       ? "pending" as const
       : recoverySpent
         ? "spent" as const
         : "available" as const,
-    ...(pending
-      ? {
-          pendingReview: {
-            iteration: pending.iteration,
-            retryable: pending.state === "retry-required",
-          },
-        }
-      : {}),
+    ...(pending?.state === "repair-required"
+      ? { repairReview: { iteration: pending.iteration } }
+      : pending?.state === "outstanding"
+        ? { nextReview: { iteration: pending.iteration } }
+      : pending
+        ? {
+            pendingReview: {
+              iteration: pending.iteration,
+              retryable: true,
+            },
+          }
+        : {}),
     summaryCoverage: input.summaryCoverage ?? "current" as const,
     reviewCoverage:
       unitVerdict !== null
@@ -3540,6 +3570,12 @@ function refuseStateGuard(
             ? "missing" as const
             : "current" as const,
   };
+  const teamGate = teamUnitGateStatus(
+    pd,
+    content,
+    stage.slug,
+    input.unit,
+  );
   const refusal = evaluateGuardRefusal({
     code: input.code,
     blockedAction: input.blockedAction,
@@ -3553,8 +3589,8 @@ function refuseStateGuard(
       freshTurn: humanActedSinceGate(pd),
       unattended: process.env.AIDLC_UNATTENDED === "1",
     },
-    ...(input.teamGateStatus
-      ? { teamGateStatus: input.teamGateStatus }
+    ...(teamGate
+      ? { teamGate }
       : {}),
     ...(input.autonomousBolt ? { autonomousBolt: input.autonomousBolt } : {}),
   });
@@ -3567,7 +3603,7 @@ function refuseStateGuard(
         : receipts?.unitIterations.get(input.unit) ?? "none"
     }`,
   ];
-  error(guardRefusalOutput(pd, refusal, attempt, resources));
+  throw new StateGuardRefusalError(refusal, attempt, resources);
 }
 
 function verifyReviewerPrecondition(
@@ -4742,6 +4778,7 @@ function teamGateContext(
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   args: string[],
+  explicitProjectDir?: string,
 ): TeamGateContext | null {
   const unit = getFlagValue(args, "--unit")?.trim();
   if (!isTeamUnitOwnership(content)) {
@@ -4765,7 +4802,7 @@ function teamGateContext(
   }
   const unitError = validateUnitName(unit);
   if (unitError) error(unitError);
-  const pd = resolveProjectDir(projectDir);
+  const pd = explicitProjectDir ?? resolveProjectDir(projectDir);
   validateLiveUnitScope(pd, unit);
   const resolution = resolveBoltDag(pd);
   if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
@@ -4820,6 +4857,7 @@ function verifyReviewerPreconditionForUnit(
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   unit: string,
+  action: ReviewerPreconditionAction,
 ): void {
   if (!stage.reviewer) return;
   const reviewClass = resolveReviewClass(
@@ -4830,10 +4868,17 @@ function verifyReviewerPreconditionForUnit(
   if (reviewClass === "none") return;
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   if (!receipts.unitVerdicts.has(unit)) {
-    error(
+    const message =
       `Refusing gate for unit "${unit}" of "${stage.slug}": no fresh ` +
-        `REVIEW_COMPLETED receipt from ${stage.reviewer} is recorded for this unit.`,
-    );
+      `REVIEW_COMPLETED receipt from ${stage.reviewer} is recorded for this unit.`;
+    refuseStateGuard(pd, content, stage, {
+      code: "REVIEW_EVIDENCE_MISSING",
+      blockedAction: action,
+      invariant: "Reviewer-bearing Units have current terminal review evidence.",
+      userMessage: message,
+      unit,
+      receipts,
+    });
   }
 }
 
@@ -4841,29 +4886,157 @@ function verifyTeamUnitGateEvidence(
   pd: string,
   content: string,
   context: TeamGateContext,
+  action: ReviewerPreconditionAction = "present-approval-gate",
 ): void {
   for (const stage of context.stages) {
     if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
     const missing = missingUnitArtifacts(pd, stage, context.unit);
     if (missing.length > 0) {
-      error(
+      const message =
         `Refusing gate for unit "${context.unit}" of "${stage.slug}": required ` +
-          `artifacts are missing (${missing.join(", ")}).`,
-      );
+        `artifacts are missing (${missing.join(", ")}).`;
+      refuseStateGuard(pd, content, stage, {
+        code: "REQUIRED_ARTIFACTS_MISSING",
+        blockedAction: action,
+        invariant: "Every applicable Unit output exists before certification.",
+        userMessage: message,
+        unit: context.unit,
+      });
     }
     if (!unitCompletedReceipts(pd, stage.slug).has(context.unit)) {
-      error(
+      const message =
         `Refusing gate for unit "${context.unit}" of "${stage.slug}": no current ` +
-          "UNIT_COMPLETED receipt is recorded.",
-      );
+        "UNIT_COMPLETED receipt is recorded.";
+      refuseStateGuard(pd, content, stage, {
+        code: "UNIT_COMPLETION_MISSING",
+        blockedAction: action,
+        invariant: "The Unit lifecycle is complete in the current attempt.",
+        userMessage: message,
+        unit: context.unit,
+      });
     }
     const summary = checkSummaryConfirmationEvidence(pd, stage, {
       stateContent: content,
       unit: context.unit,
     });
-    if (!summary.ok) error(summary.message);
-    verifyReviewerPreconditionForUnit(pd, content, stage, context.unit);
-    if (stage.workspace_requires) verifyStageArtifacts(pd, stage);
+    if (!summary.ok) {
+      refuseStateGuard(pd, content, stage, {
+        code: "SUMMARY_EVIDENCE_INVALID",
+        blockedAction: action,
+        invariant:
+          "Generated Unit outputs descend from current human-backed summary confirmation.",
+        userMessage: summary.message,
+        unit: context.unit,
+        summaryCoverage: summary.summaryCoverage,
+      });
+    }
+    verifyReviewerPreconditionForUnit(
+      pd,
+      content,
+      stage,
+      context.unit,
+      action,
+    );
+    if (stage.workspace_requires) verifyStageArtifacts(pd, stage, action);
+  }
+}
+
+export type GuardPreflightAction =
+  | "present-approval-gate"
+  | "revise"
+  | "complete"
+  | "review-request";
+
+export type GuardPreflightResult =
+  | { executable: true }
+  | { executable: false; refusal: GuardRefusal };
+
+export function guardPreflight(
+  pd: string,
+  stateContent: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  options: {
+    action: GuardPreflightAction;
+    unit?: string;
+    entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
+  },
+): GuardPreflightResult {
+  if (options.action === "review-request") {
+    // Review request authority is owned by aidlc-log. Until its admission
+    // evaluator can decide from the same immutable snapshot, fail open to the
+    // real request rather than duplicate or weaken its predicates.
+    return { executable: true };
+  }
+
+  const prior = guardPreflightActive;
+  guardPreflightActive = true;
+  try {
+    if (options.unit !== undefined) {
+      const team = teamGateContext(
+        stateContent,
+        stage,
+        ["--unit", options.unit],
+        pd,
+      );
+      if (team !== null) {
+        verifyTeamUnitGateEvidence(
+          pd,
+          stateContent,
+          team,
+          options.action === "complete"
+            ? "complete"
+            : "present-approval-gate",
+        );
+        if (
+          options.action === "present-approval-gate" ||
+          options.action === "revise"
+        ) {
+          for (const gateStage of team.stages) {
+            verifyPipelineLinkPrecondition(pd, gateStage);
+          }
+        }
+        return { executable: true };
+      }
+    }
+
+    if (
+      options.action === "present-approval-gate" ||
+      options.action === "revise"
+    ) {
+      verifyGateOpeningGuards(pd, stateContent, stage);
+      return { executable: true };
+    }
+
+    const alreadyCompleted =
+      parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)
+        ?.state === "completed";
+    if (options.entrypoint === "approve") {
+      verifyStageArtifacts(pd, stage);
+      verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+      verifyPipelineLinkPrecondition(pd, stage);
+      verifyReviewerPrecondition(pd, stateContent, stage);
+    } else {
+      verifyReviewerPrecondition(
+        pd,
+        stateContent,
+        stage,
+        "complete",
+        !alreadyCompleted,
+      );
+      if (!alreadyCompleted) {
+        verifyStageArtifacts(pd, stage);
+        verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+        verifyPipelineLinkPrecondition(pd, stage);
+      }
+    }
+    return { executable: true };
+  } catch (error) {
+    if (error instanceof StateGuardRefusalError) {
+      return { executable: false, refusal: error.refusal };
+    }
+    return { executable: true };
+  } finally {
+    guardPreflightActive = prior;
   }
 }
 
@@ -7134,6 +7307,9 @@ function handleMerge(args: string[]): void {
 // --- Utility ---
 
 function error(msg: string): never {
+  if (guardPreflightActive) {
+    throw new GuardPreflightUncertainError(msg);
+  }
   // Honor module-level projectDir (set from --project-dir in main) so test
   // fixtures and explicit overrides propagate to ERROR_LOGGED.
   const pd = resolveProjectDir(projectDir);

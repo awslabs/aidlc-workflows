@@ -291,8 +291,11 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       p,
       TEST_ENV,
     );
-    expect(refused.out).toContain('"kind":"error"');
-    expect(refused.out).toContain("Cannot present");
+    expect(refused.out).toContain('"kind":"ask"');
+    expect(refused.out).toContain('"ask_type":"guard-recovery"');
+    expect(refused.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
     expect(eventCount(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
   });
 

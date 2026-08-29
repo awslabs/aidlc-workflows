@@ -1,9 +1,9 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.124] - 2026-08-28
+## [2.6.124] - 2026-08-29
 
-One systemic fix for the class of workflow dead ends where an integrity refusal prescribed a remedy that another guard refused. Every guard refusal now computes its recovery options from the live workflow state, a repeated identical refusal halts into a single recovery question instead of looping, and review/summary attempt state is derived through one shared reducer instead of five independent audit scans. **Upgrade:** re-copy your harness's `dist/<harness>/` tree into the project so the updated tools, review-freeze hook, and orchestrator skill replace the old copies.
+One systemic fix for the class of workflow dead ends where an integrity refusal prescribed a remedy that another guard refused. Every guard refusal now computes its recovery options from the live workflow state, a repeated identical refusal halts into a single recovery question instead of looping, review/summary attempt state is derived through one shared reducer instead of five independent audit scans, and the engine consults the same guards before directing an action, so a step that would be refused is never instructed: the recovery question or the executable next step is offered directly instead. **Upgrade:** re-copy your harness's `dist/<harness>/` tree into the project so the updated tools, review-freeze hook, and orchestrator skill replace the old copies.
 
 * Refusals from gate opening, revision, completion, review recording, and the review-freeze hook name only remedies executable in the current stage state: Request Changes before the gate opens, a redo jump from a revising stage, source restore or a backward jump from a completed stage, abort/discard plus a fresh Bolt for autonomous units. The "Only a human Request Changes decision resets the review attempt" sentence no longer appears in states where that decision is invalid.
 * When the same guard state refuses a third time without progress, the engine returns a structured `guard-recovery` question listing only executable recovery actions; it never records a decision for the human, restores a review budget, or mints a receipt.
@@ -12,6 +12,10 @@ One systemic fix for the class of workflow dead ends where an integrity refusal 
 * Source-freshness refusals distinguish an unbindable source boundary (repair `.aidlc-source-paths.json` or the boundary) from real source drift (revert or re-review).
 * Unattended mode (`AIDLC_UNATTENDED=1`): the team released-attempt recovery refusal names the real exit (unset the flag, then answer) instead of demanding a human turn that unattended mode cannot mint.
 * A crashed Bolt worktree's "already exists" error points at finishing the existing Bolt's complete/merge and audit-merge path instead of suggesting nothing.
+* Report routes, gate re-entry, and review routing check the gate and completion guards before spawning the action: a report toward a gate with missing evidence returns the recovery question directly instead of a failed attempt's error text, and the happy path is unchanged.
+* Recovery questions never advertise an action the engine would refuse: team unit gates get commands carrying the Unit and the correct final gate stage, verdict recording and request retries are offered only while a matching request is actually pending, a below-cap NOT-READY review routes to "apply the repairs, then request the next iteration", and review requests are offered only while the summary confirmation is current.
+* An ambiguous same-second answer at an open approval gate now consumes the human turn (fail closed), so a turn spent answering an ordinary question can never satisfy a later approval's presence check; worst case the human is asked to type once more.
+* A team per-Unit workflow whose plan has no active per-Unit Construction gate stage gets a refusal naming the cause (no-active-gate-stage) and the Scope repair, instead of a generic restart suggestion that repeats the error.
 
 ## [2.6.123] - 2026-08-28
 

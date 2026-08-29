@@ -204,6 +204,38 @@ function summaryQuestions(proj: string, answer = ""): string {
   return path;
 }
 
+function writeTiedDecisionAndResolution(proj: string, slug: string): void {
+  const dir = dirname(seededAuditShard(proj));
+  mkdirSync(dir, { recursive: true });
+  Bun.sleepSync(1100);
+  const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  writeFileSync(
+    join(dir, "aaa-decision.md"),
+    [
+      "## Decision Recorded",
+      `**Timestamp**: ${timestamp}`,
+      "**Event**: DECISION_RECORDED",
+      `**Stage**: ${slug}`,
+      "",
+      "---",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(dir, "zzz-answer.md"),
+    [
+      "## Question Answered",
+      `**Timestamp**: ${timestamp}`,
+      "**Event**: QUESTION_ANSWERED",
+      `**Stage**: ${slug}`,
+      "",
+      "---",
+      "",
+    ].join("\n"),
+  );
+  Bun.sleepSync(1100);
+}
+
 let proj: string;
 
 describe("t188: human-presence approval gate (ledger-event design)", () => {
@@ -1124,39 +1156,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       );
     });
 
-    test("a same-second cross-shard decision/resolution tie fails closed at an open gate", () => {
+    test("a same-second cross-shard decision/resolution tie consumes the next answer", () => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
-      const dir = dirname(seededAuditShard(proj));
-      mkdirSync(dir, { recursive: true });
-      Bun.sleepSync(1100);
-      const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-      writeFileSync(
-        join(dir, "aaa-decision.md"),
-        [
-          "## Decision Recorded",
-          `**Timestamp**: ${timestamp}`,
-          "**Event**: DECISION_RECORDED",
-          `**Stage**: ${slug}`,
-          "",
-          "---",
-          "",
-        ].join("\n"),
-      );
-      writeFileSync(
-        join(dir, "zzz-answer.md"),
-        [
-          "## Question Answered",
-          `**Timestamp**: ${timestamp}`,
-          "**Event**: QUESTION_ANSWERED",
-          `**Stage**: ${slug}`,
-          "",
-          "---",
-          "",
-        ].join("\n"),
-      );
-      Bun.sleepSync(1100);
+      writeTiedDecisionAndResolution(proj, slug);
       recordHumanTurn(proj);
       const before = eventCount(proj, "QUESTION_ANSWERED");
       const answer = guardedLog(proj, [
@@ -1167,8 +1171,41 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "Reject option B, use A",
       ]);
       expect(answer.rc, answer.out).toBe(0);
-      expect(answer.out).toContain("approval-gate-report-owned");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(before);
+      expect(answer.out).toContain('"emitted":"QUESTION_ANSWERED"');
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(before + 1);
+    });
+
+    test("an answer consumed after an ambiguous tie cannot authorize approval", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      writeTiedDecisionAndResolution(proj, slug);
+      recordHumanTurn(proj);
+      expect(
+        guardedLog(proj, [
+          "answer",
+          "--stage",
+          slug,
+          "--details",
+          "Reject option B, use A",
+        ]).out,
+      ).toContain('"emitted":"QUESTION_ANSWERED"');
+
+      const approval = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "approved",
+        "--user-input",
+        "Approve",
+      ]);
+      expect(approval.rc).toBe(0);
+      expect(approval.out).toContain('"kind":"error"');
+      expect(approval.out).toContain(
+        "no new human reply has been received for this approval question",
+      );
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(field(proj, "Current Stage")).toBe(slug);
     });
   });
 });
