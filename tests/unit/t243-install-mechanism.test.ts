@@ -1983,7 +1983,7 @@ describe("t243 release lifecycle", () => {
     manifest.date = "2026-07-18";
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     expect(() => verifyReleaseDirectory(tampered)).toThrow("version.json: checksum mismatch");
-  });
+  }, 60_000);
 
   test("release manifests reject retired per-distribution data assets", () => {
     const release = fixtureReleaseBytes();

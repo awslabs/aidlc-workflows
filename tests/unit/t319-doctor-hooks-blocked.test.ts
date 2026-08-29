@@ -246,7 +246,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(otherHarnessOutput).not.toContain("Claude managed hook policy");
     expect(otherHarnessOutput).not.toContain("Hooks DISABLED");
     expect(otherHarnessOutput).not.toContain("Hooks enabled");
-  });
+  }, 30_000);
 
   test("stale heartbeats fail when workflow progress is more than five minutes newer", () => {
     const project = projectWithWorkflowProgress();

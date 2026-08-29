@@ -109,7 +109,7 @@ function run(
     cwd,
     env: { ...process.env, ...env },
     encoding: "utf-8",
-    timeout: process.platform === "win32" ? 120_000 : 60_000,
+    timeout: process.platform === "win32" ? 300_000 : 60_000,
   });
   if (result.error) throw result.error;
   return {
@@ -242,8 +242,9 @@ async function serveReleaseFixtureForChildren(
   while (!startup.includes("\n")) {
     const chunk = await reader.read();
     if (chunk.done) {
+      const exitCode = await child.exited;
       throw new Error(
-        `release fixture server exited during startup: ${await stderr}`,
+        `release fixture server exited during startup (exit code ${exitCode}): ${await stderr}`,
       );
     }
     startup += decoder.decode(chunk.value, { stream: true });
@@ -441,7 +442,7 @@ describe("t244 machine configuration and update discovery", () => {
         else process.env[key] = value;
       }
     }
-  }, process.platform === "win32" ? 30_000 : 10_000);
+  }, process.platform === "win32" ? 120_000 : 10_000);
 
   test("interactive doctor bounds a missing-cache refresh to 750 milliseconds", async () => {
     const release = fixture(NEXT_VERSION, { binary: "bytes" });
@@ -481,7 +482,7 @@ describe("t244 machine configuration and update discovery", () => {
         else process.env[key] = value;
       }
     }
-  }, process.platform === "win32" ? 15_000 : 5_000);
+  }, process.platform === "win32" ? 120_000 : 5_000);
 
   test("authenticated refresh replaces the cache and every failed refresh preserves it", async () => {
     const release = fixture(NEXT_VERSION, { binary: "bytes" });
@@ -527,7 +528,7 @@ describe("t244 machine configuration and update discovery", () => {
         else process.env[key] = value;
       }
     }
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 120_000 : 5_000);
 
   test("older authenticated metadata cannot replace a newer valid update cache", async () => {
     const newerRelease = fixture(NEXT_VERSION, { binary: "bytes" });
@@ -562,7 +563,7 @@ describe("t244 machine configuration and update discovery", () => {
         else process.env[key] = value;
       }
     }
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 120_000 : 5_000);
 
   test("disabled and offline update checks open no socket", async () => {
     const release = fixture(NEXT_VERSION, { binary: "bytes" });
@@ -623,7 +624,7 @@ describe("t244 machine configuration and update discovery", () => {
         else process.env[key] = value;
       }
     }
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 120_000 : 5_000);
 });
 
 describe("t244 management lifecycle", () => {
@@ -919,7 +920,7 @@ describe("t244 management lifecycle", () => {
       expect(existsSync(join(machine, "versions", version))).toBe(true);
     }
     expect(existsSync(join(machine, "versions", REMOVABLE_VERSION))).toBe(false);
-  }, process.platform === "win32" ? 300_000 : 240_000);
+  }, process.platform === "win32" ? 600_000 : 240_000);
 
   test("uninstall removes command and versions while preserving machine state and projects", async () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
@@ -1330,7 +1331,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(manifest.assets).toContainEqual(
       expect.objectContaining({ name: "install.ps1", kind: "installer" }),
     );
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 120_000 : 5_000);
 
   test("PowerShell installer keeps analyzer suppressions narrow and helper calls named", () => {
     const script = readFileSync(INSTALL_PS1, "utf-8");

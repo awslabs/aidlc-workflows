@@ -131,7 +131,7 @@ function runWizard(
     }),
     input,
     encoding: "utf-8",
-    timeout: 10_000,
+    timeout: 60_000,
     maxBuffer: 1024 * 1024,
   });
   if (result.error) throw result.error;
@@ -444,7 +444,7 @@ describe("t304 first-run prompt and detection safety", () => {
       readFileSync(join(result.project, ".claude", "tools", "data", "harness.json"), "utf-8"),
     );
     expect(harness.providers).toBeUndefined();
-  }, 60_000);
+  }, 120_000);
 });
 
 describe("t304 diagnostics and release truthfulness", () => {

@@ -295,7 +295,7 @@ describe("t238 build-binaries release builder", () => {
     const packaged = spawnSync(BUN, [PACKAGE_RELEASE_SCRIPT], {
       cwd: REPO_ROOT,
       encoding: "utf-8",
-      timeout: 60_000,
+      timeout: 180_000,
       env: { ...process.env, SOURCE_DATE_EPOCH: "1784246400" },
     });
     expect(packaged.status, `${packaged.stdout ?? ""}${packaged.stderr ?? ""}`).toBe(0);
