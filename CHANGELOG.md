@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.124] - 2026-08-29
+## [2.6.125] - 2026-08-30
 
 One systemic fix for the class of workflow dead ends where an integrity refusal prescribed a remedy that another guard refused. Every guard refusal now computes its recovery options from the live workflow state, a repeated identical refusal halts into a single recovery question instead of looping, review/summary attempt state is derived through one shared reducer instead of five independent audit scans, and the engine consults the same guards before directing an action, so a step that would be refused is never instructed: the recovery question or the executable next step is offered directly instead. **Upgrade:** re-copy your harness's `dist/<harness>/` tree into the project so the updated tools, review-freeze hook, and orchestrator skill replace the old copies.
 
@@ -16,6 +16,16 @@ One systemic fix for the class of workflow dead ends where an integrity refusal 
 * Recovery questions never advertise an action the engine would refuse: team unit gates get commands carrying the Unit and the correct final gate stage, verdict recording and request retries are offered only while a matching request is actually pending, a below-cap NOT-READY review routes to "apply the repairs, then request the next iteration", and review requests are offered only while the summary confirmation is current.
 * An ambiguous same-second answer at an open approval gate now consumes the human turn (fail closed), so a turn spent answering an ordinary question can never satisfy a later approval's presence check; worst case the human is asked to type once more.
 * A team per-Unit workflow whose plan has no active per-Unit Construction gate stage gets a refusal naming the cause (no-active-gate-stage) and the Scope repair, instead of a generic restart suggestion that repeats the error.
+
+## [2.6.124] - 2026-08-28
+
+Stop committing machine-local absolute paths in `aidlc-state.md`. The `Project Root` and `Worktree Path` state fields are now written in project-relative form (`.` for the root; a `relative(projectDir, worktreePath)` breadcrumb for a worktree), so a state file shared across machines or checkouts no longer carries a host-specific absolute path. Closes #937.
+
+**Upgrade / scope:** this changes only what is written **from now on** — newly created or next-updated state records. Re-copying `dist/<harness>/` refreshes the tools but does **not** rewrite any existing `aidlc/**/aidlc-state.md` in a project; an existing state file keeps its previous absolute `Project Root` / `Worktree Path` until the engine next writes those fields in the normal course of a run. No migration is performed and none is required: both fields are re-derived at runtime (`projectRootFor` walks up to the real `aidlc/` dir; the committed `Project Root` is an unreached fallback and `Worktree Path` is a decorative breadcrumb), so a stale absolute value is inert until it is overwritten.
+
+* `Project Root` template + writer emit project-relative `.` instead of an absolute `${projectDir}`.
+* `Worktree Path` writer emits `relative(projectDir, worktreePath)` (forward-slashed), matching the audit log's existing relative form.
+* Regression coverage: `t78` pins a forked worktree's `Worktree Path` to the project-relative `.aidlc/worktrees/bolt-<slug>` (never an absolute path); `t70` and the `t152` Windows-portability guard pin `Project Root` = `.`.
 
 ## [2.6.123] - 2026-08-28
 

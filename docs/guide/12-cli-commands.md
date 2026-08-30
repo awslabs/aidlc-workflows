@@ -97,7 +97,7 @@ flowchart TD
     Q2 -->|"Jump to a phase"| A6
     Q3 -->|"Verify setup"| A8
 
-    style START fill:#e1bee7,stroke:#7b1fa2
+    style START fill:#e1bee7,stroke:#7b1fa2,color:#000
 ```
 
 <!-- Text fallback: Starting a new workflow: use /aidlc classic (known scope) or /aidlc Build a payments API (auto-detect; the first intent auto-creates). Managing an existing workflow: /aidlc (resume), /aidlc --status (view progress), /aidlc --stage (jump to stage), /aidlc --phase (jump to phase). Verify setup: /aidlc --doctor (health check). -->

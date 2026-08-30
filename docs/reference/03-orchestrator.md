@@ -202,12 +202,12 @@ flowchart TD
     SCOPE_DETECT -->|"Freeform text"| FREEFORM --> CONFIRM_SCOPE
     CONFIRM_SCOPE --> CREATE
 
-    style START fill:#e1bee7,stroke:#7b1fa2
-    style RESUME_MENU fill:#bbdefb,stroke:#1565c0
-    style CONTINUE fill:#c8e6c9,stroke:#388e3c
-    style CREATE fill:#c8e6c9,stroke:#388e3c
-    style WARN fill:#ffcdd2,stroke:#c62828
-    style NO_STATE fill:#ffcdd2,stroke:#c62828
+    style START fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style RESUME_MENU fill:#bbdefb,stroke:#1565c0,color:#000
+    style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
+    style CREATE fill:#c8e6c9,stroke:#388e3c,color:#000
+    style WARN fill:#ffcdd2,stroke:#c62828,color:#000
+    style NO_STATE fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
 ### State File Schema

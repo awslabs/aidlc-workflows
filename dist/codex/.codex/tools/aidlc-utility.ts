@@ -5927,7 +5927,7 @@ function handleIntentCreateStateBuild(
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
 
 ## Workspace State
-- **Project Root**: ${projectDir}
+- **Project Root**: .
 - **Languages**: ${scan.languages}
 - **Frameworks**: ${scan.frameworks}
 - **Build System**: ${scan.buildSystem}
