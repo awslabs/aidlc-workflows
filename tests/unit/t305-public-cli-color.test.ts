@@ -98,6 +98,13 @@ function machineEnv(machine: string): NodeJS.ProcessEnv {
   return {
     AIDLC_INSTALL_ROOT: machine,
     AIDLC_BIN_DIR: join(machine, "bin"),
+    AIDLC_GH_BIN: join(
+      REPO_ROOT,
+      "tests",
+      "fixtures",
+      "bin",
+      process.platform === "win32" ? "gh.cmd" : "gh",
+    ),
   };
 }
 
