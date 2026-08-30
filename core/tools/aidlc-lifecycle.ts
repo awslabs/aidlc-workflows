@@ -83,6 +83,7 @@ import {
   scheduleWindowsUninstall as scheduleWindowsUninstallContinuation,
 } from "./aidlc-windows-uninstall.ts";
 import {
+  compiledExecutable,
   discoverProjectHarnesses,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
@@ -1080,7 +1081,8 @@ function pruneUnprotectedVersions(): string[] {
 }
 
 function uninstallCommand(argv: string[]): CommandResult {
-  const manager = packageManagerForExecutable(process.execPath);
+  const executable = compiledExecutable();
+  const manager = executable ? packageManagerForExecutable(executable) : null;
   if (manager) {
     return failure(
       `AI-DLC is installed via ${manager.name}; self-uninstall is disabled`,
@@ -1176,7 +1178,8 @@ function scheduleWindowsUninstall(purge: boolean): CommandResult {
 }
 
 async function updateCommand(argv: string[]): Promise<CommandResult> {
-  const manager = packageManagerForExecutable(process.execPath);
+  const executable = compiledExecutable();
+  const manager = executable ? packageManagerForExecutable(executable) : null;
   if (manager) {
     return failure(
       `AI-DLC is installed via ${manager.name}; self-update is disabled`,
@@ -1299,7 +1302,14 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     }
     if (argv.includes("--harness")) return usage("unknown argument: --harness");
     const projectDir = projectDirFrom(argv);
+    const dryRun = argv.includes("--dry-run");
     if (hasUnpin) {
+      if (dryRun) {
+        return success(
+          "Project pin removal plan; no files were changed.",
+          { projectDir, version: activeVersion(), pinned: false, dryRun: true },
+        );
+      }
       commitProjectPin(projectDir, null);
       return success(
         "Removed this project's AI-DLC version pin; it now follows the active machine version.",
@@ -1309,26 +1319,36 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     const requested = valueAfter(argv, "--pin");
     if (!requested) return usage("--pin requires a strict version");
     const version = requestedVersion(requested);
-    const releaseReservation = reserveVersion(version);
+    const releaseReservation = dryRun ? null : reserveVersion(version);
     try {
       if (existsSync(versionRoot(version)) && !completeVersion(version)) {
         const reason = inspectInstalledVersion(version).reason ?? "integrity validation failed";
         commandError(`retained version ${version} is incomplete: ${reason}`, EXIT.integrity);
       }
-      if (!completeVersion(version)) {
-        await installVersion({
+      let distributions = completeVersion(version)
+        ? installedDistributions(version)
+        : null;
+      if (!distributions) {
+        const planned = await installVersion({
           version,
           from: valueAfter(argv, "--from"),
           offline: offline(argv),
           activate: false,
-          dryRun: false,
+          dryRun,
           baseUrl: valueAfter(argv, "--release-base-url"),
           caBundle: valueAfter(argv, "--ca-bundle"),
         });
+        distributions = planned.distributions;
       }
       const distribution = projectDistribution(projectDir);
-      if (distribution && !inspectInstalledVersion(version, distribution).complete) {
+      if (distribution && !distributions.includes(distribution)) {
         commandError(`${version} does not contain this project's ${distribution} runtime`, EXIT.usage);
+      }
+      if (dryRun) {
+        return success(
+          `Project pin plan for aidlc ${version}; no files were changed.`,
+          { projectDir, version, pinned: true, dryRun: true },
+        );
       }
       commitProjectPin(projectDir, version);
       return success(
@@ -1336,7 +1356,7 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
         { projectDir, version, pinned: true },
       );
     } finally {
-      releaseReservation();
+      releaseReservation?.();
     }
   } catch (error) {
     return lifecycleFailureResult(error, argv);

@@ -37,6 +37,7 @@ import {
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
+const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const DIST = join(REPO_ROOT, "dist");
 const DIST_RELEASE = join(REPO_ROOT, "dist-release");
 const temporary: string[] = [];
@@ -693,6 +694,42 @@ describe("t293 config models CLI", () => {
     expect(existsSync(join(project, ".claude"))).toBe(false);
   });
 
+  test("root config rejects unknown and section-only flags before scaffold", () => {
+    for (const extra of [
+      ["--bogus"],
+      ["--show"],
+      ["--project", "--preset", "minimal"],
+    ]) {
+      const project = temp("aidlc-t293-root-grammar-");
+      mkdirSync(join(project, ".git"));
+      const result = run([
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(DIST_RELEASE, "claude"),
+        "--harness",
+        "claude",
+        "--mcp",
+        "none",
+        ...extra,
+        "--yes",
+      ], project);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toContain("config option");
+      expect(existsSync(join(project, ".claude"))).toBe(false);
+    }
+  });
+
+  test("misspelled config section help remains a usage error", () => {
+    const result = spawnSync(BUN, [DISPATCHER, "config", "modles", "--help"], {
+      cwd: REPO_ROOT,
+      encoding: "utf-8",
+    });
+    expect(result.status).toBe(2);
+    expect(`${result.stdout}${result.stderr}`).toContain("unknown config section");
+  });
+
   test("model mutations inherit the active workflow refresh refusal", () => {
     const project = install("claude");
     const dirName = "active-model-policy";
@@ -836,6 +873,38 @@ describe("t293 config models CLI", () => {
     expect(readFileSync(settingsPath)).toEqual(priorSettings);
     expect(readFileSync(agentPath)).toEqual(priorAgent);
     rmSync(join(project, ".aidlc-transaction.lock"));
+  }, 60_000);
+
+  test("global rollback preserves a newer concurrent machine setting", () => {
+    const project = install("claude");
+    const machine = temp("aidlc-t293-global-rollback-race-");
+    const settingsPath = join(machine, "aidlc.settings.json");
+    const newer = `${JSON.stringify({
+      schemaVersion: 1,
+      flags: { schemaVersion: 1, swarm: true },
+    }, null, 2)}\n`;
+    writeFileSync(
+      join(project, ".aidlc-transaction.lock"),
+      `${JSON.stringify({ pid: process.pid, staging: ".aidlc-txn-live" })}\n`,
+    );
+    const failed = run([
+      "config",
+      "models",
+      "--project-dir",
+      project,
+      "--global",
+      "--preset",
+      "thorough",
+      "--yes",
+    ], project, {
+      ...runtimeEnv(),
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_TEST_SETTINGS_ROLLBACK_INTERFERENCE: newer,
+    });
+    expect(failed.status).not.toBe(0);
+    expect(readFileSync(settingsPath, "utf-8")).toBe(newer);
+    expect(`${failed.stdout}${failed.stderr}`).toContain("rollback was incomplete");
   }, 60_000);
 });
 

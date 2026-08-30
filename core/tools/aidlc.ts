@@ -1290,8 +1290,7 @@ function commandHelpRequest(argv: readonly string[]): PublicCommand | null {
   }
   if (
     command === "config" &&
-    ["models", "runtime", "providers", "trust", "flags", "project"]
-      .includes(clean[1] ?? "")
+    clean.slice(1).some((token) => !token.startsWith("-"))
   ) {
     return null;
   }

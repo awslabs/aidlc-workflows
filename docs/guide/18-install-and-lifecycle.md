@@ -131,7 +131,8 @@ trusted by provenance verification and defaults to `awslabs/aidlc-workflows`.
 `AIDLC_RELEASE_WORKFLOW` selects the trusted signer workflow and defaults to
 `<AIDLC_RELEASE_REPOSITORY>/.github/workflows/release.yml`. Set these explicitly
 for a fork or mirror, together with its release base URL; changing the download
-URL alone does not change the provenance trust root.
+URL alone does not change the provenance trust root. `AIDLC_GH_BIN` selects an
+explicit GitHub CLI executable for both installers.
 
 `AIDLC_INSTALL_ROOT` and `AIDLC_BIN_DIR` override the machine and command
 locations. Those paths must be absolute on Unix. The PowerShell installer also
@@ -143,8 +144,9 @@ or `--from` spelling.
 The installer:
 
 1. Verifies the installer script against the release's Sigstore bundle before execution.
-2. Downloads or reads `version.json` and `checksums.txt`.
-3. Verifies the remote `checksums.txt` attestation against the repository,
+2. Downloads or reads `version.json`, `checksums.txt`, and
+   `aidlc-release.intoto.jsonl`.
+3. Verifies the `checksums.txt` attestation against the repository,
    signer workflow, and release tag before trusting any checksum.
 4. Verifies the `version.json` SHA-256 before trusting its asset metadata.
 5. Verifies the selected binary and harness archives by SHA-256 and declared
@@ -157,7 +159,9 @@ path traversal, absolute paths, duplicate entries, and oversized expansion.
 
 The release workflow assembles the candidate once. Staging and Unix/Windows
 lifecycle jobs verify `checksums.txt` and test those bytes without signing
-permissions. After the protected release gate, `publish` re-verifies the
+permissions. They add a job-local verifier fixture solely because the real
+attestation is created after the protected release gate; that fixture is never
+uploaded. After the gate, `publish` re-verifies the
 candidate, attests it, exports `aidlc-release.intoto.jsonl`, and always creates
 a draft. GitHub exposes drafts only to push-capable identities, so the
 protected `promote` job uses `contents: write` to download and verify the
@@ -703,7 +707,9 @@ harness management is not a public command.
 The release asset set is the offline package. It includes
 `aidlc-release.intoto.jsonl` alongside the binaries, runtime, installers,
 `version.json`, and `checksums.txt`. Download one complete release on a
-connected machine and transfer that directory unchanged:
+connected machine and transfer that directory unchanged. Local installation
+fails closed if the bundle is missing or does not authenticate
+`checksums.txt`:
 
 ```bash
 gh release download v2.5.45 --repo awslabs/aidlc-workflows --dir ./aidlc-offline

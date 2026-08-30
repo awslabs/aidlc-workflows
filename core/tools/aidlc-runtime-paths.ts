@@ -131,10 +131,13 @@ export function isCompiledExecutable(
   return isCompiledModuleUrl(moduleUrl) || !executableName.startsWith("bun");
 }
 
-export function compiledExecutable(): string | null {
+export function compiledExecutable(
+  moduleUrl = import.meta.url,
+  executable = process.execPath,
+): string | null {
   const explicit = process.env.AIDLC_COMPILED_EXECUTABLE?.trim();
   if (explicit) return explicit;
-  return isCompiledExecutable() ? process.execPath : null;
+  return isCompiledExecutable(moduleUrl, executable) ? executable : null;
 }
 
 export function aidlcInvocation(): string {

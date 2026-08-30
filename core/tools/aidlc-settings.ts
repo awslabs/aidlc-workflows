@@ -580,16 +580,15 @@ export function settingsModelsFromHarnessPolicy(
   harness: ModelHarness,
   policy: ModelPolicyRecord | null,
 ): SettingsModelPolicyRecord | null {
-  if (!policy) return null;
-  const { agents: _policyAgents, ...base } = policy;
+  const { agents: _policyAgents, ...base } = policy ?? { schemaVersion: 1 as const };
   const agents: Record<string, SettingsModelAgentPolicy> = {};
   const names = new Set([
     ...Object.keys(current?.agents ?? {}),
-    ...Object.keys(policy.agents ?? {}),
+    ...Object.keys(policy?.agents ?? {}),
   ]);
   for (const name of [...names].sort()) {
     const existingModels = { ...(current?.agents?.[name]?.model ?? {}) };
-    const next = policy.agents?.[name];
+    const next = policy?.agents?.[name];
     if (next?.model !== undefined) existingModels[harness] = next.model;
     else delete existingModels[harness];
     const effort = next?.effort;
@@ -600,10 +599,14 @@ export function settingsModelsFromHarnessPolicy(
       };
     }
   }
-  return normalizeSettingsModels({
+  const normalized = normalizeSettingsModels({
     ...base,
     ...(Object.keys(agents).length > 0 ? { agents } : {}),
   });
+  return normalized &&
+      Object.keys(normalized).some((key) => key !== "schemaVersion")
+    ? normalized
+    : null;
 }
 
 export function updateSettingsSection(

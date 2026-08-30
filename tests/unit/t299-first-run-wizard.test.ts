@@ -249,4 +249,20 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
     expect(existsSync(join(result.project, ".git"))).toBe(true);
   }, 60_000);
+
+  test("late first-run rollback preserves a newer concurrent settings write", () => {
+    const newer = `${JSON.stringify({
+      schemaVersion: 1,
+      flags: { schemaVersion: 1, swarm: true },
+    }, null, 2)}\n`;
+    const result = runWizard("\n", {
+      env: {
+        AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3",
+        AIDLC_TEST_FIRST_RUN_ROLLBACK_INTERFERENCE: newer,
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(readFileSync(join(result.project, "aidlc.settings.json"), "utf-8")).toBe(newer);
+    expect(`${result.stdout}${result.stderr}`).toContain("rollback was incomplete");
+  }, 60_000);
 });

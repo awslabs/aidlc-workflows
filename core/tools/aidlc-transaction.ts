@@ -175,7 +175,7 @@ export function transactionState(path: string): string | "absent" {
   if (!pathExists(path)) return "absent";
   const stat = lstatSync(path);
   if (stat.isSymbolicLink()) return `symlink:${readlinkSync(path)}`;
-  if (stat.isDirectory() && readdirSync(path).length === 0) return "empty-directory";
+  if (stat.isDirectory()) return `tree:${transactionSourceHash(path)}`;
   if (!stat.isFile()) return `type:${stat.mode}`;
   return sha256Bytes(readFileSync(path));
 }

@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractTarGz } from "./aidlc-archive.ts";
 import {
@@ -57,6 +57,7 @@ import {
   type TransactionOperation,
   type TransactionPlan,
   executePlan,
+  transactionSourceHash,
   transactionState,
   validateTransactionPlan,
   writeOperation,
@@ -359,6 +360,30 @@ const MODELS_BARE_FLAGS = new Set([
   "--yes",
 ]);
 
+const ROOT_VALUE_FLAGS = new Set([
+  "--ca-bundle",
+  "--from",
+  "--harness",
+  "--mcp",
+  "--pin",
+  "--plan-token",
+  "--project-dir",
+  "--release-base-url",
+]);
+
+const ROOT_BARE_FLAGS = new Set([
+  "--dry-run",
+  "--force",
+  "--help",
+  "--json",
+  "--no-color",
+  "--offline",
+  "--quiet",
+  "--unpin",
+  "--verbose",
+  "--yes",
+]);
+
 function configPositionals(argv: readonly string[]): Array<{ value: string; index: number }> {
   const positionals: Array<{ value: string; index: number }> = [];
   for (let index = 0; index < argv.length; index++) {
@@ -459,6 +484,23 @@ function validateModelsArgs(argv: readonly string[]): string | null {
   }
   if (valuesAfter(argv, "--agent").length > 1) {
     return "one models mutation may target only one --agent";
+  }
+  return null;
+}
+
+function validateRootConfigArgs(argv: readonly string[]): string | null {
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (!token.startsWith("--")) {
+      return `unexpected config positional ${JSON.stringify(token)}`;
+    }
+    if (ROOT_VALUE_FLAGS.has(token)) {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) return `${token} requires a value`;
+      index++;
+      continue;
+    }
+    if (!ROOT_BARE_FLAGS.has(token)) return `unknown config option ${token}`;
   }
   return null;
 }
@@ -1285,6 +1327,9 @@ function providerRecordFromArgs(
   if (profile) next.profile = profile;
   const opencodeDefault = valueAfter(argv, "--opencode-default");
   if (opencodeDefault !== undefined) {
+    if (selected.harness !== "opencode") {
+      throw new Error("--opencode-default is only valid for the opencode harness");
+    }
     if (opencodeDefault !== "yes" && opencodeDefault !== "no") {
       throw new Error("--opencode-default must be yes or no");
     }
@@ -2839,24 +2884,34 @@ function executeSettingsAndProjectMutation(
   const priorPresent = pathPresent(mutation.path);
   const priorBytes = priorPresent ? readFileSync(mutation.path) : null;
   const priorMode = priorPresent ? lstatSync(mutation.path).mode & 0o777 : undefined;
+  const committed = operation.kind === "remove"
+    ? "absent"
+    : operation.kind === "write"
+    ? sha256Bytes(Buffer.from(operation.data, "base64"))
+    : transactionState(mutation.path);
   executePlan(machinePlan);
   invalidateSettingsCache(mutation.path);
+  const rollbackInterference =
+    process.env.AIDLC_TEST_SETTINGS_ROLLBACK_INTERFERENCE;
+  if (rollbackInterference !== undefined) {
+    writeFileSync(mutation.path, rollbackInterference);
+    invalidateSettingsCache(mutation.path);
+  }
   try {
     executePlan(projectPlan);
   } catch (error) {
-    const current = transactionState(mutation.path);
     const restoreOperations: TransactionOperation[] = priorBytes === null
-      ? current === "absent"
+      ? committed === "absent"
         ? []
         : [{
             kind: "remove",
             path: relative(machinePlan.root, mutation.path),
-            expected: current,
+            expected: committed,
           }]
       : [writeOperation(
           relative(machinePlan.root, mutation.path),
           priorBytes.toString("utf-8"),
-          current,
+          committed,
           priorMode,
         )];
     try {
@@ -3967,7 +4022,11 @@ function awsSummary(credentials: ReturnType<typeof detectAwsCredentials>): {
 
 let firstRunChildCount = 0;
 
-function runConfigChild(args: string[], cwd: string): Record<string, unknown> {
+function runConfigChild(
+  args: string[],
+  cwd: string,
+  recordCommitted: (result: Record<string, unknown>) => void,
+): Record<string, unknown> {
   const env = { ...process.env };
   delete env.AIDLC_TEST_CONFIG_TTY;
   delete env.AIDLC_TEST_CONFIG_DETECTION_JSON;
@@ -3984,14 +4043,21 @@ function runConfigChild(args: string[], cwd: string): Record<string, unknown> {
   if (result.status !== 0) {
     throw new Error((result.stdout || result.stderr || "configuration failed").trim());
   }
+  const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+  recordCommitted(parsed);
   firstRunChildCount++;
   if (
     Number(process.env.AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD ?? "0") ===
       firstRunChildCount
   ) {
+    const interference =
+      process.env.AIDLC_TEST_FIRST_RUN_ROLLBACK_INTERFERENCE;
+    if (interference !== undefined) {
+      writeFileSync(join(cwd, "aidlc.settings.json"), interference);
+    }
     throw new Error(`injected first-run failure after child ${firstRunChildCount}`);
   }
-  return JSON.parse(result.stdout) as Record<string, unknown>;
+  return parsed;
 }
 
 function firstRunNextCommands(distribution: string): [string, string] {
@@ -4041,6 +4107,7 @@ export function firstRunPathRemediation(
 function applyFirstRunChoices(
   projectDir: string,
   choices: FirstRunChoices,
+  recordCommitted: (result: Record<string, unknown>) => void,
 ): void {
   firstRunChildCount = 0;
   const common = [
@@ -4055,7 +4122,7 @@ function applyFirstRunChoices(
     "--yes",
     "--json",
   ];
-  runConfigChild(common, projectDir);
+  runConfigChild(common, projectDir, recordCommitted);
   runConfigChild([
     "models",
     "--project-dir",
@@ -4065,7 +4132,7 @@ function applyFirstRunChoices(
     choices.preset,
     "--yes",
     "--json",
-  ], projectDir);
+  ], projectDir, recordCommitted);
   runConfigChild([
     "project",
     "--project-dir",
@@ -4078,7 +4145,7 @@ function applyFirstRunChoices(
     "none",
     "--yes",
     "--json",
-  ], projectDir);
+  ], projectDir, recordCommitted);
   const providerArgs = [
     "providers",
     "--project-dir",
@@ -4099,7 +4166,7 @@ function applyFirstRunChoices(
       providerArgs.push("--mark-done", "bedrock-model-access");
     }
     providerArgs.push("--yes", "--json");
-    runConfigChild(providerArgs, projectDir);
+    runConfigChild(providerArgs, projectDir, recordCommitted);
   }
 }
 
@@ -4122,7 +4189,11 @@ function firstRunMutationPaths(
 function snapshotFirstRunMutationPaths(
   projectDir: string,
   choices: FirstRunChoices,
-): { restore: () => void; cleanup: () => void } {
+): {
+  recordCommitted: (result: Record<string, unknown>) => void;
+  restore: () => void;
+  cleanup: () => void;
+} {
   const root = mkdtempSync(join(tmpdir(), "aidlc-first-run-rollback-"));
   const snapshots = firstRunMutationPaths(projectDir, choices).map((path, index) => {
     const backup = join(root, String(index));
@@ -4135,23 +4206,59 @@ function snapshotFirstRunMutationPaths(
         preserveTimestamps: true,
       });
     }
-    return { path, backup, existed };
+    return { path, backup, existed, committed: transactionState(path) };
   });
   return {
+    recordCommitted: (result) => {
+      const data = result.data;
+      if (!data || typeof data !== "object" || !("actions" in data)) return;
+      const actions = (data as { actions?: unknown }).actions;
+      if (!Array.isArray(actions)) return;
+      const changed = new Set(
+        actions.flatMap((action) => {
+          if (
+            !action ||
+            typeof action !== "object" ||
+            !("path" in action) ||
+            typeof action.path !== "string"
+          ) {
+            return [];
+          }
+          return [resolve(projectDir, action.path)];
+        }),
+      );
+      for (const snapshot of snapshots) {
+        if (
+          [...changed].some((path) =>
+            path === snapshot.path || path.startsWith(`${snapshot.path}${sep}`)
+          )
+        ) {
+          snapshot.committed = transactionState(snapshot.path);
+        }
+      }
+    },
     restore: () => {
       const errors: unknown[] = [];
       for (const snapshot of [...snapshots].reverse()) {
         try {
-          rmSync(snapshot.path, { recursive: true, force: true });
-          if (snapshot.existed) {
-            mkdirSync(dirname(snapshot.path), { recursive: true });
-            cpSync(snapshot.backup, snapshot.path, {
-              recursive: true,
-              dereference: false,
-              verbatimSymlinks: true,
-              preserveTimestamps: true,
-            });
-          }
+          const root = dirname(snapshot.path);
+          const path = basename(snapshot.path);
+          const operations: TransactionOperation[] = snapshot.existed
+            ? [{
+                kind: lstatSync(snapshot.backup).isDirectory() ? "tree" : "copy",
+                path,
+                source: snapshot.backup,
+                sourceHash: transactionSourceHash(snapshot.backup),
+                expected: snapshot.committed,
+              }]
+            : snapshot.committed === "absent"
+            ? []
+            : [{
+                kind: "remove",
+                path,
+                expected: snapshot.committed,
+              }];
+          executePlan({ schemaVersion: 1, root, operations });
         } catch (error) {
           errors.push(error);
         }
@@ -4517,7 +4624,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   if (!choices) return true;
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
   try {
-    applyFirstRunChoices(projectDir, choices);
+    applyFirstRunChoices(projectDir, choices, snapshot.recordCommitted);
     renderFirstRunEnding(projectDir, choices);
   } catch (error) {
     try {
@@ -5278,6 +5385,47 @@ function handleSettingsOnlySection(
     emitResult(usage(validation, configCommand(`${section} --help`)), options);
     return true;
   }
+  const modelMutationFlags = [
+    "--agent",
+    "--deciding-effort",
+    "--effort",
+    "--from",
+    "--model",
+    "--preset",
+    "--reset",
+    "--reviewing-effort",
+    "--save-as",
+    "--writing-up-effort",
+  ];
+  const flagMutationFlags = [
+    "--bypass",
+    "--clear-bypass",
+    "--default-scope",
+    "--hook-debug",
+    "--reset",
+    "--sensor-timeout-ms",
+    "--swarm",
+  ];
+  const mutationFlags = section === "models" ? modelMutationFlags : flagMutationFlags;
+  const inspecting = argv.includes("--show") || argv.includes("--check");
+  if (
+    inspecting &&
+    (
+      mutationFlags.some((flag) => argv.includes(flag)) ||
+      argv.includes("--dry-run") ||
+      argv.includes("--yes")
+    )
+  ) {
+    emitResult(
+      usage(`--show and --check cannot be combined with ${section} mutations`),
+      options,
+    );
+    return true;
+  }
+  if (argv.includes("--show") && argv.includes("--check")) {
+    emitResult(usage("--show and --check are mutually exclusive"), options);
+    return true;
+  }
   let resolved: ResolvedAidlcSettings;
   try {
     resolved = resolveAidlcSettings(projectDir);
@@ -5311,28 +5459,6 @@ function handleSettingsOnlySection(
     }), options);
     return true;
   }
-  const modelMutationFlags = [
-    "--agent",
-    "--deciding-effort",
-    "--effort",
-    "--from",
-    "--model",
-    "--preset",
-    "--reset",
-    "--reviewing-effort",
-    "--save-as",
-    "--writing-up-effort",
-  ];
-  const flagMutationFlags = [
-    "--bypass",
-    "--clear-bypass",
-    "--default-scope",
-    "--hook-debug",
-    "--reset",
-    "--sensor-timeout-ms",
-    "--swarm",
-  ];
-  const mutationFlags = section === "models" ? modelMutationFlags : flagMutationFlags;
   if (!mutationFlags.some((flag) => argv.includes(flag))) {
     emitResult(usage(
       `non-interactive ${section} configuration requires an explicit policy flag`,
@@ -5503,6 +5629,13 @@ export async function main(
       options,
     );
     return;
+  }
+  if (!section) {
+    const validation = validateRootConfigArgs(argv);
+    if (validation) {
+      emitResult(usage(validation, configCommand("--help")), options);
+      return;
+    }
   }
   if (
     (section?.value === "models" || section?.value === "flags") &&

@@ -1322,6 +1322,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(script).toContain("--signer-workflow");
     expect(script).toContain("$env:AIDLC_RELEASE_REPOSITORY");
     expect(script).toContain("$env:AIDLC_RELEASE_WORKFLOW");
+    expect(script).toContain("$env:AIDLC_GH_BIN");
     expect(script).toContain("$env:Path = \"$binDir;$env:Path\"");
     expect(script).toContain("exceeds the 1 MiB metadata limit");
     const release = fixture(AIDLC_VERSION, { binary: "bytes" });
@@ -1428,6 +1429,10 @@ describe("t244 Windows and completion release surfaces", () => {
     );
     writeFileSync(join(release, "version.json"), `{"version":"${AIDLC_VERSION}"}\n`);
     writeFileSync(join(release, "aidlc-runtime.tar.gz"), "runtime\n");
+    writeFileSync(
+      join(release, "aidlc-release.intoto.jsonl"),
+      "aidlc-test-release-provenance\n",
+    );
     cpSync(INSTALL_SH, join(release, "install.sh"));
     const assets = [
       "version.json",
@@ -1481,6 +1486,12 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(parsed.jobs["native-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(parsed.jobs["musl-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(workflow).toContain("name: Authorize immutable release tag");
+    expect(workflow).toContain("name: Verify release repository controls");
+    expect(workflow).toContain(".can_admins_bypass == false");
+    expect(workflow).toContain(".prevent_self_review == true");
+    expect(workflow).toContain('.reviewer.slug == "aidlc-admins"');
+    expect(workflow).toContain('.type == "creation"');
+    expect(workflow).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(workflow).toContain("git merge-base --is-ancestor");
     expect(workflow).toContain(
       'test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"',
@@ -1521,6 +1532,8 @@ describe("t244 Windows and completion release surfaces", () => {
       workflow.indexOf("  build:"),
     );
     expect(nativeSmokeJob).toContain(regen);
+    expect(nativeSmokeJob).toContain("needs: [authorize, verify]");
+    expect(nativeSmokeJob).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(nativeSmokeJob.indexOf(regen))
       .toBeLessThan(nativeSmokeJob.indexOf("t238-build-binaries.test.ts"));
     const buildJob = workflow.slice(
@@ -1528,11 +1541,15 @@ describe("t244 Windows and completion release surfaces", () => {
       workflow.indexOf("  musl-smoke:"),
     );
     expect(buildJob).toContain(regen);
+    expect(buildJob).toContain("needs: [authorize, native-smoke]");
+    expect(buildJob).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(buildJob.indexOf(regen))
       .toBeLessThan(buildJob.indexOf("bun scripts/package.ts --check"));
     expect(buildJob.indexOf("bun scripts/package.ts --check"))
       .toBeLessThan(buildJob.indexOf("bun scripts/build-binaries.ts"));
     const stageRelease = workflowJob(workflow, "stage-release");
+    expect(stageRelease).toContain("needs: [authorize, build]");
+    expect(stageRelease).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(stageRelease).toContain(regen);
     expect(stageRelease.indexOf(regen))
       .toBeLessThan(stageRelease.indexOf("bun scripts/package-release.ts"));
@@ -1566,13 +1583,16 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(stageRelease).not.toContain("attest-build-provenance");
   });
 
-  test("release MUST 2: lifecycle jobs use checksums only and keep user trust-root features", () => {
+  test("release MUST 2: lifecycle jobs stay offline and exercise mandatory local provenance", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
     const windows = workflowJob(workflow, "windows-lifecycle");
     const unix = workflowJob(workflow, "unix-lifecycle");
     expect(windows).toContain("checksums.txt");
     expect(windows).toContain("Get-FileHash -Algorithm SHA256");
     expect(windows).toContain("install.ps1 -From $releaseRoot -Offline");
+    expect(windows).toContain("aidlc-lifecycle-provenance-fixture");
+    expect(windows).toContain("$env:AIDLC_GH_BIN = $ghFixture");
+    expect(windows).toContain("offline installer did not verify release provenance");
     expect(windows).toContain(
       "$harnesses = @('claude', 'codex', 'copilot', 'cursor', 'kiro', 'kiro-ide', 'opencode')",
     );
@@ -1602,6 +1622,9 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(unix).toContain("sha256sum -c checksums.txt");
     expect(unix).toContain("shasum -a 256 -c checksums.txt");
     expect(unix).toContain('install.sh" --from "$release" --offline');
+    expect(unix).toContain("aidlc-lifecycle-provenance-fixture");
+    expect(unix).toContain('AIDLC_GH_BIN="$gh_bin"');
+    expect(unix).toContain('test -s "$gh_marker"');
     expect(unix).toContain(
       "for harness in claude codex copilot cursor kiro kiro-ide opencode; do",
     );
@@ -1619,10 +1642,8 @@ describe("t244 Windows and completion release surfaces", () => {
     );
     for (const lifecycle of [windows, unix]) {
       expect(lifecycle).not.toContain("attestation verify");
-      expect(lifecycle).not.toContain("aidlc-release.intoto.jsonl");
       expect(lifecycle).not.toContain("AIDLC_RELEASE_REPOSITORY");
       expect(lifecycle).not.toContain("AIDLC_RELEASE_WORKFLOW");
-      expect(lifecycle).not.toContain("AIDLC_GH_BIN");
     }
     const unixInstaller = readFileSync(INSTALL_SH, "utf-8");
     const windowsInstaller = readFileSync(INSTALL_PS1, "utf-8");
@@ -1651,6 +1672,8 @@ describe("t244 Windows and completion release surfaces", () => {
     });
     expect(parsed.jobs.publish.environment).toBe("release");
     const publish = workflowJob(workflow, "publish");
+    expect(publish).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
+    expect(publish).toContain("refs/remotes/origin/aidlc-release-tag^{commit}");
     expect(publish).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     expect(publish).toContain("sha256sum -c checksums.txt");
     expect(publish).toContain("name: Attest staged release assets");

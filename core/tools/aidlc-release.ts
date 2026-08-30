@@ -112,7 +112,7 @@ function verifiedChecksums(directory: string): Map<string, string> {
   return rows;
 }
 
-function verifyReleaseProvenance(
+export function verifyReleaseProvenance(
   directory: string,
   version: string,
 ): void {
@@ -120,9 +120,11 @@ function verifyReleaseProvenance(
   if (!existsSync(bundle)) {
     throw new Error(`release is missing ${PROVENANCE_BUNDLE}`);
   }
+  assertMetadataSize(bundle, PROVENANCE_BUNDLE);
   const trust = releaseTrust();
+  const gh = process.env.AIDLC_GH_BIN?.trim() || "gh";
   const result = Bun.spawnSync([
-    "gh",
+    gh,
     "attestation",
     "verify",
     join(directory, "checksums.txt"),
@@ -524,7 +526,9 @@ export async function acquireRelease(options: {
 }): Promise<{ directory: string; manifest: ReleaseManifest; cleanup?: string }> {
   if (options.from) {
     const directory = isAbsolute(options.from) ? options.from : resolve(process.cwd(), options.from);
-    const manifest = verifyReleaseDirectory(directory, options.names, Boolean(options.names?.length));
+    const manifest = readReleaseManifest(directory);
+    verifyReleaseProvenance(directory, manifest.version);
+    verifyReleaseDirectory(directory, options.names, Boolean(options.names?.length));
     if (options.version && manifest.version !== options.version) {
       throw new Error(`local release is ${manifest.version}, not requested ${options.version}`);
     }

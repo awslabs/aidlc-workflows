@@ -240,11 +240,7 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) "aidlc-install-$PID-$([Guid]::
 
 try {
   $metadataSegment = if ($Version) { "download/v$Version" } else { 'latest/download' }
-  $metadata = if ($From) {
-    @('version.json', 'checksums.txt')
-  } else {
-    @('version.json', 'checksums.txt', 'aidlc-release.intoto.jsonl')
-  }
+  $metadata = @('version.json', 'checksums.txt', 'aidlc-release.intoto.jsonl')
   foreach ($name in $metadata) {
     $output = Join-Path $temporary $name
     if ($From) {
@@ -263,7 +259,8 @@ try {
 
   $manifestPath = Join-Path $temporary 'version.json'
   $checksumsPath = Join-Path $temporary 'checksums.txt'
-  foreach ($metadataPath in @($manifestPath, $checksumsPath)) {
+  $bundle = Join-Path $temporary 'aidlc-release.intoto.jsonl'
+  foreach ($metadataPath in @($manifestPath, $checksumsPath, $bundle)) {
     if ((Get-Item -LiteralPath $metadataPath).Length -gt 1MB) {
       Stop-Install -Code 4 -Status 'failed' `
         -Message "$([IO.Path]::GetFileName($metadataPath)) exceeds the 1 MiB metadata limit"
@@ -274,25 +271,26 @@ try {
     Stop-Install -Code 4 -Status 'failed' `
       -Message 'version.json has an invalid schema or version'
   }
-  if (-not $From) {
+  $ghPath = $env:AIDLC_GH_BIN
+  if (-not $ghPath) {
     $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue |
       Select-Object -First 1
-    if (-not $gh) {
-      Stop-Install -Code 1 -Status 'failed' `
-        -Message 'GitHub CLI is required to verify release provenance' `
-        -Remediation 'install gh, then rerun this installer'
-    }
-    $bundle = Join-Path $temporary 'aidlc-release.intoto.jsonl'
-    & $gh.Source attestation verify $checksumsPath `
-      --bundle $bundle `
-      --repo $releaseRepository `
-      --signer-workflow $releaseWorkflow `
-      --source-ref "refs/tags/v$($manifest.version)" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-      Stop-Install -Code 4 -Status 'failed' `
-        -Message 'release provenance verification failed' `
-        -Remediation "obtain the release from $releaseRepository"
-    }
+    if ($gh) { $ghPath = $gh.Source }
+  }
+  if (-not $ghPath -or -not (Test-Path -LiteralPath $ghPath -PathType Leaf)) {
+    Stop-Install -Code 1 -Status 'failed' `
+      -Message 'GitHub CLI is required to verify release provenance' `
+      -Remediation 'install gh, then rerun this installer'
+  }
+  & $ghPath attestation verify $checksumsPath `
+    --bundle $bundle `
+    --repo $releaseRepository `
+    --signer-workflow $releaseWorkflow `
+    --source-ref "refs/tags/v$($manifest.version)" | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Stop-Install -Code 4 -Status 'failed' `
+      -Message 'release provenance verification failed' `
+      -Remediation "obtain the release from $releaseRepository"
   }
   $manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant()
   if ($manifestHash -ne (Get-ExpectedHash -Checksums $checksumsPath -Name 'version.json')) {

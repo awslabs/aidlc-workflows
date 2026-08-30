@@ -317,6 +317,10 @@ describe("t238 build-binaries release builder", () => {
       expect.objectContaining({ name: "aidlc-runtime.tar.gz" }),
     ]);
     expect(releaseManifest.assets.some((asset) => asset.kind === "data")).toBe(false);
+    writeFileSync(
+      join(RELEASE_DIR, "aidlc-release.intoto.jsonl"),
+      "aidlc-test-release-provenance\n",
+    );
 
     const installFixture = mkdtempSync(join(tmpdir(), "aidlc-t238-install-"));
     try {
@@ -333,6 +337,7 @@ describe("t238 build-binaries release builder", () => {
         HOME: home,
         AIDLC_INSTALL_ROOT: installRoot,
         AIDLC_BIN_DIR: binDir,
+        AIDLC_GH_BIN: join(REPO_ROOT, "tests", "fixtures", "bin", "gh"),
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
       };
       const outsideProfileDir = join(installFixture, "outside-profile");
@@ -644,7 +649,8 @@ describe("t238 build-binaries release builder", () => {
           "  process.exit(0);",
           "}",
           "if (verb === \"doctor\") {",
-          "  process.stderr.write(\"ENOENT: /$bunfs/root/data/stage-graph.json\\n\");",
+          "  process.stdout.write(\"AI-DLC doctor\\nSchema validation: 33/33 stages validated\\n\");",
+          "  process.stderr.write(\"FAIL Cannot find module \\\"/$bunfs/root/data/stage-graph.json\\\": ENOENT; uv_spawn 'git'\\n\");",
           "  process.exit(1);",
           "}",
           "process.stderr.write(\"unknown fake command\\n\");",
@@ -674,9 +680,7 @@ describe("t238 build-binaries release builder", () => {
 
       const delegateDoctorData = gate(native, "delegate-doctor-data");
       expect(delegateDoctorData.ok).toBe(false);
-      // The union crash-signature regex tries "ENOENT" at the same position
-      // where v2's narrower pattern first hit "/$bunfs/".
-      expect(delegateDoctorData.actual).toBe("ENOENT");
+      expect(delegateDoctorData.actual).toBe("Cannot find module");
       expect(result.stderr).toContain("delegate-doctor-data gate failed");
     } finally {
       rmSync(root, { recursive: true, force: true });

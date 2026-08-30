@@ -363,6 +363,67 @@ describe("t298 aidlc.settings hierarchy", () => {
     expect(existsSync(projectSettingsPath(outside))).toBe(false);
   });
 
+  test("settings-only inspection rejects mutations and harness reset preserves peers", () => {
+    const machine = temp("aidlc-t298-multi-harness-");
+    const outside = temp("aidlc-t298-multi-harness-outside-");
+    const settingsPath = join(machine, "aidlc.settings.json");
+    writeJson(settingsPath, {
+      schemaVersion: 1,
+      models: {
+        schemaVersion: 1,
+        agents: {
+          architect: {
+            effort: "high",
+            model: {
+              claude: "claude-special",
+              codex: "codex-special",
+            },
+          },
+        },
+      },
+    });
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const before = readFileSync(settingsPath, "utf-8");
+    const conflict = run([
+      "config",
+      "models",
+      "--project-dir",
+      outside,
+      "--global",
+      "--show",
+      "--preset",
+      "minimal",
+      "--yes",
+    ], outside, env);
+    expect(conflict.status).toBe(2);
+    expect(conflict.stdout).toContain("cannot be combined with models mutations");
+    expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+
+    const reset = run([
+      "config",
+      "models",
+      "--project-dir",
+      outside,
+      "--global",
+      "--harness",
+      "claude",
+      "--reset",
+      "--yes",
+    ], outside, env);
+    expect(reset.status, reset.stdout + reset.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).models).toEqual({
+      schemaVersion: 1,
+      agents: {
+        architect: {
+          model: { codex: "codex-special" },
+        },
+      },
+    });
+  });
+
   test("doctor reports a git-tracked local settings file", () => {
     const project = temp("aidlc-t298-tracked-");
     spawnSync("git", ["init", "-q"], { cwd: project });

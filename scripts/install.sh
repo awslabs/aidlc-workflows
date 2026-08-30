@@ -315,7 +315,7 @@ sha256_file() {
 
 if [ -n "$FROM" ]; then
   [ -d "$FROM" ] || usage "offline source is not a directory: $FROM"
-  for metadata in version.json checksums.txt install.sh; do
+  for metadata in version.json checksums.txt aidlc-release.intoto.jsonl install.sh; do
     [ -f "$FROM/$metadata" ] || fail 4 failed "offline source is missing $metadata"
     cp "$FROM/$metadata" "$TMP/$metadata"
   done
@@ -330,38 +330,31 @@ else
   download "$RELEASE_URL/aidlc-release.intoto.jsonl" "$TMP/aidlc-release.intoto.jsonl"
 fi
 
-for metadata in version.json checksums.txt; do
+for metadata in version.json checksums.txt aidlc-release.intoto.jsonl; do
   metadata_bytes=$(wc -c <"$TMP/$metadata" | tr -d ' ')
   [ "$metadata_bytes" -le 1048576 ] ||
     fail 4 failed "$metadata exceeds the 1 MiB metadata limit"
 done
-if [ -z "$FROM" ]; then
-  provenance_bytes=$(wc -c <"$TMP/aidlc-release.intoto.jsonl" | tr -d ' ')
-  [ "$provenance_bytes" -le 1048576 ] ||
-    fail 4 failed "aidlc-release.intoto.jsonl exceeds the 1 MiB metadata limit"
-fi
 
 candidate_version=$VERSION
 [ -n "$candidate_version" ] ||
   candidate_version=$(sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
 [ -n "$candidate_version" ] || fail 4 failed "version.json has no valid version."
-if [ -z "$FROM" ]; then
-  if [ -z "$GH_BIN" ]; then
-    GH_BIN=$(command -v gh 2>/dev/null || true)
-  fi
-  if [ -z "$GH_BIN" ] || [ ! -x "$GH_BIN" ]; then
-    fail 1 failed "GitHub CLI is required to verify release provenance" \
-      "install gh, then rerun this installer"
-  fi
-  "$GH_BIN" attestation verify "$TMP/checksums.txt" \
-    --bundle "$TMP/aidlc-release.intoto.jsonl" \
-    --repo "$RELEASE_REPOSITORY" \
-    --signer-workflow "$RELEASE_WORKFLOW" \
-    --source-ref "refs/tags/v$candidate_version" \
-    >/dev/null 2>"$TMP/provenance.err" ||
-    fail 4 failed "release provenance verification failed" \
-      "obtain the release from $RELEASE_REPOSITORY"
+if [ -z "$GH_BIN" ]; then
+  GH_BIN=$(command -v gh 2>/dev/null || true)
 fi
+if [ -z "$GH_BIN" ] || [ ! -x "$GH_BIN" ]; then
+  fail 1 failed "GitHub CLI is required to verify release provenance" \
+    "install gh, then rerun this installer"
+fi
+"$GH_BIN" attestation verify "$TMP/checksums.txt" \
+  --bundle "$TMP/aidlc-release.intoto.jsonl" \
+  --repo "$RELEASE_REPOSITORY" \
+  --signer-workflow "$RELEASE_WORKFLOW" \
+  --source-ref "refs/tags/v$candidate_version" \
+  >/dev/null 2>"$TMP/provenance.err" ||
+  fail 4 failed "release provenance verification failed" \
+    "obtain the release from $RELEASE_REPOSITORY"
 
 expected_manifest=$(sed -n 's/^\([a-f0-9]\{64\}\)  version\.json$/\1/p' "$TMP/checksums.txt")
 [ -n "$expected_manifest" ] || fail 4 failed "No checksum for version.json."

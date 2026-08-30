@@ -949,6 +949,28 @@ describe("t294 config diagnostics CLI", () => {
     });
   }, 60_000);
 
+  test("OpenCode-only provider flags are rejected for other harnesses", () => {
+    const project = install("claude");
+    const result = run([
+      "config",
+      "providers",
+      "--project-dir",
+      project,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "us-west-2",
+      "--opencode-default",
+      "yes",
+      "--yes",
+    ], project, runtimeEnv());
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain(
+      "--opencode-default is only valid for the opencode harness",
+    );
+    expect(readConfigDiagnosticRecords(join(project, ".claude")).providers).toBeNull();
+  }, 60_000);
+
   test("runtime and trust enforce non-TTY judgment, --yes semantics, show, and reset", () => {
     const project = install("claude");
     const env = runtimeEnv();

@@ -1788,13 +1788,17 @@ function delegateDoctorDataGate(artifact: string): GateResult {
   const output = `${result.stdout}\n${result.stderr}`;
   // Doctor legitimately reports PATH-dependent external tools as advisory rows,
   // and the pathless gate env phrases those on Windows as
-  // "ENOENT: no such file or directory, uv_spawn 'git'". Those are not
-  // compiled-runtime crashes; only bun spawns (packaging bug: the binary
-  // shelled out to a dev bun) and data-file misses are. Scrub advisory
-  // external-spawn lines before matching, keeping uv_spawn 'bun' lines.
+  // "ENOENT: no such file or directory, uv_spawn 'git'". Suppress only that
+  // complete suffix. A line that also carries a bundled-module or $bunfs
+  // signature is a compiled-runtime failure and must survive the scrub.
+  const externalSpawnAdvisory =
+    /ENOENT: no such file or directory, uv_spawn ['"](?!bun['"])[^'"]+['"]\s*$/;
+  const bundledRuntimeSignature = /Cannot find module|\/\$bunfs\//;
   const scrubbed = output
     .split("\n")
-    .filter((line) => !/uv_spawn ['"](?!bun['"])[^'"]+['"]/.test(line))
+    .filter((line) =>
+      bundledRuntimeSignature.test(line) || !externalSpawnAdvisory.test(line)
+    )
     .join("\n");
   const crashSignature =
     scrubbed.match(/Cannot find module|\/\$bunfs\/|ENOENT|uv_spawn ['"]bun['"]/)?.[0] ?? "";

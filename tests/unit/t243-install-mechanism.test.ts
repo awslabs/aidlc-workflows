@@ -27,6 +27,7 @@ import {
   type ArchiveEntry,
 } from "../../core/tools/aidlc-archive.ts";
 import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
+import { compiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { sha256Bytes, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import {
   machineTransactionRoot,
@@ -600,6 +601,21 @@ describe("t243 archive and transaction safety", () => {
       expect(packageManagerForExecutable("/home/user/.local/share/aidlc/versions/2.5.0/aidlc"))
         .toBeNull();
     }
+  });
+
+  test("source-mode Bun is not classified as a package-managed AI-DLC executable", () => {
+    expect(
+      compiledExecutable(
+        "file:///repo/core/tools/aidlc-lifecycle.ts",
+        "/opt/homebrew/Cellar/bun/1.3.14/bin/bun",
+      ),
+    ).toBeNull();
+    expect(
+      compiledExecutable(
+        "file:///$bunfs/root/aidlc-lifecycle.ts",
+        "/opt/homebrew/Cellar/aidlc/2.7.0/libexec/aidlc",
+      ),
+    ).toBe("/opt/homebrew/Cellar/aidlc/2.7.0/libexec/aidlc");
   });
 
   test("shared release fixture is byte-deterministic and emits hostile archives", () => {
@@ -1985,6 +2001,24 @@ describe("t243 release lifecycle", () => {
     expect(() => verifyReleaseDirectory(tampered)).toThrow("version.json: checksum mismatch");
   }, 60_000);
 
+  test("local release acquisition requires an authenticated provenance bundle", async () => {
+    const missing = fixtureReleaseBytes();
+    rmSync(join(missing, "aidlc-release.intoto.jsonl"));
+    await expect(acquireRelease({ from: missing })).rejects.toThrow(
+      "release is missing aidlc-release.intoto.jsonl",
+    );
+
+    const malformed = fixtureReleaseBytes();
+    writeFileSync(join(malformed, "aidlc-release.intoto.jsonl"), "not-attested\n");
+    await expect(acquireRelease({ from: malformed })).rejects.toThrow(
+      "release provenance verification failed",
+    );
+
+    const valid = fixtureReleaseBytes();
+    const acquired = await acquireRelease({ from: valid });
+    expect(acquired.manifest.version).toBe(AIDLC_VERSION);
+  });
+
   test("release manifests reject retired per-distribution data assets", () => {
     const release = fixtureReleaseBytes();
     const manifestPath = join(release, "version.json");
@@ -2268,6 +2302,23 @@ describe("t243 release lifecycle", () => {
     const project = temp("aidlc-t240-pin-project-");
     mkdirSync(join(project, ".git"));
     const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: bin };
+
+    writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const unpinPlan = run(INIT, [
+      "config", "--unpin", "--dry-run", "--json", "--project-dir", project,
+    ], project, env);
+    expect(unpinPlan.status, unpinPlan.stdout + unpinPlan.stderr).toBe(0);
+    expect(readFileSync(join(project, ".aidlc-version"), "utf-8")).toBe(`${AIDLC_VERSION}\n`);
+    rmSync(join(project, ".aidlc-version"));
+
+    const pinPlan = run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--from", nextRelease, "--dry-run", "--json",
+      "--project-dir", project,
+    ], project, env);
+    expect(pinPlan.status, pinPlan.stdout + pinPlan.stderr).toBe(0);
+    expect(existsSync(join(project, ".aidlc-version"))).toBe(false);
+    expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(false);
+    expect(existsSync(join(machine, "pins.json"))).toBe(false);
 
     const selected = run(LIFECYCLE, [
       "use",

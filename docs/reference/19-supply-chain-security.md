@@ -71,10 +71,13 @@ release, tag, attestations, or audit record.
 binaries, and `aidlc-runtime.tar.gz`. The staging job verifies those bytes,
 then uploads one `release-candidate` without a provenance bundle. Unix and
 Windows lifecycle jobs checksum and test that exact artifact without signing
-permissions. Each lifecycle job then scaffolds and doctors all seven harnesses
-in separate fresh projects; Unix runs every installed command under its
-stripped `PATH`. This pre-gate lifecycle coverage owns harness breadth. After
-the human gate, `publish` downloads the candidate,
+permissions. Because the public offline installer now requires provenance for
+every local directory, those pre-attestation jobs add a job-local sentinel
+bundle and verifier fixture, assert that the installer invoked it, and never
+upload either fixture. Each lifecycle job then scaffolds and doctors all seven
+harnesses in separate fresh projects; Unix runs every installed command under
+its stripped `PATH`. This pre-gate lifecycle coverage owns harness breadth.
+After the human gate, `publish` downloads the candidate,
 re-verifies it, attests `build/release/*`, copies the Sigstore bundle to the
 stable asset name `aidlc-release.intoto.jsonl`, and creates the draft without
 rebuilding or repackaging. The gated `promote` job validates the assets
@@ -99,8 +102,10 @@ The build job uses commit-SHA-pinned third-party actions, installs the frozen
 `bun.lock`, regenerates projections, runs the two-build package determinism
 guard, and builds each target in a target-native matrix
 (`.github/workflows/release.yml`). The candidate is assembled once and consumed
-unchanged by checksum-only Unix and Windows lifecycle tests. After approval,
-`publish` re-verifies and attests those bytes and creates a draft. The gated
+unchanged by Unix and Windows lifecycle tests. Those jobs verify checksums and
+use a hermetic provenance-verifier fixture because the real attestation does
+not exist until after approval. `publish` re-verifies and
+attests those bytes and creates a draft. The gated
 `promote` job verifies the draft's actual assets before its final conditional
 publication step. GitHub artifact attestations provide the signed SLSA
 provenance for the post-gate draft subjects.
@@ -109,9 +114,14 @@ provenance for the post-gate draft subjects.
 
 Tag protection and the protected `release` environment are required repository
 settings. They are not represented by files in this repository and must be
-confirmed before the first publication. The workflow independently rejects a
-tag whose commit is not on `v2`; `publish` rechecks that SHA, compares the
-selected tag with `version.json.version`, and uses
+confirmed before the first publication. The authorization job reads those
+settings and fails before checkout unless the environment has required
+reviewers, self-review and administrator bypass are disabled, `v*` is an
+allowed deployment-tag pattern, and an active release-tag creation ruleset
+names the reviewer team. The workflow independently rejects a tag whose commit
+is not on `v2`; every source-consuming job checks out the authorized SHA, and
+`publish` rechecks the remote tag target, compares the selected tag with
+`version.json.version`, and uses
 `gh release create --verify-tag --draft`. The gated `promote` job repeats
 tag/version parity against the downloaded draft. Public visibility begins only
 when that job's conditional final release-edit step succeeds
@@ -123,9 +133,8 @@ The staging and lifecycle jobs establish pre-gate byte integrity through
 `checksums.txt`. After approval, `publish` repeats checksum verification and
 attests the candidate. The gated `promote` job then downloads the draft's real
 assets, checks their checksums, and verifies both online provenance and the
-exported offline bundle before its conditional publication step. Remote
-installers and
-`core/tools/aidlc-release.ts` first verify
+exported offline bundle before its conditional publication step. Remote and
+local installers, plus `core/tools/aidlc-release.ts`, first verify
 the attestation for `checksums.txt` against the repository, signer workflow,
 and release tag using `aidlc-release.intoto.jsonl`; only then do they verify the
 `version.json` checksum and each selected asset against both the manifest and
@@ -239,11 +248,14 @@ schema.
 - Every third-party action in `.github/workflows/release.yml` is pinned to a
   full 40-hex commit SHA, with the release line retained as a comment.
 - Workflow-global permissions are `contents: read`.
+- `authorize` alone adds `actions: read` so it can fail closed after inspecting
+  the release environment; it also reads the public repository rulesets.
 - No job before `publish` receives `id-token: write` or
   `attestations: write`.
 - `publish` is the only signing job. It receives `contents: write`,
   `id-token: write`, and `attestations: write` inside the protected `release`
-  environment and consumes the authorization job's immutable tag SHA.
+  environment and consumes the authorization job's immutable tag SHA. Every
+  earlier source checkout uses that SHA rather than resolving the tag again.
 - GitHub does not expose draft releases to `contents: read` identities. A
   standalone read-only draft-verification job is not present.
 - `promote` receives `contents: write` inside the protected `release`
@@ -338,7 +350,8 @@ machine config, logs, or errors. URL errors pass through the redactor in
 `core/tools/aidlc-release.ts`.
 
 Offline mode is first-class: `--offline` requires a local `--from` release
-directory and opens no release socket. `core/tools/aidlc-update.ts` caches
+directory, requires its exported provenance bundle, and opens no release
+socket. `core/tools/aidlc-update.ts` caches
 update metadata for 24 hours in `update-check.json` and replaces it through
 the shared transaction engine. Global `update-check=false` disables automatic
 and explicit metadata refresh, but does not block a user-requested
@@ -359,9 +372,12 @@ and explicit metadata refresh, but does not block a user-requested
 ## 11. Open items for focused review
 
 - Apply and verify the protected-tag repository setting, with its allowlist
-  naming `@awslabs/aidlc-admins` per section 7.
+  naming `@awslabs/aidlc-admins` per section 7. The release workflow now fails
+  closed until this setting is present.
 - Create the protected `release` environment with non-author approval and
-  self-review disabled.
+  self-review and administrator bypass disabled, plus the `v*` deployment-tag
+  policy. The release workflow now fails closed until these settings are
+  present.
 - Decide whether the second protected-environment approval on `promote` is an
   acceptable tag-push UX cost. Do not remove the environment merely to avoid
   that second approval; it is the boundary that keeps public visibility gated.
