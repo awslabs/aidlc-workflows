@@ -372,3 +372,20 @@ The full run (33 stages, express scope) takes approximately 60-90 minutes
 with a fast model. The `express` scope skips design/review passes -- use
 `/aidlc express "..."` for the fastest end-to-end run. For a fuller test,
 use `/aidlc feature "..."` (includes design + reviewers, ~2-3 hours).
+
+## Recording Evidence
+
+Each completed run is captured under
+`tests/evidence/devin-e2e-run/<run>/` (e.g. `first-run/`, `second-run/`,
+`third-run/`), following the convention established by
+`tests/evidence/p3-kiro-routing/`. Each run directory contains:
+
+- the raw captured artifacts (doctor output, workflow output, audit trail,
+  outcomes pack, hook coverage, runtime graph, generated stage artifacts);
+- a `SUMMARY.md` narrating the run phase by phase;
+- a `README.md` recording the run environment and a SHA-256 manifest of
+  every artifact (computed with
+  `find . -type f ! -name README.md | sort | xargs sha256sum`).
+
+A top-level `tests/evidence/devin-e2e-run/README.md` tracks the campaign
+table (run, date, scope, status). Update it when a new run lands.
