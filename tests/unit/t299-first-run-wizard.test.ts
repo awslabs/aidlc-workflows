@@ -1,7 +1,16 @@
 // covers: tool:aidlc-init
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -73,6 +82,7 @@ function runWizard(
     aidlc?: boolean;
     runtimeIssue?: boolean;
     env?: NodeJS.ProcessEnv;
+    prepare?: (project: string) => void;
   } = {},
 ): { project: string; status: number; stdout: string; stderr: string } {
   const project = temp("aidlc-t299-project-");
@@ -88,6 +98,7 @@ function runWizard(
   }
   executable(join(bin, "getconf"), bin);
   if (options.aidlc !== false) executable(join(bin, "aidlc"));
+  options.prepare?.(project);
   const result = spawnSync(
     BUN,
     [INIT, "config", "--project-dir", project],
@@ -255,14 +266,30 @@ describe("t299 first-run setup wizard", () => {
       schemaVersion: 1,
       flags: { schemaVersion: 1, swarm: true },
     }, null, 2)}\n`;
+    const priorGitignore = "# user-owned before setup\n";
     const result = runWizard("\n", {
       env: {
         AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3",
         AIDLC_TEST_FIRST_RUN_ROLLBACK_INTERFERENCE: newer,
       },
+      prepare: (project) => {
+        writeFileSync(join(project, ".gitignore"), priorGitignore);
+      },
     });
     expect(result.status).toBe(1);
     expect(readFileSync(join(result.project, "aidlc.settings.json"), "utf-8")).toBe(newer);
-    expect(`${result.stdout}${result.stderr}`).toContain("rollback was incomplete");
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output).toContain("rollback was incomplete");
+    const recovery = /recovery snapshot preserved at ([^\r\n]+)/.exec(output)?.[1];
+    expect(recovery).toBeDefined();
+    expect(existsSync(recovery as string)).toBe(true);
+    expect(
+      readdirSync(recovery as string).some((entry) => {
+        const path = join(recovery as string, entry);
+        return statSync(path).isFile() &&
+          readFileSync(path, "utf-8") === priorGitignore;
+      }),
+    ).toBe(true);
+    temporary.push(recovery as string);
   }, 60_000);
 });

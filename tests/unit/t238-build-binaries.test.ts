@@ -238,8 +238,12 @@ describe("t238 build-binaries release builder", () => {
       /Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/,
     );
 
+    // A fresh empty directory, not the shared host tmp root: the binary scans
+    // its cwd for workspace detection, so tmpdir()'s accumulated litter made
+    // this spawn's duration hostage to host state (observed 0.09s clean vs
+    // 4.8s+ with ~50k entries, breaching the cap under parallel load).
     const rerun = spawnSync(native.artifact, ["version"], {
-      cwd: tmpdir(),
+      cwd: mkdtempSync(join(tmpdir(), "aidlc-rerun-")),
       encoding: "utf-8",
       timeout: 30_000,
     });
@@ -650,7 +654,8 @@ describe("t238 build-binaries release builder", () => {
           "}",
           "if (verb === \"doctor\") {",
           "  process.stdout.write(\"AI-DLC doctor\\nSchema validation: 33/33 stages validated\\n\");",
-          "  process.stderr.write(\"FAIL Cannot find module \\\"/$bunfs/root/data/stage-graph.json\\\": ENOENT; uv_spawn 'git'\\n\");",
+          "  process.stderr.write(\"FAIL Cannot find module \\\"/$bunfs/root/data/stage-graph.json\\\": ENOENT: no such file or directory, uv_spawn 'git'\\n\");",
+          "  process.stderr.write(\"WARN ENOENT: no such file or directory, uv_spawn 'git'\\n\");",
           "  process.exit(1);",
           "}",
           "process.stderr.write(\"unknown fake command\\n\");",
@@ -681,6 +686,9 @@ describe("t238 build-binaries release builder", () => {
       const delegateDoctorData = gate(native, "delegate-doctor-data");
       expect(delegateDoctorData.ok).toBe(false);
       expect(delegateDoctorData.actual).toBe("Cannot find module");
+      expect(delegateDoctorData.stderr).toContain(
+        "WARN ENOENT: no such file or directory, uv_spawn 'git'",
+      );
       expect(result.stderr).toContain("delegate-doctor-data gate failed");
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -36,35 +36,52 @@ jobs:
           environment="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")"
           jq -e '
             .can_admins_bypass == false and
-            .deployment_branch_policy.custom_branch_policies == true and
-            any(
-              .protection_rules[];
-              .type == "required_reviewers" and
-              .prevent_self_review == true and
-              (.reviewers | length) > 0
-            )
+            .deployment_branch_policy.custom_branch_policies == true
           ' <<<"$environment" >/dev/null
-          reviewer_id="$(
-            jq -r '
-              [
-                .protection_rules[]
-                | select(.type == "required_reviewers")
-                | .reviewers[]
-                | select(.type == "Team")
-                | .reviewer.id
-              ][0] // empty
-            ' <<<"$environment"
-          )"
-          test -n "$reviewer_id"
+          require_team=false
           if [ "$GITHUB_REPOSITORY" = "awslabs/aidlc-workflows" ]; then
-            jq -e '
-              any(
-                .protection_rules[];
-                .type == "required_reviewers" and
-                any(.reviewers[]; .type == "Team" and .reviewer.slug == "aidlc-admins")
-              )
-            ' <<<"$environment" >/dev/null
+            require_team=true
+            review_rule="$(
+              jq -c '
+                [
+                  .protection_rules[]
+                  | select(
+                      .type == "required_reviewers" and
+                      .prevent_self_review == true and
+                      any(
+                        .reviewers[];
+                        .type == "Team" and .reviewer.slug == "aidlc-admins"
+                      )
+                    )
+                ][0] // empty
+              ' <<<"$environment"
+            )"
+            reviewer_id="$(
+              jq -r '
+                [
+                  .reviewers[]
+                  | select(.type == "Team" and .reviewer.slug == "aidlc-admins")
+                  | .reviewer.id
+                ][0] // empty
+              ' <<<"$review_rule"
+            )"
+          else
+            review_rule="$(
+              jq -c '
+                [
+                  .protection_rules[]
+                  | select(
+                      .type == "required_reviewers" and
+                      .prevent_self_review == true and
+                      (.reviewers | length) > 0
+                    )
+                ][0] // empty
+              ' <<<"$environment"
+            )"
+            reviewer_id="$(jq -r '.reviewers[0].reviewer.id // empty' <<<"$review_rule")"
           fi
+          test -n "$review_rule"
+          test -n "$reviewer_id"
           policies="$(
             gh api --paginate \
               "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
@@ -78,19 +95,24 @@ jobs:
             while read -r ruleset_id; do
               gh api "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id" >>"$rulesets"
             done
-          jq -s -e --argjson reviewer_id "$reviewer_id" '
+          jq -s -e \
+            --argjson reviewer_id "$reviewer_id" \
+            --argjson require_team "$require_team" '
             any(
               .[];
               .enforcement == "active" and
               .target == "tag" and
               any(.rules[]?; .type == "creation") and
+              any(.rules[]?; .type == "update") and
+              any(.rules[]?; .type == "deletion") and
               any(
                 .conditions.ref_name.include[]?;
-                . == "~ALL" or startswith("refs/tags/v")
+                . == "~ALL" or . == "refs/tags/v*"
               ) and
               any(
                 .bypass_actors[]?;
-                .actor_type == "Team" and .actor_id == $reviewer_id
+                .actor_id == $reviewer_id and
+                ($require_team == false or .actor_type == "Team")
               )
             )
           ' "$rulesets" >/dev/null
@@ -285,12 +307,34 @@ jobs:
           $releaseRoot = (Resolve-Path ./build/release).Path
           Set-Content -LiteralPath (Join-Path $releaseRoot 'aidlc-release.intoto.jsonl') `
             -Value 'aidlc-lifecycle-provenance-fixture'
-          $ghFixture = Join-Path $env:RUNNER_TEMP 'aidlc-gh.cmd'
+          $ghFixture = Join-Path $env:RUNNER_TEMP 'aidlc-gh.ps1'
           $env:AIDLC_TEST_GH_MARKER = Join-Path $env:RUNNER_TEMP 'aidlc-gh-verified'
+          $env:AIDLC_TEST_GH_REPOSITORY = 'awslabs/aidlc-workflows'
+          $env:AIDLC_TEST_GH_WORKFLOW = 'awslabs/aidlc-workflows/.github/workflows/release.yml'
           @'
-          @echo off
-          > "%AIDLC_TEST_GH_MARKER%" echo verified
-          exit /b 0
+          param(
+            [Parameter(ValueFromRemainingArguments = $true)]
+            [string[]]$Remaining
+          )
+          function Get-ArgumentValue {
+            param([string]$Name)
+            $index = [Array]::IndexOf($Remaining, $Name)
+            if ($index -lt 0 -or $index + 1 -ge $Remaining.Count) { return $null }
+            return $Remaining[$index + 1]
+          }
+          if (
+            $Remaining.Count -lt 3 -or
+            $Remaining[0] -ne 'attestation' -or
+            $Remaining[1] -ne 'verify' -or
+            [IO.Path]::GetFileName($Remaining[2]) -ne 'checksums.txt' -or
+            -not (Test-Path -LiteralPath $Remaining[2] -PathType Leaf) -or
+            (Get-ArgumentValue '--repo') -ne $env:AIDLC_TEST_GH_REPOSITORY -or
+            (Get-ArgumentValue '--signer-workflow') -ne $env:AIDLC_TEST_GH_WORKFLOW
+          ) {
+            exit 2
+          }
+          Set-Content -LiteralPath $env:AIDLC_TEST_GH_MARKER -Value 'verified'
+          exit 0
           '@ | Set-Content -LiteralPath $ghFixture -Encoding Ascii
           $env:AIDLC_GH_BIN = $ghFixture
           Get-Content (Join-Path $releaseRoot 'checksums.txt') | ForEach-Object {

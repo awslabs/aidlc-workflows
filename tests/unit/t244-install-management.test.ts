@@ -1489,8 +1489,16 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).toContain("name: Verify release repository controls");
     expect(workflow).toContain(".can_admins_bypass == false");
     expect(workflow).toContain(".prevent_self_review == true");
+    expect(workflow).toContain('review_rule="$(');
+    expect(workflow).toContain("require_team=false");
+    expect(workflow).toContain("require_team=true");
     expect(workflow).toContain('.reviewer.slug == "aidlc-admins"');
     expect(workflow).toContain('.type == "creation"');
+    expect(workflow).toContain('.type == "update"');
+    expect(workflow).toContain('.type == "deletion"');
+    expect(workflow).toContain('. == "~ALL" or . == "refs/tags/v*"');
+    expect(workflow).not.toContain('startswith("refs/tags/v")');
+    expect(workflow).toContain('$require_team == false or .actor_type == "Team"');
     expect(workflow).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(workflow).toContain("git merge-base --is-ancestor");
     expect(workflow).toContain(
@@ -1591,7 +1599,19 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(windows).toContain("Get-FileHash -Algorithm SHA256");
     expect(windows).toContain("install.ps1 -From $releaseRoot -Offline");
     expect(windows).toContain("aidlc-lifecycle-provenance-fixture");
+    expect(windows).toContain("aidlc-gh.ps1");
     expect(windows).toContain("$env:AIDLC_GH_BIN = $ghFixture");
+    expect(windows).toContain("$Remaining[0] -ne 'attestation'");
+    expect(windows).toContain("$Remaining[1] -ne 'verify'");
+    expect(windows).toContain(
+      "[IO.Path]::GetFileName($Remaining[2]) -ne 'checksums.txt'",
+    );
+    expect(windows).toContain(
+      "(Get-ArgumentValue '--repo') -ne $env:AIDLC_TEST_GH_REPOSITORY",
+    );
+    expect(windows).toContain(
+      "(Get-ArgumentValue '--signer-workflow') -ne $env:AIDLC_TEST_GH_WORKFLOW",
+    );
     expect(windows).toContain("offline installer did not verify release provenance");
     expect(windows).toContain(
       "$harnesses = @('claude', 'codex', 'copilot', 'cursor', 'kiro', 'kiro-ide', 'opencode')",

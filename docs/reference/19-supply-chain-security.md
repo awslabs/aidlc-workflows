@@ -222,6 +222,11 @@ Fork and mirror operators must set these explicitly, together with the matching
 release base URL. A mirror URL does not implicitly broaden or replace the
 provenance trust root.
 
+Fork release rehearsals must also configure the protected `release`
+environment and immutable release-tag ruleset on the fork. Outside
+`awslabs/aidlc-workflows`, the workflow accepts user reviewers and user bypass
+actors because personal-account forks cannot define GitHub Teams.
+
 Verify every artifact covered by the checksum file:
 
 ```bash

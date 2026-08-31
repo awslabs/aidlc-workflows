@@ -4190,6 +4190,7 @@ function snapshotFirstRunMutationPaths(
   projectDir: string,
   choices: FirstRunChoices,
 ): {
+  recoveryPath: string;
   recordCommitted: (result: Record<string, unknown>) => void;
   restore: () => void;
   cleanup: () => void;
@@ -4209,6 +4210,7 @@ function snapshotFirstRunMutationPaths(
     return { path, backup, existed, committed: transactionState(path) };
   });
   return {
+    recoveryPath: root,
     recordCommitted: (result) => {
       const data = result.data;
       if (!data || typeof data !== "object" || !("actions" in data)) return;
@@ -4623,6 +4625,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   }
   if (!choices) return true;
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
+  let preserveSnapshot = false;
   try {
     applyFirstRunChoices(projectDir, choices, snapshot.recordCommitted);
     renderFirstRunEnding(projectDir, choices);
@@ -4630,9 +4633,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     try {
       snapshot.restore();
     } catch (rollbackError) {
+      preserveSnapshot = true;
       throw new AggregateError(
         [error, rollbackError],
-        "setup failed and rollback was incomplete",
+        `setup failed and rollback was incomplete; recovery snapshot preserved at ${snapshot.recoveryPath}`,
       );
     }
     process.stdout.write(
@@ -4641,7 +4645,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     process.stdout.write("  No setup changes were kept.\n");
     process.exitCode = EXIT.failure;
   } finally {
-    snapshot.cleanup();
+    if (!preserveSnapshot) snapshot.cleanup();
   }
   return true;
   } catch (error) {

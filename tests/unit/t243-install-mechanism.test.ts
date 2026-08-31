@@ -69,6 +69,7 @@ const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const INSTALLER = join(REPO_ROOT, "scripts", "install.sh");
+const FIXTURE_GH = join(REPO_ROOT, "tests", "fixtures", "bin", "gh.ts");
 const CLAUDE_COPY = join(REPO_ROOT, "dist", "claude");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
@@ -2017,6 +2018,30 @@ describe("t243 release lifecycle", () => {
     const valid = fixtureReleaseBytes();
     const acquired = await acquireRelease({ from: valid });
     expect(acquired.manifest.version).toBe(AIDLC_VERSION);
+
+    const repository = "example/fork";
+    const workflow = `${repository}/.github/workflows/release.yml`;
+    const swapped = spawnSync(BUN, [
+      FIXTURE_GH,
+      "attestation",
+      "verify",
+      join(valid, "checksums.txt"),
+      "--bundle",
+      join(valid, "aidlc-release.intoto.jsonl"),
+      "--repo",
+      workflow,
+      "--signer-workflow",
+      repository,
+      "--source-ref",
+      `refs/tags/v${AIDLC_VERSION}`,
+    ], {
+      env: {
+        ...process.env,
+        AIDLC_RELEASE_REPOSITORY: repository,
+        AIDLC_RELEASE_WORKFLOW: workflow,
+      },
+    });
+    expect(swapped.status).toBe(1);
   });
 
   test("release manifests reject retired per-distribution data assets", () => {

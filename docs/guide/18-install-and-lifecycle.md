@@ -134,6 +134,11 @@ for a fork or mirror, together with its release base URL; changing the download
 URL alone does not change the provenance trust root. `AIDLC_GH_BIN` selects an
 explicit GitHub CLI executable for both installers.
 
+Fork release rehearsals also need a protected `release` environment and
+immutable release-tag ruleset configured on the fork. Personal-account forks
+may use user reviewers and user bypass actors; the canonical repository
+requires its named team.
+
 `AIDLC_INSTALL_ROOT` and `AIDLC_BIN_DIR` override the machine and command
 locations. Those paths must be absolute on Unix. The PowerShell installer also
 honors `AIDLC_OFFLINE=1`; the Unix installer requires the explicit `--offline`
