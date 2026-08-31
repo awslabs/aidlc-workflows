@@ -51,6 +51,7 @@
 // suppressed too should say so — it is a one-line follow-on, not a silent choice.
 import { existsSync } from "node:fs";
 import {
+  consumeSharedDirectiveAsk,
   humanTurnMintAllowed,
   markHumanTurn,
   resolveProjectDirFromHook,
@@ -137,6 +138,7 @@ try {
           humanResponseText,
         );
       }
+      consumeSharedDirectiveAsk(projectDir);
     }
     markHumanTurn(projectDir);
   }

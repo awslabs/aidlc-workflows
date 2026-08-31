@@ -106,12 +106,16 @@
 //        marker. A conductor that jumps the pointer and then quits is released
 //        here and blocked on Claude. Narrow but real; see the coverage-gap note
 //        on markEngineTouch in aidlc-lib.ts.
-//   8. A RESUME CHOICE has a state-bound active-directive marker with kind
-//      `ask` and resume status `waiting`. On the shared non-Copilot path we must
-//      read this latch BEFORE probing `next`, because the probe publishes its
-//      own sessionless directive and can overwrite the `ask` kind. We ALLOW the
-//      stop while the human chooses how to resume. Autonomous Construction is
-//      guarded and falls through to the cap-bounded block.
+//   8. Every positive wait/release signal above is evaluated BEFORE the shared
+//      non-Copilot `next` probe. That probe intentionally publishes a
+//      sessionless directive so its exact continuation token remains usable when
+//      the hook blocks, but publication must never replace the directive epoch
+//      or protected challenge of a turn that is already waiting legitimately.
+//      Team-owned probes are already read-only, so they may safely re-check with
+//      the probe-derived stage/unit when no current marker supplied that identity.
+//      A RESUME CHOICE is the same rule in marker form: kind `ask` with resume
+//      status `waiting`. Autonomous Construction remains guarded and falls
+//      through to the cap-bounded block.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -121,7 +125,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   ActiveDirectiveLockContendedError,
   clearSessionIntentHandoff,
@@ -129,18 +133,20 @@ import {
   consumeCopilotConversation,
   copilotStopEvidence,
   COMPOSE_MARKER_TTL_MS,
+  currentSharedDirectiveWait,
   docsRoot,
   errorMessage,
+  firstInScopeStageOfPhase,
   findIntentByUuid,
   effectiveUnitGateRhythm,
   getField,
-  hasCurrentSharedResumeWait,
   hasPendingDecision,
   hookChildEnv,
   isEngineToolCall,
   hooksHealthDir,
   isoTimestamp,
   isTeamUnitOwnership,
+  loadScopeMetadata,
   matchSubagentInflight,
   parseCheckboxes,
   readActiveDirectiveMarker,
@@ -148,11 +154,15 @@ import {
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
+  resolveBoltDag,
   resolveWorkflowSelection,
   stageDir,
   stateFilePathForSelection,
   stopHookDir,
   STOP_HOOK_PROBE_ENV,
+  SUMMARY_CONFIRMATION_CHECKPOINT,
+  summaryConfirmationAnswer,
+  toPosix,
   turnMarkersShowConversational,
   validSessionId,
   updateCopilotStopCount,
@@ -165,6 +175,10 @@ import {
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
 import { questionsFileHasPendingPlanApproval } from "./aidlc-plan-approval-guard.ts";
+import {
+  PLAN_APPROVAL_CHECKPOINT,
+  planApprovalWaitIsCurrent,
+} from "../tools/aidlc-testing-posture.ts";
 
 const HOOK_NAME = "continue-workflow";
 
@@ -503,43 +517,61 @@ function isHumanWaitStop(
 // `<record>/construction/<unit>/<slug>/`. We never recursively accept a question
 // from a different unit: an old unanswered file must not disable enforcement for
 // the unit currently named by the engine.
-function hasPendingQuestion(
+interface PendingQuestion {
+  checkpoint?: string;
+  questionsFile: string;
+}
+
+function pendingQuestion(
   projectDir: string,
   slug: string,
   phase: string,
   unit?: string,
-  planApprovalOnly = false,
-): boolean {
-  if (slug.length === 0 || phase.length === 0) return false;
+  mandatoryHumanOnly = false,
+): PendingQuestion | null {
+  if (slug.length === 0 || phase.length === 0) return null;
   const normalizedPhase = phase.toLowerCase();
   const stageDirPath =
     normalizedPhase === "construction" && unit
       ? join(docsRoot(projectDir), normalizedPhase, unit, slug)
       : stageDir(projectDir, normalizedPhase, slug);
-  if (!existsSync(stageDirPath)) return false;
+  if (!existsSync(stageDirPath)) return null;
   let files: string[];
   try {
-    files = planApprovalOnly
+    files = mandatoryHumanOnly
       ? readdirSync(stageDirPath).filter((f) => f === `${slug}-questions.md`)
       : readdirSync(stageDirPath).filter((f) => f.endsWith("-questions.md"));
   } catch {
-    return false;
+    return null;
   }
   for (const f of files) {
     let body: string;
+    const path = join(stageDirPath, f);
     try {
-      body = readFileSync(join(stageDirPath, f), "utf-8");
+      body = readFileSync(path, "utf-8");
     } catch {
       continue;
     }
-    if (planApprovalOnly) {
-      if (questionsFileHasPendingPlanApproval(body)) return true;
-    } else if (/\[Answer\]:[ \t]*_*[ \t]*$/m.test(body)) {
+    const planApproval = questionsFileHasPendingPlanApproval(body);
+    const summaryConfirmation = summaryConfirmationAnswer(body) === "";
+    if (planApproval) {
+      return {
+        checkpoint: PLAN_APPROVAL_CHECKPOINT,
+        questionsFile: toPosix(relative(projectDir, path)),
+      };
+    }
+    if (summaryConfirmation) {
+      return {
+        checkpoint: SUMMARY_CONFIRMATION_CHECKPOINT,
+        questionsFile: toPosix(relative(projectDir, path)),
+      };
+    }
+    if (!mandatoryHumanOnly && /\[Answer\]:[ \t]*_*[ \t]*$/m.test(body)) {
       // An [Answer]: tag whose value is empty or underscores-only.
-      return true;
+      return { questionsFile: toPosix(relative(projectDir, path)) };
     }
   }
-  return false;
+  return null;
 }
 
 // The tier-2 carve-out decision: the state cursor is [-] in-progress and the
@@ -551,44 +583,105 @@ function isPendingQuestionStop(
   stateContent: string,
   activeStage?: string,
   unit?: string,
+  sessionId = "",
+  mandatoryAuthorityCurrent = true,
 ): boolean {
   try {
     const currentSlug = currentStageSlug(stateContent);
     const slug = activeStage?.trim() || currentSlug;
     const phase = getField(stateContent, "Lifecycle Phase") ?? "";
-    const unitMajorCodeGeneration =
-      slug === "code-generation" &&
+    const interleavedUnitMajorDirective =
+      activeStage !== undefined &&
       unit !== undefined &&
       phase.trim().toLowerCase() === "construction" &&
       getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-    if (
-      getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous" &&
-      !unitMajorCodeGeneration
-    ) {
-      return false; // autonomy guard — keep the loop alive
-    }
+    const autonomous =
+      getField(stateContent, "Construction Autonomy Mode")?.trim() ===
+        "autonomous";
     if (currentSlug.length === 0 || slug.length === 0) return false;
-    const teamUnitMajorDirective =
-      isTeamUnitOwnership(stateContent) &&
-      activeStage !== undefined &&
-      unit !== undefined &&
-      getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-    if (!teamUnitMajorDirective) {
+    if (!interleavedUnitMajorDirective) {
       const row = parseCheckboxes(stateContent).find(
         (c) => c.slug === currentSlug,
       );
       if (row?.state !== "in-progress") return false; // positive [-] only
     }
-    return hasPendingQuestion(
+    const pending = pendingQuestion(
       projectDir,
       slug,
       phase,
       unit,
-      unitMajorCodeGeneration &&
-        getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous",
+      autonomous,
+    );
+    if (pending === null) return false;
+    if (pending.checkpoint === PLAN_APPROVAL_CHECKPOINT) {
+      if (
+        !mandatoryAuthorityCurrent ||
+        !planApprovalWaitIsCurrent(
+          projectDir,
+          { unit: unit?.trim() || null },
+          pending.questionsFile,
+          sessionId,
+        )
+      ) {
+        return false;
+      }
+    }
+    if (
+      pending.checkpoint === SUMMARY_CONFIRMATION_CHECKPOINT &&
+      !mandatoryAuthorityCurrent
+    ) {
+      return false;
+    }
+    if (!autonomous) return true;
+    if (pending.checkpoint === undefined) return false;
+    return hasPendingDecision(
+      projectDir,
+      slug,
+      interleavedUnitMajorDirective ? undefined : "STAGE_STARTED",
+      unit,
+      interleavedUnitMajorDirective,
+      {
+        checkpoint: pending.checkpoint,
+        questionsFile: pending.questionsFile,
+      },
     );
   } catch {
     // Unparseable / odd content — fall through to decideBlock (never trap).
+    return false;
+  }
+}
+
+function isPendingAutonomyLadderStop(
+  projectDir: string,
+  stateContent: string,
+): boolean {
+  try {
+    if (
+      getField(stateContent, "Construction Autonomy Mode")?.trim() !== "unset"
+    ) {
+      return false;
+    }
+    const stance = (getField(stateContent, "Skeleton Stance") ?? "")
+      .trim()
+      .toLowerCase();
+    const scope = (getField(stateContent, "Scope") ?? "").trim();
+    if (!scope) return false;
+    const ceremony =
+      stance === "on" ||
+      (
+        stance === "scope-dependent" &&
+        loadScopeMetadata()[scope]?.skeleton === true
+      );
+    if (!ceremony) return false;
+    const units = resolveBoltDag(projectDir);
+    if (units.state !== "ok" || units.units.length === 0) return false;
+    const first = firstInScopeStageOfPhase("construction", scope);
+    if (first === null) return false;
+    return parseCheckboxes(stateContent).some(
+      (checkbox) =>
+        checkbox.slug === first.slug && checkbox.state === "completed",
+    );
+  } catch {
     return false;
   }
 }
@@ -628,6 +721,7 @@ function isPendingDecisionStop(
       teamUnitMajorDirective ? undefined : "STAGE_STARTED",
       teamUnitMajorDirective ? activeUnit : undefined,
       teamUnitMajorDirective,
+      { excludeCheckpoints: true },
     );
   } catch {
     return false;
@@ -1195,6 +1289,70 @@ function continuationReason(
   );
 }
 
+function validStopReleaseReason(
+  projectDir: string,
+  stateContent: string,
+  activeStage: string | undefined,
+  activeUnit: string | undefined,
+  rawSessionId: unknown,
+  sessionId: string,
+  transcriptPath: string | null,
+  transcriptFormat: "claude" | "codex",
+  copilotSession: string,
+  questionAuthorityCurrent: boolean,
+): string | null {
+  if (isPendingAutonomyLadderStop(projectDir, stateContent)) {
+    return "the post-skeleton Construction autonomy choice is waiting on the human; allowing the stop before the shared next probe";
+  }
+  if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
+    return `current stage ${currentStageSlug(stateContent)} is awaiting approval or being revised; allowing the stop (human-wait carve-out)`;
+  }
+  if (
+    isPendingQuestionStop(
+      projectDir,
+      stateContent,
+      activeStage,
+      activeUnit,
+      sessionId,
+      questionAuthorityCurrent,
+    )
+  ) {
+    const pendingStage = activeStage ?? currentStageSlug(stateContent);
+    return `active stage ${pendingStage} has an unanswered question; allowing the stop (pending-question carve-out)`;
+  }
+  if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
+    const teamPending =
+      isTeamUnitOwnership(stateContent) &&
+      activeStage !== undefined &&
+      activeUnit !== undefined &&
+      getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    const pendingStage = teamPending
+      ? (activeStage ?? currentStageSlug(stateContent))
+      : currentStageSlug(stateContent);
+    return teamPending
+      ? `active stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`
+      : `current stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`;
+  }
+  if (isPendingComposeStop(projectDir, stateContent)) {
+    return "an in-flight compose proposal is pending human approval (aidlc/.aidlc-compose-pending present); allowing the stop (pending-compose carve-out)";
+  }
+  if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
+    return "a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)";
+  }
+  if (
+    isConversationalStop(
+      projectDir,
+      stateContent,
+      transcriptPath,
+      transcriptFormat,
+      copilotSession,
+    )
+  ) {
+    return "the ending turn was conversational (human's last prompt answered with no workflow-engine call); allowing the stop (conversational carve-out)";
+  }
+  return null;
+}
+
 // --- Main ---------------------------------------------------------------------
 
 export async function run(input: string): Promise<number> {
@@ -1353,9 +1511,9 @@ if (copilotEvidence?.status === "contended") {
 }
 if (copilotEvidence?.status === "foreign" || copilotEvidence?.status === "resume") return allowStop();
 if (!copilotSession) {
-  let resumeWaiting = false;
+  let sharedWait: ReturnType<typeof currentSharedDirectiveWait>;
   try {
-    resumeWaiting = hasCurrentSharedResumeWait(projectDir);
+    sharedWait = currentSharedDirectiveWait(projectDir);
   } catch (error) {
     recordHookDrop(
       projectDir,
@@ -1364,7 +1522,7 @@ if (!copilotSession) {
     );
     return allowStop();
   }
-  if (resumeWaiting) {
+  if (sharedWait === "resume") {
     recordHookDrop(
       projectDir,
       HOOK_NAME,
@@ -1372,8 +1530,60 @@ if (!copilotSession) {
     );
     return allowStop();
   }
+  if (sharedWait === "engine-ask") {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "an engine-issued ask is waiting on the human; allowing the stop before the shared next probe",
+    );
+    return allowStop();
+  }
 }
 const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvidence.directive : undefined;
+const activeMarkerBeforeProbe = readActiveDirectiveMarker(projectDir, stateContent);
+const copilotQuestionAuthorityCurrent =
+  copilotEvidence?.status === "directive" &&
+  (
+    retainedDirective?.kind === "run-stage" ||
+    retainedDirective?.kind === "invoke-swarm"
+  );
+const questionAuthorityCurrent =
+  copilotQuestionAuthorityCurrent ||
+  (
+    activeMarkerBeforeProbe?.version === 2 &&
+    (
+      activeMarkerBeforeProbe.kind === "run-stage" ||
+      activeMarkerBeforeProbe.kind === "invoke-swarm"
+    ) &&
+    activeMarkerBeforeProbe.delivery === "issued" &&
+    activeMarkerBeforeProbe.needs_rehydrate === false
+  );
+const activeStageBeforeProbe =
+  retainedDirective?.stage ?? activeMarkerBeforeProbe?.stage;
+const activeUnitBeforeProbe =
+  retainedDirective?.unit ??
+  (
+    activeMarkerBeforeProbe &&
+      activeMarkerBeforeProbe.stage === activeStageBeforeProbe
+      ? activeMarkerBeforeProbe.unit
+      : undefined
+  );
+const validStopReason = validStopReleaseReason(
+  projectDir,
+  stateContent,
+  activeStageBeforeProbe,
+  activeUnitBeforeProbe,
+  rawSessionId,
+  sessionId,
+  transcriptPath,
+  transcriptFormat,
+  copilotSession,
+  questionAuthorityCurrent,
+);
+if (validStopReason !== null) {
+  recordHookDrop(projectDir, HOOK_NAME, validStopReason);
+  return allowStop();
+}
 const directive: EngineDirective | null = copilotEvidence
   ? retainedDirective
     ? { ...retainedDirective, retained: true }
@@ -1393,6 +1603,32 @@ const activeUnit =
       ? activeMarker.unit
       : undefined
   );
+if (isTeamUnitOwnership(stateContent)) {
+  const teamQuestionAuthorityCurrent =
+    activeMarker?.version === 2 &&
+    (
+      activeMarker.kind === "run-stage" ||
+      activeMarker.kind === "invoke-swarm"
+    ) &&
+    activeMarker.delivery === "issued" &&
+    activeMarker.needs_rehydrate === false;
+  const teamStopReason = validStopReleaseReason(
+    projectDir,
+    stateContent,
+    activeStage,
+    activeUnit,
+    rawSessionId,
+    sessionId,
+    transcriptPath,
+    transcriptFormat,
+    copilotSession,
+    teamQuestionAuthorityCurrent,
+  );
+  if (teamStopReason !== null) {
+    recordHookDrop(projectDir, HOOK_NAME, teamStopReason);
+    return allowStop();
+  }
+}
 
 // `done` → the workflow is complete; allow the turn to end and clear the guard
 // so a future stuck sequence starts fresh.
@@ -1438,110 +1674,6 @@ if (kind === "parked") {
 // freeform scope routing or a paused Unit). Allow the turn to end so the user
 // can respond, rather than re-feeding the loop.
 if (kind === "ask") {
-  return allowStop();
-}
-
-// Human-wait carve-out: the engine returns a pending directive, but the current
-// stage is positively at [?] awaiting-approval or [R] revising — the conductor
-// is correctly parked on the human (an approval gate or the Request-Changes
-// loop), with genuinely nothing to do without their input. Allow the stop
-// instead of spamming the forwarding-loop nudge. Positive-confirmation only and
-// fail-open (see isHumanWaitStop): any other state, no checkbox row, or a parse
-// error falls through to the cap-bounded block below, unchanged. (This is the
-// current-stage-scoped successor to the broad `[?]` substring match that landed
-// in 679153d; scoping to the current slug and adding [R] is strictly safer.)
-if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
-  recordHookDrop(
-    projectDir,
-    HOOK_NAME,
-    `current stage ${currentStageSlug(stateContent)} is awaiting approval or being revised; allowing the stop (human-wait carve-out)`,
-  );
-  return allowStop();
-}
-
-// Pending-question carve-out (tier 2): the current [-] cursor has an unanswered
-// question for the active directive stage, so the conductor is parked on the
-// human's answer. The active stage can be later than Current Stage during the
-// unit-major walk. Strictly gated and fail-open (see isPendingQuestionStop).
-if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
-  const pendingStage = activeStage ?? currentStageSlug(stateContent);
-  recordHookDrop(
-    projectDir,
-    HOOK_NAME,
-    `active stage ${pendingStage} has an unanswered question; allowing the stop (pending-question carve-out)`,
-  );
-  return allowStop();
-}
-
-// Logged-question carve-out: a DECISION_RECORDED for the current [-] stage has
-// no later QUESTION_ANSWERED. Copilot's numbered-prose questions end the turn
-// without a native picker, so this signal keeps the Stop hook from injecting a
-// continuation that the model could mistake for the answer.
-if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
-  const teamPending =
-    isTeamUnitOwnership(stateContent) &&
-    activeStage !== undefined &&
-    activeUnit !== undefined &&
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-  const pendingStage = teamPending
-    ? (activeStage ?? currentStageSlug(stateContent))
-    : currentStageSlug(stateContent);
-  recordHookDrop(
-    projectDir,
-    HOOK_NAME,
-    teamPending
-      ? `active stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`
-      : `current stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`,
-  );
-  return allowStop();
-}
-
-// Pending-compose carve-out (tier 2b): an in-flight compose proposal is
-// awaiting the human's approve/edit/reject (the conductor's marker file is on
-// disk) and we are NOT in autonomous Construction - the conductor is parked on
-// the human exactly like a stage gate, so allow the turn to end instead of
-// nudging it back into stage execution mid-compose. Positive-confirmation only
-// (the marker), autonomy-guarded, fail-open (see isPendingComposeStop).
-if (isPendingComposeStop(projectDir, stateContent)) {
-  recordHookDrop(
-    projectDir,
-    HOOK_NAME,
-    "an in-flight compose proposal is pending human approval (aidlc/.aidlc-compose-pending present); allowing the stop (pending-compose carve-out)",
-  );
-  return allowStop();
-}
-
-// Pending-background-subagent carve-out (tier 2c): a background Agent/Task is
-// still running, so the conductor is correctly parked until its result arrives.
-// Positive-confirmation only (a matching ledger entry), session-isolated,
-// autonomy-guarded, freshness-bounded, and fail-open (see
-// isPendingSubagentStop).
-if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
-  recordHookDrop(
-    projectDir,
-    HOOK_NAME,
-    "a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)",
-  );
-  return allowStop();
-}
-
-// Conversational carve-out (tier 3, issue #365 broader reading): the ending turn
-// answered the human's most recent prompt with NO workflow-engine engagement, so
-// the human was just chatting mid-workflow, allow the stop instead of nudging
-// them back into the loop. Two evidence sources for one predicate: the harness
-// transcript where it is delivered (Claude / Codex), and the `.aidlc-human-turn`
-// vs `.aidlc-engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
-// opencode). Strictly gated and fail-closed (see isConversationalStop): no
-// evidence, no human prompt, ANY engine call in the responding turn, an
-// autonomous run, or any read error falls through to the cap-bounded block below,
-// so a conductor that engaged the workflow and then quit mid-loop (and every
-// autonomous run) is still nudged.
-if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFormat, copilotSession)) {
-  recordHookDrop(
-    projectDir,
-    HOOK_NAME,
-    "the ending turn was conversational (human's last prompt answered with no workflow-engine call); allowing the stop (conversational carve-out)",
-  );
   return allowStop();
 }
 

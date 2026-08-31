@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ClaudeCodeHookInput,
+  findStageBySlug,
   getField,
   hookDebug,
   hooksHealthDir,
@@ -21,6 +22,7 @@ import {
   latestStartedStageSlug,
   parseCheckboxes,
   readAllAuditShards,
+  readActiveDirectiveMarker,
   readStateFile,
   resolveProjectDirFromHook,
   stateFilePath,
@@ -75,6 +77,30 @@ if (source === "ide-audit-sync") {
   // (b) No audit slug, or it already matches state → nothing to do.
   if (!auditSlug) return 0;
   if (current === auditSlug) return 0;
+  const activeDirective = readActiveDirectiveMarker(projectDir, stateContent);
+  const auditStage = findStageBySlug(auditSlug);
+  const activeDirectiveIsCurrentRunStage =
+    activeDirective?.version === 1 ||
+    (
+      activeDirective?.kind === "run-stage" &&
+      activeDirective.delivery === "issued" &&
+      activeDirective.needs_rehydrate === false
+    );
+  const unitMajorDirectiveOwnsAuditStage =
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
+    auditStage?.phase.toUpperCase() === "CONSTRUCTION" &&
+    activeDirectiveIsCurrentRunStage &&
+    activeDirective?.stage === auditSlug &&
+    activeDirective.unit !== undefined;
+  if (unitMajorDirectiveOwnsAuditStage) {
+    hookDebug(
+      projectDir,
+      "sync-workflow-state",
+      "skip: unit-major active directive intentionally leads Current Stage",
+      { auditSlug, current, unit: activeDirective.unit },
+    );
+    return 0;
+  }
   // (c) Never sync BACKWARD: if the audit slug is a stage the workflow has
   //     already completed or skipped, the state is legitimately ahead of it
   //     (the stage finished; a newer STAGE_STARTED just wasn't the last row).

@@ -282,7 +282,7 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 interface PreparedEmission {
   transported: Directive; serialized: string; resultSha256: string; projectDir?: string;
   marker?: {
-    kind: "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
+    kind: "ask" | "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
     units?: string[];
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
   };
@@ -296,6 +296,7 @@ interface PreparedLegacyPlanApproval {
 
 let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
+let engineProjectDir: string | undefined;
 
 function projectStageValidityAdvisory(
   projectDir: string,
@@ -381,6 +382,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
   const route =
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
   const publication = publicationContexts.get(directive);
+  const askState =
+    directive.kind === "ask" && engineProjectDir
+      ? loadStateFileIfPresent(engineProjectDir)
+      : null;
   let transported =
     directive.kind === "run-stage" && route
       ? transportRunStage(directive, route)
@@ -423,6 +428,16 @@ function prepareEmission(directive: Directive): PreparedEmission {
     process.exit(1);
   }
   let marker: PreparedEmission["marker"];
+  if (transported.kind === "ask" && askState !== null) {
+    const stage = (getField(askState, "Current Stage") ?? "").trim();
+    if (/^[a-z][a-z0-9-]*$/.test(stage)) {
+      marker = {
+        kind: "ask",
+        stage,
+        state_sha256: sha256(askState),
+      };
+    }
+  }
   if ((transported.kind === "load-steering" || transported.kind === "run-stage") && route) {
     const markerStateHash =
       route.stateHash ??
@@ -462,6 +477,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ? { projectDir: route.codekbCtx.projectDir }
       : publication
         ? { projectDir: publication.projectDir }
+        : marker?.kind === "ask" && engineProjectDir
+          ? { projectDir: engineProjectDir }
         : {}),
     ...(marker ? { marker } : {}),
   };
@@ -8957,6 +8974,7 @@ export function main(argv: string[]): void {
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
   const resolvedSelection = resolveWorkflowSelection(resolvedProjectDir);
+  engineProjectDir = resolvedProjectDir;
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
@@ -8998,6 +9016,7 @@ export function main(argv: string[]): void {
     }
   } finally {
     engineInvocation = null;
+    engineProjectDir = undefined;
     engineSessionId = undefined;
     engineSelections.clear();
     requestedSteeringContinuation = null;

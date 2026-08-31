@@ -7708,9 +7708,38 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   const previousContent = readStateFile(projectDir, flags.intent, flags.space);
   const currentStage = (getField(previousContent, "Current Stage") ?? "").trim();
   const activeDirective = readActiveDirectiveMarker(projectDir, previousContent);
+  const activeDirectiveIsCurrentRunStage =
+    activeDirective?.version === 1 ||
+    (
+      activeDirective?.kind === "run-stage" &&
+      activeDirective.delivery === "issued" &&
+      activeDirective.needs_rehydrate === false
+    );
+  const liveV2InterleavedDirective =
+    getField(previousContent, "Construction Iteration")?.trim() ===
+      "unit-major" &&
+    phase === "CONSTRUCTION" &&
+    activeDirective?.version === 2 &&
+    activeDirectiveIsCurrentRunStage &&
+    activeDirective.stage === stage &&
+    activeDirective.unit !== undefined &&
+    currentStage.length > 0 &&
+    currentStage !== stage;
+  if (liveV2InterleavedDirective) {
+    // The durable state fields describe Current Stage, while this run-stage is
+    // an interleaved Unit directive. Any state write also changes the marker's
+    // state digest and invalidates its protected Plan Approval authority, so
+    // preserve both the durable cursor metadata and the live directive bytes.
+    process.stdout.write(
+      `${JSON.stringify({ updated: false, phase, stage, agent })}\n`,
+    );
+    return;
+  }
   const preserveUnitMajorCursor =
     getField(previousContent, "Construction Iteration")?.trim() === "unit-major" &&
     phase === "CONSTRUCTION" &&
+    activeDirectiveIsCurrentRunStage &&
+    activeDirective?.version === 1 &&
     activeDirective?.stage === stage &&
     activeDirective.unit !== undefined &&
     currentStage.length > 0 &&
@@ -7719,12 +7748,18 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   content = setField(content, "Lifecycle Phase", phase);
   content = setField(content, "Active Agent", agent);
   content = setField(content, "Status", "Running");
-  content = setField(content, "Last Updated", isoTimestamp());
   if (!preserveUnitMajorCursor) {
     content = setField(content, "Current Stage", stage);
     content = setField(content, "In Progress", stage);
     content = setCheckbox(content, stage, "in-progress");
   }
+  if (content === previousContent) {
+    process.stdout.write(
+      `${JSON.stringify({ updated: false, phase, stage, agent })}\n`,
+    );
+    return;
+  }
+  content = setField(content, "Last Updated", isoTimestamp());
   writeStateFile(projectDir, content, flags.intent, flags.space);
   try {
     refreshActiveDirectiveMarker(projectDir, stage, previousContent, content);

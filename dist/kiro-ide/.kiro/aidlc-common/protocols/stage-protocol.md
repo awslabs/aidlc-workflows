@@ -578,10 +578,11 @@ Before beginning ANY stage, transition stage-level tasks:
    TaskUpdate({ taskId: "[current stage task ID]", status: "in_progress", activeForm: "Running [Stage Name] [slug]" })
 
 Rules:
-- The `[slug]` suffix in `activeForm` is required. A PostToolUse hook parses it to automatically sync the state file (Lifecycle Phase, Current Stage, Active Agent, checkbox `[-]`).
+- The `[slug]` suffix in `activeForm` is required. A PostToolUse hook parses it to automatically sync the state file (Lifecycle Phase, Current Stage, Active Agent, checkbox `[-]`) for ordinary stage activation.
+- **V2 interleaved unit-major exception:** when a current state-bound per-Unit directive runs ahead of the durable block cursor, the hook performs no `aidlc-state.md` write. The active-directive marker supplies the transient stage/Unit identity; the state fields continue to describe the block's first-stage cursor. This byte-preservation is mandatory because a metadata-only state write would still change the marker-bound state digest and invalidate Plan Approval authority.
 - The task MUST be `in_progress` for the activeForm spinner to display — `pending` tasks show nothing.
 - Update BEFORE reading the stage file or doing any stage work.
-- This applies to **every stage in the compiled graph. No exceptions.**
+- The Task transition applies to **every stage in the compiled graph. No exceptions.** The state-sync exception above changes only the bookkeeping write for an interleaved directive.
 - If task IDs are not in context (e.g., after compaction), use `TaskList` to find by subject.
 - For skipped stages, mark completed with skip note: TaskUpdate({ taskId: [ID], status: "completed", description: "[original] — Skipped: [reason]" })
 

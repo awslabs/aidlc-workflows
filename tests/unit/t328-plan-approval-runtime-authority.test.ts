@@ -16,6 +16,9 @@ import { tmpdir } from "node:os";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import {
   clearActiveDirectiveMarker,
+  readActiveDirectiveMarker,
+  readPlanApprovalChallenge,
+  readPlanApprovalReceipt,
   readPlanApprovalViolation,
   refreshActiveDirectiveMarker,
   sessionsDir,
@@ -74,7 +77,9 @@ function initGitBaseline(project: string): void {
   }
 }
 
-function createProject(): string {
+function createProject(
+  options: { expressConstruction?: boolean } = {},
+): string {
   const project = setupIntegrationProject({
     withState: "state-brownfield-feature.md",
   });
@@ -89,14 +94,24 @@ function createProject(): string {
       /^- \[[ xSR?-]\] code-generation(\s+—\s+)EXECUTE$/m,
       "- [-] code-generation$1EXECUTE",
     );
-  writeFileSync(statePath, state, "utf-8");
+  const scopedState = options.expressConstruction
+    ? state
+      .replace(/^- \*\*Scope\*\*:.*$/m, "- **Scope**: express")
+      .replace(/^- \*\*Depth\*\*:.*$/m, "- **Depth**: Minimal")
+      .replace(/^- \*\*Test Strategy\*\*:.*$/m, "- **Test Strategy**: Minimal")
+      .replace(
+        /^- \*\*Lifecycle Phase\*\*:.*$/m,
+        "- **Lifecycle Phase**: CONSTRUCTION",
+      )
+    : state;
+  writeFileSync(statePath, scopedState, "utf-8");
   mkdirSync(join(project, "src"), { recursive: true });
   writeFileSync(join(project, "src", "base.ts"), "export const base = 1;\n");
   initGitBaseline(project);
   writeActiveDirectiveMarker(project, {
     kind: "run-stage",
     stage: "code-generation",
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: createHash("sha256").update(scopedState).digest("hex"),
   });
   return project;
 }
@@ -142,6 +157,33 @@ function runLog(
     {
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+}
+
+function runStatusSync(
+  project: string,
+  stage: string,
+): ReturnType<typeof Bun.spawnSync> {
+  return Bun.spawnSync(
+    [
+      BUN,
+      join(DIST_ROOT, "tools", "aidlc-utility.ts"),
+      "set-status",
+      "--stage",
+      stage,
+      "--project-dir",
+      project,
+    ],
+    {
+      cwd: project,
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: project,
+        AIDLC_STATUSLINE_OWNER: `statusline:${process.pid}`,
+      },
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -306,6 +348,141 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
+  }, 30000);
+
+  test("Claude Stop preserves an Express stage-level Plan Approval until the human answers", () => {
+    const project = createProject({ expressConstruction: true });
+    expect(runStatusSync(project, "code-generation").exitCode).toBe(0);
+    const statusSyncedState = readFileSync(
+      join(seededRecordDir(project), "aidlc-state.md"),
+      "utf-8",
+    );
+    writeActiveDirectiveMarker(project, {
+      kind: "run-stage",
+      stage: "code-generation",
+      state_sha256: createHash("sha256")
+        .update(statusSyncedState)
+        .digest("hex"),
+    });
+    const questions = seedPlan(project);
+    const session = "express-stage-level-stop";
+    appendAuditEntry(
+      "SESSION_STARTED",
+      { Source: "startup", Session: session },
+      project,
+    );
+    const identity = decisionArgs(questions, session);
+    const decision = runLog(project, [
+      "decision",
+      ...identity,
+      "--decision",
+      "Approve this exact Code Generation plan?",
+      "--options",
+      "Approve Plan,Request Changes",
+    ]);
+    expect(
+      decision.exitCode,
+      `${decision.stdout?.toString() ?? ""}\n${decision.stderr?.toString() ?? ""}`,
+    ).toBe(0);
+
+    const state = readFileSync(
+      join(seededRecordDir(project), "aidlc-state.md"),
+      "utf-8",
+    );
+    const markerBefore = readActiveDirectiveMarker(project, state);
+    const authorityBefore = resolveCodeGenerationAuthority(project, {
+      unit: null,
+    });
+    const challengeBefore = readPlanApprovalChallenge(project, session);
+    expect(markerBefore?.kind).toBe("run-stage");
+    expect(challengeBefore).not.toBeNull();
+    const duplicateSync = runStatusSync(project, "code-generation");
+    expect(
+      duplicateSync.exitCode,
+      `${duplicateSync.stdout?.toString() ?? ""}\n${duplicateSync.stderr?.toString() ?? ""}`,
+    ).toBe(0);
+    expect(JSON.parse(duplicateSync.stdout?.toString() ?? "{}")).toMatchObject({
+      updated: false,
+    });
+    expect(readActiveDirectiveMarker(project, state)).toEqual(markerBefore);
+    expect(readPlanApprovalChallenge(project, session)).toEqual(
+      challengeBefore,
+    );
+
+    const stop = Bun.spawnSync(
+      [BUN, join(project, ".claude", "hooks", "aidlc-continue-workflow.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "Stop",
+          session_id: session,
+          stop_hook_active: false,
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(
+      stop.exitCode,
+      `${stop.stdout.toString()}\n${stop.stderr.toString()}`,
+    ).toBe(0);
+    expect(stop.stdout.toString()).toBe("");
+    expect(readActiveDirectiveMarker(project, state)).toEqual(markerBefore);
+    expect(resolveCodeGenerationAuthority(project, { unit: null })).toEqual(
+      authorityBefore,
+    );
+    expect(readPlanApprovalChallenge(project, session)).toEqual(
+      challengeBefore,
+    );
+
+    const human = Bun.spawnSync(
+      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "PostToolUse",
+          session_id: session,
+          tool_name: "AskUserQuestion",
+          tool_response: {
+            answers: {
+              "Approve this exact Code Generation plan?": "Approve Plan",
+            },
+          },
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(human.exitCode, human.stderr.toString()).toBe(0);
+    writeFileSync(
+      questions,
+      readFileSync(questions, "utf-8").replace(
+        /\[Answer\]:\s*$/,
+        "[Answer]: Approve Plan",
+      ),
+    );
+    const answer = runLog(project, [
+      "answer",
+      ...identity,
+      "--details",
+      "Approve Plan",
+    ]);
+    expect(
+      answer.exitCode,
+      `${answer.stdout?.toString() ?? ""}\n${answer.stderr?.toString() ?? ""}`,
+    ).toBe(0);
+    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
+    expect(
+      readPlanApprovalReceipt(project, {
+        targetId: authorityBefore.targetId,
+        directiveEpoch: authorityBefore.directiveEpoch,
+      }),
+    ).toMatchObject({
+      choice: "Approve Plan",
+      status: "approved",
+    });
   }, 30000);
 
   test("rotates the source floor and retires authority across generation, Build and Test, resume, and new directives", () => {

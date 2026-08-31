@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 835,
+    "total": 837,
     "enumeratedByClass": {
-      "function": 537,
+      "function": 539,
       "audit": 91,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 315,
+      "function": 317,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -2021,6 +2021,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:consumeSharedDirectiveAsk",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:copilotStopEvidence",
       "minMechanism": "none",
       "coveredBy": [
@@ -2075,6 +2087,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentSharedDirectiveWait",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
           "mechanism": "cli"
         }
       ],

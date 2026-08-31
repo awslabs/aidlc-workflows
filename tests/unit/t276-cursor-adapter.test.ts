@@ -2,7 +2,7 @@
 // authored adapter (run() export) against a seeded project and assert the
 // Claude-shaped conversions on the wire.
 //
-// covers: hook:aidlc-record-human-turn, hook:aidlc-log-subagent
+// covers: hook:aidlc-record-human-turn, hook:aidlc-log-subagent, function:planApprovalWaitIsCurrent
 //
 // The fixture corpus (tests/fixtures/cursor-hook-payloads/payloads.json) is
 // field-verbatim off cursor-agent 2026.07.23 on Linux (spike 2026-07-26):
@@ -48,10 +48,22 @@ import {
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
 import {
   createIntent,
+  readActiveDirectiveMarker,
   readAllAuditShards,
+  readPlanApprovalChallenge,
+  readPlanApprovalReceipt,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  codeGenerationPlanApprovalQuestionEvidence,
+  codeGenerationRecordDir,
+  recordPlanApprovalChallenge,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../dist/cursor/.cursor/tools/aidlc-testing-posture.ts";
 import {
   createTestProject,
   FIXTURES_DIR,
@@ -98,6 +110,101 @@ function installedProject(): string {
   scratch.push(root);
   cpSync(CURSOR_DIST, join(root, ".cursor"), { recursive: true });
   return root;
+}
+
+function initGitBaseline(project: string): void {
+  for (const args of [
+    ["init", "-q"],
+    ["config", "user.email", "tests@example.com"],
+    ["config", "user.name", "AI-DLC Tests"],
+    ["add", "-A"],
+    ["commit", "-qm", "baseline"],
+  ]) {
+    const result = spawnSync("git", args, {
+      cwd: project,
+      encoding: "utf-8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  }
+}
+
+function cursorPlanProject(): string {
+  const project = installedProject();
+  seedStateFile(project, "state-construction.md");
+  seedAuditFile(project);
+  const statePath = join(seededRecordDir(project), "aidlc-state.md");
+  const state = readFileSync(statePath, "utf-8")
+    .replace(/^- \*\*Scope\*\*:.*$/m, "- **Scope**: express")
+    .replace(/^- \*\*Depth\*\*:.*$/m, "- **Depth**: Minimal")
+    .replace(/^- \*\*Test Strategy\*\*:.*$/m, "- **Test Strategy**: Minimal")
+    .replace(
+      /^- \*\*Current Stage\*\*:.*$/m,
+      "- **Current Stage**: code-generation",
+    )
+    .replace(
+      /^- \[[ xSR?-]\] code-generation(\s+—\s+)EXECUTE$/m,
+      "- [-] code-generation$1EXECUTE",
+    );
+  writeFileSync(statePath, state, "utf-8");
+  mkdirSync(join(project, "src"), { recursive: true });
+  writeFileSync(join(project, "src", "base.ts"), "export const base = 1;\n");
+  initGitBaseline(project);
+  writeActiveDirectiveMarker(project, {
+    kind: "run-stage",
+    stage: "code-generation",
+    state_sha256: createHash("sha256").update(state).digest("hex"),
+  });
+  return project;
+}
+
+function seedCursorPlanChallenge(
+  project: string,
+  session: string,
+): {
+  questions: string;
+  targetId: string;
+  directiveEpoch: string;
+} {
+  const authority = resolveCodeGenerationAuthority(project, { unit: null });
+  const contract = resolveTestingPosture(project);
+  const dir = codeGenerationRecordDir(project, null);
+  mkdirSync(dir, { recursive: true });
+  const plan =
+    `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Implement\n`;
+  const instructions =
+    "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n";
+  writeFileSync(join(dir, "code-generation-plan.md"), plan);
+  writeFileSync(join(dir, "unit-test-instructions.md"), instructions);
+  const fingerprint = approvalFingerprint(
+    plan,
+    instructions,
+    contract.contract_sha256,
+    authority,
+  );
+  const questions = join(dir, "code-generation-questions.md");
+  writeFileSync(
+    questions,
+    [
+      "## Plan Approval",
+      `[Approval Fingerprint]: ${fingerprint}`,
+      "A. Approve Plan",
+      "B. Request Changes",
+      "[Answer]:",
+      "",
+    ].join("\n"),
+  );
+  const evidence = codeGenerationPlanApprovalQuestionEvidence(
+    project,
+    { unit: null },
+    questions,
+    "",
+  );
+  recordPlanApprovalChallenge(project, evidence, session);
+  return {
+    questions,
+    targetId: authority.targetId,
+    directiveEpoch: authority.directiveEpoch,
+  };
 }
 
 /** The adapter's project-local subagent ledger. Spawn records are `.json`;
@@ -790,6 +897,132 @@ describe("t276 cursor adapter payload conversion", () => {
       expect((out.followup_message as string).length).toBeGreaterThan(0);
     }
   });
+
+  test("14a: Cursor session switch reissues Plan Approval before the CLI records it", () => {
+    const proj = cursorPlanProject();
+    const ideSession = "cursor-ide-plan";
+    const cliSession = "cursor-cli-plan";
+    runAdapter(
+      proj,
+      "session-start",
+      payload("sessionStart", proj, {
+        conversation_id: ideSession,
+        session_id: ideSession,
+      }),
+    );
+    const first = seedCursorPlanChallenge(proj, ideSession);
+    const state = readFileSync(
+      join(seededRecordDir(proj), "aidlc-state.md"),
+      "utf-8",
+    );
+    const markerBefore = readActiveDirectiveMarker(proj, state);
+
+    const sameSessionStop = runAdapter(
+      proj,
+      "stop",
+      payload("stop", proj, {
+        conversation_id: ideSession,
+        session_id: ideSession,
+      }),
+    );
+    expect(sameSessionStop.code).toBe(0);
+    expect(sameSessionStop.stdout.trim()).toBe("");
+    expect(readActiveDirectiveMarker(proj, state)).toEqual(markerBefore);
+    expect(readPlanApprovalChallenge(proj, ideSession)).not.toBeNull();
+
+    runAdapter(
+      proj,
+      "session-start",
+      payload("sessionStart", proj, {
+        conversation_id: cliSession,
+        session_id: cliSession,
+      }),
+    );
+    const switchedStop = runAdapter(
+      proj,
+      "stop",
+      payload("stop", proj, {
+        conversation_id: cliSession,
+        session_id: cliSession,
+      }),
+    );
+    expect(switchedStop.code).toBe(0);
+    expect(
+      (JSON.parse(switchedStop.stdout) as { followup_message?: string })
+        .followup_message,
+    ).toBeTruthy();
+    expect(readActiveDirectiveMarker(proj, state)).toEqual(markerBefore);
+    expect(readPlanApprovalChallenge(proj, ideSession)).not.toBeNull();
+
+    const reissued = seedCursorPlanChallenge(proj, cliSession);
+    const cliStop = runAdapter(
+      proj,
+      "stop",
+      payload("stop", proj, {
+        conversation_id: cliSession,
+        session_id: cliSession,
+      }),
+    );
+    expect(cliStop.code).toBe(0);
+    expect(cliStop.stdout.trim()).toBe("");
+
+    const mint = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, {
+        conversation_id: cliSession,
+        session_id: cliSession,
+        prompt: "Approve Plan",
+      }),
+    );
+    expect(mint.code, mint.stderr).toBe(0);
+    writeFileSync(
+      reissued.questions,
+      readFileSync(reissued.questions, "utf-8").replace(
+        /\[Answer\]:\s*$/,
+        "[Answer]: Approve Plan",
+      ),
+    );
+    const answer = spawnSync(
+      "bun",
+      [
+        LOG_TOOL,
+        "answer",
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        reissued.questions,
+        "--session",
+        cliSession,
+        "--stage-level",
+        "--details",
+        "Approve Plan",
+      ],
+      {
+        cwd: proj,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_PROJECT_DIR: proj,
+          AIDLC_HARNESS_DIR: ".cursor",
+        },
+      },
+    );
+    expect(answer.status, `${answer.stdout}\n${answer.stderr}`).toBe(0);
+    expect(
+      readPlanApprovalReceipt(proj, {
+        targetId: reissued.targetId,
+        directiveEpoch: reissued.directiveEpoch,
+      }),
+    ).toMatchObject({
+      choice: "Approve Plan",
+      status: "approved",
+      session: cliSession,
+    });
+    expect(first.directiveEpoch).toBe(reissued.directiveEpoch);
+  }, 30000);
 
   test("15: malformed stdin denies guards and remains advisory elsewhere", () => {
     const proj = installedProject();

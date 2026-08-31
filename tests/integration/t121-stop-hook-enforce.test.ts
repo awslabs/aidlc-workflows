@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:hasCurrentSharedResumeWait, function:hasPendingDecision
+// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:currentSharedDirectiveWait, function:consumeSharedDirectiveAsk, function:hasCurrentSharedResumeWait, function:hasPendingDecision
 //
 // Behavioural contract for the Stop hook `aidlc-continue-workflow.ts` — the framework's
 // FIRST flow-altering hook. Migrated from tests/integration/t121-stop-hook-enforce.sh
@@ -88,6 +88,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -98,7 +99,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -118,6 +119,14 @@ const HOOK_TS = join(
   ".claude",
   "hooks",
   "aidlc-continue-workflow.ts",
+);
+const HUMAN_TURN_HOOK_TS = join(
+  REPO_ROOT,
+  "dist",
+  "claude",
+  ".claude",
+  "hooks",
+  "aidlc-record-human-turn.ts",
 );
 const UTILITY_TS = join(
   REPO_ROOT,
@@ -173,13 +182,41 @@ function guardFilePath(proj: string): string {
 
 function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): void {
   const state = readFileSync(seededStateFile(proj), "utf-8");
+  const stateSha256 = createHash("sha256").update(state, "utf-8").digest("hex");
+  const projectSha256 = createHash("sha256").update(realpathSync(proj)).digest("hex");
+  const ownerSession = `sessionless:${projectSha256.slice(0, 16)}`;
   writeFileSync(
     join(seededRecordDir(proj), ".aidlc-active-directive.json"),
     `${JSON.stringify({
-      version: 1,
+      version: 2,
+      revision: 1,
+      project_sha256: projectSha256,
+      intent_uuid: "00000000-0000-7000-8000-000000000001",
+      state_present: true,
+      state_sha256: stateSha256,
+      owner_session: ownerSession,
+      owner_epoch: 0,
+      context_epoch: 0,
+      kind: "run-stage",
       stage,
       ...(unit ? { unit } : {}),
-      state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+      delivery: "issued",
+      needs_rehydrate: false,
+      active_attempt: {
+        id: "sessionless",
+        command_kind: "next",
+        command_sha256: stateSha256,
+        issued_state_sha256: stateSha256,
+        session_id: ownerSession,
+        owner_epoch: 0,
+        context_epoch: 0,
+        status: "settled",
+      },
+      event_sequence: 0,
+      human_sequence: 0,
+      engine_sequence: 0,
+      conversation_sequence: 0,
+      stop_count: 0,
     })}\n`,
   );
 }
@@ -230,6 +267,7 @@ function seedSessionlessResumeMarker(
   proj: string,
   kind: "ask" | "run-stage" = "ask",
   stage = "requirements-analysis",
+  resume = true,
 ): string {
   const state = readFileSync(seededStateFile(proj), "utf-8");
   const stateSha256 = createHash("sha256").update(state, "utf-8").digest("hex");
@@ -262,13 +300,18 @@ function seedSessionlessResumeMarker(
         context_epoch: 0,
         status: "settled",
       },
-      resume: {
-        status: "waiting",
-        issuing_stage: stage,
-        issuing_state_sha256: stateSha256,
-        issuing_session: ownerSession,
-        issuing_intent_uuid: "00000000-0000-7000-8000-000000000001",
-      },
+      ...(resume
+        ? {
+            resume: {
+              status: "waiting",
+              issuing_stage: stage,
+              issuing_state_sha256: stateSha256,
+              issuing_session: ownerSession,
+              issuing_intent_uuid:
+                "00000000-0000-7000-8000-000000000001",
+            },
+          }
+        : {}),
       event_sequence: 0,
       human_sequence: 0,
       engine_sequence: 0,
@@ -399,25 +442,31 @@ function seedInteractionAudit(
   events: Array<{
     event:
       | "DECISION_RECORDED"
+      | "PLAN_APPROVAL_RECORDED"
       | "QUESTION_ANSWERED"
+      | "SUMMARY_CONFIRMATION_RECORDED"
       | "STAGE_STARTED"
       | "WORKFLOW_STARTED"
       | "STAGE_JUMPED";
     stage: string;
     unit?: string;
     workflow?: string;
+    checkpoint?: string;
+    questionsFile?: string;
   }>,
 ): void {
   const timestamp = "2026-08-03T18:57:53Z";
   const body = events
     .map(
-      ({ event, stage, unit, workflow }) =>
+      ({ event, stage, unit, workflow, checkpoint, questionsFile }) =>
         `## ${event}\n` +
         `**Timestamp**: ${timestamp}\n` +
         `**Event**: ${event}\n` +
         `**Stage**: ${stage}\n` +
         (unit ? `**Unit**: ${unit}\n` : "") +
         (workflow ? `**Workflow**: ${workflow}\n` : "") +
+        (checkpoint ? `**Checkpoint**: ${checkpoint}\n` : "") +
+        (questionsFile ? `**Questions File**: ${questionsFile}\n` : "") +
         "\n---\n",
     )
     .join("");
@@ -1171,6 +1220,80 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
+  test("(b3) sessionless engine ask allows the stop before the shared next probe", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const markerPath = seedSessionlessResumeMarker(
+      proj,
+      "ask",
+      "requirements-analysis",
+      false,
+    );
+    const before = readFileSync(markerPath, "utf-8");
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      true,
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(false);
+    expect(readFileSync(markerPath, "utf-8")).toBe(before);
+
+    const human = spawnSync(BUN, [HUMAN_TURN_HOOK_TS], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+      input: JSON.stringify({
+        hook_event_name: "UserPromptSubmit",
+        prompt: "Continue the active work",
+      }),
+      encoding: "utf-8",
+    });
+    expect(human.status, human.stderr).toBe(0);
+    expect(
+      (
+        JSON.parse(readFileSync(markerPath, "utf-8")) as {
+          delivery?: string;
+        }
+      ).delivery,
+    ).toBe("consumed");
+
+    const abandoned = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+    );
+    expect(abandoned.rc).toBe(0);
+    expect(
+      (JSON.parse(abandoned.out) as { decision?: string }).decision,
+    ).toBe("block");
+  }, 30000);
+
+  test("(b3) autonomous Construction still honors a sessionless engine ask", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      phase: "construction",
+      autonomy: "autonomous",
+    });
+    seedSessionlessResumeMarker(proj, "ask", "code-generation", false);
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "",
+      "code-generation",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
   // =========================================================================
   // (c) RECURSION GUARD — asserted hardest. The session must ALWAYS release.
   // =========================================================================
@@ -1417,6 +1540,52 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe("");
   }, 30000);
 
+  test("(e) completed walking skeleton with unset autonomy waits for the ladder before probing", () => {
+    const proj = makeProject();
+    writeFileSync(
+      seededStateFile(proj),
+      [
+        "- **Workflow**: feature",
+        "- **Scope**: feature",
+        "- **Lifecycle Phase**: CONSTRUCTION",
+        "- **Current Stage**: code-generation",
+        "- **Skeleton Stance**: on",
+        "- **Construction Autonomy Mode**: unset",
+        "",
+        "## Stage Progress",
+        "- [x] functional-design — EXECUTE",
+        "- [-] code-generation — EXECUTE",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    seedAuditShard(proj);
+    const dependencyDir = join(
+      seededRecordDir(proj),
+      "inception",
+      "units-generation",
+    );
+    mkdirSync(dependencyDir, { recursive: true });
+    writeFileSync(
+      join(dependencyDir, "unit-of-work-dependency.md"),
+      "# Unit dependencies\n\n```yaml\nunits:\n  - name: skeleton\n    depends_on: []\n```\n",
+      "utf-8",
+    );
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "",
+      "code-generation",
+      "",
+      true,
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(false);
+  }, 30000);
+
   test("(e) carve-out is positive-only — [-] in-progress still BLOCKS (cap is the only release)", () => {
     const proj = makeProject();
     // [-] in-progress is ALSO the normal 'stage work still owed' state — a
@@ -1500,29 +1669,173 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
-  test("(f) gated Construction — [-] + blank question DOES allow (autonomy not granted)", () => {
+  test("(f) autonomous Construction still waits for mandatory summary confirmation", () => {
     const proj = makeProject();
-    // The complement: same Construction stage, but autonomy is 'gated' (or
-    // unset) → the human is in the loop, so a pending question releases.
+    seedInProgressWithQuestions(proj, {
+      slug: "functional-design",
+      phase: "construction",
+      autonomy: "autonomous",
+      questions:
+        "# Functional Design Questions\n\n## Consolidated Summary Confirmation\nDoes this look correct?\n[Answer]:\n",
+    });
+    seedActiveDirectiveMarker(proj, "functional-design");
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "functional-design" },
+      {
+        event: "DECISION_RECORDED",
+        stage: "functional-design",
+        checkpoint: "Consolidated Summary Confirmation",
+        questionsFile: relative(
+          proj,
+          join(
+            seededRecordDir(proj),
+            "construction",
+            "functional-design",
+            "functional-design-questions.md",
+          ),
+        ),
+      },
+    ]);
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "load-steering",
+      "",
+      "",
+      "functional-design",
+      "",
+      true,
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(false);
+  }, 30000);
+
+  test("(f) an old completed summary decision does not authorize a reset blank checkpoint", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "functional-design",
+      phase: "construction",
+      autonomy: "autonomous",
+      questions:
+        "# Functional Design Questions\n\n## Consolidated Summary Confirmation\nDoes this look correct?\n[Answer]:\n",
+    });
+    seedActiveDirectiveMarker(proj, "functional-design");
+    const questionsFile = relative(
+      proj,
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "functional-design",
+        "functional-design-questions.md",
+      ),
+    );
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "functional-design" },
+      {
+        event: "DECISION_RECORDED",
+        stage: "functional-design",
+        checkpoint: "Consolidated Summary Confirmation",
+        questionsFile,
+      },
+      {
+        event: "SUMMARY_CONFIRMATION_RECORDED",
+        stage: "functional-design",
+        checkpoint: "Consolidated Summary Confirmation",
+        questionsFile,
+      },
+    ]);
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "load-steering",
+      "",
+      "",
+      "functional-design",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(f) a blank Plan Approval without a session challenge cannot suppress the Stop-hook next probe", () => {
+    const proj = makeProject();
+    // A blank markdown answer is not authority. Without a protected challenge
+    // for this Stop session, the hook must probe and recover rather than park
+    // forever on an answer that this session can never record.
     seedInProgressWithQuestions(proj, {
       slug: "code-generation",
       phase: "construction",
       autonomy: "gated",
-      questions: "# Questions\n\n## Q1\nEdge case?\n[Answer]:\n",
+      questions:
+        "# Code Generation Questions\n\n## Plan Approval\nApprove this plan?\n[Answer]:\n",
     });
+    seedActiveDirectiveMarker(proj, "code-generation");
+    const markerPath = join(
+      seededRecordDir(proj),
+      ".aidlc-active-directive.json",
+    );
+    const markerBefore = readFileSync(markerPath, "utf-8");
     const r = runHook(
       proj,
       '{"stop_hook_active":false}',
-      "run-stage",
+      "load-steering",
+      "",
+      "",
+      "code-generation",
+      "",
+      true,
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(true);
+    expect(readFileSync(markerPath, "utf-8")).not.toBe(markerBefore);
+  }, 30000);
+
+  test("(f) invalidated directive does not strand a blank Plan Approval wait", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      phase: "construction",
+      autonomy: "gated",
+      questions:
+        "# Code Generation Questions\n\n## Plan Approval\nApprove this plan?\n[Answer]:\n",
+    });
+    seedSessionlessResumeMarker(proj, "ask", "code-generation", false);
+    rewriteCopilotMarker(proj, (marker) => {
+      marker.kind = "error";
+      marker.delivery = "superseded";
+      marker.needs_rehydrate = true;
+    });
+    seedInteractionAudit(proj, [
+      {
+        event: "DECISION_RECORDED",
+        stage: "code-generation",
+        checkpoint: "Code Generation Plan Approval",
+        questionsFile: relative(
+          proj,
+          join(
+            seededRecordDir(proj),
+            "construction",
+            "code-generation",
+            "code-generation-questions.md",
+          ),
+        ),
+      },
+    ]);
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "load-steering",
       "",
       "",
       "code-generation",
     );
     expect(r.rc).toBe(0);
-    expect(r.out).toBe("");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(true);
   }, 30000);
 
-  test("(f) gated per-unit Construction finds the active unit's blank question", () => {
+  test("(f) gated per-unit Plan Approval without a protected challenge keeps recovering", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj, {
       slug: "code-generation",
@@ -1531,6 +1844,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       unit: "checkout-api",
       questions: "# Plan Approval\n\nApprove this plan?\n[Answer]:\n",
     });
+    seedActiveDirectiveMarker(proj, "code-generation", "checkout-api");
     const r = runHook(
       proj,
       '{"stop_hook_active":false}',
@@ -1540,7 +1854,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       "code-generation",
     );
     expect(r.rc).toBe(0);
-    expect(r.out).toBe("");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
   test("(f) team unit-major finds a later active stage question after the durable cursor completes", () => {
@@ -1578,6 +1892,66 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe("");
   }, 30000);
 
+  test("(f) team read-only probe cannot authorize an invalidated Plan Approval checkpoint", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      currentSlug: "functional-design",
+      phase: "construction",
+      autonomy: "gated",
+      iteration: "unit-major",
+      unit: "alpha",
+      questions:
+        "# Code Generation Questions\n\n## Plan Approval\nApprove this plan?\n[Answer]:\n",
+    });
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8")
+        .replace(
+          "- **Construction Iteration**: unit-major\n",
+          "- **Construction Iteration**: unit-major\n- **Unit Ownership**: team\n",
+        )
+        .replace(
+          "- [-] functional-design — EXECUTE",
+          "- [x] functional-design — EXECUTE",
+        ),
+    );
+    seedActiveDirectiveMarker(proj, "code-generation", "alpha");
+    rewriteCopilotMarker(proj, (marker) => {
+      marker.kind = "error";
+      marker.delivery = "superseded";
+      marker.needs_rehydrate = true;
+    });
+    seedInteractionAudit(proj, [
+      {
+        event: "DECISION_RECORDED",
+        stage: "code-generation",
+        unit: "alpha",
+        checkpoint: "Code Generation Plan Approval",
+        questionsFile: relative(
+          proj,
+          join(
+            seededRecordDir(proj),
+            "construction",
+            "alpha",
+            "code-generation",
+            "code-generation-questions.md",
+          ),
+        ),
+      },
+    ]);
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "alpha",
+      "code-generation",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
   test("(f) per-unit lookup ignores a different unit's stale blank question", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj, {
@@ -1599,7 +1973,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
-  test("(f) autonomous unit-major Plan Approval recovers the unit through load-steering and allows the stop", () => {
+  test("(f) autonomous unit-major Plan Approval without a protected challenge keeps loading rules", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj, {
       slug: "code-generation",
@@ -1626,6 +2000,24 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(syncedMarker.state_sha256).toBe(
       createHash("sha256").update(syncedState, "utf-8").digest("hex"),
     );
+    seedInteractionAudit(proj, [
+      {
+        event: "DECISION_RECORDED",
+        stage: "code-generation",
+        unit: "alpha",
+        checkpoint: "Code Generation Plan Approval",
+        questionsFile: relative(
+          proj,
+          join(
+            seededRecordDir(proj),
+            "construction",
+            "alpha",
+            "code-generation",
+            "code-generation-questions.md",
+          ),
+        ),
+      },
+    ]);
     const r = runHook(
       proj,
       '{"stop_hook_active":false}',
@@ -1635,7 +2027,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       "code-generation",
     );
     expect(r.rc).toBe(0);
-    expect(r.out).toBe("");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
   test("(f) autonomous unit-major generic code-generation question still blocks", () => {
@@ -2206,12 +2598,12 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   test("(f2) THE PROBE IS MARKED - the hook delivers AIDLC_STOP_HOOK_PROBE=1 to its own engine consultation", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
-    seedTurnMarkers(proj, { humanNewer: true });
+    seedTurnMarkers(proj, { humanNewer: false });
     const enginePath = join(seededRecordDir(proj), ".aidlc-engine-touch");
     const before = statSync(enginePath).mtimeMs;
     const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
     expect(r.rc).toBe(0);
-    expect(r.out).toBe(""); // still allowed after a real hook run
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
 
     // THE ASSERTION THAT ACTUALLY BITES. The hook runs `aidlc-orchestrate next`
     // on every stop to learn whether work is pending. If that consultation were

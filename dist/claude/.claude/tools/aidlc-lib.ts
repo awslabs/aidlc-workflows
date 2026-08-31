@@ -5271,11 +5271,54 @@ export function readActiveDirectiveMarker(
   }
 }
 
-// Read the shared/sessionless resume wait under the active-directive lock. The
+export type SharedDirectiveWait = "engine-ask" | "resume";
+
+// Read a shared/sessionless human wait under the active-directive lock. The
 // marker is read before state while refreshActiveDirectiveMarker uses the same
 // lock after writing state, so a concurrent state transition either linearizes
 // after this evidence or makes the marker/state digest mismatch and fails closed.
+export function currentSharedDirectiveWait(
+  projectDir: string,
+): SharedDirectiveWait | null {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: null, preserve: true };
+    }
+    const currentAsk =
+      marker?.version === 2 &&
+      marker.owner_session?.startsWith("sessionless:") === true &&
+      marker.state_sha256 === stateContentSha256(stateContent) &&
+      marker.kind === "ask" &&
+      marker.delivery === "issued" &&
+      marker.needs_rehydrate === false;
+    if (!currentAsk) {
+      return { marker, result: null, preserve: true };
+    }
+    if (marker.resume?.status === "waiting") {
+      const waiting =
+        getField(stateContent, "Construction Autonomy Mode")?.trim() !==
+          "autonomous";
+      return {
+        marker,
+        result: waiting ? "resume" as const : null,
+        preserve: true,
+      };
+    }
+    if (marker.resume?.status === "selected") {
+      return { marker, result: null, preserve: true };
+    }
+    return { marker, result: "engine-ask" as const, preserve: true };
+  });
+}
+
 export function hasCurrentSharedResumeWait(projectDir: string): boolean {
+  return currentSharedDirectiveWait(projectDir) === "resume";
+}
+
+export function consumeSharedDirectiveAsk(projectDir: string): boolean {
   return transactActiveDirective(projectDir, (marker, target) => {
     let stateContent: string;
     try {
@@ -5283,14 +5326,26 @@ export function hasCurrentSharedResumeWait(projectDir: string): boolean {
     } catch {
       return { marker, result: false, preserve: true };
     }
-    const waiting =
+    const consumable =
       marker?.version === 2 &&
       marker.owner_session?.startsWith("sessionless:") === true &&
       marker.state_sha256 === stateContentSha256(stateContent) &&
       marker.kind === "ask" &&
-      marker.resume?.status === "waiting" &&
-      getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous";
-    return { marker, result: waiting, preserve: true };
+      marker.delivery === "issued" &&
+      marker.needs_rehydrate === false &&
+      marker.resume?.status !== "waiting" &&
+      marker.resume?.status !== "selected";
+    if (!consumable) {
+      return { marker, result: false, preserve: true };
+    }
+    return {
+      marker: {
+        ...marker,
+        revision: (marker.revision ?? 0) + 1,
+        delivery: "consumed",
+      },
+      result: true,
+    };
   });
 }
 
@@ -7603,10 +7658,17 @@ export function hasPendingDecision(
   afterEvent?: string,
   unit?: string,
   workflowAttempt = false,
+  identity: {
+    checkpoint?: string;
+    questionsFile?: string;
+    excludeCheckpoints?: boolean;
+  } = {},
 ): boolean {
   const relevant = new Set([
     "DECISION_RECORDED",
     "QUESTION_ANSWERED",
+    "PLAN_APPROVAL_RECORDED",
+    "SUMMARY_CONFIRMATION_RECORDED",
     ...(afterEvent ? [afterEvent] : []),
     ...(workflowAttempt ? ["WORKFLOW_STARTED", "STAGE_JUMPED"] : []),
   ]);
@@ -7617,6 +7679,8 @@ export function hasPendingDecision(
       stage: auditBlockField(row.block, "Stage"),
       unit: auditBlockField(row.block, "Unit"),
       workflow: auditBlockField(row.block, "Workflow"),
+      checkpoint: auditBlockField(row.block, "Checkpoint"),
+      questionsFile: auditBlockField(row.block, "Questions File"),
     }))
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -7671,8 +7735,22 @@ export function hasPendingDecision(
           event.stage === stage &&
           (unit === undefined || event.unit === unit) &&
           (
+            identity.checkpoint === undefined ||
+            event.checkpoint === identity.checkpoint
+          ) &&
+          (
+            identity.excludeCheckpoints !== true ||
+            event.checkpoint === null
+          ) &&
+          (
+            identity.questionsFile === undefined ||
+            event.questionsFile === identity.questionsFile
+          ) &&
+          (
             event.event === "DECISION_RECORDED" ||
-            event.event === "QUESTION_ANSWERED"
+            event.event === "QUESTION_ANSWERED" ||
+            event.event === "PLAN_APPROVAL_RECORDED" ||
+            event.event === "SUMMARY_CONFIRMATION_RECORDED"
           ),
       );
     const matchingShards = new Set(matching.map((event) => event.shard));
@@ -11572,7 +11650,7 @@ function readSyncBufferedLine(
     const newline = reader.buffer.indexOf(0x0a, reader.offset);
     if (newline !== -1 && newline < reader.end) {
       const chunk = reader.buffer.subarray(reader.offset, newline);
-      chunks.push(chunk);
+      chunks.push(Buffer.from(chunk));
       total += chunk.length;
       reader.offset = newline + 1;
       if (total > maxBytes) return null;
@@ -11581,7 +11659,9 @@ function readSyncBufferedLine(
         : Buffer.concat(chunks, total);
     }
     const chunk = reader.buffer.subarray(reader.offset, reader.end);
-    chunks.push(chunk);
+    // The next refill overwrites reader.buffer. Own this partial line before
+    // advancing so a header split across the 64 KiB boundary stays intact.
+    chunks.push(Buffer.from(chunk));
     total += chunk.length;
     reader.offset = reader.end;
     if (total > maxBytes) return null;

@@ -1595,6 +1595,33 @@ export function codeGenerationPlanApprovalQuestionEvidence(
   };
 }
 
+export function planApprovalWaitIsCurrent(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  suppliedQuestionsFile: string,
+  session: string,
+): boolean {
+  if (!session.trim()) return false;
+  try {
+    const evidence = codeGenerationPlanApprovalQuestionEvidence(
+      projectDir,
+      target,
+      suppliedQuestionsFile,
+      "",
+    );
+    const challenge = readPlanApprovalChallenge(projectDir, session);
+    if (
+      challenge === null ||
+      !runtimeIdentityMatches(challenge, runtimeIdentity(evidence))
+    ) {
+      return false;
+    }
+    return readPlanApprovalResponse(projectDir, session) === null;
+  } catch {
+    return false;
+  }
+}
+
 export function evaluateCodeGenerationApproval(
   projectDir: string,
   target: CodeGenerationTarget,

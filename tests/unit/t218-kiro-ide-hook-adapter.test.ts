@@ -40,6 +40,7 @@ import { fileURLToPath } from "node:url";
 import {
   readAllAuditShards,
   readIntentRegistry,
+  sessionsDir,
   writePlanApprovalLegacyOffer,
   writeActiveDirectiveMarker,
 } from "../../core/tools/aidlc-lib.ts";
@@ -2947,6 +2948,110 @@ describe("t218 forward-only sync-statusline (finding 1: no state resurrection)",
       const r = runIde(dir, "sync-workflow-state", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
       expect(r.code).toBe(0);
       expect(stateField(dir, "Current Stage")).toBe("user-stories");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F1d: unit-major audit sync preserves durable cursor metadata and Plan Approval runtime", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      const state = readFileSync(statePath, "utf-8")
+        .replace(
+          /^- \*\*Current Stage\*\*:.*$/m,
+          "- **Current Stage**: functional-design",
+        )
+        .replace(
+          "- **Revision Count**: 0",
+          "- **Revision Count**: 0\n- **Construction Iteration**: unit-major",
+        );
+      writeFileSync(statePath, state, "utf-8");
+      writeActiveDirectiveMarker(dir, {
+        kind: "run-stage",
+        stage: "code-generation",
+        unit: "saved-search",
+        state_sha256: createHash("sha256").update(state).digest("hex"),
+      });
+      appendStageStarted(dir, "code-generation", "2026-08-31T04:30:00.000Z");
+      const markerPath = join(
+        seededRecordDir(dir),
+        ".aidlc-active-directive.json",
+      );
+      const runtimeDir = join(sessionsDir(dir), "plan-approval");
+      mkdirSync(runtimeDir, { recursive: true });
+      const challenge = join(runtimeDir, "challenge-sentinel.json");
+      writeFileSync(challenge, '{"pending":true}\n', "utf-8");
+      const markerBefore = readFileSync(markerPath, "utf-8");
+
+      const r = runIde(
+        dir,
+        "sync-workflow-state",
+        ctx("execute_bash", "Output:\nok\n\nExit Code: 0"),
+      );
+      expect(r.code).toBe(0);
+      expect(readFileSync(statePath, "utf-8")).toBe(state);
+      expect(readFileSync(markerPath, "utf-8")).toBe(markerBefore);
+      expect(readFileSync(challenge, "utf-8")).toBe('{"pending":true}\n');
+
+      const directSync = spawnSync(
+        process.execPath,
+        [
+          join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+          "set-status",
+          "--stage",
+          "code-generation",
+          "--project-dir",
+          dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            AIDLC_STATUSLINE_OWNER: `statusline:${process.pid}`,
+          },
+        },
+      );
+      expect(directSync.status, directSync.stderr).toBe(0);
+      expect(JSON.parse(directSync.stdout)).toMatchObject({ updated: false });
+      expect(readFileSync(statePath, "utf-8")).toBe(state);
+      expect(readFileSync(markerPath, "utf-8")).toBe(markerBefore);
+      expect(readFileSync(challenge, "utf-8")).toBe('{"pending":true}\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F1e: invalidated unit-major markers do not suppress legitimate forward sync", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      const state = readFileSync(statePath, "utf-8")
+        .replace(
+          /^- \*\*Current Stage\*\*:.*$/m,
+          "- **Current Stage**: functional-design",
+        )
+        .replace(
+          "- **Revision Count**: 0",
+          "- **Revision Count**: 0\n- **Construction Iteration**: unit-major",
+        );
+      writeFileSync(statePath, state, "utf-8");
+      writeActiveDirectiveMarker(dir, {
+        kind: "error",
+        stage: "code-generation",
+        unit: "saved-search",
+        state_sha256: createHash("sha256").update(state).digest("hex"),
+      });
+      appendStageStarted(dir, "code-generation", "2026-08-31T04:31:00.000Z");
+
+      const r = runIde(
+        dir,
+        "sync-workflow-state",
+        ctx("execute_bash", "Output:\nok\n\nExit Code: 0"),
+      );
+      expect(r.code).toBe(0);
+      expect(stateField(dir, "Current Stage")).toBe("code-generation");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -80,6 +80,7 @@ import {
   FIXTURES_DIR,
   resetAidlcEnv,
   runOrchestrateNext,
+  seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -682,6 +683,32 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(directive.question).toContain(
       `as "${directive.proposed_scope}" work`,
     );
+    const markerPath = join(
+      seededRecordDir(proj),
+      ".aidlc-active-directive.json",
+    );
+    const markerBefore = readFileSync(markerPath, "utf-8");
+    expect(JSON.parse(markerBefore)).toMatchObject({
+      version: 2,
+      kind: "ask",
+      stage: "feasibility",
+      delivery: "issued",
+      needs_rehydrate: false,
+    });
+    expect("stage" in directive).toBe(false);
+    const stop = spawnSync(
+      BUN,
+      [join(AIDLC_SRC, "hooks", "aidlc-continue-workflow.ts")],
+      {
+        cwd: proj,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+        input: '{"hook_event_name":"Stop","stop_hook_active":false}',
+        encoding: "utf-8",
+      },
+    );
+    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+    expect(stop.stdout).toBe("");
+    expect(readFileSync(markerPath, "utf-8")).toBe(markerBefore);
   });
 
   test("keyword-matching prose names the scope a confirmed new intent would get", () => {
