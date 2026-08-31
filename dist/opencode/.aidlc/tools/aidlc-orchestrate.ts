@@ -1541,6 +1541,14 @@ function parseNextFlags(args: string[]): ParsedFlags {
       i++;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
+    } else if (a === "--init" || a === "--force") {
+      // RETIRED flags (Branch 3 retired in P4; see the handleNext comment at
+      // ~:4082): initialization happens automatically, so these are harmless
+      // no-ops from pre-P4 docs and muscle memory. Consume them - since #847
+      // made unknown flag-looking tokens lossless task text, an unconsumed
+      // retired flag would otherwise become the intent's literal DESCRIPTION
+      // (`--arguments=--init`), which downstream agents cannot act on. A task
+      // that genuinely needs the token spells it via the `--` delimiter.
     } else {
       // Unknown flag-looking tokens are task text, not disposable noise. Use
       // the standard `--` delimiter when a task must contain a token that is

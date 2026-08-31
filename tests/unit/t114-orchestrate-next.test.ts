@@ -717,3 +717,71 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(out).toContain("intent-create");
   });
 });
+
+// ===========================================================================
+// Retired flags (--init / --force) are consumed, never intent text
+// ===========================================================================
+// Branch 3 (`--init`) retired in P4; #847 later made unknown flag-looking
+// tokens lossless task text. Together they leaked retired flags into the
+// created intent's DESCRIPTION (`--arguments=--init`). These pin the repair:
+// retired flags vanish, genuinely-unknown tokens still ride as task text,
+// and the `--` delimiter still passes a literal `--init` through.
+describe("t114 retired flags are consumed, not description text", () => {
+  test("--init with --new-intent + prose creates without leaking the flag", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--init",
+      "--new-intent",
+      "--scope",
+      "bugfix",
+      "fix the login flow",
+    ]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("intent-create --scope bugfix");
+    expect(out).not.toContain("--init");
+  });
+
+  test("--force is likewise consumed", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--force",
+      "--new-intent",
+      "--scope",
+      "poc",
+      "a standalone dashboard",
+    ]).out;
+    expect(out).toContain("intent-create");
+    expect(out).not.toContain("--force");
+  });
+
+  test("genuinely unknown flag-looking tokens remain lossless task text (#847)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "a dashboard with",
+      "--dark-mode",
+    ]).out;
+    expect(out).toContain("intent-create");
+    expect(out).toContain("--dark-mode");
+  });
+
+  test("the -- delimiter still passes a literal --init through as text", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "document the retired",
+      "--",
+      "--init",
+    ]).out;
+    expect(out).toContain("intent-create");
+    expect(out).toContain("--init");
+  });
+});
