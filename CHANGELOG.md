@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.125] - 2026-08-31
+
+Retired orchestrator flags no longer leak into new-work descriptions.
+
+* `/aidlc --init ...` and `--force` (retired in P4; initialization is automatic) are now consumed as harmless no-ops instead of becoming the created intent's literal description (`--arguments=--init`), which stalled agents on an unactionable task. Genuinely unknown flag-looking tokens remain lossless task text, and the `--` delimiter still passes literal flag tokens through.
+
 ## [2.6.124] - 2026-08-28
 
 Stop committing machine-local absolute paths in `aidlc-state.md`. The `Project Root` and `Worktree Path` state fields are now written in project-relative form (`.` for the root; a `relative(projectDir, worktreePath)` breadcrumb for a worktree), so a state file shared across machines or checkouts no longer carries a host-specific absolute path. Closes #937.
