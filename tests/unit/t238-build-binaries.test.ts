@@ -277,7 +277,7 @@ describe("t238 build-binaries release builder", () => {
     }
 
     const doctor = spawnSync(native.artifact, ["doctor"], {
-      cwd: tmpdir(),
+      cwd: mkdtempSync(join(tmpdir(), "aidlc-rerun-")),
       encoding: "utf-8",
       env: { ...process.env, PATH: "" },
       timeout: 30_000,
@@ -289,7 +289,7 @@ describe("t238 build-binaries release builder", () => {
     );
 
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
-      cwd: tmpdir(),
+      cwd: mkdtempSync(join(tmpdir(), "aidlc-rerun-")),
       encoding: "utf-8",
       timeout: 30_000,
     });
