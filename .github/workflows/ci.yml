@@ -16,13 +16,15 @@ on:
   pull_request:
     branches:
       - v2
-    # Run on PR open, on every push to the PR branch (synchronize), and on
-    # reopen. This is GitHub's default set for `pull_request`; declared
-    # explicitly so the re-run-on-modify behavior is unambiguous.
+    # Run on PR open, every push, reopen, transition out of draft, and metadata
+    # edit. The last two also provide a fresh unprivileged signal for the fork
+    # AI-review workflow_run lane.
     types:
       - opened
       - synchronize
       - reopened
+      - ready_for_review
+      - edited
   workflow_dispatch:
 
 permissions:
