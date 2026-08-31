@@ -9,10 +9,6 @@ on:
         description: Existing version tag to publish
         type: string
         required: true
-      draft:
-        description: Leave the verified release as a draft for manual promotion
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -20,6 +16,7 @@ permissions:
 jobs:
   authorize:
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       actions: read
       contents: read
@@ -27,20 +24,63 @@ jobs:
       tag: ${{ steps.authorize.outputs.tag }}
       sha: ${{ steps.authorize.outputs.sha }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - name: Authorize immutable release tag
+        id: authorize
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          fi
+          git fetch --no-tags origin v2
+          tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          test "$(git rev-parse HEAD)" = "$tag_sha"
+          git merge-base --is-ancestor "$tag_sha" origin/v2
+          printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
+      - name: Require protected release authorization identity
+        shell: bash
+        env:
+          RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          RELEASE_AUTH_APP_PRIVATE_KEY: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_AUTH_APP_ID" ] || [ -z "$RELEASE_AUTH_APP_PRIVATE_KEY" ]; then
+            echo "::error title=Release authorization identity failure::The protected release environment must provide AIDLC_RELEASE_AUTH_APP_ID and AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY."
+            exit 1
+          fi
+      - name: Mint release authorization token
+        id: release-authorization-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-administration: write
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
       - name: Verify release repository controls
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-authorization-token.outputs.token }}
         run: |
           set -euo pipefail
-          environment="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")"
+          if ! environment="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")"; then
+            echo "::error title=Release authorization identity failure::The protected GitHub App identity could not read the release environment."
+            exit 1
+          fi
           jq -e '
             .can_admins_bypass == false and
             .deployment_branch_policy.custom_branch_policies == true
           ' <<<"$environment" >/dev/null
-          require_team=false
           if [ "$GITHUB_REPOSITORY" = "awslabs/aidlc-workflows" ]; then
-            require_team=true
             review_rule="$(
               jq -c '
                 [
@@ -65,6 +105,7 @@ jobs:
                 ][0] // empty
               ' <<<"$review_rule"
             )"
+            reviewer_type="Team"
           else
             review_rule="$(
               jq -c '
@@ -79,63 +120,41 @@ jobs:
               ' <<<"$environment"
             )"
             reviewer_id="$(jq -r '.reviewers[0].reviewer.id // empty' <<<"$review_rule")"
+            reviewer_type="$(jq -r '.reviewers[0].type // empty' <<<"$review_rule")"
           fi
           test -n "$review_rule"
           test -n "$reviewer_id"
-          policies="$(
+          test "$reviewer_type" = "Team" -o "$reviewer_type" = "User"
+          if ! policies="$(
             gh api --paginate \
               "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
-          )"
+          )"; then
+            echo "::error title=Release authorization identity failure::The protected GitHub App identity could not read release deployment policies."
+            exit 1
+          fi
           jq -e '
             any(.branch_policies[]; .type == "tag" and .name == "v*")
           ' <<<"$policies" >/dev/null
-          rulesets="$RUNNER_TEMP/aidlc-release-rulesets.jsonl"
-          : >"$rulesets"
-          gh api --paginate "repos/$GITHUB_REPOSITORY/rulesets" --jq '.[].id' |
-            while read -r ruleset_id; do
-              gh api "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id" >>"$rulesets"
-            done
-          jq -s -e \
-            --argjson reviewer_id "$reviewer_id" \
-            --argjson require_team "$require_team" '
-            any(
-              .[];
-              .enforcement == "active" and
-              .target == "tag" and
-              any(.rules[]?; .type == "creation") and
-              any(.rules[]?; .type == "update") and
-              any(.rules[]?; .type == "deletion") and
-              any(
-                .conditions.ref_name.include[]?;
-                . == "~ALL" or . == "refs/tags/v*"
-              ) and
-              any(
-                .bypass_actors[]?;
-                .actor_id == $reviewer_id and
-                ($require_team == false or .actor_type == "Team")
-              )
-            )
-          ' "$rulesets" >/dev/null
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-      - name: Authorize immutable release tag
-        id: authorize
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        run: |
-          set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          rulesets="$RUNNER_TEMP/aidlc-release-rulesets"
+          mkdir -p "$rulesets"
+          if ! ruleset_ids="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/rulesets" --jq '.[].id'
+          )"; then
+            echo "::error title=Release authorization identity failure::The protected GitHub App identity could not list repository rulesets."
+            exit 1
           fi
-          git fetch --no-tags origin v2
-          tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
-          test "$(git rev-parse HEAD)" = "$tag_sha"
-          git merge-base --is-ancestor "$tag_sha" origin/v2
-          printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
+          while read -r ruleset_id; do
+            test -n "$ruleset_id" || continue
+            if ! gh api "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id" \
+              >"$rulesets/$ruleset_id.json"; then
+              echo "::error title=Release authorization identity failure::The protected GitHub App identity could not read ruleset $ruleset_id."
+              exit 1
+            fi
+          done <<<"$ruleset_ids"
+          bun scripts/verify-release.ts controls \
+            --rulesets "$rulesets" \
+            --reviewer-id "$reviewer_id" \
+            --reviewer-type "$reviewer_type"
 
   verify:
     needs: authorize
@@ -311,25 +330,49 @@ jobs:
           $env:AIDLC_TEST_GH_MARKER = Join-Path $env:RUNNER_TEMP 'aidlc-gh-verified'
           $env:AIDLC_TEST_GH_REPOSITORY = 'awslabs/aidlc-workflows'
           $env:AIDLC_TEST_GH_WORKFLOW = 'awslabs/aidlc-workflows/.github/workflows/release.yml'
+          $manifest = Get-Content -Raw -LiteralPath (Join-Path $releaseRoot 'version.json') |
+            ConvertFrom-Json
+          $env:AIDLC_TEST_GH_SOURCE_REF = "refs/tags/v$($manifest.version)"
+          $env:AIDLC_TEST_GH_CHECKSUM_SHA = (
+            Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $releaseRoot 'checksums.txt')
+          ).Hash.ToLowerInvariant()
           @'
           param(
             [Parameter(ValueFromRemainingArguments = $true)]
             [string[]]$Remaining
           )
-          function Get-ArgumentValue {
-            param([string]$Name)
-            $index = [Array]::IndexOf($Remaining, $Name)
-            if ($index -lt 0 -or $index + 1 -ge $Remaining.Count) { return $null }
-            return $Remaining[$index + 1]
+          $subject = if ($Remaining.Count -ge 3) {
+            [IO.Path]::GetFullPath($Remaining[2])
+          } else {
+            ''
+          }
+          $bundle = if ($Remaining.Count -ge 5) {
+            [IO.Path]::GetFullPath($Remaining[4])
+          } else {
+            ''
+          }
+          $expectedBundle = if ($subject) {
+            Join-Path ([IO.Path]::GetDirectoryName($subject)) 'aidlc-release.intoto.jsonl'
+          } else {
+            ''
           }
           if (
-            $Remaining.Count -lt 3 -or
+            $Remaining.Count -ne 11 -or
             $Remaining[0] -ne 'attestation' -or
             $Remaining[1] -ne 'verify' -or
-            [IO.Path]::GetFileName($Remaining[2]) -ne 'checksums.txt' -or
-            -not (Test-Path -LiteralPath $Remaining[2] -PathType Leaf) -or
-            (Get-ArgumentValue '--repo') -ne $env:AIDLC_TEST_GH_REPOSITORY -or
-            (Get-ArgumentValue '--signer-workflow') -ne $env:AIDLC_TEST_GH_WORKFLOW
+            [IO.Path]::GetFileName($subject) -ne 'checksums.txt' -or
+            -not (Test-Path -LiteralPath $subject -PathType Leaf) -or
+            $Remaining[3] -ne '--bundle' -or
+            $bundle -ne $expectedBundle -or
+            -not (Test-Path -LiteralPath $bundle -PathType Leaf) -or
+            $Remaining[5] -ne '--repo' -or
+            $Remaining[6] -ne $env:AIDLC_TEST_GH_REPOSITORY -or
+            $Remaining[7] -ne '--signer-workflow' -or
+            $Remaining[8] -ne $env:AIDLC_TEST_GH_WORKFLOW -or
+            $Remaining[9] -ne '--source-ref' -or
+            $Remaining[10] -ne $env:AIDLC_TEST_GH_SOURCE_REF -or
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $subject).Hash.ToLowerInvariant() -ne
+              $env:AIDLC_TEST_GH_CHECKSUM_SHA
           ) {
             exit 2
           }
@@ -419,16 +462,51 @@ jobs:
             >"$release/aidlc-release.intoto.jsonl"
           gh_bin="$RUNNER_TEMP/aidlc-gh"
           gh_marker="$RUNNER_TEMP/aidlc-gh-verified"
-          printf '%s\n' \
-            '#!/bin/sh' \
-            'printf "verified\n" >"$AIDLC_TEST_GH_MARKER"' \
-            'exit 0' >"$gh_bin"
+          manifest_version="$(
+            sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' \
+              "$release/version.json" | head -n 1
+          )"
+          test -n "$manifest_version"
+          if command -v sha256sum >/dev/null 2>&1; then
+            checksums_sha="$(sha256sum "$release/checksums.txt" | awk '{print $1}')"
+          else
+            checksums_sha="$(shasum -a 256 "$release/checksums.txt" | awk '{print $1}')"
+          fi
+          cat >"$gh_bin" <<'AIDLC_GH_FIXTURE'
+          #!/bin/sh
+          [ "$#" -eq 11 ] || exit 2
+          [ "$1" = attestation ] || exit 2
+          [ "$2" = verify ] || exit 2
+          case "$3" in /*/checksums.txt) ;; *) exit 2 ;; esac
+          [ -f "$3" ] || exit 2
+          [ "$4" = --bundle ] || exit 2
+          [ "$5" = "${3%/checksums.txt}/aidlc-release.intoto.jsonl" ] || exit 2
+          [ -f "$5" ] || exit 2
+          [ "$6" = --repo ] || exit 2
+          [ "$7" = "$AIDLC_TEST_GH_REPOSITORY" ] || exit 2
+          [ "$8" = --signer-workflow ] || exit 2
+          [ "$9" = "$AIDLC_TEST_GH_WORKFLOW" ] || exit 2
+          [ "${10}" = --source-ref ] || exit 2
+          [ "${11}" = "$AIDLC_TEST_GH_SOURCE_REF" ] || exit 2
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual="$(sha256sum "$3" | awk '{print $1}')"
+          else
+            actual="$(shasum -a 256 "$3" | awk '{print $1}')"
+          fi
+          [ "$actual" = "$AIDLC_TEST_GH_CHECKSUM_SHA" ] || exit 2
+          printf "verified\n" >"$AIDLC_TEST_GH_MARKER"
+          exit 0
+          AIDLC_GH_FIXTURE
           chmod +x "$gh_bin"
           env PATH="/usr/bin:/bin" \
             AIDLC_INSTALL_ROOT="$AIDLC_INSTALL_ROOT" \
             AIDLC_BIN_DIR="$AIDLC_BIN_DIR" \
             AIDLC_GH_BIN="$gh_bin" \
             AIDLC_TEST_GH_MARKER="$gh_marker" \
+            AIDLC_TEST_GH_REPOSITORY="awslabs/aidlc-workflows" \
+            AIDLC_TEST_GH_WORKFLOW="awslabs/aidlc-workflows/.github/workflows/release.yml" \
+            AIDLC_TEST_GH_SOURCE_REF="refs/tags/v$manifest_version" \
+            AIDLC_TEST_GH_CHECKSUM_SHA="$checksums_sha" \
             sh "$release/install.sh" --from "$release" --offline --quiet
           test -s "$gh_marker"
           command="$AIDLC_BIN_DIR/aidlc"
@@ -451,7 +529,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
     steps:
@@ -459,6 +537,9 @@ jobs:
         with:
           fetch-depth: 1
           ref: ${{ needs.authorize.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
       - name: Recheck authorized tag target
         env:
           AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
@@ -474,7 +555,7 @@ jobs:
           path: build/release
       - run: test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
       - name: Re-verify staged release checksums
         working-directory: build/release
         run: sha256sum -c checksums.txt
@@ -489,59 +570,108 @@ jobs:
           cp "$ATTESTATION_BUNDLE" build/release/aidlc-release.intoto.jsonl
         env:
           ATTESTATION_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
-      - name: Create draft release
-        run: gh release create "$RELEASE_TAG" build/release/* --verify-tag --generate-notes --draft
+      - name: Validate complete attested release candidate
+        run: |
+          bun scripts/verify-release.ts candidate \
+            --directory build/release \
+            --tag "$RELEASE_TAG"
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: attested-release
+          path: build/release
+          if-no-files-found: error
 
   promote:
-    needs: publish
+    needs: [authorize, publish]
     runs-on: ubuntu-latest
     environment: release
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.authorize.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
-      - name: Verify draft release assets and provenance
+      - name: Recheck authorized tag target
+        env:
+          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+        run: |
+          git fetch --no-tags origin \
+            "refs/tags/$RELEASE_TAG:refs/remotes/origin/aidlc-release-tag"
+          test "$(git rev-parse refs/remotes/origin/aidlc-release-tag^{commit})" = "$AUTHORIZED_SHA"
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: attested-release
+          path: build/release
+      - name: Authenticate and verify immutable release bytes
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
         run: |
           set -euo pipefail
-          release="$RUNNER_TEMP/aidlc-draft-release"
-          mkdir -p "$release"
-          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true"
-          gh release download "$RELEASE_TAG" --dir "$release"
-          cd "$release"
-          sha256sum -c checksums.txt
-          test "$RELEASE_TAG" = "v$(jq -r .version version.json)"
-          test -f aidlc-release.intoto.jsonl
+          release="$PWD/build/release"
+          checksums="$release/checksums.txt"
+          bundle="$release/aidlc-release.intoto.jsonl"
+          signer_workflow="$GH_REPO/.github/workflows/release.yml"
+          test -f "$checksums"
+          test -f "$bundle"
+
+          # Authenticate checksums.txt before it can select or validate any
+          # other release byte.
+          gh attestation verify "$checksums" \
+            --repo "$GH_REPO" \
+            --signer-workflow "$signer_workflow" \
+            --source-ref "refs/tags/$RELEASE_TAG"
+          gh attestation verify "$checksums" \
+            --bundle "$bundle" \
+            --repo "$GH_REPO" \
+            --signer-workflow "$signer_workflow" \
+            --source-ref "refs/tags/$RELEASE_TAG"
+
           mapfile -t attested_assets < <(
-            jq -r '.assets[] | select(.kind == "binary" or .kind == "runtime") | .name' version.json
+            bun scripts/verify-release.ts candidate \
+              --directory "$release" \
+              --tag "$RELEASE_TAG" \
+              --list-assets
           )
-          test "${#attested_assets[@]}" -ge 2
-          for asset in "${attested_assets[@]}"; do
+          test "${#attested_assets[@]}" -eq 10
+          for asset_name in "${attested_assets[@]}"; do
+            asset="$release/$asset_name"
             gh attestation verify "$asset" \
               --repo "$GH_REPO" \
-              --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
+              --signer-workflow "$signer_workflow" \
               --source-ref "refs/tags/$RELEASE_TAG"
             gh attestation verify "$asset" \
-              --bundle aidlc-release.intoto.jsonl \
+              --bundle "$bundle" \
               --repo "$GH_REPO" \
-              --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
+              --signer-workflow "$signer_workflow" \
               --source-ref "refs/tags/$RELEASE_TAG"
           done
+          verified_digests="$RUNNER_TEMP/aidlc-verified-release.sha256"
+          (
+            cd "$release"
+            find . -mindepth 1 -maxdepth 1 -type f -printf '%P\0' |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum
+          ) >"$verified_digests"
+          test "$(wc -l <"$verified_digests")" -eq 13
+          chmod a-w "$verified_digests"
+          chmod -R a-w "$release"
 
-          server_root="$RUNNER_TEMP/aidlc-draft-server"
-          port_file="$RUNNER_TEMP/aidlc-draft-server.port"
-          mkdir -p "$server_root/latest/download"
-          cp -R "$release/." "$server_root/latest/download/"
+          server_root="$RUNNER_TEMP/aidlc-release-server"
+          port_file="$RUNNER_TEMP/aidlc-release-server.port"
+          journey_release="$server_root/latest/download"
+          mkdir -p "$journey_release"
+          cp -R "$release/." "$journey_release/"
           # Bun 1.4 can replace this with a static { dir } route. On the pinned
           # Bun 1.3.14 that shape selects the framework dev server and fails.
           bun -e '
@@ -567,7 +697,7 @@ jobs:
             });
             await Bun.write(portFile, `${server.port}\n`);
           ' "$server_root" "$port_file" \
-            >"$RUNNER_TEMP/aidlc-draft-server.log" 2>&1 &
+            >"$RUNNER_TEMP/aidlc-release-server.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           for _ in {1..50}; do
@@ -599,7 +729,7 @@ jobs:
             AIDLC_GH_BIN="$gh_bin" \
             AIDLC_RELEASE_REPOSITORY="$GH_REPO" \
             AIDLC_RELEASE_WORKFLOW="$GH_REPO/.github/workflows/release.yml" \
-            sh "$release/install.sh" \
+            sh "$journey_release/install.sh" \
             --release-base-url "http://127.0.0.1:$port" \
             --quiet
           command="$AIDLC_BIN_DIR/aidlc"
@@ -620,10 +750,22 @@ jobs:
             exit 1
           }
 
-      - name: Promote verified draft release
-        if: github.event_name != 'workflow_dispatch' || inputs.draft == false
-        run: gh release edit "$RELEASE_TAG" --draft=false
+      - name: Publish exact verified release bytes
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release="$PWD/build/release"
+          (
+            cd "$release"
+            sha256sum -c "$RUNNER_TEMP/aidlc-verified-release.sha256"
+          )
+          bun scripts/verify-release.ts candidate \
+            --directory "$release" \
+            --tag "$RELEASE_TAG"
+          gh release create "$RELEASE_TAG" "$release"/* \
+            --verify-tag \
+            --generate-notes

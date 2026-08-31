@@ -134,10 +134,13 @@ for a fork or mirror, together with its release base URL; changing the download
 URL alone does not change the provenance trust root. `AIDLC_GH_BIN` selects an
 explicit GitHub CLI executable for both installers.
 
-Fork release rehearsals also need a protected `release` environment and
-immutable release-tag ruleset configured on the fork. Personal-account forks
-may use user reviewers and user bypass actors; the canonical repository
-requires its named team.
+Fork release rehearsals also need a protected `release` environment, a
+protected-environment GitHub App identity with Actions read and Administration
+write, and two tag rulesets over exactly `refs/tags/v*` with no exclusions.
+The creation-only ruleset has exactly the environment reviewer in `always`
+bypass mode; the update-plus-deletion ruleset has no bypass actors.
+Personal-account forks may use a user reviewer for creation; the canonical
+repository requires its named team.
 
 `AIDLC_INSTALL_ROOT` and `AIDLC_BIN_DIR` override the machine and command
 locations. Those paths must be absolute on Unix. The PowerShell installer also
@@ -167,14 +170,16 @@ lifecycle jobs verify `checksums.txt` and test those bytes without signing
 permissions. They add a job-local verifier fixture solely because the real
 attestation is created after the protected release gate; that fixture is never
 uploaded. After the gate, `publish` re-verifies the
-candidate, attests it, exports `aidlc-release.intoto.jsonl`, and always creates
-a draft. GitHub exposes drafts only to push-capable identities, so the
-protected `promote` job uses `contents: write` to download and verify the
-draft's actual assets, including online and exported-bundle provenance. Its
-final public-release edit alone is conditional: `draft=true` dispatches still
-run the full verification and leave the verified draft unpublished. The bundle
-is intentionally outside `version.json` and `checksums.txt`: those files cover
-the installable artifacts, while the bundle is its own Sigstore trust channel.
+candidate, attests it, exports `aidlc-release.intoto.jsonl`, validates the
+complete inventory, and uploads one immutable workflow artifact. The protected
+`promote` job authenticates `checksums.txt` online and through that bundle
+before reading it, verifies every manifest asset through both provenance paths,
+records the complete digest set, and runs the real installer journey from a
+separate copy. It then rechecks the untouched publication directory and creates
+the GitHub Release from those exact bytes; no mutable draft or later release
+edit exists. The bundle is intentionally outside `version.json` and
+`checksums.txt`: those files cover the installable artifacts, while the bundle
+is its own Sigstore trust channel.
 TLS, SHA-256, and that provenance are the permanent trust model. OS
 code-signing and notarization are not part of it. See
 [Supply-Chain Security](../reference/19-supply-chain-security.md).

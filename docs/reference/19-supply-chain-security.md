@@ -37,30 +37,30 @@ commit or a manual dispatch naming an existing tag. Its authorization job proves
 that the immutable tag commit is an ancestor of `origin/v2`. A manual dispatch
 must itself run on that tag (`refs/tags/<tag>`), so the attestation source ref
 cannot silently remain the branch from which the workflow was opened.
-The protected `release` environment requires non-author approval. After that
-gate, `publish` rechecks the authorized tag SHA, requires the tag to equal
-`v<version.json.version>`, re-verifies checksums, attests the candidate, exports
-the Sigstore bundle, and uses `gh release create --verify-tag --draft`.
+The protected `release` environment requires non-author approval and protects
+the authorization App credentials. `authorize` first proves the selected tag
+commit is already on `v2` using only the normal read token. Only then does it
+mint a current-repository installation token with Actions read and
+Administration write, use it to read the otherwise-hidden ruleset bypass
+actors, and emit a distinct authorization identity error when the API omits or
+hides that field.
 
-GitHub draft releases are visible only to identities with push access. Round 5
-shakedown run `33153448486` proved the constraint directly: `publish` created
-the `v2.7.0` draft with all 13 assets, while a subsequent `contents: read`
-token received `release not found` from its first `gh release view`. A
-standalone read-only draft verifier is therefore structurally impossible on
-GitHub.
+After the authorization and test gates, `publish` rechecks the authorized tag
+SHA, requires the tag to equal `v<version.json.version>`, re-verifies checksums,
+attests the candidate, exports the Sigstore bundle, validates the exact
+13-file inventory, and uploads it as the immutable `attested-release` workflow
+artifact. `publish` has signing permissions but only `contents: read`.
 
-The second protected-environment job, `promote`, consequently receives
-`contents: write`, downloads the draft's actual assets, and checks their
-checksums, online provenance, exported-bundle provenance, tag/version parity,
-and real online-install journey. Its final release-edit step alone is
-conditional: tag-push runs and manual runs with `draft: false` flip the verified
-draft public, while manual `draft: true` runs perform the full verification and
-leave the draft unpublished (`.github/workflows/release.yml`).
-
-This platform constraint means the verifying identity is also the promoting
-identity. The accepted mitigations are the protected `release` environment,
-SHA-pinned workflow actions, and the immutable tag-bound workflow definition;
-no write-capable release job exists outside that environment.
+The protected `promote` job downloads that immutable artifact and receives the
+only `contents: write` job permission. It authenticates `checksums.txt` through
+both GitHub's online attestation path and the exported bundle before reading
+any checksum or manifest data. It then validates `version.json`, verifies every
+manifest asset through both provenance paths, records the complete local digest
+set, runs the real online-install journey from a separate copy, rechecks the
+untouched publication directory, and finally uses
+`gh release create --verify-tag` with that exact directory. There is no draft
+creation or later release edit, so publication cannot switch to server-side
+bytes that changed after verification.
 
 Published releases are immutable by policy. A defective artifact is corrected
 by a new patch release. A compromised release is excluded from update
@@ -79,15 +79,16 @@ harnesses in separate fresh projects; Unix runs every installed command under
 its stripped `PATH`. This pre-gate lifecycle coverage owns harness breadth.
 After the human gate, `publish` downloads the candidate,
 re-verifies it, attests `build/release/*`, copies the Sigstore bundle to the
-stable asset name `aidlc-release.intoto.jsonl`, and creates the draft without
-rebuilding or repackaging. The gated `promote` job validates the assets
-downloaded from that draft, then serves the downloaded directory through a
+stable asset name `aidlc-release.intoto.jsonl`, validates the exact local
+inventory, and uploads it as an immutable workflow artifact without rebuilding
+or repackaging. The gated `promote` job authenticates and validates those
+artifact bytes, records their complete digest set, then serves a separate copy through a
 loopback GitHub-shaped `latest/download/` mirror and runs the real online
 installer with Bun removed from `PATH` and an absolute `gh` path. That
 rehearsal exercises release transport, the installer's mandatory provenance
-branch against the draft's exported bundle, native `version`, one Claude
-project config, and doctor before the final conditional step can make the
-draft public. Keeping that online rehearsal Claude-only is deliberate:
+branch against the exported bundle, native `version`, one Claude project
+config, and doctor before the final release creation. Keeping that online
+rehearsal Claude-only is deliberate:
 lifecycle provides seven-harness breadth, while promote proves authenticated
 transport plus one complete installed journey. The bundle is
 intentionally not listed in either `version.json` or `checksums.txt`: those
@@ -104,37 +105,37 @@ guard, and builds each target in a target-native matrix
 (`.github/workflows/release.yml`). The candidate is assembled once and consumed
 unchanged by Unix and Windows lifecycle tests. Those jobs verify checksums and
 use a hermetic provenance-verifier fixture because the real attestation does
-not exist until after approval. `publish` re-verifies and
-attests those bytes and creates a draft. The gated
-`promote` job verifies the draft's actual assets before its final conditional
-publication step. GitHub artifact attestations provide the signed SLSA
-provenance for the post-gate draft subjects.
+not exist until after approval. `publish` re-verifies and attests those bytes,
+then transfers them through an immutable workflow artifact. The gated
+`promote` job verifies that artifact before creating the release from the same
+local directory. GitHub artifact attestations provide the signed SLSA
+provenance for the post-gate release subjects.
 
 ### Release or tag hijack
 
 Tag protection and the protected `release` environment are required repository
 settings. They are not represented by files in this repository and must be
 confirmed before the first publication. The authorization job reads those
-settings and fails before checkout unless the environment has required
-reviewers, self-review and administrator bypass are disabled, `v*` is an
-allowed deployment-tag pattern, and an active release-tag creation ruleset
-names the reviewer team. The workflow independently rejects a tag whose commit
-is not on `v2`; every source-consuming job checks out the authorized SHA, and
-`publish` rechecks the remote tag target, compares the selected tag with
-`version.json.version`, and uses
-`gh release create --verify-tag --draft`. The gated `promote` job repeats
-tag/version parity against the downloaded draft. Public visibility begins only
-when that job's conditional final release-edit step succeeds
-(`.github/workflows/release.yml`).
+settings through a protected-environment GitHub App identity and fails unless
+the environment has required reviewers, self-review and administrator bypass
+are disabled, and `v*` is an allowed deployment-tag pattern. It also requires
+two separate active tag rulesets over exactly `refs/tags/v*`, with no
+exclusions: a creation-only ruleset with exactly the documented reviewer actor
+in `always` bypass mode, and an update-plus-deletion ruleset with no bypass
+actors. Combined controls, extra actors, wrong modes, hidden actor data, or
+partial namespaces fail closed. The workflow independently rejects a tag whose
+commit is not on `v2`; every source-consuming job checks out the authorized
+SHA, and both protected release jobs recheck the remote tag target.
 
 ### Mirror or download tampering
 
 The staging and lifecycle jobs establish pre-gate byte integrity through
 `checksums.txt`. After approval, `publish` repeats checksum verification and
-attests the candidate. The gated `promote` job then downloads the draft's real
-assets, checks their checksums, and verifies both online provenance and the
-exported offline bundle before its conditional publication step. Remote and
-local installers, plus `core/tools/aidlc-release.ts`, first verify
+attests the candidate. The gated `promote` job then authenticates
+`checksums.txt` online and through the exported bundle before using it,
+validates the exact manifest and directory inventory, and verifies every
+manifest asset through both provenance paths before release creation. Remote
+and local installers, plus `core/tools/aidlc-release.ts`, first verify
 the attestation for `checksums.txt` against the repository, signer workflow,
 and release tag using `aidlc-release.intoto.jsonl`; only then do they verify the
 `version.json` checksum and each selected asset against both the manifest and
@@ -151,14 +152,13 @@ that version explicitly and retain their own accepted-version floor.
 ### Partial publication failure
 
 Publication has no destructive automatic rollback. Failed verification inside
-`promote` occurs before the release-edit step and leaves an unpromoted draft,
-excluded from latest/update discovery; no cleanup destroys its assets or audit
-evidence. The named publication owner must inspect that draft and publish a
-complete corrective patch release when needed. Because attestation occurs
-after the approval gate but before draft verification, a defective draft still
-leaves transparency-log entries. This rare, post-gate, defect-only exposure is
-accepted; it preserves evidence while preventing public promotion. The owner
-assignment is a focused-review decision in section 7.
+`promote` occurs before `gh release create`, so no GitHub Release exists and
+the immutable `attested-release` workflow artifact plus transparency-log
+entries retain the evidence. A failure during the final create may leave a
+partial release record; the workflow never edits or deletes it automatically.
+The named publication owner inspects the record and publishes a complete
+corrective patch release when needed. The owner assignment is a focused-review
+decision in section 7.
 
 ### Compromised release
 
@@ -223,9 +223,10 @@ release base URL. A mirror URL does not implicitly broaden or replace the
 provenance trust root.
 
 Fork release rehearsals must also configure the protected `release`
-environment and immutable release-tag ruleset on the fork. Outside
-`awslabs/aidlc-workflows`, the workflow accepts user reviewers and user bypass
-actors because personal-account forks cannot define GitHub Teams.
+environment, its authorization App identity, and both release-tag rulesets.
+Outside `awslabs/aidlc-workflows`, the creation ruleset may name a user
+reviewer in `always` bypass mode because personal-account forks cannot define
+GitHub Teams. The update-plus-deletion ruleset still has no bypass actor.
 
 Verify every artifact covered by the checksum file:
 
@@ -253,20 +254,28 @@ schema.
 - Every third-party action in `.github/workflows/release.yml` is pinned to a
   full 40-hex commit SHA, with the release line retained as a comment.
 - Workflow-global permissions are `contents: read`.
-- `authorize` alone adds `actions: read` so it can fail closed after inspecting
-  the release environment; it also reads the public repository rulesets.
+- `authorize` runs inside the protected `release` environment. The environment
+  stores `AIDLC_RELEASE_AUTH_APP_ID` and
+  `AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY`; missing configuration fails before any
+  ruleset request.
+- `authorize` mints a current-repository GitHub App installation token with
+  Actions read and Administration write. That narrowly scoped identity can
+  observe `bypass_actors`; an omitted, hidden, or unreadable field is reported
+  as an authorization identity failure rather than a policy mismatch.
 - No job before `publish` receives `id-token: write` or
   `attestations: write`.
-- `publish` is the only signing job. It receives `contents: write`,
+- `publish` is the only signing job. It receives `contents: read`,
   `id-token: write`, and `attestations: write` inside the protected `release`
   environment and consumes the authorization job's immutable tag SHA. Every
   earlier source checkout uses that SHA rather than resolving the tag again.
-- GitHub does not expose draft releases to `contents: read` identities. A
-  standalone read-only draft-verification job is not present.
+- `publish` validates the bundle-complete candidate and transfers it through
+  the immutable v4 workflow-artifact service; it cannot create or edit a
+  GitHub Release.
 - `promote` receives `contents: write` inside the protected `release`
-  environment, verifies the draft's downloaded assets and both provenance
-  paths, rehearses the real online installer, and only then reaches its
-  conditional public-release edit.
+  environment, authenticates metadata before use, verifies every asset and
+  both provenance paths, rehearses the real online installer from a copy,
+  rechecks the original digest set, and only then creates the release from the
+  verified local directory.
 - No job outside the protected `release` environment receives any write
   permission.
 - OIDC supplies short-lived identity to Sigstore; no long-lived signing key is
@@ -311,12 +320,13 @@ would otherwise have encoded:
   one who authorized the affected tag, because the compromise vector may be
   that member's credentials.
 
-The tag-protection ruleset's allowlist names the same team, so the setting
-itself enforces who can authorize a release tag, and membership rotation
-never requires touching the ruleset. The GitHub Release is published by the
-tag-triggered workflow; the team owns that outcome, and the first responder
-for a publication failure is by convention the member who authorized the
-tag, though any member may act.
+The creation ruleset's bypass actor names the same team, so the setting itself
+enforces who can authorize a release tag, and membership rotation never
+requires touching the ruleset. The separate update-plus-deletion ruleset has
+no bypass actor, including for that team. The GitHub Release is published by
+the tag-triggered workflow; the team owns that outcome, and the first responder
+for a publication failure is by convention the member who authorized the tag,
+though any member may act.
 
 ## 8. No OS code-signing
 
@@ -376,16 +386,22 @@ and explicit metadata refresh, but does not block a user-requested
 
 ## 11. Open items for focused review
 
-- Apply and verify the protected-tag repository setting, with its allowlist
-  naming `@awslabs/aidlc-admins` per section 7. The release workflow now fails
-  closed until this setting is present.
-- Create the protected `release` environment with non-author approval and
-  self-review and administrator bypass disabled, plus the `v*` deployment-tag
-  policy. The release workflow now fails closed until these settings are
-  present.
-- Decide whether the second protected-environment approval on `promote` is an
-  acceptable tag-push UX cost. Do not remove the environment merely to avoid
-  that second approval; it is the boundary that keeps public visibility gated.
+- Create the protected `release` environment with non-author approval,
+  self-review and administrator bypass disabled, and the `v*` deployment-tag
+  policy.
+- Install a current-repository GitHub App with Actions read and Administration
+  write, then store its App ID as the protected-environment variable
+  `AIDLC_RELEASE_AUTH_APP_ID` and its private key as the protected-environment
+  secret `AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY`. Do not store the private key as
+  an ordinary repository secret.
+- Create an active creation-only ruleset covering exactly `refs/tags/v*`, with
+  no exclusions and exactly `@awslabs/aidlc-admins` in `always` bypass mode.
+  Create a separate active update-plus-deletion ruleset over the same exact
+  namespace with no exclusions and no bypass actors.
+- Decide whether repeated protected-environment approvals across `authorize`,
+  `publish`, and `promote` are an acceptable tag-push UX cost. Do not remove
+  the environment merely to avoid those approvals; it protects both the App
+  private key and public visibility.
 - Confirm the team-based ownership assignment in section 7
   (`@awslabs/aidlc-admins` on every duty, with its two separation-of-duties
   qualifiers).

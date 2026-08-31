@@ -61,11 +61,13 @@ musl matrix uses
 `fail-fast: false` so both architectures report before CI stages one
 checksum-verified candidate. Unix and Windows lifecycle
 journeys consume those bytes without signing permissions. After the protected
-gate, the workflow attests them and creates a draft. GitHub requires push
-access to read drafts, so the protected `promote` job verifies the draft's
-actual assets through online and offline provenance paths before its final
-conditional public-release edit. Publishing downloads the same candidate,
-re-verifies its checksums, and does not rebuild or repackage it.
+gate, the workflow attests them and uploads one immutable workflow artifact.
+The protected `promote` job authenticates `checksums.txt` before using it,
+validates the exact inventory, verifies every manifest asset through online
+and offline provenance paths, records the complete digest set, and exercises
+the real installer from a separate copy. Only after rechecking the original
+directory does it create the GitHub Release from those exact local bytes. Publishing never
+downloads a mutable release object, rebuilds, or repackages the candidate.
 
 `tests/harness/release-fixture.ts` builds deterministic release directories
 from the generated projection manifests and can serve them locally with

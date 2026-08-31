@@ -31,6 +31,7 @@ import {
   resolveAction,
   routePolicyFor,
 } from "../../core/tools/aidlc.ts";
+import { validatePublicConfigArgs } from "../../core/tools/aidlc-init.ts";
 import { launcherRouteUsesPin } from "../../core/tools/aidlc-command.ts";
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
 import {
@@ -1455,6 +1456,176 @@ describe("t230 dispatcher help and errors", () => {
     }
     expect(entriesUnder(machineRoot)).toEqual([]);
   }, 60_000);
+
+  test("top-level config help consumes every root value flag without doing work", () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "aidlc-t230-config-help-"));
+    tempProjects.add(sandbox);
+    const projectDir = join(sandbox, "project");
+    const machineRoot = join(sandbox, "machine");
+    mkdirSync(projectDir);
+    const env = {
+      AIDLC_INSTALL_ROOT: machineRoot,
+      AIDLC_BIN_DIR: join(machineRoot, "bin"),
+      AIDLC_DISPATCH_TOOLS_DIR: join(sandbox, "missing-tools"),
+      AIDLC_OFFLINE: "0",
+    };
+    const cases: Array<[string, string]> = [
+      ["--from", join(sandbox, "missing-release")],
+      ["--harness", "claude"],
+      ["--mcp", "none"],
+      ["--pin", "9.9.9"],
+      ["--release-base-url", "http://127.0.0.1:9"],
+      ["--ca-bundle", join(sandbox, "missing-ca.pem")],
+      ["--plan-token", "not-a-real-plan-token"],
+      ["--project-dir", projectDir],
+    ];
+    const expected = renderCommandHelp("config");
+    for (const [flag, value] of cases) {
+      const args = [
+        "config",
+        flag,
+        value,
+        ...(flag === "--project-dir" ? [] : ["--project-dir", projectDir]),
+        "--help",
+      ];
+      const result = viaDispatcher(args, projectDir, env);
+      expect(result.exitCode, flag).toBe(0);
+      expect(result.stdout.toString("utf-8"), flag).toBe(expected);
+      expect(result.stderr.toString("utf-8"), flag).toBe("");
+      expect(entriesUnder(projectDir), flag).toEqual([]);
+      expect(entriesUnder(machineRoot), flag).toEqual([]);
+    }
+  });
+
+  test("all public commands reject malformed grammar before delegation or writes", () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "aidlc-t230-public-grammar-"));
+    tempProjects.add(sandbox);
+    const projectDir = join(sandbox, "project");
+    const machineRoot = join(sandbox, "machine");
+    mkdirSync(projectDir);
+    const env = {
+      AIDLC_INSTALL_ROOT: machineRoot,
+      AIDLC_BIN_DIR: join(machineRoot, "bin"),
+      AIDLC_DISPATCH_TOOLS_DIR: join(sandbox, "missing-tools"),
+      AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9",
+      AIDLC_OFFLINE: "0",
+    };
+    const cases: Array<{
+      command: (typeof PUBLIC_COMMANDS)[number];
+      category: string;
+      args: string[];
+      message: string;
+    }> = [
+      { command: "config", category: "unknown", args: ["config", "--wat"], message: "unknown config option --wat" },
+      { command: "config", category: "stray", args: ["config", "extra"], message: "unknown config section" },
+      { command: "config", category: "missing", args: ["config", "--from"], message: "--from requires a value" },
+      { command: "config", category: "duplicate", args: ["config", "--force", "--force"], message: "--force may be specified only once" },
+      { command: "config", category: "incompatible", args: ["config", "--json", "--quiet"], message: "mutually exclusive" },
+      { command: "doctor", category: "unknown", args: ["doctor", "--wat"], message: "unknown doctor option --wat" },
+      { command: "doctor", category: "stray", args: ["doctor", "extra"], message: "unexpected doctor positional" },
+      { command: "doctor", category: "missing", args: ["doctor", "--output"], message: "--output requires a value" },
+      { command: "doctor", category: "duplicate", args: ["doctor", "--verbose", "--verbose"], message: "--verbose may be specified only once" },
+      { command: "doctor", category: "incompatible", args: ["doctor", "--json", "--quiet"], message: "mutually exclusive" },
+      { command: "version", category: "unknown", args: ["version", "--wat"], message: "unknown version option --wat" },
+      { command: "version", category: "stray", args: ["version", "extra"], message: "unexpected version positional" },
+      { command: "version", category: "missing", args: ["version", "--project-dir"], message: "--project-dir requires a path value" },
+      { command: "version", category: "duplicate", args: ["version", "--json", "--json"], message: "--json may be specified only once" },
+      { command: "version", category: "incompatible", args: ["version", "--quiet"], message: "does not support --quiet" },
+      { command: "update", category: "unknown", args: ["update", "--wat"], message: "unknown update option --wat" },
+      { command: "update", category: "stray", args: ["update", "extra"], message: "unexpected update positional" },
+      { command: "update", category: "missing", args: ["update", "--version"], message: "--version requires a value" },
+      { command: "update", category: "duplicate", args: ["update", "--check", "--check"], message: "--check may be specified only once" },
+      { command: "update", category: "incompatible", args: ["update", "--check", "--dry-run"], message: "--check cannot be combined" },
+      { command: "use", category: "unknown", args: ["use", "1.2.3", "--wat"], message: "unknown use option --wat" },
+      { command: "use", category: "stray", args: ["use", "1.2.3", "extra"], message: "unexpected use positional" },
+      { command: "use", category: "missing", args: ["use", "1.2.3", "--from"], message: "--from requires a value" },
+      { command: "use", category: "duplicate", args: ["use", "1.2.3", "--offline", "--offline"], message: "--offline may be specified only once" },
+      { command: "use", category: "incompatible", args: ["use", "1.2.3", "--json", "--quiet"], message: "mutually exclusive" },
+      { command: "use", category: "ordering", args: ["use", "--from", "./release", "1.2.3"], message: "version before options" },
+      { command: "uninstall", category: "unknown", args: ["uninstall", "--wat"], message: "unknown uninstall option --wat" },
+      { command: "uninstall", category: "stray", args: ["uninstall", "extra"], message: "unexpected uninstall positional" },
+      { command: "uninstall", category: "missing", args: ["uninstall", "--project-dir"], message: "--project-dir requires a path value" },
+      { command: "uninstall", category: "duplicate", args: ["uninstall", "--purge", "--purge"], message: "--purge may be specified only once" },
+      { command: "uninstall", category: "incompatible", args: ["uninstall", "--json", "--quiet"], message: "mutually exclusive" },
+    ];
+    for (const item of cases) {
+      const result = viaDispatcher(item.args, projectDir, env);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(result.exitCode, `${item.command} ${item.category}: ${output}`).toBe(2);
+      expect(output, `${item.command} ${item.category}`).toContain(item.message);
+      expect(entriesUnder(projectDir), `${item.command} ${item.category}`).toEqual([]);
+      expect(entriesUnder(machineRoot), `${item.command} ${item.category}`).toEqual([]);
+    }
+
+    const typo = viaDispatcher(
+      ["uninstall", "--pruge", "--dry-run", "--yes", "--json"],
+      projectDir,
+      env,
+    );
+    expect(typo.exitCode).toBe(2);
+    expect(JSON.parse(typo.stdout.toString("utf-8")).message).toBe(
+      "unknown uninstall option --pruge",
+    );
+    expect(entriesUnder(projectDir)).toEqual([]);
+    expect(entriesUnder(machineRoot)).toEqual([]);
+
+    for (const [alias, command] of [
+      ["--doctor", "doctor"],
+      ["--version", "version"],
+    ] as const) {
+      const malformed = viaDispatcher([alias, "--wat"], projectDir, env);
+      expect(malformed.exitCode, alias).toBe(2);
+      expect(`${malformed.stdout}${malformed.stderr}`, alias).toContain(
+        `unknown ${command} option --wat`,
+      );
+      const help = viaDispatcher([alias, "--help"], projectDir, env);
+      expect(help.exitCode, `${alias} help`).toBe(0);
+      expect(help.stdout.toString("utf-8"), `${alias} help`).toBe(
+        renderCommandHelp(command),
+      );
+      expect(entriesUnder(projectDir), alias).toEqual([]);
+      expect(entriesUnder(machineRoot), alias).toEqual([]);
+    }
+  }, 60_000);
+
+  test("root config grammar isolates scaffold, pin, and unpin options", () => {
+    const cases: Array<{
+      flag: string;
+      tokens: string[];
+      allowed: Array<"scaffold" | "pin" | "unpin">;
+    }> = [
+      { flag: "--mcp", tokens: ["--mcp", "none"], allowed: ["scaffold"] },
+      { flag: "--harness", tokens: ["--harness", "claude"], allowed: ["scaffold"] },
+      { flag: "--force", tokens: ["--force"], allowed: ["scaffold"] },
+      { flag: "--plan-token", tokens: ["--plan-token", "token"], allowed: ["scaffold"] },
+      { flag: "--from", tokens: ["--from", "/tmp/release"], allowed: ["scaffold", "pin"] },
+      { flag: "--release-base-url", tokens: ["--release-base-url", "https://example.invalid"], allowed: ["pin"] },
+      { flag: "--ca-bundle", tokens: ["--ca-bundle", "/tmp/ca.pem"], allowed: ["pin"] },
+      { flag: "--offline", tokens: ["--offline"], allowed: ["pin"] },
+    ];
+    const modes = {
+      scaffold: ["config"],
+      pin: ["config", "--pin", "1.2.3"],
+      unpin: ["config", "--unpin"],
+    } as const;
+    for (const item of cases) {
+      for (const [mode, prefix] of Object.entries(modes) as Array<
+        [keyof typeof modes, readonly string[]]
+      >) {
+        const error = validatePublicConfigArgs([...prefix, ...item.tokens]);
+        if (item.allowed.includes(mode)) {
+          expect(error, `${mode} ${item.flag}`).toBeNull();
+        } else {
+          expect(error, `${mode} ${item.flag}`).toContain(
+            `${item.flag} is not valid with config`,
+          );
+        }
+      }
+    }
+    expect(
+      validatePublicConfigArgs(["config", "--pin", "1.2.3", "--unpin"]),
+    ).toBe("--pin and --unpin are mutually exclusive");
+  });
 
   test("config help names top-level flags and section help still passes through", () => {
     const projectDir = makeProject();

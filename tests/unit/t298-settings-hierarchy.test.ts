@@ -7,7 +7,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,6 +54,25 @@ function temp(prefix: string): string {
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function treeSnapshot(root: string): Record<string, string> {
+  if (!existsSync(root)) return {};
+  const snapshot: Record<string, string> = {};
+  const visit = (path: string, prefix: string): void => {
+    for (const entry of readdirSync(path).sort()) {
+      const absolute = join(path, entry);
+      const relative = prefix ? `${prefix}/${entry}` : entry;
+      if (statSync(absolute).isDirectory()) {
+        snapshot[`${relative}/`] = "";
+        visit(absolute, relative);
+      } else {
+        snapshot[relative] = readFileSync(absolute).toString("base64");
+      }
+    }
+  };
+  visit(root, "");
+  return snapshot;
 }
 
 function run(
@@ -423,6 +444,69 @@ describe("t298 aidlc.settings hierarchy", () => {
       },
     });
   });
+
+  test("settings-only and installed flags reject every reset mutation identically", () => {
+    const machine = temp("aidlc-t298-reset-machine-");
+    const outside = temp("aidlc-t298-reset-outside-");
+    const installed = install();
+    const settingsPath = join(machine, "aidlc.settings.json");
+    writeJson(settingsPath, {
+      schemaVersion: 1,
+      flags: {
+        schemaVersion: 1,
+        swarm: false,
+        bypasses: ["AIDLC_SKIP_ARTIFACT_GUARD"],
+      },
+    });
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+    };
+    const mutations: Array<[string, string[]]> = [
+      ["--default-scope", ["--default-scope", "poc"]],
+      ["--swarm", ["--swarm", "on"]],
+      ["--hook-debug", ["--hook-debug", "on"]],
+      ["--sensor-timeout-ms", ["--sensor-timeout-ms", "1234"]],
+      ["--bypass", ["--bypass", "AIDLC_SKIP_ARTIFACT_GUARD"]],
+      ["--clear-bypass", ["--clear-bypass", "AIDLC_SKIP_ARTIFACT_GUARD"]],
+    ];
+    const machineBefore = readFileSync(settingsPath, "utf-8");
+    const outsideBefore = treeSnapshot(outside);
+    const installedBefore = treeSnapshot(installed);
+    for (const [flag, tokens] of mutations) {
+      const outsideResult = run([
+        "config",
+        "flags",
+        "--project-dir",
+        outside,
+        "--global",
+        "--reset",
+        ...tokens,
+        "--yes",
+      ], outside, env);
+      const installedResult = run([
+        "config",
+        "flags",
+        "--project-dir",
+        installed,
+        "--global",
+        "--reset",
+        ...tokens,
+        "--yes",
+      ], installed, env);
+      expect(outsideResult.status, flag).toBe(2);
+      expect(installedResult.status, flag).toBe(2);
+      expect(outsideResult.stdout, flag).toBe(installedResult.stdout);
+      expect(outsideResult.stderr, flag).toBe(installedResult.stderr);
+      expect(outsideResult.stdout + outsideResult.stderr, flag).toContain(
+        `--reset cannot be combined with ${flag}`,
+      );
+    }
+    expect(readFileSync(settingsPath, "utf-8")).toBe(machineBefore);
+    expect(treeSnapshot(outside)).toEqual(outsideBefore);
+    expect(treeSnapshot(installed)).toEqual(installedBefore);
+  }, 60_000);
 
   test("doctor reports a git-tracked local settings file", () => {
     const project = temp("aidlc-t298-tracked-");

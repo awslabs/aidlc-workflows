@@ -519,12 +519,15 @@ seven-target matrix in release mode), archives each
 uploads that candidate without signing. Unix and Windows lifecycle jobs verify
 its checksums and test it. After the release-environment gate, `publish`
 downloads the same candidate, re-verifies it, attests it, adds the exported
-`aidlc-release.intoto.jsonl` bundle, and always creates a draft. Because GitHub
-requires push access to read drafts, the protected `promote` job validates the
-draft's downloaded assets and both provenance paths before its conditional
-public-release edit. The bundle is a separate trust channel and is
-intentionally absent from `version.json` and `checksums.txt`. This pipeline
-does not implement the deferred npm channel. See
+`aidlc-release.intoto.jsonl` bundle, validates the complete inventory, and
+uploads one immutable `attested-release` workflow artifact. The protected
+`promote` job authenticates `checksums.txt` through online and bundled
+provenance before reading it, verifies every manifest asset, runs the online
+journey from a separate copy, rechecks the original digest set, then creates
+the GitHub Release from the untouched publication directory. The bundle is a
+separate trust channel and is intentionally absent
+from `version.json` and `checksums.txt`. This pipeline does not implement the
+deferred npm channel. See
 [Supply-Chain Security](19-supply-chain-security.md).
 
 ## Directory Structure

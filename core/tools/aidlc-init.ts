@@ -360,29 +360,130 @@ const MODELS_BARE_FLAGS = new Set([
   "--yes",
 ]);
 
-const ROOT_VALUE_FLAGS = new Set([
+const VALID_CONFIG_SECTIONS = new Set([
+  "models",
+  "runtime",
+  "providers",
+  "trust",
+  "flags",
+  "project",
+]);
+
+const ROOT_CONFIG_FLAGS = new Set([
   "--ca-bundle",
+  "--dry-run",
+  "--force",
   "--from",
   "--harness",
+  "--help",
+  "--json",
   "--mcp",
+  "--no-color",
+  "--offline",
   "--pin",
   "--plan-token",
   "--project-dir",
-  "--release-base-url",
-]);
-
-const ROOT_BARE_FLAGS = new Set([
-  "--dry-run",
-  "--force",
-  "--help",
-  "--json",
-  "--no-color",
-  "--offline",
   "--quiet",
+  "--release-base-url",
   "--unpin",
   "--verbose",
   "--yes",
 ]);
+
+type ConfigOptionGrammar = {
+  values: ReadonlySet<string>;
+  bare: ReadonlySet<string>;
+  repeatable?: ReadonlySet<string>;
+  invalidKnownFlags?: ReadonlySet<string>;
+  invalidKnownMessage?: (flag: string) => string;
+};
+
+function duplicateConfigOptionMessage(flag: string): string {
+  if (flag === "--harness") {
+    return "multi-harness config is not supported yet; pass one --harness <name>";
+  }
+  if (flag === "--agent") {
+    return "one models mutation may target only one --agent";
+  }
+  return `${flag} may be specified only once`;
+}
+
+function validateConfigOptionGrammar(
+  argv: readonly string[],
+  label: string,
+  grammar: ConfigOptionGrammar,
+): string | null {
+  const seen = new Set<string>();
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (!token.startsWith("--")) {
+      return `unexpected ${label} positional ${JSON.stringify(token)}`;
+    }
+    if (grammar.values.has(token)) {
+      if (seen.has(token) && !grammar.repeatable?.has(token)) {
+        return duplicateConfigOptionMessage(token);
+      }
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) return `${token} requires a value`;
+      seen.add(token);
+      index++;
+      continue;
+    }
+    if (!grammar.bare.has(token)) {
+      if (
+        (CONFIG_VALUE_FLAGS.has(token) || grammar.invalidKnownFlags?.has(token)) &&
+        grammar.invalidKnownMessage
+      ) {
+        return grammar.invalidKnownMessage(token);
+      }
+      return `unknown ${label} option ${token}`;
+    }
+    if (seen.has(token)) return duplicateConfigOptionMessage(token);
+    seen.add(token);
+  }
+  return null;
+}
+
+function validateConfigOutputMode(argv: readonly string[]): string | null {
+  return argv.includes("--json") && argv.includes("--quiet")
+    ? "--json and --quiet are mutually exclusive"
+    : null;
+}
+
+function validateSettingsTargets(argv: readonly string[]): string | null {
+  const selected = ["--local", "--project", "--global"].filter((flag) =>
+    argv.includes(flag)
+  );
+  return selected.length > 1
+    ? "pass exactly one settings target: --local, --project, or --global"
+    : null;
+}
+
+function validateConfigMutationModes(
+  argv: readonly string[],
+  section: string,
+  mutationFlags: readonly string[],
+): string | null {
+  const hasMutation = mutationFlags.some((flag) => argv.includes(flag));
+  if (
+    (argv.includes("--show") || argv.includes("--check")) &&
+    (hasMutation || argv.includes("--dry-run") || argv.includes("--yes"))
+  ) {
+    return section === "models"
+      ? "--show and --check cannot be combined with models mutations"
+      : `--show and --check cannot be combined with ${section} mutations`;
+  }
+  if (argv.includes("--show") && argv.includes("--check")) {
+    return "--show and --check are mutually exclusive";
+  }
+  if (argv.includes("--reset")) {
+    const conflict = mutationFlags.find((flag) =>
+      flag !== "--reset" && argv.includes(flag)
+    );
+    if (conflict) return `--reset cannot be combined with ${conflict}`;
+  }
+  return validateConfigOutputMode(argv);
+}
 
 function configPositionals(argv: readonly string[]): Array<{ value: string; index: number }> {
   const positionals: Array<{ value: string; index: number }> = [];
@@ -466,43 +567,117 @@ function settingsTargetForMutation(
 }
 
 function validateModelsArgs(argv: readonly string[]): string | null {
-  for (let index = 0; index < argv.length; index++) {
-    const token = argv[index];
-    if (!token.startsWith("--")) {
-      return `unexpected models positional ${JSON.stringify(token)}`;
-    }
-    if (MODELS_VALUE_FLAGS.has(token)) {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("--")) return `${token} requires a value`;
-      index++;
-      continue;
-    }
-    if (!MODELS_BARE_FLAGS.has(token)) return `unknown models option ${token}`;
+  const grammar = validateConfigOptionGrammar(argv, "models", {
+    values: MODELS_VALUE_FLAGS,
+    bare: MODELS_BARE_FLAGS,
+  });
+  if (grammar) return grammar;
+  const mutationFlags = [
+    "--agent",
+    "--deciding-effort",
+    "--effort",
+    "--from",
+    "--model",
+    "--preset",
+    "--reset",
+    "--reviewing-effort",
+    "--save-as",
+    "--writing-up-effort",
+  ];
+  const modes = validateConfigMutationModes(argv, "models", mutationFlags) ??
+    validateSettingsTargets(argv);
+  if (modes) return modes;
+  if (argv.includes("--preset") && argv.includes("--from")) {
+    return "--preset and --from are mutually exclusive";
   }
-  if (valuesAfter(argv, "--harness").length > 1) {
-    return "multi-harness config is not supported yet; pass one --harness <name>";
+  if (argv.includes("--save-as") && !argv.includes("--from")) {
+    return "--save-as requires --from <preset|profile>";
   }
-  if (valuesAfter(argv, "--agent").length > 1) {
-    return "one models mutation may target only one --agent";
+  if (argv.includes("--agent") && !argv.includes("--effort")) {
+    return "--agent requires --effort <value>";
+  }
+  if (
+    !argv.includes("--agent") &&
+    (argv.includes("--effort") || argv.includes("--model"))
+  ) {
+    return "--effort and --model require --agent <name>";
   }
   return null;
 }
 
 function validateRootConfigArgs(argv: readonly string[]): string | null {
-  for (let index = 0; index < argv.length; index++) {
-    const token = argv[index];
-    if (!token.startsWith("--")) {
-      return `unexpected config positional ${JSON.stringify(token)}`;
-    }
-    if (ROOT_VALUE_FLAGS.has(token)) {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("--")) return `${token} requires a value`;
-      index++;
-      continue;
-    }
-    if (!ROOT_BARE_FLAGS.has(token)) return `unknown config option ${token}`;
+  const hasPin = argv.includes("--pin");
+  const hasUnpin = argv.includes("--unpin");
+  if (hasPin && hasUnpin) return "--pin and --unpin are mutually exclusive";
+
+  const commonValues = ["--project-dir"];
+  const commonBare = [
+    "--dry-run",
+    "--help",
+    "--json",
+    "--no-color",
+    "--quiet",
+    "--verbose",
+    "--yes",
+  ];
+  const mode = hasPin ? "config --pin" : hasUnpin ? "config --unpin" : "config";
+  const values = new Set(
+    hasPin
+      ? [
+          ...commonValues,
+          "--ca-bundle",
+          "--from",
+          "--pin",
+          "--release-base-url",
+        ]
+      : hasUnpin
+      ? commonValues
+      : [
+          ...commonValues,
+          "--from",
+          "--harness",
+          "--mcp",
+          "--plan-token",
+        ],
+  );
+  const bare = new Set(
+    hasPin
+      ? [...commonBare, "--offline"]
+      : hasUnpin
+      ? [...commonBare, "--unpin"]
+      : [...commonBare, "--force"],
+  );
+  const grammar = validateConfigOptionGrammar(argv, mode, {
+    values,
+    bare,
+    invalidKnownFlags: ROOT_CONFIG_FLAGS,
+    invalidKnownMessage: (flag) => `${flag} is not valid with ${mode}`,
+  });
+  if (grammar) return grammar;
+  return validateConfigOutputMode(argv);
+}
+
+export function validatePublicConfigArgs(input: readonly string[]): string | null {
+  const argv = stripVerb([...input]);
+  const positionals = configPositionals(argv);
+  const section = positionals[0];
+  if (!section) return validateRootConfigArgs(argv);
+  if (!VALID_CONFIG_SECTIONS.has(section.value)) {
+    return `unknown config section ${JSON.stringify(section.value)}; valid sections: models, runtime, providers, trust, flags, project`;
   }
-  return null;
+  const sectionArgv = [
+    ...argv.slice(0, section.index),
+    ...argv.slice(section.index + 1),
+  ];
+  if (section.value === "models") return validateModelsArgs(sectionArgv);
+  if (
+    section.value === "runtime" ||
+    section.value === "providers" ||
+    section.value === "trust"
+  ) {
+    return validateDiagnosticArgs(section.value, sectionArgv);
+  }
+  return validateChoiceArgs(section.value as ChoiceSection, sectionArgv);
 }
 
 function modelPolicyHelp(): string {
@@ -954,24 +1129,29 @@ function validateDiagnosticArgs(
     : section === "providers"
     ? new Set([...DIAGNOSTIC_BARE_FLAGS, "--acknowledge"])
     : new Set([...DIAGNOSTIC_BARE_FLAGS, "--acknowledge"]);
-  for (let index = 0; index < argv.length; index++) {
-    const token = argv[index];
-    if (!token.startsWith("--")) {
-      return `unexpected ${section} positional ${JSON.stringify(token)}`;
-    }
-    if (DIAGNOSTIC_VALUE_FLAGS.has(token)) {
-      if (!sectionValues.has(token)) return `${token} is not valid for config ${section}`;
-      const value = argv[index + 1];
-      if (!value || value.startsWith("--")) return `${token} requires a value`;
-      index++;
-      continue;
-    }
-    if (!sectionBare.has(token)) return `unknown ${section} option ${token}`;
-  }
-  if (valuesAfter(argv, "--harness").length > 1) {
-    return "multi-harness config is not supported yet; pass one --harness <name>";
-  }
-  return null;
+  const grammar = validateConfigOptionGrammar(argv, section, {
+    values: sectionValues,
+    bare: sectionBare,
+    repeatable: section === "providers"
+      ? new Set(["--mark-done"])
+      : undefined,
+    invalidKnownMessage: (flag) => `${flag} is not valid for config ${section}`,
+  });
+  if (grammar) return grammar;
+  const mutationFlags = section === "runtime"
+    ? ["--record-paths", "--reset"]
+    : section === "providers"
+    ? [
+        "--acknowledge",
+        "--mark-done",
+        "--opencode-default",
+        "--profile",
+        "--provider",
+        "--region",
+        "--reset",
+      ]
+    : ["--acknowledge", "--reset"];
+  return validateConfigMutationModes(argv, section, mutationFlags);
 }
 
 function diagnosticHelp(section: DiagnosticSection): string {
@@ -2019,30 +2199,35 @@ function validateChoiceArgs(
         "--plugins",
         "--project-dir",
       ]);
-  for (let index = 0; index < argv.length; index++) {
-    const token = argv[index];
-    if (!token.startsWith("--")) {
-      return `unexpected ${section} positional ${JSON.stringify(token)}`;
-    }
-    if (CHOICE_VALUE_FLAGS.has(token)) {
-      if (!values.has(token)) return `${token} is not valid for config ${section}`;
-      const value = argv[index + 1];
-      if (!value || value.startsWith("--")) return `${token} requires a value`;
-      index++;
-      continue;
-    }
-    if (!CHOICE_BARE_FLAGS.has(token)) return `unknown ${section} option ${token}`;
-    if (
-      section !== "flags" &&
-      (token === "--local" || token === "--project" || token === "--global")
-    ) {
-      return `${token} is not valid for config ${section}`;
-    }
-  }
-  if (valuesAfter(argv, "--harness").length > 1) {
-    return "multi-harness config is not supported yet; pass one --harness <name>";
-  }
-  return null;
+  const bare = section === "flags"
+    ? CHOICE_BARE_FLAGS
+    : new Set(
+        [...CHOICE_BARE_FLAGS].filter((flag) =>
+          flag !== "--local" && flag !== "--project" && flag !== "--global"
+        ),
+      );
+  const grammar = validateConfigOptionGrammar(argv, section, {
+    values,
+    bare,
+    repeatable: section === "flags"
+      ? new Set(["--bypass", "--clear-bypass"])
+      : undefined,
+    invalidKnownMessage: (flag) => `${flag} is not valid for config ${section}`,
+  });
+  if (grammar) return grammar;
+  const mutationFlags = section === "flags"
+    ? [
+        "--bypass",
+        "--clear-bypass",
+        "--default-scope",
+        "--hook-debug",
+        "--reset",
+        "--sensor-timeout-ms",
+        "--swarm",
+      ]
+    : ["--completions", "--mcp", "--plugins", "--reset"];
+  return validateConfigMutationModes(argv, section, mutationFlags) ??
+    (section === "flags" ? validateSettingsTargets(argv) : null);
 }
 
 function choiceHelp(section: ChoiceSection): string {
@@ -5572,15 +5757,7 @@ export async function main(
   const options = globalOptions(argv);
   const positionals = configPositionals(argv);
   const section = positionals[0];
-  const validSections = new Set([
-    "models",
-    "runtime",
-    "providers",
-    "trust",
-    "flags",
-    "project",
-  ]);
-  if (section && !validSections.has(section.value)) {
+  if (section && !VALID_CONFIG_SECTIONS.has(section.value)) {
     if (configInputIsTty() && options.mode === "human") {
       const distance = (left: string, right: string): number => {
         const row = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -5599,7 +5776,7 @@ export async function main(
         }
         return row[right.length];
       };
-      const nearest = [...validSections]
+      const nearest = [...VALID_CONFIG_SECTIONS]
         .map((candidate) => ({
           candidate,
           distance: distance(section.value, candidate),

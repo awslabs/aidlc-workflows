@@ -120,6 +120,119 @@ function offline(argv: readonly string[]): boolean | undefined {
   return undefined;
 }
 
+type PublicLifecycleCommand = "update" | "use" | "uninstall";
+
+type PublicLifecycleGrammar = {
+  values: ReadonlySet<string>;
+  bare: ReadonlySet<string>;
+  positionals: number;
+};
+
+const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
+  Record<PublicLifecycleCommand, PublicLifecycleGrammar>
+> = {
+  update: {
+    values: new Set([
+      "--ca-bundle",
+      "--from",
+      "--project-dir",
+      "--release-base-url",
+      "--version",
+    ]),
+    bare: new Set([
+      "--check",
+      "--dry-run",
+      "--json",
+      "--no-color",
+      "--offline",
+      "--quiet",
+    ]),
+    positionals: 0,
+  },
+  use: {
+    values: new Set([
+      "--ca-bundle",
+      "--from",
+      "--project-dir",
+      "--release-base-url",
+    ]),
+    bare: new Set([
+      "--json",
+      "--no-color",
+      "--offline",
+      "--quiet",
+    ]),
+    positionals: 1,
+  },
+  uninstall: {
+    values: new Set(["--project-dir"]),
+    bare: new Set([
+      "--json",
+      "--no-color",
+      "--purge",
+      "--quiet",
+      "--yes",
+    ]),
+    positionals: 0,
+  },
+};
+
+export function validatePublicLifecycleArgs(
+  argv: readonly string[],
+): string | null {
+  const command = argv[0] as PublicLifecycleCommand | undefined;
+  const grammar = command ? PUBLIC_LIFECYCLE_GRAMMARS[command] : undefined;
+  if (!grammar) return null;
+
+  const seen = new Set<string>();
+  const positionals: string[] = [];
+  let startIndex = 1;
+  if (command === "use") {
+    const version = argv[1];
+    if (!version || version.startsWith("--")) {
+      return "use requires the version before options";
+    }
+    positionals.push(version);
+    startIndex = 2;
+  }
+  for (let index = startIndex; index < argv.length; index++) {
+    const token = argv[index];
+    if (!token.startsWith("--")) {
+      positionals.push(token);
+      continue;
+    }
+    if (grammar.values.has(token)) {
+      if (seen.has(token)) return `${token} may be specified only once`;
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) return `${token} requires a value`;
+      seen.add(token);
+      index++;
+      continue;
+    }
+    if (!grammar.bare.has(token)) return `unknown ${command} option ${token}`;
+    if (seen.has(token)) return `${token} may be specified only once`;
+    seen.add(token);
+  }
+
+  if (positionals.length !== grammar.positionals) {
+    if (command === "use" && positionals.length === 0) {
+      return "use requires exactly one version";
+    }
+    return `unexpected ${command} positional ${
+      JSON.stringify(positionals[grammar.positionals] ?? positionals[0])
+    }`;
+  }
+  if (argv.includes("--json") && argv.includes("--quiet")) {
+    return "--json and --quiet are mutually exclusive";
+  }
+  if (command === "update" && argv.includes("--check")) {
+    for (const flag of ["--dry-run", "--from", "--version"]) {
+      if (argv.includes(flag)) return `--check cannot be combined with ${flag}`;
+    }
+  }
+  return null;
+}
+
 const RUNTIME_ASSET = "aidlc-runtime.tar.gz";
 const COMPLETION_FILES: Readonly<Record<Shell, string>> = {
   bash: "aidlc.bash",
@@ -1553,6 +1666,11 @@ function humanLifecycleNarration(
 export async function main(input: string[]): Promise<void> {
   const argv = input;
   const options = globalOptions(argv);
+  const validation = validatePublicLifecycleArgs(argv);
+  if (validation) {
+    emitResult(usage(validation), options);
+    return;
+  }
   try {
     const command = argv[0];
     const before = activeVersion();

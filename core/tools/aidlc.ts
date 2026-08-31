@@ -1202,6 +1202,26 @@ const COMMAND_HELP_USAGE: Record<PublicCommand, string> = {
   uninstall: "aidlc uninstall [options]",
 };
 
+const ROOT_CONFIG_HELP_VALUE_FLAGS = new Set([
+  "--ca-bundle",
+  "--from",
+  "--harness",
+  "--mcp",
+  "--pin",
+  "--plan-token",
+  "--project-dir",
+  "--release-base-url",
+]);
+
+function publicCommandFromToken(token: string | undefined): PublicCommand | null {
+  if ((PUBLIC_COMMANDS as readonly (string | undefined)[]).includes(token)) {
+    return token as PublicCommand;
+  }
+  if (token === "--doctor") return "doctor";
+  if (token === "--version") return "version";
+  return null;
+}
+
 export function renderCommandHelp(command: PublicCommand): string {
   const route = ROUTES.find((candidate) =>
     candidate.namespace === "public" &&
@@ -1280,18 +1300,26 @@ export function renderCommandHelp(command: PublicCommand): string {
 
 function commandHelpRequest(argv: readonly string[]): PublicCommand | null {
   const clean = withoutProjectDirFlag(argv);
-  const command = clean[0] as PublicCommand | undefined;
+  const invocation = clean[0];
+  const command = publicCommandFromToken(invocation);
   if (
     !command ||
-    !(PUBLIC_COMMANDS as readonly string[]).includes(command) ||
     !clean.slice(1).some((token) => token === "--help" || token === "-h")
   ) {
     return null;
   }
-  if (
-    command === "config" &&
-    clean.slice(1).some((token) => !token.startsWith("-"))
-  ) {
+  if (command === "config") {
+    const normalized = normalizePublicCommandArgv(argv, command, invocation);
+    for (let index = 1; index < normalized.length; index++) {
+      const token = normalized[index];
+      if (ROOT_CONFIG_HELP_VALUE_FLAGS.has(token)) {
+        const value = normalized[index + 1];
+        if (value && !value.startsWith("-")) index++;
+        continue;
+      }
+      if (token === "--help" || token === "-h") return command;
+      if (!token.startsWith("-")) return null;
+    }
     return null;
   }
   return command;
@@ -2204,6 +2232,29 @@ function withoutProjectDirFlag(argv: readonly string[]): string[] {
   return clean;
 }
 
+function normalizePublicCommandArgv(
+  argv: readonly string[],
+  command: PublicCommand,
+  invocation: string = command,
+): string[] {
+  const normalized: string[] = [command];
+  let removedCommand = false;
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--project-dir") {
+      normalized.push(token);
+      if (argv[index + 1] !== undefined) normalized.push(argv[++index]);
+      continue;
+    }
+    if (!removedCommand && token === invocation) {
+      removedCommand = true;
+      continue;
+    }
+    normalized.push(token);
+  }
+  return normalized;
+}
+
 function routeById(id: string): Route {
   const route = ROUTES.find((candidate) => candidate.id === id);
   if (!route) throw new Error(`dispatcher route registry is missing ${id}`);
@@ -2418,6 +2469,152 @@ function basicPolicyError(route: Route, argv: readonly string[]): string | null 
   return null;
 }
 
+type SimplePublicGrammar = {
+  values: ReadonlySet<string>;
+  bare: ReadonlySet<string>;
+};
+
+const SIMPLE_PUBLIC_GRAMMARS: Readonly<
+  Partial<Record<PublicCommand, SimplePublicGrammar>>
+> = {
+  doctor: {
+    values: new Set([
+      "--ca-bundle",
+      "--output",
+      "--project-dir",
+      "--release-base-url",
+    ]),
+    bare: new Set([
+      "--check-updates",
+      "--export",
+      "--json",
+      "--no-color",
+      "--offline",
+      "--quiet",
+      "--verbose",
+    ]),
+  },
+  version: {
+    values: new Set(["--project-dir"]),
+    bare: new Set(["--json", "--no-color"]),
+  },
+};
+
+function validateSimplePublicGrammar(
+  command: PublicCommand,
+  argv: readonly string[],
+): string | null {
+  const grammar = SIMPLE_PUBLIC_GRAMMARS[command];
+  if (!grammar) return null;
+  const seen = new Set<string>();
+  for (let index = 1; index < argv.length; index++) {
+    const token = argv[index];
+    if (!token.startsWith("--")) {
+      return `unexpected ${command} positional ${JSON.stringify(token)}`;
+    }
+    if (grammar.values.has(token)) {
+      if (seen.has(token)) return `${token} may be specified only once`;
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) return `${token} requires a value`;
+      seen.add(token);
+      index++;
+      continue;
+    }
+    if (!grammar.bare.has(token)) return `unknown ${command} option ${token}`;
+    if (seen.has(token)) return `${token} may be specified only once`;
+    seen.add(token);
+  }
+  if (argv.includes("--json") && argv.includes("--quiet")) {
+    return "--json and --quiet are mutually exclusive";
+  }
+  if (
+    command === "doctor" &&
+    argv.includes("--output") &&
+    !argv.includes("--export")
+  ) {
+    return "--output requires --export";
+  }
+  return null;
+}
+
+async function publicCommandGrammarError(
+  route: Route | null,
+  argv: readonly string[],
+): Promise<string | null> {
+  if (
+    route?.namespace !== "public" ||
+    route.group !== "top"
+  ) {
+    return null;
+  }
+  const command = route.verbs[0] as PublicCommand | undefined;
+  const invocation = withoutProjectDirFlag(argv)[0];
+  if (
+    !command ||
+    !(PUBLIC_COMMANDS as readonly string[]).includes(command) ||
+    publicCommandFromToken(invocation) !== command
+  ) {
+    return null;
+  }
+  const normalized = normalizePublicCommandArgv(argv, command, invocation);
+  if (command === "config") {
+    const { validatePublicConfigArgs } = await import("./aidlc-init.ts");
+    return validatePublicConfigArgs(normalized);
+  }
+  if (command === "update" || command === "use" || command === "uninstall") {
+    const { validatePublicLifecycleArgs } = await import("./aidlc-lifecycle.ts");
+    return validatePublicLifecycleArgs(normalized);
+  }
+  return validateSimplePublicGrammar(command, normalized);
+}
+
+function renderPublicGrammarFailure(
+  argv: readonly string[],
+  message: string,
+): number {
+  const configSection = /^unknown config section "([^"]+)";/.exec(message)?.[1];
+  if (
+    configSection &&
+    requestedOutputMode(argv) === "human" &&
+    (process.stdin.isTTY || process.env.AIDLC_TEST_CONFIG_TTY === "1")
+  ) {
+    const invoke = aidlcInvocation();
+    const nearest = [
+      "models",
+      "runtime",
+      "providers",
+      "trust",
+      "flags",
+      "project",
+    ]
+      .map((candidate) => ({
+        candidate,
+        distance: editDistance(configSection, candidate),
+      }))
+      .sort((left, right) =>
+        left.distance - right.distance ||
+        left.candidate.localeCompare(right.candidate)
+      )[0];
+    text(
+      2,
+      `${errorLabel("error:", process.stderr)} unknown config section '${configSection}'\n`,
+    );
+    if (nearest && nearest.distance <= 2) {
+      text(
+        2,
+        `\n  ${tipLabel("tip:", process.stderr)} did you mean '${nearest.candidate}'?\n`,
+      );
+    }
+    text(
+      2,
+      `\n${heading("usage:", process.stderr)} ${invoke} config <section> [flags]\n`,
+    );
+    text(2, `For the full list, run '${invoke} config --help'.\n`);
+    return 2;
+  }
+  return renderDispatcherFailure(argv, 2, message);
+}
+
 function projectPolicyError(route: Route, argv: readonly string[]): string | null {
   if (route.projectRequirement !== "required") return null;
   const projectDir = dispatcherProjectDirFrom(argv);
@@ -2476,6 +2673,19 @@ export async function main(argv: string[]): Promise<void> {
     text(1, renderCommandHelp(commandHelp));
     return;
   }
+  const route = routePolicyFor(argv);
+  if (route) {
+    const error = basicPolicyError(route, argv);
+    if (error) {
+      process.exitCode = renderDispatcherFailure(argv, 2, error);
+      return;
+    }
+  }
+  const grammarError = await publicCommandGrammarError(route, argv);
+  if (grammarError) {
+    process.exitCode = renderPublicGrammarFailure(argv, grammarError);
+    return;
+  }
   if (isCompiledExecutable()) {
     // Compiled, no explicit harness: discover the project install from its
     // shipped stamp/harness metadata. Module-relative derivation cannot work
@@ -2514,14 +2724,6 @@ export async function main(argv: string[]): Promise<void> {
         `Windows uninstall recovery failed: ${errorMessage(error)}`,
         "aidlc doctor",
       );
-      return;
-    }
-  }
-  const route = routePolicyFor(argv);
-  if (route) {
-    const error = basicPolicyError(route, argv);
-    if (error) {
-      process.exitCode = renderDispatcherFailure(argv, 2, error);
       return;
     }
   }
