@@ -4,12 +4,14 @@
 // collisions before writing any part of the distribution.
 
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   statSync,
@@ -67,6 +69,35 @@ function assertSafeManagedTree(targetRoot: string): void {
   assertNoSymlinks(targetRoot, targetRoot, false);
   for (const rel of [".cursor", "aidlc", "AGENTS.md", ".gitignore"]) {
     assertNoSymlinks(join(targetRoot, rel), targetRoot);
+  }
+}
+
+function comparablePath(path: string): string {
+  const canonical = realpathSync(path);
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+function assertCursorGitRoot(targetRoot: string): void {
+  if (!existsSync(targetRoot)) {
+    throw new Error(
+      `Cursor project hooks load only from a Git repository root. Create the target directory, initialize it with \`git -C ${JSON.stringify(targetRoot)} init\`, then rerun this installer.`,
+    );
+  }
+  const git = spawnSync(
+    "git",
+    ["-C", targetRoot, "rev-parse", "--show-toplevel"],
+    { encoding: "utf-8" },
+  );
+  if (git.status !== 0 || !git.stdout.trim()) {
+    throw new Error(
+      `Cursor project hooks load only from a Git repository root. Initialize this target with \`git -C ${JSON.stringify(targetRoot)} init\`, then rerun this installer.`,
+    );
+  }
+  const gitRoot = git.stdout.trim();
+  if (comparablePath(gitRoot) !== comparablePath(targetRoot)) {
+    throw new Error(
+      `Cursor resolves project hooks from the Git repository root ${JSON.stringify(gitRoot)}, but the installer target is ${JSON.stringify(targetRoot)}. Install AI-DLC at the repository root, or initialize the target as a separate repository, then open and trust that exact root in Cursor.`,
+    );
   }
 }
 
@@ -1001,6 +1032,7 @@ async function refreshPluginRouting(targetRoot: string): Promise<void> {
 export async function install(targetDir: string): Promise<void> {
   const targetRoot = resolve(targetDir);
   assertSafeManagedTree(targetRoot);
+  assertCursorGitRoot(targetRoot);
   const actions: WriteAction[] = [];
   const collisions: string[] = [];
   const sharedJson = new Set([".cursor/hooks.json", ".cursor/cli.json"]);

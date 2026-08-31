@@ -287,10 +287,14 @@ Then continue in [AI-DLC on Codex CLI](harnesses/codex-cli.md): the project must
 <summary><strong>Cursor</strong></summary>
 
 ```bash
+mkdir -p your-project
+git -C your-project init
 bun dist/cursor/install.ts your-project
 ```
 
-Then continue in [AI-DLC on Cursor](harnesses/cursor.md) for IDE and CLI usage, hook behavior, permissions, and installer refresh rules.
+Then open and trust that exact Git root in Cursor and fully restart it. Continue
+in [AI-DLC on Cursor](harnesses/cursor.md) for IDE and CLI usage, hook behavior,
+permissions, and installer refresh rules.
 
 </details>
 
