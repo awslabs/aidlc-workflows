@@ -74,7 +74,8 @@ awslabs/aidlc-workflows/
 
 ## CI/CD Architecture
 
-Nine workflows form two release/CI pipelines, a security scanning suite, a pull request validation gate, and standalone markdown, CodeQL, and documentation workflows:
+Eight workflows form two release/CI pipelines, a security scanning suite, a
+pull request validation gate, and standalone markdown and CodeQL validation:
 
 ### Pipeline 1: Release (changelog-first)
 

@@ -2,7 +2,8 @@
 
 When creating pull requests in this repository, always include the following in the PR body:
 
-1. Use the structure from `.github/pull_request_template.md`
+1. Use the pull request template supplied by GitHub from the default `main`
+   branch
 2. The PR description MUST end with this contributor statement (required by CI):
 
 ```text

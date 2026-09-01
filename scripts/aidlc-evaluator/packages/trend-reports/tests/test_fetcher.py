@@ -239,27 +239,62 @@ class TestFetchPrereleaseBundles:
             result = fetch_prerelease_bundles("owner/repo", work_dir=tmp_path)
         assert result == []
 
-    def test_main_artifact_found(self, tmp_path):
-        main_zip = tmp_path / "report-main" / "report-main.zip"
-        main_zip.parent.mkdir(parents=True)
-        main_zip.write_bytes(b"fake")
+    def test_v1_baseline_artifact_found(self, tmp_path):
+        baseline_zip = tmp_path / "report-v1" / "report-v1.zip"
+        baseline_zip.parent.mkdir(parents=True)
+        baseline_zip.write_bytes(b"fake")
 
         with (
             patch(
                 "trend_reports.fetcher.fetch_workflow_runs",
                 side_effect=[
-                    [{"databaseId": 1, "headBranch": "main"}],  # main runs
+                    [{"databaseId": 1, "headBranch": "v1"}],  # baseline runs
                     [],  # PR runs
                 ],
-            ),
+            ) as fetch_runs,
             patch(
                 "trend_reports.fetcher.fetch_artifact_bundle",
-                return_value=main_zip,
-            ),
+                return_value=baseline_zip,
+            ) as fetch_bundle,
         ):
             result = fetch_prerelease_bundles("owner/repo", work_dir=tmp_path)
         assert len(result) == 1
-        assert result[0] == main_zip
+        assert result[0] == baseline_zip
+        fetch_runs.assert_any_call("owner/repo", branch="v1", limit=5)
+        fetch_bundle.assert_called_once_with(
+            "owner/repo",
+            1,
+            "report-v1",
+            tmp_path,
+        )
+
+    def test_baseline_branch_and_artifact_are_parameterized(self, tmp_path):
+        with (
+            patch(
+                "trend_reports.fetcher.fetch_workflow_runs",
+                side_effect=[
+                    [{"databaseId": 7, "headBranch": "maintenance"}],
+                    [],
+                ],
+            ) as fetch_runs,
+            patch(
+                "trend_reports.fetcher.fetch_artifact_bundle",
+                return_value=None,
+            ) as fetch_bundle,
+        ):
+            fetch_prerelease_bundles(
+                "owner/repo",
+                work_dir=tmp_path,
+                baseline_branch="maintenance",
+            )
+
+        fetch_runs.assert_any_call("owner/repo", branch="maintenance", limit=5)
+        fetch_bundle.assert_called_once_with(
+            "owner/repo",
+            7,
+            "report-maintenance",
+            tmp_path,
+        )
 
 
 class TestFetchReleaseBundles:

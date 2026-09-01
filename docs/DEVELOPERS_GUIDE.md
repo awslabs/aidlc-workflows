@@ -59,7 +59,7 @@ You can run AWS CodeBuild builds locally using the [CodeBuild local agent](https
 
 ## Security Scanners
 
-The [`security-scanners.yml`](../.github/workflows/security-scanners.yml) workflow runs six scanners on every push to `main`, every PR targeting `main`, and on a daily schedule. Five upload SARIF to GitHub Code Scanning (visible under the **Security** tab) and as downloadable artifacts; ClamAV uploads a text log artifact only.
+The [`security-scanners.yml`](../.github/workflows/security-scanners.yml) workflow runs six scanners on every push to `v1`, every PR targeting `v1`, and on manual dispatch. Five upload SARIF to GitHub Code Scanning (visible under the **Security** tab) and as downloadable artifacts; ClamAV uploads a text log artifact only.
 
 All six scanners use a **deferred-failure pattern**: the scan always runs to completion and preserves results before the job fails. This ensures findings are recorded even when the build breaks.
 
