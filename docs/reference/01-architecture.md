@@ -252,7 +252,8 @@ sequenceDiagram
 ## Source vs distribution (one core, many harnesses)
 
 The framework is **authored once and generated per harness** — today Claude
-Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and
+Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, GitHub Copilot, and
+Devin CLI, and
 any capable CLI you port it to. The
 hand-authored source is a harness-neutral `core/` plus a thin `harness/<name>/`
 surface per CLI; `bun scripts/package.ts` regenerates the committed,
@@ -272,7 +273,8 @@ scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   under ignored build/binaries/
 dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
                        #   kiro-ide/.kiro, codex/{.codex,.agents},
-                       #   opencode/{.aidlc,.opencode}, copilot/{.aidlc,.github} — never hand-edited
+                       #   opencode/{.aidlc,.opencode}, copilot/{.aidlc,.github},
+                       #   cursor/{.cursor,aidlc}, devin/{.devin,aidlc} — never hand-edited
 ```
 
 `core/` `.ts` is byte-copied untransformed; the runtime `harnessDir()` seam

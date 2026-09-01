@@ -107,6 +107,25 @@ function spawnAgentPrompt(input: CodexSpawnAgentInput): string {
   return parts.join("\n");
 }
 
+// Normalize a PostToolUse tool_response into the JSON string the selection
+// parsers expect. Codex may deliver {success, output, error} (object form,
+// mirroring Devin); the answer payload is JSON-encoded inside `output`. If the
+// caller already passed a string (test fixtures, live captures), pass it
+// through. The codex adapter `export`s hasExplicitHumanSelection, so the
+// public signature is unchanged — only the parsing pre-step is added.
+function normalizeToolResponse(toolResponse: unknown): string | null {
+  if (typeof toolResponse === "string") return toolResponse;
+  if (
+    toolResponse !== null &&
+    typeof toolResponse === "object" &&
+    !Array.isArray(toolResponse)
+  ) {
+    const obj = toolResponse as Record<string, unknown>;
+    if (typeof obj.output === "string") return obj.output;
+  }
+  return null;
+}
+
 function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
   const offered = new Map<string, Set<string>>();
   if (toolInput === null || typeof toolInput !== "object") return offered;
@@ -132,10 +151,11 @@ function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
 }
 
 export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): boolean {
-  if (typeof toolResponse !== "string") return false;
+  const json = normalizeToolResponse(toolResponse);
+  if (json === null) return false;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(toolResponse);
+    parsed = JSON.parse(json);
   } catch {
     return false;
   }
@@ -159,9 +179,10 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
 }
 
 function explicitHumanSelectionText(toolResponse: unknown): string {
-  if (typeof toolResponse !== "string") return "";
+  const json = normalizeToolResponse(toolResponse);
+  if (json === null) return "";
   try {
-    const parsed = JSON.parse(toolResponse) as {
+    const parsed = JSON.parse(json) as {
       answers?: Record<string, { answers?: unknown[] }>;
     };
     for (const selection of Object.values(parsed.answers ?? {})) {

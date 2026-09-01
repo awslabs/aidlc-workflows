@@ -557,7 +557,9 @@ describe("t305 conductor SKILLs — STAGE RITUAL IS ATOMIC exception (authored +
     "(One exception: the Build-and-Test failure loop-back — the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) — jumps back to code-generation from a deliberately in-flight failed stage; its learnings ritual fires on the eventual passing run.)";
 
   test("every authored conductor SKILL carries the exception on the atomic-ritual bullet", () => {
-    expect(HARNESS_MATRIX).toHaveLength(7);
+    // The sweep below is exhaustive over HARNESS_MATRIX, which is itself
+    // validated against discovered manifests at import time in
+    // tests/harness/harness-matrix.ts.
     const missing: string[] = [];
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;

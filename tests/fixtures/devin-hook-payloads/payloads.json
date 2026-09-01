@@ -1,0 +1,190 @@
+{
+  "sessionStart": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "SessionStart",
+    "model": "glm-5.2-high",
+    "source": "startup"
+  },
+  "sessionEnd": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "SessionEnd"
+  },
+  "userPromptSubmit": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Run /aidlc --status"
+  },
+  "preToolUse_exec": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exec",
+    "tool_input": { "command": "bun .devin/tools/aidlc-utility.ts status" },
+    "tool_use_id": "call_0"
+  },
+  "preToolUse_edit": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "edit",
+    "tool_input": { "file_path": "/tmp/devin-test/proj/src/index.ts", "old_string": "foo", "new_string": "bar" },
+    "tool_use_id": "call_1"
+  },
+  "preToolUse_run_subagent": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "run_subagent",
+    "tool_input": { "title": "reviewer", "task": "review the code", "profile": "subagent_explore" },
+    "tool_use_id": "call_2"
+  },
+  "preToolUse_ask_user_question": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "ask_user_question",
+    "tool_input": { "questions": [] },
+    "tool_use_id": "call_3"
+  },
+  "postToolUse_exec": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "exec",
+    "tool_input": { "command": "bun .devin/tools/aidlc-orchestrate.ts next" },
+    "tool_response": "ok",
+    "tool_use_id": "call_0"
+  },
+  "postToolUse_edit_aidlcDocs": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "edit",
+    "tool_input": { "file_path": "/tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/ideation/intent-capture/notes.md", "old_string": "x", "new_string": "y" },
+    "tool_response": "ok",
+    "tool_use_id": "call_1"
+  },
+  "postToolUse_edit_plain": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "edit",
+    "tool_input": { "file_path": "/tmp/devin-test/proj/src/index.ts", "old_string": "x", "new_string": "y" },
+    "tool_response": "ok",
+    "tool_use_id": "call_2"
+  },
+  "postToolUse_write_aidlcDocs": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "write",
+    "tool_input": { "file_path": "/tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/ideation/intent-capture/diary.md", "content": "# Diary\n" },
+    "tool_response": "ok",
+    "tool_use_id": "call_3"
+  },
+  "postToolUse_applyPatch_aidlcDocs": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "apply_patch",
+    "tool_input": { "command": "*** Add File: /tmp/devin-test/proj/aidlc/spaces/default/intents/test-abc12345/ideation/intent-capture/artifact.md\n+content\n" },
+    "tool_response": "ok",
+    "tool_use_id": "call_4"
+  },
+  "postToolUse_applyPatch_plain": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "apply_patch",
+    "tool_input": { "command": "*** Add File: /tmp/devin-test/proj/src/main.ts\n+content\n" },
+    "tool_response": "ok",
+    "tool_use_id": "call_5"
+  },
+  "postToolUse_todoWrite": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "todo_write",
+    "tool_input": { "todos": [{ "content": "stage 1", "status": "in_progress" }] },
+    "tool_response": "ok",
+    "tool_use_id": "call_6"
+  },
+  "postToolUse_runSubagent": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "run_subagent",
+    "tool_input": { "title": "worker", "task": "do work", "profile": "subagent_general" },
+    "tool_response": "done",
+    "tool_use_id": "call_7"
+  },
+  "postToolUse_askUserQuestion": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "ask_user_question",
+    "tool_input": { "questions": [{ "question": "approve?", "header": "gate", "options": [{ "label": "yes" }, { "label": "no" }] }] },
+    "tool_response": "{\"approve\":\"yes\"}",
+    "tool_use_id": "call_8"
+  },
+  "postToolUse_askUserQuestion_objectResponse": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "ask_user_question",
+    "tool_input": { "questions": [{ "id": "approve", "question": "approve?", "header": "gate", "options": [{ "label": "yes" }, { "label": "no" }] }] },
+    "tool_response": { "success": true, "output": "{\"answers\":{\"approve\":{\"answers\":[\"yes\"]}}}", "error": null },
+    "tool_use_id": "call_8b"
+  },
+  "postCompaction": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostCompaction"
+  },
+  "stop": {
+    "session_id": "019eb8c2-aa02-72e1-9ab4-53e67fca5d63",
+    "turn_id": "019eb8c2-bd47-7890-8e9a-a0a93f414c71",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  "malformed": "not valid json{{"
+}

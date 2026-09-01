@@ -1,0 +1,139 @@
+{
+  "workflow_id": "2026-08-31T21:37:16Z",
+  "scope": "express",
+  "started_at": "2026-08-31T21:37:16Z",
+  "stages": [
+    {
+      "stage_slug": "workspace-scaffold",
+      "started_at": "2026-08-31T21:37:16Z",
+      "completed_at": "2026-08-31T21:37:16Z",
+      "agent": "orchestrator",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-api/initialization/workspace-scaffold/memory.md",
+      "memory_entries": null,
+      "memory_breakdown": null,
+      "sensor_firings": [],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "workspace-detection",
+      "started_at": "2026-08-31T21:37:16Z",
+      "completed_at": "2026-08-31T21:37:16Z",
+      "agent": "orchestrator",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-api/initialization/workspace-detection/memory.md",
+      "memory_entries": null,
+      "memory_breakdown": null,
+      "sensor_firings": [],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "state-init",
+      "started_at": "2026-08-31T21:37:16Z",
+      "completed_at": "2026-08-31T21:37:16Z",
+      "agent": "orchestrator",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-api/initialization/state-init/memory.md",
+      "memory_entries": null,
+      "memory_breakdown": null,
+      "sensor_firings": [],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "requirements-analysis",
+      "started_at": "2026-08-31T21:37:16Z",
+      "completed_at": "2026-08-31T21:51:31Z",
+      "agent": "aidlc-product-agent",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-api/inception/requirements-analysis/memory.md",
+      "memory_entries": 3,
+      "memory_breakdown": {
+        "interpretations": 0,
+        "deviations": 0,
+        "tradeoffs": 0,
+        "open_questions": 3
+      },
+      "sensor_firings": [
+        {
+          "id": "required-sections",
+          "fire_id": "778b2325",
+          "result": "passed",
+          "ts": "2026-08-31T21:46:05Z"
+        },
+        {
+          "id": "required-sections",
+          "fire_id": "44d92e32",
+          "result": "passed",
+          "ts": "2026-08-31T21:46:05Z"
+        },
+        {
+          "id": "upstream-coverage",
+          "fire_id": "14650042",
+          "result": "passed",
+          "ts": "2026-08-31T21:46:05Z"
+        },
+        {
+          "id": "upstream-coverage",
+          "fire_id": "2738ea56",
+          "result": "passed",
+          "ts": "2026-08-31T21:46:05Z"
+        }
+      ],
+      "outcome": "approved",
+      "learnings_captured": {
+        "from_orchestrator": 0,
+        "from_user_addition": 0
+      }
+    },
+    {
+      "stage_slug": "code-generation",
+      "started_at": "2026-08-31T21:51:31Z",
+      "completed_at": null,
+      "agent": "aidlc-developer-agent",
+      "memory_path": "aidlc/spaces/default/intents/260831-todo-api/construction/code-generation/memory.md",
+      "memory_entries": 0,
+      "memory_breakdown": {
+        "interpretations": 0,
+        "deviations": 0,
+        "tradeoffs": 0,
+        "open_questions": 0
+      },
+      "sensor_firings": [
+        {
+          "id": "linter",
+          "fire_id": "89633913",
+          "result": "passed",
+          "ts": "2026-08-31T21:54:49Z"
+        },
+        {
+          "id": "type-check",
+          "fire_id": "eee76d9d",
+          "result": "passed",
+          "ts": "2026-08-31T21:54:51Z"
+        },
+        {
+          "id": "linter",
+          "fire_id": "aa92b64e",
+          "result": "passed",
+          "ts": "2026-08-31T21:56:04Z"
+        },
+        {
+          "id": "type-check",
+          "fire_id": "2422e8c5",
+          "result": "passed",
+          "ts": "2026-08-31T21:56:05Z"
+        }
+      ],
+      "outcome": "pending",
+      "learnings_captured": null
+    }
+  ]
+}

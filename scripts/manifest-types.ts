@@ -67,7 +67,7 @@ export type OnboardingSpec = {
 export type HarnessManifest = {
   /** Harness name; matches the dist/<name>/ and harness/<name>/ dir. */
   name: string;
-  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
+  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor" | ".devin"). */
   harnessDir: string;
   /**
    * Project-root-relative path to the emitted orchestrator SKILL.md. Defaults
@@ -82,7 +82,7 @@ export type HarnessManifest = {
    * new harness picks its projection shape in its manifest - the packager
    * never infers it from the harness name.
    */
-  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
+  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor" | "devin";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */

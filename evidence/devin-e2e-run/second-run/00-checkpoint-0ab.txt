@@ -1,0 +1,14 @@
+Checkpoint 0a — Doctor rows (all required present):
+  PASS  bun installed
+  PASS  aidlc-devin-adapter.ts present
+  PASS  hooks.v1.json present (hook wiring)
+  PASS  config.json present (permissions + read_config_from)
+  PASS  mcp_config.json present (MCP servers)
+  PASS  rules/aidlc.md present (standing method rule)
+  PASS  devin CLI version 3000.6.7 >= 3000.3.0
+  PASS  hook approval (advisory)
+  NOT FOUND  settings.json present  (correct — harness detected as .devin, not Claude fallback)
+
+Checkpoint 0b — Doctor exit code: 0 (45 passed, 0 failed)
+
+All Phase 0 checkpoints PASS.

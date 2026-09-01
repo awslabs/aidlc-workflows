@@ -1,4 +1,4 @@
-// covers: doc:harness/claude/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/codex/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/cursor/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/kiro/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/kiro-ide/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/opencode/skills/aidlc/question-rendering.md(never-echo-spec), doc:aidlc-common/protocols/stage-protocol.md(structured-questions-never-echo)
+// covers: doc:harness/claude/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/codex/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/cursor/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/kiro/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/kiro-ide/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/opencode/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/devin/skills/aidlc/question-rendering.md(never-echo-spec), doc:harness/copilot/skills/aidlc/question-rendering.md(never-echo-spec), doc:aidlc-common/protocols/stage-protocol.md(structured-questions-never-echo)
 //
 // t250: regression guard for the "never echo the ```question fence" contract:
 // an orchestrator that dumps a fenced ` ```question ` block as LITERAL text
@@ -10,6 +10,8 @@
 //   - harness/kiro-ide/skills/aidlc/question-rendering.md  (numbered prose)
 //   - harness/opencode/skills/aidlc/question-rendering.md  (numbered prose)
 //   - harness/cursor/skills/aidlc/question-rendering.md    (numbered prose)
+//   - harness/devin/skills/aidlc/question-rendering.md     (numbered prose)
+//   - harness/copilot/skills/aidlc/question-rendering.md   (numbered prose)
 //   - core/aidlc-common/protocols/stage-protocol.md        (harness-neutral § "Structured questions")
 //
 // Mechanism: none. There is no tool / process / argv seam: the subject IS the
@@ -37,10 +39,15 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 // REPO_ROOT = <repo> (tests/harness/../..). The authored source trees sit
 // directly beneath it: core/ (harness-neutral) and harness/<h>/.
-const HARNESSES = ["claude", "codex", "kiro", "kiro-ide", "opencode", "cursor"] as const;
+// DISCOVERED, never hardcoded: a hardcoded roster silently stops covering the
+// next harness, which is exactly how devin shipped an annex that still said
+// "Claude Code harness annex". Deriving from HARNESS_MATRIX also picked up
+// copilot, which the old six-name list had been omitting.
+const HARNESSES = HARNESS_MATRIX.map((h) => h.name);
 
 function annexPath(harness: string): string {
   return join(
@@ -68,7 +75,7 @@ function read(path: string): string {
 }
 
 describe("t250 (smoke) ```question fence is a SPEC to render, never echoed to chat", () => {
-  test("all six annexes and the protocol exist (no vacuous pass on a rename)", () => {
+  test("all shipped annexes and the protocol exist (no vacuous pass on a rename)", () => {
     for (const h of HARNESSES) {
       expect(existsSync(annexPath(h))).toBe(true);
     }

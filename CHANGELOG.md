@@ -1,6 +1,33 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.3] - 2026-09-01
+
+Post-merge fixes for the devin release-engineering PR (#1): closes an unasserted build gate, removes a tautological test assertion, and refreshes a stale test header. **Upgrade:** no action required beyond re-copying `dist/devin/` if you use the compiled single-binary release; the runtime-paths and build-binaries changes from #1 are unchanged.
+
+* t238: added `"harness-probe-devin"` to the asserted gate list — the gate was added to `scripts/build-binaries.ts` in #1 but its pass/fail was never checked. The devin probe gate is now enforced alongside kiro, copilot, and opencode.
+* t305: removed a tautological count assertion (`HARNESS_MATRIX.length` vs the same computation it derives from). The per-harness sweep loop below it is the real coverage and is unchanged.
+* t250: refreshed the header comment and test name to reflect the 8-harness derived roster (was stale at "six annexes" after #1 switched from a hardcoded list).
+
+## [2.7.2] - 2026-09-01
+
+Devin's dispatched-topology stages (`subagent`, `pipeline`, `mob`) now dispatch via `run_subagent` as designed, firing the `deliver-stage-rules` and `log-subagent` hooks; the conductor no longer falls back to inline execution when the ensemble protocol lacks a Devin binding section. **Upgrade:** re-copy `dist/devin/` into your project so the updated ensemble protocol and conductor SKILL replace the prior copies, then fully restart Devin CLI. The agent slug must be passed as the `profile` field of each `run_subagent` call or the `deliver-stage-rules` / `plan-approval-guard` hooks do not fire.
+
+* Devin: added the missing `### Devin` binding section to the shared ensemble protocol (`stage-protocol-ensemble.md`), covering all three dispatched topologies. The binding names `run_subagent` as the dispatch verb, specifies the `profile`-field mechanic (the adapter and the `deliver-stage-rules` / `plan-approval-guard` hooks match on `tool_input.profile`, not the prompt text), the foreground/background split for parallelism (`is_background: true` for parallel supports, read each result via `read_subagent`), the `ask_user_question`-withheld constraint (the mob's mid-stage human surfacing is the parent conductor's job, not a dispatched spoke's), and the nesting-depth-0 rule (the parent dispatches every participant in every topology).
+* Devin: added a must-dispatch paragraph to `harness/devin/skills/aidlc/SKILL.md` — belt-and-suspenders so the conductor does not run a dispatched-topology stage inline even if the ensemble protocol fails to load. The `subagents_enabled: false` / double-failure case routes through the ensemble §11 failure-recovery protocol; its user-gated "Run it here" option is the only sanctioned inline path.
+* Devin: dispatched agents run on the default subagent model (SWE-1.6 by default), not the parent's model — the AIDLC agent files carry no `model:` frontmatter. To run dispatched agents on your primary model, set the org/enterprise "Default subagent model" to it (see `docs/guide/harnesses/devin.md`).
+* All harnesses: the ensemble protocol now carries a `### Devin` binding section (was missing — Devin was the only shipped harness without one). The protocol file is identical across harness dist trees, so every `dist/<harness>/` gets the new section.
+* New test `tests/unit/t333-ensemble-harness-bindings.test.ts` pins the invariant going forward: every shipped harness has a `### <Display Name>` binding section, and the Devin section names `run_subagent`, `profile`, `is_background`, and the default subagent model.
+
+## [2.7.1] - 2026-09-01
+
+AI-DLC now runs natively on the **Devin CLI** harness — the eighth distribution from the one harness-neutral core. **Upgrade:** no action needed for existing harnesses; to use Devin, copy `dist/devin/` into your project, approve its hooks via `/hooks`, then fully restart Devin CLI.
+
+* The Devin shell ships in `.devin/`: a stdin adapter shim (`aidlc-devin-adapter.ts`) normalizes Devin's hook payloads onto the shared core hooks, `hooks.v1.json` wires Devin's seven events (SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostCompaction, Stop) to the adapter, `config.json` pre-approves the tools AIDLC workflows run, `mcp_config.json` declares the five MCP servers (context7 + four AWS), and `rules/aidlc.md` is the auto-loaded method pointer (no `@`-import — Devin loads `.devin/rules/*.md` automatically).
+* `/aidlc` invokes the orchestrator; `/aidlc --doctor` validates the Devin setup (adapter presence, the four wiring files, a `devin` CLI version floor of 3000.3.0, and a hook-approval advisory); `/aidlc --status` substitutes for the statusline Devin does not have.
+* Structured gates render via Devin's native `ask_user_question` tool; subagent dispatch uses `run_subagent`; the engine binary is invoked via `exec` (`bun .devin/tools/...`).
+* The doctor's `.devin` arm and the dual-harness coexistence list now recognize `.devin`; the test matrix (`tests/harness/harness-matrix.ts`) registers `devin` with `memoryInclude: "devin-rules"` and `reviewerScopeRegistration: "devin-hooks"`, and `tests/unit/t331-devin-packaging.test.ts` pins the dist parity, wiring shape, and doctor smoke.
+
 ## [2.7.0] - 2026-09-01
 
 AI-DLC 2.7.0 consolidates the 2.6.x release cycle into a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** replace the complete `dist/<harness>/` tree in one quiescent operation, then run `/aidlc plugin sync` for every installed plugin. Existing 2.6.124 workflow records require no migration. Before replacing an older shell, finish and archive every workflow created before 2.6.1; the new shell rejects that stale state before `--new-intent` can create fresh work. Upgrades from any release before 2.6.124 must also apply every intervening **Upgrade**, **Breaking**, and migration note below; this roll-up does not replace those one-time actions.

@@ -82,6 +82,7 @@ const RUNTIME_DISTRIBUTIONS = [
   "claude",
   "codex",
   "cursor",
+  "devin",
   "kiro",
   "kiro-ide",
   "copilot",
@@ -1798,6 +1799,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-ide", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "copilot", ".aidlc"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "opencode", ".aidlc"));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "devin", ".devin"));
     result.gates.push(harnessProbeGate(
       actual.artifact,
       "kiro",
@@ -1812,6 +1814,14 @@ function buildTarget(target: TargetConfig): TargetResult {
       actual.artifact,
       "opencode",
       "opencode.json or opencode.jsonc present",
+    ));
+    // Without this gate, a `.devin` install whose harness.json is unreadable
+    // resolved as "claude" and looked for runtime/claude - the exact fallback arm
+    // that was missing from aidlc-runtime-paths.ts.
+    result.gates.push(harnessProbeGate(
+      actual.artifact,
+      "devin",
+      "config.json present (permissions + read_config_from)",
     ));
     result.gates.push(compiledKiroNewWorkRoutingGate(actual.artifact));
     result.gates.push(pluginSelectGate(actual.artifact));

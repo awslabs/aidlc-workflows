@@ -1,0 +1,49 @@
+AI-DLC E2E Run 2 — Hook Coverage Checklist
+================================================================================
+Generated from audit trail analysis of galaxybook-31663ac55957.md
+Session ended: 2026-09-01T01:31:51Z (reason: prompt_input_exit)
+Workflow stage at session end: code-generation (in progress, plan approval gate open)
+
+| Hook Event | Target | Matcher | Verification | Run 1 | Run 2 |
+|------------|--------|---------|--------------|-------|-------|
+| SessionStart | session-start | -- | SESSION_STARTED in audit | PASS | NOT TESTED (no SESSION_STARTED event in audit trail — may be emitted by harness not audit) |
+| SessionEnd | session-end | -- | SESSION_ENDED in audit | PASS | PASS (SESSION_ENDED at 2026-09-01T01:31:51Z, reason: prompt_input_exit) |
+| UserPromptSubmit | record-human-turn | -- | HUMAN_TURN in audit | PASS | PASS (5 HUMAN_TURN events — user answered 5 gates: 3 in requirements-analysis, 1 gate approval, 1 plan approval response) |
+| PreToolUse | state-transition-guard | -- | No direct state mutations | PASS | PASS (no evidence of direct state mutations in audit trail) |
+| PreToolUse | reviewer-scope | -- | Reviewer read-scope enforced | PASS | PASS (reviewer-scope.last hook health file present, fired at 2026-08-31T21:46:04Z; ERROR_LOGGED at 21:43:45Z shows review pass correctly refused for stage with 0 review passes) |
+| PreToolUse | review-freeze | -- | No writes during review | PASS | PASS (review-freeze.last hook health file present, fired at 2026-08-31T21:46:05Z) |
+| PreToolUse | plan-approval-guard | -- | PLAN_APPROVAL_BLOCKED count (run 1: 15, run 2 target: 0) | PASS | PARTIAL (12 PLAN_APPROVAL_BLOCKED events — improved from 15 to 12 but not zero; all blocks were Bash commands during code-generation stage before plan approval) |
+| PreToolUse | deliver-stage-rules | run_subagent | SUBAGENT_COMPLETED in audit (run 1: NOT TESTED) | NOT TESTED | NOT TESTED (session ended before subagent dispatch fired; code-generation stage did not reach the point of dispatching a subagent) |
+| PreToolUse | fold-usage | -- | No errors in stderr | PASS | PASS (no fold-usage errors observed) |
+| PostToolUse | audit-and-sensors | edit\|write\|apply_patch | ARTIFACT_* events | PASS | PASS (9 ARTIFACT_CREATED + 8 ARTIFACT_UPDATED = 17 artifact events; 8 SENSOR_FIRED + 8 SENSOR_PASSED = 16 sensor events) |
+| PostToolUse | sync-workflow-state | todo_write | State updated after todo_write | PASS | PASS (state file updated to version 8, reflecting 4 completed stages and code-generation in progress) |
+| PostToolUse | log-subagent | run_subagent | SUBAGENT_COMPLETED in audit (run 1: NOT TESTED) | NOT TESTED | NOT TESTED (no run_subagent tool calls observed; session ended before subagent dispatch) |
+| PostToolUse | record-human-turn | ask_user_question | HUMAN_TURN after each gate (run 1: PARTIAL) | PARTIAL | PASS (5 HUMAN_TURN events for 5 user interactions: 3 decision gates + 1 gate approval + 1 plan approval response; all gates had corresponding HUMAN_TURN events) |
+| PostToolUse | rebuild-stage-graph | exec | Stage graph refreshed | PASS | PASS (runtime-graph.json present and updated with 5 stages including code-generation with sensor firings) |
+| PostToolUse | fold-usage | -- | Token usage folded | PASS | PASS (no fold-usage errors observed) |
+| PostCompaction | validate-state | -- | State validated after compaction | PASS | NOT TESTED (no SESSION_COMPACTED event in audit trail — session did not compact) |
+| Stop | continue-workflow | -- | Continuation prompt when work remains | PASS | PASS (continue-workflow.last hook health file present, fired at 2026-08-31T21:45:16Z; continue_token present in active directive) |
+
+================================================================================
+SUMMARY
+================================================================================
+- 10 of 16 hooks verified as PASS in Run 2
+- 2 hooks NOT TESTED (deliver-stage-rules, log-subagent) — session ended before subagent dispatch
+- 1 hook NOT TESTED (validate-state) — no compaction occurred
+- 1 hook NOT TESTED (session-start) — no SESSION_STARTED event in audit
+- 1 hook PARTIAL (plan-approval-guard) — 12 blocks vs target 0 (improved from 15)
+- 1 hook PASS with note (record-human-turn) — improved from PARTIAL in Run 1 to PASS in Run 2
+
+KEY FINDINGS:
+1. PLAN_APPROVAL_BLOCKED: 12 (Run 1: 15) — improved but not zero. All blocks were Bash commands
+   the agent tried to run during code-generation before plan approval was recorded.
+2. SUBAGENT_COMPLETED: 0 (Run 1: 0) — NOT TESTED. Session ended (prompt_input_exit) before
+   the code-generation stage could dispatch a subagent. The plan approval gate was still open.
+3. HUMAN_TURN: 5 (Run 1: 2) — PASS. User answered 5 gates via ask_user_question.
+4. GATE_APPROVED: 1 (Run 1: unknown) — PASS. Requirements-analysis gate was approved.
+5. PLAN_APPROVAL_RECORDED: 0 — NOT ACHIEVED. The plan approval recording failed with error
+   "Refusing to record Plan Approval: Plan Approval requires the actual offered choice from
+   this prompt and session." The [Answer] field in code-generation-questions.md remained empty.
+6. Session ended prematurely: The user exited the session (prompt_input_exit) at 01:31:51Z
+   while the code-generation plan approval gate was still open. The workflow did not complete.
+================================================================================

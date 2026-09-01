@@ -899,6 +899,15 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t328 drives the shipped log, human-turn, and begin CLIs so protected
     // challenge/response receipts and cross-process lock ordering are genuine.
     "unit/t328-plan-approval-runtime-authority.test.ts",
+    // t331 spawns the shipped packager (`bun scripts/package.ts devin --check`)
+    // and the compiled dispatcher to prove the Devin CLI dist is byte-parity and
+    // the harness routes through the adapter — observable only across a real
+    // process boundary.
+    "unit/t331-devin-packaging.test.ts",
+    // t332 spawns the shipped Devin adapter to prove hook payload conversion,
+    // guard enforcement, and session lifecycle routing across a real process
+    // boundary — in-process calls would catch the throws that mask the contract.
+    "unit/t332-devin-adapter.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",
