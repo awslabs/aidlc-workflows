@@ -83,7 +83,13 @@ runners are explicit-only: `/aidlc-domain-design`, `/aidlc-bugfix`, etc.
 - **Structured gates** — render via Devin's native `ask_user_question` tool
   (per `question-rendering.md`). Gate semantics live in the engine.
 - **Subagent dispatch** — uses `run_subagent` (Devin's subagent tool); the
-  engine binary is invoked via `exec` (`bun .devin/tools/...`).
+  engine binary is invoked via `exec` (`bun .devin/tools/...`). The agent slug
+  is passed as the `profile` field of each `run_subagent` call (the adapter and
+  the `deliver-stage-rules` / `plan-approval-guard` hooks match on
+  `tool_input.profile`, not the prompt text). **Dispatched agents run on the
+  default subagent model (SWE-1.6 by default), not the parent's model** — the
+  AIDLC agent files carry no `model:` frontmatter. To run dispatched agents on
+  your primary model, set the org/enterprise "Default subagent model" to it.
 - **Method ambient context** — `.devin/rules/aidlc.md` is auto-loaded by Devin
   (no `@`-import chain, unlike Claude). AIDLC's stage resolver reads
   `aidlc/spaces/<space>/memory/` directly, so stage correctness is unaffected.

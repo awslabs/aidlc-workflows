@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.125] - 2026-09-01
+
+Devin's dispatched-topology stages (`subagent`, `pipeline`, `mob`) now dispatch via `run_subagent` as designed, firing the `deliver-stage-rules` and `log-subagent` hooks; the conductor no longer falls back to inline execution when the ensemble protocol lacks a Devin binding section. **Upgrade:** re-copy `dist/devin/` into your project so the updated ensemble protocol and conductor SKILL replace the prior copies, then fully restart Devin CLI. The agent slug must be passed as the `profile` field of each `run_subagent` call or the `deliver-stage-rules` / `plan-approval-guard` hooks do not fire.
+
+* Devin: added the missing `### Devin` binding section to the shared ensemble protocol (`stage-protocol-ensemble.md`), covering all three dispatched topologies. The binding names `run_subagent` as the dispatch verb, specifies the `profile`-field mechanic (the adapter and the `deliver-stage-rules` / `plan-approval-guard` hooks match on `tool_input.profile`, not the prompt text), the foreground/background split for parallelism (`is_background: true` for parallel supports, read each result via `read_subagent`), the `ask_user_question`-withheld constraint (the mob's mid-stage human surfacing is the parent conductor's job, not a dispatched spoke's), and the nesting-depth-0 rule (the parent dispatches every participant in every topology).
+* Devin: added a must-dispatch paragraph to `harness/devin/skills/aidlc/SKILL.md` — belt-and-suspenders so the conductor does not run a dispatched-topology stage inline even if the ensemble protocol fails to load. The `subagents_enabled: false` / double-failure case routes through the ensemble §11 failure-recovery protocol; its user-gated "Run it here" option is the only sanctioned inline path.
+* Devin: dispatched agents run on the default subagent model (SWE-1.6 by default), not the parent's model — the AIDLC agent files carry no `model:` frontmatter. To run dispatched agents on your primary model, set the org/enterprise "Default subagent model" to it (see `docs/guide/harnesses/devin.md`).
+* All harnesses: the ensemble protocol now carries a `### Devin` binding section (was missing — Devin was the only shipped harness without one). The protocol file is identical across harness dist trees, so every `dist/<harness>/` gets the new section.
+* New test `tests/unit/t333-ensemble-harness-bindings.test.ts` pins the invariant going forward: every shipped harness has a `### <Display Name>` binding section, and the Devin section names `run_subagent`, `profile`, `is_background`, and the default subagent model.
+
 ## [2.6.124] - 2026-08-29
 
 AI-DLC now runs natively on the **Devin CLI** harness — the eighth distribution from the one harness-neutral core. **Upgrade:** no action needed for existing harnesses; to use Devin, copy `dist/devin/` into your project, approve its hooks via `/hooks`, then fully restart Devin CLI.
