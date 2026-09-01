@@ -12,6 +12,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   auditBlockField,
+  collectStalePlanApprovalReceipts,
+  contentBeforeTerminalReviewAppendix,
   docsRoot,
   getField,
   latestMainWorkflowStageRunFloorForProject,
@@ -29,6 +31,7 @@ import {
   readPlanApprovalViolation,
   resolveBoltDag,
   resolveProjectDir,
+  stalePlanApprovalReceiptsForTarget,
   resolveWorkflowSelection,
   stateFilePath,
   toPosix,
@@ -42,8 +45,10 @@ import {
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalReceipt,
   writePlanApprovalResponse,
+  type PlanApprovalReceiptKey,
   type PlanApprovalRuntimeChallenge,
   type PlanApprovalRuntimeIdentity,
+  type PlanApprovalRuntimeProvenance,
   type PlanApprovalRuntimeReceipt,
 } from "./aidlc-lib.ts";
 
@@ -127,6 +132,7 @@ export interface PlanApprovalQuestionEvidence {
   questionsRelativePath: string;
   questionsSha256: string;
   promptSha256: string;
+  plannedSourceSha256: string;
 }
 
 interface ClassifiedPosture {
@@ -149,8 +155,22 @@ const CONTRACT_MARKER_RE =
   /^[ \t]*AIDLC-TESTING-CONTRACT[ \t]*:[ \t]*(sha256:[0-9a-f]{64})[ \t]*$/;
 const MARKDOWN_HEADING_RE = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/;
 const ANSWER_TAG_RE = /^\[Answer\]:[ \t]*(.*)$/;
+// The recorded fingerprint tag. `sha256:v2:<hex>` is the content-bound format;
+// the bare `sha256:<hex>` shape is still matched so a questions file written
+// before this change is READ and reported as "approve again" rather than looking
+// like a line the parser does not understand.
 const FINGERPRINT_TAG_RE =
-  /^\[Approval Fingerprint\]:[ \t]*(sha256:[0-9a-f]{64})?[ \t]*$/;
+  /^\[Approval Fingerprint\]:[ \t]*(sha256:(?:v2:)?[0-9a-f]{64})?[ \t]*$/;
+// The workspace source the plan was written against, recorded by the fingerprint
+// command so drift between planning and approval is caught with a remedy the
+// conductor can always execute.
+const PLANNED_SOURCE_TAG_RE =
+  /^\[Planned Source\]:[ \t]*([0-9a-f]{40}|[0-9a-f]{64}|unbindable)?[ \t]*$/;
+export const APPROVAL_FINGERPRINT_PREFIX = "sha256:v2:";
+
+export function approvalFingerprintIsCurrentFormat(tag: string | null): boolean {
+  return tag?.startsWith(APPROVAL_FINGERPRINT_PREFIX) === true;
+}
 const APPROVE_PLAN_RE = /^(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?$/i;
 const QUESTION_PREFIX_RE =
   /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)/i;
@@ -816,25 +836,105 @@ export function parseTestingContract(plan: string): TestingPostureContract | nul
   }
 }
 
+// --- The Plan Approval content projection -------------------------------------
+//
+// The approval must survive the edits the stage itself ORDERS after approval, and
+// must not survive an edit to the plan. Byte-exact hashing cannot do both: Step 4
+// tells the developer agent to tick the plan's checkboxes as it works, and the
+// reviewer appends `## Review` to that same file because the plan IS the stage's
+// review artifact. Hashing raw bytes therefore invalidated every approval as soon
+// as the approved work started.
+//
+// So the fingerprint is taken over a projection that erases exactly those two
+// mandated mutations and nothing else:
+//
+//   1. A TERMINAL `## Review` appendix is removed, using the engine's own
+//      appendix locator (a `## Review` inside a fence or an HTML comment, a
+//      lower-case or unspaced variant, and a mid-plan section are all NOT an
+//      appendix and stay material).
+//   2. List task markers are reset: `[x]`, `[X]` and `[-]` become `[ ]`, outside
+//      fenced blocks and HTML comments. A tick is a claim about execution, not a
+//      change to the plan.
+//   3. Line endings become LF, trailing whitespace per line is dropped, runs of
+//      blank lines outside fences and comments collapse to one, and trailing
+//      blank lines are dropped. These are editor artifacts, not content.
+//
+// Everything else is byte-exact, INCLUDING the fenced `## Testing Contract` JSON
+// and any text inside code fences. Reordering, rewording, adding or deleting a
+// step, changing a number, a path, or the contract hash all change the
+// projection.
+//
+// The one thing the projection cannot see is an edit made INSIDE a terminal
+// review appendix. That is closed elsewhere: the stage hands the developer agent
+// the plan BODY (this projection's input), so a step smuggled into the appendix is
+// never delivered as work.
+const PLAN_TASK_MARKER_RE = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[[xX-]\](?=[ \t]|$)/;
+
+export function projectPlanApprovalContent(text: string): string {
+  const retained = contentBeforeTerminalReviewAppendix(text.replace(/^\uFEFF/, ""));
+  const projected: string[] = [];
+  let fence: MarkdownFence | null = null;
+  let inComment = false;
+  let previousBlank = false;
+  for (const rawLine of retained.replace(/\r\n?/g, "\n").split("\n")) {
+    const line = rawLine.replace(/[ \t]+$/, "");
+    if (fence) {
+      projected.push(line);
+      previousBlank = false;
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    if (inComment) {
+      projected.push(line);
+      previousBlank = false;
+      if (line.includes("-->")) inComment = false;
+      continue;
+    }
+    const opening = fenceOpening(line);
+    if (opening) {
+      fence = opening;
+      projected.push(line);
+      previousBlank = false;
+      continue;
+    }
+    if (/^ {0,3}<!--/.test(line) && !line.includes("-->")) {
+      inComment = true;
+      projected.push(line);
+      previousBlank = false;
+      continue;
+    }
+    const blank = line.length === 0;
+    if (blank && previousBlank) continue;
+    previousBlank = blank;
+    projected.push(line.replace(PLAN_TASK_MARKER_RE, "$1[ ]"));
+  }
+  while (projected.length > 0 && projected[projected.length - 1] === "") {
+    projected.pop();
+  }
+  return projected.join("\n");
+}
+
+// The value recorded as `[Approval Fingerprint]:`. It binds CONTENT (the
+// projected plan and unit-test instructions plus the Testing Contract hash) to
+// PLACE (target, intent) and to ATTEMPT (the run floor). The tag carries a format
+// version so a value recorded under the previous, issuance-bound scheme is
+// recognised and answered with "approve again" instead of an unexplained
+// mismatch.
 export function approvalFingerprint(
   plan: string,
   instructions: string,
   contractHash: string,
-  authority: Pick<
-    CodeGenerationAuthority,
-    "targetId" | "intentId" | "directiveEpoch" | "runFloor" | "sourceFloor"
-  >,
+  authority: Pick<CodeGenerationAuthority, "targetId" | "intentId" | "runFloor">,
 ): string {
-  return hashObject({
-    plan,
-    instructions,
+  const digest = hashObject({
+    plan: projectPlanApprovalContent(plan),
+    instructions: projectPlanApprovalContent(instructions),
     testing_contract: contractHash,
     target: authority.targetId,
     intent: authority.intentId,
-    directive_epoch: authority.directiveEpoch,
     run_floor: authority.runFloor,
-    source_floor: authority.sourceFloor,
   });
+  return `${APPROVAL_FINGERPRINT_PREFIX}${digest.slice("sha256:".length)}`;
 }
 
 function isPlanApprovalLabel(value: string): boolean {
@@ -856,12 +956,14 @@ function latestPlanApproval(body: string): {
   found: boolean;
   answer: string | null;
   fingerprint: string | null;
+  plannedSource: string | null;
 } {
   let inPlanApproval = false;
   let awaitingNumberedQuestionText = false;
   let foundPlanApproval = false;
   let latestAnswer: string | null = null;
   let latestFingerprint: string | null = null;
+  let latestPlannedSource: string | null = null;
 
   for (const line of visibleMarkdownLines(body)) {
     const heading = line.match(MARKDOWN_HEADING_RE);
@@ -876,6 +978,7 @@ function latestPlanApproval(body: string): {
         foundPlanApproval = true;
         latestAnswer = null;
         latestFingerprint = null;
+        latestPlannedSource = null;
       }
       continue;
     }
@@ -886,6 +989,7 @@ function latestPlanApproval(body: string): {
         foundPlanApproval = true;
         latestAnswer = null;
         latestFingerprint = null;
+        latestPlannedSource = null;
       }
     }
     if (!inPlanApproval) continue;
@@ -893,11 +997,14 @@ function latestPlanApproval(body: string): {
     if (answer) latestAnswer = answer[1].trim();
     const fingerprint = line.match(FINGERPRINT_TAG_RE);
     if (fingerprint) latestFingerprint = fingerprint[1] ?? null;
+    const plannedSource = line.match(PLANNED_SOURCE_TAG_RE);
+    if (plannedSource) latestPlannedSource = plannedSource[1] ?? null;
   }
   return {
     found: foundPlanApproval,
     answer: latestAnswer,
     fingerprint: latestFingerprint,
+    plannedSource: latestPlannedSource,
   };
 }
 
@@ -921,6 +1028,10 @@ export function questionsFileHasPendingPlanApproval(body: string): boolean {
 
 export function questionsFileApprovalFingerprint(body: string): string | null {
   return latestPlanApproval(body).fingerprint;
+}
+
+export function questionsFilePlannedSource(body: string): string | null {
+  return latestPlanApproval(body).plannedSource;
 }
 
 export function promptTestingContractMarkers(text: string): string[] {
@@ -1009,10 +1120,14 @@ export function resolveCodeGenerationAuthority(
   const intentId = marker.intent_uuid ?? "bare-space";
   const sourceFloor =
     marker.code_generation_source_sha256 ?? UNBINDABLE_FINGERPRINT;
+  // Pass the target Unit: a GATE_REJECTED row for one Unit carries that Unit, and
+  // without it a rejected per-Unit gate moved no Unit's approval floor in team
+  // mode while moving it in solo.
   const runFloor = latestMainWorkflowStageRunFloorForProject(
     projectDir,
     "code-generation",
     getField(state, "Construction Iteration")?.trim() === "unit-major",
+    target.unit ?? undefined,
   );
   const directiveEpoch = hashObject({
     version: marker.version,
@@ -1244,16 +1359,14 @@ export function legacyPlanApprovalGuardState(
       session === null ? null : readPlanApprovalResponse(projectDir, session);
     const challengeMatches =
       challenge !== null &&
-      challenge.targetId === authority.targetId &&
-      challenge.intentId === authority.intentId &&
-      challenge.directiveEpoch === authority.directiveEpoch &&
-      challenge.runFloor === authority.runFloor &&
-      challenge.fingerprint === artifacts.expectedFingerprint &&
-      challenge.questionsFile ===
-        toPosix(relative(projectDir, artifacts.questionsPath)) &&
-      challenge.promptSha256 === promptSha256 &&
-      challenge.sourceFloor === authority.sourceFloor &&
-      challenge.markerRevision === authority.markerRevision;
+      runtimeIdentityMatches(challenge, {
+        targetId: authority.targetId,
+        intentId: authority.intentId,
+        runFloor: authority.runFloor,
+        fingerprint: artifacts.expectedFingerprint,
+        questionsFile: toPosix(relative(projectDir, artifacts.questionsPath)),
+        promptSha256,
+      });
     const humanAfterDecision =
       challengeMatches &&
       response !== null &&
@@ -1286,13 +1399,25 @@ function runtimeIdentity(
   return {
     targetId: evidence.authority.targetId,
     intentId: evidence.authority.intentId,
-    directiveEpoch: evidence.authority.directiveEpoch,
     runFloor: evidence.authority.runFloor,
     fingerprint: evidence.fingerprint,
     questionsFile: evidence.questionsRelativePath,
     promptSha256: evidence.promptSha256,
+  };
+}
+
+// Recorded, never compared. The directive epoch and marker revision describe the
+// directive that happened to be issued when the human answered; the legacy Kiro
+// IDE window handshake still reads the revision off a challenge, and both help a
+// human reading the store understand where a receipt came from.
+function runtimeProvenance(
+  evidence: PlanApprovalQuestionEvidence,
+): PlanApprovalRuntimeProvenance {
+  return {
+    directiveEpoch: evidence.authority.directiveEpoch,
     sourceFloor: evidence.authority.sourceFloor,
     markerRevision: evidence.authority.markerRevision,
+    plannedSourceSha256: evidence.plannedSourceSha256,
   };
 }
 
@@ -1303,13 +1428,10 @@ function runtimeIdentityMatches(
   return (
     value.targetId === expected.targetId &&
     value.intentId === expected.intentId &&
-    value.directiveEpoch === expected.directiveEpoch &&
     value.runFloor === expected.runFloor &&
     value.fingerprint === expected.fingerprint &&
     value.questionsFile === expected.questionsFile &&
-    value.promptSha256 === expected.promptSha256 &&
-    value.sourceFloor === expected.sourceFloor &&
-    value.markerRevision === expected.markerRevision
+    value.promptSha256 === expected.promptSha256
   );
 }
 
@@ -1326,6 +1448,7 @@ export function recordPlanApprovalChallenge(
     throw new Error("Plan Approval challenge requires a nonblank session");
   }
   const identity = runtimeIdentity(evidence);
+  const provenance = runtimeProvenance(evidence);
   if (
     (hashOptionLabels || useLegacyDirectiveOffer) &&
     readPlanApprovalChallenge(projectDir, session)
@@ -1343,7 +1466,7 @@ export function recordPlanApprovalChallenge(
       (
         !offer ||
         offer.intentId !== identity.intentId ||
-        offer.markerRevision !== identity.markerRevision ||
+        offer.markerRevision !== provenance.markerRevision ||
         !offer.allowedUnits.some((unit) => unit === evidence.authority.unit)
       )
     ) {
@@ -1364,7 +1487,11 @@ export function recordPlanApprovalChallenge(
     const challenge: PlanApprovalRuntimeChallenge = {
       version: 1,
       ...identity,
+      ...provenance,
       session,
+      // The challenge id covers the compared identity, the session, and the exact
+      // options offered. Provenance is deliberately outside it: a challenge that
+      // rotated with every directive re-issue is the churn this change removes.
       challengeId: hashObject({
         ...identity,
         session,
@@ -1468,6 +1595,7 @@ export function recordPlanApprovalReceipt(
 ): PlanApprovalRuntimeReceipt | null {
   return withActiveDirectiveLock(projectDir, () => {
   const identity = runtimeIdentity(evidence);
+  const provenance = runtimeProvenance(evidence);
   const challenge = readPlanApprovalChallenge(projectDir, session);
   const response = readPlanApprovalResponse(projectDir, session);
   if (
@@ -1495,21 +1623,28 @@ export function recordPlanApprovalReceipt(
     }
   }
   if (choice === "Request Changes") {
+    // Requesting changes withdraws the decision, so it clears BOTH halves: the
+    // challenge AND any receipt for this exact identity. Without the second
+    // clear, identical content could be re-approved by rewriting the answer tag,
+    // because nothing else about the identity had moved.
     clearPlanApprovalChallenge(projectDir, session);
+    clearPlanApprovalReceipt(projectDir, identity);
     return null;
   }
   const sourceBefore = workspaceSourceFingerprint(projectDir);
   if (
     sourceBefore === null ||
-    sourceBefore !== evidence.authority.sourceFloor
+    sourceBefore !== evidence.plannedSourceSha256
   ) {
     throw new Error(
-      "Plan Approval requires workspace source to match the Code Generation directive's pre-planning source floor",
+      "Plan Approval requires workspace source to match the source recorded when this plan was fingerprinted. " +
+        "Re-run the fingerprint command and re-present the plan.",
     );
   }
   const receipt: PlanApprovalRuntimeReceipt = {
     version: 1,
     ...identity,
+    ...provenance,
     session,
     challengeId: challenge.challengeId,
     choice: "Approve Plan",
@@ -1526,6 +1661,9 @@ export function recordPlanApprovalReceipt(
     );
   }
   clearPlanApprovalChallenge(projectDir, session);
+  // Sweep this target's receipts from attempts that have ended. Nothing deletes a
+  // receipt to invalidate it any more, so the store is tidied here instead.
+  collectStalePlanApprovalReceipts(projectDir, identity.targetId, identity.runFloor);
   return receipt;
   });
 }
@@ -1537,15 +1675,6 @@ export function codeGenerationPlanApprovalQuestionEvidence(
   expectedAnswer: "" | "Approve Plan" | "Request Changes",
 ): PlanApprovalQuestionEvidence {
   const authority = resolveCodeGenerationAuthority(projectDir, target);
-  const currentSource = workspaceSourceFingerprint(projectDir);
-  if (
-    authority.sourceFloor !== UNBINDABLE_FINGERPRINT &&
-    (currentSource === null || currentSource !== authority.sourceFloor)
-  ) {
-    throw new Error(
-      "Plan Approval requires workspace source to match the Code Generation directive's pre-planning source floor",
-    );
-  }
   const expectedPath = resolve(
     authority.stageDir,
     "code-generation-questions.md",
@@ -1567,13 +1696,39 @@ export function codeGenerationPlanApprovalQuestionEvidence(
   }
   if (artifacts.recordedFingerprint !== artifacts.expectedFingerprint) {
     throw new Error(
-      "Plan Approval fingerprint does not match the active intent, target, directive epoch, plan, instructions, and Testing Contract",
+      artifacts.recordedFingerprint !== null &&
+        !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
+        ? "The recorded Plan Approval fingerprint predates the content-bound format. " +
+            "Re-run the fingerprint command, re-present the plan, and approve again."
+        : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract",
     );
   }
   const latest = latestPlanApproval(artifacts.questions);
   if (!latest.found || latest.answer === null || latest.answer !== expectedAnswer) {
     throw new Error(
       `Plan Approval questions file must contain exactly [Answer]: ${expectedAnswer || "(blank)"}`,
+    );
+  }
+  // The source the plan was written against, recorded by the fingerprint command.
+  // The approval binds to THIS value rather than to the directive's sticky floor,
+  // so drift is always answerable by re-fingerprinting and re-presenting; the
+  // sticky floor could only be rotated by a receipt that required the floor to
+  // match already, which is the loop that made an out-of-band `git pull` permanent.
+  const plannedSource = latest.plannedSource;
+  if (plannedSource === null) {
+    throw new Error(
+      "Plan Approval requires a [Planned Source]: tag in the Plan Approval section. " +
+        "Re-run the fingerprint command, record both tags it prints, and re-present the plan.",
+    );
+  }
+  const currentSource = workspaceSourceFingerprint(projectDir);
+  if (
+    plannedSource !== UNBINDABLE_FINGERPRINT &&
+    (currentSource === null || currentSource !== plannedSource)
+  ) {
+    throw new Error(
+      "Workspace source changed after this plan was fingerprinted. " +
+        "Re-run the fingerprint command and re-present the plan.",
     );
   }
   return {
@@ -1592,6 +1747,7 @@ export function codeGenerationPlanApprovalQuestionEvidence(
         "utf-8",
       )
       .digest("hex"),
+    plannedSourceSha256: plannedSource,
   };
 }
 
@@ -1653,7 +1809,10 @@ export function evaluateCodeGenerationApproval(
       artifacts.recordedFingerprint === artifacts.expectedFingerprint;
     if (!empty.fingerprintValid) {
       empty.reason =
-        "the Plan Approval fingerprint does not match the active intent, target, directive epoch, plan, test instructions, and Testing Contract";
+        artifacts.recordedFingerprint !== null &&
+          !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
+          ? "the recorded Plan Approval fingerprint predates the content-bound format; re-run the fingerprint command, re-present the plan, and approve again"
+          : "the Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, test instructions, and Testing Contract";
       return empty;
     }
     const questionsSha256 = createHash("sha256")
@@ -1670,13 +1829,10 @@ export function evaluateCodeGenerationApproval(
     const identity: PlanApprovalRuntimeIdentity = {
       targetId: authority.targetId,
       intentId: authority.intentId,
-      directiveEpoch: authority.directiveEpoch,
       runFloor: authority.runFloor,
       fingerprint: artifacts.expectedFingerprint!,
       questionsFile: toPosix(relative(projectDir, artifacts.questionsPath)),
       promptSha256,
-      sourceFloor: authority.sourceFloor,
-      markerRevision: authority.markerRevision,
     };
     const violation = readPlanApprovalViolation(projectDir);
     if (
@@ -1688,19 +1844,35 @@ export function evaluateCodeGenerationApproval(
       return empty;
     }
     const receipt = readPlanApprovalReceipt(projectDir, identity);
+    const sourceCurrent =
+      receipt !== null &&
+      (
+        receipt.status === "generation" ||
+        workspaceSourceFingerprint(projectDir) === receipt.certifiedSourceSha256
+      );
     empty.receiptValid =
       receipt !== null &&
       runtimeIdentityMatches(receipt, identity) &&
       receipt.choice === "Approve Plan" &&
       receipt.questionsSha256 === questionsSha256 &&
-      receipt.certifiedSourceSha256 === authority.sourceFloor &&
-      (
-        receipt.status === "generation" ||
-        workspaceSourceFingerprint(projectDir) === receipt.certifiedSourceSha256
-      );
+      sourceCurrent;
     if (!empty.receiptValid) {
-      empty.reason =
-        "no current protected Plan Approval receipt matches this prompt, session response, target, directive epoch, and source floor";
+      if (receipt !== null && !sourceCurrent) {
+        empty.reason =
+          "workspace source changed after this plan was approved and before generation began; approve again (that re-baselines the source this plan is bound to)";
+        return empty;
+      }
+      // Distinguish "never approved" from "approved in an attempt that has since
+      // ended". The second is the case a redo jump or a rejected gate produces,
+      // and it has a different instruction.
+      const stale = stalePlanApprovalReceiptsForTarget(
+        projectDir,
+        authority.targetId,
+        authority.runFloor,
+      );
+      empty.reason = stale.length > 0
+        ? "the Plan Approval receipt for this target belongs to an earlier stage attempt; present the plan again and approve it for the current attempt"
+        : "no current protected Plan Approval receipt matches this prompt, session response, target, stage attempt, and plan content";
       return empty;
     }
     return { ...empty, ok: true, reason: "approved" };
@@ -1724,10 +1896,12 @@ export function beginCodeGeneration(
         throw new Error(approval.reason || "Code Generation requires Plan Approval");
       }
       const authority = resolveCodeGenerationAuthority(projectDir, target);
-      const receipt = readPlanApprovalReceipt(projectDir, {
+      const receiptKey: PlanApprovalReceiptKey = {
         targetId: authority.targetId,
-        directiveEpoch: authority.directiveEpoch,
-      });
+        runFloor: authority.runFloor,
+        fingerprint: approval.approvalFingerprint,
+      };
+      const receipt = readPlanApprovalReceipt(projectDir, receiptKey);
       if (!receipt) {
         throw new Error("Code Generation has no protected approval receipt");
       }
@@ -1737,8 +1911,13 @@ export function beginCodeGeneration(
         sourceBefore === null ||
         sourceBefore !== receipt.certifiedSourceSha256
       ) {
+        // Refuse and KEEP the receipt. Deleting the human's recorded decision
+        // because the workspace moved turned a recoverable drift into a state with
+        // no way back: the remedy is a fresh approval, which re-baselines the
+        // source this plan is bound to.
         throw new Error(
-          "workspace source changed after Plan Approval and before generation began",
+          "Workspace source changed after Plan Approval and before generation began. " +
+            "Approve again (that re-baselines the source floor).",
         );
       }
       // Publication is the generation boundary. It sits between two source
@@ -1756,7 +1935,7 @@ export function beginCodeGeneration(
         const deadline = Date.now() + 30_000;
         while (!existsSync(`${publicationBarrier}.release`)) {
           if (Date.now() >= deadline) {
-            clearPlanApprovalReceipt(projectDir, receipt);
+            writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
             throw new Error(
               "timed out waiting for the Plan Approval publication test barrier",
             );
@@ -1766,11 +1945,19 @@ export function beginCodeGeneration(
       }
       const sourceAfter = workspaceSourceFingerprint(projectDir);
       if (sourceAfter === null || sourceAfter !== sourceBefore) {
-        clearPlanApprovalReceipt(projectDir, receipt);
+        // Revert the generation boundary rather than delete the approval: the
+        // human's decision is still a fact, only the start is not.
+        writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
         throw new Error(
-          "workspace source changed while Code Generation authority was starting",
+          "Workspace source changed while Code Generation authority was starting. " +
+            "Approve again (that re-baselines the source floor).",
         );
       }
+      collectStalePlanApprovalReceipts(
+        projectDir,
+        authority.targetId,
+        authority.runFloor,
+      );
     });
   });
 }
@@ -1843,14 +2030,23 @@ export function main(argv: string[]): void {
               "plan Testing Contract does not match the current effective posture",
           );
         }
+        // Print the two tag lines the Plan Approval section must carry, ready to
+        // copy: the content fingerprint, and the workspace source this plan was
+        // written against. Recording the source here is what makes drift between
+        // planning and approval answerable - re-run this command and re-present.
+        const plannedSource =
+          workspaceSourceFingerprint(projectDir) ?? UNBINDABLE_FINGERPRINT;
         console.log(
-          approvalFingerprint(
-            plan,
-            instructions,
-            current.contract_sha256,
-            authority,
-          ),
+          `[Approval Fingerprint]: ${
+            approvalFingerprint(
+              plan,
+              instructions,
+              current.contract_sha256,
+              authority,
+            )
+          }`,
         );
+        console.log(`[Planned Source]: ${plannedSource}`);
         return;
       }
       case "verify": {

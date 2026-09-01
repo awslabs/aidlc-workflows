@@ -2591,19 +2591,41 @@ export class SessionResolutionConflictError extends Error {
 
 const PLAN_APPROVAL_RUNTIME_DIR = "plan-approval";
 
+// WHAT A PLAN APPROVAL IS BOUND TO.
+//
+// An approval answers one question: may generation proceed from THIS content,
+// for THIS target, in THIS attempt? So the identity carries content (the
+// fingerprint over the projected plan and instructions plus the Testing
+// Contract), place (target, intent), attempt (the run floor: the latest workflow
+// start, stage start, jump, or gate rejection), and what the human actually saw
+// (the questions file and the hash of its prompt with answers blanked).
+//
+// It deliberately does NOT carry the identity of the directive that happened to
+// be issued when the human answered. A directive's epoch and revision move every
+// time the engine re-says the same thing - a probe, a resume, a fresh session, a
+// metadata write - and none of those distinguish "the human approved different
+// bytes" from "the engine repeated itself". Binding to them meant an approval
+// could not survive its own turn.
 export interface PlanApprovalRuntimeIdentity {
   targetId: string;
   intentId: string;
-  directiveEpoch: string;
   runFloor: string;
   fingerprint: string;
   questionsFile: string;
   promptSha256: string;
-  sourceFloor: string;
-  markerRevision: number;
 }
 
-export interface PlanApprovalRuntimeChallenge extends PlanApprovalRuntimeIdentity {
+// Recorded beside the identity for diagnosis and for the legacy Kiro IDE window
+// handshake, and never compared when deciding validity.
+export interface PlanApprovalRuntimeProvenance {
+  directiveEpoch: string;
+  sourceFloor: string;
+  markerRevision: number;
+  plannedSourceSha256: string;
+}
+
+export interface PlanApprovalRuntimeChallenge
+  extends PlanApprovalRuntimeIdentity, PlanApprovalRuntimeProvenance {
   version: 1;
   session: string;
   challengeId: string;
@@ -2620,7 +2642,8 @@ export interface PlanApprovalRuntimeResponse {
   responseSha256: string;
 }
 
-export interface PlanApprovalRuntimeReceipt extends PlanApprovalRuntimeIdentity {
+export interface PlanApprovalRuntimeReceipt
+  extends PlanApprovalRuntimeIdentity, PlanApprovalRuntimeProvenance {
   version: 1;
   session: string;
   challengeId: string;
@@ -2710,12 +2733,23 @@ function planApprovalResponsePath(projectDir: string, session: string): string {
     : "";
 }
 
+// The receipt's file name is its identity: same target, same attempt, same
+// content resolves to the same path, so a re-issued directive finds the receipt
+// the human already gave instead of orphaning it under a new name.
+export type PlanApprovalReceiptKey = Pick<
+  PlanApprovalRuntimeIdentity,
+  "targetId" | "runFloor" | "fingerprint"
+>;
+
 function planApprovalReceiptPath(
   projectDir: string,
-  identity: Pick<PlanApprovalRuntimeIdentity, "targetId" | "directiveEpoch">,
+  identity: PlanApprovalReceiptKey,
 ): string {
   const key = createHash("sha256")
-    .update(`${identity.targetId}\n${identity.directiveEpoch}`, "utf-8")
+    .update(
+      `${identity.targetId}\n${identity.runFloor}\n${identity.fingerprint}`,
+      "utf-8",
+    )
     .digest("hex");
   return join(planApprovalRuntimeDir(projectDir), `receipt-${key}.json`);
 }
@@ -2782,16 +2816,6 @@ function readPlanApprovalRuntimeJson<T>(path: string, what: string): T | null {
     ) as T;
   } catch {
     return null;
-  }
-}
-
-export function resetPlanApprovalRuntime(projectDir: string): void {
-  try {
-    const dir = planApprovalRuntimeDir(projectDir);
-    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
-    rmSync(dir, { recursive: true, force: true });
-  } catch {
-    // A stale or redirected authority store is equivalent to no authority.
   }
 }
 
@@ -2872,7 +2896,7 @@ export function writePlanApprovalReceipt(
 
 export function readPlanApprovalReceipt(
   projectDir: string,
-  identity: Pick<PlanApprovalRuntimeIdentity, "targetId" | "directiveEpoch">,
+  identity: PlanApprovalReceiptKey,
 ): PlanApprovalRuntimeReceipt | null {
   const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeReceipt>(
     planApprovalReceiptPath(projectDir, identity),
@@ -2883,13 +2907,78 @@ export function readPlanApprovalReceipt(
 
 export function clearPlanApprovalReceipt(
   projectDir: string,
-  identity: Pick<PlanApprovalRuntimeIdentity, "targetId" | "directiveEpoch">,
+  identity: PlanApprovalReceiptKey,
 ): void {
   try {
     unlinkSync(planApprovalReceiptPath(projectDir, identity));
   } catch {
     // Missing runtime authority is already clear.
   }
+}
+
+// Every receipt on disk, newest-irrelevant (callers filter). Reading the dir is
+// how the store is enumerated; there is no index.
+function readPlanApprovalReceipts(
+  projectDir: string,
+): Array<{ path: string; receipt: PlanApprovalRuntimeReceipt }> {
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir))
+      .filter((name) => name.startsWith("receipt-") && name.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const out: Array<{ path: string; receipt: PlanApprovalRuntimeReceipt }> = [];
+  for (const name of names.sort()) {
+    const path = join(planApprovalRuntimeDir(projectDir), name);
+    const receipt = readPlanApprovalRuntimeJson<PlanApprovalRuntimeReceipt>(
+      path,
+      "Plan Approval receipt",
+    );
+    if (receipt?.version === 1) out.push({ path, receipt });
+  }
+  return out;
+}
+
+// The receipts recorded for this target in an attempt that has since ended. They
+// are the difference between "you never approved this" and "your approval was
+// for the previous attempt", which is the difference between a mystery and an
+// instruction.
+export function stalePlanApprovalReceiptsForTarget(
+  projectDir: string,
+  targetId: string,
+  runFloor: string,
+): PlanApprovalRuntimeReceipt[] {
+  return readPlanApprovalReceipts(projectDir)
+    .filter(
+      (entry) =>
+        entry.receipt.targetId === targetId && entry.receipt.runFloor !== runFloor,
+    )
+    .map((entry) => entry.receipt);
+}
+
+// Lazy garbage collection. Nothing deletes a receipt to invalidate it any more,
+// so the store is swept opportunistically: a receipt for this target from an
+// attempt that has ended can never authorize anything again. Best-effort by
+// design - a leftover file is inert, and failing here must never fail an
+// approval.
+export function collectStalePlanApprovalReceipts(
+  projectDir: string,
+  targetId: string,
+  runFloor: string,
+): number {
+  let removed = 0;
+  for (const entry of readPlanApprovalReceipts(projectDir)) {
+    if (entry.receipt.targetId !== targetId) continue;
+    if (entry.receipt.runFloor === runFloor) continue;
+    try {
+      unlinkSync(entry.path);
+      removed++;
+    } catch {
+      // An unremovable stale receipt is inert; it can match no live identity.
+    }
+  }
+  return removed;
 }
 
 export function planApprovalRuntimeHasReceiptForMarker(
@@ -2908,25 +2997,12 @@ export function planApprovalRuntimeHasReceiptForMarker(
     marker.revision;
   const sourceFloor = marker.code_generation_source_sha256;
   if (!Number.isInteger(revision) || !sourceFloor) return false;
-  let names: string[];
-  try {
-    names = readdirSync(planApprovalRuntimeDir(projectDir))
-      .filter((name) => name.startsWith("receipt-") && name.endsWith(".json"));
-  } catch {
-    return false;
-  }
-  return names.some((name) => {
-    const receipt = readPlanApprovalRuntimeJson<PlanApprovalRuntimeReceipt>(
-      join(planApprovalRuntimeDir(projectDir), name),
-      "Plan Approval receipt",
-    );
-    return (
-      receipt?.version === 1 &&
-      receipt.markerRevision === revision &&
-      receipt.sourceFloor === sourceFloor &&
-      receipt.status === "generation"
-    );
-  });
+  return readPlanApprovalReceipts(projectDir).some(
+    (entry) =>
+      entry.receipt.markerRevision === revision &&
+      entry.receipt.sourceFloor === sourceFloor &&
+      entry.receipt.status === "generation",
+  );
 }
 
 export function writePlanApprovalViolation(
@@ -4171,6 +4247,11 @@ export interface ActiveDirectiveMarker {
   revision?: number; project_sha256?: string; intent_uuid?: string | null; state_present?: boolean;
   code_generation_source_sha256?: string;
   code_generation_authority_revision?: number;
+  // The rule bundle and directive body the issued directive was built from. They
+  // let a repeated `next` recognise its own issued directive and return it
+  // unchanged instead of re-transporting it from part one.
+  rules_bundle?: string;
+  directive_sha256?: string;
   cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
@@ -4223,6 +4304,31 @@ export class ActiveDirectiveLockContendedError extends Error {
     super(message);
     this.name = "ActiveDirectiveLockContendedError";
   }
+}
+
+// Thrown when an engine observer reaches a durable write primitive. The
+// per-call-site suppressions below keep observers off those paths; this barrier
+// is what makes the guarantee a property of the code shape rather than of an
+// enumeration a future author has to remember. It THROWS rather than no-ops
+// because a silent no-op hides exactly the bug the barrier exists to expose, and
+// both producers already fail safe on a non-zero engine exit: the Stop hook
+// allows the stop and records a drop, and the route check surfaces the error
+// from `unit start` instead of corrupting authority.
+export class EngineModeViolationError extends Error {
+  constructor(readonly primitive: string) {
+    super(
+      `An engine observer (${
+        isStopHookProbe() ? STOP_HOOK_PROBE_ENV : ROUTE_CHECK_ENV
+      }) reached the durable write primitive "${primitive}". Observers read the ` +
+        "current directive and must change no project bytes. This is an engine defect, not a workflow problem.",
+    );
+    this.name = "EngineModeViolationError";
+  }
+}
+
+// The barrier itself. Call as the first statement of a durable write primitive.
+export function refuseEngineObserverWrite(primitive: string): void {
+  if (isReadOnlyEngineProbe()) throw new EngineModeViolationError(primitive);
 }
 
 function validPlanApprovalLegacyOfferCandidate(
@@ -4618,8 +4724,100 @@ function activeDirectiveMarkerPath(
   return resolveActiveDirectiveTarget(projectDir, intent, space).markerPath;
 }
 
-function stateContentSha256(stateContent: string): string {
-  return createHash("sha256").update(stateContent, "utf-8").digest("hex");
+// Bare sha256 of a UTF-8 string. Used for continuation tokens and cursor
+// inputs, which are hashed byte-exact; workflow state uses stateDigest below.
+function contentSha256(value: string): string {
+  return createHash("sha256").update(value, "utf-8").digest("hex");
+}
+
+// --- The state digest the active directive binds to ---------------------------
+//
+// A directive is bound to the workflow state it was issued for, so that a state
+// transition invalidates it. Binding to the WHOLE FILE overshoots: aidlc-state.md
+// also carries a cache layer the template itself calls "never routing or
+// completion evidence" (Last Updated, the active Unit's lifecycle mirror, the
+// derived Unit Progress grid, detected workspace facts). Hashing those made the
+// directive unreadable after writes no human would call a change - a status
+// sync, a Unit pause, a metadata refresh - and an unreadable directive means no
+// resolvable authority, which is how a recorded Plan Approval became
+// unreachable.
+//
+// So the digest is taken over a PROJECTION: every routing and completion field
+// stays byte-exact (Stage Progress checkboxes, Current/Next Stage, Status,
+// Lifecycle and Phase Progress, Scope, Depth, Test Strategy, Revision Count,
+// Unit Ownership, Unit Gate Rhythm, Construction Iteration, Skeleton Stance,
+// Parked, Project Type, State Version, Total Stages, In Progress), and the cache
+// layer is dropped. Changing a routing field still invalidates the directive.
+//
+// Blacklist rather than allowlist, deliberately: a new routing field must be
+// covered by default, and only a field someone consciously classifies as cache
+// may leave the digest. The contributor question in
+// docs/reference/11-contributing.md asks for that classification by name.
+const STATE_DIGEST_IGNORED_FIELDS = new Set([
+  // Timestamps and the active persona.
+  "Last Updated",
+  "Active Agent",
+  "Practices Affirmed Timestamp",
+  "Start Date",
+  // The active Unit's lifecycle mirror. The receipts in the ledger are the
+  // authority for a Unit's lifecycle; these fields are a convenience copy.
+  "Active Unit",
+  "Unit State",
+  "Unit Pause Reason",
+  "Unit Next Action",
+  // Derived counts and breadcrumbs.
+  "Completed",
+  "Worktree Path",
+  "Bolt Refs",
+  // Descriptive project prose and provenance, never routing.
+  "Project",
+  "Project Description Source",
+  // Detected workspace facts (the `## Workspace State` section).
+  "Project Root",
+  "Languages",
+  "Frameworks",
+  "Build System",
+  // The resume-point breadcrumb (the `## Session Resume Point` section).
+  "Last Completed Stage",
+  "Next Action",
+  "Pending Artifacts",
+]);
+
+// The one section whose BODY is engine-derived rather than authored: the Unit
+// Progress grid is rewritten on every routed `next` from the Unit DAG, artifact
+// coverage, and gate events, and the template says in as many words that hand
+// edits there are never routing or completion evidence. Only its table rows are
+// dropped, so anything unexpected inside the section still binds.
+const STATE_DIGEST_DERIVED_TABLE_SECTION = "## Unit Progress";
+
+// Drop the cache layer from aidlc-state.md. Deliberately line-based and
+// field-named rather than section-wide: dropping a whole section would also drop
+// anything appended after it (the template's last section is a cache section), so
+// an unrecognised line anywhere in the file still binds the directive.
+export function projectStateForDigest(stateContent: string): string {
+  const kept: string[] = [];
+  let inDerivedTable = false;
+  for (const line of stateContent.split(/\r?\n/)) {
+    if (line.startsWith("## ")) {
+      inDerivedTable = line.trim() === STATE_DIGEST_DERIVED_TABLE_SECTION;
+      kept.push(line);
+      continue;
+    }
+    if (inDerivedTable && /^[ \t]*\|/.test(line)) continue;
+    const field = /^- \*\*([^*]+)\*\*:/.exec(line);
+    if (field && STATE_DIGEST_IGNORED_FIELDS.has(field[1].trim())) continue;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+// The digest every active-directive comparison uses. Exported because the engine
+// (which stamps it into the marker and the continuation token) and the Stop hook
+// (whose no-progress signature must agree with it) both need the same value.
+export function stateDigest(stateContent: string): string {
+  return createHash("sha256")
+    .update(projectStateForDigest(stateContent), "utf-8")
+    .digest("hex");
 }
 
 function activeDirectiveContext(target: ActiveDirectiveTarget, stateContent: string | null) {
@@ -4627,7 +4825,7 @@ function activeDirectiveContext(target: ActiveDirectiveTarget, stateContent: str
     projectSha256: createHash("sha256").update(target.canonicalProjectDir, "utf-8").digest("hex"),
     intentUuid: target.intentUuid,
     statePresent: stateContent !== null,
-    stateSha256: stateContentSha256(stateContent ?? ""),
+    stateSha256: stateDigest(stateContent ?? ""),
   };
 }
 
@@ -4651,6 +4849,10 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
       )) ||
     ("code_generation_authority_revision" in parsed &&
       !integer(parsed.code_generation_authority_revision)) ||
+    ("rules_bundle" in parsed &&
+      !/^sha256:[0-9a-f]{64}$/.test(String(parsed.rules_bundle ?? ""))) ||
+    ("directive_sha256" in parsed &&
+      !/^[0-9a-f]{64}$/.test(String(parsed.directive_sha256 ?? ""))) ||
     ("units" in parsed &&
       (
         !Array.isArray(parsed.units) ||
@@ -4688,7 +4890,7 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   ) return null;
   if (parsed.continue_token !== undefined) {
     if (typeof parsed.continue_token !== "string" || Buffer.byteLength(parsed.continue_token, "utf-8") > 16 * 1024) return null;
-    if (stateContentSha256(parsed.continue_token) !== parsed.continue_token_sha256) return null;
+    if (contentSha256(parsed.continue_token) !== parsed.continue_token_sha256) return null;
   }
   if (parsed.kind === "load-steering" &&
     (!Number.isInteger(parsed.part) || !Number.isInteger(parsed.parts) || (parsed.part as number) < 1 ||
@@ -4797,6 +4999,10 @@ function transactActiveDirectiveTarget<T>(
   try {
     const current = readActiveDirectiveMarkerRaw(target.markerPath);
     const next = update(current, target);
+    // The barrier sits on the COMMIT, not on lock acquisition: read-only
+    // consultations (hasCurrentSharedResumeWait, withActiveDirectiveLock
+    // readers) take the same lock and must keep working under an observer.
+    if (!next.preserve) refuseEngineObserverWrite("transactActiveDirective commit");
     if (!next.preserve && next.marker === null) {
       const removed = join(receipt.tokenDir, "removed.json");
       try {
@@ -4915,6 +5121,8 @@ export function writeActiveDirectiveMarker(
     continue_token?: string;
     state_sha256: string;
     units?: string[];
+    rules_bundle?: string;
+    directive_sha256?: string;
   },
   invocation?: {
     attemptId?: string;
@@ -4953,7 +5161,6 @@ export function writeActiveDirectiveMarker(
   ) {
     throw new Error("Legacy Plan Approval offer/session mismatch");
   }
-  let shouldResetRuntime = false;
   const result = transactActiveDirective(projectDir, (current, target) => {
     const stateContent = existsSync(target.statePath) ? readFileSync(target.statePath, "utf-8") : null;
     const context = activeDirectiveContext(target, stateContent);
@@ -5164,7 +5371,6 @@ export function writeActiveDirectiveMarker(
           ? priorAuthorityRevision
           : nextRevision
         : undefined;
-    shouldResetRuntime = !preserveCodeGenerationAuthority;
     const nextAttempt = matchingAttempt && attempt
       ? {
           ...attempt,
@@ -5201,16 +5407,18 @@ export function writeActiveDirectiveMarker(
         : { units: undefined }),
       ...(marker.part ? { part: marker.part } : { part: undefined }),
       ...(marker.parts ? { parts: marker.parts } : { parts: undefined }),
-      ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
+      ...(marker.rules_bundle
+        ? { rules_bundle: marker.rules_bundle }
+        : { rules_bundle: undefined }),
+      ...(marker.directive_sha256
+        ? { directive_sha256: marker.directive_sha256 }
+        : { directive_sha256: undefined }),
+      ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
       delivery: "issued",
       needs_rehydrate: copilotOwned,
       ...(nextAttempt ? { active_attempt: nextAttempt } : {}),
     };
     if (legacyOffer) {
-      if (shouldResetRuntime) {
-        resetPlanApprovalRuntime(target.canonicalProjectDir);
-        shouldResetRuntime = false;
-      }
       installPlanApprovalLegacyOffer(
         target.canonicalProjectDir,
         legacyOffer,
@@ -5219,12 +5427,12 @@ export function writeActiveDirectiveMarker(
     }
     return { marker: next, result: copilotOwned ? "copilot-committed" as const : "generic-committed" as const };
   });
-  if (
-    (result === "generic-committed" || result === "copilot-committed") &&
-    shouldResetRuntime
-  ) {
-    resetPlanApprovalRuntime(projectDir);
-  }
+  // Publication no longer deletes Plan Approval state. A recorded approval is
+  // valid for the content it approved and for the attempt it was taken in
+  // (target, intent, run floor), never for the identity of the directive that
+  // happened to be issued when the human answered, so re-saying the same thing
+  // has nothing to invalidate. What retires an approval is a moving run floor, a
+  // changed target, changed plan content, or the human asking for changes.
   return result;
 }
 
@@ -5232,7 +5440,6 @@ export function clearActiveDirectiveMarker(projectDir: string): void {
   transactActiveDirective(projectDir, (marker) =>
     marker?.version === 2 && !marker.owner_session?.startsWith("sessionless:") && marker.active_attempt?.status === "pending"
       ? { marker, result: true, preserve: true } : { marker: null, result: true });
-  resetPlanApprovalRuntime(projectDir);
 }
 
 export function refreshActiveDirectiveMarker(
@@ -5241,22 +5448,29 @@ export function refreshActiveDirectiveMarker(
   previousStateContent: string,
   nextStateContent: string,
 ): boolean {
-  const refreshed = transactActiveDirective(projectDir, (marker) => {
-    if (!marker || marker.stage !== stage || marker.state_sha256 !== stateContentSha256(previousStateContent)) {
+  return transactActiveDirective(projectDir, (marker) => {
+    const previousDigest = stateDigest(previousStateContent);
+    const nextDigest = stateDigest(nextStateContent);
+    if (!marker || marker.stage !== stage || marker.state_sha256 !== previousDigest) {
       return { marker, result: false, preserve: true };
     }
+    // A write that changed only the cache layer leaves the digest alone, so the
+    // issued directive is still exactly current: touch nothing. Before the
+    // digest was projected, a status sync that rewrote Last Updated superseded
+    // the live directive and deleted the human's Plan Approval with it.
+    if (nextDigest === previousDigest) {
+      return { marker, result: true, preserve: true };
+    }
     if (marker.version === 1) {
-      return { marker: { ...marker, state_sha256: stateContentSha256(nextStateContent) }, result: true };
+      return { marker: { ...marker, state_sha256: nextDigest }, result: true };
     }
     return {
       marker: {
-        ...crossActiveDirectiveBoundary(marker, stateContentSha256(nextStateContent), marker.intent_uuid ?? null, true),
+        ...crossActiveDirectiveBoundary(marker, nextDigest, marker.intent_uuid ?? null, true),
       },
       result: true,
     };
   });
-  if (refreshed) resetPlanApprovalRuntime(projectDir);
-  return refreshed;
 }
 
 export function readActiveDirectiveMarker(
@@ -5265,7 +5479,7 @@ export function readActiveDirectiveMarker(
 ): ActiveDirectiveMarker | null {
   try {
     const marker = readActiveDirectiveMarkerRaw(activeDirectiveMarkerPath(projectDir));
-    return marker?.state_sha256 === stateContentSha256(stateContent) ? marker : null;
+    return marker?.state_sha256 === stateDigest(stateContent) ? marker : null;
   } catch {
     return null;
   }
@@ -5286,7 +5500,7 @@ export function hasCurrentSharedResumeWait(projectDir: string): boolean {
     const waiting =
       marker?.version === 2 &&
       marker.owner_session?.startsWith("sessionless:") === true &&
-      marker.state_sha256 === stateContentSha256(stateContent) &&
+      marker.state_sha256 === stateDigest(stateContent) &&
       marker.kind === "ask" &&
       marker.resume?.status === "waiting" &&
       getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous";
@@ -5356,6 +5570,8 @@ export function advanceContinuationCursor(
     continue_token?: string;
     state_sha256: string;
     units?: string[];
+    rules_bundle?: string;
+    directive_sha256?: string;
   },
   resultSha256: string,
   attemptId?: string,
@@ -5387,7 +5603,6 @@ export function advanceContinuationCursor(
   ) {
     return "drift";
   }
-  let shouldResetRuntime = true;
   const result = transactActiveDirectiveTarget(snapshot.target, (current, target) => {
     const currentTarget = resolveActiveDirectiveTarget(target.canonicalProjectDir);
     if (currentTarget.markerPath !== target.markerPath || currentTarget.intentUuid !== target.intentUuid) {
@@ -5552,7 +5767,7 @@ export function advanceContinuationCursor(
       current.intent_uuid === context.intentUuid &&
       current.state_sha256 === context.stateSha256 &&
       current.state_present === context.statePresent;
-    const inputSha256 = stateContentSha256(presentedToken);
+    const inputSha256 = contentSha256(presentedToken);
     if (exactContext && (current.kind !== "load-steering" ||
       current.continue_token_sha256 !== inputSha256)) {
       return { marker: current, result: "superseded" as const, preserve: true };
@@ -5595,7 +5810,6 @@ export function advanceContinuationCursor(
             nextRevision
           : nextRevision
         : undefined;
-    shouldResetRuntime = !preserveCodeGenerationAuthority;
     const next: ActiveDirectiveMarker = {
       ...base,
       revision: nextRevision,
@@ -5619,7 +5833,13 @@ export function advanceContinuationCursor(
         : { units: undefined }),
       ...(successor.part ? { part: successor.part } : { part: undefined }),
       ...(successor.parts ? { parts: successor.parts } : { parts: undefined }),
-      ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
+      ...(successor.rules_bundle
+        ? { rules_bundle: successor.rules_bundle }
+        : { rules_bundle: undefined }),
+      ...(successor.directive_sha256
+        ? { directive_sha256: successor.directive_sha256 }
+        : { directive_sha256: undefined }),
+      ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
       delivery: "issued",
       needs_rehydrate: !base.owner_session?.startsWith("sessionless:"),
       ...(pending ? { active_attempt: matchingAttempt
@@ -5627,10 +5847,6 @@ export function advanceContinuationCursor(
         : pending.status === "pending" ? { ...pending, status: "failed" } : pending } : {}),
     };
     if (legacyPlanApprovalOffer) {
-      if (shouldResetRuntime) {
-        resetPlanApprovalRuntime(target.canonicalProjectDir);
-        shouldResetRuntime = false;
-      }
       installPlanApprovalLegacyOffer(
         target.canonicalProjectDir,
         legacyPlanApprovalOffer,
@@ -5639,9 +5855,8 @@ export function advanceContinuationCursor(
     }
     return { marker: next, result: "advanced" as const };
   });
-  if (result === "advanced" && shouldResetRuntime) {
-    resetPlanApprovalRuntime(snapshot.target.canonicalProjectDir);
-  }
+  // Advancing the steering cursor is transport, not a new attempt: it retires no
+  // Plan Approval state (see writeActiveDirectiveMarker).
   return result;
 }
 
@@ -5671,7 +5886,10 @@ export function invalidateActiveDirectiveContext(
       result: true,
     };
   });
-  if (invalidated) resetPlanApprovalRuntime(projectDir);
+  // Compaction invalidates the CONTEXT, so the conductor must re-read its
+  // directive before acting. It says nothing about what the human approved, so
+  // the Plan Approval state stays: a long planning turn that compacts used to
+  // lose an approval already recorded.
   return invalidated;
 }
 
@@ -5746,7 +5964,7 @@ export function claimCopilotCommand(
       return { marker, result: { allowed: false, reason: "resume" }, preserve: marker === current };
     }
     const pending = marker?.active_attempt;
-    const tokenSha256 = input.continueToken ? stateContentSha256(input.continueToken) : "";
+    const tokenSha256 = input.continueToken ? contentSha256(input.continueToken) : "";
     const duplicateContinue = marker && pending?.status === "pending" && pending.command_kind === "continue" &&
       input.commandKind === "continue" && marker.kind === "load-steering" && marker.continue_token === input.continueToken &&
       marker.continue_token_sha256 === tokenSha256 && pending.cursor_input_sha256 === tokenSha256 &&
@@ -5805,7 +6023,7 @@ export function claimCopilotCommand(
         claim_revision: nextRevision,
         status: "pending",
       ...(input.commandKind === "continue" && input.continueToken
-        ? { cursor_input_sha256: stateContentSha256(input.continueToken) }
+        ? { cursor_input_sha256: contentSha256(input.continueToken) }
         : {}),
       ...(input.resumeRequest ? { resume_request: true } : {}),
       ...(input.resumeAction ? { resume_action: input.resumeAction } : {}),
@@ -5884,7 +6102,7 @@ export function settleCopilotCommand(
       typeof directive.resultSha256 === "string" && directive.resultSha256 === attempt.result_sha256 &&
       Number.isInteger(attempt.result_revision) && (attempt.result_revision ?? 0) <= (marker.revision ?? 0) &&
       marker.kind === directive.kind && marker.stage === (directive.stage ?? marker.stage) &&
-      marker.continue_token_sha256 === (directive.continueToken ? stateContentSha256(directive.continueToken) : undefined);
+      marker.continue_token_sha256 === (directive.continueToken ? contentSha256(directive.continueToken) : undefined);
     if (!resultBound) {
       return {
         marker: { ...invalidateActiveDirectiveDelivery(base), active_attempt: { ...attempt, status: "failed" } },
@@ -5943,7 +6161,7 @@ export function settleCopilotCommand(
       ...(unit ? { unit } : { unit: undefined }),
       ...(directive.part ? { part: directive.part } : { part: undefined }),
       ...(directive.parts ? { parts: directive.parts } : { parts: undefined }),
-      ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
+      ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
       delivery: canDeliver ? "delivered" : "superseded",
       needs_rehydrate: !canDeliver,
       active_attempt: { ...attempt, status: "settled" },
@@ -8662,6 +8880,20 @@ function existingReviewAppendixOffset(body: Buffer): number | null {
   return Buffer.byteLength(text.slice(0, offset), "utf-8");
 }
 
+// The artifact body with a TERMINAL `## Review` appendix removed, using the same
+// locator the reviewer protocol uses to decide where an appendix may start
+// (exact `^## Review$`, confirmed by a Markdown render pass so a heading inside a
+// fence or an HTML comment does not count). Exported for the Plan Approval
+// content projection: the stage orders the reviewer to append its verdict to the
+// very file the approval is bound to, so the appendix cannot be part of what the
+// approval hashes. A non-terminal `## Review` stays in the body and is therefore
+// material, which is what keeps a mid-plan section from becoming a hiding place.
+export function contentBeforeTerminalReviewAppendix(body: string): string {
+  const bytes = Buffer.from(body, "utf-8");
+  const offset = existingReviewAppendixOffset(bytes);
+  return offset === null ? body : bytes.subarray(0, offset).toString("utf-8");
+}
+
 /**
  * Snapshot the exact review input and the explicit review_artifact byte
  * boundary after which the reviewer may append `## Review`.
@@ -9435,6 +9667,85 @@ function auditEventIsCrossShardTied<
   );
 }
 
+export function sortAttemptEvents<T extends AuditShardEvent>(
+  rows: ReadonlyArray<T>,
+): T[] {
+  return [...rows].sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+    if (a.shard === b.shard) return a.pos - b.pos;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+}
+
+export function attemptEventIsCrossShardTied<T extends AuditShardEvent>(
+  events: ReadonlyArray<T>,
+  index: number,
+  ignoredEvents: ReadonlySet<string> = new Set(),
+): boolean {
+  const event = events[index];
+  return events.some(
+    (candidate, other) =>
+      other !== index &&
+      !ignoredEvents.has(candidate.event) &&
+      candidate.timestamp === event.timestamp &&
+      candidate.shard !== event.shard,
+  );
+}
+
+export function attemptEventDefinitelyBefore(
+  earlier: AuditShardEvent,
+  later: AuditShardEvent,
+): boolean {
+  if (earlier.shard === later.shard) return earlier.pos < later.pos;
+  return earlier.timestamp < later.timestamp;
+}
+
+export function maximalAttemptEvents<T extends AuditShardEvent>(
+  events: ReadonlyArray<T>,
+): T[] {
+  return events.filter(
+    (candidate, index) =>
+      !events.some(
+        (other, otherIndex) =>
+          otherIndex !== index &&
+          attemptEventDefinitelyBefore(candidate, other),
+      ),
+  );
+}
+
+export interface AttemptFrontierView {
+  events: AuditShardEvent[];
+  floor: AuditShardEvent[];
+}
+
+export function reviewInvalidationAttemptView(
+  rows: ReadonlyArray<AuditShardEvent>,
+  stageSlug: string,
+): AttemptFrontierView {
+  const events = sortAttemptEvents(rows);
+  const floor = maximalAttemptEvents(
+    events.filter(
+      (event) =>
+        event.event === "WORKFLOW_STARTED" ||
+        event.event === "STAGE_JUMPED" ||
+        ((event.event === "GATE_APPROVED" ||
+          event.event === "GATE_REJECTED") &&
+          auditBlockField(event.block, "Stage") === stageSlug),
+    ),
+  );
+  return { events, floor };
+}
+
+export function attemptEventAfterFrontier(
+  frontier: ReadonlyArray<AuditShardEvent>,
+  event: AuditShardEvent,
+): boolean {
+  return frontier.every((boundary) =>
+    attemptEventDefinitelyBefore(boundary, event)
+  );
+}
+
 const REVIEW_RECEIPT_EVENTS = new Set([
   "WORKFLOW_STARTED",
   "STAGE_STARTED",
@@ -9452,13 +9763,15 @@ const REVIEW_RECEIPT_EVENTS = new Set([
   "REVIEW_COMPLETED",
 ]);
 
-export interface ReviewAttemptWindow {
+export interface AttemptView {
   allEvents: AuditShardEvent[];
   events: AuditShardEvent[];
   floorIdx: number;
   mergedBoltUnits: Set<string>;
   openBoltUnits: Set<string>;
 }
+
+export type ReviewAttemptWindow = AttemptView;
 
 function boltEventUnits(event: AuditShardEvent): string[] {
   const field =
@@ -9484,15 +9797,11 @@ export function reviewAttemptWindow(
   projectDir: string,
   stateContent: string,
   stage: { slug: string; for_each?: string },
-): ReviewAttemptWindow {
+): AttemptView {
   const allEvents = readAuditShardEvents(projectDir);
-  const events = allEvents
-    .filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event))
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      if (a.shard === b.shard) return a.pos - b.pos;
-      return a.shardIndex - b.shardIndex;
-    });
+  const events = sortAttemptEvents(
+    allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event)),
+  );
   const perUnit = stage.for_each === "unit-of-work";
   const artifactPerUnit =
     perUnit &&
@@ -9693,6 +10002,618 @@ export function reviewAttemptWindow(
     mergedBoltUnits,
     openBoltUnits,
   };
+}
+
+export interface ReviewAttemptAccounting {
+  floor: string;
+  requestCount: number;
+  boltStarted: boolean;
+  boltBatch: string | null;
+  boltSlug: string | null;
+  pendingIterations: Set<number>;
+  pendingRequests: Map<
+    number,
+    {
+      binding: ReviewRequestBinding | null;
+      retried: boolean;
+    }
+  >;
+  recoveryIteration: number | null;
+  recoverySpent: boolean;
+  ambiguity: string | null;
+}
+
+export function reviewAttemptEventMatchesCurrentClaim(
+  projectDir: string,
+  stateContent: string,
+  unit: string | undefined,
+  row: AuditShardEvent,
+): boolean {
+  if (unit === undefined || !isTeamUnitOwnership(stateContent)) return true;
+  const eventUnit = auditBlockField(row.block, "Unit");
+  if (eventUnit !== null) {
+    return eventUnit !== unit ||
+      eventMatchesClaimAttempt(projectDir, row.block, eventUnit);
+  }
+  const boltSlug = auditBlockField(row.block, "Bolt slug");
+  const boltNames = auditBlockField(row.block, "Bolt names");
+  if (
+    boltNames === unit &&
+    boltSlug === boltSlugForUnit(unit) &&
+    (
+      row.event === "BOLT_STARTED" ||
+      row.event === "BOLT_COMPLETED" ||
+      row.event === "BOLT_FAILED"
+    )
+  ) {
+    return eventMatchesClaimAttempt(projectDir, row.block, unit);
+  }
+  return true;
+}
+
+const REVIEW_ACCOUNTING_EVENTS = new Set([
+  "WORKFLOW_STARTED",
+  "STAGE_STARTED",
+  "STAGE_COMPLETED",
+  "STAGE_JUMPED",
+  "GATE_REJECTED",
+  "BOLT_STARTED",
+  "BOLT_COMPLETED",
+  "BOLT_FAILED",
+  "REVIEW_REQUESTED",
+  "REVIEW_COMPLETED",
+]);
+
+// Count requests in the current stage/unit attempt. The same chronological
+// floors used by receipt freshness reset the budget on workflow start, jump,
+// stage re-entry, or gate rejection. A matching BOLT_STARTED is a stronger
+// per-unit floor because the forked audit inherits the main workflow's prior
+// rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
+export function reviewAttemptAccounting(
+  attemptView: AttemptView,
+  stateContent: string,
+  stage: { slug: string; for_each?: string; workspace_requires?: boolean },
+  reviewer: string,
+  unit: string | undefined,
+  workflow: string | undefined,
+  options: {
+    eventFilter?: (event: AuditShardEvent) => boolean;
+  } = {},
+): ReviewAttemptAccounting {
+  const events = sortAttemptEvents(
+    attemptView.allEvents.filter(
+      (row) =>
+        REVIEW_ACCOUNTING_EVENTS.has(row.event) &&
+        (options.eventFilter?.(row) ?? true),
+    ),
+  );
+  const tiedAcrossShards = (index: number): boolean =>
+    attemptEventIsCrossShardTied(events, index);
+  const tiedOnlyToWorkflowBoundary = (index: number): boolean => {
+    let sawBoundary = false;
+    for (let other = 0; other < events.length; other++) {
+      if (
+        other === index ||
+        events[other].timestamp !== events[index].timestamp ||
+        events[other].shard === events[index].shard
+      ) {
+        continue;
+      }
+      if (
+        events[other].event !== "WORKFLOW_STARTED" &&
+        events[other].event !== "STAGE_JUMPED"
+      ) {
+        return false;
+      }
+      sawBoundary = true;
+    }
+    return sawBoundary;
+  };
+
+  const unitMajor =
+    stage.for_each === "unit-of-work" &&
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const teamOwnership =
+    stage.for_each === "unit-of-work" &&
+    isTeamUnitOwnership(stateContent);
+  let floor = -1;
+  let boltStarted = false;
+  let boltBatch: string | null = null;
+  let boltSlug: string | null = null;
+  const expectedBoltSlug = unit === undefined ? null : boltSlugForUnit(unit);
+  let ambiguity: string | null = null;
+  for (let i = 0; i < events.length; i++) {
+    const entry = events[i];
+    if (workflow !== undefined) {
+      if (
+        entry.event === "STAGE_COMPLETED" &&
+        auditBlockField(entry.block, "Stage") === stage.slug &&
+        auditBlockField(entry.block, "Workflow") === workflow
+      ) {
+        floor = i;
+      }
+      continue;
+    }
+    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
+      if (teamOwnership && tiedAcrossShards(i)) {
+        ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
+      }
+      floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+      if (!teamOwnership || !tiedAcrossShards(i)) ambiguity = null;
+      continue;
+    }
+    if (entry.event === "BOLT_STARTED" && unit !== undefined) {
+      const names = (auditBlockField(entry.block, "Bolt names") ?? "")
+        .split(",")
+        .map((name) => name.trim());
+      const startedSlug = auditBlockField(entry.block, "Bolt slug");
+      if (
+        !names.includes(unit) ||
+        (startedSlug !== null && startedSlug !== expectedBoltSlug)
+      ) {
+        continue;
+      }
+      if (tiedAcrossShards(i)) {
+        ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
+      }
+      floor = i;
+      boltStarted = true;
+      boltBatch = auditBlockField(entry.block, "Batch number");
+      boltSlug = startedSlug;
+      if (!tiedAcrossShards(i)) ambiguity = null;
+      continue;
+    }
+    if (
+      (entry.event === "BOLT_COMPLETED" ||
+        entry.event === "BOLT_FAILED") &&
+      unit !== undefined
+    ) {
+      const terminalNames = (
+        auditBlockField(
+          entry.block,
+          entry.event === "BOLT_FAILED" ? "Failed Bolt" : "Bolt names",
+        ) ?? ""
+      )
+        .split(",")
+        .map((name) => name.trim());
+      const terminalSlug = auditBlockField(entry.block, "Bolt slug");
+      const paired =
+        boltSlug !== null && terminalSlug !== null
+          ? boltSlug === terminalSlug
+          : terminalNames.includes(unit);
+      if (!paired) continue;
+      const tied = tiedAcrossShards(i);
+      ambiguity = tied
+        ? `cross-shard Bolt boundary tie at ${entry.timestamp}`
+        : null;
+      floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+      continue;
+    }
+    if (entry.event === "GATE_REJECTED") {
+      const gateStages = (
+        auditBlockField(entry.block, "Gate Stages") ??
+          auditBlockField(entry.block, "Stage") ??
+          ""
+      )
+        .split(",")
+        .map((value) => value.trim());
+      if (!gateStages.includes(stage.slug)) continue;
+      const rejectedUnit = auditBlockField(entry.block, "Unit");
+      if (teamOwnership && unit !== undefined && rejectedUnit !== unit) continue;
+      if (teamOwnership && unit === undefined && rejectedUnit !== null) continue;
+      const tied = tiedAcrossShards(i);
+      ambiguity = tied
+        ? `cross-shard gate boundary tie at ${entry.timestamp}`
+        : null;
+      floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+    } else if (
+      auditBlockField(entry.block, "Stage") === stage.slug &&
+      entry.event === "STAGE_STARTED" &&
+      !unitMajor &&
+      !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+    ) {
+      const tied = tiedAcrossShards(i);
+      ambiguity = tied
+        ? `cross-shard stage boundary tie at ${entry.timestamp}`
+        : null;
+      floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+    }
+  }
+  if (
+    unit !== undefined &&
+    ambiguity?.startsWith("cross-shard Bolt boundary tie at ") &&
+    attemptView.mergedBoltUnits.has(unit) &&
+    !attemptView.openBoltUnits.has(unit)
+  ) {
+    const timestamp = ambiguity.slice(
+      "cross-shard Bolt boundary tie at ".length,
+    );
+    const tied = attemptView.events.filter(
+      (event) => event.timestamp === timestamp,
+    );
+    const tiedShards = new Set(tied.map((event) => event.shard));
+    const lifecycleOnly =
+      tied.length > 1 &&
+      tiedShards.size > 1 &&
+      tied.every((event) => {
+        if (event.event === "AUDIT_MERGED") return true;
+        if (
+          event.event !== "BOLT_STARTED" &&
+          event.event !== "BOLT_COMPLETED" &&
+          event.event !== "BOLT_FAILED"
+        ) {
+          return false;
+        }
+        const field =
+          event.event === "BOLT_FAILED"
+            ? auditBlockField(event.block, "Failed Bolt")
+            : auditBlockField(event.block, "Bolt names");
+        return (field ?? "")
+          .split(",")
+          .map((name) => name.trim())
+          .includes(unit);
+      });
+    if (lifecycleOnly) {
+      ambiguity = null;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+    }
+  }
+
+  let requestCount = 0;
+  let recoveryIteration: number | null = null;
+  let recoverySpent = false;
+  const pendingIterations = new Set<number>();
+  const pendingRequests = new Map<
+    number,
+    {
+      binding: ReviewRequestBinding | null;
+      retried: boolean;
+    }
+  >();
+  for (let i = floor + 1; i < events.length; i++) {
+    const entry = events[i];
+    if (
+      entry.event !== "REVIEW_REQUESTED" &&
+      entry.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
+    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    if (auditBlockField(entry.block, "Reviewer") !== reviewer) continue;
+    const eventUnit = auditBlockField(entry.block, "Unit") || undefined;
+    if (eventUnit !== unit) continue;
+    const eventWorkflow = auditBlockField(entry.block, "Workflow") || undefined;
+    if (
+      workflow !== undefined
+        ? eventWorkflow !== workflow
+        : eventWorkflow?.startsWith("single-stage:")
+    ) {
+      continue;
+    }
+    if (
+      tiedAcrossShards(i) &&
+      !(!teamOwnership && tiedOnlyToWorkflowBoundary(i))
+    ) {
+      ambiguity = `cross-shard review authority tie at ${entry.timestamp}`;
+      continue;
+    }
+    const rawIteration = auditBlockField(entry.block, "Iteration");
+    if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
+    const iteration = Number(rawIteration);
+    if (entry.event === "REVIEW_REQUESTED") {
+      const binding = reviewRequestBindingFromBlock(entry.block);
+      if (binding === null) continue;
+      if (auditBlockField(entry.block, "Retry") !== "pending-request") {
+        requestCount++;
+      }
+      if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
+        recoveryIteration = iteration;
+        recoverySpent = true;
+      }
+      pendingIterations.add(iteration);
+      const previous = pendingRequests.get(iteration);
+      const modernBinding =
+        binding.appendixArtifact !== null &&
+        binding.appendixOffset !== null &&
+        (binding.priorAppendixLength === null ||
+          binding.priorAppendixLength === 0 ||
+          binding.reviewChallenge !== null) &&
+        (!stage.workspace_requires || binding.sourceFingerprint !== null);
+      pendingRequests.set(iteration, {
+        binding,
+        retried:
+          previous?.retried === true ||
+          (auditBlockField(entry.block, "Retry") === "pending-request" &&
+            modernBinding),
+      });
+    } else {
+      const pending = pendingRequests.get(iteration);
+      if (
+        pending?.binding &&
+        reviewCompletionMatchesRequest(pending.binding, entry.block)
+      ) {
+        pendingIterations.delete(iteration);
+        pendingRequests.delete(iteration);
+      }
+    }
+  }
+  return {
+    floor:
+      floor < 0
+        ? ""
+        : `${events[floor].event}:${events[floor].timestamp}:${events[floor].shard}:${events[floor].pos}`,
+    requestCount,
+    boltStarted,
+    boltBatch,
+    boltSlug,
+    pendingIterations,
+    pendingRequests,
+    recoveryIteration,
+    recoverySpent,
+    ambiguity,
+  };
+}
+
+export interface WorktreeReviewAttemptProjection {
+  events: AuditShardEvent[];
+  boltStart: AuditShardEvent | null;
+  terminal: {
+    event: AuditShardEvent;
+    binding: ReviewRequestBinding;
+  } | null;
+}
+
+export function worktreeReviewAttemptProjection(
+  rows: ReadonlyArray<AuditShardEvent>,
+  options: {
+    boltSlug: string;
+    unit: string;
+    stage: string;
+    reviewer: string;
+    reviewClass: Exclude<ReviewClass, "none">;
+    maxIterations: number;
+  },
+): WorktreeReviewAttemptProjection {
+  const relevant = new Set([
+    "BOLT_STARTED",
+    "REVIEW_REQUESTED",
+    "REVIEW_COMPLETED",
+  ]);
+  const events = sortAttemptEvents(
+    rows.filter((event) => relevant.has(event.event)),
+  );
+  const crossShardTied = (index: number): boolean =>
+    attemptEventIsCrossShardTied(events, index);
+
+  let boltStart = -1;
+  for (let i = 0; i < events.length; i++) {
+    if (
+      events[i].event === "BOLT_STARTED" &&
+      auditBlockField(events[i].block, "Bolt slug") === options.boltSlug
+    ) {
+      if (crossShardTied(i)) {
+        let end = i;
+        while (
+          end + 1 < events.length &&
+          events[end + 1].timestamp === events[i].timestamp
+        ) {
+          end++;
+        }
+        boltStart = end;
+        i = end;
+      } else {
+        boltStart = i;
+      }
+    }
+  }
+  if (boltStart === -1) {
+    return { events, boltStart: null, terminal: null };
+  }
+
+  const pendingRequests = new Map<
+    string,
+    {
+      binding: ReviewRequestBinding | null;
+      recovery: boolean;
+      timestamp: string;
+      shard: string;
+    }
+  >();
+  let terminal: WorktreeReviewAttemptProjection["terminal"] = null;
+  for (let i = boltStart + 1; i < events.length; i++) {
+    const event = events[i];
+    if (
+      event.event !== "REVIEW_REQUESTED" &&
+      event.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
+    if (
+      auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")
+    ) {
+      continue;
+    }
+    if (auditBlockField(event.block, "Stage") !== options.stage) continue;
+    if (auditBlockField(event.block, "Reviewer") !== options.reviewer) continue;
+    if (auditBlockField(event.block, "Unit") !== options.unit) continue;
+    const iteration = auditBlockField(event.block, "Iteration");
+    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    const requestKey = `${options.unit}\u0000${iteration}`;
+    if (event.event === "REVIEW_REQUESTED") {
+      if (crossShardTied(i)) continue;
+      const binding = reviewRequestBindingFromBlock(event.block);
+      if (binding === null) continue;
+      pendingRequests.set(requestKey, {
+        binding,
+        recovery:
+          auditBlockField(event.block, "Recovery") === "stale-receipt",
+        timestamp: event.timestamp,
+        shard: event.shard,
+      });
+      continue;
+    }
+    if (crossShardTied(i)) {
+      pendingRequests.delete(requestKey);
+      continue;
+    }
+    const request = pendingRequests.get(requestKey);
+    if (
+      request === undefined ||
+      (request.timestamp === event.timestamp &&
+        request.shard !== event.shard) ||
+      request.binding === null ||
+      !reviewCompletionMatchesRequest(request.binding, event.block)
+    ) {
+      continue;
+    }
+    pendingRequests.delete(requestKey);
+    const rawVerdict = auditBlockField(event.block, "Verdict");
+    const verdict = request.recovery
+      ? rawVerdict === "READY" || rawVerdict === "NOT-READY"
+        ? rawVerdict
+        : null
+      : terminalReviewVerdict(
+          rawVerdict,
+          iteration,
+          options.reviewClass,
+          options.maxIterations,
+        );
+    if (verdict !== null) {
+      terminal = {
+        event,
+        binding: request.binding,
+      };
+    }
+  }
+
+  return {
+    events,
+    boltStart: events[boltStart],
+    terminal,
+  };
+}
+
+function candidateAttemptEventMatches(
+  event: AuditShardEvent,
+  unit: string,
+  generation: number,
+  stage: string,
+): boolean {
+  const gateStages = auditBlockField(event.block, "Gate Stages");
+  const stageMatches = gateStages
+    ? gateStages
+        .split(",")
+        .map((value) => value.trim())
+        .includes(stage)
+    : auditBlockField(event.block, "Stage") === stage;
+  return (
+    stageMatches &&
+    auditBlockField(event.block, "Unit") === unit &&
+    auditBlockField(event.block, "Attempt Generation") === String(generation)
+  );
+}
+
+export function candidateReviewCoverageProjection(
+  rows: ReadonlyArray<AuditShardEvent>,
+  options: {
+    unit: string;
+    generation: number;
+    stage: string;
+    reviewer: string | undefined;
+    artifactPrefix: string;
+    expectedFingerprint: string;
+  },
+): boolean {
+  const events = sortAttemptEvents(rows);
+  const relevantByTimestamp = new Map<string, Set<string>>();
+  for (const event of events) {
+    const file = auditBlockField(event.block, "File") ?? "";
+    const relevant =
+      event.event === "ARTIFACT_CREATED" ||
+      event.event === "ARTIFACT_UPDATED"
+        ? file.includes(options.artifactPrefix)
+        : (event.event === "REVIEW_REQUESTED" ||
+            event.event === "REVIEW_COMPLETED" ||
+            event.event === "GATE_REJECTED" ||
+            event.event === "STAGE_REVISING") &&
+          candidateAttemptEventMatches(
+            event,
+            options.unit,
+            options.generation,
+            options.stage,
+          );
+    if (!relevant) continue;
+    const shards = relevantByTimestamp.get(event.timestamp) ?? new Set<string>();
+    shards.add(event.shard);
+    relevantByTimestamp.set(event.timestamp, shards);
+  }
+  if ([...relevantByTimestamp.values()].some((shards) => shards.size > 1)) {
+    return false;
+  }
+
+  const pending = new Set<string>();
+  let ready = false;
+  for (const event of events) {
+    if (
+      event.event === "ARTIFACT_CREATED" ||
+      event.event === "ARTIFACT_UPDATED"
+    ) {
+      const file = auditBlockField(event.block, "File") ?? "";
+      if (file.includes(options.artifactPrefix)) ready = false;
+      continue;
+    }
+    if (
+      !candidateAttemptEventMatches(
+        event,
+        options.unit,
+        options.generation,
+        options.stage,
+      )
+    ) {
+      continue;
+    }
+    if (
+      event.event === "GATE_REJECTED" ||
+      event.event === "STAGE_REVISING"
+    ) {
+      pending.clear();
+      ready = false;
+      continue;
+    }
+    if (
+      event.event !== "REVIEW_REQUESTED" &&
+      event.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
+    if (auditBlockField(event.block, "Reviewer") !== options.reviewer) continue;
+    const iteration = auditBlockField(event.block, "Iteration");
+    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    if (event.event === "REVIEW_REQUESTED") {
+      pending.add(iteration);
+      continue;
+    }
+    if (!pending.delete(iteration)) continue;
+    ready =
+      auditBlockField(event.block, "Verdict") === "READY" &&
+      auditBlockField(event.block, "Artifact Fingerprint") ===
+        options.expectedFingerprint;
+  }
+  return ready;
 }
 
 export function freshReviewReceipts(
@@ -14503,6 +15424,38 @@ export function engineTouchMarkerPath(projectDir: string, intent?: string, space
 // above).
 export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
 
+// The env marker that identifies the route check `aidlc-state.ts unit start`
+// runs to learn which Unit the engine would route. Like the Stop-hook probe it
+// consults the engine and reads only the directive off stdout.
+export const ROUTE_CHECK_ENV = "AIDLC_ROUTE_CHECK";
+
+// --- Engine observer mode -----------------------------------------------------
+//
+// An OBSERVER is an engine invocation whose whole purpose is to LEARN the
+// current directive: the Stop hook's `next` probe and the route check's
+// `next`/`continue` pair. Both read the prepared directive off stdout and never
+// consult the durable marker afterwards, so publishing from one buys nothing and
+// costs correctness: a publication rotates the directive's issuance identity and
+// used to delete the plan-approval runtime dir, which destroyed a human's
+// in-flight approval between the turn that offered it and the turn that recorded
+// their answer.
+//
+// The predicates are deliberately env-only and read the LIVE environment on
+// every call: a module-level snapshot would ignore a test that sets the variable
+// after import, and the cost of a property read is irrelevant beside a spawn.
+// Queries are read-only for every Unit Ownership, not only team-owned Units.
+export function isStopHookProbe(): boolean {
+  return process.env[STOP_HOOK_PROBE_ENV] === "1";
+}
+
+export function isRouteCheckProbe(): boolean {
+  return process.env[ROUTE_CHECK_ENV] === "1";
+}
+
+export function isReadOnlyEngineProbe(): boolean {
+  return isStopHookProbe() || isRouteCheckProbe();
+}
+
 // Touch a turn-shape marker. Only the mtime carries meaning, so the body is a
 // timestamp purely as a debugging affordance. The CALL never throws: these
 // markers are an advisory optimisation of the Stop hook's block decision, and a
@@ -16451,6 +17404,7 @@ export function documentInputRequestFilePath(
 }
 
 export function writeStateFile(projectDir: string, content: string, intent?: string, space?: string): void {
+  refuseEngineObserverWrite("writeStateFile");
   const path = stateFilePath(projectDir, intent, space);
   // A read-only aidlc-state.md is a deliberate write barrier the state tool
   // must honour (a corrupt/locked workspace must fail loud, not silently
@@ -18164,6 +19118,7 @@ const AUDIT_LOCK_DEPTH = new Map<string, number>();
 // truncating or renaming each other's in-flight data. Cleans up only the temp
 // owned by this invocation on write/rename failure.
 export function writeFileAtomic(path: string, data: string): void {
+  refuseEngineObserverWrite("writeFileAtomic");
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   let fd: number | undefined;
   let ownsTmp = false;
@@ -18192,6 +19147,7 @@ export function writeFileAtomic(path: string, data: string): void {
 // shape so the two cannot drift; the only difference is no utf-8 coercion, so
 // the bytes round-trip identical to the source and stay sha256-verifiable.
 export function writeBufferAtomic(path: string, data: Buffer | Uint8Array): void {
+  refuseEngineObserverWrite("writeBufferAtomic");
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   let fd: number | undefined;
   let ownsTmp = false;

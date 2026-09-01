@@ -90,6 +90,7 @@ import {
   readApplicableTeamUnitScopeStamp,
   readAuditShardEvents,
   readStateFile,
+  ROUTE_CHECK_ENV,
   readUnitMergeTransaction,
   readUnitGateRhythm,
   readUnitScopeStamp,
@@ -2057,7 +2058,7 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
         env: {
           ...process.env,
           AIDLC_PROJECT_DIR: pd,
-          AIDLC_ROUTE_CHECK: "1",
+          [ROUTE_CHECK_ENV]: "1",
           ...(stateSessionOverride
             ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
             : {}),
@@ -2138,7 +2139,7 @@ function requireEngineRoutedWaveUnit(
         env: {
           ...process.env,
           AIDLC_PROJECT_DIR: pd,
-          AIDLC_ROUTE_CHECK: "1",
+          [ROUTE_CHECK_ENV]: "1",
           ...(stateSessionOverride
             ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
             : {}),

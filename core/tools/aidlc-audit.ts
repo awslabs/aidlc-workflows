@@ -27,6 +27,7 @@ import {
   redactProjectDirPrefix,
   relativeRecordDir,
   readRegularFileNoFollowOrThrow,
+  refuseEngineObserverWrite,
   releaseAuditLock,
   requireLiveClaimForTeamUnit,
   resolveProjectDir,
@@ -649,6 +650,11 @@ function appendAuditBlockAtPath(
   block: string,
   expectedIdentity?: AuditAppendExpectation,
 ): void {
+  // Every audit append funnels through here, so one barrier covers
+  // appendAuditEntry, appendAuditEntryUnlocked, appendAuditEntryAtPathUnlocked
+  // and appendAuditEntries: the ledger is authority evidence, and an observer
+  // that appended to it would be minting the very receipts it came to read.
+  refuseEngineObserverWrite("appendAuditBlockAtPath");
   const dir = dirname(shardPath);
   const projectAbs = resolve(projectDir);
   const projectReal = realpathSync(projectAbs);

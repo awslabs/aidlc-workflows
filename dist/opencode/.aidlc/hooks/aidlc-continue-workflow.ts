@@ -134,6 +134,7 @@ import {
   findIntentByUuid,
   effectiveUnitGateRhythm,
   getField,
+  stateDigest,
   hasCurrentSharedResumeWait,
   hasPendingDecision,
   hookChildEnv,
@@ -260,11 +261,11 @@ function currentStageSlug(stateContent: string): string {
 // the pending directive advances, while ignoring unrelated audit-only traffic.
 function progressSignature(stateContent: string, directive: EngineDirective): string {
   const stage = currentStageSlug(stateContent);
-  const stableState = stateContent.replace(
-    /^- \*\*Last Updated\*\*:[^\n]*(?:\n|$)/gm,
-    "",
-  );
-  const stateSha256 = createHash("sha256").update(stableState, "utf-8").digest("hex");
+  // The same projection the engine binds a directive to, so "did the workflow
+  // advance?" and "is the issued directive still current?" cannot disagree. This
+  // hook already ignored Last Updated for exactly this reason; the projection
+  // generalizes that to the whole cache layer.
+  const stateSha256 = stateDigest(stateContent);
   const directiveFingerprint = createHash("sha256")
     .update(
       JSON.stringify({

@@ -21,7 +21,9 @@ import {
   artifactFilename,
   auditBlockField,
   auditShardName,
+  type AuditShardEvent,
   type CachedUnitClaim,
+  candidateReviewCoverageProjection,
   clearClaimGeneration,
   clearUnitScopeStamp,
   ensureCloneId,
@@ -33,6 +35,7 @@ import {
   idSuffix,
   invalidateLiveClaimPayloadCache,
   isNonAnswer,
+  isReadOnlyEngineProbe,
   isTeamUnitOwnership,
   isoTimestamp,
   loadScopeMetadata,
@@ -859,10 +862,7 @@ export function cachedUnitClaimOverview(
   const opening = localOpeningStatus(pd);
   const cache = readUnitClaimRegistryCache(pd);
   let claims = cachedClaims(pd);
-  if (
-    options.writeCache !== false &&
-    process.env.AIDLC_STOP_HOOK_PROBE !== "1"
-  ) {
+  if (options.writeCache !== false && !isReadOnlyEngineProbe()) {
     claims = cacheClaims(pd, claims, cache?.warning);
   }
   return buildOverview(opening, claims, cache?.warning);
@@ -946,14 +946,7 @@ function gitTextAt(
   return shown.stdout;
 }
 
-interface CandidateAuditEvent {
-  event: string;
-  block: string;
-  timestamp: string;
-  shard: string;
-  shardIndex: number;
-  pos: number;
-}
+type CandidateAuditEvent = AuditShardEvent;
 
 function candidateAuditEvents(
   projectDir: string,
@@ -1071,75 +1064,15 @@ function candidateReviewerReady(
     stage,
     unitKind,
   );
-  const pending = new Set<string>();
-  let ready = false;
   const artifactPrefix = `construction/${unit}/${stage.slug}/`;
-  const relevantByTimestamp = new Map<string, Set<string>>();
-  for (const event of events) {
-    const file = auditBlockField(event.block, "File") ?? "";
-    const relevant =
-      (
-        event.event === "ARTIFACT_CREATED" ||
-        event.event === "ARTIFACT_UPDATED"
-      )
-        ? file.includes(artifactPrefix)
-        : (
-          event.event === "REVIEW_REQUESTED" ||
-          event.event === "REVIEW_COMPLETED" ||
-          event.event === "GATE_REJECTED" ||
-          event.event === "STAGE_REVISING"
-        ) &&
-          attemptEventMatches(event, unit, generation, stage.slug);
-    if (!relevant) continue;
-    const shards = relevantByTimestamp.get(event.timestamp) ?? new Set<string>();
-    shards.add(event.shard);
-    relevantByTimestamp.set(event.timestamp, shards);
-  }
-  if ([...relevantByTimestamp.values()].some((shards) => shards.size > 1)) {
-    return false;
-  }
-  for (const event of events) {
-    if (
-      event.event === "ARTIFACT_CREATED" ||
-      event.event === "ARTIFACT_UPDATED"
-    ) {
-      const file = auditBlockField(event.block, "File") ?? "";
-      if (file.includes(artifactPrefix)) ready = false;
-      continue;
-    }
-    if (
-      !attemptEventMatches(event, unit, generation, stage.slug)
-    ) {
-      continue;
-    }
-    if (
-      event.event === "GATE_REJECTED" ||
-      event.event === "STAGE_REVISING"
-    ) {
-      pending.clear();
-      ready = false;
-      continue;
-    }
-    if (
-      event.event !== "REVIEW_REQUESTED" &&
-      event.event !== "REVIEW_COMPLETED"
-    ) {
-      continue;
-    }
-    if (auditBlockField(event.block, "Reviewer") !== stage.reviewer) continue;
-    const iteration = auditBlockField(event.block, "Iteration");
-    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
-    if (event.event === "REVIEW_REQUESTED") {
-      pending.add(iteration);
-      continue;
-    }
-    if (!pending.delete(iteration)) continue;
-    ready =
-      auditBlockField(event.block, "Verdict") === "READY" &&
-      auditBlockField(event.block, "Artifact Fingerprint") ===
-        expectedFingerprint;
-  }
-  return ready;
+  return candidateReviewCoverageProjection(events, {
+    unit,
+    generation,
+    stage: stage.slug,
+    reviewer: stage.reviewer,
+    artifactPrefix,
+    expectedFingerprint,
+  });
 }
 
 function validateCandidateUnitProgress(
@@ -1614,7 +1547,9 @@ function candidateEvidence(
     );
     const questions = gitTextAt(projectDir, claim.oid, questionsPath);
     const fingerprint =
-      /^\[Approval Fingerprint\]:\s*(sha256:[0-9a-f]{64})\s*$/m.exec(questions);
+      /^\[Approval Fingerprint\]:\s*(sha256:(?:v2:)?[0-9a-f]{64})\s*$/m.exec(
+        questions,
+      );
     const embedded = parseTestingContract(plan);
     const currentContract = resolveTestingPosture(projectDir);
     const approvalEvent = events.findLast((event) =>

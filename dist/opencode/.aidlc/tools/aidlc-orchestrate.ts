@@ -178,7 +178,13 @@ import {
   type StageEntry,
   type AuditShardEvent,
   stateFilePath,
-  STOP_HOOK_PROBE_ENV,
+  isReadOnlyEngineProbe,
+  stateDigest,
+  readActiveDirectiveMarker,
+  type ActiveDirectiveMarker,
+  isRouteCheckProbe,
+  isStopHookProbe,
+  EngineModeViolationError,
   stateFilePathForSelection,
   unitDependencyPath,
   unitParkedPath,
@@ -277,6 +283,7 @@ interface PreparedEmission {
     kind: "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
     units?: string[];
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
+    rules_bundle?: string; directive_sha256?: string;
   };
 }
 
@@ -373,8 +380,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
   const route =
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
   const publication = publicationContexts.get(directive);
+  // A route check asks one question: which Unit would the engine route now? It
+  // never loads rules, so it skips transport entirely - which also keeps it from
+  // minting the machine-local steering key on a checkout that has none.
   let transported =
-    directive.kind === "run-stage" && route
+    directive.kind === "run-stage" && route && !isRouteCheckProbe()
       ? transportRunStage(directive, route)
       : directive;
   if (activeStageValidityAdvisory) {
@@ -421,7 +431,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
       (
         directive.kind === "run-stage" && directive.single === true &&
           existsSync(engineStateFilePath(route.codekbCtx.projectDir))
-          ? sha256(readFileSync(engineStateFilePath(route.codekbCtx.projectDir), "utf-8"))
+          ? stateDigest(readFileSync(engineStateFilePath(route.codekbCtx.projectDir), "utf-8"))
           : sha256("")
       );
     marker = {
@@ -433,6 +443,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
             part: transported.part,
             parts: transported.parts,
             continue_token: transported.continue_token,
+          }
+        : {}),
+      ...(preparedTransportIdentity
+        ? {
+            rules_bundle: preparedTransportIdentity.bundle,
+            directive_sha256: preparedTransportIdentity.directiveSha256,
           }
         : {}),
       state_sha256: markerStateHash,
@@ -525,37 +541,6 @@ function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
 }
 
-function isTeamStopHookProbe(projectDir: string | undefined): boolean {
-  if (
-    process.env.AIDLC_STOP_HOOK_PROBE !== "1" ||
-    !projectDir
-  ) {
-    return false;
-  }
-  try {
-    return isTeamUnitOwnership(readStateFile(projectDir));
-  } catch {
-    return false;
-  }
-}
-
-// The Stop hook's own `next` consultation, whatever the Unit Ownership. That
-// probe is READ-ONLY BY CONTRACT: aidlc-continue-workflow.ts parses the prepared
-// directive off stdout and never reads the durable marker, so publishing from a
-// probe buys nothing and costs correctness. Publishing from a bare probe `next`
-// fails preserveCodeGenerationAuthority in writeActiveDirectiveMarker (the base
-// marker is `run-stage`, not swarm planning), so the write bumps
-// code_generation_authority_revision and calls resetPlanApprovalRuntime, which
-// removes the whole plan-approval runtime dir. Recording the human's "Approve
-// Plan" answer needs a turn boundary, so the challenge minted in turn N was
-// destroyed by turn N's own Stop probe and Plan Approval could never stabilize
-// (issue #995). The predicate is deliberately env-only: the deadlock is not
-// specific to team-owned units, and handleContinue already suppresses its cursor
-// advance for every probe rather than only the team ones.
-function isStopHookProbe(): boolean {
-  return process.env[STOP_HOOK_PROBE_ENV] === "1";
-}
-
 function legacyPlanApprovalRecoveryDirective(): AskDirective {
   return {
     kind: "ask",
@@ -572,9 +557,15 @@ function emit(directive: Directive): void {
     prepareEmission(directive),
   );
   const prepared = withLegacyOffer.prepared;
+  // An observer never publishes. Publishing from a query bumped the directive's
+  // issuance identity and used to delete the plan-approval runtime dir, so the
+  // challenge minted in turn N was destroyed by turn N's own Stop probe and an
+  // approval could never be recorded. The suppression is not team-specific: the
+  // hook parses the directive off stdout for every Unit Ownership.
   if (
     prepared.marker &&
-    !isStopHookProbe()
+    !isReadOnlyEngineProbe() &&
+    !retainedIssuedDirective
   ) {
     const projectDir = prepared.projectDir;
     try {
@@ -626,6 +617,12 @@ function emit(directive: Directive): void {
         }
       }
     } catch (e) {
+      // A barrier violation is an engine defect, not a workflow problem, and must
+      // surface as a non-zero exit: both observers fail safe on that (the Stop
+      // hook allows the stop and records a drop; the route check reports the
+      // error). Turning it into an `error` directive with exit 0 would tell the
+      // conductor to stop and print a message, hiding the defect.
+      if (e instanceof EngineModeViolationError) throw e;
       if (projectDir) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
@@ -1974,7 +1971,7 @@ export function bootstrapDirectiveMemory(
     if (
       !codekbCtx ||
       memoryPath.includes("{") ||
-      process.env[STOP_HOOK_PROBE_ENV] === "1"
+      isReadOnlyEngineProbe()
     ) {
       return;
     }
@@ -2080,6 +2077,13 @@ const publicationContexts = new WeakMap<
   { projectDir: string; stateHash: string }
 >();
 let requestedSteeringContinuation: SteeringTokenPayload | null = null;
+// Set when this invocation RE-ISSUED the directive already recorded on the active
+// marker instead of publishing a new one. `next` is a query: asking twice for the
+// same state must answer the same thing and change nothing.
+let retainedIssuedDirective = false;
+// The content identity of the transport this invocation prepared, so the marker
+// records what the conductor was actually handed.
+let preparedTransportIdentity: { bundle: string; directiveSha256: string } | null = null;
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
 // keys on. The engine is stateless per call, so it cannot track a "session";
@@ -3320,7 +3324,7 @@ function buildRunStageDirective(
       node,
       scope,
       stateAware: stateContent !== null,
-      stateHash: stateContent === null ? null : sha256(stateContent),
+      stateHash: stateContent === null ? null : stateDigest(stateContent),
       codekbCtx,
       unit,
       unitKind,
@@ -3534,7 +3538,7 @@ function encodeSteeringToken(
   payload: SteeringTokenPayload,
   projectDir: string,
 ): { token: string | null; error: string | null } {
-  const probe = isTeamStopHookProbe(projectDir);
+  const probe = isStopHookProbe();
   const loaded = steeringTokenKey(projectDir, !probe);
   const key = probe
     ? (loaded.error === null ? probeSteeringTokenKey(projectDir) : null)
@@ -3667,6 +3671,93 @@ function steeringRouteHash(node: GraphStage, scope: string): string {
   );
 }
 
+// The directive already issued for this exact state, or null when there is none
+// to reuse. Every condition is a reason a re-issue would be a DIFFERENT answer:
+//
+//   - no marker for the current projected state digest (state moved, or none)
+//   - the marker is not the live issued directive (superseded, consumed, awaiting
+//     rehydration, or an ask/error/done)
+//   - a Copilot-owned marker, whose attempt bookkeeping needs the write
+//   - a tracked attempt id, likewise
+//   - `--single`, which owns its own synthetic attempt
+//   - the legacy Kiro IDE window, whose protected choices are rotated BY the
+//     publication this would skip
+//   - different stage, Unit, rule bundle, or directive body
+//   - for a partial delivery: a different part count, or a continuation token that
+//     no longer verifies for this state
+function retainedTransportForCurrentState(
+  directive: RunStageDirective,
+  route: RunStageRoute,
+  bundle: string,
+  directiveHash: string,
+  chunks: RuleContent[][],
+): Directive | null {
+  if (engineInvocation?.commandKind !== "next") return null;
+  if (engineInvocation.attemptId !== undefined) return null;
+  if (directive.single === true) return null;
+  const projectDir = route.codekbCtx.projectDir;
+  const stateHash = route.stateHash;
+  if (!stateHash) return null;
+  let marker: ActiveDirectiveMarker | null = null;
+  try {
+    if (installedHarnessName(projectDir) === "kiro-ide") return null;
+    const state = loadStateFileIfPresent(projectDir);
+    if (state === null) return null;
+    marker = readActiveDirectiveMarker(projectDir, state);
+  } catch {
+    return null;
+  }
+  if (
+    marker?.version !== 2 ||
+    marker.state_sha256 !== stateHash ||
+    marker.delivery !== "issued" ||
+    marker.needs_rehydrate === true ||
+    marker.owner_session?.startsWith("sessionless:") !== true ||
+    marker.stage !== directive.stage ||
+    (marker.unit ?? undefined) !== (directive.unit ?? undefined) ||
+    marker.rules_bundle !== bundle ||
+    marker.directive_sha256 !== directiveHash
+  ) {
+    return null;
+  }
+  if (marker.kind === "run-stage") return directive;
+  if (marker.kind !== "load-steering") return null;
+  const part = marker.part;
+  const token = marker.continue_token;
+  if (
+    !Number.isInteger(part) ||
+    (part as number) < 1 ||
+    (part as number) > chunks.length ||
+    marker.parts !== chunks.length ||
+    typeof token !== "string"
+  ) {
+    return null;
+  }
+  const payload = decodeSteeringToken(token, projectDir);
+  if (
+    !payload ||
+    payload.i !== part ||
+    payload.s !== directive.stage ||
+    payload.b !== bundle ||
+    payload.d !== directiveHash ||
+    payload.h !== stateHash
+  ) {
+    return null;
+  }
+  const load: LoadSteeringDirective = {
+    kind: "load-steering",
+    stage: directive.stage,
+    bundle,
+    part: part as number,
+    parts: chunks.length,
+    rules_content: chunks[(part as number) - 1],
+    continue_token: token,
+  };
+  return Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES
+    ? null
+    : load;
+}
+
 function transportRunStage(
   directive: RunStageDirective,
   route: RunStageRoute,
@@ -3687,6 +3778,35 @@ function transportRunStage(
   const directiveHash = sha256(JSON.stringify(directive));
   const chunks = steeringChunks(loaded.content);
   const requested = requestedSteeringContinuation;
+  preparedTransportIdentity = { bundle, directiveSha256: directiveHash };
+
+  // --- `next` is idempotent for unchanged state -----------------------------
+  //
+  // A plain `next` used to re-transport an already-delivered stage from part one
+  // with a fresh token, and to publish that as a new directive. So asking "what
+  // now?" twice moved the workflow's issuance identity twice, and the conductor
+  // was handed rules it had already loaded (which is the shape users reported as
+  // the rules restarting on every turn).
+  //
+  // When the marker already records THIS directive for THIS state - same stage,
+  // same Unit, same rule bundle, same directive body - the answer is the
+  // directive already issued. Return it verbatim: no marker rewrite, no revision
+  // bump, no new token. Routing itself is NOT skipped, only the transport: a
+  // paused Unit or a moved gate produces a different directive and never reaches
+  // here, so this can never re-issue work the lifecycle has left behind.
+  if (!requested) {
+    const retained = retainedTransportForCurrentState(
+      directive,
+      route,
+      bundle,
+      directiveHash,
+      chunks,
+    );
+    if (retained) {
+      retainedIssuedDirective = true;
+      return retained;
+    }
+  }
 
   if (requested) {
     if (
@@ -4540,9 +4660,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
           // walk: no registry access and no fan-out directive.
           throw new Error("claimless-team-mode");
         }
-        const readOnlyBoard =
-          process.env.AIDLC_STOP_HOOK_PROBE === "1" ||
-          process.env.AIDLC_ROUTE_CHECK === "1";
+        const readOnlyBoard = isReadOnlyEngineProbe();
         const overview = cachedUnitClaimOverview(pd, {
           writeCache: !readOnlyBoard,
         });
@@ -4920,7 +5038,7 @@ function tryEmitSwarm(
     };
     publicationContexts.set(directive, {
       projectDir,
-      stateHash: sha256(stateContent ?? ""),
+      stateHash: stateDigest(stateContent ?? ""),
     });
     emit(directive);
   } else {
@@ -4932,7 +5050,7 @@ function tryEmitSwarm(
     };
     publicationContexts.set(directive, {
       projectDir,
-      stateHash: sha256(stateContent ?? ""),
+      stateHash: stateDigest(stateContent ?? ""),
     });
     emit(directive);
   }
@@ -5977,10 +6095,7 @@ function refreshTeamUnitProgress(
   projectDir: string,
   model: TeamUnitProgressModel,
 ): string {
-  if (
-    process.env.AIDLC_ROUTE_CHECK === "1" ||
-    process.env.AIDLC_STOP_HOOK_PROBE === "1"
-  ) {
+  if (isReadOnlyEngineProbe()) {
     return readStateFile(projectDir);
   }
   const payload = Buffer.from(
@@ -6033,10 +6148,7 @@ function emitTeamUnitMajorRunStage(
   let model: TeamUnitProgressModel | null = null;
   let refreshedState: string;
   try {
-    if (
-      process.env.AIDLC_STOP_HOOK_PROBE === "1" ||
-      process.env.AIDLC_ROUTE_CHECK === "1"
-    ) {
+    if (isReadOnlyEngineProbe()) {
       refreshedState = stateContent;
     } else {
       model = deriveTeamUnitProgressModel(projectDir, stateContent, auditRows);
@@ -6056,11 +6168,7 @@ function emitTeamUnitMajorRunStage(
       ]),
     );
   const syncScopedStage = (stage: string, unit: string): boolean => {
-    if (
-      !scopeStamp ||
-      process.env.AIDLC_STOP_HOOK_PROBE === "1" ||
-      process.env.AIDLC_ROUTE_CHECK === "1"
-    ) {
+    if (!scopeStamp || isReadOnlyEngineProbe()) {
       return true;
     }
     const synced = spawnState(projectDir, [
@@ -6484,6 +6592,9 @@ function ensureSingleStageStarted(
   projectDir: string,
   node: GraphStage,
 ): string | null {
+  // A query never appends a lifecycle event: an observer that opened a
+  // single-stage attempt would move the run floor it came to read.
+  if (isReadOnlyEngineProbe()) return null;
   if (singleStageAttemptIsOpen(projectDir, node.slug)) return null;
   return appendSingleStageAuditEvents(projectDir, [{
     eventType: "STAGE_STARTED",
@@ -8368,7 +8479,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     return;
   }
   const liveState = loadStateFileIfPresent(pd);
-  const liveStateHash = liveState === null ? null : sha256(liveState);
+  const liveStateHash = liveState === null ? null : stateDigest(liveState);
   if (payload.a && payload.h !== liveStateHash) {
     emit(errorDirective(
       "The saved position moved on: the workflow state changed while this stage's rules were being loaded. Run a fresh `next` to restart delivery from part 1.",
@@ -8449,7 +8560,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     writePrepared(prepared);
     return;
   }
-  if (process.env.AIDLC_STOP_HOOK_PROBE === "1") {
+  if (isReadOnlyEngineProbe()) {
     writePrepared(prepared);
     return;
   }
@@ -8575,6 +8686,8 @@ export function main(argv: string[]): void {
     engineSessionId = undefined;
     engineSelections.clear();
     requestedSteeringContinuation = null;
+    retainedIssuedDirective = false;
+    preparedTransportIdentity = null;
   }
 }
 
