@@ -153,6 +153,13 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         // native include (both Copilot surfaces expand @-imports).
         const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
         expect(agentsMd, harness.name).toContain("@aidlc/spaces/default/memory/org.md");
+      } else if (harness.capabilities.memoryInclude === "devin-rule-pointer") {
+        // Devin: the project-root AGENTS.md is the always-on surface. Devin has
+        // no documented @-import expansion, so these lines are a POINTER the
+        // conductor is told to read, not content the host injects — the read
+        // instruction is asserted in t266 c3.
+        const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
+        expect(agentsMd, harness.name).toContain("@aidlc/spaces/default/memory/org.md");
       } else if (harness.capabilities.memoryInclude === "cursor-rule") {
         // Cursor: the alwaysApply rule lists the method files as plain paths
         // (no @-import expansion on Cursor); the sessionStart hook injects the

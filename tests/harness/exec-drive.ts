@@ -23,6 +23,7 @@ const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const COPILOT_BIN = process.env.AIDLC_COPILOT_BIN ?? "copilot";
 const OPENCODE_BIN = process.env.AIDLC_OPENCODE_BIN ?? "opencode";
 const CURSOR_BIN = process.env.AIDLC_CURSOR_BIN ?? "agent";
+const DEVIN_BIN = process.env.AIDLC_DEVIN_BIN ?? "devin";
 
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
@@ -236,6 +237,34 @@ export function setupCursorProject(): CursorProject {
 // skips the workspace-trust prompt on the scratch dir. No -f/--force: an
 // unexpected permission ask auto-rejects and fails the asserts (the honest
 // signal).
+/**
+ * Drive Devin CLI non-interactively.
+ *
+ * UNVERIFIED END-TO-END. Devin refuses an untrusted workspace ("Refusing to run
+ * in an untrusted workspace"), and trust is granted by starting `devin`
+ * INTERACTIVELY in the directory once - which a test cannot do. So this driver is
+ * written to the documented interface and gated behind AIDLC_DEVIN_EXEC_LIVE,
+ * which is OFF by default: nothing here claims coverage it does not have. To use
+ * it, trust the workspace once by hand, or set `respect_workspace_trust: false`
+ * in the config the run points at.
+ *
+ * There is no `--trust` flag as on Cursor, and no `--output-format`; `-p` prints
+ * to stdout directly.
+ */
+export function runDevin(proj: string, promptText: string): ExecResult {
+  const result = spawnSync(DEVIN_BIN, ["-p", "--", promptText], {
+    cwd: proj,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, PWD: proj },
+    timeout: TEST_TIMEOUT_MS,
+  });
+  return {
+    rc: result.status ?? -1,
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+  };
+}
+
 export function runCursor(proj: string, promptText: string): ExecResult {
   const result = spawnSync(
     CURSOR_BIN,

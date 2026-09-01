@@ -714,6 +714,61 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
+  test("Devin hooks.v1.json wires reviewer-scope over the full read+write+shell set", () => {
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "devin-hooks",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      // In hooks.v1.json the hooks object IS the whole document - there is no
+      // "hooks" wrapper key, unlike every other JSON-configured harness.
+      const wiring = JSON.parse(
+        readFileSync(join(harness.engineRoot, "hooks.v1.json"), "utf-8"),
+      ) as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+      expect(wiring.hooks, `${harness.name}: no "hooks" wrapper key`).toBeUndefined();
+
+      const pre = wiring.PreToolUse ?? [];
+      const scope = pre.find((g) =>
+        g.hooks.some((h) => h.command.endsWith("aidlc-devin-adapter.ts reviewer-scope")),
+      );
+      expect(scope, `${harness.name}: reviewer-scope registered`).toBeDefined();
+
+      // The matcher must cover every tool the core hook can act on, in DEVIN's
+      // names. Narrowing it to the shell tool alone is a silent enforcement hole:
+      // the hook loads, matches, and never sees the read or write it should bound.
+      // Claude ships ONE matcher string across its three PreToolUse guards; devin
+      // shares one set for the same three.
+      for (const tool of [
+        "read",
+        "notebook_read",
+        "edit",
+        "apply_patch",
+        "write",
+        "notebook_edit",
+        "glob",
+        "grep",
+        "exec",
+      ]) {
+        expect(
+          new RegExp(`\\b${tool}\\b`).test(scope?.matcher ?? ""),
+          `${harness.name}: reviewer-scope matcher covers ${tool}`,
+        ).toBe(true);
+      }
+
+      // review-freeze and state-transition-guard must share that same set - they
+      // were both narrowed to "^exec$" once, which is how the hole was found.
+      for (const target of ["review-freeze", "state-transition-guard"]) {
+        const group = pre.find((g) =>
+          g.hooks.some((h) => h.command.endsWith(`aidlc-devin-adapter.ts ${target}`)),
+        );
+        expect(group, `${harness.name}: ${target} registered`).toBeDefined();
+        expect(group?.matcher, `${harness.name}: ${target} shares the guarded set`).toBe(
+          scope?.matcher,
+        );
+      }
+    }
+  });
+
   test("Codex hooks.json wires the adapter's reviewer-scope target on PreToolUse", () => {
     const harnesses = HARNESS_MATRIX.filter(
       (harness) => harness.capabilities.reviewerScopeRegistration === "codex-hooks",

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Exec(bun .devin/tools)",
+      "Exec(bun .devin/hooks)",
+      "Exec(date -u)"
+    ]
+  }
+}

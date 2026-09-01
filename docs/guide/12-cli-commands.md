@@ -3,7 +3,7 @@
 All AI-DLC commands start with the orchestrator invocation. This chapter is a complete reference for every invocation pattern and flag.
 
 > **Invocation prefix differs by harness.** On Claude Code, Kiro IDE, Kiro CLI,
-> Cursor, opencode, and GitHub Copilot you type `/aidlc`; on Codex CLI it is `$aidlc` (or
+> Cursor, opencode, GitHub Copilot, and Devin you type `/aidlc`; on Codex CLI it is `$aidlc` (or
 > `/skills` → aidlc). The flags and behaviour below are identical either way —
 > only the prefix changes. The examples use `/aidlc`; substitute `$aidlc` on
 > Codex. See the [Kiro CLI](harnesses/kiro-cli.md),

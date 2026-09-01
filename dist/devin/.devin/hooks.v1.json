@@ -1,0 +1,161 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts session-start",
+          "timeout": 30
+        }
+      ]
+    }
+  ],
+  "SessionEnd": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts session-end",
+          "timeout": 30
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts record-human-turn",
+          "timeout": 30
+        }
+      ]
+    }
+  ],
+  "PreToolUse": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts deliver-stage-rules",
+          "timeout": 30
+        }
+      ]
+    },
+    {
+      "matcher": "^(read|notebook_read|edit|apply_patch|write|notebook_edit|glob|grep|exec)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts state-transition-guard",
+          "timeout": 30
+        }
+      ]
+    },
+    {
+      "matcher": "^(read|notebook_read|edit|apply_patch|write|notebook_edit|glob|grep|exec)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts reviewer-scope",
+          "timeout": 30
+        }
+      ]
+    },
+    {
+      "matcher": "^(read|notebook_read|edit|apply_patch|write|notebook_edit|glob|grep|exec)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts review-freeze",
+          "timeout": 30
+        }
+      ]
+    },
+    {
+      "matcher": "^(write|edit|apply_patch|notebook_edit|exec|run_subagent|read_subagent|exit_plan_mode)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts plan-approval-guard",
+          "timeout": 30
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "^(write|edit|apply_patch|notebook_edit)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts audit-and-sensors",
+          "timeout": 60
+        }
+      ]
+    },
+    {
+      "matcher": "^(write|edit|apply_patch|notebook_edit)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts run-sensors",
+          "timeout": 60
+        }
+      ]
+    },
+    {
+      "matcher": "^todo_write$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts sync-workflow-state",
+          "timeout": 30
+        }
+      ]
+    },
+    {
+      "matcher": "^exec$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts rebuild-stage-graph",
+          "timeout": 30
+        }
+      ]
+    },
+    {
+      "matcher": "^(run_subagent|read_subagent)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts log-subagent",
+          "timeout": 30
+        }
+      ]
+    }
+  ],
+  "PostCompaction": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts validate-state",
+          "timeout": 30
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bun .devin/hooks/aidlc-devin-adapter.ts continue-workflow",
+          "timeout": 30
+        }
+      ]
+    }
+  ]
+}

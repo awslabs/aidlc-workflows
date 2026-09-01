@@ -2710,6 +2710,73 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       label: ".opencode/command/aidlc.md present (/aidlc entry point)",
       fix: "copy from `dist/opencode/.opencode/command/aidlc.md`",
     });
+  } else if (harness === ".devin") {
+    // Devin: the wiring config is .devin/hooks.v1.json — Devin's own hook file,
+    // where the hooks object IS the whole document (no "hooks" wrapper key).
+    // Permissions ride .devin/config.json, checked below, the way codex checks
+    // rules/default.rules and cursor checks cli.json.
+    results.push({
+      pass: existsSync(join(projectDir, harness, "config.json")),
+      label: "config.json present (scoped Exec allowlist for the framework's tools)",
+      fix: "copy or MERGE `dist/devin/.devin/config.json` — it carries only `permissions`",
+    });
+    results.push({
+      pass: existsSync(join(projectDir, harness, "hooks.v1.json")),
+      label: "hooks.v1.json present (Devin hook wiring)",
+      fix: "copy from `dist/devin/.devin/hooks.v1.json`",
+    });
+    results.push({
+      pass: existsSync(join(projectDir, harness, "hooks", "aidlc-devin-adapter.ts")),
+      label: "aidlc-devin-adapter.ts present (tool-name translation for the core hooks)",
+      fix: "copy from `dist/devin/.devin/hooks/aidlc-devin-adapter.ts`",
+    });
+    // Version floor. Devin AUTO-UPDATES, and the whole block channel is
+    // version-gated: exit-2-blocks-with-reason-on-stderr arrived in v3000.3.22.
+    // Below that, every PreToolUse guard loads, matches, and cannot refuse
+    // anything — enforcement that looks installed and silently does nothing, with
+    // no diagnostic. codex and copilot both carry a floor for the same reason.
+    //
+    // ADVISORY when the binary is absent, unlike codex's hard fail: Devin Desktop
+    // ("Devin Local") runs a server-pinned agent build and a Desktop-only install
+    // legitimately has no `devin` on PATH. A missing binary must not fail the
+    // doctor for those users; an OLD binary must.
+    const MIN_DEVIN = [3000, 3, 22] as const;
+    // MUST be wrapped: Bun.spawnSync THROWS ("Executable not found in $PATH")
+    // rather than returning a failed result when the binary is absent, which on a
+    // Desktop-only install would crash the whole doctor rather than degrade to the
+    // advisory arm below. (codex's equivalent check is unguarded, but codex is a
+    // hard prerequisite there, so it never hits this.)
+    let devinVerText = "";
+    try {
+      const devinVer = Bun.spawnSync(["devin", "--version"], {
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      devinVerText = (devinVer.stdout?.toString() ?? "").trim();
+    } catch {
+      devinVerText = ""; // not installed -> advisory arm
+    }
+    const devinMatch = devinVerText.match(/(\d+)\.(\d+)\.(\d+)/);
+    if (!devinMatch) {
+      results.push({
+        pass: true,
+        label:
+          "devin CLI version: not probeable (no `devin` on PATH) — expected on a " +
+          "Devin Desktop-only install, whose agent build is server-pinned and cannot " +
+          "be read from a session. On the CLI, >= 3000.3.22 is required for hooks to block",
+      });
+    } else {
+      const v = [Number(devinMatch[1]), Number(devinMatch[2]), Number(devinMatch[3])];
+      const ok =
+        v[0] > MIN_DEVIN[0] ||
+        (v[0] === MIN_DEVIN[0] &&
+          (v[1] > MIN_DEVIN[1] || (v[1] === MIN_DEVIN[1] && v[2] >= MIN_DEVIN[2])));
+      results.push({
+        pass: ok,
+        label: `devin CLI version ${devinMatch[0]} >= 3000.3.22 (exit-2 hook block channel)`,
+        fix: "upgrade Devin CLI (`devin update`) — below 3000.3.22 no hook can refuse a tool call",
+      });
+    }
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
@@ -2722,7 +2789,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"].filter(
+  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor", ".devin"].filter(
     (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
   );
   if (

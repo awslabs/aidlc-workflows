@@ -90,8 +90,8 @@ The authored dial on every agent is `tier:` -- it names the KIND of work the per
 | Tier | Agents | Meaning |
 |------|--------|---------|
 | `judgment` | architect, aws-platform, compliance, composer, design, developer, devsecops, product, quality | Multi-constraint reasoning under ambiguity; output cascades downstream. Never downgraded: inherits the session's model AND effort |
-| `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. Mid-size model at reduced effort on Claude Code, Codex, and opencode (on Kiro, Cursor, and Copilot, inherits session model like all tiers) |
-| `templated` | delivery, operations, pipeline-deploy | Dominantly pattern-following output; methodology already in knowledge (delivery plans, CI/CD YAML, runbooks). Mid-size model at reduced effort on Claude Code, Codex, and opencode (on Kiro, Cursor, and Copilot, inherits session model like all tiers) |
+| `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. Mid-size model at reduced effort on Claude Code, Codex, and opencode (on Kiro, Cursor, and Copilot, inherits session model like all tiers; on Devin, pins `sonnet` with no effort key) |
+| `templated` | delivery, operations, pipeline-deploy | Dominantly pattern-following output; methodology already in knowledge (delivery plans, CI/CD YAML, runbooks). Mid-size model at reduced effort on Claude Code, Codex, and opencode (on Kiro, Cursor, and Copilot, inherits session model like all tiers; on Devin, pins `sonnet` with no effort key) |
 
 `balanced` and `templated` currently project IDENTICALLY in every harness -- both pin
 the mid-size model at `medium` effort. The two names are kept apart because they
@@ -148,7 +148,7 @@ access grant.
 
 **Observations:**
 - aidlc-architect-agent has the broadest stage involvement (10 stages across 3 phases).
-- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down on Claude Code, Codex, and opencode (the two `balanced` reviewers plus the three `templated` planners; on Kiro, Cursor, and Copilot all tiers inherit the session model and effort, so no agent steps down there); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
+- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down on Claude Code, Codex, and opencode (the two `balanced` reviewers plus the three `templated` planners; on Kiro, Cursor, and Copilot all tiers inherit the session model and effort, so no agent steps down there; on Devin every tier pins a model because omission would silently fall back to its default subagent model); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
 - aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages).
 - Six of 11 agents are expected to use Bash for CLI interaction.
 - Three agents are expected to use WebSearch for research tasks.

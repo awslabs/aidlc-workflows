@@ -189,6 +189,8 @@ function agentTierFromMd(s: string, srcPath: string): string {
 // harness's own session/config default applies for that harness/tier
 // combination. When every key is omitted the `tier:` line is dropped without
 // a replacement.
+const DROPS_DISALLOWED_TOOLS = new Set<Harness>(["kiro", "devin"]);
+
 function projectTierFrontmatter(
   s: string,
   srcPath: string,
@@ -229,7 +231,12 @@ function projectTierFrontmatter(
   const newFm = fm
     .split(/\r?\n/)
     .flatMap((line) => {
-      if (harness === "kiro" && /^disallowedTools:/.test(line)) return [];
+      // Harnesses that do not understand Claude's `disallowedTools` key drop it
+      // rather than ship it inert. An inert key that READS like enforcement is
+      // worse than no key: a reviewer sees "Task is denied" and stops looking.
+      // kiro rejects it outright; Devin silently ignores it, and denies
+      // delegation through the `allowed-tools` allowlist its manifest emits.
+      if (DROPS_DISALLOWED_TOOLS.has(harness) && /^disallowedTools:/.test(line)) return [];
       return /^tier:/.test(line) ? lines : [line];
     })
     .join("\n");

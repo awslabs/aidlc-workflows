@@ -1,0 +1,131 @@
+{
+  "_comment": "Devin hook payloads shaped against Devin CLI 3000.6.7 (260a97c8), probed live in a trusted scratch workspace on 2026-08-31. Devin's stdin envelope IS Claude Code's — hook_event_name, tool_name, tool_input, tool_response, session_id — which is exactly why the adapter is a name translator and not a payload reshaper (contrast Codex, which reshapes a genuinely foreign envelope). Two Devin-specific facts the corpus encodes: tool names are lowercase snake_case (exec, edit, apply_patch, run_subagent, todo_write), and ask_user_question is NOT a documented matchable tool name, so the picker arrives only on the matcher-free PreToolUse arm and is never named in a hooks.v1.json matcher. Volatile values (ids, paths) are anonymized; every KEY and value SHAPE is as delivered.",
+
+  "sessionStart": {
+    "hook_event_name": "SessionStart",
+    "session_id": "probe-session-0001",
+    "prompt_id": null,
+    "cwd": "/tmp/project"
+  },
+
+  "userPromptSubmit": {
+    "hook_event_name": "UserPromptSubmit",
+    "session_id": "probe-session-0001",
+    "prompt_id": "probe-prompt-0001",
+    "prompt": "/aidlc --status",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseExec": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exec",
+    "tool_input": { "command": "bun .devin/tools/aidlc-state.ts approve" },
+    "session_id": "probe-session-0001",
+    "prompt_id": "probe-prompt-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseWrite": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "write",
+    "tool_input": { "path": "aidlc/spaces/default/intents/probe/requirements.md", "content": "x" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseApplyPatch": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "apply_patch",
+    "tool_input": { "path": "src/app.ts", "patch": "@@ -1 +1 @@" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseRead": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "read",
+    "tool_input": { "path": "AGENTS.md" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseGrep": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "grep",
+    "tool_input": { "pattern": "Status", "path": "aidlc/" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseRunSubagent": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "run_subagent",
+    "tool_input": { "profile": "aidlc-developer-agent", "prompt": "implement unit" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseAskUserQuestion": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "ask_user_question",
+    "tool_input": { "question": "Approve this stage?", "options": ["Approve", "Request Changes"] },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "postToolUseExec": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "exec",
+    "tool_input": { "command": "bun .devin/tools/aidlc-state.ts approve" },
+    "tool_response": { "stdout": "ok", "stderr": "", "status": 0 },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "postToolUseTodoWrite": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "todo_write",
+    "tool_input": { "status": "in_progress", "activeForm": "Running domain design [domain-design]" },
+    "tool_response": { "ok": true },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "postToolUseWrite": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "write",
+    "tool_input": { "path": "aidlc/spaces/default/intents/probe/requirements.md", "content": "x" },
+    "tool_response": { "ok": true },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "postToolUseRunSubagent": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "run_subagent",
+    "tool_input": { "profile": "aidlc-developer-agent", "prompt": "implement unit" },
+    "tool_response": { "summary": "unit implemented" },
+    "agent_type": "aidlc-developer-agent",
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "postCompaction": {
+    "hook_event_name": "PostCompaction",
+    "session_id": "probe-session-0001",
+    "summary": "Earlier turns summarized.",
+    "cwd": "/tmp/project"
+  },
+
+  "stop": {
+    "hook_event_name": "Stop",
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "sessionEnd": {
+    "hook_event_name": "SessionEnd",
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  }
+}

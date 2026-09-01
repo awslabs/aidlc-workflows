@@ -215,6 +215,10 @@ const FRESH_SESSION_TOKENS: Record<string, string[]> = {
   opencode: ["restart OpenCode", "`/aidlc`"],
   copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
   cursor: ["new Cursor chat", "`/aidlc`"],
+  // Devin has neither `/clear` nor a Claude Code process to restart. Without an
+  // entry here the lookup fell through `?? []` and asserted nothing, which is how
+  // devin shipped "tell the user to `/clear` (or restart Claude Code)".
+  devin: ["new Devin CLI session", "new Devin Desktop conversation", "`/aidlc`"],
 };
 
 function stageTableRows(body: string): string[] {
@@ -751,6 +755,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "copilot",
       "codex",
       "cursor",
+      "devin",
       "kiro",
       "kiro-ide",
       "opencode",
