@@ -39,10 +39,10 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
           fi
-          git fetch --no-tags origin v2
+          git fetch --no-tags origin main
           tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
           test "$(git rev-parse HEAD)" = "$tag_sha"
-          git merge-base --is-ancestor "$tag_sha" origin/v2
+          git merge-base --is-ancestor "$tag_sha" origin/main
           printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
       - name: Require protected release authorization identity
         shell: bash

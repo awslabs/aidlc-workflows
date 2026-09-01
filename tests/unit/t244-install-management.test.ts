@@ -52,6 +52,12 @@ const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const INSTALL_SH = join(REPO_ROOT, "scripts", "install.sh");
 const INSTALL_PS1 = join(REPO_ROOT, "scripts", "install.ps1");
 const RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
+const V1_RELEASE_DISPATCH_WORKFLOW = join(
+  REPO_ROOT,
+  ".github",
+  "workflows",
+  "dispatch-v1-release.yml",
+);
 const RELEASE_VERIFIER = join(REPO_ROOT, "scripts", "verify-release.ts");
 const UTILITY = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
 const RELEASE_HARNESSES = [
@@ -1775,7 +1781,11 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).toContain('.reviewer.slug == "aidlc-admins"');
     expect(workflow).toContain("bun scripts/verify-release.ts controls");
     expect(workflow).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
-    expect(workflow).toContain("git merge-base --is-ancestor");
+    expect(workflow).toContain("git fetch --no-tags origin main");
+    expect(workflow).toContain(
+      'git merge-base --is-ancestor "$tag_sha" origin/main',
+    );
+    expect(workflow).not.toContain("origin/v2");
     expect(workflow.indexOf("name: Authorize immutable release tag"))
       .toBeLessThan(workflow.indexOf("name: Mint release authorization token"));
     expect(workflow.indexOf("name: Authorize immutable release tag"))
@@ -2272,6 +2282,18 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).not.toContain("--draft");
   });
 
+  test("the default branch preserves a manual v1 release forwarder", () => {
+    const workflow = readFileSync(V1_RELEASE_DISPATCH_WORKFLOW, "utf-8");
+    expect(workflow).toContain("name: Dispatch v1 Release");
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain(
+      'if [[ ! "$INPUT_TAG" =~ ^v1\\.[0-9]+\\.[0-9]+$ ]]; then',
+    );
+    expect(workflow).toContain("gh workflow run release.yml");
+    expect(workflow).toContain('--ref "$INPUT_TAG"');
+    expect(workflow).not.toContain("\n  push:");
+  });
+
   test("CI test job builds the projections before running the tiers", () => {
     // The same generator-driven rule for the per-push gate: the tiers exercise
     // CI-built bytes from a fresh checkout.
@@ -2279,6 +2301,8 @@ describe("t244 Windows and completion release surfaces", () => {
       join(REPO_ROOT, ".github", "workflows", "ci.yml"),
       "utf-8",
     );
+    expect(ci).toContain("branches:\n      - main");
+    expect(ci).not.toContain("branches:\n      - v2");
     const testJob = ci.slice(ci.indexOf("\n  test:"), ci.indexOf("\n  changelog-guard:"));
     const regen = "run: bun scripts/package.ts";
     expect(testJob).toContain(regen);

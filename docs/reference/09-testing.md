@@ -258,7 +258,7 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | CI pipeline | L2 | `bun tests/run-tests.ts --ci` | CI/CD pipeline |
-| Release / merge to `v2` | L3 | `bun tests/run-tests.ts --release` | CI/CD pipeline |
+| Release / merge to `main` | L3 | `bun tests/run-tests.ts --release` | CI/CD pipeline |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 

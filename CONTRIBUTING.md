@@ -89,7 +89,7 @@ PRs produced by AI coding agents are welcome and follow the same process. Start 
 
 ### Submitting your PR
 
-1. Work against the latest `v2` branch
+1. Work against the latest `main` branch
 2. Check existing open and recently merged PRs
 3. Fork the repository
 4. Make your changes (keep them focused)

@@ -34,12 +34,12 @@ digest check does not prove the file on disk is the attested subject.
 The publication boundary is one GitHub Release for an existing `v*` tag. The
 workflow starts from either a protected tag pushed from a reviewed release-prep
 commit or a manual dispatch naming an existing tag. Its authorization job proves
-that the immutable tag commit is an ancestor of `origin/v2`. A manual dispatch
+that the immutable tag commit is an ancestor of `origin/main`. A manual dispatch
 must itself run on that tag (`refs/tags/<tag>`), so the attestation source ref
 cannot silently remain the branch from which the workflow was opened.
 The protected `release` environment requires non-author approval and protects
 the authorization App credentials. `authorize` first proves the selected tag
-commit is already on `v2` using only the normal read token. Only then does it
+commit is already on `main` using only the normal read token. Only then does it
 mint a current-repository installation token with Actions read and
 Administration write, use it to read the otherwise-hidden ruleset bypass
 actors, and emit a distinct authorization identity error when the API omits or
@@ -124,7 +124,7 @@ exclusions: a creation-only ruleset with exactly the documented reviewer actor
 in `always` bypass mode, and an update-plus-deletion ruleset with no bypass
 actors. Combined controls, extra actors, wrong modes, hidden actor data, or
 partial namespaces fail closed. The workflow independently rejects a tag whose
-commit is not on `v2`; every source-consuming job checks out the authorized
+commit is not on `main`; every source-consuming job checks out the authorized
 SHA, and both protected release jobs recheck the remote tag target.
 
 ### Mirror or download tampering

@@ -7,8 +7,8 @@
 // init tool's verbatim stdout, the on-disk state fields, and the parsed audit
 // events — NEVER on assistantText.
 //
-// ⛔ DIVERGENCE from origin/v2's copy: v2's t59 still drives the RETIRED
-// `--init` flag (`/aidlc --init --scope bugfix ...`). Since v2 #847
+// DIVERGENCE from the pre-main-transition copy: t59 still drove the RETIRED
+// `--init` flag (`/aidlc --init --scope bugfix ...`). Since #847
 // (2d9b23899, lossless task text: unknown flag-looking tokens are kept as
 // intent words), parseNextFlags no longer silently drops `--init`, so it
 // leaks into the creation directive as `--arguments=--init` — a garbage

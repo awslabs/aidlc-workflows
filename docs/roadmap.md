@@ -1,19 +1,20 @@
 # AI-DLC Workflows 2.0 - Roadmap
 
-Status as of 2026-08-20.
+Status as of 2026-09-01.
 
-- The current v2 version is **2.6.18** (`origin/v2` tip `fbb1460c`). Version
-  numbers describe the committed framework tree;
-  they are not GitHub Releases.
-- AI-DLC Workflows 2.0 is **GA**. The README announcement landed in #627 after
-  the reviewer-as-verifier and three-role ensemble milestones shipped.
-- Release publication is not yet aligned with the v2 branch: GitHub still marks
-  `v1.0.1` as Latest, tracked by #635. The native distribution implementation
-  for #722 is under review in #756; no public v2 native release exists yet.
+- The current v2 source version is **2.7.1** on `main`. Version numbers
+  describe the committed framework tree, not GitHub Releases.
+- AI-DLC Workflows 2.0 is **GA** on the default `main` branch. Use `main` for
+  new installations and upgrades. The earlier implementation is maintained
+  separately on `v1`.
+- GitHub marks `v2.7.0` as Latest, but that roll-up release has no native
+  assets. The native distribution implementation lands in 2.7.1 through #756;
+  publication remains gated on the protected release environment and tag
+  controls tracked by #635.
 - PR validation now includes the deterministic integration and end-to-end tiers
   in addition to smoke, unit, packaging, typecheck and lint (#791).
 
-The version numbers below describe where work landed on the v2 branch. Future
+The version numbers below describe where work landed on `main`. Future
 themes and open pull requests are directional, not committed release promises.
 
 ## North star reference
@@ -55,13 +56,13 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 
 | # | Goal | Status | Delivered by | Remaining work |
 | --- | --- | --- | --- | --- |
-| 1 | Real-world ensemble | Shipped | 2.5.0 independent collaborators and selectable topologies (#568); enforced reviewer receipts (#569); batch-parallel per-unit waves (#617) | Harness-native live-team transports and planned-Bolt/runtime alignment remain enhancements (#734) |
-| 2 | Customization | Shipped, with follow-ups | 2.3.0 plugin seam, 2.3.5 content projection/selection (#550), deterministic rule delivery (#658), plugin scopes (#664), reusable plugin test kit (#792) | Stage-specific rules, `when:` evaluation, remote discovery and marketplace (#723) |
-| 3 | Adaptiveness | Shipped | 2.2.0 composer, entropy-scored composition (#595), deterministic ARS (#644), unit-major Code Generation (#705), Classic/Express scopes and conditional protocol modules (#767) | Boundary changes remain human-approved by design |
-| 4 | Verifier as adversary | Shipped | 2.4.0 adversarial evidence contract (#566), gate-and-completion enforcement (#569, #551), reviewer-class cost dial (#718), turn/recovery backstops (#613, #758) | Blocking sensor severity is an adjacent follow-up (#431) |
-| 5 | Cyclic flows | Partial | Within-stage review/revision loops, bounded recovery mechanics, and explicit human-authorized forward/backward/redo stage jumps | Stage-triggered governed cross-stage feedback loops remain unbuilt; #616 is a narrower Build & Test loop-back |
-| 6 | Traceability | Partial | Artefact graph, upstream coverage, per-stage enforcement (#401), claim provenance (#647, #686), shared CodeKB safeguards (#670), domain/contract boundaries (#711), fingerprinted Testing Posture plan approval (#772) | Progressive in-place enrichment, stale-result propagation (#716), source-bound receipts (#646), cross-unit discovery |
-| 7 | Org repository | Shipped | 2.1.0 spaces/intents/org-KB, declared multi-repo manifest and sync (#674), clone-safe active-space cursor (#709), DocumentKB indexing and citations (#731) | Additional retrieval lifecycle and auditable supplemental-knowledge selection remain active extensions (#694, #714) |
+| 1 | Real-world ensemble | Shipped | 2.5.0 independent collaborators and selectable topologies (#568), enforced reviewer receipts (#569), batch-parallel per-unit waves (#617), team-owned parallel Units (#879) | Harness-native live-team transports remain an enhancement |
+| 2 | Customization | Shipped, with follow-ups | 2.3.0 plugin seam, 2.3.5 content projection/selection (#550), deterministic rule delivery (#658), plugin scopes (#664), reusable plugin test kit (#792), plugin doctor extensions (#797), standalone authoring toolchain (#892) | Stage-specific rules, `when:` evaluation, remote discovery and marketplace (#723) |
+| 3 | Adaptiveness | Shipped | 2.2.0 composer, entropy-scored composition (#595), deterministic ARS (#644), unit-major Code Generation (#705), Classic/Express scopes and conditional protocol modules (#767), per-session workflow bindings (#858) | Boundary changes remain human-approved by design |
+| 4 | Verifier as adversary | Shipped | 2.4.0 adversarial evidence contract (#566), gate-and-completion enforcement (#569, #551), reviewer-class cost dial (#718), turn/recovery backstops (#613, #758), gate-bound blocking sensors (#836) | Pull-request-level adversarial review is under development in #799 |
+| 5 | Cyclic flows | Partial | Within-stage review/revision loops, bounded recovery mechanics, explicit human-authorized forward/backward/redo stage jumps, and bounded Build & Test to Code Generation loop-back (#616) | General governed cross-stage feedback loops remain unbuilt |
+| 6 | Traceability | Partial | Artefact graph, upstream coverage, per-stage enforcement (#401), claim provenance (#647, #686), shared CodeKB safeguards (#670), domain/contract boundaries (#711), stale-result propagation (#716), source-bound and per-Unit review receipts (#646, #813) | Progressive in-place enrichment and cross-unit discovery propagation (#299) |
+| 7 | Org repository | Shipped | 2.1.0 spaces/intents/org-KB, declared multi-repo manifest and sync (#674), clone-safe active-space cursor (#709), DocumentKB indexing and citations (#731), summaries and tags (#894) | Auditable supplemental-knowledge selection remains an active extension (#694) |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -99,6 +100,19 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 | 2.6.16 | Code Generation plans bound to the affirmed Testing Posture | 4, 6 | #772 |
 | 2.6.17 | Reusable plugin test kit and plugin-author testing tiers | 2 | #792 |
 | 2.6.18 | Classic and Express scopes, Classic implicit default and conditional protocol modules | 2, 3 | #767 |
+| 2.6.20 | Bounded Build & Test to Code Generation failure loop-back | 5 | #616 |
+| 2.6.37 | Code Generation review receipts bound to workspace source state | 4, 6 | #646 |
+| 2.6.51 - 2.6.64 | Continuation cursor, Kiro reliability, plugin-extensible doctor checks, stage-validity receipts and native Kiro IDE surfaces | 1, 2, 4, 6 | #822, #788, #797, #716, #824 |
+| 2.6.69 | Per-Unit source attribution for Code Generation review receipts | 4, 6 | #813 |
+| 2.6.72 - 2.6.74 | Gate-bound blocking sensors and binding quality-target verification | 4, 6 | #836, #842 |
+| 2.6.80 | Per-session workflow bindings for concurrent intents in one space | 3, 7 | #858 |
+| 2.6.87 | DocumentKB summaries and tags | 7 | #894 |
+| 2.6.105 | Standalone plugin create, validate, build and test toolchain | 2 | #892 |
+| 2.6.107 | Team-owned Units and parallel Construction across teams | 1, 3 | #879 |
+| 2.6.114 | No-DAG per-Unit review continuity | 1, 4 | #947 |
+| 2.6.121 - 2.6.124 | Immutable reviewer evidence, Git-independent source binding and portable workflow state paths | 4, 6 | #888, #904, #962 |
+| 2.7.0 | Consolidated 2.6.x GA baseline on `main` | 1-7 | #992 |
+| 2.7.1 | Native distribution, six-command CLI, config policy and release hardening | 1-7 | #756 |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -111,17 +125,13 @@ frequently; each linked pull request is authoritative.
 
 | PR | Work | Theme |
 | --- | --- | --- |
-| [#756](https://github.com/awslabs/aidlc-workflows/pull/756) | Native distribution, six-command CLI, config policy and release hardening | Installation and releases |
 | [#775](https://github.com/awslabs/aidlc-workflows/pull/775) | Unified Kiro distribution aligned to the agent harness | Harness parity |
 | [#782](https://github.com/awslabs/aidlc-workflows/pull/782) | Product-discovery plugin (AI-PLC) | Plugins and product discovery |
-| [#797](https://github.com/awslabs/aidlc-workflows/pull/797) | Plugin-extensible doctor checks | Plugin ecosystem |
 | [#799](https://github.com/awslabs/aidlc-workflows/pull/799) | Adversarial AI pull-request review agent | CI and verification |
-| [#813](https://github.com/awslabs/aidlc-workflows/pull/813) | Per-unit attribution for Code Generation review receipts | Traceability and validity |
-| [#716](https://github.com/awslabs/aidlc-workflows/pull/716) | Project and propagate stale stage results | Traceability and validity |
-| [#616](https://github.com/awslabs/aidlc-workflows/pull/616) | Bounded Build & Test to Code Generation loop-back | Cyclic flows |
-| [#646](https://github.com/awslabs/aidlc-workflows/pull/646) | Bind Code Generation review receipts to workspace source state | Traceability and validity |
-| [#754](https://github.com/awslabs/aidlc-workflows/pull/754) | Reconcile planned Bolt terminology with the current Construction walk | Construction semantics |
-| [#788](https://github.com/awslabs/aidlc-workflows/pull/788) | Kiro agent-v1 hook matcher and adapter hardening | Harness reliability |
+| [#969](https://github.com/awslabs/aidlc-workflows/pull/969) | Construction integration through pull requests | Delivery workflow |
+| [#968](https://github.com/awslabs/aidlc-workflows/pull/968) | Devin CLI and Desktop harness | Harness expansion |
+| [#907](https://github.com/awslabs/aidlc-workflows/pull/907) | mabl verification plugin | Plugins and verification |
+| [#753](https://github.com/awslabs/aidlc-workflows/pull/753) | Evaluator integration | Evaluation |
 | [#526](https://github.com/awslabs/aidlc-workflows/pull/526) | Product discovery in Ideation | Product discovery |
 
 <!-- markdownlint-enable MD013 -->
@@ -134,15 +144,14 @@ but do not yet have committed release versions.
 ### Traceability and progressive enrichment
 
 - Per-stage upstream traceability enforcement shipped in
-  [#401](https://github.com/awslabs/aidlc-workflows/pull/401). Bind review evidence
-  to source state
-  ([#646](https://github.com/awslabs/aidlc-workflows/pull/646)), and propagate
-  stale stage results
-  ([#716](https://github.com/awslabs/aidlc-workflows/pull/716)).
-- Per-unit attribution for Code Generation review receipts is active in
-  [#813](https://github.com/awslabs/aidlc-workflows/pull/813), addressing
-  [#662](https://github.com/awslabs/aidlc-workflows/issues/662). A fresh v2
-  implementation is still needed for cross-unit discovery propagation
+  [#401](https://github.com/awslabs/aidlc-workflows/pull/401). Source-bound review
+  evidence shipped in
+  [#646](https://github.com/awslabs/aidlc-workflows/pull/646), stale stage-result
+  propagation shipped in
+  [#716](https://github.com/awslabs/aidlc-workflows/pull/716), and per-Unit
+  attribution shipped in
+  [#813](https://github.com/awslabs/aidlc-workflows/pull/813).
+- Cross-unit discovery propagation remains open
   ([#299](https://github.com/awslabs/aidlc-workflows/issues/299)/[#300](https://github.com/awslabs/aidlc-workflows/pull/300)).
 - Preserve progressive enrichment as the North Star destination: downstream
   stages enrich upstream artefacts in place, with ADRs as a core design artefact.
@@ -152,7 +161,7 @@ but do not yet have committed release versions.
 
 ### Governed feedback loops
 
-- [#616](https://github.com/awslabs/aidlc-workflows/pull/616) implements one
+- [#616](https://github.com/awslabs/aidlc-workflows/pull/616) shipped one
   bounded Build & Test to Code Generation return path for
   [#611](https://github.com/awslabs/aidlc-workflows/issues/611). It is an
   incremental loop, not a general cyclic graph engine.
@@ -164,10 +173,13 @@ but do not yet have committed release versions.
 - The plugin mechanism, content projection, selection and plugin-contributed
   scopes are shipped; the plugin test kit and authoring tiers shipped in
   [#792](https://github.com/awslabs/aidlc-workflows/pull/792).
-- The offline plugin CREATE, VALIDATE, BUILD, and TEST authoring tiers ship as
+- Plugin-extensible doctor checks shipped in
+  [#797](https://github.com/awslabs/aidlc-workflows/pull/797). The offline plugin
+  CREATE, VALIDATE, BUILD, and TEST authoring tiers ship as
   the standalone `aidlc-plugin-create.ts`, `aidlc-plugin-validate.ts`,
   `aidlc-plugin-build.ts`, and `aidlc-plugin-test.ts` tools. The top-level
-  command routes remain proposed in
+  `plugin validate` and `plugin build` routes also ship. Top-level
+  `plugin create` and `plugin test` routes remain proposed in
   [#723](https://github.com/awslabs/aidlc-workflows/issues/723).
   Remote discovery, trust, a first-party marketplace and a graduation path are
   also proposed in #723.
@@ -176,19 +188,19 @@ but do not yet have committed release versions.
   [#782](https://github.com/awslabs/aidlc-workflows/pull/782)) and design
   ([#527](https://github.com/awslabs/aidlc-workflows/issues/527)) are candidates
   for first-party plugins.
-- Plugin-native diagnostics are active in
-  [#797](https://github.com/awslabs/aidlc-workflows/pull/797); external authors
-  can exercise composition against a disposable copy of an install with
-  `aidlc-plugin-test.ts`.
+- `aidlc-plugin-test.ts` exercises composition against a disposable copy of an
+  install for external plugin authors.
 
 ### Knowledge and documents
 
 - [#731](https://github.com/awslabs/aidlc-workflows/pull/731) shipped
-  DocumentKB's first indexing and citation slice;
-  [#714](https://github.com/awslabs/aidlc-workflows/issues/714) remains the
-  broader retrieval lifecycle.
-- [#694](https://github.com/awslabs/aidlc-workflows/issues/694) proposes auditable
-  supplemental-knowledge selection and delivery across stage topologies.
+  DocumentKB's first indexing and citation slice. Summaries and tags shipped in
+  [#894](https://github.com/awslabs/aidlc-workflows/pull/894), completing that
+  metadata slice of the tracked
+  [#714](https://github.com/awslabs/aidlc-workflows/issues/714) RFC.
+- [#694](https://github.com/awslabs/aidlc-workflows/issues/694) tracks
+  intent-aware discovery and auditable supplemental-knowledge delivery across
+  stage topologies.
 
 ### Product discovery
 
@@ -202,9 +214,11 @@ but do not yet have committed release versions.
 
 ### Installation, upgrades and releases
 
+- The GA implementation and its active development line now live on `main`.
+  The earlier implementation remains on `v1`.
 - [#722](https://github.com/awslabs/aidlc-workflows/issues/722) covers binary
-  packaging, installers, release automation, rollback and post-install setup;
-  its milestones 1-3 implementation is under review in
+  packaging, installers, release automation, rollback and post-install setup.
+  Its milestones 1-3 implementation ships in 2.7.1 through
   [#756](https://github.com/awslabs/aidlc-workflows/pull/756). The earlier Bun
   dependency tracker [#399](https://github.com/awslabs/aidlc-workflows/issues/399)
   is closed as superseded by #722.
@@ -213,8 +227,8 @@ but do not yet have committed release versions.
   [#535](https://github.com/awslabs/aidlc-workflows/pull/535) closed without
   merging.
 - [#635](https://github.com/awslabs/aidlc-workflows/issues/635) tracks the
-  mismatch between the v2 GA announcement and GitHub's Latest release still
-  pointing at `v1.0.1`.
+  completion of the public native release after GitHub Latest moved from
+  `v1.0.1` to the assetless `v2.7.0` roll-up.
 
 ### Harness expansion and parity
 
@@ -224,10 +238,11 @@ but do not yet have committed release versions.
 - Cursor support shipped in
   [#661](https://github.com/awslabs/aidlc-workflows/pull/661). A unified Kiro
   distribution is under review in
-  [#775](https://github.com/awslabs/aidlc-workflows/pull/775); the existing
-  `dist/kiro-ide/` compatibility gap remains tracked separately in
-  [#555](https://github.com/awslabs/aidlc-workflows/issues/555), while matcher
-  and adapter reliability continues in
+  [#775](https://github.com/awslabs/aidlc-workflows/pull/775). Native Kiro IDE
+  surfaces shipped in
+  [#824](https://github.com/awslabs/aidlc-workflows/pull/824), closing
+  [#555](https://github.com/awslabs/aidlc-workflows/issues/555), and hook matcher
+  hardening shipped in
   [#788](https://github.com/awslabs/aidlc-workflows/pull/788).
 - Antigravity setup is proposed in
   [#690](https://github.com/awslabs/aidlc-workflows/issues/690).
@@ -243,18 +258,16 @@ but do not yet have committed release versions.
 - Operations-phase steering remains a requested direction
   ([#221](https://github.com/awslabs/aidlc-workflows/issues/221),
   [#473](https://github.com/awslabs/aidlc-workflows/issues/473)), not an active
-  v2 implementation stream.
+  `main` implementation stream.
 
 ## Known gaps
 
 - Stage-specific rules (`aidlc-stage-<slug>.md`) are reserved but unbuilt.
 - Plugin `when:` evaluation, remote discovery and marketplace trust remain open.
-- Sensor failures are advisory; blocking severity remains open in #431.
+- Write-fired sensors remain advisory; gate-bound sensors support blocking
+  severity and human-backed override.
 - General cross-stage cycles and progressive in-place artefact enrichment remain
   North Star gaps.
-- Kiro's remaining gaps include the legacy `dist/kiro-ide/` compatibility issue
-  (#555), plus hook registration/payload drift, plugin projection and argument
-  forwarding (#763, #764, #776, #778, #779, #783, #784). The unified Kiro work
-  in #775 is a separate distribution and does not yet retire that legacy gap.
-- Several older community PRs remain open and need rebasing or disposition:
-  #526 and #553. PRs #432, #535, #552, #653 and #712 closed without merging.
+- The unified Kiro distribution remains under review in #775.
+- Older community PR #526 remains open and needs rebasing or disposition. PRs
+  #432, #535, #552, #653 and #712 closed without merging.
