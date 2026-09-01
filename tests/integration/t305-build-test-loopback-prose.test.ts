@@ -33,7 +33,7 @@
 // no teardown — there is no mutable surface.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -557,7 +557,14 @@ describe("t305 conductor SKILLs — STAGE RITUAL IS ATOMIC exception (authored +
     "(One exception: the Build-and-Test failure loop-back — the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) — jumps back to code-generation from a deliberately in-flight failed stage; its learnings ritual fires on the eventual passing run.)";
 
   test("every authored conductor SKILL carries the exception on the atomic-ritual bullet", () => {
-    expect(HARNESS_MATRIX).toHaveLength(8);
+    // Derived, not a literal: this assertion exists to prove the sweep below
+    // covers EVERY shipped harness, and a hardcoded count fails the moment one
+    // is added (it did, on devin) without saying anything about coverage.
+    expect(HARNESS_MATRIX.length).toBe(
+      readdirSync(join(REPO_ROOT, "harness"), { withFileTypes: true })
+        .filter((e) => e.isDirectory() && existsSync(join(REPO_ROOT, "harness", e.name, "manifest.ts")))
+        .length,
+    );
     const missing: string[] = [];
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
