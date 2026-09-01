@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 843,
+    "total": 845,
     "enumeratedByClass": {
-      "function": 545,
+      "function": 547,
       "audit": 91,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 322,
+      "function": 324,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -3960,6 +3960,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:pendingReviewRequestStatus",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PER_UNIT_FOR_EACH",
       "minMechanism": "none",
       "coveredBy": [],
@@ -5036,6 +5048,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewAttemptEventMatchesCurrentClaim",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t324-team-unit-progress-gates.test.ts",
           "mechanism": "cli"
         }
       ],

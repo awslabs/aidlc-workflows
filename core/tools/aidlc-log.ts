@@ -13,7 +13,6 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
-  boltSlugForUnit,
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   emitError,
@@ -30,7 +29,6 @@ import {
   humanPresenceGuardDisabled,
   isAutonomousConstructionDecision,
   isAutonomousSwarmStage,
-  isTeamUnitOwnership,
   loadStageGraphAll,
   isNonAnswer,
   latestPipelineLinkArtifactMtime,
@@ -38,6 +36,7 @@ import {
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
+  pendingReviewRequestStatus,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -47,6 +46,7 @@ import {
   recoveryGuidance,
   requestChangesResetIsExecutable,
   reviewAttemptAccounting,
+  reviewAttemptEventMatchesCurrentClaim,
   reviewArtifactSnapshot,
   reviewAppendixDigest,
   reviewAppendixEvidenceBytes,
@@ -1195,6 +1195,7 @@ function reviewGuardAttemptState(
   receipts: ReturnType<typeof freshReviewReceipts> | null,
   unit: string | undefined,
   summaryCoverage: GuardAttemptState["summaryCoverage"] = "current",
+  pendingStatus: ReturnType<typeof pendingReviewRequestStatus> = null,
 ): GuardAttemptState {
   const pendingIterations = [...attempt.pendingIterations].sort((a, b) => a - b);
   const pending =
@@ -1241,14 +1242,28 @@ function reviewGuardAttemptState(
         ? {
             pendingReview: {
               iteration: pending.iteration,
-              retryable: true,
+              retryable:
+                pendingStatus?.iteration === pending.iteration
+                  ? pendingStatus.retryable
+                  : true,
+              verdictRecordable:
+                pendingStatus?.iteration === pending.iteration
+                  ? pendingStatus.verdictRecordable
+                  : true,
             },
           }
         : pendingIterations.length > 0
           ? {
               pendingReview: {
                 iteration: pendingIterations[0],
-                retryable: true,
+                retryable:
+                  pendingStatus?.iteration === pendingIterations[0]
+                    ? pendingStatus.retryable
+                    : true,
+                verdictRecordable:
+                  pendingStatus?.iteration === pendingIterations[0]
+                    ? pendingStatus.verdictRecordable
+                    : true,
               },
             }
           : {}),
@@ -1332,7 +1347,6 @@ function handleReview(args: string[]): void {
     }
     const autonomousCandidate =
       flags.unit !== undefined && isAutonomousSwarmStage(pd, state, node);
-    const teamOwnership = isTeamUnitOwnership(state);
     const unitResolution =
       node.for_each === "unit-of-work" ? resolveBoltDag(pd, intent, space) : null;
     const attemptWindow = reviewAttemptWindow(pd, state, node);
@@ -1344,28 +1358,13 @@ function handleReview(args: string[]): void {
       flags.unit,
       fields.Workflow,
       {
-        eventFilter: (row) => {
-          if (!flags.unit || !teamOwnership) return true;
-          const eventUnit = auditBlockField(row.block, "Unit");
-          if (eventUnit !== null) {
-            return eventUnit !== flags.unit ||
-              eventMatchesClaimAttempt(pd, row.block, eventUnit);
-          }
-          const boltSlug = auditBlockField(row.block, "Bolt slug");
-          const boltNames = auditBlockField(row.block, "Bolt names");
-          if (
-            boltNames === flags.unit &&
-            boltSlug === boltSlugForUnit(flags.unit) &&
-            (
-              row.event === "BOLT_STARTED" ||
-              row.event === "BOLT_COMPLETED" ||
-              row.event === "BOLT_FAILED"
-            )
-          ) {
-            return eventMatchesClaimAttempt(pd, row.block, flags.unit);
-          }
-          return true;
-        },
+        eventFilter: (row) =>
+          reviewAttemptEventMatchesCurrentClaim(
+            pd,
+            state,
+            flags.unit,
+            row,
+          ),
       },
     );
     const mergedBoltUnits = attemptWindow.mergedBoltUnits;
@@ -1533,6 +1532,18 @@ function handleReview(args: string[]): void {
           unitResolution,
           mergedBoltUnits,
         } = loadContext(true, !retryPending);
+        const pendingStatus = pendingReviewRequestStatus(
+          pd,
+          node,
+          flags.unit,
+          attempt,
+          {
+            requireRequiredArtifacts,
+            boltDag: unitResolution ?? undefined,
+            mergedBoltUnits,
+            single: flags.single === "true",
+          },
+        );
         const teamGate = teamUnitGateStatus(
           pd,
           state,
@@ -1555,6 +1566,7 @@ function handleReview(args: string[]): void {
             receipts,
             flags.unit,
             summaryEvidence.summaryCoverage,
+            pendingStatus,
           );
           const evaluated = evaluateGuardRefusal({
             code: summaryEvidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
@@ -1615,6 +1627,8 @@ function handleReview(args: string[]): void {
             budget,
             receipts,
             flags.unit,
+            "current",
+            pendingStatus,
           );
           const autonomousBolt =
             autonomousCandidate && attempt.boltStarted && flags.unit

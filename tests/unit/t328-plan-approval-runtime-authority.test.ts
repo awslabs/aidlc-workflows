@@ -3,6 +3,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -240,6 +241,35 @@ function runStatusSync(
         CLAUDE_PROJECT_DIR: project,
         AIDLC_STATUSLINE_OWNER: `statusline:${process.pid}`,
       },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+}
+
+function runPlanGuard(
+  project: string,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+) {
+  return Bun.spawnSync(
+    [
+      BUN,
+      join(
+        project,
+        ".claude",
+        "hooks",
+        "aidlc-plan-approval-guard.ts",
+      ),
+    ],
+    {
+      cwd: project,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+      stdin: Buffer.from(JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: toolName,
+        tool_input: toolInput,
+      })),
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -996,32 +1026,15 @@ describe("t328 Plan Approval runtime authority", () => {
 
     const contract = resolveTestingPosture(project).contract_sha256;
     const dispatchDeveloper = () =>
-      Bun.spawnSync(
-        [
-          BUN,
-          join(
-            project,
-            ".claude",
-            "hooks",
-            "aidlc-plan-approval-guard.ts",
-          ),
-        ],
+      runPlanGuard(
+        project,
+        "Task",
         {
-          cwd: project,
-          env: { ...process.env, CLAUDE_PROJECT_DIR: project },
-          stdin: Buffer.from(JSON.stringify({
-            hook_event_name: "PreToolUse",
-            tool_name: "Task",
-            tool_input: {
-              subagent_type: "aidlc-developer-agent",
-              prompt:
-                `AIDLC-UNIT: ${unit}\n` +
-                `AIDLC-TESTING-CONTRACT: ${contract}\n` +
-                "Implement the approved plan.",
-            },
-          })),
-          stdout: "pipe",
-          stderr: "pipe",
+          subagent_type: "aidlc-developer-agent",
+          prompt:
+            `AIDLC-UNIT: ${unit}\n` +
+            `AIDLC-TESTING-CONTRACT: ${contract}\n` +
+            "Implement the approved plan.",
         },
       );
     const dispatch = dispatchDeveloper();
@@ -1029,6 +1042,84 @@ describe("t328 Plan Approval runtime authority", () => {
       dispatch.exitCode,
       `${dispatch.stdout.toString()}\n${dispatch.stderr.toString()}`,
     ).toBe(0);
+
+    const generationState = readFileSync(statePath, "utf-8");
+    const generationMarker = readActiveDirectiveMarker(
+      project,
+      generationState,
+    );
+    const stopAfterGeneration = Bun.spawnSync(
+      [BUN, join(project, ".claude", "hooks", "aidlc-continue-workflow.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "Stop",
+          session_id: "unit-start-dispatch",
+          stop_hook_active: false,
+          transcript_path: join(project, "missing-transcript.jsonl"),
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(
+      stopAfterGeneration.exitCode,
+      `${stopAfterGeneration.stdout.toString()}\n${stopAfterGeneration.stderr.toString()}`,
+    ).toBe(0);
+    expect(JSON.parse(stopAfterGeneration.stdout.toString())).toMatchObject({
+      decision: "block",
+    });
+    expect(
+      readActiveDirectiveMarker(project, generationState),
+    ).toEqual(generationMarker);
+
+    const reviewArtifact = join(
+      codeGenerationRecordDir(project, unit),
+      "code-generation-plan.md",
+    );
+    const reviewerDispatch = join(
+      seededRecordDir(project),
+      ".aidlc-reviewer-dispatch.json",
+    );
+    for (const guarded of [
+      runPlanGuard(project, "Bash", {
+        command: 'date -u +"%Y-%m-%dT%H:%M:%SZ"',
+      }),
+      runPlanGuard(project, "Bash", {
+        command:
+          "bun .claude/tools/aidlc-log.ts review --stage code-generation " +
+          `--reviewer aidlc-architecture-reviewer-agent --iteration 1 --unit ${unit}`,
+      }),
+      runPlanGuard(project, "Bash", {
+        command:
+          `bun ${join(project, ".claude", "tools", "aidlc-state.ts")} unit complete ` +
+          `--stage code-generation --unit ${unit} 2>&1`,
+      }),
+      runPlanGuard(project, "Write", {
+        file_path: reviewerDispatch,
+        content: "{}\n",
+      }),
+      runPlanGuard(project, "Edit", {
+        file_path: reviewArtifact,
+        old_string: "# Plan",
+        new_string: "# Plan\n\n## Review",
+      }),
+    ]) {
+      expect(
+        guarded.exitCode,
+        `${guarded.stdout.toString()}\n${guarded.stderr.toString()}`,
+      ).toBe(0);
+    }
+    expect(
+      resolveCodeGenerationAuthority(project, { unit }),
+    ).toEqual(authorityBefore);
+    expect(
+      readPlanApprovalReceipt(project, {
+        targetId: authorityBefore.targetId,
+        directiveEpoch: authorityBefore.directiveEpoch,
+      }),
+    ).toMatchObject({ status: "generation" });
 
     const lifecycle = (
       action: "pause" | "resume" | "complete",
@@ -1104,6 +1195,216 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(
       `${completedDispatch.stdout.toString()}\n${completedDispatch.stderr.toString()}`,
     ).toContain(`unit "${unit}" is not active`);
+  }, 30000);
+
+  test("Code Generation review request, appendix, verdict, and Unit completion remain executable after Stop", () => {
+    const unit = "alpha";
+    const project = createProject({
+      unit,
+      inlineUnits: [unit],
+    });
+    const questions = seedPlan(project, unit);
+    approve(project, questions, "review-handoff", unit);
+    const authority = resolveCodeGenerationAuthority(project, { unit });
+
+    const runState = (args: string[]) =>
+      Bun.spawnSync(
+        [
+          BUN,
+          join(DIST_ROOT, "tools", "aidlc-state.ts"),
+          ...args,
+          "--project-dir",
+          project,
+        ],
+        {
+          cwd: project,
+          env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+    const started = runState([
+      "unit",
+      "start",
+      "--stage",
+      "code-generation",
+      "--unit",
+      unit,
+    ]);
+    expect(started.exitCode, started.stderr.toString()).toBe(0);
+
+    const contract = resolveTestingPosture(project).contract_sha256;
+    const dispatch = runPlanGuard(project, "Task", {
+      subagent_type: "aidlc-developer-agent",
+      prompt:
+        `AIDLC-UNIT: ${unit}\n` +
+        `AIDLC-TESTING-CONTRACT: ${contract}\n` +
+        "Implement the approved plan.",
+    });
+    expect(
+      dispatch.exitCode,
+      `${dispatch.stdout.toString()}\n${dispatch.stderr.toString()}`,
+    ).toBe(0);
+
+    const stageDir = codeGenerationRecordDir(project, unit);
+    writeFileSync(join(stageDir, "code-summary.md"), "# Code Summary\n");
+    writeFileSync(join(stageDir, "traceability.json"), "{}\n");
+    writeFileSync(
+      join(stageDir, "source-manifest.json"),
+      `${JSON.stringify({
+        stage: "code-generation",
+        unit,
+        version: 1,
+        writes: [],
+      })}\n`,
+    );
+
+    const statePath = join(seededRecordDir(project), "aidlc-state.md");
+    const stateBeforeStop = readFileSync(statePath, "utf-8");
+    const markerBeforeStop = readActiveDirectiveMarker(
+      project,
+      stateBeforeStop,
+    );
+    const stop = Bun.spawnSync(
+      [BUN, join(project, ".claude", "hooks", "aidlc-continue-workflow.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "Stop",
+          session_id: "review-handoff",
+          stop_hook_active: false,
+          transcript_path: join(project, "missing-transcript.jsonl"),
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(stop.exitCode, stop.stderr.toString()).toBe(0);
+    expect(JSON.parse(stop.stdout.toString())).toMatchObject({
+      decision: "block",
+    });
+    expect(
+      readActiveDirectiveMarker(project, stateBeforeStop),
+    ).toEqual(markerBeforeStop);
+
+    const reviewArgs = [
+      "review",
+      "--stage",
+      "code-generation",
+      "--reviewer",
+      "aidlc-architecture-reviewer-agent",
+      "--iteration",
+      "1",
+      "--unit",
+      unit,
+    ];
+    const reviewCommand =
+      `bun .claude/tools/aidlc-log.ts ${reviewArgs.join(" ")}`;
+    expect(
+      runPlanGuard(project, "Bash", { command: reviewCommand }).exitCode,
+    ).toBe(0);
+    const requested = Bun.spawnSync(
+      [BUN, join(DIST_ROOT, "tools", "aidlc-log.ts"), ...reviewArgs],
+      {
+        cwd: project,
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: project,
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(requested.exitCode, requested.stderr.toString()).toBe(0);
+
+    const reviewerDispatch = join(
+      seededRecordDir(project),
+      ".aidlc-reviewer-dispatch.json",
+    );
+    expect(
+      runPlanGuard(project, "Write", {
+        file_path: reviewerDispatch,
+        content: "{}\n",
+      }).exitCode,
+    ).toBe(0);
+    writeFileSync(reviewerDispatch, "{}\n");
+
+    const reviewArtifact = join(stageDir, "code-generation-plan.md");
+    expect(
+      runPlanGuard(project, "Edit", {
+        file_path: reviewArtifact,
+        old_string: "# Plan",
+        new_string: "# Plan\n\n## Review",
+      }).exitCode,
+    ).toBe(0);
+    appendFileSync(
+      reviewArtifact,
+      [
+        "",
+        "## Review",
+        "",
+        "**Verdict:** READY",
+        "**Reviewer:** aidlc-architecture-reviewer-agent",
+        "**Iteration:** 1",
+        "",
+        "### Findings",
+        "",
+        "No blocking findings.",
+        "",
+      ].join("\n"),
+    );
+
+    const verdictArgs = [...reviewArgs, "--verdict", "READY"];
+    expect(
+      runPlanGuard(project, "Bash", {
+        command:
+          `bun .claude/tools/aidlc-log.ts ${verdictArgs.join(" ")}`,
+      }).exitCode,
+    ).toBe(0);
+    const verdict = Bun.spawnSync(
+      [BUN, join(DIST_ROOT, "tools", "aidlc-log.ts"), ...verdictArgs],
+      {
+        cwd: project,
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: project,
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(verdict.exitCode, verdict.stderr.toString()).toBe(0);
+
+    const completeCommand =
+      `bun ${join(project, ".claude", "tools", "aidlc-state.ts")} unit complete ` +
+      `--stage code-generation --unit ${unit}`;
+    expect(
+      runPlanGuard(project, "Bash", { command: completeCommand }).exitCode,
+    ).toBe(0);
+    const completed = runState([
+      "unit",
+      "complete",
+      "--stage",
+      "code-generation",
+      "--unit",
+      unit,
+    ]);
+    expect(completed.exitCode, completed.stderr.toString()).toBe(0);
+    const audit = readAllAuditShards(project);
+    expect(audit).toContain("**Event**: REVIEW_COMPLETED");
+    expect(audit).toContain("**Event**: UNIT_COMPLETED");
+    expect(resolveCodeGenerationAuthority(project, { unit })).toEqual(
+      authority,
+    );
+    expect(
+      readPlanApprovalReceipt(project, {
+        targetId: authority.targetId,
+        directiveEpoch: authority.directiveEpoch,
+      }),
+    ).toMatchObject({ status: "generation" });
   }, 30000);
 
   test("audit append failure does not strand a consumed engine ask before the next Stop probe", () => {

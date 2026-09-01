@@ -90,6 +90,7 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
+  pendingReviewRequestStatus,
   producesArtifactFile,
   readAllAuditShards,
   readApplicableTeamUnitScopeStamp,
@@ -112,6 +113,8 @@ import {
   resolveBoltDag,
   requireLiveClaimForTeamUnit,
   reviewArtifactFingerprint,
+  reviewAttemptAccounting,
+  reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
   reviewerGateGuardDisabled,
   resolveReviewClass,
@@ -3542,6 +3545,43 @@ function refuseStateGuard(
     staleProgress?.recoverySpent === true ||
     receipts?.sourceStaleProgress?.recoverySpent === true ||
     receipts?.sourceRecoverySpent === true;
+  const pendingAttempt =
+    stage.reviewer === undefined || stage.phase === undefined
+      ? null
+      : reviewAttemptAccounting(
+          attemptView,
+          content,
+          stage,
+          stage.reviewer,
+          input.unit,
+          undefined,
+          {
+            eventFilter: (row) =>
+              reviewAttemptEventMatchesCurrentClaim(
+                pd,
+                content,
+                input.unit,
+                row,
+              ),
+          },
+        );
+  const pendingStatus =
+    pendingAttempt === null
+      ? null
+      : pendingReviewRequestStatus(
+          pd,
+          {
+            ...stage,
+            phase: stage.phase!,
+          },
+          input.unit,
+          pendingAttempt,
+          {
+            requireRequiredArtifacts:
+              process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1",
+            mergedBoltUnits: attemptView.mergedBoltUnits,
+          },
+        );
   const attempt = {
     floor:
       floorEvent === undefined
@@ -3560,7 +3600,14 @@ function refuseStateGuard(
         ? {
             pendingReview: {
               iteration: pending.iteration,
-              retryable: true,
+              retryable:
+                pendingStatus?.iteration === pending.iteration
+                  ? pendingStatus.retryable
+                  : true,
+              verdictRecordable:
+                pendingStatus?.iteration === pending.iteration
+                  ? pendingStatus.verdictRecordable
+                  : true,
             },
           }
         : {}),

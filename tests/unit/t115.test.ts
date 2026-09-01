@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint
+// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint, function:pendingReviewRequestStatus
 //
 // CLI-contract port of tests/unit/t115-orchestrate-report.sh (TAP plan 22),
 // mechanism = cli. The .sh drives `aidlc-orchestrate.ts report` — the
@@ -1375,6 +1375,74 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(countEvent(p, "REVIEW_REQUESTED")).toBe(1);
     expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
+  }, 30000);
+
+  test("R5b: changed pending review bytes do not advertise verdict or retry commands that will refuse", () => {
+    const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n\nOriginal request bytes.\n");
+    const request = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    expect(log(request, p).status).toBe(0);
+
+    writeFileSync(
+      artifact,
+      [
+        "# Requirements",
+        "",
+        "Changed outside the reviewer-owned appendix.",
+        "",
+        "review prose before the required heading",
+        "## Review",
+        "",
+        "**Verdict:** NOT-READY",
+        "**Reviewer:** aidlc-product-lead-agent",
+        "**Iteration:** 1",
+        "",
+      ].join("\n"),
+    );
+    expect(log([...request, "--retry-pending"], p).status).not.toBe(0);
+    expect(
+      log([...request, "--verdict", "NOT-READY"], p).status,
+    ).not.toBe(0);
+
+    const stateBefore = readFileSync(statePath(p), "utf-8");
+    const auditBefore = readAllAuditShards(p);
+    const result = orchestrate(
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "awaiting-approval",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(result.status).toBe(0);
+    expect(result.out).toContain('"kind":"ask"');
+    expect(result.out).toContain('"ask_type":"guard-recovery"');
+    expect(result.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
+    expect(result.out).toContain('Ask \\"What should change?\\"');
+    expect(result.out).not.toContain("Record the verdict for pending review");
+    expect(result.out).not.toContain("--retry-pending");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    expect(readAllAuditShards(p)).toBe(auditBefore);
   }, 30000);
 
   // R6 (blocker 1): the guard lives in handleApprove, so a DIRECT

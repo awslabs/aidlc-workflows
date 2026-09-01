@@ -67,6 +67,7 @@ import {
   isoTimestamp,
   loadStageGraph,
   parseCheckboxes,
+  pendingReviewRequestStatus,
   producesArtifactUnit,
   readAllAuditShards,
   readStateFile,
@@ -74,6 +75,8 @@ import {
   recoveryGuidance,
   releaseAuditLock,
   resolveReviewClass,
+  reviewAttemptAccounting,
+  reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
   resolveProjectDirFromHook,
   teamUnitGateStatus,
@@ -397,6 +400,40 @@ export async function run(input: string): Promise<number> {
       ? receipts.stageStale
       : receipts.unitStale.has(verdict.unit);
   const view = reviewAttemptWindow(projectDir, stateContent, stage);
+  const pendingAttempt =
+    stage.reviewer === undefined
+      ? null
+      : reviewAttemptAccounting(
+          view,
+          stateContent,
+          stage,
+          stage.reviewer,
+          verdict.unit,
+          undefined,
+          {
+            eventFilter: (row) =>
+              reviewAttemptEventMatchesCurrentClaim(
+                projectDir,
+                stateContent,
+                verdict.unit,
+                row,
+              ),
+          },
+        );
+  const pendingStatus =
+    pendingAttempt === null
+      ? null
+      : pendingReviewRequestStatus(
+          projectDir,
+          stage,
+          verdict.unit,
+          pendingAttempt,
+          {
+            requireRequiredArtifacts:
+              process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1",
+            mergedBoltUnits: view.mergedBoltUnits,
+          },
+        );
   const floor = view.events[view.floorIdx];
   const summaryEvidence = checkSummaryConfirmationEvidence(
     projectDir,
@@ -426,7 +463,14 @@ export async function run(input: string): Promise<number> {
         ? {
             pendingReview: {
               iteration: pending.iteration,
-              retryable: true,
+              retryable:
+                pendingStatus?.iteration === pending.iteration
+                  ? pendingStatus.retryable
+                  : true,
+              verdictRecordable:
+                pendingStatus?.iteration === pending.iteration
+                  ? pendingStatus.verdictRecordable
+                  : true,
             },
           }
         : {}),

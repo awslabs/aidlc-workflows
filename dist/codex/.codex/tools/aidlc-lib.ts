@@ -10101,6 +10101,41 @@ export interface ReviewAttemptAccounting {
   ambiguity: string | null;
 }
 
+export interface PendingReviewRequestStatus {
+  iteration: number;
+  requestCurrent: boolean;
+  retryable: boolean;
+  verdictRecordable: boolean;
+}
+
+export function reviewAttemptEventMatchesCurrentClaim(
+  projectDir: string,
+  stateContent: string,
+  unit: string | undefined,
+  row: AuditShardEvent,
+): boolean {
+  if (unit === undefined || !isTeamUnitOwnership(stateContent)) return true;
+  const eventUnit = auditBlockField(row.block, "Unit");
+  if (eventUnit !== null) {
+    return eventUnit !== unit ||
+      eventMatchesClaimAttempt(projectDir, row.block, eventUnit);
+  }
+  const boltSlug = auditBlockField(row.block, "Bolt slug");
+  const boltNames = auditBlockField(row.block, "Bolt names");
+  if (
+    boltNames === unit &&
+    boltSlug === boltSlugForUnit(unit) &&
+    (
+      row.event === "BOLT_STARTED" ||
+      row.event === "BOLT_COMPLETED" ||
+      row.event === "BOLT_FAILED"
+    )
+  ) {
+    return eventMatchesClaimAttempt(projectDir, row.block, unit);
+  }
+  return true;
+}
+
 const REVIEW_ACCOUNTING_EVENTS = new Set([
   "WORKFLOW_STARTED",
   "STAGE_STARTED",
@@ -10410,6 +10445,164 @@ export function reviewAttemptAccounting(
     recoveryIteration,
     recoverySpent,
     ambiguity,
+  };
+}
+
+export function pendingReviewRequestStatus(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit: string | undefined,
+  attempt: ReviewAttemptAccounting,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+    mergedBoltUnits?: ReadonlySet<string>;
+    single?: boolean;
+  } = {},
+): PendingReviewRequestStatus | null {
+  const iteration = [...attempt.pendingIterations].sort((a, b) => a - b)[0];
+  if (iteration === undefined) return null;
+  const pending = attempt.pendingRequests.get(iteration);
+  const binding = pending?.binding;
+  if (!pending || !binding) {
+    return {
+      iteration,
+      requestCurrent: false,
+      retryable: false,
+      verdictRecordable: false,
+    };
+  }
+
+  const snapshot = reviewArtifactSnapshot(projectDir, stage, unit, {
+    requireRequiredArtifacts: options.requireRequiredArtifacts,
+    boltDag: options.boltDag,
+    mergedBoltUnits: options.mergedBoltUnits,
+    ...(binding.appendixArtifact !== null && binding.appendixOffset !== null
+      ? {
+          appendixBinding: {
+            artifact: binding.appendixArtifact,
+            offset: binding.appendixOffset,
+          },
+        }
+      : {}),
+  });
+  if (snapshot === null) {
+    return {
+      iteration,
+      requestCurrent: false,
+      retryable: false,
+      verdictRecordable: false,
+    };
+  }
+
+  const currentRequestFingerprint =
+    binding.appendixArtifact === null || binding.appendixOffset === null
+      ? snapshot.fingerprint
+      : snapshot.requestFingerprint;
+  let requestCurrent =
+    currentRequestFingerprint === binding.artifactFingerprint;
+  let modernVerdictBinding =
+    binding.appendixArtifact !== null &&
+    binding.appendixOffset !== null &&
+    binding.priorAppendixDigest !== null &&
+    binding.priorAppendixLength !== null &&
+    (
+      binding.priorAppendixLength === 0 ||
+      binding.reviewChallenge !== null
+    );
+
+  const sourceState = stage.workspace_requires
+    ? workspaceSourceState(projectDir)
+    : null;
+  if (stage.workspace_requires) {
+    const currentSource =
+      sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    if (
+      binding.sourceFingerprint !== null &&
+      currentSource !== binding.sourceFingerprint
+    ) {
+      requestCurrent = false;
+    }
+    if (binding.sourceFingerprint === null) modernVerdictBinding = false;
+  }
+
+  const bindsUnitSource =
+    stage.workspace_requires === true &&
+    unit !== undefined &&
+    stage.for_each === "unit-of-work" &&
+    options.single !== true;
+  if (bindsUnitSource) {
+    const manifest = readUnitSourceManifest(projectDir, stage.slug, unit);
+    if (manifest.ok !== true) {
+      requestCurrent = false;
+      modernVerdictBinding = false;
+    } else {
+      const currentUnitSource =
+        sourceState === null
+          ? UNBINDABLE_FINGERPRINT
+          : unitSourceFingerprint(
+              sourceState.listing,
+              manifest,
+              manifest.rawBytesSha256,
+            );
+      if (
+        binding.unitSourceFingerprint !== null &&
+        currentUnitSource !== binding.unitSourceFingerprint
+      ) {
+        requestCurrent = false;
+      }
+      if (binding.unitSourceFingerprint === null) modernVerdictBinding = false;
+    }
+  }
+
+  let retryBindingCurrent = requestCurrent;
+  if (
+    binding.priorAppendixLength === null &&
+    binding.priorAppendixDigest !== null &&
+    reviewAppendixDigest(snapshot.appendix) !== binding.priorAppendixDigest
+  ) {
+    retryBindingCurrent = false;
+  }
+
+  const appendixEvidence = reviewAppendixEvidenceBytes(snapshot.appendix);
+  const stalePriorAppendix =
+    binding.priorAppendixLength !== null &&
+    binding.priorAppendixLength > 0 &&
+    appendixEvidence.length >= binding.priorAppendixLength &&
+    reviewAppendixDigest(
+      appendixEvidence.subarray(0, binding.priorAppendixLength),
+    ) === binding.priorAppendixDigest;
+  const reviewer = stage.reviewer ?? "";
+  const canonicalAppendix =
+    reviewer.length > 0 &&
+    (
+      validateReviewAppendix(snapshot.appendix, {
+        verdict: "READY",
+        reviewer,
+        iteration,
+        reviewChallenge: binding.reviewChallenge,
+      }).valid ||
+      validateReviewAppendix(snapshot.appendix, {
+        verdict: "NOT-READY",
+        reviewer,
+        iteration,
+        reviewChallenge: binding.reviewChallenge,
+      }).valid
+    );
+  const incompleteFallback =
+    snapshot.appendix.length === 0 && pending.retried;
+
+  return {
+    iteration,
+    requestCurrent,
+    retryable:
+      retryBindingCurrent &&
+      !pending.retried,
+    verdictRecordable:
+      requestCurrent &&
+      modernVerdictBinding &&
+      !stalePriorAppendix &&
+      (canonicalAppendix || incompleteFallback),
   };
 }
 
@@ -17759,6 +17952,7 @@ export interface GuardAttemptState {
   pendingReview?: {
     iteration: number;
     retryable: boolean;
+    verdictRecordable?: boolean;
   };
   repairReview?: {
     iteration: number;
@@ -17994,13 +18188,15 @@ export function evaluateGuardRefusal(
     });
   } else {
     if (input.attempt.pendingReview) {
-      remedies.push({
-        action:
-          `Record the verdict for pending review iteration ` +
-          `${input.attempt.pendingReview.iteration} if the reviewer returned.`,
-        requiresHuman: false,
-        executableNow: true,
-      });
+      if (input.attempt.pendingReview.verdictRecordable !== false) {
+        remedies.push({
+          action:
+            `Record the verdict for pending review iteration ` +
+            `${input.attempt.pendingReview.iteration} if the reviewer returned.`,
+          requiresHuman: false,
+          executableNow: true,
+        });
+      }
       if (input.attempt.pendingReview.retryable) {
         remedies.push({
           action:
