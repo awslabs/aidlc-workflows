@@ -167,6 +167,7 @@ describe("t238 build-binaries release builder", () => {
       "runtime-opencode",
       "harness-probe-kiro",
       "harness-probe-copilot",
+      "harness-probe-devin",
       "harness-probe-opencode",
       "compiled-kiro-new-work-routing",
       "plugin-select",

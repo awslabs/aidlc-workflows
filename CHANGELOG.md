@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.126] - 2026-09-01
+
+Post-merge fixes for the devin release-engineering PR (#1): closes an unasserted build gate, removes a tautological test assertion, and refreshes a stale test header. **Upgrade:** no action required beyond re-copying `dist/devin/` if you use the compiled single-binary release; the runtime-paths and build-binaries changes from #1 are unchanged.
+
+* t238: added `"harness-probe-devin"` to the asserted gate list — the gate was added to `scripts/build-binaries.ts` in #1 but its pass/fail was never checked. The devin probe gate is now enforced alongside kiro, copilot, and opencode.
+* t305: removed a tautological count assertion (`HARNESS_MATRIX.length` vs the same computation it derives from). The per-harness sweep loop below it is the real coverage and is unchanged.
+* t250: refreshed the header comment and test name to reflect the 8-harness derived roster (was stale at "six annexes" after #1 switched from a hardcoded list).
+
 ## [2.6.125] - 2026-09-01
 
 Devin's dispatched-topology stages (`subagent`, `pipeline`, `mob`) now dispatch via `run_subagent` as designed, firing the `deliver-stage-rules` and `log-subagent` hooks; the conductor no longer falls back to inline execution when the ensemble protocol lacks a Devin binding section. **Upgrade:** re-copy `dist/devin/` into your project so the updated ensemble protocol and conductor SKILL replace the prior copies, then fully restart Devin CLI. The agent slug must be passed as the `profile` field of each `run_subagent` call or the `deliver-stage-rules` / `plan-approval-guard` hooks do not fire.
