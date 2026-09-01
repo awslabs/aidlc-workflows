@@ -9,7 +9,7 @@
 // (per-intent layout, --init retirement, intent/space verbs, multi-repo --repo,
 // the "offer a second intent" conductor prose) updated every authored conductor
 // SKILL — EXCEPT harness/kiro-ide/skills/aidlc/SKILL.md, which was a stale fork
-// byte-identical to kiro CLI's SKILL at origin/v2 and never re-synced across the
+// byte-identical to kiro CLI's SKILL at origin/main and never re-synced across the
 // 43-commit stack. It shipped GREEN because NO test reads a per-harness conductor
 // SKILL: `package.ts --check` only proves dist==authored, so a self-consistent-
 // but-stale authored SKILL passes. This gate closes that hole in BOTH directions:
@@ -647,6 +647,23 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "never use `report` for this response route",
       ]) {
         if (!annex.includes(token)) missing.push(`${annexRel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("every conductor keeps action-only guard recovery behind a fresh human turn", () => {
+    const missing: string[] = [];
+    for (const rel of harnessSkills()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        "A remedy without `command` is action-only",
+        "render that follow-up and END THE TURN",
+        "their exact text",
+        "Never synthesize a missing command",
+        "process its returned directive through the table above",
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
       }
     }
     expect(missing).toEqual([]);

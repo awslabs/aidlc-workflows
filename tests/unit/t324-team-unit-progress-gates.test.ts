@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -16,6 +17,7 @@ import {
   UNIT_OWNERSHIP_FIELD,
   unitCompletedReceipts,
   unitGateStatus,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -42,6 +44,11 @@ const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const HUMAN_TURN_HOOK = join(
+  AIDLC_SRC,
+  "hooks",
+  "aidlc-record-human-turn.ts",
+);
 
 const ENV: NodeJS.ProcessEnv = {
   ...process.env,
@@ -211,16 +218,48 @@ function runState(
 }
 
 function runReport(proj: string, args: string[]): Directive {
+  return runReportWithEnv(proj, args, ENV);
+}
+
+function runReportWithEnv(
+  proj: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Directive {
   const result = spawnSync(
     BUN,
     [ORCH, "report", ...args, "--project-dir", proj],
-    { encoding: "utf-8", env: ENV },
+    { encoding: "utf-8", env },
   );
   try {
     return JSON.parse((result.stdout ?? "").trim()) as Directive;
   } catch {
     throw new Error(`report failed: ${result.status}\n${result.stdout}\n${result.stderr}`);
   }
+}
+
+function recordHumanResponse(
+  proj: string,
+  response: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  const result = spawnSync(BUN, [HUMAN_TURN_HOOK], {
+    cwd: proj,
+    encoding: "utf-8",
+    env: {
+      ...env,
+      CLAUDE_PROJECT_DIR: proj,
+    },
+    input: JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "guard-feedback-session",
+      prompt: response,
+    }),
+  });
+  expect(
+    result.status,
+    `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+  ).toBe(0);
 }
 
 function coverUnit(proj: string, unit: string, stage: string): void {
@@ -532,7 +571,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(unitGates.every((gate) => typeof gate.unit === "string")).toBe(true);
   }, 120000);
 
-  test("team summary asks carry a routable Unit rejection command", () => {
+  test("team summary asks preserve the Unit in action-only rejection recovery", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
     const body = runNext(proj);
     expect(body).toMatchObject({
@@ -572,16 +611,122 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       unit: "alpha",
       reason_codes: ["SUMMARY_QUESTIONS_MISSING"],
     });
-    expect(
-      ask.remedies?.some(
-        (remedy) =>
-          remedy.executableNow &&
-          remedy.command?.includes(
-            'report --stage "functional-design" --unit "alpha" --result rejected',
-          ),
-      ),
-    ).toBe(true);
+    const rejection = ask.remedies?.find((remedy) =>
+      remedy.executableNow &&
+      remedy.action.includes('Ask "What should change?"')
+    );
+    expect(rejection?.action).toContain(
+      'stage "functional-design" for Unit "alpha"',
+    );
+    expect(rejection?.command).toBeUndefined();
   }, 30000);
+
+  test("guard recovery binds rejection to a separate exact human feedback turn", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    coverUnit(proj, "alpha", "functional-design");
+    appendAuditEntry(
+      "UNIT_COMPLETED",
+      {
+        Stage: "functional-design",
+        Unit: "alpha",
+        "Run floor": "unstarted#0",
+      },
+      proj,
+    );
+    logReviewReady(
+      proj,
+      "functional-design",
+      "alpha",
+      "aidlc-architecture-reviewer-agent",
+    );
+    const stateContent = state(proj);
+    expect(
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: "guard-recovery",
+        stage: "functional-design",
+        unit: "alpha",
+        state_sha256: createHash("sha256")
+          .update(stateContent, "utf-8")
+          .digest("hex"),
+      }),
+    ).toBe("generic-committed");
+
+    const authorityEnv = { ...ENV };
+    delete authorityEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    recordHumanResponse(proj, "Use Request Changes", authorityEnv);
+
+    const selectionIsNotFeedback = runReportWithEnv(
+      proj,
+      [
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes",
+        "--reason",
+        "neutral assistant wording",
+      ],
+      authorityEnv,
+    );
+    expect(selectionIsNotFeedback.kind).toBe("error");
+    expect(selectionIsNotFeedback.message).toContain(
+      "guard-recovery choice is not revision feedback",
+    );
+
+    recordHumanResponse(proj, "Change alpha only", authorityEnv);
+    const altered = runReportWithEnv(
+      proj,
+      [
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes",
+        "--reason",
+        "Change alpha and beta",
+      ],
+      authorityEnv,
+    );
+    expect(altered.kind).toBe("error");
+    expect(altered.message).toContain(
+      "does not exactly match the human's separate guard-recovery response",
+    );
+
+    const exact = runReportWithEnv(
+      proj,
+      [
+        "--stage",
+        "functional-design",
+        "--unit",
+        "alpha",
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes",
+        "--reason",
+        "Change alpha only",
+      ],
+      authorityEnv,
+    );
+    expect(exact.kind).toBe("print");
+    const audit = readAllAuditShards(proj);
+    const rejectedBlock = audit
+      .split("\n---\n")
+      .find((block) =>
+        block.includes("**Event**: GATE_REJECTED") &&
+        block.includes("**Unit**: alpha")
+      ) ?? "";
+    expect(rejectedBlock).toContain("**Feedback**: Change alpha only");
+    expect(rejectedBlock).not.toContain("neutral assistant wording");
+    expect(rejectedBlock).not.toContain("Change alpha and beta");
+  }, 60000);
 
   test("below-cap NOT-READY gate asks for repairs and the next iteration", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
@@ -1169,6 +1314,9 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       "Change alpha only",
     ]);
     expect(rejected.kind).toBe("print");
+    const rejectedAudit = readAllAuditShards(proj);
+    expect(rejectedAudit).toContain("**Feedback**: Change alpha only");
+    expect(rejectedAudit).not.toContain("<requested changes>");
     expect([...unitCompletedReceipts(proj, "functional-design")])
       .toEqual(["beta"]);
     const stage = findStageBySlug("functional-design")!;

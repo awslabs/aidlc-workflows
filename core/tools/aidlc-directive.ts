@@ -1166,8 +1166,21 @@ function checkGuardRemedies(
     if (typeof remedy.action !== "string" || remedy.action.length === 0) {
       errors.push(`${kind}: remedies[${index}].action must be non-empty string`);
     }
-    if ("command" in remedy && typeof remedy.command !== "string") {
-      errors.push(`${kind}: remedies[${index}].command must be string`);
+    if ("command" in remedy) {
+      if (typeof remedy.command !== "string" || remedy.command.trim().length === 0) {
+        errors.push(`${kind}: remedies[${index}].command must be non-empty string`);
+      } else {
+        if (/<[A-Za-z][^<>]*>/.test(remedy.command)) {
+          errors.push(
+            `${kind}: remedies[${index}].command must not contain unresolved placeholders`,
+          );
+        }
+        if (!/^bun \.[A-Za-z0-9_.-]+\/tools\/aidlc-[A-Za-z0-9-]+\.ts(?:\s|$)/.test(remedy.command)) {
+          errors.push(
+            `${kind}: remedies[${index}].command must be a bun-qualified packaged AIDLC tool invocation`,
+          );
+        }
+      }
     }
     if (typeof remedy.requiresHuman !== "boolean") {
       errors.push(`${kind}: remedies[${index}].requiresHuman must be boolean`);

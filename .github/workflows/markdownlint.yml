@@ -3,10 +3,10 @@ name: Markdownlint
 on:
   pull_request:
     branches:
-      - v2
+      - main
   push:
     branches:
-      - v2
+      - main
   workflow_dispatch:
 
 permissions:

@@ -95,6 +95,8 @@ For an isolated run's reviewer, add `--single` to both `aidlc-log.ts review` cal
 | `invoke-swarm` | Load every module named in `directive.protocol_modules` before acting - including `reviewer` when emitted, plus `construction` and `swarm` - then follow the swarm module's subsection for this harness. The directive kind is the fallback trigger when the hint field is absent. |
 | `present-gate` | _(engine-future — not emitted today; folded into `run-stage`'s `gate` field.)_ |
 
+**Guard-recovery execution.** A remedy without `command` is action-only. If its action asks for exact feedback or a concrete Scope, render that follow-up and END THE TURN; only after the human answers may you use the normal `report` or `next` route with their exact text. Never synthesize a missing command or execute angle-bracket placeholder text. When a selected command invokes `aidlc-orchestrate.ts`, process its returned directive through the table above.
+
 **Typed new-work Other response.** For a `new-work-routing` ask, a reply consisting only of `4` or `Other` does not describe a route: ask exactly **"What would you like me to do instead?"** and END THE TURN without calling a tool. Once the human supplies an actual alternative, call `next "<human alternative>"` with their words unchanged and act on the returned directive; never call `report`.
 
 **Autonomy-ladder ask.** `ask_type: "autonomy-ladder"` is an exception to "every other ask" above. Present only **Continue autonomously** and **Gate every Bolt**. After the human chooses one, follow `response_route: "set-autonomy"` by running the matching `aidlc-bolt.ts set-autonomy --mode autonomous|gated` command from the loaded Construction protocol, then re-run `next`; never call `report` for this ask.

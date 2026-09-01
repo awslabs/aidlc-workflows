@@ -3,7 +3,7 @@ name: Deploy Documentation
 on:
   push:
     branches:
-      - v2
+      - main
     # Only rebuild/deploy the site when something the build actually consumes
     # changes: the docs sources, the zensical config, the link-rewrite step,
     # the Python deps it installs, or this workflow itself.
@@ -16,7 +16,7 @@ on:
       - '.github/workflows/docs.yml'
   pull_request:
     branches:
-      - v2
+      - main
     paths:
       - 'docs/**'
       - 'zensical.toml'

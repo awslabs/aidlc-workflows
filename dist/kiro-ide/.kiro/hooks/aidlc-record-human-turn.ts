@@ -143,7 +143,7 @@ try {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
       try {
-        consumeSharedDirectiveAsk(projectDir);
+        consumeSharedDirectiveAsk(projectDir, humanResponseText);
       } catch {
         // Non-authority marker consumption is independently best-effort.
       }
