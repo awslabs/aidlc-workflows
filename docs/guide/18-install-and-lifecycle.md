@@ -87,7 +87,9 @@ links `$HOME/.local/bin/aidlc` to the active version by default.
 The installer does not edit a shell startup file unless
 `--profile <absolute-path-under-$HOME>` is explicit. That option writes or
 updates one `BEGIN AI-DLC:PATH` block transactionally and preserves the rest
-of the file.
+of the file. The profile cannot be inside the AI-DLC install or command roots;
+existing markers must be unique, exact full lines, and ordered begin-before-end.
+Malformed marker layouts are refused without changing the profile.
 
 ### Windows PowerShell
 

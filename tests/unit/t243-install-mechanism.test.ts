@@ -537,6 +537,7 @@ describe("t243 archive and transaction safety", () => {
       project: process.env.AIDLC_ROUTE_PROJECT_DIR,
       install: process.env.AIDLC_INSTALL_ROOT,
       bin: process.env.AIDLC_BIN_DIR,
+      home: process.env.HOME,
     };
     process.env.AIDLC_ROUTE_ID = "root-policy-test";
     process.env.AIDLC_ROUTE_PROJECT_DIR = project;
@@ -552,6 +553,36 @@ describe("t243 archive and transaction safety", () => {
       })).toThrow("project mutation scope cannot mutate machine path");
       expect(existsSync(join(machineRoot, "machine-blocked.txt"))).toBe(false);
 
+      process.env.AIDLC_ROUTE_PROJECT_DIR = machine;
+      expect(() => executePlan({
+        schemaVersion: 1,
+        root: machineRoot,
+        operations: [writeOperation("overlap-blocked.txt", "no\n", "absent")],
+      })).toThrow("project mutation scope cannot mutate machine path");
+      expect(existsSync(join(machineRoot, "overlap-blocked.txt"))).toBe(false);
+
+      if (process.platform !== "win32") {
+        const alias = join(dirname(machine), `${basename(machine)}-alias`);
+        symlinkSync(machine, alias, "dir");
+        process.env.AIDLC_ROUTE_PROJECT_DIR = alias;
+        expect(() => executePlan({
+          schemaVersion: 1,
+          root: alias,
+          operations: [writeOperation("alias-blocked.txt", "no\n", "absent")],
+        })).toThrow("project mutation scope cannot mutate machine path");
+        expect(existsSync(join(machine, "alias-blocked.txt"))).toBe(false);
+      }
+
+      process.env.HOME = dirname(machine);
+      process.env.AIDLC_ROUTE_MUTATION_SCOPE = "user-home";
+      expect(() => executePlan({
+        schemaVersion: 1,
+        root: machineRoot,
+        operations: [writeOperation("home-overlap-blocked.txt", "no\n", "absent")],
+      })).toThrow("user-home mutation scope cannot mutate machine path");
+      expect(existsSync(join(machineRoot, "home-overlap-blocked.txt"))).toBe(false);
+
+      process.env.AIDLC_ROUTE_PROJECT_DIR = project;
       process.env.AIDLC_ROUTE_MUTATION_SCOPE = "machine";
       expect(() => executePlan({
         schemaVersion: 1,
@@ -581,6 +612,7 @@ describe("t243 archive and transaction safety", () => {
           project: "AIDLC_ROUTE_PROJECT_DIR",
           install: "AIDLC_INSTALL_ROOT",
           bin: "AIDLC_BIN_DIR",
+          home: "HOME",
         }[name] as string;
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;

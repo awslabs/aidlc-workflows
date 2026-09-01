@@ -636,6 +636,8 @@ function lifecycleFailureResult(error: unknown, argv: readonly string[]): Comman
     ? error.exitCode
     : error instanceof ReleaseUnavailableError
     ? EXIT.unavailable
+    : /mutation scope cannot mutate/.test(message)
+    ? EXIT.integrity
     : valueAfter(argv, "--from") &&
         /(checksum|version\.json|checksums\.txt|release is missing|invalid asset|size mismatch)/i
           .test(message)
@@ -1662,16 +1664,30 @@ function installProfileCommand(argv: string[]): CommandResult {
   const begin = "# BEGIN AI-DLC:PATH";
   const end = "# END AI-DLC:PATH";
   const current = profileExists ? readFileSync(profile, "utf-8") : "";
-  const begins = current.split(begin).length - 1;
-  const ends = current.split(end).length - 1;
-  if (begins > 1 || ends > 1 || begins !== ends) {
+  const lines = current.split(/\r?\n/);
+  const beginLines: number[] = [];
+  const endLines: number[] = [];
+  for (const [index, line] of lines.entries()) {
+    if (line === begin) beginLines.push(index);
+    if (line === end) endLines.push(index);
+  }
+  const beginOccurrences = current.split(begin).length - 1;
+  const endOccurrences = current.split(end).length - 1;
+  if (
+    beginOccurrences !== beginLines.length ||
+    endOccurrences !== endLines.length ||
+    beginLines.length > 1 ||
+    endLines.length > 1 ||
+    beginLines.length !== endLines.length ||
+    (beginLines.length === 1 && beginLines[0] >= endLines[0])
+  ) {
     return failure("profile AI-DLC PATH markers are missing, duplicated, or malformed", EXIT.integrity);
   }
   const escapedBin = bin.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")
     .replaceAll("$", "\\$").replaceAll("`", "\\`");
   const block = `${begin}\nexport PATH="${escapedBin}:$PATH"\n${end}`;
   let next: string;
-  if (begins === 1) {
+  if (beginLines.length === 1) {
     const start = current.indexOf(begin);
     const finish = current.indexOf(end, start + begin.length) + end.length;
     next = `${current.slice(0, start)}${block}${current.slice(finish)}`;

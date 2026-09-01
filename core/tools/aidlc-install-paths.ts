@@ -1,7 +1,16 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { basename, dirname, isAbsolute, join, parse, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { projectionFiles, sha256File, walkFiles } from "./aidlc-distribution.ts";
 
 export const STRICT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -36,6 +45,30 @@ export function binRoot(): string {
   return platform() === "win32"
     ? join(installRoot(), "bin")
     : join(homedir(), ".local", "bin");
+}
+
+export function canonicalPolicyPath(path: string): string {
+  const absolute = resolve(path);
+  let cursor = absolute;
+  const suffix: string[] = [];
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    suffix.unshift(basename(cursor));
+    cursor = parent;
+  }
+  const base = existsSync(cursor) ? realpathSync(cursor) : cursor;
+  return suffix.reduce((current, entry) => join(current, entry), base);
+}
+
+export function policyPathWithin(path: string, root: string): boolean {
+  const rel = relative(canonicalPolicyPath(root), canonicalPolicyPath(path));
+  return rel === "" ||
+    (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
+export function isMachineOwnedPath(path: string): boolean {
+  return [installRoot(), binRoot()].some((root) => policyPathWithin(path, root));
 }
 
 export function machineTransactionRoot(): string {

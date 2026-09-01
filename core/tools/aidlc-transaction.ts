@@ -23,8 +23,7 @@ import {
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { sha256Bytes } from "./aidlc-distribution.ts";
 import {
-  binRoot,
-  installRoot,
+  isMachineOwnedPath,
   machineTransactionRoot,
   windowsUninstallFencePath,
 } from "./aidlc-install-paths.ts";
@@ -112,7 +111,6 @@ function enforceRouteMutationPlan(
   if (scope === "none") {
     throw new Error(`route ${route} does not permit filesystem mutation`);
   }
-  const machineRoots = [installRoot(), binRoot()].map(canonicalRoot);
   const machineControlPaths = [windowsUninstallFencePath()].map(canonicalRoot);
   const projectValue = process.env.AIDLC_ROUTE_PROJECT_DIR;
   const projectRoot = projectValue ? canonicalRoot(projectValue) : null;
@@ -120,10 +118,12 @@ function enforceRouteMutationPlan(
   for (const operation of operations) {
     const rel = normalizedRelative(operation.path);
     const target = canonicalRoot(targetPath(root, rel));
-    const isMachine = machineRoots.some((machineRoot) => withinRoot(target, machineRoot)) ||
+    const isMachine = isMachineOwnedPath(target) ||
       machineControlPaths.includes(target);
-    const isProject = Boolean(projectRoot && withinRoot(target, projectRoot));
-    const isUserHome = Boolean(homeRoot && withinRoot(target, homeRoot));
+    const isProject = !isMachine &&
+      Boolean(projectRoot && withinRoot(target, projectRoot));
+    const isUserHome = !isMachine &&
+      Boolean(homeRoot && withinRoot(target, homeRoot));
     const permitted =
       (scope === "project" && isProject) ||
       (scope === "machine" && isMachine) ||

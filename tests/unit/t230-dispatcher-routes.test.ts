@@ -12,6 +12,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -632,6 +633,90 @@ describe("t230 dispatcher route parity", () => {
     expect(state).toContain("- **Scope**: poc");
   });
 
+  test("engine project roots cannot overlap machine install or command paths", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t230-machine-project-"));
+    tempProjects.add(root);
+    const install = join(root, "install");
+    const bin = join(root, "bin");
+    mkdirSync(install, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    const candidates = [
+      install,
+      join(install, "retained-runtime"),
+      bin,
+    ];
+    for (const project of candidates) {
+      mkdirSync(join(project, ".git"), { recursive: true });
+    }
+    if (process.platform !== "win32") {
+      const target = join(install, "aliased-runtime");
+      mkdirSync(join(target, ".git"), { recursive: true });
+      const alias = join(root, "project-alias");
+      symlinkSync(target, alias, "dir");
+      candidates.push(alias);
+    }
+
+    for (const project of candidates) {
+      const result = viaDispatcher(
+        [
+          "engine",
+          "intent",
+          "create",
+          "--scope",
+          "poc",
+          "--project-dir",
+          project,
+        ],
+        REPO_ROOT,
+        {
+          AIDLC_INSTALL_ROOT: install,
+          AIDLC_BIN_DIR: bin,
+        },
+      );
+      expect(result.exitCode, project).toBe(1);
+      expect(result.stderr.toString()).toContain(
+        "cannot use an AI-DLC machine install or command directory as its project directory",
+      );
+      expect(existsSync(join(project, "aidlc"))).toBe(false);
+    }
+
+    const aliasProject = candidates[0];
+    for (const args of [
+      ["--claim", "machine-unit"],
+      ["--release", "machine-unit"],
+    ]) {
+      const result = viaDispatcher(
+        [...args, "--project-dir", aliasProject],
+        REPO_ROOT,
+        {
+          AIDLC_INSTALL_ROOT: install,
+          AIDLC_BIN_DIR: bin,
+        },
+      );
+      expect(result.exitCode, args.join(" ")).toBe(1);
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        "cannot use an AI-DLC machine install or command directory as its project directory",
+      );
+    }
+
+    writeFileSync(join(aliasProject, ".aidlc-version"), "9.9.9\n");
+    const pinnedStatus = viaDispatcher(
+      ["engine", "status", "--project-dir", aliasProject],
+      REPO_ROOT,
+      {
+        AIDLC_INSTALL_ROOT: install,
+        AIDLC_BIN_DIR: bin,
+      },
+    );
+    expect(pinnedStatus.exitCode).toBe(1);
+    expect(`${pinnedStatus.stdout}${pinnedStatus.stderr}`).toContain(
+      "cannot use an AI-DLC machine install or command directory as its project directory",
+    );
+    expect(`${pinnedStatus.stdout}${pinnedStatus.stderr}`).not.toContain(
+      "pin is not registered",
+    );
+  });
+
   test("--project-dir is global and may be interleaved with workspace tokens", () => {
     const projectDir = makeProject();
     const routed = viaDispatcher(
@@ -695,6 +780,21 @@ describe("t230 version-aware startup", () => {
         launcherRouteUsesPin(argv),
         `${route.id}: ${argv.join(" ")}`,
       ).toBe(route.pinPolicy === "pinned");
+    }
+    for (const alias of ["--claim", "--release"]) {
+      expect(launcherRouteUsesPin([alias, "unit-a"]), alias).toBe(true);
+    }
+  });
+
+  test("legacy unit aliases retain pinned policy on normal projects", () => {
+    const project = makeProject();
+    for (const alias of ["--claim", "--release"]) {
+      const result = viaDispatcher([alias, "unit-a"], project);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(output).not.toContain("launcher pin policy drift");
+      expect(output).not.toContain(
+        "cannot use an AI-DLC machine install or command directory",
+      );
     }
   });
 
@@ -961,6 +1061,104 @@ describe("t230 dispatcher global flag translation", () => {
     );
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     expect(readFileSync(profile, "utf-8")).toContain("# BEGIN AI-DLC:PATH");
+
+    const replacementBin = join(home, "bin-replacement");
+    const replaced = viaDispatcher(
+      [
+        "system",
+        "lifecycle",
+        "install-profile",
+        "--profile",
+        profile,
+        "--bin-dir",
+        replacementBin,
+      ],
+      projectDir,
+      {
+        HOME: home,
+        AIDLC_INSTALL_ROOT: join(home, ".local", "share", "aidlc"),
+        AIDLC_BIN_DIR: bin,
+      },
+    );
+    expect(replaced.exitCode, replaced.stderr.toString()).toBe(0);
+    const updated = readFileSync(profile, "utf-8");
+    expect(updated.match(/^# BEGIN AI-DLC:PATH$/gm)).toHaveLength(1);
+    expect(updated.match(/^# END AI-DLC:PATH$/gm)).toHaveLength(1);
+    expect(updated).toContain(`export PATH="${replacementBin}:$PATH"`);
+    expect(updated).not.toContain(`export PATH="${bin}:$PATH"`);
+  });
+
+  test("install-profile cannot overwrite machine control files", () => {
+    const projectDir = makeProject();
+    const home = mkdtempSync(join(tmpdir(), "aidlc-t230-profile-machine-"));
+    tempProjects.add(home);
+    const install = join(home, ".local", "share", "aidlc");
+    const bin = join(home, ".local", "bin");
+    const profile = join(install, "active-version");
+    mkdirSync(install, { recursive: true });
+    writeFileSync(profile, "2.7.1\n");
+    const result = viaDispatcher(
+      [
+        "system",
+        "lifecycle",
+        "install-profile",
+        "--profile",
+        profile,
+        "--bin-dir",
+        bin,
+      ],
+      projectDir,
+      {
+        HOME: home,
+        AIDLC_INSTALL_ROOT: install,
+        AIDLC_BIN_DIR: bin,
+      },
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(`${result.stdout}${result.stderr}`).toContain(
+      "user-home mutation scope cannot mutate machine path",
+    );
+    expect(readFileSync(profile, "utf-8")).toBe("2.7.1\n");
+  });
+
+  test("install-profile rejects malformed marker layouts without writing", () => {
+    const projectDir = makeProject();
+    const home = mkdtempSync(join(tmpdir(), "aidlc-t230-profile-markers-"));
+    tempProjects.add(home);
+    const profile = join(home, ".profile");
+    const bin = join(home, ".local", "bin");
+    const cases = [
+      "# END AI-DLC:PATH\nkeep-this-line\n# BEGIN AI-DLC:PATH\n",
+      "# BEGIN AI-DLC:PATH\none\n# END AI-DLC:PATH\n# BEGIN AI-DLC:PATH\ntwo\n# END AI-DLC:PATH\n",
+      "# BEGIN AI-DLC:PATH\nmissing-end\n",
+      "prefix # BEGIN AI-DLC:PATH suffix\n# END AI-DLC:PATH\n",
+    ];
+    for (const content of cases) {
+      writeFileSync(profile, content);
+      const result = viaDispatcher(
+        [
+          "system",
+          "lifecycle",
+          "install-profile",
+          "--profile",
+          profile,
+          "--bin-dir",
+          bin,
+        ],
+        projectDir,
+        {
+          HOME: home,
+          AIDLC_INSTALL_ROOT: join(home, ".local", "share", "aidlc"),
+          AIDLC_BIN_DIR: bin,
+        },
+      );
+      expect(result.exitCode, content).toBe(4);
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        "profile AI-DLC PATH markers are missing, duplicated, or malformed",
+      );
+      expect(readFileSync(profile, "utf-8")).toBe(content);
+    }
   });
 
   test("carries --project-dir into routing-only actions", () => {
@@ -1304,6 +1502,8 @@ describe("t230 dispatcher route completeness", () => {
       expect(routePolicyFor(args)?.id, args.join(" ")).toBe(routeId);
     }
     expect(routePolicyFor(["system", "workspace-sync"])?.id).toBe("workspace-sync");
+    expect(routePolicyFor(["--claim", "unit-a"])?.id).toBe("unit");
+    expect(routePolicyFor(["--release", "unit-a"])?.id).toBe("unit");
     expect(routePolicyFor(["engine", "sensor-claim-sources"])?.id)
       .toBe("engine-sensor-claim-sources");
     expect(routePolicyFor(["engine", "utility", "status"])).toBeNull();

@@ -2293,6 +2293,8 @@ export function routePolicyFor(argv: readonly string[]): Route | null {
     return routeById("top-help");
   }
   const aliasRoutes: Readonly<Record<string, string>> = {
+    "--claim": "unit",
+    "--release": "unit",
     "--status": "top-status",
     "--doctor": "top-doctor",
     "--version": "top-version",
@@ -2677,6 +2679,25 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     : `${route.id} requires an installed project harness or recognized project directory; run aidlc config`;
 }
 
+async function projectMachineOverlapError(
+  route: Route,
+  argv: readonly string[],
+): Promise<string | null> {
+  const scope = effectiveMutationScope(route, argv);
+  if (
+    route.projectRequirement !== "required" &&
+    scope !== "project" &&
+    scope !== "project-and-machine"
+  ) {
+    return null;
+  }
+  const projectDir = dispatcherProjectDirFrom(argv);
+  const { isMachineOwnedPath } = await import("./aidlc-install-paths.ts");
+  return isMachineOwnedPath(projectDir)
+    ? `${route.id} cannot use an AI-DLC machine install or command directory as its project directory`
+    : null;
+}
+
 function effectiveMutationScope(
   route: Route,
   argv: readonly string[],
@@ -2744,6 +2765,13 @@ export async function main(argv: string[]): Promise<void> {
   if (grammarError) {
     process.exitCode = renderPublicGrammarFailure(argv, grammarError);
     return;
+  }
+  if (route) {
+    const overlapError = await projectMachineOverlapError(route, argv);
+    if (overlapError) {
+      process.exitCode = renderDispatcherFailure(argv, 1, overlapError);
+      return;
+    }
   }
   if (isCompiledExecutable()) {
     // Compiled, no explicit harness: discover the project install from its
