@@ -1,7 +1,7 @@
 # Fix Plan — Devin Adapter `hasExplicitHumanSelection` Object-Format Bug
 
 > Working plan for review. Found by the second live e2e run
-> (`tests/evidence/devin-e2e-run/second-run/`); the bug blocked the workflow
+> (`evidence/devin-e2e-run/second-run/`); the bug blocked the workflow
 > at code-generation plan approval because the human response to
 > `ask_user_question` was never recorded.
 
@@ -165,7 +165,7 @@ bun scripts/package.ts --check  # confirm no drift
 
 ### Step 9 — Re-run the e2e plan
 
-Re-execute `tests/evidence/devin-e2e-run/second-run/devin-e2e-test-plan.md`
+Re-execute `evidence/devin-e2e-run/second-run/devin-e2e-test-plan.md`
 (third run) with the fixed `dist/devin`. The headline success metric:
 `PLAN_APPROVAL_BLOCKED` should be 0 after a genuine "Approve Plan" answer,
 and `PLAN_APPROVAL_RECORDED` should be 1.

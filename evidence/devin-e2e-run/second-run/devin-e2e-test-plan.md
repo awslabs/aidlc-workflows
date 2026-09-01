@@ -76,7 +76,7 @@ this run).
    ```bash
    bun .devin/tools/aidlc-utility.ts doctor
    ```
-   Save the output to `tests/evidence/devin-e2e-run/second-run/00-doctor-output.txt`.
+   Save the output to `evidence/devin-e2e-run/second-run/00-doctor-output.txt`.
 
    **Checkpoint 0a — Doctor output must include these rows (all pass):**
    - `pass  bun installed`
@@ -330,7 +330,7 @@ Devin session, which has exited).
     cd ~/devin-e2e-test-2
     bun .devin/tools/aidlc-runtime.ts summary --json
     ```
-    Save to `tests/evidence/devin-e2e-run/second-run/05-session-cost.json`.
+    Save to `evidence/devin-e2e-run/second-run/05-session-cost.json`.
     Should show: total duration, stage count, phase rollup, memory entries,
     sensor firings, learnings.
 
@@ -338,7 +338,7 @@ Devin session, which has exited).
     ```
     /aidlc-replay
     ```
-    Save the output to `tests/evidence/devin-e2e-run/second-run/05-replay.txt`.
+    Save the output to `evidence/devin-e2e-run/second-run/05-replay.txt`.
     Should print a structured session narrative (phase rollup, stage
     outcomes, duration).
 
@@ -346,9 +346,9 @@ Devin session, which has exited).
     ```
     /aidlc-outcomes-pack
     ```
-    Save the output to `tests/evidence/devin-e2e-run/second-run/05-outcomes-pack-output.txt`
+    Save the output to `evidence/devin-e2e-run/second-run/05-outcomes-pack-output.txt`
     and copy the generated `OUTCOMES.md` to
-    `tests/evidence/devin-e2e-run/second-run/05-outcomes.md`.
+    `evidence/devin-e2e-run/second-run/05-outcomes.md`.
     Should write `OUTCOMES.md` at the project root.
 
 14. **Full audit trail integrity:**
@@ -356,7 +356,7 @@ Devin session, which has exited).
     grep -oE 'ARTIFACT_CREATED|ARTIFACT_UPDATED|STAGE_STARTED|STAGE_COMPLETED|STAGE_AWAITING_APPROVAL|GATE_APPROVED|GATE_REJECTED|HUMAN_TURN|SUBAGENT_COMPLETED|PLAN_APPROVAL_BLOCKED|PLAN_APPROVAL_RECORDED|SESSION_STARTED|SESSION_ENDED|SESSION_COMPACTED|LEARNING|WORKFLOW_COMPLETED' \
       aidlc/spaces/default/intents/<slug>-<id8>/audit/*.md | sort | uniq -c | sort -rn
     ```
-    Save to `tests/evidence/devin-e2e-run/second-run/05-audit-trail-distribution.txt`.
+    Save to `evidence/devin-e2e-run/second-run/05-audit-trail-distribution.txt`.
 
     **Expected distribution (delta from run 1 highlighted):**
     - `SESSION_STARTED`: >= 1
@@ -396,7 +396,7 @@ was 15/17).
 | Stop | continue-workflow | -- | Continuation prompt when work remains | PASS | PASS |
 
 Save the completed checklist to
-`tests/evidence/devin-e2e-run/second-run/06-hook-coverage.txt`.
+`evidence/devin-e2e-run/second-run/06-hook-coverage.txt`.
 
 ## Phase 7 — Failure Mode Checklist
 
@@ -448,9 +448,9 @@ because you are answering each gate by hand instead of auto-approving.
 
 ## Recording Evidence
 
-Capture under `tests/evidence/devin-e2e-run/second-run/` (this directory),
+Capture under `evidence/devin-e2e-run/second-run/` (this directory),
 following the convention established by `first-run/` and
-`tests/evidence/p3-kiro-routing/`. The directory contains:
+`evidence/p3-kiro-routing/`. The directory contains:
 
 - the raw captured artifacts (doctor output, workflow output, audit trail,
   outcomes pack, hook coverage, runtime graph, generated stage artifacts);
@@ -462,4 +462,4 @@ following the convention established by `first-run/` and
   `find . -type f ! -name README.md | sort | xargs sha256sum`).
 
 Update the campaign table in
-`tests/evidence/devin-e2e-run/README.md` when this run lands.
+`evidence/devin-e2e-run/README.md` when this run lands.

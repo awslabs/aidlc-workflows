@@ -376,9 +376,9 @@ use `/aidlc feature "..."` (includes design + reviewers, ~2-3 hours).
 ## Recording Evidence
 
 Each completed run is captured under
-`tests/evidence/devin-e2e-run/<run>/` (e.g. `first-run/`, `second-run/`,
+`evidence/devin-e2e-run/<run>/` (e.g. `first-run/`, `second-run/`,
 `third-run/`), following the convention established by
-`tests/evidence/p3-kiro-routing/`. Each run directory contains:
+`evidence/p3-kiro-routing/`. Each run directory contains:
 
 - the raw captured artifacts (doctor output, workflow output, audit trail,
   outcomes pack, hook coverage, runtime graph, generated stage artifacts);
@@ -387,5 +387,5 @@ Each completed run is captured under
   every artifact (computed with
   `find . -type f ! -name README.md | sort | xargs sha256sum`).
 
-A top-level `tests/evidence/devin-e2e-run/README.md` tracks the campaign
+A top-level `evidence/devin-e2e-run/README.md` tracks the campaign
 table (run, date, scope, status). Update it when a new run lands.

@@ -2,7 +2,7 @@
 # AI-DLC E2E Run 2 - Polling loop
 # Polls every 45 seconds for up to 40 minutes (~53 iterations)
 
-EVIDENCE_DIR="/home/wiley/sources/aidlc-workflows/tests/evidence/devin-e2e-run/second-run"
+EVIDENCE_DIR="/home/wiley/sources/aidlc-workflows/evidence/devin-e2e-run/second-run"
 STATE_FILE="/home/wiley/devin-e2e-test-2/aidlc/spaces/default/intents/260831-todo-api/aidlc-state.md"
 LOG_FILE="$EVIDENCE_DIR/monitoring-log.txt"
 MAX_POLLS=53

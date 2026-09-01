@@ -11,7 +11,7 @@ rendering, genuine plan approval, subagent dispatch).
 
 Three runs are planned. Each lives in its own subdirectory with a per-run
 `README.md` describing the environment and SHA-256 hashes of every artifact,
-mirroring the convention established by `tests/evidence/p3-kiro-routing/`.
+mirroring the convention established by `evidence/p3-kiro-routing/`.
 
 | Run | Date | Scope | Mode | Status |
 |-----|------|-------|------|--------|
@@ -28,6 +28,6 @@ phase and a `README.md` with environment + SHA-256 manifest.
 
 ## Why tracked
 
-Same rationale as `tests/evidence/p3-kiro-routing/`: tamper-evident receipts
+Same rationale as `evidence/p3-kiro-routing/`: tamper-evident receipts
 for live harness runs that cannot be reproduced in CI. Hashes let a reviewer
 confirm the captured artifacts are exactly what the run produced.

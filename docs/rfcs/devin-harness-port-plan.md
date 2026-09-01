@@ -4,7 +4,7 @@
 > (commit `172cfd55` — "feat: add Devin CLI harness — eighth distribution
 > from one core"). Executed autonomously via sub-agents with per-step
 > worker/reviewer verification. The adapter bug found by the second live
-> e2e run (`tests/evidence/devin-e2e-run/second-run/`) was introduced in
+> e2e run (`evidence/devin-e2e-run/second-run/`) was introduced in
 > Step 3 and missed by Step 9's tests (the fixture used a string-format
 > `tool_response` instead of Devin's object format). The targeted fix is
 > in [`devin-adapter-ask-user-question-fix-plan.md`](devin-adapter-ask-user-question-fix-plan.md).
