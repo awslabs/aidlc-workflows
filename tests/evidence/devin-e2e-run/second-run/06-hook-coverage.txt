@@ -1,0 +1,40 @@
+# Hook Coverage Checklist — Run 2 (Interactive, Blocked at Plan Approval)
+
+Run 2 was stopped at code-generation's plan approval due to a harness adapter
+bug (see SUMMARY.md § "Root Cause"). The checklist below reflects what could
+be verified before the block.
+
+| Hook Event | Target | Matcher | Verification | Run 1 | Run 2 |
+|------------|--------|---------|--------------|-------|-------|
+| SessionStart | session-start | -- | SESSION_STARTED in audit | PASS | PASS (WORKFLOW_STARTED recorded) |
+| SessionEnd | session-end | -- | SESSION_ENDED in audit | PASS | NOT TESTED (session not exited cleanly — stopped mid-stage) |
+| UserPromptSubmit | record-human-turn | -- | HUMAN_TURN in audit (from typed prompts) | PASS | PASS (5 HUMAN_TURN events) |
+| PreToolUse | state-transition-guard | -- | No direct state mutations | PASS | PASS (no state corruption) |
+| PreToolUse | reviewer-scope | -- | Reviewer read-scope enforced | PASS | PASS (health file exists) |
+| PreToolUse | review-freeze | -- | No writes during review | PASS | PASS (health file exists) |
+| PreToolUse | plan-approval-guard | -- | PLAN_APPROVAL_BLOCKED count | PASS (15 blocks) | PASS (12 blocks — guard enforces correctly; blocks because receipt is never written due to adapter bug) |
+| PreToolUse | deliver-stage-rules | run_subagent | SUBAGENT_COMPLETED in audit | NOT TESTED | NOT TESTED (workflow blocked before subagent dispatch) |
+| PreToolUse | fold-usage | -- | Token usage folded | PASS | PASS (health file exists) |
+| PostToolUse | audit-and-sensors | edit\|write\|apply_patch | ARTIFACT_* events | PASS | PASS (9 ARTIFACT_CREATED + 8 ARTIFACT_UPDATED) |
+| PostToolUse | sync-workflow-state | todo_write | State updated after todo_write | PASS | PASS (state file updated) |
+| PostToolUse | log-subagent | run_subagent | SUBAGENT_COMPLETED in audit | NOT TESTED | NOT TESTED (workflow blocked before subagent dispatch) |
+| PostToolUse | record-human-turn | ask_user_question | HUMAN_TURN after ask_user_question answer | PARTIAL | **FAIL** — hook fires but skips because hasExplicitHumanSelection() returns false for Devin's object-format tool_response. No human response recorded from ask_user_question. 8 ERROR_LOGGED events confirm "no new human reply has arrived". |
+| PostToolUse | rebuild-stage-graph | exec | Stage graph refreshed | PASS | PASS (runtime-graph.json compiled) |
+| PostToolUse | fold-usage | -- | Token usage folded | PASS | PASS (health file exists) |
+| PostCompaction | validate-state | -- | State validated after compaction | PASS | NOT TESTED (no compaction occurred) |
+| Stop | continue-workflow | -- | Continuation prompt when work remains | PASS | PASS (health file exists) |
+
+## Summary
+
+- **14/17 hooks verified** (run 1: 15/17 — different gaps)
+- **1 hook FAIL**: `record-human-turn` on `ask_user_question` PostToolUse — the
+  adapter's `hasExplicitHumanSelection()` returns false for Devin's
+  object-format `tool_response`, causing the hook to skip, which breaks the
+  Plan Approval challenge/response/receipt triple and all ask_user_question
+  answer recording
+- **2 hooks NOT TESTED**: `deliver-stage-rules` and `log-subagent` — workflow
+  blocked at code-generation plan approval before subagent dispatch could fire
+- **Key delta from run 1**: `ask_user_question` rendering verified (native
+  prompt, not text fence) — the single biggest run-1 gap closed. But the
+  PostToolUse recording path for `ask_user_question` is broken, which run 1
+  couldn't expose because print mode never fired the question tool.
