@@ -2692,8 +2692,10 @@ async function projectMachineOverlapError(
     return null;
   }
   const projectDir = dispatcherProjectDirFrom(argv);
-  const { isMachineOwnedPath } = await import("./aidlc-install-paths.ts");
-  return isMachineOwnedPath(projectDir)
+  const { projectPathOverlapsMachineRoots } = await import(
+    "./aidlc-install-paths.ts"
+  );
+  return projectPathOverlapsMachineRoots(projectDir)
     ? `${route.id} cannot use an AI-DLC machine install or command directory as its project directory`
     : null;
 }

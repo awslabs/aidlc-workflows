@@ -641,6 +641,7 @@ describe("t230 dispatcher route parity", () => {
     mkdirSync(install, { recursive: true });
     mkdirSync(bin, { recursive: true });
     const candidates = [
+      root,
       install,
       join(install, "retained-runtime"),
       bin,
@@ -654,6 +655,14 @@ describe("t230 dispatcher route parity", () => {
       const alias = join(root, "project-alias");
       symlinkSync(target, alias, "dir");
       candidates.push(alias);
+
+      const ancestorAliasRoot = mkdtempSync(
+        join(tmpdir(), "aidlc-t230-machine-project-alias-"),
+      );
+      tempProjects.add(ancestorAliasRoot);
+      const ancestorAlias = join(ancestorAliasRoot, "project");
+      symlinkSync(root, ancestorAlias, "dir");
+      candidates.push(ancestorAlias);
     }
 
     for (const project of candidates) {
@@ -677,7 +686,7 @@ describe("t230 dispatcher route parity", () => {
       expect(result.stderr.toString()).toContain(
         "cannot use an AI-DLC machine install or command directory as its project directory",
       );
-      expect(existsSync(join(project, "aidlc"))).toBe(false);
+      expect(existsSync(join(project, "aidlc", "spaces"))).toBe(false);
     }
 
     const aliasProject = candidates[0];
@@ -715,6 +724,71 @@ describe("t230 dispatcher route parity", () => {
     expect(`${pinnedStatus.stdout}${pinnedStatus.stderr}`).not.toContain(
       "pin is not registered",
     );
+
+    const parentProject = mkdtempSync(
+      join(tmpdir(), "aidlc-t230-machine-parent-project-"),
+    );
+    tempProjects.add(parentProject);
+    mkdirSync(join(parentProject, ".git"));
+    const nestedInstall = join(parentProject, "aidlc");
+    const nestedBin = join(root, "parent-project-bin");
+    mkdirSync(nestedInstall, { recursive: true });
+    const parentResult = viaDispatcher(
+      [
+        "engine",
+        "intent",
+        "create",
+        "--scope",
+        "poc",
+        "--project-dir",
+        parentProject,
+      ],
+      REPO_ROOT,
+      {
+        AIDLC_INSTALL_ROOT: nestedInstall,
+        AIDLC_BIN_DIR: nestedBin,
+      },
+    );
+    expect(parentResult.exitCode).toBe(1);
+    expect(`${parentResult.stdout}${parentResult.stderr}`).toContain(
+      "cannot use an AI-DLC machine install or command directory as its project directory",
+    );
+    expect(existsSync(join(nestedInstall, "spaces"))).toBe(false);
+
+    if (process.platform !== "win32") {
+      const symlinkProject = mkdtempSync(
+        join(tmpdir(), "aidlc-t230-machine-symlink-parent-"),
+      );
+      const externalMachine = mkdtempSync(
+        join(tmpdir(), "aidlc-t230-machine-symlink-target-"),
+      );
+      tempProjects.add(symlinkProject);
+      tempProjects.add(externalMachine);
+      mkdirSync(join(symlinkProject, ".git"));
+      const linkedInstall = join(symlinkProject, "aidlc");
+      symlinkSync(externalMachine, linkedInstall, "dir");
+      const symlinkResult = viaDispatcher(
+        [
+          "engine",
+          "intent",
+          "create",
+          "--scope",
+          "poc",
+          "--project-dir",
+          symlinkProject,
+        ],
+        REPO_ROOT,
+        {
+          AIDLC_INSTALL_ROOT: linkedInstall,
+          AIDLC_BIN_DIR: join(root, "symlink-project-bin"),
+        },
+      );
+      expect(symlinkResult.exitCode).toBe(1);
+      expect(`${symlinkResult.stdout}${symlinkResult.stderr}`).toContain(
+        "cannot use an AI-DLC machine install or command directory as its project directory",
+      );
+      expect(existsSync(join(externalMachine, "spaces"))).toBe(false);
+    }
   });
 
   test("--project-dir is global and may be interleaved with workspace tokens", () => {
@@ -1096,7 +1170,7 @@ describe("t230 dispatcher global flag translation", () => {
     const bin = join(home, ".local", "bin");
     const profile = join(install, "active-version");
     mkdirSync(install, { recursive: true });
-    writeFileSync(profile, "2.7.1\n");
+    writeFileSync(profile, `${AIDLC_VERSION}\n`);
     const result = viaDispatcher(
       [
         "system",
@@ -1119,7 +1193,7 @@ describe("t230 dispatcher global flag translation", () => {
     expect(`${result.stdout}${result.stderr}`).toContain(
       "user-home mutation scope cannot mutate machine path",
     );
-    expect(readFileSync(profile, "utf-8")).toBe("2.7.1\n");
+    expect(readFileSync(profile, "utf-8")).toBe(`${AIDLC_VERSION}\n`);
   });
 
   test("install-profile rejects malformed marker layouts without writing", () => {
@@ -1174,7 +1248,8 @@ describe("t230 dispatcher global flag translation", () => {
 
   test("pin policy is route-aware when --project-dir precedes the command", () => {
     const projectDir = makeProject();
-    const machine = join(projectDir, "machine");
+    const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-pin-machine-"));
+    tempProjects.add(machine);
     const versionRoot = join(machine, "versions", "99.0.0");
     const executable = join(
       versionRoot,
@@ -1276,16 +1351,18 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
 
   test("compiled main discovers an OpenCode project from shipped harness metadata", () => {
     const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-opencode-"));
+    const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-opencode-machine-"));
     tempProjects.add(projectDir);
+    tempProjects.add(machine);
     cpSync(join(REPO_ROOT, "dist", "opencode"), projectDir, { recursive: true });
     const result = viaImportedCompiledMain(
       ["doctor", "--project-dir", projectDir, "--json"],
       projectDir,
       {
-        AIDLC_BIN_DIR: join(projectDir, "machine", "bin"),
+        AIDLC_BIN_DIR: join(machine, "bin"),
         AIDLC_DISPATCH_TOOLS_DIR: CORE_TOOLS_DIR,
         AIDLC_HARNESS_DIR: "",
-        AIDLC_INSTALL_ROOT: join(projectDir, "machine"),
+        AIDLC_INSTALL_ROOT: machine,
       },
     );
     const report = JSON.parse(result.stdout.toString()) as {

@@ -67,8 +67,23 @@ export function policyPathWithin(path: string, root: string): boolean {
     (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 }
 
+function resolvedPathWithin(path: string, root: string): boolean {
+  const rel = relative(resolve(root), resolve(path));
+  return rel === "" ||
+    (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
 export function isMachineOwnedPath(path: string): boolean {
   return [installRoot(), binRoot()].some((root) => policyPathWithin(path, root));
+}
+
+export function projectPathOverlapsMachineRoots(projectDir: string): boolean {
+  return [installRoot(), binRoot()].some((root) =>
+    policyPathWithin(projectDir, root) ||
+    policyPathWithin(root, projectDir) ||
+    resolvedPathWithin(projectDir, root) ||
+    resolvedPathWithin(root, projectDir)
+  );
 }
 
 export function machineTransactionRoot(): string {

@@ -15,7 +15,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.7.1-blue)
+![version](https://img.shields.io/badge/version-2.7.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -342,7 +342,8 @@ than repository-generated files:
 
 ```bash
 tmp="$(mktemp -d)"
-gh release download v2.7.1 --repo awslabs/aidlc-workflows \
+tag=vX.Y.Z
+gh release download "$tag" --repo awslabs/aidlc-workflows \
   --pattern aidlc-runtime.tar.gz --dir "$tmp"
 tar -xzf "$tmp/aidlc-runtime.tar.gz" -C "$tmp"
 cp -R "$tmp/runtime/<harness>/." /absolute/path/to/your-project/

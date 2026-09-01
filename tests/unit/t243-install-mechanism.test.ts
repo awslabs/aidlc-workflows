@@ -11,6 +11,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -2621,6 +2622,117 @@ describe("t243 release lifecycle", () => {
         message: `this project's ${NEXT_VERSION} pin is not registered on this machine`,
         remediation: `aidlc config --pin ${NEXT_VERSION}`,
       }));
+    } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
+  }, 60_000);
+
+  test("pin registry canonicalizes aliases and reconciles equivalent keys", () => {
+    const release = fixtureRelease();
+    const machine = temp("aidlc-t243-pin-alias-machine-");
+    const project = temp("aidlc-t243-pin-alias-project-");
+    const aliasRoot = temp("aidlc-t243-pin-alias-parent-");
+    const alias = join(aliasRoot, "project");
+    mkdirSync(join(project, ".git"));
+    symlinkSync(project, alias, process.platform === "win32" ? "junction" : "dir");
+    const canonical = realpathSync(project);
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], alias, env).status).toBe(0);
+    const pinPlan = run(INIT, [
+      "config", "--pin", AIDLC_VERSION, "--project-dir", alias, "--dry-run", "--json",
+    ], alias, env);
+    expect(pinPlan.status, pinPlan.stdout + pinPlan.stderr).toBe(0);
+    expect(JSON.parse(pinPlan.stdout).data.projectDir).toBe(canonical);
+    expect(existsSync(join(machine, "pins.json"))).toBe(false);
+    const pinned = run(INIT, [
+      "config", "--pin", AIDLC_VERSION, "--project-dir", alias, "--json",
+    ], alias, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    expect(JSON.parse(pinned.stdout).data.projectDir).toBe(canonical);
+    expect(
+      JSON.parse(readFileSync(join(machine, "pins.json"), "utf-8")),
+    ).toEqual({ [canonical]: AIDLC_VERSION });
+
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    try {
+      expect(resolvePinnedDispatch([
+        "engine", "status", "--project-dir", alias,
+      ])).toEqual({ kind: "none" });
+
+      writeFileSync(
+        join(machine, "pins.json"),
+        `${JSON.stringify({
+          [canonical]: AIDLC_VERSION,
+          [alias]: AIDLC_VERSION,
+        }, null, 2)}\n`,
+      );
+      const list = JSON.parse(
+        run(LIFECYCLE, ["versions", "list", "--json"], alias, env).stdout,
+      ) as {
+        data: {
+          versions: Array<{ version: string; pinPaths: string[] }>;
+        };
+      };
+      expect(
+        list.data.versions.find((item) => item.version === AIDLC_VERSION)?.pinPaths,
+      ).toEqual([canonical]);
+
+      writeFileSync(
+        join(machine, "pins.json"),
+        `${JSON.stringify({
+          [canonical]: AIDLC_VERSION,
+          [alias]: NEXT_VERSION,
+        }, null, 2)}\n`,
+      );
+      expect(resolvePinnedDispatch([
+        "engine", "status", "--project-dir", alias,
+      ])).toEqual(expect.objectContaining({
+        kind: "failure",
+        code: 4,
+        message: expect.stringContaining("conflicting equivalent pin entries"),
+      }));
+
+      const reconciled = run(INIT, [
+        "config", "--pin", AIDLC_VERSION, "--project-dir", alias,
+      ], alias, env);
+      expect(reconciled.status, reconciled.stdout + reconciled.stderr).toBe(0);
+      expect(
+        JSON.parse(readFileSync(join(machine, "pins.json"), "utf-8")),
+      ).toEqual({ [canonical]: AIDLC_VERSION });
+
+      writeFileSync(
+        join(machine, "pins.json"),
+        `${JSON.stringify({
+          [canonical]: AIDLC_VERSION,
+          [alias]: AIDLC_VERSION,
+        }, null, 2)}\n`,
+      );
+      const unpinPlan = run(INIT, [
+        "config", "--unpin", "--project-dir", alias, "--dry-run", "--json",
+      ], alias, env);
+      expect(unpinPlan.status, unpinPlan.stdout + unpinPlan.stderr).toBe(0);
+      expect(JSON.parse(unpinPlan.stdout).data.projectDir).toBe(canonical);
+      const unpinned = run(INIT, [
+        "config", "--unpin", "--project-dir", alias, "--json",
+      ], alias, env);
+      expect(unpinned.status, unpinned.stdout + unpinned.stderr).toBe(0);
+      expect(JSON.parse(unpinned.stdout).data.projectDir).toBe(canonical);
+      expect(
+        JSON.parse(readFileSync(join(machine, "pins.json"), "utf-8")),
+      ).toEqual({});
     } finally {
       if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = saved.root;

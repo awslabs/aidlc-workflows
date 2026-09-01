@@ -45,6 +45,7 @@ import {
   activeExecutablePath,
   activeVersionPath,
   binRoot,
+  canonicalPolicyPath,
   commandPath,
   createRuntimeIntegrity,
   installedExecutablePath,
@@ -411,7 +412,10 @@ function commandOwnedByInstaller(version: string): boolean {
   }
 }
 
-function readPinRegistry(strict = false): {
+function readPinRegistry(
+  strict = false,
+  reconcileProject?: string,
+): {
   pins: Record<string, string>;
   warnings: string[];
 } {
@@ -432,19 +436,45 @@ function readPinRegistry(strict = false): {
   }
   const pins: Record<string, string> = {};
   const warnings: string[] = [];
+  const conflicted = new Set<string>();
   for (const [project, version] of Object.entries(value as Record<string, unknown>)) {
     if (!isAbsolute(project) || typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
       warnings.push(`${path} contains an invalid pin entry for ${project}`);
       continue;
     }
-    pins[project] = version;
+    let canonical: string;
+    try {
+      canonical = canonicalProjectPath(project);
+    } catch (error) {
+      warnings.push(
+        `${path} cannot resolve pin entry for ${project}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      continue;
+    }
+    if (conflicted.has(canonical)) continue;
+    const existing = pins[canonical];
+    if (existing === undefined || existing === version) {
+      pins[canonical] = version;
+      continue;
+    }
+    if (canonical === reconcileProject) {
+      pins[canonical] = version;
+      continue;
+    }
+    delete pins[canonical];
+    conflicted.add(canonical);
+    warnings.push(
+      `${path} contains conflicting equivalent pin entries for ${canonical}`,
+    );
   }
   if (strict && warnings.length > 0) commandError(warnings.join("; "), EXIT.integrity);
   return { pins, warnings };
 }
 
 function canonicalProjectPath(projectDir: string): string {
-  return existsSync(projectDir) ? realpathSync(projectDir) : resolve(projectDir);
+  return canonicalPolicyPath(projectDir);
 }
 
 function projectPinRecordsMatch(projectDir: string, version: string): boolean {
@@ -477,9 +507,9 @@ function commitProjectPin(projectDir: string, version: string | null): void {
   const pinPath = join(projectDir, ".aidlc-version");
   const targetPath = projectPinTargetPath(projectDir);
   const registryPath = join(installRoot(), "pins.json");
-  const pins = readPinRegistry(true).pins;
-  if (version === null) delete pins[project];
-  else pins[project] = version;
+  const pins = readPinRegistry(true, project).pins;
+  delete pins[project];
+  if (version !== null) pins[project] = version;
 
   const projectOperations = version === null
     ? [
@@ -1516,18 +1546,24 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
     }
     if (argv.includes("--harness")) return usage("unknown argument: --harness");
     const projectDir = projectDirFrom(argv);
+    const responseProjectDir = canonicalProjectPath(projectDir);
     const dryRun = argv.includes("--dry-run");
     if (hasUnpin) {
       if (dryRun) {
         return success(
           "Project pin removal plan; no files were changed.",
-          { projectDir, version: activeVersion(), pinned: false, dryRun: true },
+          {
+            projectDir: responseProjectDir,
+            version: activeVersion(),
+            pinned: false,
+            dryRun: true,
+          },
         );
       }
       commitProjectPin(projectDir, null);
       return success(
         "Removed this project's AI-DLC version pin; it now follows the active machine version.",
-        { projectDir, version: activeVersion(), pinned: false },
+        { projectDir: responseProjectDir, version: activeVersion(), pinned: false },
       );
     }
     const requested = valueAfter(argv, "--pin");
@@ -1561,13 +1597,13 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
       if (dryRun) {
         return success(
           `Project pin plan for aidlc ${version}; no files were changed.`,
-          { projectDir, version, pinned: true, dryRun: true },
+          { projectDir: responseProjectDir, version, pinned: true, dryRun: true },
         );
       }
       commitProjectPin(projectDir, version);
       return success(
         `Pinned this project to aidlc ${version}. Commit .aidlc-version to share the pin.`,
-        { projectDir, version, pinned: true },
+        { projectDir: responseProjectDir, version, pinned: true },
       );
     } finally {
       releaseReservation?.();

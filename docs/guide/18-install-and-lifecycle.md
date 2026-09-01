@@ -709,6 +709,10 @@ git add .aidlc-version
 writes `.aidlc-version`, records the absolute binary target under the
 gitignored `aidlc/.aidlc-sessions/` runtime directory, and registers the real
 project path in machine-local `pins.json`.
+Registry reads canonicalize filesystem aliases (including macOS `/var` and
+`/private/var`) and JSON output reports the canonical project path. Equivalent
+keys with the same version collapse; conflicting equivalents fail closed until
+`config --pin` or `config --unpin` reconciles every alias for that project.
 
 Commit only `.aidlc-version`. The stable `aidlc` launcher starts the
 integrity-checked active binary, whose dispatcher validates the complete pinned
