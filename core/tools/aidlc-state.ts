@@ -914,6 +914,156 @@ function handleSetConstructionIteration(args: string[]): void {
   });
 }
 
+// First-Bolt facts parsed from the delivery-planning bolt-plan (issue #985).
+// `skeletonFirst` is true only when the FIRST Bolt row carries an affirmative
+// walking-skeleton marker (not merely an explanatory or negative mention
+// elsewhere in the file). `firstBoltUnitCount` is the number of distinct Units
+// that first Bolt spans (a multi-Unit first Bolt is a vertical slice no
+// horizontal Unit batch delivers as one increment). Both are best-effort.
+interface FirstBoltFacts {
+  skeletonFirst: boolean;
+  firstBoltUnitCount: number;
+}
+
+// Reads <record>/inception/delivery-planning/bolt-plan.md and extracts the first
+// Bolt's walking-skeleton marker and Unit span. Fail-open: a missing or
+// unreadable plan, or one with no recognizable first Bolt, returns
+// skeletonFirst=false so the reconciliation notice never blocks a completion.
+//
+// Canonical plan shape (delivery-planning stage prose: "Each Bolt entry: included
+// Unit(s) of Work, walking-skeleton marker if applicable, ..."): a markdown table
+//   | Bolt | Units | Skeleton? | Definition of Done |
+// with Bolt rows ordered top-to-bottom. The affirmative first-Bolt marker is a
+// "YES" or "walking skeleton" token in that row's Skeleton? cell; "no"/"n/a" or an
+// explanatory-only mention is not affirmative. Only the FIRST data row is
+// consulted for the marker, so rationale text and later negative rows do not fire.
+function readFirstBoltFacts(pd: string): FirstBoltFacts {
+  const miss: FirstBoltFacts = { skeletonFirst: false, firstBoltUnitCount: 0 };
+  const rec = recordDir(pd);
+  if (rec === null) return miss;
+  const planPath = join(rec, "inception", "delivery-planning", "bolt-plan.md");
+  if (!existsSync(planPath)) return miss;
+  let body: string;
+  try {
+    body = readFileSync(planPath, "utf-8");
+  } catch {
+    return miss;
+  }
+
+  // Find the first markdown pipe-table and read its header to locate the
+  // Skeleton? and Units columns by name (order-independent).
+  const lines = body.split(/\r?\n/);
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l.includes("|")) continue;
+    const next = lines[i + 1] ?? "";
+    // A header is a pipe row immediately followed by a `---|---` separator row.
+    if (/^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(next) && next.includes("-")) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) return miss;
+
+  const splitCells = (row: string): string[] =>
+    row
+      .replace(/^\s*\|/, "")
+      .replace(/\|\s*$/, "")
+      .split("|")
+      .map((c) => c.trim());
+
+  const header = splitCells(lines[headerIdx]).map((h) => h.toLowerCase());
+  const skeletonCol = header.findIndex((h) => h.includes("skeleton"));
+  const unitsCol = header.findIndex((h) => h.includes("unit"));
+
+  // First NON-BLANK data row after the separator. A formatting spacer row (all
+  // cells empty) is skipped so the real first Bolt is the one consulted.
+  let cells: string[] | null = null;
+  for (let i = headerIdx + 2; i < lines.length; i++) {
+    const row = lines[i];
+    if (row === undefined) break;
+    if (!row.includes("|")) break; // table ended
+    const c = splitCells(row);
+    if (c.some((cell) => cell.length > 0)) {
+      cells = c;
+      break;
+    }
+  }
+  if (cells === null) return miss;
+
+  // Affirmative marker in the FIRST Bolt's Skeleton? cell only. An affirmative
+  // "YES" token or "walking skeleton" phrase wins; a hedged affirmative ("yes, but
+  // not fully thin") still counts. A cell with NO affirmative token that carries an
+  // explicit negative ("no", "n/a", "not a walking skeleton") is treated as not a
+  // skeleton, so a negative cell that spells out the phrase does not false-match.
+  const skeletonCell = skeletonCol >= 0 ? (cells[skeletonCol] ?? "") : "";
+  const affirmative =
+    /\byes\b/i.test(skeletonCell) || /walking[\s-]*skeleton/i.test(skeletonCell);
+  const bareNegative =
+    /\b(no|n\/?a|none|not)\b/i.test(skeletonCell) && !/\byes\b/i.test(skeletonCell);
+  const skeletonFirst = affirmative && !bareNegative;
+
+  // Count distinct Units the first Bolt spans. The Units cell is free text like
+  // "U4 + thin U1", "U1 full", or "Unit 1". Count only EXPLICIT Unit references so
+  // descriptive prose ("auth, thin API") is never mis-counted as multiple Units,
+  // which would spuriously warn on the aligned one-Unit unit-major path:
+  //   1. distinct "U<n>" ids (case-insensitive), else
+  //   2. distinct "Unit <n>" ids.
+  // A cell with no explicit Unit reference yields 0 (unconfirmed), which the
+  // caller treats as "cannot prove multi-Unit" rather than "multi-Unit".
+  const unitsCell = unitsCol >= 0 ? (cells[unitsCol] ?? "") : "";
+  const firstBoltUnitCount = countFirstBoltUnits(unitsCell);
+
+  return { skeletonFirst, firstBoltUnitCount };
+}
+
+// Distinct explicit-Unit count for a free-text bolt-plan Units cell. Both "U<n>"
+// and "Unit <n>" references count, unioned into one distinct set keyed by the
+// numeric id (so "U1 + Unit 2" is 2, and "U1 + Unit 1" is 1). Arbitrary comma/plus
+// free text with no explicit Unit reference does not count (see readFirstBoltFacts).
+// Returns 0 when no explicit Unit reference is present.
+function countFirstBoltUnits(unitsCell: string): number {
+  const ids = new Set<string>();
+  for (const m of unitsCell.matchAll(/\bU\s*(\d+)\b/gi)) ids.add(m[1]);
+  for (const m of unitsCell.matchAll(/\bunit\s*(\d+)\b/gi)) ids.add(m[1]);
+  return ids.size;
+}
+
+// The reconciliation notice text (issue #985), or undefined when the selected
+// Construction walk CAN represent the approved first Bolt. The runtime walks by
+// Unit/stage batch from unit-of-work-dependency.md, never by the Bolt sequence in
+// bolt-plan.md, so:
+//   - stage-major (the default, incl. when set-construction-iteration was never
+//     called) never delivers a walking-skeleton first Bolt as the first
+//     reviewable increment -> warn.
+//   - unit-major delivers Unit by Unit; it CAN carry a first Bolt of at most one
+//     Unit as the first increment (silent), but a multi-Unit first Bolt is a
+//     vertical slice no single Unit batch represents -> warn. An unconfirmed Unit
+//     count (an unparseable/absent Units cell -> 0) fails toward silent under
+//     unit-major: the notice is advisory and must not cry wolf on the aligned,
+//     mitigating choice.
+// Advisory only: the caller still completes the stage and the transition proceeds.
+function boltPlanReconciliationWarning(
+  pd: string,
+  effectiveUnitMajor: boolean,
+): string | undefined {
+  const { skeletonFirst, firstBoltUnitCount } = readFirstBoltFacts(pd);
+  if (!skeletonFirst) return undefined;
+  const walkRepresentsFirstBolt = effectiveUnitMajor && firstBoltUnitCount <= 1;
+  if (walkRepresentsFirstBolt) return undefined;
+  const walk = effectiveUnitMajor
+    ? `unit-major walk delivers one Unit at a time, but the walking-skeleton first Bolt spans ${firstBoltUnitCount} Units`
+    : "stage-major (the default) walk batches by stage across all Units, so no early increment is the walking-skeleton first Bolt";
+  return (
+    "bolt-plan.md is walking-skeleton-first, but the selected Construction " +
+    `iteration cannot deliver that first Bolt as the first reviewable increment: ${walk}. ` +
+    "Construction walks by Unit/stage batch (from unit-of-work-dependency.md), not by the " +
+    "Bolt sequence. Confirm the approved delivery plan and the iteration choice agree before " +
+    "approving the transition into Construction."
+  );
+}
+
 function unitProgressSectionRange(
   content: string,
 ): { start: number; end: number } | null {
@@ -4242,6 +4392,19 @@ function handleFinalize(args: string[]): void {
   content = setField(content, "Next Action", nextStage ? `Resume from ${nextStage.name}` : "Workflow complete");
 
   writeStateFile(pd, content);
+  // Reconciliation notice (issue #985), fired at delivery-planning completion so
+  // it runs BEFORE the approval transition into Construction and regardless of
+  // whether set-construction-iteration was ever called (stage-major is the
+  // default). Warns only when the effective Construction walk cannot deliver a
+  // walking-skeleton first Bolt as the first reviewable increment. Advisory only:
+  // the stage is already marked completed above and the transition proceeds.
+  const reconciliationWarning =
+    completedSlug === "delivery-planning"
+      ? boltPlanReconciliationWarning(
+          pd,
+          getField(content, "Construction Iteration")?.trim() === "unit-major",
+        )
+      : undefined;
   console.log(
     JSON.stringify({
       completed: completedSlug,
@@ -4249,6 +4412,7 @@ function handleFinalize(args: string[]): void {
       next_stage: nextStage?.slug || "none",
       phase: nextStage?.phase.toUpperCase() || completedStage.phase.toUpperCase(),
       timestamp,
+      ...(reconciliationWarning ? { warning: reconciliationWarning } : {}),
     })
   );
   });
