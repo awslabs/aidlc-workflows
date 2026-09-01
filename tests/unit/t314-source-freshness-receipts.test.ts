@@ -2499,8 +2499,8 @@ describe("t314 multi-unit source attribution", () => {
     expect(dirty.out).toContain(
       "workspace source changed again after the one recovery review",
     );
-    expect(dirty.out).toContain("To change this document");
-    expect(dirty.out).toContain("Request Changes decision");
+    expect(dirty.out).toContain('Ask \\"What should change?\\" for stage \\"code-generation\\"');
+    expect(dirty.out).toContain("their exact text unchanged");
   }, 60_000);
 });
 

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 837,
+    "total": 838,
     "enumeratedByClass": {
-      "function": 539,
+      "function": 540,
       "audit": 91,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 317,
+      "function": 318,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -2669,6 +2669,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t330-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRecoveryFeedbackStatus",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t324-team-unit-progress-gates.test.ts",
           "mechanism": "cli"
         }
       ],
