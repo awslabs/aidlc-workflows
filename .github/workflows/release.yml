@@ -1,0 +1,42 @@
+# GitHub requires this path on the default branch before tag-on-merge.yml can
+# dispatch the full v1 workflow with `gh workflow run release.yml --ref <tag>`.
+# The selected v1 release tag contains the implementation that creates the
+# draft GitHub Release.
+
+name: Release (v1)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Optional v1 release tag to dispatch, for example v1.2.0'
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  dispatch-v1-tag:
+    name: Dispatch v1 release tag
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUT_TAG: ${{ inputs.tag }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Run the tagged v1 workflow
+        run: |
+          if [ -z "$INPUT_TAG" ]; then
+            echo "::error::Provide the v1 release tag in the tag input, for example v1.2.0."
+            exit 1
+          fi
+          if [[ ! "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must match vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          gh workflow run release.yml \
+            --ref "$INPUT_TAG" \
+            --repo "$REPO"
+          echo "Dispatched release.yml from $INPUT_TAG"

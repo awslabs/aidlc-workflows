@@ -1,0 +1,40 @@
+# GitHub registers workflow_dispatch only from the default branch. The v1
+# implementation remains on v1. This default-branch entry forwards manual
+# requests to that maintained implementation.
+
+name: Release PR (v1)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.2.0). Leave empty to auto-determine from conventional commits.'
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  dispatch-v1:
+    name: Dispatch v1 Release PR
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUT_VERSION: ${{ inputs.version }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Run the v1 workflow
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            gh workflow run release-pr.yml \
+              --ref v1 \
+              --repo "$REPO" \
+              --field "version=$INPUT_VERSION"
+          else
+            gh workflow run release-pr.yml \
+              --ref v1 \
+              --repo "$REPO"
+          fi
+          echo "Dispatched release-pr.yml from v1"

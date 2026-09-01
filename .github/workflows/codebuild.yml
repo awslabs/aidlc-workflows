@@ -1,0 +1,38 @@
+# GitHub requires this path on the default branch before tag-on-merge.yml can
+# dispatch the full v1 workflow with `gh workflow run codebuild.yml --ref
+# <tag>`. Manual default-branch runs are forwarded to the requested v1 ref.
+
+name: CodeBuild (v1)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'v1 branch or v1 release tag to build'
+        required: false
+        default: v1
+        type: string
+
+permissions: {}
+
+jobs:
+  dispatch-v1:
+    name: Dispatch v1 CodeBuild
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUT_REF: ${{ inputs.ref }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Run the v1 workflow
+        run: |
+          if [ "$INPUT_REF" != "v1" ] && [[ ! "$INPUT_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::CodeBuild ref must be v1 or a vMAJOR.MINOR.PATCH release tag."
+            exit 1
+          fi
+          gh workflow run codebuild.yml \
+            --ref "$INPUT_REF" \
+            --repo "$REPO"
+          echo "Dispatched codebuild.yml from $INPUT_REF"

@@ -1,11 +1,12 @@
 # This workflow must live on the default branch for pull_request_target events.
-# It validates pull requests whose base branch is the maintained v1 line.
+# It supplies the repository-required merge checks for main and the maintained
+# v1 line.
 
 name: Pull Request Validation
 
 on:
   pull_request_target:
-    branches: [ "v1" ]
+    branches: [ "main", "v1" ]
     types:
       - edited
       - labeled
@@ -21,7 +22,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -52,7 +53,7 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
             echo "$PR_LABELS"
             echo "::endgroup::"
-          elif [ "$GITHUB_EVENT_NAME" == "pull_request" -o "$GITHUB_EVENT_NAME" == "pull_request_target" ]; then
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; then
             PR_NUMBER="$PR_NUMBER_INPUT"
             PR_LABELS=$(echo "$PR_LABELS_JSON" | jq -c '.')
           fi
@@ -95,9 +96,13 @@ jobs:
               jq '[.[] | select(.headRefName | startswith("release/"))]')
           echo "$OPEN_RELEASES"
           echo "::endgroup::"
-          echo "$OPEN_RELEASES" | jq --exit-status --arg pr "$PR_NUMBER" '[.[] | select((.number | tostring) != $pr)] | length == 0' && \
-              echo "No other open release pull requests"  || \
-              (echo "::warning::⚠️ Merges are rejected while there are open release pull requests" && exit 1)
+          if echo "$OPEN_RELEASES" | jq --exit-status --arg pr "$PR_NUMBER" \
+              '[.[] | select((.number | tostring) != $pr)] | length == 0'; then
+            echo "No other open release pull requests"
+          else
+            echo "::warning::⚠️ Merges are rejected while there are open release pull requests"
+            exit 1
+          fi
           if [ "$HALT_MERGES" = "0" ]; then
             echo "✅ All merges are allowed (HALT_MERGES=0)"
             exit 0
@@ -166,7 +171,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
       pull-requests: write
     if: github.event_name == 'pull_request_target'
     steps:
