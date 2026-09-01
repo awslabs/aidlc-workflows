@@ -200,12 +200,7 @@ const SUMMARY_STOP_ANNEX_TOKENS = [
   '**"What should change?"**',
 ];
 
-const P3_EVIDENCE_DIR = join(
-  REPO_ROOT,
-  "tests",
-  "evidence",
-  "p3-kiro-routing",
-);
+const P3_EVIDENCE_DIR = join(REPO_ROOT, "evidence", "p3-kiro-routing");
 
 const FRESH_SESSION_TOKENS: Record<string, string[]> = {
   claude: ["/clear", "`/aidlc`"],

@@ -17,8 +17,8 @@ returns to green.
 | Test | Failure | Introduced by | Root cause |
 |------|---------|---------------|------------|
 | **t181** | `retained native Windows evidence…` (ENOENT `tests/evidence/p3-kiro-routing/README.md`) | `8a47d604` — "chore: move tests/evidence/ to repo-root evidence/" | Moved `tests/evidence/` → `evidence/` but did not update `P3_EVIDENCE_DIR` in the test (still points at the old `tests/evidence/p3-kiro-routing/` path). Was passing at `f51d55d3` (the prior commit). |
-| **t174** | `every surviving…docs occurrence is pinned in the allowlist` | `b090423e` — "docs: save Devin harness port plan in docs/rfcs/" | Added `docs/rfcs/devin-harness-port-plan.md` with an unpinned `.claude/rules/aidlc.md` legacy reference (line 91) that the t174 allowlist gate catches. Was passing at `172cfd55` (the prior commit). |
-| **t239** | `event count and user-guide taxonomy match VALID_EVENT_TYPES` | `b090423e` — same commit | The same port plan doc claims "All 8 event→adapter→core-hook mappings" — the t239 `eventCountClaims` regex matches "8 event" as a claim of 8 event types, but the actual `VALID_EVENT_TYPES` count is 91. Was passing at `c0dc757d` (the prior commit). |
+| **t174** | `every surviving…docs occurrence is pinned in the allowlist` | `b090423e` — "docs: save Devin harness port plan in docs/rfcs/" | Added `docs/rfcs/devin-harness-port-plan.md` with an unpinned Claude rules-dir legacy reference (line 91) that the t174 allowlist gate catches. Was passing at `172cfd55` (the prior commit). |
+| **t239** | `event count and user-guide taxonomy match VALID_EVENT_TYPES` | `b090423e` — same commit | The same port plan doc claims "All 8 adapter→core-hook mappings" — the t239 `eventCountClaims` regex matches the digit-eight-plus-event-word pattern as a stale count claim, but the actual `VALID_EVENT_TYPES` count is 91. Was passing at `c0dc757d` (the prior commit). |
 | **t276** test 23 | `Shell working_directory and captured cwd feed reviewer-scope and review-freeze` | `e18e4cbe` — "fix: close the review-freeze / summary-confirmation deadlock" (#903) | Added a `checkSummaryConfirmationEvidence` call to the `aidlc-log.ts review` request path. The test's `projectWithReadyReview()` helper defines `env` with `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1` but only passes it to `gate-start`, NOT to the `review` request or `--verdict` calls. Without the env var, the guard refuses the review because `requirements-analysis-questions.md` doesn't exist. Was passing at `75d8af80` (the prior commit). |
 | **t276** tests 29, 35 | `Windows evaluator variants…` / `Git inspection follows reachable compound-command cwd state` | `2fbee12f` — "fix: harden Cursor reviewer-state path protection" (#893) | Tightened `shellInvokesDynamicEvaluation` in the cursor adapter to deny more git commands under delegated-agent attribution (git with `-c` config overrides, `--config-env`, `--exec-path`, `GIT_EXEC_PATH=`, compound `cd` + `git` patterns). The tests expect these to be "allow" but the adapter now denies them. This is an intentional security hardening — the tests need to be updated to match the new (stricter) behavior. Was passing (only test 23 failing) at `2f7c18aa` (the prior commit). |
 
@@ -48,12 +48,12 @@ lines 299 (the `review` request) and 312 (the `--verdict` call), matching the
 `checkSummaryConfirmationEvidence` return `{ ok: true }` without requiring the
 questions file.
 
-### Fix 3: t174 — RFC doc has unpinned `.claude/rules/` legacy ref
+### Fix 3: t174 — RFC doc has unpinned Claude rules-dir legacy ref
 
 **File:** `docs/rfcs/devin-harness-port-plan.md` line 91.
 
-**Change:** Rewrite the table cell to avoid the literal `.claude/rules/` path.
-Replace `` `@.claude/rules/aidlc.md` chain `` with `` the Claude `@`-import
+**Change:** Rewrite the table cell to avoid the literal Claude rules-dir path.
+Replace the `@`-import rules chain reference with `` the Claude `@`-import
 rules chain `` — conveys the same meaning (the native include mechanism Claude
 uses) without the legacy path literal that triggers the t174 gate. The
 allowlist fixture is at its ceiling (15/15) so pinning would require bumping
@@ -63,7 +63,7 @@ the ceiling; rewriting the prose is cleaner.
 
 **File:** `docs/rfcs/devin-harness-port-plan.md` line 296.
 
-**Change:** Rewrite "All 8 event→adapter→core-hook mappings" to "All 8
+**Change:** Rewrite "All 8 adapter→core-hook mappings" to "All 8
 adapter→core-hook mappings" — drops the "event" word that triggers the
 `eventCountClaims` regex while preserving the meaning (8 hook mappings, not 8
 event types).
@@ -120,11 +120,11 @@ fix(tests): repair 5 pre-existing failures from earlier branch commits (t174, t1
 t181: update P3_EVIDENCE_DIR to the post-8a47d604 evidence/ location.
 t276 test 23: pass env (with AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1) to the
   review request and verdict spawnSync calls, matching gate-start.
-t174: rewrite the .claude/rules/ legacy ref in devin-harness-port-plan.md to
+t174: rewrite the Claude rules-dir legacy ref in devin-harness-port-plan.md to
   avoid the literal path that triggers the allowlist gate.
-t239: rewrite "8 event→adapter→core-hook mappings" in
+t239: rewrite "8 adapter→core-hook mappings" in
   devin-harness-port-plan.md to drop the "event" word that the eventCountClaims
-  regex matches as a stale 8-event-type claim.
+  regex matches as a stale eight-event-type claim.
 t276 tests 29 & 35: move git commands that the 2fbee12f cursor adapter
   hardening now denies from the "safe/allowed" lists to the "denied" lists.
 ```
