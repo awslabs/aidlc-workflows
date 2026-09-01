@@ -1,27 +1,88 @@
 # Build and Test
 
-**Purpose**: Build all units and execute comprehensive testing strategy
+> **OVERRIDE**: ALL steps in this file are exempt from the Adaptive Workflow Principle, adaptive depth, and any rule that permits the model to skip steps or apply judgement about whether to follow instructions. Every step MUST be executed. The model MUST NOT skip them, combine them, or treat them as optional.
+
+**Purpose**: Build all generated code and execute comprehensive static validation. "Code" in this stage means ALL generated artifacts: application source code and extension source code such as infrastructure as code (IaC), tests, operational artifacts (runbooks, SSM documents, canary scripts, dashboard definitions), and configuration files. All are first-class outputs of Code Generation and all MUST be built and validated.
 
 ## Prerequisites
 - Code Generation must be complete for all units
-- All code artifacts must be generated
+- All code artifacts must be generated — application code and extension artifacts
 - Project is ready for build and testing
 
 ---
 
-## Step 1: Analyze Testing Requirements
+## Step 1: Analyze Build and Testing Requirements
 
-Analyze the project to determine appropriate testing strategy:
+Analyze the project to determine the build process and appropriate testing strategy:
+- **Build**: Dependency installation, compilation, bundling, template synthesis for all generated code
 - **Unit tests**: Already generated per unit during code generation
-- **Integration tests**: Test interactions between units/services
-- **Performance tests**: Load, stress, and scalability testing
-- **End-to-end tests**: Complete user workflows
+- **Static validation**: Linting, type checking, schema validation, template validation for all generated code
+- **Integration tests**: Test interactions between units/services (requires deployed environment — instructions only)
+- **Performance tests**: Load, stress, and scalability testing (requires deployed environment — instructions only)
+- **End-to-end tests**: Complete user workflows (requires deployed environment — instructions only)
 - **Contract tests**: API contract validation between services
-- **Security tests**: Vulnerability scanning, penetration testing
+- **Security tests**: Vulnerability scanning, dependency security checks
 
 ---
 
-## Step 2: Generate Build Instructions
+## Step 2: Discover Available Tools and Environment
+
+**MANDATORY**: You MUST inventory the workspace and all available tools. **MANDATORY**: You MUST create `aidlc-docs/construction/build-and-test/tool-inventory.md`.
+
+### Step 2.1: Scan the workspace
+
+**MANDATORY**: You MUST identify all generated artifact types (application code, IaC, tests, runbooks, canary scripts, dashboards, alarms, pipeline definitions) and the languages, frameworks, and tools used to create them.
+
+### Step 2.2: Check available build and test tools
+
+**MANDATORY**: You MUST determine what is installed or installable in the current environment (e.g. compilers, test runners, linters, IaC CLIs, syntax checkers).
+
+### Step 2.3: Install missing tools and their dependencies
+
+For each generated artifact type, you MUST identify the tool needed to build and test it. If that tool is not installed, you MUST attempt to install it AND any runtime dependencies it requires. For example: `npm install -g aws-cdk` for CDK CLI (requires Node.js — you MUST install Node.js first if missing), `pip install cfn-lint` for template validation, `pip install yamllint` for YAML validation. If a tool requires a CLI or runtime that is not installed (e.g. CDK requires Node.js, SAM requires Docker), you MUST install the runtime first, then install the tool. **MANDATORY**: You MUST NOT assume a tool requires prerequisites (such as an AWS account, deployed infrastructure, or network access) without proving it by attempting to install and run the tool. For example, assuming `cdk synth` requires an AWS account. If installation fails, you MUST record the install command attempted and the specific error in the tool inventory, then continue. **MANDATORY**: You MUST NOT skip installation without attempting it. **MANDATORY**: You MUST NOT assume a tool is unavailable without running an install command.
+
+### Step 2.4: List available services
+
+**MANDATORY**: You MUST list all available MCP servers and their capabilities, and any other connected services that can be used for build, test, or validation.
+
+### Step 2.5: Identify environment constraints
+
+**MANDATORY**: You MUST note limitations that cannot be resolved by installing software (e.g. do not have access to an AWS account, do not have access to AWS hosted resources, do not have network access to production endpoints). **MANDATORY**: You MUST NOT list a missing tool as a constraint without first attempting to install it as stated in Step 2.3. **MANDATORY**: You MUST NOT list a tool as constrained by prerequisites without first attempting to run it as stated in Step 2.3.
+
+```markdown
+# Tool Inventory
+
+## Generated Artifacts
+| Artifact | Location | Language / Format | Build Tool |
+|----------|----------|-------------------|------------|
+| [e.g. Backend API] | [workspace/backend] | [Python 3.12] | [pip/uv] |
+| [e.g. Frontend SPA] | [workspace/frontend] | [TypeScript] | [npm/vite] |
+| [e.g. IaC stacks] | [workspace/infra] | [Python CDK] | [cdk synth] |
+| [e.g. Runbooks] | [workspace/runbooks] | [YAML] | [yamllint] |
+| [e.g. Canary scripts] | [workspace/canaries] | [Node.js] | [node --check] |
+
+## Available Tools
+| Tool | Version | Purpose | Available |
+|------|---------|---------|-----------|
+| [e.g. pytest] | [X.X] | [Unit test runner] | [Yes/No] |
+| [e.g. cdk] | [X.X] | [IaC synthesis] | [Yes/No] |
+| [e.g. cfn-lint] | [X.X] | [Template validation] | [Yes/No] |
+
+## Available Services (MCP Servers)
+| Service | Capabilities | Relevant To |
+|---------|-------------|-------------|
+| [e.g. IaC compliance server] | [CDK validation, best practice checks] | [IaC stacks] |
+
+## Environment Constraints
+- [e.g. No deployed AWS infrastructure — cannot execute integration or performance tests]
+- [e.g. No database available — cannot run tests requiring database connections]
+```
+
+---
+
+## Step 3: Generate Build Instructions
+
+The instructions generated in this step MUST reflect the tools and environment documented in `aidlc-docs/construction/build-and-test/tool-inventory.md`.
 
 Create `aidlc-docs/construction/build-and-test/build-instructions.md`:
 
@@ -29,7 +90,7 @@ Create `aidlc-docs/construction/build-and-test/build-instructions.md`:
 # Build Instructions
 
 ## Prerequisites
-- **Build Tool**: [Tool name and version]
+- **Build Tools**: [Tool names and versions]
 - **Dependencies**: [List all required dependencies]
 - **Environment Variables**: [List required env vars]
 - **System Requirements**: [OS, memory, disk space]
@@ -38,8 +99,9 @@ Create `aidlc-docs/construction/build-and-test/build-instructions.md`:
 
 ### 1. Install Dependencies
 \`\`\`bash
-[Command to install dependencies]
-# Example: npm install, mvn dependency:resolve, pip install -r requirements.txt
+[Commands to install dependencies for ALL generated code]
+# Example: npm install, pip install -r requirements.txt, uv pip install -e ".[dev]",
+#          terraform init, pip install -r infra/requirements.txt
 \`\`\`
 
 ### 2. Configure Environment
@@ -48,14 +110,15 @@ Create `aidlc-docs/construction/build-and-test/build-instructions.md`:
 # Example: export variables, configure credentials
 \`\`\`
 
-### 3. Build All Units
+### 3. Build All Code
 \`\`\`bash
-[Command to build all units]
-# Example: mvn clean install, npm run build, brazil-build
+[Commands to build ALL generated code]
+# Example: mvn clean install, npm run build, docker build,
+#          cdk synth, terraform plan, sam build
 \`\`\`
 
 ### 4. Verify Build Success
-- **Expected Output**: [Describe successful build output]
+- **Expected Output**: [Describe successful build output for each artifact type — compiled code, generated templates, bundled assets]
 - **Build Artifacts**: [List generated artifacts and locations]
 - **Common Warnings**: [Note any acceptable warnings]
 
@@ -66,62 +129,78 @@ Create `aidlc-docs/construction/build-and-test/build-instructions.md`:
 - **Solution**: [Step-by-step fix]
 
 ### Build Fails with Compilation Errors
-- **Cause**: [Common causes]
+- **Cause**: [Common causes — missing imports, type errors, circular references, invalid construct props]
 - **Solution**: [Step-by-step fix]
 ```
 
 ---
 
-## Step 3: Generate Unit Test Execution Instructions
+## Step 4: Generate Unit Test Execution Instructions
 
 Create `aidlc-docs/construction/build-and-test/unit-test-instructions.md`:
 
 ```markdown
 # Unit Test Execution
 
-## Run Unit Tests
+## Run All Unit Tests
 
-### 1. Execute All Unit Tests
+### 1. Execute Application Unit Tests
 \`\`\`bash
-[Command to run all unit tests]
-# Example: mvn test, npm test, pytest tests/unit
+[Commands to run application unit tests]
+# Example: mvn test, npm test, pytest tests/unit, uv run pytest tests/unit/ -v --tb=short
 \`\`\`
 
-### 2. Review Test Results
+### 2. Execute Extension Unit Tests
+\`\`\`bash
+[Commands to validate all extension artifacts]
+# Example: cfn-lint template.yaml, terraform validate, sam validate,
+#          yamllint runbooks/*.yaml, node --check canaries/*.js, python -m py_compile canaries/*.py
+\`\`\`
+
+### 3. Execute Property-Based Tests (If Applicable)
+\`\`\`bash
+[Command to run property-based tests]
+# Example: uv run pytest tests/property/ -v, npm run test -- tests/property/
+\`\`\`
+
+### 4. Review Test Results
 - **Expected**: [X] tests pass, 0 failures
 - **Test Coverage**: [Expected coverage percentage]
 - **Test Report Location**: [Path to test reports]
+- **Verify**: All generated code — application and extension — passes its tests and validations with no errors
 
-### 3. Fix Failing Tests
-If tests fail:
-1. Review test output in [location]
-2. Identify failing test cases
-3. Fix code issues
-4. Rerun tests until all pass
+### 5. Fix Failing Tests
+If any test fails:
+1. Review test output to identify the failure
+2. Fix the code or artifact
+3. Rerun until all pass
 ```
 
 ---
 
-## Step 4: Generate Integration Test Instructions
+## Step 5: Generate Integration Test Instructions
 
 Create `aidlc-docs/construction/build-and-test/integration-test-instructions.md`:
+
+These instructions will be reused during the Post-Deployment Testing stage.
 
 ```markdown
 # Integration Test Instructions
 
 ## Purpose
 Test interactions between units/services to ensure they work together correctly.
+These tests require a deployed environment and will be executed during the Post-Deployment Testing stage.
 
 ## Test Scenarios
 
-### Scenario 1: [Unit A] → [Unit B] Integration
+### Scenario 1: [Component A] → [Component B] Integration
 - **Description**: [What is being tested]
 - **Setup**: [Required test environment setup]
 - **Test Steps**: [Step-by-step test execution]
 - **Expected Results**: [What should happen]
 - **Cleanup**: [How to clean up after test]
 
-### Scenario 2: [Unit B] → [Unit C] Integration
+### Scenario 2: [Component B] → [Component C] Integration
 [Similar structure]
 
 ## Setup Integration Test Environment
@@ -129,13 +208,13 @@ Test interactions between units/services to ensure they work together correctly.
 ### 1. Start Required Services
 \`\`\`bash
 [Commands to start services]
-# Example: docker-compose up, start test database
+# Example: docker-compose up, start test database, configure test endpoints
 \`\`\`
 
 ### 2. Configure Service Endpoints
 \`\`\`bash
 [Commands to configure endpoints]
-# Example: export API_URL=http://localhost:8080
+# Example: export API_URL=http://localhost:8080, export DATABASE_URL=...
 \`\`\`
 
 ## Run Integration Tests
@@ -143,7 +222,7 @@ Test interactions between units/services to ensure they work together correctly.
 ### 1. Execute Integration Test Suite
 \`\`\`bash
 [Command to run integration tests]
-# Example: mvn integration-test, npm run test:integration
+# Example: mvn integration-test, npm run test:integration, pytest tests/integration/
 \`\`\`
 
 ### 2. Verify Service Interactions
@@ -160,15 +239,18 @@ Test interactions between units/services to ensure they work together correctly.
 
 ---
 
-## Step 5: Generate Performance Test Instructions (If Applicable)
+## Step 6: Generate Performance Test Instructions
 
 Create `aidlc-docs/construction/build-and-test/performance-test-instructions.md`:
+
+These instructions will be reused during the Post-Deployment Testing stage.
 
 ```markdown
 # Performance Test Instructions
 
 ## Purpose
 Validate system performance under load to ensure it meets requirements.
+These tests require a deployed environment and will be executed during the Post-Deployment Testing stage.
 
 ## Performance Requirements
 - **Response Time**: < [X]ms for [Y]% of requests
@@ -181,7 +263,7 @@ Validate system performance under load to ensure it meets requirements.
 ### 1. Prepare Test Environment
 \`\`\`bash
 [Commands to set up performance testing]
-# Example: scale services, configure load balancers
+# Example: deploy to pre-production, configure load balancers
 \`\`\`
 
 ### 2. Configure Test Parameters
@@ -194,7 +276,7 @@ Validate system performance under load to ensure it meets requirements.
 ### 1. Execute Load Tests
 \`\`\`bash
 [Command to run load tests]
-# Example: jmeter -n -t test.jmx, k6 run script.js
+# Example: locust -f locustfile.py --headless -u 100 -r 10, k6 run script.js
 \`\`\`
 
 ### 2. Execute Stress Tests
@@ -220,9 +302,9 @@ If performance doesn't meet requirements:
 
 ---
 
-## Step 6: Generate Additional Test Instructions (As Needed)
+## Step 7: Generate Additional Test Instructions
 
-Based on project requirements, generate additional test instruction files:
+Based on project requirements, generate additional test instruction files in `aidlc-docs/construction/build-and-test/`:
 
 ### Contract Tests (For Microservices)
 Create `aidlc-docs/construction/build-and-test/contract-test-instructions.md`:
@@ -232,7 +314,7 @@ Create `aidlc-docs/construction/build-and-test/contract-test-instructions.md`:
 
 ### Security Tests
 Create `aidlc-docs/construction/build-and-test/security-test-instructions.md`:
-- Vulnerability scanning
+- Vulnerability scanning (e.g. pip-audit, npm audit, trivy)
 - Dependency security checks
 - Authentication/authorization testing
 - Input validation testing
@@ -245,58 +327,76 @@ Create `aidlc-docs/construction/build-and-test/e2e-test-instructions.md`:
 
 ---
 
-## Step 7: Generate Test Summary
+## Step 8: Execute Build
+
+Using the tools documented in `aidlc-docs/construction/build-and-test/tool-inventory.md`, execute the build process for ALL generated code. Install dependencies, run the build, and verify the output. **MANDATORY**: You MUST follow the rules set out in Step 2.3 for every artifact type in the tool inventory.
+
+Record the build result (success or failure) and any errors.
+
+If any build fails, attempt to fix the issue and rebuild. If the fix requires code changes, make the changes and rebuild. Do not proceed to Step 9 until all builds succeed.
+
+---
+
+## Step 9: Execute Unit Tests and Validation
+
+Using the tools documented in `aidlc-docs/construction/build-and-test/tool-inventory.md`, execute all testing and validation that does NOT require a deployed environment. Follow the instructions generated in Step 4.
+
+Record pass/fail counts, coverage, and validation results for all generated code.
+
+MUST NOT execute (these require a deployed environment and will be executed during the Post-Deployment Testing stage):
+- Integration tests
+- Performance tests
+- End-to-end tests
+
+If any test or validation fails, attempt to fix the issue. Do not proceed until all pass.
+
+---
+
+## Step 10: Generate Build and Test Summary
 
 Create `aidlc-docs/construction/build-and-test/build-and-test-summary.md`:
+
+Summarise the ACTUAL results from Steps 8 and 9. Every value in this summary MUST come from execution output — do not estimate or assume results.
 
 ```markdown
 # Build and Test Summary
 
 ## Build Status
-- **Build Tool**: [Tool name]
+- **Build Tool**: [Tool names]
 - **Build Status**: [Success/Failed]
-- **Build Artifacts**: [List artifacts]
+- **Build Artifacts**: [List all artifacts — compiled code, generated templates, bundled assets]
 - **Build Time**: [Duration]
 
-## Test Execution Summary
+## Test and Validation Results
+| Test / Validation | Count | Passed | Failed | Notes |
+|-------------------|-------|--------|--------|-------|
+| [e.g. Backend unit tests] | [X] | [X] | [X] | [coverage, report location] |
+| [e.g. Frontend unit tests] | [X] | [X] | [X] | [coverage, report location] |
+| [e.g. Property-based tests] | [X] | [X] | [X] | [framework, examples per test] |
+| [e.g. IaC template validation] | [X] | [X] | [X] | [tool, template location] |
+| [e.g. Runbook validation] | [X] | [X] | [X] | [tool, validation output] |
+| [e.g. Canary script validation] | [X] | [X] | [X] | [tool, validation output] |
 
-### Unit Tests
-- **Total Tests**: [X]
-- **Passed**: [X]
-- **Failed**: [X]
-- **Coverage**: [X]%
-- **Status**: [Pass/Fail]
-
-### Integration Tests
-- **Test Scenarios**: [X]
-- **Passed**: [X]
-- **Failed**: [X]
-- **Status**: [Pass/Fail]
-
-### Performance Tests
-- **Response Time**: [Actual] (Target: [Expected])
-- **Throughput**: [Actual] (Target: [Expected])
-- **Error Rate**: [Actual] (Target: [Expected])
-- **Status**: [Pass/Fail]
-
-### Additional Tests
-- **Contract Tests**: [Pass/Fail/N/A]
-- **Security Tests**: [Pass/Fail/N/A]
-- **E2E Tests**: [Pass/Fail/N/A]
+## Test Instructions Generated (For Dynamic Validation)
+| File | Purpose |
+|------|---------|
+| integration-test-instructions.md | Component integration testing |
+| performance-test-instructions.md | Load and stress testing |
+| [additional files] | [purpose] |
 
 ## Overall Status
 - **Build**: [Success/Failed]
-- **All Tests**: [Pass/Fail]
+- **All Tests and Validations**: [Pass/Fail]
 - **Ready for Operations**: [Yes/No]
 
 ## Next Steps
-[If all pass]: Ready to proceed to Operations phase for deployment planning
-[If failures]: Address failing tests and rebuild
+[If all pass]: Ready to proceed to Operations phase
+[If failures]: Address failing items and rebuild/revalidate
 ```
 
 ---
 
-## Step 8: Update State Tracking
+## Step 11: Update State Tracking
 
 Update `aidlc-docs/aidlc-state.md`:
 - Mark Build and Test stage as complete
@@ -304,57 +404,51 @@ Update `aidlc-docs/aidlc-state.md`:
 
 ---
 
-## Step 9: Present Results to User
+## Step 12: Present Results to User
 
-Present completion message in this structure:
-     1. **Completion Announcement** (mandatory): Always start with this:
+Present comprehensive message:
 
-```markdown
-# 🔨 Build and Test Complete
 ```
+"🔨 Build and Test Complete!
 
-     2. **AI Summary** (optional): Provide structured bullet-point summary of build and test results
-        - Format: "Build and test has completed with the following results:"
-        - List build status and artifacts
-        - List test results by category (unit, integration, performance, etc.)
-        - List generated instruction files
-        - DO NOT include workflow instructions ("please review", "let me know", "proceed to next phase", "before we proceed")
-        - Keep factual and content-focused
-     3. **Formatted Workflow Message** (mandatory): Always end with this exact format:
+**Build Status**: [Success/Failed]
 
-```markdown
-> **📋 <u>**REVIEW REQUIRED:**</u>**  
-> Please examine the build and test summary at: `aidlc-docs/construction/build-and-test/build-and-test-summary.md`
+**Test and Validation Results**:
+[summary table from build-and-test-summary.md]
 
+**Test Instructions Generated** (for execution during the Post-Deployment Testing stage):
+1. [status] integration-test-instructions.md
+2. [status] performance-test-instructions.md
+3. [status] [additional instruction files]
 
+**All Generated Files**:
+[list all files in aidlc-docs/construction/build-and-test/]
 
-> **🚀 <u>**WHAT'S NEXT?**</u>**
->
-> **You may:**
->
-> 🔧 **Request Changes** - Ask for modifications to the build and test instructions based on your review
-> ✅ **Approve & Continue** - Approve build and test results and proceed to **Operations**
+Review the summary in aidlc-docs/construction/build-and-test/build-and-test-summary.md
 
----
+**Ready to proceed to Operations stage?**"
 ```
 
 ---
 
-## Step 10: Log Interaction
+## Step 13: Wait for Explicit Approval
 
-**MANDATORY**: Log the stage completion in `aidlc-docs/audit.md`:
+- Do not proceed until the user explicitly approves
+- If user requests changes, address them and repeat the approval process
+
+---
+
+## Step 14: Log Interaction
+
+**MANDATORY**: You MUST log the phase completion in `aidlc-docs/audit.md`:
 
 ```markdown
 ## Build and Test Stage
 **Timestamp**: [ISO timestamp]
 **Build Status**: [Success/Failed]
-**Test Status**: [Pass/Fail]
+**Test and Validation Results**: [summary from build-and-test-summary.md]
 **Files Generated**:
-- build-instructions.md
-- unit-test-instructions.md
-- integration-test-instructions.md
-- performance-test-instructions.md
-- build-and-test-summary.md
+- [list all generated files]
 
 ---
 ```

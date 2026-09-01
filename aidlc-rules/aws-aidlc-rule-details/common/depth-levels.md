@@ -6,6 +6,10 @@
 
 **When a stage executes, ALL its defined artifacts are created. The "depth" refers to the level of detail and rigor within those artifacts, which adapts to the problem's complexity.**
 
+## Exclusion: Blocking Rules
+
+Adaptive depth MUST NOT be applied to blocking rules. All extension rules are blocking by default — when a rule uses MUST, the model MUST satisfy that rule regardless of problem complexity. Adaptive depth governs the detail level of documentation artifacts. It does NOT govern whether a blocking rule is satisfied.
+
 ## Stage Selection vs Detail Level
 
 ### Stage Selection (Binary)

@@ -55,14 +55,14 @@
 **Outputs**: Design artifacts, NFR implementations, code, tests
 
 ### OPERATIONS PHASE
-**Purpose**: Deployment and operational readiness  
-**Focus**: How to DEPLOY and RUN it  
-**Location**: `operations/` directory
+**Purpose**: Validate that Construction correctly implemented all applicable operational rules and produce comprehensive documentation  
+**Focus**: Verify WHAT was built meets the rules, and ensure operational readiness  
+**Location**: `extensions/{domain}/` directory
 
 **Stages**:
-- Operations (PLACEHOLDER)
+- Validation (CONDITIONAL — at least one extension opted in)
 
-**Outputs**: Build instructions, deployment guides, monitoring setup, verification procedures
+**Outputs**: Per-domain validation reports, resource documentation, operations summary with compliance status
 
 ---
 
@@ -96,7 +96,7 @@
 ## Architecture Terms (Infrastructure)
 
 ### Unit of Work
-A logical grouping of user stories for development purposes. The term used during planning and decomposition.
+A logical grouping of user stories for development purposes. Defined during Inception (Units Planning/Generation) and used as the iteration boundary throughout Construction — each unit goes through Functional Design, NFR Design, Infrastructure Design, and Code Generation independently.
 
 **Usage**: "We need to decompose the system into units of work"
 
@@ -114,6 +114,72 @@ A logical grouping of functionality within a single service or monolith. Modules
 A reusable building block within a service or module. Components are classes, functions, or packages that provide specific functionality.
 
 **Usage**: "The EmailValidator component validates email addresses"
+
+## Extensions and Operations Terms
+
+### Extension
+A cross-cutting constraint that applies across all AI-DLC phases. Extensions define operational rules (observability, recovery, runbooks, deployment, security) that are enforced during Construction and validated during Operations.
+
+Each extension has two files in `extensions/{domain}/`:
+- **Opt-in file** (`{domain}-baseline.opt-in.md`): Lightweight file loaded at workflow start. Contains the A/B/C/D question and loading instructions.
+- **Baseline file** (`{domain}-baseline.md`): Full strategy rules loaded after opt-in. Defines WHAT to do and WHY, enforcement behavior, and stage enforcement requirements.
+
+Extensions are hard constraints, not optional guidance. All extension rules are **blocking** by default.
+
+### Domain
+An operational concern area with its own extension and rule files. Each domain has an extension baseline in `extensions/{domain}/` and implementation rules in `extensions/{domain}/`.
+
+Current domains: observability, recovery, runbooks, deployment, security.
+
+### A/B/C/D Applicability Answer
+The opt-in mechanism for extensions. Asked during Requirements Analysis and recorded in `aidlc-state.md`:
+- **A**: AWS best-practice rules only
+- **B**: AWS best-practice rules plus organisation-specific custom rules
+- **C**: Custom rules only
+- **D**: Skip this domain entirely (no rules enforced)
+
+The answer determines which rule files are loaded for the domain.
+
+### Rule File
+A `.md` file in `extensions/{domain}/` containing one or more rules for a specific aspect of a domain (e.g. `observability-metrics.md`, `observability-alarms.md`). Each rule within a file has a unique rule ID with a domain prefix (e.g. `AIOBS-MET-003`, `AIRUN-CONTENT-001`).
+
+### Blocking Finding
+A rule verification failure that prevents stage completion. When a blocking finding exists:
+- The stage MUST NOT present "Continue to Next Stage"
+- Only "Request Changes" is offered
+- The finding is logged in `audit.md` with the rule ID
+
+All extension rules are blocking by default. A rule marked N/A with rationale is not a blocking finding.
+
+### Blocking Rule
+A rule that uses MUST language and must be satisfied regardless of problem complexity. All extension rules are blocking by default. Adaptive depth (see `depth-levels.md`) does NOT govern whether a blocking rule is satisfied.
+
+### Cross-Cutting Constraint
+A rule that applies across multiple phases rather than within a single stage. Extensions are cross-cutting constraints — they are enforced during NFR Design, Code Generation, and Operations, not just one stage.
+
+### N/A Determination
+The process of marking a rule as not applicable to the current architecture with a documented rationale. N/A is not a blocking finding, but silent omission is not acceptable — every rule must be explicitly evaluated as compliant, non-compliant, or N/A.
+
+### Known Exception
+A validation gap that the user explicitly accepts rather than fixing. The decision and justification are logged in `audit.md` and recorded in the operations summary.
+
+### Validation
+The Operations phase stage that verifies Construction correctly implemented all applicable operational rules. Validation does not generate code — it reads actual source files and IaC, checks them against rules, reports gaps, and produces documentation.
+
+### Applicability Matrix
+A table produced during Validation (Step 2a) showing each rule ID with status APPLICABLE or NOT APPLICABLE and rationale. The matrix is assessed independently from what Construction decided — Operations re-evaluates from the architecture.
+
+### Rule Mapping
+The intermediate artifact `{unit-name}-extension-plan-rule-mapping.md` created during Code Generation Step 2.2. Contains an AWS resource inventory and maps every rule to every resource it can technically apply to. Used to generate the extension code plan.
+
+### Extension Code Plan
+The intermediate artifact `{unit-name}-extension-code-plan.md` created during Code Generation Step 2.3. Contains one checklist item per rule × resource combination, grouped by rule file. Merged into the final code generation plan.
+
+### Application Code Plan
+The intermediate artifact `{unit-name}-application-code-plan.md` created during Code Generation Step 2.1. Contains steps for business logic, API layer, repository layer, frontend, and deployment artifacts. Merged into the final code generation plan.
+
+### Extension Configuration
+The table in `aidlc-state.md` that records each extension's opt-in answer (A/B/C/D) and enabled/disabled status. Written during Requirements Analysis, read by Construction and Operations to determine which rules to load.
 
 ## Terminology Guidelines
 

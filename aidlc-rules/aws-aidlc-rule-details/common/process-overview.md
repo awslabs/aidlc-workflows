@@ -10,7 +10,7 @@
 ## The Three-Phase Lifecycle:
 • **INCEPTION PHASE**: Planning and architecture (Workspace Detection + conditional phases + Workflow Planning)
 • **CONSTRUCTION PHASE**: Design, implementation, build and test (per-unit design + Code Generation + Build & Test)
-• **OPERATIONS PHASE**: Placeholder for future deployment and monitoring workflows
+• **OPERATIONS PHASE**: Validate that Construction correctly implemented all applicable operational rules and produce comprehensive documentation
 
 ## The Adaptive Workflow:
 • **Workspace Detection** (always) → **Reverse Engineering** (brownfield only) → **Requirements Analysis** (always, adaptive depth) → **Conditional Phases** (as needed) → **Workflow Planning** (always) → **Code Generation** (always, per-unit) → **Build and Test** (always)
@@ -54,7 +54,8 @@ flowchart TD
     end
     
     subgraph OPERATIONS["🟡 OPERATIONS PHASE"]
-        OPS["Operations<br/><b>PLACEHOLDER</b>"]
+        OPS["Rules Validation<br/><b>EXECUTE</b>"]
+        DEPVAL["Deployment Validation<br/><b>EXECUTE</b>"]
     end
     
     Start --> WD
@@ -90,7 +91,7 @@ flowchart TD
 
     style CG fill:#4CAF50,stroke:#1B5E20,stroke-width:3px,color:#fff
     style BT fill:#4CAF50,stroke:#1B5E20,stroke-width:3px,color:#fff
-    style OPS fill:#BDBDBD,stroke:#424242,stroke-width:2px,stroke-dasharray: 5 5,color:#000
+    style OPS fill:#FFA726,stroke:#E65100,stroke-width:3px,stroke-dasharray: 5 5,color:#000
     style RE fill:#FFA726,stroke:#E65100,stroke-width:3px,stroke-dasharray: 5 5,color:#000
     style Stories fill:#FFA726,stroke:#E65100,stroke-width:3px,stroke-dasharray: 5 5,color:#000
     style AppDesign fill:#FFA726,stroke:#E65100,stroke-width:3px,stroke-dasharray: 5 5,color:#000
@@ -128,14 +129,15 @@ flowchart TD
 - Code Generation: Generate code with Part 1 - Planning, Part 2 - Generation (ALWAYS, per-unit)
 - Build and Test: Build all units and execute comprehensive testing (ALWAYS)
 
-**🟡 OPERATIONS PHASE** - Placeholder
-- Operations: Placeholder for future deployment and monitoring workflows (PLACEHOLDER)
+**🟡 OPERATIONS PHASE** - Validation, Deployment, and Documentation
+- Rules Validation: Validate Construction output against all applicable operational rules (CONDITIONAL — at least one extension opted in)
+- Deployment Validation: Deploy workload to pre-production, run dynamic checks and chaos tests (CONDITIONAL — deployment extension opted in)
 
 **Key Principles:**
 - Phases execute only when they add value
 - Each phase independently evaluated
 - INCEPTION focuses on "what" and "why"
 - CONSTRUCTION focuses on "how" plus "build and test"
-- OPERATIONS is placeholder for future expansion
+- OPERATIONS validates what was built meets the rules
 - Simple changes may skip conditional INCEPTION stages
 - Complex changes get full INCEPTION and CONSTRUCTION treatment

@@ -40,6 +40,8 @@ class AgentProgressHandler:
         self.agent_name = agent_name
         self.tool_count = 0
         self._collector = collector
+        self._current_batch: list[str] = []
+        self._batch_has_handoff = False
 
     def __call__(self, **kwargs: Any) -> None:
         event = kwargs.get("event")
@@ -52,7 +54,24 @@ class AgentProgressHandler:
             if "toolUse" in start:
                 tool_name = start["toolUse"].get("name", "unknown")
                 self.tool_count += 1
+                self._current_batch.append(tool_name)
+                if tool_name == "handoff_to_agent":
+                    self._batch_has_handoff = True
                 _print_status(f"  [{self.agent_name}] tool #{self.tool_count}: {tool_name}")
+
+        # Message stop — end of a model response (batch complete)
+        if "messageStop" in event:
+            if self._batch_has_handoff and len(self._current_batch) > 1:
+                _print_status(
+                    f"  [{self.agent_name}] [handoff-batch] handoff_to_agent was in batch of "
+                    f"{len(self._current_batch)} tools: {self._current_batch}"
+                )
+            elif self._batch_has_handoff:
+                _print_status(
+                    f"  [{self.agent_name}] [handoff-batch] handoff_to_agent was sole tool call ✓"
+                )
+            self._current_batch = []
+            self._batch_has_handoff = False
 
         # Tool input — show key details for important tools
         if "contentBlockDelta" in event:

@@ -41,7 +41,7 @@ class AidlcConfig:
 class SwarmConfig:
     max_handoffs: int = 200
     max_iterations: int = 200
-    execution_timeout: float = 14400.0
+    execution_timeout: float = 28800.0
     node_timeout: float = 3600.0
 
 

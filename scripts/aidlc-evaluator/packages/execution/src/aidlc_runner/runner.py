@@ -172,6 +172,80 @@ def write_run_meta(
     atomic_yaml_dump(meta, run_folder / "run-meta.yaml")
 
 
+def _patch_handoff_stop(swarm: Swarm) -> None:
+    """Patch the Swarm's handoff_to_agent tool to stop the agent event loop after execution.
+
+    The Strands Swarm checks for handoff_node only after the agent's turn completes.
+    If the model batches handoff_to_agent with other tool calls in the same response,
+    the turn doesn't end at the handoff point and the Swarm misses the signal.
+
+    This patch wraps the original handoff tool to set request_state["stop_event_loop"] = True,
+    which causes the agent's event loop to stop after the current tool-call cycle completes.
+
+    It also registers a hook that clears the flag before each node starts, preventing
+    the flag from leaking between agent turns (invocation_state is shared across all nodes).
+    """
+    from strands import tool
+    from strands.hooks.events import BeforeNodeCallEvent
+
+    swarm_ref = swarm
+
+    # Hook: clear stop_event_loop before each node starts (prevents leaking between agents)
+    def _clear_stop_flag(event: BeforeNodeCallEvent) -> None:
+        if hasattr(swarm_ref, '_patch_invocation_state') and swarm_ref._patch_invocation_state:
+            swarm_ref._patch_invocation_state.get("request_state", {}).pop("stop_event_loop", None)
+
+    swarm.hooks.add_callback(BeforeNodeCallEvent, _clear_stop_flag)
+
+    @tool(context="tool_context")
+    def handoff_to_agent(agent_name: str, message: str, context: dict | None = None, tool_context=None) -> dict:
+        """Transfer control to another agent in the swarm for specialized help.
+
+        Args:
+            agent_name: Name of the agent to hand off to
+            message: Message explaining what needs to be done and why you're handing off
+            context: Additional context to share with the next agent
+
+        Returns:
+            Confirmation of handoff initiation
+        """
+        context = context or {}
+
+        # Validate target agent exists
+        target_node = swarm_ref.nodes.get(agent_name)
+        if not target_node:
+            return {"status": "error", "content": [{"text": f"Error: Agent '{agent_name}' not found in swarm"}]}
+
+        # Execute handoff (sets swarm.state.handoff_node)
+        swarm_ref._handle_handoff(target_node, message, context)
+
+        # Force the event loop to stop after this cycle
+        if tool_context and hasattr(tool_context, 'invocation_state'):
+            request_state = tool_context.invocation_state.get("request_state", {})
+            request_state["stop_event_loop"] = True
+            tool_context.invocation_state["request_state"] = request_state
+            # Store reference so the hook can clear it on next node start
+            swarm_ref._patch_invocation_state = tool_context.invocation_state
+            print(
+                f"  [handoff-patch] stop_event_loop=True | target={agent_name} | message={message[:80]}",
+                file=sys.stderr, flush=True,
+            )
+        else:
+            print(
+                "  [handoff-patch] WARNING: tool_context not available — stop_event_loop NOT set",
+                file=sys.stderr, flush=True,
+            )
+
+        return {"status": "success", "content": [{"text": f"Handing off to {agent_name}: {message}"}]}
+
+    # Replace the injected tool in each node's registry
+    for node in swarm_ref.nodes.values():
+        registry = node.executor.tool_registry.registry
+        if "handoff_to_agent" in registry:
+            registry.pop("handoff_to_agent")
+            node.executor.tool_registry.process_tools([handoff_to_agent])
+
+
 def run(config: RunnerConfig, vision_path: Path, tech_env_path: Path | None = None) -> None:
     """Execute a full AIDLC workflow run.
 
@@ -263,6 +337,11 @@ def run(config: RunnerConfig, vision_path: Path, tech_env_path: Path | None = No
     # Register progress hook for node-level events
     progress_hook = SwarmProgressHook(collector=collector)
     swarm.hooks.add_hook(progress_hook)
+
+    # Patch: force event loop stop after handoff_to_agent to prevent tool batching.
+    # Without this, the model may call tools after handoff_to_agent in the same response,
+    # causing the Swarm to miss the handoff signal and continue the executor's turn.
+    _patch_handoff_stop(swarm)
 
     result = swarm(initial_prompt)
 

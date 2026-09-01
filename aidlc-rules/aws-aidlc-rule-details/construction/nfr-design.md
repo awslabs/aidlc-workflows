@@ -1,5 +1,7 @@
 # NFR Design
 
+> **OVERRIDE**: ALL steps in this file are exempt from the Adaptive Workflow Principle, adaptive depth, and any rule that permits the model to skip steps or apply judgement about whether to follow instructions. Every step MUST be executed including all sub-tasks. The model MUST NOT skip them, combine them, or treat them as optional.
+
 ## Prerequisites
 - NFR Requirements must be complete for the unit
 - NFR requirements artifacts must be available
@@ -12,11 +14,14 @@ Incorporate NFR requirements into unit design using patterns and logical compone
 
 ### Step 1: Analyze NFR Requirements
 - Read NFR requirements from `aidlc-docs/construction/{unit-name}/nfr-requirements/`
-- Understand scalability, performance, availability, security needs
+- Understand the needs and infrastructure dependencies that result from ALL active extensions 
+- Understand scalability, performance, availability, and security needs
 
 ### Step 2: Create NFR Design Plan
 - Generate plan with checkboxes [] for NFR design
-- Focus on design patterns and logical components
+- Focus on design patterns, logical components
+- Each step MUST include the dependencies required to build, test, deploy, and operate the step
+- Each step MUST include anything required to comply with ALL active extensions
 - Each step should have a checkbox []
 
 ### Step 3: Generate Context-Appropriate Questions
