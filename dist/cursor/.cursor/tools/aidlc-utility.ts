@@ -1826,10 +1826,33 @@ const PLUGIN_DOCTOR_REQUIRED_JSON =
   '{"checks":[{"pass":boolean,"label":string,"fix"?:string,"severity"?:"error"|"advisory"}]}';
 const HOOK_EXECUTION_RECOVERY =
   "1. Run /hooks to check hook approval and policy state. 2. If hooks need approval, approve them and fully restart the CLI; approval does not take effect until a full restart. 3. If /hooks says hooks are restricted by policy, only your Claude Code administrator can lift allowManagedHooksOnly in managed-settings.json. Until then, for an attended session, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1";
+const CURSOR_HOOK_EXECUTION_RECOVERY =
+  "ensure the workspace is the exact Git repository root, mark it trusted in Cursor, verify Customize > Hooks lists .cursor/hooks.json, then fully restart Cursor before resuming the workflow";
 // Hook heartbeats and audit rows are written in the same turn, normally
 // seconds apart. Five minutes absorbs host scheduling and slow tool-return
 // ordering without hiding a resumed workflow that advances after hooks die.
 const HOOK_HEARTBEAT_STALE_SLACK_MS = 5 * 60 * 1000;
+
+function canonicalComparablePath(path: string): string {
+  let canonical = resolve(path);
+  try {
+    canonical = realpathSync(path);
+  } catch {
+    // Keep the resolved path so a missing/unreadable target fails comparison.
+  }
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+function gitTopLevel(projectDir: string): string | null {
+  const result = spawnSync(
+    "git",
+    ["-C", projectDir, "rev-parse", "--show-toplevel"],
+    { encoding: "utf-8" },
+  );
+  if (result.status !== 0) return null;
+  const root = result.stdout.trim();
+  return root ? root : null;
+}
 
 function frontmatterFields(filePath: string, kind: "Agent" | "Scope"): { name: string; plugin: string } {
   const body = readFileSync(filePath, "utf-8");
@@ -2694,6 +2717,32 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         fix: `copy from \`${from}\``,
       });
     }
+    const gitRoot = gitTopLevel(projectDir);
+    if (gitRoot === null) {
+      results.push({
+        pass: false,
+        label:
+          "Cursor workspace is not a Git repository root - project hooks will not load",
+        fix:
+          `run \`git -C ${JSON.stringify(projectDir)} init\`, reopen that exact directory in Cursor, mark the workspace trusted, verify Customize > Hooks lists .cursor/hooks.json, then fully restart Cursor`,
+      });
+    } else if (
+      canonicalComparablePath(gitRoot) !== canonicalComparablePath(projectDir)
+    ) {
+      results.push({
+        pass: false,
+        label:
+          `Cursor workspace is below Git root ${gitRoot} - .cursor/hooks.json at this target will not load`,
+        fix:
+          `install AI-DLC at ${JSON.stringify(gitRoot)}, or initialize ${JSON.stringify(projectDir)} as a separate repository; then open and trust that exact root in Cursor and fully restart`,
+      });
+    } else {
+      results.push({
+        pass: true,
+        label:
+          "Cursor workspace is the Git repository root (project hooks discoverable; workspace trust is still required)",
+      });
+    }
   } else if (harness === ".aidlc") {
     // opencode: the wiring config is the project-root opencode.json/jsonc
     // (permissions + the method-include instructions glob) plus the /aidlc
@@ -3117,7 +3166,9 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   const hookExecutionRecovery =
     harnessName === "claude"
       ? HOOK_EXECUTION_RECOVERY
-      : "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
+      : harnessName === "cursor"
+        ? CURSOR_HOOK_EXECUTION_RECOVERY
+        : "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
@@ -3196,7 +3247,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     results.push({
       pass: false,
       label: "Hook heartbeat data",
-      fix: "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json",
+      fix: hookExecutionRecovery,
     });
   } else if (
     !heartbeatDirExists ||
@@ -3220,9 +3271,13 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     stageOrGateEvents.length > 0 &&
     !auditShardEvents.some((event) => event.event === "HUMAN_TURN")
   ) {
+    const cursorPresenceFailure = harnessName === "cursor";
     results.push({
-      pass: true,
-      label: `Human-turn receipts: 0 HUMAN_TURN rows across ${stageOrGateEvents.length} stage/gate event(s) (advisory) - receipts are not being minted, so presence-gated checkpoints will refuse`,
+      pass: !cursorPresenceFailure,
+      label:
+        `Human-turn receipts: 0 HUMAN_TURN rows across ${stageOrGateEvents.length} stage/gate event(s)` +
+        `${cursorPresenceFailure ? "" : " (advisory)"} - receipts are not being minted, so presence-gated checkpoints will refuse`,
+      fix: cursorPresenceFailure ? CURSOR_HOOK_EXECUTION_RECOVERY : undefined,
     });
   }
 

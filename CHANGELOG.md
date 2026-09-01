@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.3] - 2026-09-01
+
+Cursor installs now fail before copying when the target is not the exact Git repository root, closing the silent state where `/aidlc` loads but project hooks never run and every human-presence checkpoint eventually refuses. **Upgrade:** for an affected existing project, run `git -C <project> init` (or move the install to the parent Git root), re-run `bun dist/cursor/install.ts <project>`, open and trust that exact root in Cursor, verify **Customize > Hooks** lists `.cursor/hooks.json`, then fully restart Cursor before resuming.
+
+* The Cursor installer rejects non-Git and nested targets without writing a partial framework tree, and names the exact `git init` or root-placement remedy.
+* `/aidlc --doctor` verifies Cursor is running at the exact Git root before workflow work begins; after progress, missing hook heartbeats and missing `HUMAN_TURN` receipts are failures rather than passing advisories.
+* Cursor recovery guidance preserves the human-authority boundary: it repairs project-hook discovery and workspace trust instead of bypassing or fabricating a human turn.
+
 ## [2.7.0] - 2026-09-01
 
 AI-DLC 2.7.0 consolidates the 2.6.x release cycle into a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** replace the complete `dist/<harness>/` tree in one quiescent operation, then run `/aidlc plugin sync` for every installed plugin. Existing 2.6.124 workflow records require no migration. Before replacing an older shell, finish and archive every workflow created before 2.6.1; the new shell rejects that stale state before `--new-intent` can create fresh work. Upgrades from any release before 2.6.124 must also apply every intervening **Upgrade**, **Breaking**, and migration note below; this roll-up does not replace those one-time actions.

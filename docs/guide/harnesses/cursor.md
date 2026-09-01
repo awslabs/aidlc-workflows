@@ -36,6 +36,10 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   current-line features.
 - **bun** - same requirement as every harness; every tool and hook runs via
   bun. `bun` must be on the PATH the shells Cursor spawns can see.
+- **A trusted Git repository root** - Cursor resolves project hooks by walking
+  to the Git root and runs them only in a trusted workspace. A non-Git folder,
+  or an install below a parent repository root, can still load the `/aidlc`
+  skill while silently skipping every project hook.
 - **A paid Cursor plan for named models** - Free accounts can only use `Auto`.
   The tiered persona surfaces ship with **no model pins** (all tiers project to
   null on Cursor: model availability is plan-dependent), so every agent
@@ -49,10 +53,13 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
 1. Install the distribution into your project:
 
    ```bash
+   mkdir -p your-project
+   git -C your-project init
    bun dist/cursor/install.ts your-project
    ```
 
-   The installer preflights the full copy, refuses project-owned collisions,
+   The installer first requires `your-project` to be the exact Git repository
+   root, then preflights the full copy, refuses project-owned collisions,
    preserves `.cursor/.gitignore` and existing method memory, structurally
    merges `.cursor/hooks.json` and `.cursor/cli.json`, and adds marked AI-DLC
    sections to existing `AGENTS.md` and `.gitignore` files instead of replacing
@@ -68,8 +75,10 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
    tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready"
    check without it.
 
-2. Open the project in the Cursor IDE (or start `agent` in it) and run
-   `/aidlc --doctor`, then `/aidlc` followed by what you want to build.
+2. Open that exact Git root in the Cursor IDE (or start `agent` in it), mark the
+   workspace trusted, fully restart Cursor, and run `/aidlc --doctor`. Verify
+   **Customize > Hooks** lists `.cursor/hooks.json`, then invoke `/aidlc`
+   followed by what you want to build.
    Native utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>`
    (or `--phase <name>`), and `/aidlc-scope <name>`.
 
@@ -179,7 +188,11 @@ agent -p "/aidlc --status" --output-format text --trust   # /aidlc --status thro
 
 The doctor's Cursor-specific checks: the hook wiring at `.cursor/hooks.json`,
 the `Shell(bun)` permission pre-approval at `.cursor/cli.json`, the standing
-rule at `.cursor/rules/aidlc.mdc`, and all four phase-rule pointers.
+rule at `.cursor/rules/aidlc.mdc`, all four phase-rule pointers, and that the
+workspace is the exact Git repository root. Once workflow progress exists,
+missing hook heartbeats or missing `HUMAN_TURN` receipts fail doctor and point
+to Git-root discovery, workspace trust, **Customize > Hooks**, and a full
+restart.
 
 > **Scripting trap: Cursor CLI always exits 0.** Headless `agent -p "<prompt>"
 > --output-format text --trust` returns exit code 0 even when the run errors, so

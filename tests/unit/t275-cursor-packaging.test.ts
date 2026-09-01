@@ -50,6 +50,16 @@ const CURSOR_ROOT = join(REPO_ROOT, "dist", "cursor");
 const ENGINE = join(CURSOR_ROOT, ".cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 
+function initializeGitRoot(project: string): void {
+  mkdirSync(project, { recursive: true });
+  const initialized = spawnSync("git", ["init", "--quiet", project], {
+    encoding: "utf-8",
+  });
+  if (initialized.status !== 0) {
+    throw new Error(initialized.stderr || `git init failed for ${project}`);
+  }
+}
+
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {
     const full = join(dir, entry);
@@ -221,6 +231,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     try {
       const project = join(root, "project");
       cpSync(CURSOR_ROOT, project, { recursive: true });
+      initializeGitRoot(project);
       const r = spawnSync(
         "bun",
         [join(project, ".cursor", "tools", "aidlc-utility.ts"), "doctor", "--project-dir", project],
@@ -234,6 +245,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(r.stdout).toContain("✓  hooks.json present (hook wiring)");
       expect(r.stdout).toContain("✓  cli.json present (Shell(bun) permission pre-approval)");
       expect(r.stdout).toContain(
+        "✓  Cursor workspace is the Git repository root (project hooks discoverable; workspace trust is still required)",
+      );
+      expect(r.stdout).toContain(
         "✓  rules/aidlc.mdc present (standing method rule (alwaysApply read instruction))",
       );
       for (const phase of ["Ideation", "Inception", "Construction", "Operation"]) {
@@ -246,10 +260,165 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     }
   });
 
+  test("8b: doctor rejects a non-Git Cursor workspace before workflow progress", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-doctor-nongit-"));
+    try {
+      const project = join(root, "project");
+      cpSync(CURSOR_ROOT, project, { recursive: true });
+      const r = spawnSync(
+        "bun",
+        [join(project, ".cursor", "tools", "aidlc-utility.ts"), "doctor", "--project-dir", project],
+        {
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".cursor" },
+        },
+      );
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(
+        "✗  Cursor workspace is not a Git repository root - project hooks will not load",
+      );
+      expect(r.stdout).toContain(`git -C "${project}" init`);
+      expect(r.stdout).toContain("mark the workspace trusted");
+      expect(r.stdout).toContain("Customize > Hooks");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("8c: doctor fails missing Cursor hook and human-turn evidence after progress", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-doctor-no-hooks-"));
+    try {
+      const project = join(root, "project");
+      cpSync(CURSOR_ROOT, project, { recursive: true });
+      initializeGitRoot(project);
+      const utility = join(project, ".cursor", "tools", "aidlc-utility.ts");
+      const env = { ...process.env, AIDLC_HARNESS_DIR: ".cursor" };
+      const created = spawnSync(
+        "bun",
+        [
+          utility,
+          "intent-create",
+          "--scope",
+          "express",
+          "--label",
+          "cursor-hook-probe",
+          "--arguments",
+          "exercise missing Cursor project hooks",
+          "--project-dir",
+          project,
+        ],
+        { cwd: project, encoding: "utf-8", env },
+      );
+      expect(created.status, created.stderr).toBe(0);
+      const doctor = spawnSync(
+        "bun",
+        [utility, "doctor", "--project-dir", project],
+        { cwd: project, encoding: "utf-8", env },
+      );
+      expect(doctor.status).toBe(1);
+      expect(doctor.stdout).toMatch(
+        /✗ {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
+      );
+      expect(doctor.stdout).toMatch(
+        /✗ {2}Human-turn receipts: 0 HUMAN_TURN rows across \d+ stage\/gate event\(s\)/,
+      );
+      expect(doctor.stdout).toContain("ensure the workspace is the exact Git repository root");
+      expect(doctor.stdout).toContain("mark it trusted in Cursor");
+      expect(doctor.stdout).toContain("Customize > Hooks");
+
+      const activeIntent = readFileSync(
+        join(
+          project,
+          "aidlc",
+          "spaces",
+          "default",
+          "intents",
+          "active-intent",
+        ),
+        "utf-8",
+      ).trim();
+      mkdirSync(
+        join(
+          project,
+          "aidlc",
+          "spaces",
+          "default",
+          "intents",
+          activeIntent,
+          ".aidlc-hooks-health",
+        ),
+        { recursive: true },
+      );
+      const emptyHealth = spawnSync(
+        "bun",
+        [utility, "doctor", "--project-dir", project],
+        { cwd: project, encoding: "utf-8", env },
+      );
+      expect(emptyHealth.status).toBe(1);
+      expect(emptyHealth.stdout).toContain("✗  Hook heartbeat data");
+      expect(emptyHealth.stdout).toContain(
+        "ensure the workspace is the exact Git repository root",
+      );
+      expect(emptyHealth.stdout).toContain("Customize > Hooks");
+      expect(emptyHealth.stdout).not.toContain(
+        "verify hooks are registered in settings.json",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("9a: Cursor installer refuses non-Git and nested targets before copying", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-root-"));
+    try {
+      const missing = join(root, "missing");
+      const missingTarget = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), missing], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(missingTarget.status).toBe(1);
+      expect(missingTarget.stderr).toContain("Create the target directory");
+      expect(missingTarget.stderr).toContain(`git -C "${missing}" init`);
+      expect(existsSync(missing)).toBe(false);
+
+      const nonGit = join(root, "non-git");
+      mkdirSync(nonGit);
+      const missingRepo = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), nonGit], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(missingRepo.status).toBe(1);
+      expect(missingRepo.stderr).toContain(
+        "Cursor project hooks load only from a Git repository root",
+      );
+      expect(missingRepo.stderr).toContain(`git -C "${nonGit}" init`);
+      expect(existsSync(join(nonGit, ".cursor"))).toBe(false);
+
+      const parentRepo = join(root, "parent");
+      initializeGitRoot(parentRepo);
+      const nested = join(parentRepo, "nested");
+      mkdirSync(nested);
+      const belowRoot = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), nested], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(belowRoot.status).toBe(1);
+      expect(belowRoot.stderr).toContain(
+        "Cursor resolves project hooks from the Git repository root",
+      );
+      expect(belowRoot.stderr).toContain(`installer target is "${nested}"`);
+      expect(existsSync(join(nested, ".cursor"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("9: Cursor installer merges shared surfaces without overwriting project files", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-"));
     const project = join(root, "project");
     try {
+      initializeGitRoot(project);
       const cursorDir = join(project, ".cursor");
       mkdirSync(cursorDir, { recursive: true });
       writeFileSync(
@@ -325,6 +494,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-malformed-"));
     const project = join(root, "project");
     try {
+      initializeGitRoot(project);
       mkdirSync(join(project, ".cursor"), { recursive: true });
       writeFileSync(join(project, ".cursor", "hooks.json"), "{not json");
       writeFileSync(join(project, "AGENTS.md"), "# Keep me\n");
@@ -345,6 +515,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-collision-"));
     const project = join(root, "project");
     try {
+      initializeGitRoot(project);
       mkdirSync(join(project, ".cursor", "rules"), { recursive: true });
       writeFileSync(join(project, ".cursor", "rules", "aidlc.mdc"), "project-owned\n");
       writeFileSync(join(project, "AGENTS.md"), "# Keep me\n");
@@ -378,6 +549,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-upgrade-"));
     const project = join(root, "project");
     try {
+      initializeGitRoot(project);
       const stagedDist = join(root, "cursor-dist");
       cpSync(CURSOR_ROOT, stagedDist, { recursive: true });
       cpSync(CURSOR_INSTALLER_SOURCE, join(stagedDist, "install.ts"));
@@ -523,6 +695,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-selection-reinstall-"));
     const project = join(root, "project");
     try {
+      initializeGitRoot(project);
       const installer = join(CURSOR_ROOT, "install.ts");
       const first = spawnSync("bun", [installer, project], {
         cwd: REPO_ROOT,
@@ -598,6 +771,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-active-restore-"));
     const project = join(root, "project");
     try {
+      initializeGitRoot(project);
       const installer = join(CURSOR_ROOT, "install.ts");
       expect(
         spawnSync("bun", [installer, project], {
@@ -658,7 +832,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       const externalFile = join(root, "external-agents.md");
       writeFileSync(externalFile, "# Outside\n");
       const fileProject = join(root, "file-project");
-      mkdirSync(fileProject, { recursive: true });
+      initializeGitRoot(fileProject);
       symlinkSync(externalFile, join(fileProject, "AGENTS.md"));
       const fileInstall = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), fileProject], {
         cwd: REPO_ROOT,
@@ -673,7 +847,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       const externalCursor = join(root, "external-cursor");
       mkdirSync(externalCursor);
       const directoryProject = join(root, "directory-project");
-      mkdirSync(directoryProject);
+      initializeGitRoot(directoryProject);
       symlinkSync(externalCursor, join(directoryProject, ".cursor"), "dir");
       const directoryInstall = spawnSync(
         "bun",
@@ -689,6 +863,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(readdirSync(externalCursor)).toEqual([]);
 
       const ordinaryProject = join(root, "ordinary-project");
+      initializeGitRoot(ordinaryProject);
       mkdirSync(join(ordinaryProject, "node_modules", ".bin"), { recursive: true });
       mkdirSync(join(ordinaryProject, "sub"), { recursive: true });
       symlinkSync(
@@ -715,6 +890,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-obsolete-"));
     const project = join(root, "project");
     try {
+      initializeGitRoot(project);
       const installer = join(CURSOR_ROOT, "install.ts");
       expect(
         spawnSync("bun", [installer, project], {
@@ -790,6 +966,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-core-adopts-"));
     const project = join(root, "project");
     try {
+      initializeGitRoot(project);
       const installer = join(CURSOR_ROOT, "install.ts");
       expect(
         spawnSync("bun", [installer, project], {
