@@ -196,9 +196,8 @@ The `cp` commands below run from a clone of this repository on the `v2`
 branch:
 
 ```bash
-git clone https://github.com/awslabs/aidlc-workflows.git
+git clone --branch main https://github.com/awslabs/aidlc-workflows.git
 cd aidlc-workflows
-git checkout v2
 ```
 
 ### Step 1: Copy the implementation
@@ -462,7 +461,7 @@ In your shell:
 command -v claude >/dev/null && echo "✓ Claude Code" || echo "✗ Claude Code"
 command -v bun    >/dev/null && echo "✓ bun"          || echo "✗ bun"
 
-# From your aidlc-workflows clone (v2 branch) - see Installation above
+# From your aidlc-workflows clone (main branch) - see Installation above
 # Install (engine + the workspace shell sibling)
 cp -r dist/claude/.claude/ your-project/.claude/
 cp -r dist/claude/aidlc/   your-project/aidlc/

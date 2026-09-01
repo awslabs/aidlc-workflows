@@ -1,6 +1,6 @@
 name: CI
 
-# Deterministic PR gate for the v2 line. Runs the fast contract checks
+# Deterministic PR gate for the main line. Runs the fast contract checks
 # (dist byte-parity, typecheck, lint), the credential-free test tiers
 # (smoke + unit), and the DETERMINISTIC SUBSET of integration + e2e under
 # --no-llm. The live-model tests are excluded EXPLICITLY by that flag - the
@@ -15,7 +15,7 @@ name: CI
 on:
   pull_request:
     branches:
-      - v2
+      - main
     # Run on PR open, on every push to the PR branch (synchronize), and on
     # reopen. This is GitHub's default set for `pull_request`; declared
     # explicitly so the re-run-on-modify behavior is unambiguous.
@@ -120,7 +120,7 @@ jobs:
       # sync and heading uniqueness, but not deletion of an existing entry).
       # Diff against the FROZEN base commit the PR event fired from
       # (pull_request.base.sha), NOT origin/<base_ref>: the branch ref moves as
-      # v2 accrues new entries while this PR is open, which would make the guard
+      # main accrues new entries while this PR is open, which would make the guard
       # falsely report those newer entries as "removed" on any re-run.
       - name: Guard against deleted CHANGELOG entries
         run: bun scripts/ci-changelog-guard.ts "${{ github.event.pull_request.base.sha }}"

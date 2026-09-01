@@ -17,7 +17,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-const REPO_BLOB_URL = "https://github.com/awslabs/aidlc-workflows/blob/v2";
+const REPO_BLOB_URL = "https://github.com/awslabs/aidlc-workflows/blob/main";
 
 const docsDir = resolve(process.argv[2] ?? "docs");
 const repoRoot = dirname(docsDir);
