@@ -64,14 +64,34 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           TAG="${BRANCH#release/}"
+          KNOWN_RUN_IDS=$(gh run list \
+            --workflow=release.yml \
+            --repo "$REPO" \
+            --limit 100 \
+            --json databaseId,headBranch,event | \
+            jq -c --arg tag "$TAG" \
+              '[.[] | select(.event == "workflow_dispatch" and .headBranch == $tag) | .databaseId]')
           echo "Dispatching release.yml on ref $TAG"
           gh workflow run release.yml --ref "$TAG" --repo "$REPO"
 
-          # Wait for the run to appear, then watch it to completion
-          echo "Waiting for release workflow run to appear..."
+          # Find only a newly created workflow_dispatch run for this exact tag.
+          echo "Waiting for the release workflow run for $TAG to appear..."
           sleep 5
           for i in $(seq 1 12); do
-            RUN_ID=$(gh run list --workflow=release.yml --repo "$REPO" --json databaseId,headBranch,event,status --jq '[.[] | select(.event=="workflow_dispatch")] | first | .databaseId' 2>/dev/null || echo "")
+            RUN_ID=$(gh run list \
+              --workflow=release.yml \
+              --repo "$REPO" \
+              --limit 100 \
+              --json databaseId,headBranch,event | \
+              jq -r \
+                --arg tag "$TAG" \
+                --argjson known "$KNOWN_RUN_IDS" \
+                '[.[]
+                  | select(.event == "workflow_dispatch" and .headBranch == $tag)
+                  | .databaseId as $id
+                  | select(($known | index($id)) == null)]
+                | first
+                | .databaseId // empty' 2>/dev/null || echo "")
             if [[ -n "$RUN_ID" ]]; then
               break
             fi
