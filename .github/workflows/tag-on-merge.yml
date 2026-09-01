@@ -34,6 +34,41 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+
+      - name: Snapshot existing release runs
+        id: release_run_baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="${BRANCH#release/}"
+          KNOWN_RUN_IDS=""
+
+          for attempt in $(seq 1 5); do
+            RUNS_JSON=$(gh run list \
+              --workflow=release.yml \
+              --repo "$REPO" \
+              --limit 100 \
+              --json databaseId,headBranch,event 2>/dev/null || true)
+
+            if printf '%s\n' "$RUNS_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+              KNOWN_RUN_IDS=$(printf '%s\n' "$RUNS_JSON" | jq -c --arg tag "$TAG" \
+                '[.[] | select(.event == "workflow_dispatch" and .headBranch == $tag) | .databaseId]')
+              break
+            fi
+
+            echo "Could not read release workflow runs (attempt $attempt/5)"
+            sleep 2
+          done
+
+          if ! printf '%s\n' "$KNOWN_RUN_IDS" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "::error::Could not establish a valid release-run baseline for $TAG. No tag was created."
+            exit 1
+          fi
+
+          echo "known_run_ids=$KNOWN_RUN_IDS" >> "$GITHUB_OUTPUT"
+
       - name: Create tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -62,15 +97,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           REPO: ${{ github.repository }}
+          KNOWN_RUN_IDS: ${{ steps.release_run_baseline.outputs.known_run_ids }}
         run: |
           TAG="${BRANCH#release/}"
-          KNOWN_RUN_IDS=$(gh run list \
-            --workflow=release.yml \
-            --repo "$REPO" \
-            --limit 100 \
-            --json databaseId,headBranch,event | \
-            jq -c --arg tag "$TAG" \
-              '[.[] | select(.event == "workflow_dispatch" and .headBranch == $tag) | .databaseId]')
+
+          if ! printf '%s\n' "$KNOWN_RUN_IDS" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "::error::Invalid release-run baseline for $TAG."
+            exit 1
+          fi
+
           echo "Dispatching release.yml on ref $TAG"
           gh workflow run release.yml --ref "$TAG" --repo "$REPO"
 
