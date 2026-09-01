@@ -206,13 +206,14 @@ def fetch_prerelease_bundles(
     repo: str,
     cache_prefix: str = "report-",
     work_dir: Path | None = None,
+    baseline_branch: str = "v1",
 ) -> list[Path]:
-    """Fetch pre-release artifact bundles (main branch and PRs).
+    """Fetch pre-release artifact bundles (baseline branch and PRs).
 
-    Uses GitHub Actions Artifacts to find evaluation bundles for the ``main``
-    branch and open pull requests.  Returns a (possibly empty) list of zip
-    file paths.  Never raises on missing artifacts — pre-release data is
-    optional.
+    Uses GitHub Actions Artifacts to find evaluation bundles for
+    ``baseline_branch`` and open pull requests. Returns a (possibly empty)
+    list of zip file paths. Never raises on missing artifacts because
+    pre-release data is optional.
     """
     import tempfile
 
@@ -221,22 +222,29 @@ def fetch_prerelease_bundles(
 
     zip_paths: list[Path] = []
 
-    # --- Phase A: main branch artifact ---
+    # --- Phase A: baseline branch artifact ---
     try:
-        main_runs = fetch_workflow_runs(repo, branch="main", limit=5)
-        if main_runs:
-            artifact_name = f"{cache_prefix}main"
-            for run in main_runs:
+        baseline_runs = fetch_workflow_runs(repo, branch=baseline_branch, limit=5)
+        if baseline_runs:
+            artifact_name = f"{cache_prefix}{baseline_branch}"
+            for run in baseline_runs:
                 run_id = run["databaseId"]
                 logger.info("Checking run %s for %s artifact …", run_id, artifact_name)
                 zip_path = fetch_artifact_bundle(repo, run_id, artifact_name, work_dir)
                 if zip_path is not None:
                     zip_paths.append(zip_path)
-                    break  # Only need the latest main artifact
+                    break  # Only need the latest baseline artifact
         else:
-            logger.info("No successful main-branch workflow runs found")
+            logger.info(
+                "No successful %s-branch workflow runs found",
+                baseline_branch,
+            )
     except FetchError as exc:
-        logger.warning("Could not fetch main-branch artifact: %s", exc)
+        logger.warning(
+            "Could not fetch %s-branch artifact: %s",
+            baseline_branch,
+            exc,
+        )
 
     # --- Phase B: PR artifacts ---
     try:

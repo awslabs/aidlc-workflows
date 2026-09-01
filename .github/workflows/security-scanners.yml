@@ -1,14 +1,11 @@
 name: Security Scanners
 
 on:
-  schedule:
-    # Daily at 03:47 UTC (random time to avoid GitHub Actions load spikes)
-    - cron: '47 3 * * *'
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [v1]
   pull_request:
-    branches: [main]
+    branches: [v1]
 
 permissions: {}
 

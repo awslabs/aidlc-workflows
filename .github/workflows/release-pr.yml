@@ -36,6 +36,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: v1
 
       - name: Install git-cliff
         uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
@@ -139,6 +140,7 @@ jobs:
           # Draft PR because the github-actions[bot] does not trigger a pull_request_target workflow
           gh pr create \
             --title "docs: update changelog for $TAG" \
+            --base v1 \
             --draft \
             --body "$(cat <<EOF
           # Release $TAG

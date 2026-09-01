@@ -14,6 +14,7 @@ name: Tag Release
 
 on:
   pull_request:
+    branches: [v1]
     types: [closed]
 
 permissions: {}

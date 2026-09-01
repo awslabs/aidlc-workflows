@@ -4,7 +4,7 @@ on:
   workflow_dispatch: {}
   pull_request:
     branches:
-      - main
+      - v1
     types:
       - labeled
       - opened
@@ -16,7 +16,7 @@ on:
       - 'aidlc-rules/**'
   push:
     branches:
-      - main
+      - v1
     tags:
       - 'v*'
 
@@ -27,6 +27,7 @@ concurrency:
 env:
   CODEBUILD_PROJECT_NAME: ${{ vars.CODEBUILD_PROJECT_NAME || 'codebuild-project' }}
   LABEL_REMINDER_MARKER: rules-label-reminder
+  RELEASE_BRANCH: v1
 
 permissions: {}
 
@@ -167,6 +168,7 @@ jobs:
                 GH_REF_NAME: ${{ github.ref_name }}
                 GH_HEAD_REF: ${{ github.head_ref }}
                 GH_EVENT_NAME: ${{ github.event_name }}
+                RELEASE_BRANCH: ${{ env.RELEASE_BRANCH }}
             phases:
               install:
                 commands:
@@ -182,12 +184,12 @@ jobs:
                   - echo "pre_build"
               build:
                 commands:
-                  - DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo "main")
+                  - TARGET_BRANCH="${RELEASE_BRANCH:-v1}"
                   - CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "${GH_HEAD_REF:-${GH_REF_NAME:-}}")
                   - CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
                   - IS_RELEASE=$([[ -n "$CURRENT_TAG" ]] && echo "true" || echo "false")
-                  - IS_PRE_RELEASE=$([[ "$CURRENT_BRANCH" == "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
-                  - IS_PRE_MERGE=$([[ -z "$CURRENT_TAG" && "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
+                  - IS_PRE_RELEASE=$([[ "$CURRENT_BRANCH" == "$TARGET_BRANCH" ]] && echo "true" || echo "false")
+                  - IS_PRE_MERGE=$([[ -z "$CURRENT_TAG" && "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]] && echo "true" || echo "false")
                   - echo "Branch=$CURRENT_BRANCH Tag=$CURRENT_TAG Release=$IS_RELEASE PreRelease=$IS_PRE_RELEASE PreMerge=$IS_PRE_MERGE"
                   - |
                     echo "========================================"
@@ -459,8 +461,8 @@ jobs:
           name: >-
             ${{ github.event_name == 'pull_request'
                 && format('report-pr-{0}', github.event.pull_request.number)
-                || github.ref == 'refs/heads/main' && 'report-main'
-                || format('report-head') }}
+                || github.ref == 'refs/heads/v1' && 'report-v1'
+                || 'report-head' }}
           path: ${{ github.workspace }}/.codebuild/downloads/report-bundle.zip
           if-no-files-found: warn
           archive: false
