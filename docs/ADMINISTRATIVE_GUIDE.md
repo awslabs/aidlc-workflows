@@ -47,14 +47,11 @@ This repository publishes the **AI-DLC (AI-Driven Development Life Cycle)** meth
 awslabs/aidlc-workflows/
 ├── .github/
 │   ├── CODEOWNERS
-│   ├── ISSUE_TEMPLATE/           # Bug, feature, RFC, docs templates
 │   ├── labeler.yml               # Auto-label rules (path → label mapping)
-│   ├── pull_request_template.md  # PR template with contributor statement
 │   └── workflows/
 │       ├── ci.yml                # Markdown lint and formatting checks
 │       ├── codebuild.yml         # CI via AWS CodeBuild
 │       ├── codeql.yml            # CodeQL static analysis
-│       ├── docs.yml              # Documentation build and Pages deployment
 │       ├── pull-request-lint.yml # PR validation (title, labels, merge gates)
 │       ├── release.yml           # GitHub Release on tag push
 │       ├── release-pr.yml        # Changelog PR before release
@@ -124,7 +121,7 @@ The release flow is **changelog-first**: the CHANGELOG is updated *before* the t
 
 ```mermaid
 flowchart LR
-    A["git push main"] --> B{{"Manual approval\n(codebuild environment)"}}
+    A["git push v1"] --> B{{"Manual approval\n(codebuild environment)"}}
     C["workflow_dispatch\n(no tag input)"] --> B
     D["pull_request\n(aidlc-rules/** changed)"] --> E{"rules\nlabel?"}
     E -->|yes| F["label-cleanup\n(remove reminder comment)"]
@@ -138,9 +135,8 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A["push main"] --> G["security-scanners.yml"]
-    B["pull_request to main"] --> G
-    C["schedule (daily 03:47 UTC)"] --> G
+    A["push v1"] --> G["security-scanners.yml"]
+    B["pull_request to v1"] --> G
     D["workflow_dispatch"] --> G
 
     G --> H["gitleaks\n(secret detection)"]
@@ -164,7 +160,7 @@ All six scanner jobs run in parallel. Each scanner (except ClamAV) produces a SA
 
 ```mermaid
 flowchart TD
-    A["pull_request_target\n(to main)"] --> B["get-pr-info"]
+    A["pull_request_target\n(to v1)"] --> B["get-pr-info"]
     C["merge_group\n(checks_requested)"] --> B
 
     B --> D["check-merge-status\n(HALT_MERGES + open release PRs)"]
@@ -174,13 +170,13 @@ flowchart TD
     A --> H["auto-label\n(actions/labeler)"]
 ```
 
-`pull-request-lint.yml` runs on every PR targeting `main` and on merge queue checks. It enforces four gates (conventional commit PR titles, the contributor statement from the PR template, a configurable merge-halt mechanism, and a do-not-merge label check) and automatically applies labels based on changed file paths. The workflow uses `pull_request_target` (not `pull_request`) so it runs in the context of the base branch — this is safe because it never checks out PR code and the `auto-label` job uses `actions/labeler` which only reads file paths from the API.
+`pull-request-lint.yml` runs on every PR targeting `v1` and on merge queue checks. It enforces four gates (conventional commit PR titles, the contributor statement from the PR template, a configurable merge-halt mechanism, and a do-not-merge label check) and automatically applies labels based on changed file paths. The workflow uses `pull_request_target` (not `pull_request`) so it runs in the context of the base branch — this is safe because it never checks out PR code and the `auto-label` job uses `actions/labeler` which only reads file paths from the API.
 
-### Standalone validation and documentation workflows
+### Standalone validation workflows
 
-- **`ci.yml`** runs markdownlint and the repository's multiple-choice formatting check on pushes and pull requests targeting `main`, plus manual dispatches.
-- **`codeql.yml`** runs CodeQL analysis for GitHub Actions and Python on pushes and pull requests targeting `main`, plus its weekly schedule.
-- **`docs.yml`** builds documentation for pushes and pull requests targeting `v2`. Non-PR runs upload and deploy the GitHub Pages artifact; PR runs perform the strict build only.
+- **`ci.yml`** runs markdownlint and the repository's multiple-choice formatting check on pushes and pull requests targeting `v1`, plus manual dispatches.
+- **`codeql.yml`** runs CodeQL analysis for GitHub Actions and Python on pushes
+  and pull requests targeting `v1`.
 
 ---
 
@@ -249,13 +245,13 @@ flowchart TD
 
 ### CodeBuild Workflow (`codebuild.yml`)
 
-| Property        | Value                                                                                                                                                                                                           |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **File**        | `.github/workflows/codebuild.yml`                                                                                                                                                                               |
-| **Triggers**    | `push` to `main`, `push` tags `v*`, `pull_request` to `main` (label-gated, path-filtered), `workflow_dispatch` (dispatched by `tag-on-merge.yml` or manual — select a tag in the UI to trigger a release build) |
-| **Environment** | `codebuild` (protected, manual approval)                                                                                                                                                                        |
-| **Runner**      | `ubuntu-latest`                                                                                                                                                                                                 |
-| **Concurrency** | Groups by `{workflow}-{event_name}-{ref}`, cancels in-progress                                                                                                                                                  |
+- **File:** `.github/workflows/codebuild.yml`
+- **Triggers:** `push` to `v1`, `push` tags `v*`, label-gated and path-filtered
+  `pull_request` to `v1`, and `workflow_dispatch`
+- **Environment:** `codebuild` (protected, manual approval)
+- **Runner:** `ubuntu-latest`
+- **Concurrency:** Groups by `{workflow}-{event_name}-{ref}` and cancels
+  in-progress runs
 
 **Purpose:** Runs an AWS CodeBuild project, downloads primary and secondary artifacts from S3, caches them in GitHub Actions cache, uploads them as workflow artifacts, and (when triggered from a `v*` tag) attaches them to the GitHub Release.
 
@@ -339,7 +335,7 @@ This job runs when the `rules` label is applied, immediately removing the remind
 | 3    | Create release artifact | ref is a `v*` tag | `zip -r ai-dlc-rules-v{VERSION}.zip aidlc-rules/`                                                                                                   |
 | 4    | Create GitHub Release   | ref is a `v*` tag | `softprops/action-gh-release` with `draft: true` and zip attached                                                                                   |
 
-**Graceful skip:** If dispatched from a branch instead of a tag (e.g., someone manually runs the workflow from `main`), the job completes successfully with a warning annotation rather than failing. This prevents confusing red X failures in the Actions UI.
+**Graceful skip:** If dispatched from a branch instead of a tag (e.g., someone manually runs the workflow from `v1`), the job completes successfully with a warning annotation rather than failing. This prevents confusing red X failures in the Actions UI.
 
 **Release naming:** `AI-DLC Workflow v{VERSION}` (e.g., `AI-DLC Workflow v0.1.6`)
 
@@ -354,13 +350,12 @@ This job runs when the `rules` label is applied, immediately removing the remind
 
 ### Pull Request Validation Workflow (`pull-request-lint.yml`)
 
-| Property        | Value                                                                                                                                           |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **File**        | `.github/workflows/pull-request-lint.yml`                                                                                                       |
-| **Triggers**    | `pull_request_target` to `main` (edited, labeled, opened, ready_for_review, reopened, synchronize, unlabeled); `merge_group` (checks_requested) |
-| **Environment** | *(none)*                                                                                                                                        |
-| **Runner**      | `ubuntu-latest`                                                                                                                                 |
-| **Concurrency** | Groups by `{workflow}-{event_name}-{ref}`, cancels in-progress                                                                                  |
+- **File:** `.github/workflows/pull-request-lint.yml`
+- **Triggers:** `pull_request_target` to `v1` and `merge_group`
+- **Environment:** *(none)*
+- **Runner:** `ubuntu-latest`
+- **Concurrency:** Groups by `{workflow}-{event_name}-{ref}` and cancels
+  in-progress runs
 
 **Purpose:** Validates pull requests before merge. Enforces conventional commit PR titles, the contributor acknowledgment statement, merge-halt controls, and a do-not-merge label gate. Also runs as a merge queue check.
 
@@ -409,7 +404,7 @@ With `sync-labels: true`, labels are automatically removed when the matching fil
 
 **Job: `contributorStatement` ("Require Contributor Statement")**
 
-Only runs for `pull_request` and `pull_request_target` events. Skipped for bot accounts (`dependabot[bot]`, `github-actions[bot]`, `github-actions`, `aidlc-workflows`). Verifies the PR body contains the contributor acknowledgment text from `.github/pull_request_template.md`:
+Only runs for `pull_request` and `pull_request_target` events. Skipped for bot accounts (`dependabot[bot]`, `github-actions[bot]`, `github-actions`, `aidlc-workflows`). Verifies the PR body contains the contributor acknowledgment text from the pull request template on `main`:
 
 > By submitting this pull request, I confirm that you can use, modify, copy, and redistribute this contribution, under the terms of the project license.
 
@@ -428,7 +423,7 @@ Only runs for `pull_request` and `pull_request_target` events. Skipped for bot a
 | Property     | Value                                                  |
 | ------------ | ------------------------------------------------------ |
 | **File**     | `.github/workflows/ci.yml`                             |
-| **Triggers** | Push and pull request to `main`; `workflow_dispatch`   |
+| **Triggers** | Push and pull request to `v1`; `workflow_dispatch`     |
 | **Purpose**  | Markdown linting and multiple-choice formatting checks |
 
 The workflow denies permissions by default and grants only `contents: read` to its `markdownlint` job.
@@ -440,34 +435,21 @@ The workflow denies permissions by default and grants only `contents: read` to i
 | Property     | Value                                                  |
 | ------------ | ------------------------------------------------------ |
 | **File**     | `.github/workflows/codeql.yml`                         |
-| **Triggers** | Push and pull request to `main`; weekly schedule       |
+| **Triggers** | Push and pull request to `v1`                          |
 | **Purpose**  | CodeQL analysis of GitHub Actions and Python           |
 
 The workflow denies permissions by default. Its matrix job grants only the read permissions needed for source, workflow metadata, and CodeQL packs, plus `security-events: write` for results.
 
 ---
 
-### Documentation Workflow (`docs.yml`)
-
-| Property     | Value                                                  |
-| ------------ | ------------------------------------------------------ |
-| **File**     | `.github/workflows/docs.yml`                           |
-| **Triggers** | Push and pull request to `v2`; `workflow_dispatch`     |
-| **Purpose**  | Strict documentation build and GitHub Pages deployment |
-
-The workflow grants `contents: read` for its build. On non-PR runs, the deploy job additionally receives `pages: write` and `id-token: write`.
-
----
-
 ### Security Scanners Workflow (`security-scanners.yml`)
 
-| Property        | Value                                                                                          |
-| --------------- | ---------------------------------------------------------------------------------------------- |
-| **File**        | `.github/workflows/security-scanners.yml`                                                      |
-| **Triggers**    | `push` to `main`, `pull_request` to `main`, `schedule` (daily 03:47 UTC), `workflow_dispatch`  |
-| **Environment** | *(none)*                                                                                       |
-| **Runner**      | `ubuntu-latest`                                                                                |
-| **Concurrency** | Groups by `{workflow}-{event_name}-{ref}`, cancels in-progress                                 |
+- **File:** `.github/workflows/security-scanners.yml`
+- **Triggers:** `push` and `pull_request` to `v1`, plus `workflow_dispatch`
+- **Environment:** *(none)*
+- **Runner:** `ubuntu-latest`
+- **Concurrency:** Groups by `{workflow}-{event_name}-{ref}` and cancels
+  in-progress runs
 
 **Purpose:** Runs six independent security scanners in parallel to detect secrets, vulnerabilities, misconfigurations, and malware. All HIGH and CRITICAL findings must be remediated or have a documented risk acceptance before merge (see [Security Finding Requirements](#security-finding-requirements)).
 
@@ -506,14 +488,13 @@ For detailed remediation and suppression instructions, see [Developer's Guide �
 | Environment    | Used By                     | Purpose                                       |
 | -------------- | --------------------------- | --------------------------------------------- |
 | `codebuild`    | `codebuild.yml` job `build` | Gates access to AWS credentials for CodeBuild |
-| `github-pages` | `docs.yml` job `deploy`     | Records and protects the Pages deployment     |
 
 The `codebuild` environment contains:
 
 - The `AWS_CODEBUILD_ROLE_ARN` secret (required for OIDC-based AWS role assumption)
 - Possibly the repository variables `CODEBUILD_PROJECT_NAME`, `AWS_REGION`, and `ROLE_DURATION_SECONDS` (these may alternatively be set at the repository level)
 
-Environment protection rules (configured in GitHub repository settings) may include required reviewers or deployment branch restrictions. The Pages-managed `github-pages` environment records the documentation deployment URL.
+Environment protection rules (configured in GitHub repository settings) may include required reviewers or deployment branch restrictions.
 
 ---
 
@@ -551,7 +532,6 @@ All variables have sensible defaults via `${{ vars.VAR || 'default' }}` syntax, 
 | `ci.yml`                | `permissions: {}` (deny all)           |
 | `codebuild.yml`         | `permissions: {}` (deny all)           |
 | `codeql.yml`            | `permissions: {}` (deny all)           |
-| `docs.yml`              | `contents: read`                       |
 | `pull-request-lint.yml` | `permissions: {}` (deny all)           |
 | `release.yml`           | `permissions: {}` (deny all)           |
 | `release-pr.yml`        | `permissions: {}` (deny all)           |
@@ -578,9 +558,7 @@ Additional wider job grants:
 - `codebuild.yml` / `build`: `actions: write`, `contents: write`, `id-token: write`, and `pull-requests: write`.
 - `release-pr.yml` / `release-pr`: `contents: write`, `pull-requests: write`, and `issues: write`.
 - `codeql.yml` / `analyze`: `security-events: write`, `packages: read`, `actions: read`, and `contents: read`.
-- `docs.yml` / `deploy`: `pages: write` and `id-token: write`.
-
-All nine workflows follow a least-privilege model. Eight deny permissions at the workflow level and grant only what their jobs require; `docs.yml` grants `contents: read` for its build and adds Pages/OIDC permissions only on the deploy job. Five SARIF-producing security scanner jobs grant `actions: read`, `contents: read`, and `security-events: write`; ClamAV grants only `actions: read` and `contents: read`.
+All eight workflows follow a least-privilege model and deny permissions at the workflow level. Five SARIF-producing security scanner jobs grant `actions: read`, `contents: read`, and `security-events: write`; ClamAV grants only `actions: read` and `contents: read`.
 
 ---
 
@@ -598,13 +576,17 @@ All nine workflows follow a least-privilege model. Eight deny permissions at the
 | **Code ownership**          | `.github/` (including workflows) owned exclusively by `@awslabs/aidlc-admins` via CODEOWNERS                                                                                                                                                            |
 | **Account masking**         | `mask-aws-account-id: true` in AWS credential configuration                                                                                                                                                                                             |
 
-**Security scanning:** Six automated scanners cover SAST, SCA, secrets, IaC, and malware on pushes to `main`, pull requests, and the daily schedule. Five publish SARIF to GitHub Code Scanning; ClamAV publishes a text artifact. Findings at each workflow's configured failure threshold require remediation or documented risk acceptance.
+**Security scanning:** Six automated scanners cover SAST, SCA, secrets, IaC,
+and malware on pushes to `v1` and pull requests targeting `v1`. Five publish
+SARIF to GitHub Code Scanning; ClamAV publishes a text artifact. Findings at
+each workflow's configured failure threshold require remediation or documented
+risk acceptance.
 
-**Least-privilege tokens:** All nine workflows grant only the permissions required by their jobs. Pages access is isolated to the documentation deploy job; OIDC is granted only to that job and the CodeBuild job that assumes the AWS role.
+**Least-privilege tokens:** All eight workflows grant only the permissions required by their jobs. OIDC is granted only to the CodeBuild job that assumes the AWS role.
 
 ### Security Finding Requirements
 
-All **HIGH** and **CRITICAL** security findings from any scanner must be either **remediated** or have a **documented risk acceptance** before a PR can be merged to `main`. This applies to:
+All **HIGH** and **CRITICAL** security findings from any scanner must be either **remediated** or have a **documented risk acceptance** before a PR can be merged to `v1`. This applies to:
 
 - **Bandit / Semgrep (SAST):** High-severity code findings must be fixed or suppressed with an inline comment (`# nosec` / `# nosemgrep`) that includes a justification explaining why the finding is acceptable
 - **Grype (SCA):** High and critical CVEs must be resolved by upgrading the affected dependency. If no fix is available, add an entry to `.grype.yaml` `ignore` with the CVE, affected package, and reason for acceptance
@@ -668,7 +650,7 @@ Releases follow a **changelog-first** flow: the CHANGELOG is updated *before* th
    - Verify all expected artifacts are attached (rules zip + build artifacts)
    - Review release notes and edit if needed
 
-**Note:** The `codebuild` protected environment may need its deployment branch rules updated to allow `v*` tags (in addition to `main`) for tag-triggered builds to proceed.
+**Note:** The `codebuild` protected environment may need its deployment branch rules updated to allow `v*` tags (in addition to `v1`) for tag-triggered builds to proceed.
 
 ---
 
