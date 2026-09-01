@@ -4941,6 +4941,15 @@ function verifyTeamUnitGateEvidence(
   }
 }
 
+function verifyTeamUnitGatePipelinePrecondition(
+  pd: string,
+  context: TeamGateContext,
+): void {
+  for (const stage of context.stages) {
+    verifyPipelineLinkPrecondition(pd, stage);
+  }
+}
+
 export type GuardPreflightAction =
   | "present-approval-gate"
   | "revise"
@@ -4991,9 +5000,7 @@ export function guardPreflight(
           options.action === "present-approval-gate" ||
           options.action === "revise"
         ) {
-          for (const gateStage of team.stages) {
-            verifyPipelineLinkPrecondition(pd, gateStage);
-          }
+          verifyTeamUnitGatePipelinePrecondition(pd, team);
         }
         return { executable: true };
       }
@@ -5091,9 +5098,7 @@ function handleGateStart(args: string[]): void {
   );
   if (preflightTeamGate) {
     verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate);
-    for (const gateStage of preflightTeamGate.stages) {
-      verifyPipelineLinkPrecondition(pd, gateStage);
-    }
+    verifyTeamUnitGatePipelinePrecondition(pd, preflightTeamGate);
   } else {
     validateSlugInState(
       preflightContent,
@@ -5131,9 +5136,7 @@ function handleGateStart(args: string[]): void {
   const teamGate = teamGateContext(content, stage, args.slice(1));
   if (teamGate) {
     verifyTeamUnitGateEvidence(pd, content, teamGate);
-    for (const gateStage of teamGate.stages) {
-      verifyPipelineLinkPrecondition(pd, gateStage);
-    }
+    verifyTeamUnitGatePipelinePrecondition(pd, teamGate);
     verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
     const status = unitGateStatus(
       pd,
@@ -5896,6 +5899,7 @@ function handleRevise(args: string[]): void {
       );
     }
     verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate);
+    verifyTeamUnitGatePipelinePrecondition(pd, preflightTeamGate);
   } else {
     validateSlugInState(preflightContent, slug, "revising");
     verifyGateOpeningGuards(
@@ -5936,6 +5940,7 @@ function handleRevise(args: string[]): void {
       );
     }
     verifyTeamUnitGateEvidence(pd, content, teamGate);
+    verifyTeamUnitGatePipelinePrecondition(pd, teamGate);
     const timestamp = isoTimestamp();
     content = setField(content, "Last Updated", timestamp);
     try {

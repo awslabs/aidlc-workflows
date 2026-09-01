@@ -11,6 +11,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -44,24 +45,39 @@ import {
   reviewInvalidationAttemptView,
   reviewAttemptAccounting,
   sortAttemptEvents,
+  splitKiroCommandArgs,
   teamUnitGateStatus,
   worktreeReviewAttemptProjection,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { guardPreflight } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 import {
+  AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  FIXTURES_DIR,
+  seedAuditFile,
   seedAidlcMemory,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
 const projects: string[] = [];
+const REPO_ROOT = join(import.meta.dir, "..", "..");
 const STATE_TOOL = join(
   import.meta.dir,
   "../../dist/claude/.claude/tools/aidlc-state.ts",
 );
+const PACKAGED_HARNESSES = [
+  { name: "claude", engineDir: ".claude" },
+  { name: "codex", engineDir: ".codex" },
+  { name: "copilot", engineDir: ".aidlc" },
+  { name: "cursor", engineDir: ".cursor" },
+  { name: "kiro", engineDir: ".kiro" },
+  { name: "kiro-ide", engineDir: ".kiro" },
+  { name: "opencode", engineDir: ".aidlc" },
+] as const;
 
 afterEach(() => {
   while (projects.length > 0) {
@@ -102,6 +118,31 @@ function event(
     shardIndex,
     pos,
   };
+}
+
+function installPackagedEngine(
+  project: string,
+  harness: (typeof PACKAGED_HARNESSES)[number],
+): void {
+  cpSync(
+    join(REPO_ROOT, "dist", harness.name, harness.engineDir),
+    join(project, harness.engineDir),
+    { recursive: true },
+  );
+}
+
+function runExactCommand(
+  project: string,
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ReturnType<typeof spawnSync> {
+  const argv = splitKiroCommandArgs(command);
+  if (argv.length === 0) throw new Error("empty command");
+  return spawnSync(argv[0], argv.slice(1), {
+    cwd: project,
+    encoding: "utf-8",
+    env,
+  });
 }
 
 describe("bounded guard-remedy liveness", () => {
@@ -208,6 +249,222 @@ describe("bounded guard-remedy liveness", () => {
     expect(cases).toBe(324);
   });
 
+  test("Request Changes recovery is action-only until exact human feedback exists", () => {
+    const refusal = evaluateGuardRefusal({
+      code: "SUMMARY_EVIDENCE_INVALID",
+      blockedAction: "present-approval-gate",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: state("-"),
+      invariant: "Rejection feedback comes from the human.",
+      userMessage: "blocked",
+      attempt: {
+        recovery: "spent",
+        summaryCoverage: "missing",
+        reviewCoverage: "missing",
+        sourceCoverage: "current",
+      },
+      humanAuthority: { freshTurn: true, unattended: false },
+      teamGate: {
+        resolved: true,
+        scope: "per-stage",
+        status: "pending",
+        gateStage: "functional-design",
+      },
+    });
+    const rejection = refusal.remedies.find((remedy) =>
+      remedy.action.includes('Ask "What should change?"')
+    );
+    expect(rejection).toBeDefined();
+    expect(rejection?.action).toContain('stage "functional-design" for Unit "alpha"');
+    expect(rejection?.action).toContain("exact text unchanged");
+    expect(rejection?.command).toBeUndefined();
+
+    const ask = guardRecoveryAskForRefusal(refusal);
+    expect(ask).not.toBeNull();
+    expect(validateDirective(ask).valid).toBe(true);
+    expect(
+      ask?.remedies.some((remedy) =>
+        remedy.command?.includes("<requested changes>")
+      ),
+    ).toBe(false);
+  });
+
+  test("guard-recovery validation rejects unresolved or non-packaged commands", () => {
+    const base = {
+      kind: "ask",
+      ask_type: "guard-recovery",
+      response_route: "execute-remedy",
+      question: "Choose one.",
+      stage: "functional-design",
+      reason_codes: ["TEST"],
+      remedies: [{
+        action: "Change scope.",
+        command: "bun .claude/tools/aidlc-orchestrate.ts next --scope <scope>",
+        requiresHuman: true,
+        executableNow: true,
+      }],
+    };
+    const unresolved = validateDirective(base);
+    expect(unresolved.valid).toBe(false);
+    if (!unresolved.valid) {
+      expect(unresolved.errors.join("\n")).toContain("unresolved placeholders");
+    }
+
+    const bare = validateDirective({
+      ...base,
+      remedies: [{
+        ...base.remedies[0],
+        command: "aidlc-orchestrate.ts next --stage functional-design",
+      }],
+    });
+    expect(bare.valid).toBe(false);
+    if (!bare.valid) {
+      expect(bare.errors.join("\n")).toContain(
+        "bun-qualified packaged AIDLC tool invocation",
+      );
+    }
+  });
+
+  test("restart remedies execute through every packaged harness", () => {
+    for (const harness of PACKAGED_HARNESSES) {
+      const project = createTestProject();
+      projects.push(project);
+      seedAidlcMemory(project);
+      seedStateFile(project, "state-mid-inception.md");
+      installPackagedEngine(project, harness);
+
+      const priorHarness = process.env.AIDLC_HARNESS_DIR;
+      process.env.AIDLC_HARNESS_DIR = harness.engineDir;
+      let command: string | undefined;
+      try {
+        const refusal = evaluateGuardRefusal({
+          code: "RESTART_TEST",
+          blockedAction: "complete",
+          stage: "requirements-analysis",
+          stateContent:
+            "# State\n- [ ] requirements-analysis — EXECUTE\n",
+          invariant: "Restart commands are directly executable.",
+          userMessage: "blocked",
+          attempt: {
+            recovery: "spent",
+            summaryCoverage: "current",
+            reviewCoverage: "current",
+            sourceCoverage: "current",
+          },
+          humanAuthority: { freshTurn: false, unattended: false },
+        });
+        command = refusal.remedies.find((remedy) => remedy.command)?.command;
+        expect(validateDirective(guardRecoveryAskForRefusal(refusal)).valid)
+          .toBe(true);
+      } finally {
+        if (priorHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
+        else process.env.AIDLC_HARNESS_DIR = priorHarness;
+      }
+
+      expect(command, harness.name).toBe(
+        `bun ${harness.engineDir}/tools/aidlc-orchestrate.ts next --stage requirements-analysis`,
+      );
+      expect(command).not.toContain("<");
+      const run = runExactCommand(project, command!, {
+        ...process.env,
+        AIDLC_HARNESS_DIR: harness.engineDir,
+      });
+      expect(
+        run.status,
+        `${harness.name}\n${run.stdout ?? ""}\n${run.stderr ?? ""}`,
+      ).toBe(0);
+      const directive = JSON.parse(String(run.stdout ?? "").trim()) as {
+        kind?: string;
+      };
+      expect(["print", "run-stage"]).toContain(directive.kind ?? "");
+    }
+  }, 60000);
+
+  test("autonomous Bolt recovery executes the packaged abort-and-discard command", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedAidlcMemory(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-construction.md"));
+    seedAuditFile(project);
+    installPackagedEngine(project, {
+      name: "claude",
+      engineDir: ".claude",
+    });
+
+    for (const args of [
+      ["init", "-q", "-b", "main"],
+      ["config", "user.email", "t@test"],
+      ["config", "user.name", "t"],
+      ["add", "-A"],
+      ["commit", "-qm", "fixture"],
+    ]) {
+      const git = spawnSync("git", args, { cwd: project, encoding: "utf-8" });
+      expect(
+        git.status,
+        `${args.join(" ")}\n${git.stdout ?? ""}\n${git.stderr ?? ""}`,
+      ).toBe(0);
+    }
+    const create = spawnSync(
+      process.execPath,
+      [
+        join(project, ".claude", "tools", "aidlc-worktree.ts"),
+        "create",
+        "--slug",
+        "alpha",
+        "--base",
+        "main",
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    expect(
+      create.status,
+      `${create.stdout ?? ""}\n${create.stderr ?? ""}`,
+    ).toBe(0);
+
+    const priorHarness = process.env.AIDLC_HARNESS_DIR;
+    process.env.AIDLC_HARNESS_DIR = ".claude";
+    let command: string | undefined;
+    try {
+      const refusal = evaluateGuardRefusal({
+        code: "AUTONOMOUS_RECOVERY_TEST",
+        blockedAction: "review",
+        stage: "code-generation",
+        unit: "alpha",
+        stateContent: state("-"),
+        invariant: "Autonomous recovery aborts the old attempt.",
+        userMessage: "blocked",
+        attempt: {
+          recovery: "spent",
+          summaryCoverage: "current",
+          reviewCoverage: "stale",
+          sourceCoverage: "current",
+        },
+        humanAuthority: { freshTurn: true, unattended: false },
+        autonomousBolt: { unit: "alpha", slug: "alpha", batch: "1" },
+      });
+      command = refusal.remedies[0]?.command;
+      expect(validateDirective(guardRecoveryAskForRefusal(refusal)).valid)
+        .toBe(true);
+    } finally {
+      if (priorHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
+      else process.env.AIDLC_HARNESS_DIR = priorHarness;
+    }
+    expect(command).toContain("bun .claude/tools/aidlc-bolt.ts abort");
+    expect(command).not.toContain("<");
+
+    const aborted = runExactCommand(project, command!);
+    expect(
+      aborted.status,
+      `${aborted.stdout ?? ""}\n${aborted.stderr ?? ""}`,
+    ).toBe(0);
+    expect(aborted.stdout).toContain('"emitted":"BOLT_FAILED"');
+    expect(
+      existsSync(join(project, ".aidlc", "worktrees", "bolt-alpha")),
+    ).toBe(false);
+    expect(readAllAuditShards(project)).toContain("**Reason**: aborted");
+  }, 60000);
+
   test("team gates use unit lifecycle instead of the global checkbox", () => {
     const pending = evaluateGuardRefusal({
       code: "TEAM_TEST",
@@ -232,13 +489,13 @@ describe("bounded guard-remedy liveness", () => {
       },
     });
     expect(pending.state).toBe("in-progress");
-    expect(
-      pending.remedies.some((remedy) =>
-        remedy.command?.includes(
-          '--unit "alpha" --result rejected',
-        )
-      ),
-    ).toBe(true);
+    const pendingRejection = pending.remedies.find((remedy) =>
+      remedy.action.includes('Ask "What should change?"')
+    );
+    expect(pendingRejection?.action).toContain(
+      'stage "functional-design" for Unit "alpha"',
+    );
+    expect(pendingRejection?.command).toBeUndefined();
     expect(guardRecoveryAskForRefusal(pending)).toMatchObject({
       kind: "ask",
       ask_type: "guard-recovery",
@@ -462,13 +719,13 @@ describe("bounded guard-remedy liveness", () => {
       teamGate: resolved,
     });
     expect(refusal.stage).toBe("functional-design");
-    expect(
-      refusal.remedies.some((remedy) =>
-        remedy.command?.includes(
-          '--stage "code-generation" --unit "alpha" --result rejected',
-        )
-      ),
-    ).toBe(true);
+    const rejection = refusal.remedies.find((remedy) =>
+      remedy.action.includes('Ask "What should change?"')
+    );
+    expect(rejection?.action).toContain(
+      'stage "code-generation" for Unit "alpha"',
+    );
+    expect(rejection?.command).toBeUndefined();
 
     const unresolvedState = unitEndState.replace(
       /— EXECUTE/g,
@@ -508,11 +765,8 @@ describe("bounded guard-remedy liveness", () => {
         remedy.command?.includes("--result rejected")
       ),
     ).toBe(false);
-    expect(
-      unresolvedAsk?.remedies.some((remedy) =>
-        remedy.command === "/aidlc --scope <scope>"
-      ),
-    ).toBe(true);
+    expect(unresolvedAsk?.remedies.some((remedy) => remedy.command !== undefined))
+      .toBe(false);
     const unresolvedText = unresolvedAsk?.remedies
       .map((remedy) => remedy.action)
       .join(" ") ?? "";
@@ -565,7 +819,7 @@ describe("bounded guard-remedy liveness", () => {
     expect(
       invalidAsk?.remedies.some((remedy) =>
         remedy.command?.includes("--result rejected") ||
-        remedy.command === "/aidlc --stage functional-design"
+        remedy.command?.includes("next --stage functional-design")
       ),
     ).toBe(false);
     expect(
@@ -753,6 +1007,138 @@ describe("AttemptView projections and refusal streaks", () => {
         "**Event**: STAGE_AWAITING_APPROVAL",
       );
     }
+  });
+
+  test("team pipeline revise preflight and enforcement refuse the same plugin-shaped stage", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedAidlcMemory(project);
+    seedBoltDag(project, ["alpha"]);
+    const slug = "test-pro-pipeline-unit";
+    const stateContent = [
+      "# AI-DLC State",
+      "- **Scope**: feature",
+      "- **State Version**: 8",
+      "- **Unit Ownership**: team",
+      "- **Unit Gate Rhythm**: per-stage",
+      "- **Construction Iteration**: stage-major",
+      "- **Lifecycle Phase**: CONSTRUCTION",
+      `- **Current Stage**: ${slug}`,
+      "- **Status**: Running",
+      `- [R] ${slug} — EXECUTE`,
+      "",
+    ].join("\n");
+    writeFileSync(seededStateFile(project), stateContent);
+    appendAuditEntry(
+      "GATE_REJECTED",
+      {
+        Stage: slug,
+        Unit: "alpha",
+        "Gate Scope": "per-stage",
+        Feedback: "repair",
+      },
+      project,
+    );
+
+    const liveGraph = JSON.parse(
+      readFileSync(join(AIDLC_SRC, "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<Record<string, unknown>>;
+    const template = liveGraph.find((entry) =>
+      entry.slug === "functional-design"
+    );
+    if (!template) throw new Error("functional-design graph row missing");
+    const typedTemplate = findStageBySlug("functional-design");
+    if (!typedTemplate) throw new Error("typed functional-design row missing");
+    const graphPath = join(project, "plugin-stage-graph.json");
+    writeFileSync(
+      graphPath,
+      `${JSON.stringify([
+        ...liveGraph,
+        {
+          ...template,
+          slug,
+          number: "3.7p",
+          name: "Plugin Pipeline Unit",
+          plugin: "test-pro",
+          mode: "pipeline",
+          support_agents: ["aidlc-quality-agent"],
+          produces: [],
+          optional_produces: [],
+          reviewer: undefined,
+          review_artifact: undefined,
+        },
+      ], null, 2)}\n`,
+    );
+
+    const priorDisable = process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
+    delete process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
+    let preflight: ReturnType<typeof guardPreflight>;
+    try {
+      const stage = {
+        ...typedTemplate,
+        slug,
+        number: "3.7p",
+        name: "Plugin Pipeline Unit",
+        plugin: "test-pro",
+        mode: "pipeline" as const,
+        support_agents: ["aidlc-quality-agent"],
+        produces: [],
+        optional_produces: [],
+        reviewer: undefined,
+        review_artifact: undefined,
+      };
+      preflight = guardPreflight(project, stateContent, stage, {
+        action: "revise",
+        unit: "alpha",
+      });
+    } finally {
+      if (priorDisable === undefined) {
+        delete process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
+      } else {
+        process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE = priorDisable;
+      }
+    }
+    expect(preflight.executable).toBe(false);
+    if (preflight.executable) throw new Error("expected preflight refusal");
+    expect(preflight.refusal.code).toBe("PIPELINE_EVIDENCE_MISSING");
+
+    const attempted = spawnSync(
+      process.execPath,
+      [
+        STATE_TOOL,
+        "revise",
+        slug,
+        "--unit",
+        "alpha",
+        "--project-dir",
+        project,
+      ],
+      {
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+          AIDLC_STAGE_GRAPH: graphPath,
+          AIDLC_DISABLE_ENSEMBLE_EVIDENCE: undefined,
+        },
+      },
+    );
+    expect(attempted.status).not.toBe(0);
+    const guardDir = join(
+      seededRecordDir(project),
+      ".aidlc-guard-refusals",
+    );
+    const recordName = readdirSync(guardDir).find((name) =>
+      name.endsWith(".json")
+    );
+    if (!recordName) throw new Error("guard refusal record missing");
+    const recorded = JSON.parse(
+      readFileSync(join(guardDir, recordName), "utf-8"),
+    ) as { refusal: { code: string } };
+    expect(recorded.refusal.code).toBe(preflight.refusal.code);
+    expect(readAllAuditShards(project)).not.toContain(
+      "**Event**: STAGE_AWAITING_APPROVAL",
+    );
   });
 
   test("shared ordering and partial-order frontier helpers preserve shard causality", () => {

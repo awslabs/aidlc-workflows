@@ -17559,12 +17559,29 @@ function guardLifecycleState(
   );
 }
 
+function guardCommandArg(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function guardToolCommand(tool: string, args: string[]): string {
+  return [
+    "bun",
+    `${harnessDir()}/tools/${tool}`,
+    ...args.map(guardCommandArg),
+  ].join(" ");
+}
+
 function restartStageRemedy(stage: string): GuardRemedy {
   return {
     action:
       `Restart this stage with /aidlc --stage ${stage}; the recorded answers ` +
       "survive, and the stage will ask for confirmation again.",
-    command: `/aidlc --stage ${stage}`,
+    command: guardToolCommand("aidlc-orchestrate.ts", [
+      "next",
+      "--stage",
+      stage,
+    ]),
     requiresHuman: true,
     executableNow: true,
   };
@@ -17596,7 +17613,6 @@ function lifecycleResetRemedies(
       action:
         "This stage is excluded from the current plan; change to a scope that " +
         `includes it with /aidlc --scope <scope>, then restart ${input.stage}.`,
-      command: "/aidlc --scope <scope>",
       requiresHuman: true,
       executableNow: true,
     };
@@ -17613,21 +17629,18 @@ function lifecycleResetRemedies(
   if (state === "in-progress" || state === "awaiting-approval") {
     const reportStage =
       input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
-    const unitArg =
+    const unitContext =
       input.teamGate?.resolved === true && input.unit
-        ? ` --unit "${input.unit}"`
+        ? ` for Unit "${input.unit}"`
         : "";
-    const command =
-      `aidlc-orchestrate.ts report --stage "${reportStage}"${unitArg} --result rejected ` +
-      '--user-input "Request Changes" --reason "<requested changes>"';
     if (input.humanAuthority.unattended) {
       return [
         {
           action:
             "Halt unattended execution and ask a human what should change. " +
-            "Unset AIDLC_UNATTENDED, wait for their typed Request Changes choice, " +
-            "then record that decision without choosing for them.",
-          command,
+            `Unset AIDLC_UNATTENDED, ask "What should change?" for stage ` +
+            `"${reportStage}"${unitContext}, and end the turn. Only after the human ` +
+            "answers may their exact text be submitted as the Request Changes reason.",
           requiresHuman: true,
           executableNow: true,
         },
@@ -17637,9 +17650,9 @@ function lifecycleResetRemedies(
       return [
         {
           action:
-            "Record the human's fresh Request Changes choice with the report " +
-            "command, preserving their feedback verbatim.",
-          command,
+            `Ask "What should change?" for stage "${reportStage}"${unitContext} ` +
+            "and end the turn. After the human answers, submit Request Changes with " +
+            "their exact text unchanged as the report reason.",
           requiresHuman: true,
           executableNow: true,
         },
@@ -17648,10 +17661,9 @@ function lifecycleResetRemedies(
     return [
       {
         action:
-          "To change this document, tell me what should change and I'll record your " +
-          "Request Changes decision (this works before the gate opens); that unlocks " +
-          "the file for revision and a fresh review.",
-        command,
+          `Ask "What should change?" for stage "${reportStage}"${unitContext} and ` +
+          "end the turn. After the human answers, submit Request Changes with their " +
+          "exact text unchanged as the report reason; that unlocks revision and a fresh review.",
         requiresHuman: true,
         executableNow: true,
       },
@@ -17664,7 +17676,11 @@ function lifecycleResetRemedies(
           "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
           `/aidlc --stage ${input.stage} (your recorded answers survive; you will ` +
           "re-confirm the summary once).",
-        command: `/aidlc --stage ${input.stage}`,
+        command: guardToolCommand("aidlc-orchestrate.ts", [
+          "next",
+          "--stage",
+          input.stage,
+        ]),
         requiresHuman: true,
         executableNow: true,
       },
@@ -17679,7 +17695,11 @@ function lifecycleResetRemedies(
             `/aidlc --stage ${input.stage} to redo it.`
           : "This stage is already approved; restore the reviewed source state, or " +
             `jump back with /aidlc --stage ${input.stage} to redo it.`,
-      command: `/aidlc --stage ${input.stage}`,
+      command: guardToolCommand("aidlc-orchestrate.ts", [
+        "next",
+        "--stage",
+        input.stage,
+      ]),
       requiresHuman: true,
       executableNow: true,
     },
@@ -17707,9 +17727,16 @@ export function evaluateGuardRefusal(
         `"${input.autonomousBolt.unit}". On approval, abort and discard the old ` +
         `attempt, then rerun the current prepare step in${batch} so a fresh ` +
         "BOLT_STARTED boundary creates a new review allowance.",
-      command:
-        `aidlc-bolt.ts abort --name "${input.autonomousBolt.unit}" --slug ` +
-        `"${slug}" --reason "stale review recovery exhausted" --discard`,
+      command: guardToolCommand("aidlc-bolt.ts", [
+        "abort",
+        "--name",
+        input.autonomousBolt.unit,
+        "--slug",
+        slug,
+        "--reason",
+        "stale review recovery exhausted",
+        "--discard",
+      ]),
       requiresHuman: true,
       executableNow: true,
     });

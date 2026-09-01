@@ -634,6 +634,23 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("every conductor keeps action-only guard recovery behind a fresh human turn", () => {
+    const missing: string[] = [];
+    for (const rel of harnessSkills()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        "A remedy without `command` is action-only",
+        "render that follow-up and END THE TURN",
+        "their exact text",
+        "Never synthesize a missing command",
+        "process its returned directive through the table above",
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("retained native Windows evidence proves completed CLI and IDE routing", () => {
     const manifest = readFileSync(join(P3_EVIDENCE_DIR, "README.md"), "utf-8");
     const hashes: Record<string, string> = {

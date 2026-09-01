@@ -532,7 +532,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(unitGates.every((gate) => typeof gate.unit === "string")).toBe(true);
   }, 120000);
 
-  test("team summary asks carry a routable Unit rejection command", () => {
+  test("team summary asks preserve the Unit in action-only rejection recovery", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
     const body = runNext(proj);
     expect(body).toMatchObject({
@@ -572,15 +572,14 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       unit: "alpha",
       reason_codes: ["SUMMARY_QUESTIONS_MISSING"],
     });
-    expect(
-      ask.remedies?.some(
-        (remedy) =>
-          remedy.executableNow &&
-          remedy.command?.includes(
-            'report --stage "functional-design" --unit "alpha" --result rejected',
-          ),
-      ),
-    ).toBe(true);
+    const rejection = ask.remedies?.find((remedy) =>
+      remedy.executableNow &&
+      remedy.action.includes('Ask "What should change?"')
+    );
+    expect(rejection?.action).toContain(
+      'stage "functional-design" for Unit "alpha"',
+    );
+    expect(rejection?.command).toBeUndefined();
   }, 30000);
 
   test("below-cap NOT-READY gate asks for repairs and the next iteration", () => {
@@ -1169,6 +1168,9 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       "Change alpha only",
     ]);
     expect(rejected.kind).toBe("print");
+    const rejectedAudit = readAllAuditShards(proj);
+    expect(rejectedAudit).toContain("**Feedback**: Change alpha only");
+    expect(rejectedAudit).not.toContain("<requested changes>");
     expect([...unitCompletedReceipts(proj, "functional-design")])
       .toEqual(["beta"]);
     const stage = findStageBySlug("functional-design")!;
