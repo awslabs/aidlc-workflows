@@ -333,14 +333,25 @@ export function scheduleWindowsUninstall(
   }
 }
 
-export function recoverWindowsUninstallContinuations(): number {
-  if (process.platform !== "win32") return 0;
+export function recoverWindowsUninstallContinuations(requestedPurge?: boolean): number {
   const scan = scanWindowsUninstallJournals();
   if (scan.invalid.length > 0) {
     throw new Error(
       `invalid Windows uninstall journal(s): ${scan.invalid.join(", ")}`,
     );
   }
+  const mismatched = requestedPurge === undefined
+    ? []
+    : scan.pending.filter(({ journal }) => journal.purge !== requestedPurge);
+  if (mismatched.length > 0) {
+    const pendingMode = mismatched[0].journal.purge ? "--purge" : "non-purge";
+    const requestedMode = requestedPurge ? "--purge" : "non-purge";
+    throw new Error(
+      `pending Windows ${pendingMode} uninstall cannot be resumed as ${requestedMode}; ` +
+        "finish or recover the pending uninstall before changing purge mode",
+    );
+  }
+  if (process.platform !== "win32") return 0;
   let recovered = 0;
   for (const { path, journal } of scan.pending) {
     launch(path, journal);

@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   probeHarnessCli,
@@ -21,6 +21,12 @@ import {
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { firstRunPathRemediation } from "../../core/tools/aidlc-init.ts";
 import { acquireRelease } from "../../core/tools/aidlc-release.ts";
+import { machineTransactionRoot } from "../../core/tools/aidlc-install-paths.ts";
+import {
+  executePlan,
+  transactionState,
+  writeOperation,
+} from "../../core/tools/aidlc-transaction.ts";
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -200,7 +206,7 @@ describe("t304 copied projection configuration", () => {
       ]);
       expect(metadata.status).not.toBe(0);
       expect(metadata.stdout + metadata.stderr).toContain(
-        "copied projection metadata must be regular files",
+        "projected path traverses a symlink: .claude/tools/data/aidlc-projection.json",
       );
 
       const nestedProject = readmeCopyProject();
@@ -218,6 +224,45 @@ describe("t304 copied projection configuration", () => {
       expect(nested.status).not.toBe(0);
       expect(nested.stdout + nested.stderr).toContain(
         "links and special files are not valid projection content",
+      );
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "root integrations reject a symlinked parent before reading outside bytes",
+    () => {
+      const project = readmeCopyProject();
+      const outside = temp("aidlc-t304-parent-link-");
+      writeFileSync(join(outside, "secret.txt"), "outside-secret\n");
+      symlinkSync(outside, join(project, "escape"));
+      const descriptorPath = join(
+        project,
+        ".claude",
+        "tools",
+        "data",
+        "aidlc-projection.json",
+      );
+      const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+      descriptor.rootIntegrations.push({
+        path: "escape/secret.txt",
+        policy: "whole-file",
+      });
+      writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+
+      const result = runCopied(project, [
+        "config",
+        "models",
+        "--preset",
+        "balanced",
+        "--project",
+        "--yes",
+      ]);
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain(
+        "projected path traverses a symlink: escape/secret.txt",
+      );
+      expect(readFileSync(join(outside, "secret.txt"), "utf-8")).toBe(
+        "outside-secret\n",
       );
     },
   );
@@ -474,6 +519,81 @@ describe("t304 diagnostics and release truthfulness", () => {
       })).rejects.toThrow("No published native release is available yet");
     } finally {
       server.stop(true);
+    }
+  });
+});
+
+describe("t304 transaction boundaries", () => {
+  test("candidate validation cannot race a stale destination into commit", () => {
+    const root = temp("aidlc-t304-transaction-race-");
+    const target = join(root, "value.txt");
+    writeFileSync(target, "planned\n");
+    const planned = transactionState(target);
+
+    expect(() =>
+      executePlan({
+        schemaVersion: 1,
+        root,
+        operations: [writeOperation("value.txt", "replacement\n", planned)],
+      }, {
+        validateCandidates: () => {
+          writeFileSync(target, "concurrent\n");
+        },
+      })
+    ).toThrow("value.txt: source changed after planning");
+    expect(readFileSync(target, "utf-8")).toBe("concurrent\n");
+  });
+
+  test("machine scope excludes unrelated descendants of the shared lock root", () => {
+    const home = temp("aidlc-t304-route-scope-");
+    const install = join(home, ".local", "share", "aidlc");
+    const bin = join(home, ".local", "bin");
+    mkdirSync(join(home, ".local"), { recursive: true });
+    const prior = {
+      install: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+      route: process.env.AIDLC_ROUTE_ID,
+      scope: process.env.AIDLC_ROUTE_MUTATION_SCOPE,
+      project: process.env.AIDLC_ROUTE_PROJECT_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = install;
+    process.env.AIDLC_BIN_DIR = bin;
+    process.env.AIDLC_ROUTE_ID = "test-machine";
+    process.env.AIDLC_ROUTE_MUTATION_SCOPE = "machine";
+    process.env.AIDLC_ROUTE_PROJECT_DIR = home;
+    try {
+      const root = machineTransactionRoot();
+      const unrelated = join(home, ".local", "unrelated-app", "owned.txt");
+      expect(() =>
+        executePlan({
+          schemaVersion: 1,
+          root,
+          operations: [
+            writeOperation(relative(root, unrelated), "no\n", "absent"),
+          ],
+        })
+      ).toThrow("machine mutation scope cannot mutate project path");
+      expect(existsSync(unrelated)).toBe(false);
+
+      const owned = join(install, "owned.txt");
+      executePlan({
+        schemaVersion: 1,
+        root,
+        operations: [
+          writeOperation(relative(root, owned), "yes\n", "absent"),
+        ],
+      });
+      expect(readFileSync(owned, "utf-8")).toBe("yes\n");
+    } finally {
+      const restore = (name: string, value: string | undefined): void => {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      };
+      restore("AIDLC_INSTALL_ROOT", prior.install);
+      restore("AIDLC_BIN_DIR", prior.bin);
+      restore("AIDLC_ROUTE_ID", prior.route);
+      restore("AIDLC_ROUTE_MUTATION_SCOPE", prior.scope);
+      restore("AIDLC_ROUTE_PROJECT_DIR", prior.project);
     }
   });
 });

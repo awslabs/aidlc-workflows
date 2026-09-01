@@ -37,6 +37,7 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  assertProjectionPathHasNoSymlinks,
   type ProjectionDescriptor,
   projectionFiles,
   sha256Bytes,
@@ -3074,7 +3075,20 @@ function executeSettingsAndProjectMutation(
     : operation.kind === "write"
     ? sha256Bytes(Buffer.from(operation.data, "base64"))
     : transactionState(mutation.path);
-  executePlan(machinePlan);
+  executePlan(machinePlan, {
+    validateLocked: () => {
+      const baseline =
+        process.env.AIDLC_FIRST_RUN_GLOBAL_BASELINE_STATE;
+      if (
+        baseline !== undefined &&
+        transactionState(mutation.path) !== baseline
+      ) {
+        throw new Error(
+          "global settings changed while first-run setup was preparing the mutation",
+        );
+      }
+    },
+  });
   invalidateSettingsCache(mutation.path);
   const rollbackInterference =
     process.env.AIDLC_TEST_SETTINGS_ROLLBACK_INTERFERENCE;
@@ -3962,6 +3976,14 @@ function copiedProjectSource(
   const dataDir = join(selected.root, "tools", "data");
   const stampPath = join(dataDir, "aidlc-stamp.json");
   const descriptorPath = join(dataDir, "aidlc-projection.json");
+  assertProjectionPathHasNoSymlinks(
+    projectDir,
+    relative(projectDir, stampPath).replaceAll("\\", "/"),
+  );
+  assertProjectionPathHasNoSymlinks(
+    projectDir,
+    relative(projectDir, descriptorPath).replaceAll("\\", "/"),
+  );
   if (
     !existsSync(stampPath) ||
     !lstatSync(stampPath).isFile() ||
@@ -3993,6 +4015,7 @@ function copiedProjectSource(
   const root = join(cleanup, "projection");
   mkdirSync(root, { recursive: true });
   for (const directory of descriptor.managedDirectories) {
+    assertProjectionPathHasNoSymlinks(projectDir, directory);
     const source = join(projectDir, directory);
     if (!existsSync(source) || !lstatSync(source).isDirectory()) {
       rmSync(cleanup, { recursive: true, force: true });
@@ -4004,6 +4027,7 @@ function copiedProjectSource(
     });
   }
   for (const integration of descriptor.rootIntegrations) {
+    assertProjectionPathHasNoSymlinks(projectDir, integration.path);
     const source = join(projectDir, integration.path);
     if (!existsSync(source) || !lstatSync(source).isFile()) continue;
     const target = join(root, integration.path);
@@ -4207,12 +4231,20 @@ function awsSummary(credentials: ReturnType<typeof detectAwsCredentials>): {
 
 let firstRunChildCount = 0;
 
+type FirstRunMutationSnapshot = {
+  recoveryPath: string;
+  prepareChild: (args: readonly string[]) => NodeJS.ProcessEnv;
+  recordCommitted: (result: Record<string, unknown>) => void;
+  restore: () => void;
+  cleanup: () => void;
+};
+
 function runConfigChild(
   args: string[],
   cwd: string,
-  recordCommitted: (result: Record<string, unknown>) => void,
+  snapshot: FirstRunMutationSnapshot,
 ): Record<string, unknown> {
-  const env = { ...process.env };
+  const env = { ...process.env, ...snapshot.prepareChild(args) };
   delete env.AIDLC_TEST_CONFIG_TTY;
   delete env.AIDLC_TEST_CONFIG_DETECTION_JSON;
   const commandArgs = isCompiledExecutable()
@@ -4229,7 +4261,7 @@ function runConfigChild(
     throw new Error((result.stdout || result.stderr || "configuration failed").trim());
   }
   const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
-  recordCommitted(parsed);
+  snapshot.recordCommitted(parsed);
   firstRunChildCount++;
   if (
     Number(process.env.AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD ?? "0") ===
@@ -4238,7 +4270,11 @@ function runConfigChild(
     const interference =
       process.env.AIDLC_TEST_FIRST_RUN_ROLLBACK_INTERFERENCE;
     if (interference !== undefined) {
-      writeFileSync(join(cwd, "aidlc.settings.json"), interference);
+      writeFileSync(
+        process.env.AIDLC_TEST_FIRST_RUN_ROLLBACK_INTERFERENCE_PATH ??
+          join(cwd, "aidlc.settings.json"),
+        interference,
+      );
     }
     throw new Error(`injected first-run failure after child ${firstRunChildCount}`);
   }
@@ -4292,7 +4328,7 @@ export function firstRunPathRemediation(
 function applyFirstRunChoices(
   projectDir: string,
   choices: FirstRunChoices,
-  recordCommitted: (result: Record<string, unknown>) => void,
+  snapshot: FirstRunMutationSnapshot,
 ): void {
   firstRunChildCount = 0;
   const common = [
@@ -4307,7 +4343,7 @@ function applyFirstRunChoices(
     "--yes",
     "--json",
   ];
-  runConfigChild(common, projectDir, recordCommitted);
+  runConfigChild(common, projectDir, snapshot);
   runConfigChild([
     "models",
     "--project-dir",
@@ -4317,7 +4353,7 @@ function applyFirstRunChoices(
     choices.preset,
     "--yes",
     "--json",
-  ], projectDir, recordCommitted);
+  ], projectDir, snapshot);
   runConfigChild([
     "project",
     "--project-dir",
@@ -4330,7 +4366,7 @@ function applyFirstRunChoices(
     "none",
     "--yes",
     "--json",
-  ], projectDir, recordCommitted);
+  ], projectDir, snapshot);
   const providerArgs = [
     "providers",
     "--project-dir",
@@ -4351,7 +4387,7 @@ function applyFirstRunChoices(
       providerArgs.push("--mark-done", "bedrock-model-access");
     }
     providerArgs.push("--yes", "--json");
-    runConfigChild(providerArgs, projectDir, recordCommitted);
+    runConfigChild(providerArgs, projectDir, snapshot);
   }
 }
 
@@ -4374,28 +4410,46 @@ function firstRunMutationPaths(
 function snapshotFirstRunMutationPaths(
   projectDir: string,
   choices: FirstRunChoices,
-): {
-  recoveryPath: string;
-  recordCommitted: (result: Record<string, unknown>) => void;
-  restore: () => void;
-  cleanup: () => void;
-} {
+): FirstRunMutationSnapshot {
   const root = mkdtempSync(join(tmpdir(), "aidlc-first-run-rollback-"));
   const snapshots = firstRunMutationPaths(projectDir, choices).map((path, index) => {
     const backup = join(root, String(index));
-    const existed = pathPresent(path);
-    if (existed) {
-      cpSync(path, backup, {
+    return {
+      path,
+      backup,
+      existed: false,
+      committed: "absent" as string | "absent",
+      owned: false,
+    };
+  });
+  const capture = (snapshot: (typeof snapshots)[number]): void => {
+    rmSync(snapshot.backup, { recursive: true, force: true });
+    snapshot.existed = pathPresent(snapshot.path);
+    if (snapshot.existed) {
+      cpSync(snapshot.path, snapshot.backup, {
         recursive: true,
         dereference: false,
         verbatimSymlinks: true,
         preserveTimestamps: true,
       });
     }
-    return { path, backup, existed, committed: transactionState(path) };
-  });
+    snapshot.committed = transactionState(snapshot.path);
+  };
+  for (const snapshot of snapshots) capture(snapshot);
   return {
     recoveryPath: root,
+    prepareChild: (args) => {
+      if (!args.includes("--global")) return {};
+      const globalPath = resolve(settingsPathForTarget(projectDir, "global"));
+      const snapshot = snapshots.find((candidate) =>
+        candidate.path === globalPath
+      );
+      if (!snapshot || snapshot.owned) return {};
+      capture(snapshot);
+      return {
+        AIDLC_FIRST_RUN_GLOBAL_BASELINE_STATE: snapshot.committed,
+      };
+    },
     recordCommitted: (result) => {
       const data = result.data;
       if (!data || typeof data !== "object" || !("actions" in data)) return;
@@ -4421,6 +4475,7 @@ function snapshotFirstRunMutationPaths(
           )
         ) {
           snapshot.committed = transactionState(snapshot.path);
+          snapshot.owned = true;
         }
       }
     },
@@ -4428,8 +4483,15 @@ function snapshotFirstRunMutationPaths(
       const errors: unknown[] = [];
       for (const snapshot of [...snapshots].reverse()) {
         try {
-          const root = dirname(snapshot.path);
-          const path = basename(snapshot.path);
+          const projectRelative = relative(projectDir, snapshot.path);
+          const projectOwned = projectRelative !== "" &&
+            !isAbsolute(projectRelative) &&
+            projectRelative !== ".." &&
+            !projectRelative.startsWith(`..${sep}`);
+          const transactionRoot = projectOwned
+            ? projectDir
+            : machineTransactionRoot();
+          const path = relative(transactionRoot, snapshot.path);
           const operations: TransactionOperation[] = snapshot.existed
             ? [{
                 kind: lstatSync(snapshot.backup).isDirectory() ? "tree" : "copy",
@@ -4445,7 +4507,11 @@ function snapshotFirstRunMutationPaths(
                 path,
                 expected: snapshot.committed,
               }];
-          executePlan({ schemaVersion: 1, root, operations });
+          executePlan({
+            schemaVersion: 1,
+            root: transactionRoot,
+            operations,
+          });
         } catch (error) {
           errors.push(error);
         }
@@ -4812,7 +4878,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   const snapshot = snapshotFirstRunMutationPaths(projectDir, choices);
   let preserveSnapshot = false;
   try {
-    applyFirstRunChoices(projectDir, choices, snapshot.recordCommitted);
+    applyFirstRunChoices(projectDir, choices, snapshot);
     renderFirstRunEnding(projectDir, choices);
   } catch (error) {
     try {

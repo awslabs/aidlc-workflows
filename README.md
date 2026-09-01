@@ -100,12 +100,16 @@ The authenticated bootstrap requires GitHub CLI (`gh`).
 
 ```bash
 tmp="$(mktemp -d)"
-gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
+tag="$(gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName)"
+source_digest="$(gh api "repos/awslabs/aidlc-workflows/commits/$tag" --jq .sha)"
+gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo awslabs/aidlc-workflows \
-  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+  --source-ref refs/heads/main \
+  --source-digest "$source_digest"
 sh "$tmp/install.sh"
 rm -rf "$tmp"
 export PATH="$HOME/.local/bin:$PATH"
@@ -369,7 +373,7 @@ two; `bun scripts/package.ts` materializes the third.
 aidlc-claude/
 │  ─────────── HAND-AUTHORED SOURCE — edit here ───────────
 ├── core/                       # ONE harness-neutral source of truth
-│   ├── tools/                  #   48 aidlc-*.ts engine and authoring tools
+│   ├── tools/                  #   68 aidlc-*.ts engine and authoring tools
 │   ├── aidlc-common/           #   stage protocol + 33 stage files + conductor
 │   ├── agents/                 #   14 agents: 11 domain + 2 reviewers + composer
 │   ├── knowledge/ memory/ scopes/ sensors/ hooks/

@@ -56,7 +56,12 @@ type RouteNamespace = RouteNamespaceName;
 type ProjectRequirement = "none" | "optional" | "required";
 type PinPolicy = "active" | "inspect" | "pinned";
 type NetworkPolicy = "forbidden" | "explicit-only" | "interactive-bounded" | "required";
-type MutationScope = "none" | "project" | "machine" | "project-and-machine";
+type MutationScope =
+  | "none"
+  | "project"
+  | "machine"
+  | "project-and-machine"
+  | "user-home";
 
 export type Route = {
   id: string;
@@ -313,7 +318,7 @@ export const ROUTES: readonly Route[] = [
     projectRequirement: "optional",
     pinPolicy: "active",
     networkPolicy: "interactive-bounded",
-    mutationScope: "machine",
+    mutationScope: "project-and-machine",
     outputModes: ["human", "quiet", "json"],
     human: [
       { command: "doctor [--check-updates]", summary: "run environment diagnostics" },
@@ -1023,7 +1028,7 @@ export const ROUTES: readonly Route[] = [
     projectRequirement: "optional",
     pinPolicy: "active",
     networkPolicy: "explicit-only",
-    mutationScope: "project-and-machine",
+    mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
     all: [
       "install-apply --from <dir> --version <version> [args]",
@@ -1302,9 +1307,11 @@ function commandHelpRequest(argv: readonly string[]): PublicCommand | null {
   const clean = withoutProjectDirFlag(argv);
   const invocation = clean[0];
   const command = publicCommandFromToken(invocation);
+  const delimiter = clean.indexOf("--");
+  const commandArgs = delimiter < 0 ? clean : clean.slice(0, delimiter);
   if (
     !command ||
-    !clean.slice(1).some((token) => token === "--help" || token === "-h")
+    !commandArgs.slice(1).some((token) => token === "--help" || token === "-h")
   ) {
     return null;
   }
@@ -1849,7 +1856,11 @@ export function resolveAction(argv: string[]): Action {
       action.projectDir = absoluteProjectDir;
     }
   }
-  if (action.type === "delegate") action.args.push(...globalFlags);
+  if (action.type === "delegate") {
+    const delimiter = action.args.indexOf("--");
+    if (delimiter >= 0) action.args.splice(delimiter, 0, ...globalFlags);
+    else action.args.push(...globalFlags);
+  }
   return action;
 }
 // TRANSLATION_LOGIC_END
@@ -1863,8 +1874,7 @@ function bunExecutable(): string {
 }
 
 function delegatedProjectDir(args: readonly string[]): string | undefined {
-  const index = args.indexOf("--project-dir");
-  return index >= 0 ? args[index + 1] : undefined;
+  return projectDirFlag(args).value;
 }
 
 function runDelegateDev(tool: string, args: string[]): number {
@@ -2219,11 +2229,20 @@ async function execute(action: Action): Promise<number> {
 
 function withoutProjectDirFlag(argv: readonly string[]): string[] {
   const clean: string[] = [];
+  let literalArgs = false;
   for (let index = 0; index < argv.length; index++) {
-    if (["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(argv[index])) {
+    if (argv[index] === "--") {
+      literalArgs = true;
+      clean.push(argv[index]);
       continue;
     }
-    if (argv[index] === "--project-dir") {
+    if (
+      !literalArgs &&
+      ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(argv[index])
+    ) {
+      continue;
+    }
+    if (!literalArgs && argv[index] === "--project-dir") {
       index++;
       continue;
     }
@@ -2239,9 +2258,15 @@ function normalizePublicCommandArgv(
 ): string[] {
   const normalized: string[] = [command];
   let removedCommand = false;
+  let literalArgs = false;
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
-    if (token === "--project-dir") {
+    if (token === "--") {
+      literalArgs = true;
+      normalized.push(token);
+      continue;
+    }
+    if (!literalArgs && token === "--project-dir") {
       normalized.push(token);
       if (argv[index + 1] !== undefined) normalized.push(argv[++index]);
       continue;
@@ -2356,6 +2381,7 @@ function projectDirFlag(argv: readonly string[]): {
 } {
   let value: string | undefined;
   for (let index = 0; index < argv.length; index++) {
+    if (argv[index] === "--") break;
     if (argv[index] !== "--project-dir") continue;
     const candidate = argv[++index];
     if (!candidate || candidate.startsWith("--")) {
@@ -2377,7 +2403,10 @@ async function dispatchPinnedVersion(
   const projectDir = dispatcherProjectDirFrom(argv);
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return null;
-  const { resolvePinnedDispatch } = await import("./aidlc-lifecycle.ts");
+  const {
+    reserveDispatchedVersion,
+    resolvePinnedDispatch,
+  } = await import("./aidlc-lifecycle.ts");
   const result = resolvePinnedDispatch(argv);
   if (result.kind === "none") return null;
   if (result.kind === "failure") {
@@ -2388,18 +2417,23 @@ async function dispatchPinnedVersion(
       result.remediation,
     );
   }
-  const child = Bun.spawnSync([result.executable, ...argv], {
-    cwd: process.cwd(),
-    stdin: input === null ? "inherit" : new TextEncoder().encode(input),
-    stdout: "inherit",
-    stderr: "inherit",
-    env: {
-      ...process.env,
-      AIDLC_PIN_DISPATCHED: result.version,
-      AIDLC_ACTIVE_VERSION: AIDLC_VERSION,
-    },
-  });
-  return child.exitCode ?? 1;
+  const releaseReservation = reserveDispatchedVersion(result.version);
+  try {
+    const child = Bun.spawnSync([result.executable, ...argv], {
+      cwd: process.cwd(),
+      stdin: input === null ? "inherit" : new TextEncoder().encode(input),
+      stdout: "inherit",
+      stderr: "inherit",
+      env: {
+        ...process.env,
+        AIDLC_PIN_DISPATCHED: result.version,
+        AIDLC_ACTIVE_VERSION: AIDLC_VERSION,
+      },
+    });
+    return child.exitCode ?? 1;
+  } finally {
+    releaseReservation();
+  }
 }
 
 function refuseUnpinnedMajorSkew(argv: readonly string[]): number | null {
@@ -2423,8 +2457,10 @@ function refuseUnpinnedMajorSkew(argv: readonly string[]): number | null {
 }
 
 function requestedOutputMode(argv: readonly string[]): "human" | "quiet" | "json" {
-  if (argv.includes("--json")) return "json";
-  if (argv.includes("--quiet")) return "quiet";
+  const delimiter = argv.indexOf("--");
+  const globalArgs = delimiter < 0 ? argv : argv.slice(0, delimiter);
+  if (globalArgs.includes("--json")) return "json";
+  if (globalArgs.includes("--quiet")) return "quiet";
   return "human";
 }
 
@@ -2463,7 +2499,9 @@ function basicPolicyError(route: Route, argv: readonly string[]): string | null 
   if (!route.outputModes.includes(output)) {
     return `${route.id} does not support --${output}`;
   }
-  if (route.networkPolicy === "required" && argv.includes("--offline")) {
+  const delimiter = argv.indexOf("--");
+  const globalArgs = delimiter < 0 ? argv : argv.slice(0, delimiter);
+  if (route.networkPolicy === "required" && globalArgs.includes("--offline")) {
     return `${route.id} requires network access and cannot run with --offline`;
   }
   return null;
@@ -2533,6 +2571,13 @@ function validateSimplePublicGrammar(
     !argv.includes("--export")
   ) {
     return "--output requires --export";
+  }
+  if (
+    command === "doctor" &&
+    argv.includes("--export") &&
+    (argv.includes("--json") || argv.includes("--quiet"))
+  ) {
+    return "--export cannot be combined with --json or --quiet";
   }
   return null;
 }
@@ -2632,11 +2677,25 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     : `${route.id} requires an installed project harness or recognized project directory; run aidlc config`;
 }
 
+function effectiveMutationScope(
+  route: Route,
+  argv: readonly string[],
+): MutationScope {
+  const clean = withoutProjectDirFlag(argv);
+  if (
+    route.id === "system-lifecycle" &&
+    clean[2] === "install-profile"
+  ) {
+    return "user-home";
+  }
+  return route.mutationScope;
+}
+
 async function withRoutePolicy(route: Route, argv: readonly string[], run: () => Promise<number>): Promise<number> {
   const values: Record<string, string> = {
     AIDLC_ROUTE_ID: route.id,
     AIDLC_ROUTE_NETWORK_POLICY: route.networkPolicy,
-    AIDLC_ROUTE_MUTATION_SCOPE: route.mutationScope,
+    AIDLC_ROUTE_MUTATION_SCOPE: effectiveMutationScope(route, argv),
     AIDLC_ROUTE_PROJECT_DIR: dispatcherProjectDirFrom(argv),
     AIDLC_ROUTE_OUTPUT_MODE: requestedOutputMode(argv),
   };

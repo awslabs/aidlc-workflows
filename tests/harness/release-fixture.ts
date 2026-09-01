@@ -287,6 +287,8 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
     schemaVersion: 1,
     version,
     date: "2026-07-17",
+    sourceRef: "refs/heads/main",
+    sourceDigest: "0".repeat(40),
     distributions: distributionRows,
     assets,
   };

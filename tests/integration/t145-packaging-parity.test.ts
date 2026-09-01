@@ -343,6 +343,39 @@ describe("t145 packager contract regressions", () => {
     }
   }, CHECK_TIMEOUT_MS);
 
+  test("full write removes generated harness and plugin roots absent from source", () => {
+    const root = makeFixture("claude");
+    try {
+      const staleHarness = join(root, "dist", "removed-harness", "stale.txt");
+      const staleReleaseHarness = join(
+        root,
+        "dist-release",
+        "removed-harness",
+        "stale.txt",
+      );
+      const stalePlugin = join(
+        root,
+        "dist",
+        "plugins",
+        "removed-plugin",
+        "claude",
+        "stale.txt",
+      );
+      for (const path of [staleHarness, staleReleaseHarness, stalePlugin]) {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, "stale\n");
+      }
+
+      const run = runPackage(root);
+      expect(run.status, output(run)).toBe(0);
+      expect(existsSync(join(root, "dist", "removed-harness"))).toBe(false);
+      expect(existsSync(join(root, "dist-release", "removed-harness"))).toBe(false);
+      expect(existsSync(join(root, "dist", "plugins", "removed-plugin"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, CHECK_TIMEOUT_MS);
+
   test("write mode replaces only the named generated root", () => {
     const root = makeFixture("kiro");
     try {

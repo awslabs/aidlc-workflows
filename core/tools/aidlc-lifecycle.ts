@@ -10,6 +10,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  rmdirSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -43,10 +44,12 @@ import {
   activeVersion,
   activeExecutablePath,
   activeVersionPath,
+  binRoot,
   commandPath,
+  createRuntimeIntegrity,
   installedExecutablePath,
+  inspectProjectPinTarget,
   inspectInstalledVersion,
-  installedVersionFingerprint,
   installRoot,
   machineTransactionRoot,
   packageManagerForExecutable,
@@ -55,6 +58,7 @@ import {
   requireVersion,
   readActiveExecutable,
   rollbackVersionPath,
+  runtimeIntegrityPath,
   runtimeRoot,
   STRICT_SEMVER,
   targetTriple,
@@ -300,7 +304,10 @@ function reservedVersions(): Set<string> {
   return reserved;
 }
 
-function reserveVersion(version: string): () => void {
+function reserveVersion(
+  version: string,
+  options: { requireComplete?: boolean } = {},
+): () => void {
   const root = machineTransactionRoot();
   const path = join(
     reservationRoot(),
@@ -315,17 +322,35 @@ function reserveVersion(version: string): () => void {
       "absent",
       0o600,
     )],
+  }, {
+    validateLocked: options.requireComplete
+      ? () => {
+          const inspection = inspectInstalledVersion(version);
+          if (!inspection.complete) {
+            commandError(
+              `cannot reserve incomplete retained version ${version}: ${
+                inspection.reason ?? "integrity validation failed"
+              }`,
+              EXIT.integrity,
+            );
+          }
+        }
+      : undefined,
   });
   return () => {
     rmSync(path, { force: true });
     try {
       if (existsSync(reservationRoot()) && readdirSync(reservationRoot()).length === 0) {
-        rmSync(reservationRoot());
+        rmdirSync(reservationRoot());
       }
     } catch {
       // Stale reservations fail toward retention and are reaped by the next scan.
     }
   };
+}
+
+export function reserveDispatchedVersion(version: string): () => void {
+  return reserveVersion(version, { requireComplete: true });
 }
 
 function pathEntryExists(path: string): boolean {
@@ -418,6 +443,22 @@ function readPinRegistry(strict = false): {
   return { pins, warnings };
 }
 
+function canonicalProjectPath(projectDir: string): string {
+  return existsSync(projectDir) ? realpathSync(projectDir) : resolve(projectDir);
+}
+
+function projectPinRecordsMatch(projectDir: string, version: string): boolean {
+  try {
+    const pinPath = join(projectDir, ".aidlc-version");
+    return existsSync(pinPath) &&
+      statSync(pinPath).isFile() &&
+      readFileSync(pinPath, "utf-8").trim() === version &&
+      inspectProjectPinTarget(projectDir, version).valid;
+  } catch {
+    return false;
+  }
+}
+
 function registeredPins(strict = false): {
   pins: Record<string, string>;
   warnings: string[];
@@ -425,27 +466,14 @@ function registeredPins(strict = false): {
   const { pins: rawPins, warnings } = readPinRegistry(strict);
   const pins: Record<string, string> = {};
   for (const [project, version] of Object.entries(rawPins)) {
-    if (existsSync(project)) {
-      try {
-        const pinPath = join(project, ".aidlc-version");
-        if (
-          !existsSync(pinPath) ||
-          !statSync(pinPath).isFile() ||
-          readFileSync(pinPath, "utf-8").trim() !== version
-        ) {
-          continue;
-        }
-      } catch {
-        continue;
-      }
-    }
+    if (existsSync(project) && !projectPinRecordsMatch(project, version)) continue;
     pins[project] = version;
   }
   return { pins, warnings };
 }
 
 function commitProjectPin(projectDir: string, version: string | null): void {
-  const project = existsSync(projectDir) ? realpathSync(projectDir) : resolve(projectDir);
+  const project = canonicalProjectPath(projectDir);
   const pinPath = join(projectDir, ".aidlc-version");
   const targetPath = projectPinTargetPath(projectDir);
   const registryPath = join(installRoot(), "pins.json");
@@ -533,9 +561,7 @@ function completePinnedVersion(
   distribution: string | null,
 ): boolean {
   try {
-    const inspection = inspectInstalledVersion(version, distribution);
-    if (!inspection.complete) return false;
-    return installedVersionFingerprint(version) !== null;
+    return inspectInstalledVersion(version, distribution).complete;
   } catch {
     return false;
   }
@@ -556,20 +582,50 @@ export function resolvePinnedDispatch(
       remediation: "aidlc config --unpin",
     };
   }
-  if (process.env.AIDLC_PIN_DISPATCHED === version) return { kind: "none" };
+  const remediation = `aidlc config --pin ${version}`;
+  const registry = readPinRegistry();
+  if (registry.warnings.length > 0) {
+    return {
+      kind: "failure",
+      code: EXIT.integrity,
+      message: `this project's pin registry is invalid: ${registry.warnings.join("; ")}`,
+      remediation,
+    };
+  }
+  const project = canonicalProjectPath(projectDir);
+  if (registry.pins[project] !== version) {
+    return {
+      kind: "failure",
+      code: EXIT.failure,
+      message: `this project's ${version} pin is not registered on this machine`,
+      remediation,
+    };
+  }
+  const target = inspectProjectPinTarget(projectDir, version);
+  if (!target.valid) {
+    return {
+      kind: "failure",
+      code: EXIT.failure,
+      message: `this project's ${version} pin target is invalid: ${
+        target.reason ?? "resolved target validation failed"
+      }`,
+      remediation,
+    };
+  }
   const distribution = projectDistribution(projectDir);
   if (!completePinnedVersion(version, distribution)) {
     return {
       kind: "failure",
       code: EXIT.failure,
       message: `this project requires ${version}, which is not installed completely`,
-      remediation: `aidlc config --pin ${version}`,
+      remediation,
     };
   }
+  if (process.env.AIDLC_PIN_DISPATCHED === version) return { kind: "none" };
   if (version === AIDLC_VERSION) return { kind: "none" };
   return {
     kind: "execute",
-    executable: installedExecutablePath(version),
+    executable: target.target,
     version,
   };
 }
@@ -974,9 +1030,26 @@ async function installVersion(options: {
         throw new Error(`${distribution} runtime stamp does not match release ${version}`);
       }
     }
+    const baselinePath = join(candidate, basename(runtimeIntegrityPath(version)));
+    writeFileSync(
+      baselinePath,
+      `${JSON.stringify(
+        createRuntimeIntegrity(version, join(candidate, "runtime")),
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
     writeFileSync(
       join(candidate, "version.json"),
-      `${JSON.stringify(release.manifest, null, 2)}\n`,
+      `${JSON.stringify({
+        ...release.manifest,
+        installedRuntime: {
+          schemaVersion: 1,
+          baseline: basename(baselinePath),
+          sha256: sha256File(baselinePath),
+        },
+      }, null, 2)}\n`,
     );
     if (!options.dryRun) {
       const destination = versionRoot(version);
@@ -1193,6 +1266,20 @@ function pruneUnprotectedVersions(): string[] {
   return removable.map((item) => item.version);
 }
 
+function removeEmptyInstallerDirectory(path: string): void {
+  try {
+    if (
+      existsSync(path) &&
+      lstatSync(path).isDirectory() &&
+      readdirSync(path).length === 0
+    ) {
+      rmdirSync(path);
+    }
+  } catch {
+    // Non-empty or concurrently reused directories are preserved.
+  }
+}
+
 function uninstallCommand(argv: string[]): CommandResult {
   const executable = compiledExecutable();
   const manager = executable ? packageManagerForExecutable(executable) : null;
@@ -1206,12 +1293,13 @@ function uninstallCommand(argv: string[]): CommandResult {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return failure("refusing to uninstall a root-owned installation", EXIT.integrity);
   }
+  const purge = argv.includes("--purge");
   if (process.platform === "win32") {
-    const recovered = recoverWindowsUninstallContinuations();
+    const recovered = recoverWindowsUninstallContinuations(purge);
     if (recovered > 0) {
       return success(
         `resumed ${recovered} pending Windows uninstall continuation(s)`,
-        { purge: argv.includes("--purge"), deferred: true, recovered },
+        { purge, deferred: true, recovered },
       );
     }
   }
@@ -1228,7 +1316,14 @@ function uninstallCommand(argv: string[]): CommandResult {
       EXIT.integrity,
     );
   }
-  const purge = argv.includes("--purge");
+  const reservations = reservedVersions();
+  if (reservations.size > 0) {
+    return failure(
+      "cannot uninstall while a retained AI-DLC version is in use",
+      EXIT.failure,
+      "wait for running AI-DLC commands to exit, then retry",
+    );
+  }
   const { versions } = retainedVersions();
   const preserved = purge ? "nothing" : "global config, update cache, pins, and harness default";
   requireConfirmation(
@@ -1242,6 +1337,8 @@ function uninstallCommand(argv: string[]): CommandResult {
   const paths = [
     commandPath(),
     versionsRoot(),
+    join(installRoot(), "completions"),
+    reservationRoot(),
     activeVersionPath(),
     rollbackVersionPath(),
     activeExecutablePath(),
@@ -1263,6 +1360,15 @@ function uninstallCommand(argv: string[]): CommandResult {
       expected: transactionState(path) as string,
     })),
   });
+  const resolvedInstallRoot = resolve(installRoot());
+  const resolvedBinRoot = resolve(binRoot());
+  if (
+    resolvedBinRoot !== resolvedInstallRoot &&
+    resolvedBinRoot.startsWith(`${resolvedInstallRoot}${sep}`)
+  ) {
+    removeEmptyInstallerDirectory(resolvedBinRoot);
+  }
+  if (purge) removeEmptyInstallerDirectory(resolvedInstallRoot);
   return success(
     `uninstalled AI-DLC; ${purge ? "removed machine configuration and cache" : "preserved machine configuration and cache"}`,
     { purge, preserved: purge ? [] : ["config", "update-cache", "pins", "default-harness"] },
@@ -1270,13 +1376,6 @@ function uninstallCommand(argv: string[]): CommandResult {
 }
 
 function scheduleWindowsUninstall(purge: boolean): CommandResult {
-  const recovered = recoverWindowsUninstallContinuations();
-  if (recovered > 0) {
-    return success(
-      `resumed ${recovered} pending Windows uninstall continuation(s)`,
-      { purge, deferred: true, recovered },
-    );
-  }
   const preserved = [
     machineConfigPath(),
     updateCachePath(),
@@ -1477,6 +1576,15 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
 }
 
 async function useCommand(argv: string[]): Promise<CommandResult> {
+  const executable = compiledExecutable();
+  const manager = executable ? packageManagerForExecutable(executable) : null;
+  if (manager) {
+    return failure(
+      `AI-DLC is installed via ${manager.name}; self-version switching is disabled`,
+      EXIT.failure,
+      manager.remediation,
+    );
+  }
   const value = argv[1];
   if (!value || value.startsWith("--")) return usage("usage: aidlc use <version>");
   if (argv.includes("--pin")) {

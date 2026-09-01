@@ -31,6 +31,8 @@ export type ReleaseManifest = {
   schemaVersion: 1;
   version: string;
   date: string;
+  sourceRef?: string;
+  sourceDigest?: string;
   distributions: Array<{ name: string; productName: string }>;
   assets: ReleaseAsset[];
 };
@@ -114,7 +116,7 @@ function verifiedChecksums(directory: string): Map<string, string> {
 
 export function verifyReleaseProvenance(
   directory: string,
-  version: string,
+  manifest: ReleaseManifest,
 ): void {
   const bundle = join(directory, PROVENANCE_BUNDLE);
   if (!existsSync(bundle)) {
@@ -135,7 +137,10 @@ export function verifyReleaseProvenance(
     "--signer-workflow",
     trust.workflow,
     "--source-ref",
-    `refs/tags/v${version}`,
+    manifest.sourceRef ?? `refs/tags/v${manifest.version}`,
+    ...(manifest.sourceDigest
+      ? ["--source-digest", manifest.sourceDigest]
+      : []),
   ], {
     env: { ...process.env },
     stdin: "ignore",
@@ -162,6 +167,20 @@ export function readReleaseManifest(directory: string): ReleaseManifest {
   }
   if (manifest.schemaVersion !== 1) throw new Error(`unsupported release schema ${manifest.schemaVersion}`);
   requireVersion(manifest.version);
+  const hasSourceRef = manifest.sourceRef !== undefined;
+  const hasSourceDigest = manifest.sourceDigest !== undefined;
+  if (hasSourceRef !== hasSourceDigest) {
+    throw new Error("version.json must provide sourceRef and sourceDigest together");
+  }
+  if (
+    hasSourceRef &&
+    (
+      manifest.sourceRef !== "refs/heads/main" ||
+      !/^[a-f0-9]{40}$/.test(manifest.sourceDigest ?? "")
+    )
+  ) {
+    throw new Error("version.json contains an invalid release source identity");
+  }
   if (!Array.isArray(manifest.distributions) || manifest.distributions.length === 0) {
     throw new Error("version.json contains no distributions");
   }
@@ -503,8 +522,12 @@ export async function fetchReleaseMetadata(options: {
       metadataTimeoutMs,
     );
     const manifest = readReleaseManifest(temporary);
-    verifyReleaseProvenance(temporary, manifest.version);
+    verifyReleaseProvenance(temporary, {
+      ...manifest,
+      sourceDigest: undefined,
+    });
     verifiedChecksums(temporary);
+    if (manifest.sourceDigest) verifyReleaseProvenance(temporary, manifest);
     if (version && manifest.version !== version) {
       throw new Error(`release endpoint returned ${manifest.version}, not requested ${version}`);
     }
@@ -527,7 +550,12 @@ export async function acquireRelease(options: {
   if (options.from) {
     const directory = isAbsolute(options.from) ? options.from : resolve(process.cwd(), options.from);
     const manifest = readReleaseManifest(directory);
-    verifyReleaseProvenance(directory, manifest.version);
+    verifyReleaseProvenance(directory, {
+      ...manifest,
+      sourceDigest: undefined,
+    });
+    verifiedChecksums(directory);
+    if (manifest.sourceDigest) verifyReleaseProvenance(directory, manifest);
     verifyReleaseDirectory(directory, options.names, Boolean(options.names?.length));
     if (options.version && manifest.version !== options.version) {
       throw new Error(`local release is ${manifest.version}, not requested ${options.version}`);

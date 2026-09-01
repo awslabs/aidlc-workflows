@@ -232,6 +232,39 @@ export function installedExecutablePath(version: string): string {
   return join(versionRoot(version), platform() === "win32" ? "aidlc.exe" : "aidlc");
 }
 
+export type InstalledRuntimeIntegrity = {
+  schemaVersion: 1;
+  version: string;
+  files: Array<{
+    path: string;
+    mode: number;
+    sha256: string;
+  }>;
+};
+
+export function runtimeIntegrityPath(version: string): string {
+  return join(versionRoot(version), "runtime-integrity.json");
+}
+
+export function createRuntimeIntegrity(
+  version: string,
+  root = runtimeRoot(version),
+): InstalledRuntimeIntegrity {
+  requireVersion(version);
+  return {
+    schemaVersion: 1,
+    version,
+    files: walkFiles(root).map((file) => {
+      const path = join(root, file);
+      return {
+        path: file.replaceAll("\\", "/"),
+        mode: statSync(path).mode & 0o777,
+        sha256: sha256File(path),
+      };
+    }),
+  };
+}
+
 export function installedVersionFingerprint(version: string): string | null {
   try {
     const root = versionRoot(version);
@@ -263,6 +296,7 @@ export function inspectInstalledVersion(
     version?: unknown;
     distributions?: unknown;
     assets?: unknown;
+    installedRuntime?: unknown;
   };
   try {
     manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as typeof manifest;
@@ -288,6 +322,114 @@ export function inspectInstalledVersion(
   const runtime = runtimeRoot(version);
   if (!existsSync(runtime)) {
     return { complete: false, distributions: [], reason: "runtime directory is missing" };
+  }
+  const runtimeAssetDeclared = manifest.assets.some((asset) =>
+    Boolean(asset) &&
+    typeof asset === "object" &&
+    (asset as { name?: unknown }).name === "aidlc-runtime.tar.gz"
+  );
+  if (runtimeAssetDeclared || manifest.installedRuntime !== undefined) {
+    const installedRuntime = manifest.installedRuntime as {
+      schemaVersion?: unknown;
+      baseline?: unknown;
+      sha256?: unknown;
+    } | undefined;
+    if (
+      installedRuntime?.schemaVersion !== 1 ||
+      installedRuntime.baseline !== "runtime-integrity.json" ||
+      typeof installedRuntime.sha256 !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/.test(installedRuntime.sha256)
+    ) {
+      return {
+        complete: false,
+        distributions: [],
+        reason: "installed runtime integrity metadata is missing or invalid",
+      };
+    }
+    const baselinePath = runtimeIntegrityPath(version);
+    let baseline: InstalledRuntimeIntegrity;
+    try {
+      if (!statSync(baselinePath).isFile()) {
+        return {
+          complete: false,
+          distributions: [],
+          reason: "runtime integrity baseline is not a regular file",
+        };
+      }
+      if (sha256File(baselinePath) !== installedRuntime.sha256) {
+        return {
+          complete: false,
+          distributions: [],
+          reason: "runtime integrity baseline does not match version.json",
+        };
+      }
+      baseline = JSON.parse(readFileSync(baselinePath, "utf-8")) as InstalledRuntimeIntegrity;
+    } catch {
+      return {
+        complete: false,
+        distributions: [],
+        reason: "runtime integrity baseline is missing or malformed",
+      };
+    }
+    if (
+      baseline.schemaVersion !== 1 ||
+      baseline.version !== version ||
+      !Array.isArray(baseline.files)
+    ) {
+      return {
+        complete: false,
+        distributions: [],
+        reason: "runtime integrity baseline identity is invalid",
+      };
+    }
+    let actual: InstalledRuntimeIntegrity;
+    try {
+      actual = createRuntimeIntegrity(version, runtime);
+    } catch (error) {
+      return {
+        complete: false,
+        distributions: [],
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (baseline.files.length !== actual.files.length) {
+      return {
+        complete: false,
+        distributions: [],
+        reason: "runtime file inventory does not match the installed baseline",
+      };
+    }
+    for (let index = 0; index < actual.files.length; index++) {
+      const expected = baseline.files[index];
+      const current = actual.files[index];
+      if (
+        !expected ||
+        typeof expected.path !== "string" ||
+        !Number.isInteger(expected.mode) ||
+        typeof expected.sha256 !== "string" ||
+        !/^sha256:[a-f0-9]{64}$/.test(expected.sha256)
+      ) {
+        return {
+          complete: false,
+          distributions: [],
+          reason: "runtime integrity baseline contains an invalid file entry",
+        };
+      }
+      if (expected.path !== current.path) {
+        return {
+          complete: false,
+          distributions: [],
+          reason: "runtime file inventory does not match the installed baseline",
+        };
+      }
+      if (expected.mode !== current.mode || expected.sha256 !== current.sha256) {
+        return {
+          complete: false,
+          distributions: [],
+          reason: `runtime file ${current.path} does not match the installed baseline`,
+        };
+      }
+    }
   }
   const declared = new Set(
     Array.isArray(manifest.distributions)

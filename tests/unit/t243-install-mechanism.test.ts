@@ -30,6 +30,9 @@ import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { sha256Bytes, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import {
+  activeExecutablePath,
+  commandPath,
+  inspectInstalledVersion,
   machineTransactionRoot,
   packageManagerForExecutable,
   projectPinTargetPath,
@@ -38,7 +41,11 @@ import {
   targetTriple,
   windowsUninstallFencePath,
 } from "../../core/tools/aidlc-install-paths.ts";
-import { activate } from "../../core/tools/aidlc-lifecycle.ts";
+import {
+  activate,
+  reserveDispatchedVersion,
+  resolvePinnedDispatch,
+} from "../../core/tools/aidlc-lifecycle.ts";
 import {
   TRUSTED_COMMAND_TOKENS,
   UNTRUSTED_ROUTE_NAMESPACES,
@@ -57,6 +64,10 @@ import {
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import {
+  recoverWindowsUninstallContinuations,
+  type WindowsUninstallJournal,
+} from "../../core/tools/aidlc-windows-uninstall.ts";
 import {
   checkLiveReleaseContract,
   serveReleaseFixture,
@@ -538,7 +549,7 @@ describe("t243 archive and transaction safety", () => {
         schemaVersion: 1,
         root: machineRoot,
         operations: [writeOperation("machine-blocked.txt", "no\n", "absent")],
-      })).toThrow("project mutation scope cannot mutate machine root");
+      })).toThrow("project mutation scope cannot mutate machine path");
       expect(existsSync(join(machineRoot, "machine-blocked.txt"))).toBe(false);
 
       process.env.AIDLC_ROUTE_MUTATION_SCOPE = "machine";
@@ -546,7 +557,7 @@ describe("t243 archive and transaction safety", () => {
         schemaVersion: 1,
         root: project,
         operations: [writeOperation("project-blocked.txt", "no\n", "absent")],
-      })).toThrow("machine mutation scope cannot mutate project root");
+      })).toThrow("machine mutation scope cannot mutate project path");
       expect(existsSync(join(project, "project-blocked.txt"))).toBe(false);
 
       process.env.AIDLC_ROUTE_MUTATION_SCOPE = "project-and-machine";
@@ -2429,6 +2440,332 @@ describe("t243 release lifecycle", () => {
     expect(() => verifyReleaseDirectory(release)).toThrow("checksum mismatch");
   }, 60_000);
 
+  test("installed runtime integrity baseline rejects ordinary retained-file tampering", () => {
+    const release = fixtureReleaseBytes();
+    const machine = temp("aidlc-t243-runtime-integrity-machine-");
+    const project = temp("aidlc-t243-runtime-integrity-project-");
+    mkdirSync(join(project, ".git"));
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const installed = run(LIFECYCLE, [
+      "versions", "install", AIDLC_VERSION, "--from", release,
+    ], project, env);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const pinned = run(INIT, [
+      "config", "--pin", AIDLC_VERSION, "--project-dir", project,
+    ], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+
+    const manifest = JSON.parse(
+      readFileSync(join(machine, "versions", AIDLC_VERSION, "version.json"), "utf-8"),
+    ) as {
+      installedRuntime?: {
+        schemaVersion?: number;
+        baseline?: string;
+        sha256?: string;
+      };
+    };
+    expect(manifest.installedRuntime).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      baseline: "runtime-integrity.json",
+      sha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    }));
+    expect(existsSync(join(machine, "versions", AIDLC_VERSION, "runtime-integrity.json")))
+      .toBe(true);
+
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    try {
+      expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(true);
+      const runtime = join(machine, "versions", AIDLC_VERSION, "runtime");
+      const file = walkFiles(runtime).find((path) =>
+        !path.endsWith("aidlc-stamp.json")
+      ) as string;
+      writeFileSync(join(runtime, file), `${readFileSync(join(runtime, file), "utf-8")}\ntampered\n`);
+
+      const inspection = inspectInstalledVersion(AIDLC_VERSION);
+      expect(inspection.complete).toBe(false);
+      expect(inspection.reason).toContain("does not match the installed baseline");
+      expect(resolvePinnedDispatch([
+        "engine", "status", "--project-dir", project,
+      ])).toEqual(expect.objectContaining({
+        kind: "failure",
+        message: `this project requires ${AIDLC_VERSION}, which is not installed completely`,
+        remediation: `aidlc config --pin ${AIDLC_VERSION}`,
+      }));
+    } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
+  }, 60_000);
+
+  test("fresh-clone pins require target and registry reconciliation before dispatch", () => {
+    const release = fixtureReleaseBytes(NEXT_VERSION);
+    const machine = temp("aidlc-t243-pin-reconcile-machine-");
+    const project = temp("aidlc-t243-pin-reconcile-project-");
+    mkdirSync(join(project, ".git"));
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    expect(run(LIFECYCLE, [
+      "versions", "install", NEXT_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    writeFileSync(join(project, ".aidlc-version"), `${NEXT_VERSION}\n`);
+
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    try {
+      expect(resolvePinnedDispatch([
+        "engine", "status", "--project-dir", project,
+      ])).toEqual(expect.objectContaining({
+        kind: "failure",
+        message: `this project's ${NEXT_VERSION} pin is not registered on this machine`,
+        remediation: `aidlc config --pin ${NEXT_VERSION}`,
+      }));
+
+      writeFileSync(
+        join(machine, "pins.json"),
+        `${JSON.stringify({ [project]: NEXT_VERSION }, null, 2)}\n`,
+      );
+      expect(resolvePinnedDispatch([
+        "engine", "status", "--project-dir", project,
+      ])).toEqual(expect.objectContaining({
+        kind: "failure",
+        message: expect.stringContaining("pin target is invalid"),
+        remediation: `aidlc config --pin ${NEXT_VERSION}`,
+      }));
+
+      const reconciled = run(INIT, [
+        "config", "--pin", NEXT_VERSION, "--project-dir", project,
+      ], project, env);
+      expect(reconciled.status, reconciled.stdout + reconciled.stderr).toBe(0);
+      expect(resolvePinnedDispatch([
+        "engine", "status", "--project-dir", project,
+      ])).toEqual({
+        kind: "execute",
+        executable: join(machine, "versions", NEXT_VERSION, INSTALLED_EXECUTABLE),
+        version: NEXT_VERSION,
+      });
+
+      const protectedPrune = run(
+        LIFECYCLE,
+        ["versions", "prune", "--yes"],
+        project,
+        env,
+      );
+      expect(protectedPrune.status, protectedPrune.stdout + protectedPrune.stderr).toBe(0);
+      expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(true);
+
+      writeFileSync(projectPinTargetPath(project), `${join(machine, "wrong-aidlc")}\n`);
+      expect(resolvePinnedDispatch([
+        "engine", "status", "--project-dir", project,
+      ])).toEqual(expect.objectContaining({
+        kind: "failure",
+        message: expect.stringContaining("pin target is invalid"),
+        remediation: `aidlc config --pin ${NEXT_VERSION}`,
+      }));
+
+      expect(run(INIT, [
+        "config", "--pin", NEXT_VERSION, "--project-dir", project,
+      ], project, env).status).toBe(0);
+      writeFileSync(join(machine, "pins.json"), "{}\n");
+      expect(resolvePinnedDispatch([
+        "engine", "status", "--project-dir", project,
+      ])).toEqual(expect.objectContaining({
+        kind: "failure",
+        message: `this project's ${NEXT_VERSION} pin is not registered on this machine`,
+        remediation: `aidlc config --pin ${NEXT_VERSION}`,
+      }));
+    } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
+  }, 60_000);
+
+  test("use refuses to create a native ownership domain beside Homebrew or Nix", () => {
+    const release = fixtureReleaseBytes();
+    for (const executable of [
+      "/opt/homebrew/Cellar/aidlc/2.7.0/libexec/aidlc",
+      "/nix/store/hash-aidlc-2.7.0/bin/aidlc",
+    ]) {
+      const machine = temp("aidlc-t243-managed-use-machine-");
+      const project = temp("aidlc-t243-managed-use-project-");
+      mkdirSync(join(project, ".git"));
+      const refused = run(LIFECYCLE, [
+        "use", AIDLC_VERSION, "--from", release,
+      ], project, {
+        AIDLC_COMPILED_EXECUTABLE: executable,
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      });
+      expect(refused.status).toBe(1);
+      expect(refused.stdout + refused.stderr).toContain("self-version switching is disabled");
+      expect(existsSync(join(machine, "versions"))).toBe(false);
+    }
+  });
+
+  test("a dispatched-version reservation protects the runtime until release", () => {
+    const activeRelease = fixtureReleaseBytes();
+    const retainedRelease = fixtureReleaseBytes(NEXT_VERSION);
+    const machine = temp("aidlc-t243-dispatch-reservation-machine-");
+    const project = temp("aidlc-t243-dispatch-reservation-project-");
+    mkdirSync(join(project, ".git"));
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", activeRelease,
+    ], project, env).status).toBe(0);
+    expect(run(LIFECYCLE, [
+      "versions", "install", NEXT_VERSION, "--from", retainedRelease,
+    ], project, env).status).toBe(0);
+
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
+    try {
+      const protectedPrune = run(
+        LIFECYCLE,
+        ["versions", "prune", "--yes"],
+        project,
+        env,
+      );
+      expect(protectedPrune.status, protectedPrune.stdout + protectedPrune.stderr).toBe(0);
+      expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(true);
+      expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
+    } finally {
+      releaseReservation();
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
+
+    const pruned = run(LIFECYCLE, ["versions", "prune", "--yes"], project, env);
+    expect(pruned.status, pruned.stdout + pruned.stderr).toBe(0);
+    expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(false);
+    expect(existsSync(join(machine, "reservations"))).toBe(false);
+  }, 60_000);
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "Unix purge removes completions and installer-owned empty state directories",
+    () => {
+      const release = fixtureRelease();
+      const machine = temp("aidlc-t243-purge-machine-");
+      const project = temp("aidlc-t243-purge-project-");
+      mkdirSync(join(project, ".git"));
+      const env = {
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      expect(run(LIFECYCLE, [
+        "update", "--version", AIDLC_VERSION, "--from", release,
+      ], project, env).status).toBe(0);
+      expect(readdirSync(join(machine, "completions")).sort()).toEqual(
+        ["_aidlc", "aidlc.bash", "aidlc.fish", "aidlc.ps1"],
+      );
+      mkdirSync(join(machine, "reservations"), { recursive: true });
+
+      const purge = run(LIFECYCLE, ["uninstall", "--purge", "--yes"], project, env);
+      expect(purge.status, purge.stdout + purge.stderr).toBe(0);
+      expect(existsSync(join(machine, "completions"))).toBe(false);
+      expect(existsSync(join(machine, "reservations"))).toBe(false);
+      expect(existsSync(join(machine, "bin"))).toBe(false);
+      expect(existsSync(machine)).toBe(false);
+    },
+    60_000,
+  );
+
+  test("Windows uninstall retries reject a purge-mode change before cleanup", () => {
+    const machine = temp("aidlc-t243-windows-retry-machine-");
+    const isolatedTemp = temp("aidlc-t243-windows-retry-temp-");
+    const saved = {
+      root: process.env.AIDLC_INSTALL_ROOT,
+      bin: process.env.AIDLC_BIN_DIR,
+      tmpdir: process.env.TMPDIR,
+      tmp: process.env.TMP,
+      temp: process.env.TEMP,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    process.env.TMPDIR = isolatedTemp;
+    process.env.TMP = isolatedTemp;
+    process.env.TEMP = isolatedTemp;
+    try {
+      const id = createHash("sha256").update(machine).digest("hex").slice(0, 16);
+      const journalPath = join(tmpdir(), `aidlc-uninstall-${id}.json`);
+      const cleanupPath = join(tmpdir(), `aidlc-uninstall-${id}.ps1`);
+      const fencePath = windowsUninstallFencePath();
+      mkdirSync(dirname(commandPath()), { recursive: true });
+      writeFileSync(commandPath(), "installer-owned command\n");
+      writeFileSync(cleanupPath, "exit 0\n");
+      const journal: WindowsUninstallJournal = {
+        schemaVersion: 1,
+        operation: "windows-uninstall-continuation",
+        status: "pending",
+        parentPid: process.pid,
+        shimPid: null,
+        installRoot: machine,
+        commandPath: commandPath(),
+        pointerPath: activeExecutablePath(),
+        cleanupPath,
+        fencePath,
+        purge: false,
+        preserved: [join(machine, "pins.json")],
+      };
+      writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+      writeFileSync(
+        fencePath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          operation: "windows-uninstall-continuation",
+          journalPath,
+        }, null, 2)}\n`,
+      );
+
+      expect(() => recoverWindowsUninstallContinuations(true)).toThrow(
+        "pending Windows non-purge uninstall cannot be resumed as --purge",
+      );
+      expect(readFileSync(commandPath(), "utf-8")).toBe("installer-owned command\n");
+      expect(
+        (JSON.parse(readFileSync(journalPath, "utf-8")) as WindowsUninstallJournal).purge,
+      ).toBe(false);
+    } finally {
+      const envKeys = {
+        root: "AIDLC_INSTALL_ROOT",
+        bin: "AIDLC_BIN_DIR",
+        tmpdir: "TMPDIR",
+        tmp: "TMP",
+        temp: "TEMP",
+      } as const;
+      for (const [name, key] of Object.entries(envKeys)) {
+        const value = saved[name as keyof typeof saved];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("a failed project pin commit rolls the machine registry reservation back", () => {
     const release = fixtureRelease();
     const machine = temp("aidlc-t243-pin-rollback-machine-");
@@ -2703,7 +3040,7 @@ describe("t243 release lifecycle", () => {
     expect(integrity.status).toBe(4);
   }, 60_000);
 
-  test("same-version pinned dispatch is read-only after a project moves", () => {
+  test("a moved project pin fails read-only until its machine records are reconciled", () => {
     const release = fixtureRelease();
     const machine = temp("aidlc-t240-moved-machine-");
     const bin = join(machine, "bin");
@@ -2730,11 +3067,26 @@ describe("t243 release lifecycle", () => {
     ) as Record<string, string>;
     expect(oldPins[oldProject]).toBe(AIDLC_VERSION);
     const status = run(DISPATCHER, ["--status", "--project-dir", newProject], newProject, env);
-    expect(status.status).toBe(0);
+    expect(status.status).toBe(1);
+    expect(status.stderr).toContain(
+      `this project's ${AIDLC_VERSION} pin is not registered on this machine`,
+    );
+    expect(status.stderr).toContain(`aidlc config --pin ${AIDLC_VERSION}`);
+    expect(
+      JSON.parse(readFileSync(join(machine, "pins.json"), "utf-8")),
+    ).toEqual(oldPins);
+
+    const reconciled = run(INIT, [
+      "config", "--pin", AIDLC_VERSION, "--project-dir", newProject,
+    ], newProject, env);
+    expect(reconciled.status, reconciled.stdout + reconciled.stderr).toBe(0);
+    expect(
+      run(DISPATCHER, ["--status", "--project-dir", newProject], newProject, env).status,
+    ).toBe(0);
     const pins = JSON.parse(
       readFileSync(join(machine, "pins.json"), "utf-8"),
     ) as Record<string, string>;
-    expect(pins[newProject]).toBeUndefined();
+    expect(pins[newProject]).toBe(AIDLC_VERSION);
     expect(pins[oldProject]).toBe(AIDLC_VERSION);
   }, 60_000);
 });

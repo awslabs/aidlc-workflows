@@ -12,6 +12,7 @@ function valueAfter(flag: string): string | undefined {
 
 const bundle = valueAfter("--bundle");
 const sourceRef = valueAfter("--source-ref");
+const sourceDigest = valueAfter("--source-digest");
 const repository = valueAfter("--repo");
 const signerWorkflow = valueAfter("--signer-workflow");
 const expectedRepository =
@@ -26,7 +27,11 @@ if (
   readFileSync(bundle, "utf-8").trim() !== "aidlc-test-release-provenance" ||
   repository !== expectedRepository ||
   signerWorkflow !== expectedWorkflow ||
-  !sourceRef?.startsWith("refs/tags/v")
+  (
+    sourceRef !== "refs/heads/main" &&
+    !sourceRef?.startsWith("refs/tags/v")
+  ) ||
+  (sourceDigest !== undefined && !/^[a-f0-9]{40}$/.test(sourceDigest))
 ) {
   process.exit(1);
 }

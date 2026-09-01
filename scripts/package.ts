@@ -1578,6 +1578,41 @@ function emitPlugins(
   }
 }
 
+function removeUnexpectedGeneratedEntries(
+  root: string,
+  expected: ReadonlySet<string>,
+): void {
+  if (!existsSync(root)) return;
+  for (const name of readdirSync(root)) {
+    if (!expected.has(name)) {
+      rmSync(join(root, name), { recursive: true, force: true });
+    }
+  }
+}
+
+function cleanWriteOutputs(harnesses: string[], fullBuild: boolean): void {
+  const distRoot = join(REPO_ROOT, "dist");
+  const releaseRoot = join(REPO_ROOT, "dist-release");
+  if (fullBuild) {
+    removeUnexpectedGeneratedEntries(
+      distRoot,
+      new Set([...harnesses, "plugins"]),
+    );
+    removeUnexpectedGeneratedEntries(releaseRoot, new Set(harnesses));
+    rmSync(join(distRoot, "plugins"), { recursive: true, force: true });
+    return;
+  }
+
+  for (const pluginName of discoverPluginNames()) {
+    for (const harnessName of pluginHarnessesFor(harnesses)) {
+      rmSync(
+        join(distRoot, "plugins", pluginName, harnessName),
+        { recursive: true, force: true },
+      );
+    }
+  }
+}
+
 function buildCheckPass(root: string, harnesses: string[]): void {
   const distRoot = join(root, "dist");
   const releaseRoot = join(root, "dist-release");
@@ -1686,6 +1721,7 @@ if (check) {
       `for ${targets.join(", ")}.`,
   );
 } else {
+  cleanWriteOutputs(targets, named === undefined);
   for (const n of targets) {
     writeHarness(n);
     writeReleaseHarness(n);

@@ -16,11 +16,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   activeExecutablePath,
   commandPath,
+  projectPinTargetPath,
   readActiveExecutable,
   windowsUninstallFencePath,
 } from "../../core/tools/aidlc-install-paths.ts";
@@ -137,6 +138,8 @@ function writeVerifierCandidate(root: string): void {
     schemaVersion: 1,
     version: AIDLC_VERSION,
     date: "2026-08-28",
+    sourceRef: "refs/heads/main",
+    sourceDigest: "1".repeat(40),
     distributions: RELEASE_HARNESSES.map((name) => ({
       name,
       productName: `AI-DLC ${name}`,
@@ -699,8 +702,18 @@ describe("t244 management lifecycle", () => {
     const project = temp("aidlc-t241-malformed-pins-project-");
     const pinnedProject = temp("aidlc-t241-valid-pin-project-");
     const version = "9.8.7";
-    mkdirSync(join(machine, "versions", version), { recursive: true });
+    const executable = join(
+      machine,
+      "versions",
+      version,
+      process.platform === "win32" ? "aidlc.exe" : "aidlc",
+    );
+    const target = projectPinTargetPath(pinnedProject);
+    mkdirSync(dirname(executable), { recursive: true });
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     writeFileSync(join(pinnedProject, ".aidlc-version"), `${version}\n`);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, `${executable}\n`);
     writeFileSync(
       join(machine, "pins.json"),
       `${JSON.stringify({
@@ -1493,7 +1506,14 @@ describe("t244 Windows and completion release surfaces", () => {
       "#!/bin/sh\nprintf 'Error loading shared library libstdc++.so.6: No such file or directory\\n' >&2\nexit 127\n",
       { mode: 0o755 },
     );
-    writeFileSync(join(release, "version.json"), `{"version":"${AIDLC_VERSION}"}\n`);
+    writeFileSync(
+      join(release, "version.json"),
+      `${JSON.stringify({
+        version: AIDLC_VERSION,
+        sourceRef: "refs/heads/main",
+        sourceDigest: "1".repeat(40),
+      })}\n`,
+    );
     writeFileSync(join(release, "aidlc-runtime.tar.gz"), "runtime\n");
     writeFileSync(
       join(release, "aidlc-release.intoto.jsonl"),
@@ -1606,6 +1626,10 @@ describe("t244 Windows and completion release surfaces", () => {
     wrongMode.bypass_actors[0].bypass_mode = "pull_request";
     const combined = structuredClone(creation);
     combined.rules.push({ type: "update" }, { type: "deletion" });
+    const broad = structuredClone(immutability);
+    broad.id = 3;
+    broad.name = "broad-tag-immutability";
+    broad.conditions.ref_name.include = ["~ALL"];
     const hiddenActors = structuredClone(creation) as Record<string, unknown>;
     delete hiddenActors.bypass_actors;
     const unrelatedHiddenActors = {
@@ -1628,6 +1652,8 @@ describe("t244 Windows and completion release surfaces", () => {
       [extraActor, immutability],
       [wrongMode, immutability],
       [combined],
+      [creation, immutability, combined],
+      [creation, immutability, broad],
       [creation],
     ]) {
       expect(verify(rulesets).status).toBe(1);
@@ -1777,23 +1803,26 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).toContain("authorization identity failure");
     expect(workflow).toContain(".can_admins_bypass == false");
     expect(workflow).toContain(".prevent_self_review == true");
-    expect(workflow).toContain('review_rule="$(');
     expect(workflow).toContain('.reviewer.slug == "aidlc-admins"');
+    expect(workflow).toContain("(.reviewers | length) == 1");
+    expect(workflow).toContain('gh api "repos/$GITHUB_REPOSITORY/immutable-releases"');
+    expect(workflow).toContain(".enabled == true and .enforced_by_owner == true");
+    expect(workflow).toContain('[.[].branch_policies[]][0].name == "main"');
     expect(workflow).toContain("bun scripts/verify-release.ts controls");
     expect(workflow).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(workflow).toContain("git fetch --no-tags origin main");
     expect(workflow).toContain(
-      'git merge-base --is-ancestor "$tag_sha" origin/main',
+      'test "$tag_sha" = "$main_sha"',
     );
+    expect(workflow).toContain('test "$GITHUB_REF" = "refs/heads/main"');
+    expect(workflow).not.toContain("\n  push:");
     expect(workflow).not.toContain("origin/v2");
     expect(workflow.indexOf("name: Authorize immutable release tag"))
       .toBeLessThan(workflow.indexOf("name: Mint release authorization token"));
     expect(workflow.indexOf("name: Authorize immutable release tag"))
       .toBeLessThan(workflow.indexOf("bun scripts/verify-release.ts controls"));
-    expect(workflow).toContain(
-      'test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"',
-    );
     expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
+    expect(workflow).toContain("AIDLC_RELEASE_SOURCE_DIGEST:");
     const actionRefs = [...workflow.matchAll(
       /^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm,
     )].map((match) => match[1]);
@@ -1896,6 +1925,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(windows).toContain("aidlc-gh.ps1");
     expect(windows).toContain("$env:AIDLC_GH_BIN = $ghFixture");
     expect(windows).toContain("$Remaining.Count -ne 11");
+    expect(windows).toContain("$Remaining.Count -ne 13");
     expect(windows).toContain("$Remaining[0] -ne 'attestation'");
     expect(windows).toContain("$Remaining[1] -ne 'verify'");
     expect(windows).toContain(
@@ -1916,9 +1946,13 @@ describe("t244 Windows and completion release surfaces", () => {
       "$Remaining[10] -ne $env:AIDLC_TEST_GH_SOURCE_REF",
     );
     expect(windows).toContain(
+      "$Remaining[12] -ne $env:AIDLC_TEST_GH_SOURCE_DIGEST",
+    );
+    expect(windows).toContain(
       "$env:AIDLC_TEST_GH_CHECKSUM_SHA",
     );
     expect(windows).toContain("offline installer did not verify release provenance");
+    expect(windows).toContain("offline installer did not bind the trusted source digest");
     expect(windows).toContain(
       "$harnesses = @('claude', 'codex', 'copilot', 'cursor', 'kiro', 'kiro-ide', 'opencode')",
     );
@@ -1950,7 +1984,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(unix).toContain('install.sh" --from "$release" --offline');
     expect(unix).toContain("aidlc-lifecycle-provenance-fixture");
     expect(unix).toContain('AIDLC_GH_BIN="$gh_bin"');
-    expect(unix).toContain('[ "$#" -eq 11 ] || exit 2');
+    expect(unix).toContain('[ "$#" -eq 11 ] || [ "$#" -eq 13 ]');
     expect(unix).toContain('[ "$4" = --bundle ] || exit 2');
     expect(unix).toMatch(
       /\[ "\$5" = "\$\{3%\/checksums\.txt\}\/aidlc-release\.intoto\.jsonl" \] \|\| exit 2/,
@@ -1958,6 +1992,10 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(unix).toMatch(/\[ "\$\{10\}" = --source-ref \] \|\| exit 2/);
     expect(unix).toMatch(
       /\[ "\$\{11\}" = "\$AIDLC_TEST_GH_SOURCE_REF" \] \|\| exit 2/,
+    );
+    expect(unix).toMatch(/\[ "\$\{12\}" = --source-digest \] \|\| exit 2/);
+    expect(unix).toMatch(
+      /\[ "\$\{13\}" = "\$AIDLC_TEST_GH_SOURCE_DIGEST" \] \|\| exit 2/,
     );
     expect(unix).toContain(
       '[ "$actual" = "$AIDLC_TEST_GH_CHECKSUM_SHA" ] || exit 2',
@@ -2007,7 +2045,8 @@ describe("t244 Windows and completion release surfaces", () => {
     writeFileSync(bundle, "bundle fixture\n");
     const repository = "awslabs/aidlc-workflows";
     const signerWorkflow = `${repository}/.github/workflows/release.yml`;
-    const sourceRef = `refs/tags/v${AIDLC_VERSION}`;
+    const sourceRef = "refs/heads/main";
+    const sourceDigest = "1".repeat(40);
     const checksumSha = createHash("sha256")
       .update(readFileSync(checksums))
       .digest("hex");
@@ -2023,6 +2062,8 @@ describe("t244 Windows and completion release surfaces", () => {
       signerWorkflow,
       "--source-ref",
       sourceRef,
+      "--source-digest",
+      sourceDigest,
     ];
     const env = {
       ...process.env,
@@ -2030,6 +2071,7 @@ describe("t244 Windows and completion release surfaces", () => {
       AIDLC_TEST_GH_REPOSITORY: repository,
       AIDLC_TEST_GH_WORKFLOW: signerWorkflow,
       AIDLC_TEST_GH_SOURCE_REF: sourceRef,
+      AIDLC_TEST_GH_SOURCE_DIGEST: sourceDigest,
       AIDLC_TEST_GH_CHECKSUM_SHA: checksumSha,
     };
 
@@ -2103,6 +2145,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(publish).toContain("steps.provenance.outputs.bundle-path");
     expect(publish).toContain("name: Validate complete attested release candidate");
     expect(publish).toContain("bun scripts/verify-release.ts candidate");
+    expect(publish).toContain('--source-digest "$AUTHORIZED_SHA"');
     expect(publish).toContain("name: attested-release");
     expect(publish).toContain(
       "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
@@ -2150,6 +2193,8 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(promote.match(/gh attestation verify "\$asset"/g)).toHaveLength(2);
     expect(promote).toContain('--repo "$GH_REPO"');
     expect(promote).toContain('--bundle "$bundle"');
+    expect(promote).toContain('--source-ref "$source_ref"');
+    expect(promote).toContain('--source-digest "$AUTHORIZED_SHA"');
     expect(promote).toContain("--list-assets");
     expect(promote).toMatch(/test "\$\{#attested_assets\[@\]\}" -eq 10/);
     expect(promote).not.toContain(
@@ -2214,7 +2259,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(promote).not.toContain('AIDLC_RELEASE_REPOSITORY="awslabs');
   });
 
-  test("release MUST 5: publication uploads only the immutable locally verified bytes", () => {
+  test("release MUST 5: publication verifies the immutable remote bytes", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
       jobs: Record<string, {
@@ -2245,8 +2290,12 @@ describe("t244 Windows and completion release surfaces", () => {
     );
     expect(promote).toContain("--verify-tag");
     expect(promote).not.toContain("gh release edit");
-    expect(promote).not.toContain("gh release download");
-    expect(promote).not.toContain("gh release view");
+    expect(promote).toContain('gh release view "$RELEASE_TAG"');
+    expect(promote).toContain('gh release download "$RELEASE_TAG"');
+    expect(promote).toContain(".isImmutable == true");
+    expect(promote).toContain(
+      'sha256sum -c "$RUNNER_TEMP/aidlc-verified-release.sha256"',
+    );
     expect(promote).not.toContain("--draft");
     expect(promote.indexOf("name: Authenticate and verify immutable release bytes"))
       .toBeLessThan(promote.indexOf("name: Publish exact verified release bytes"));

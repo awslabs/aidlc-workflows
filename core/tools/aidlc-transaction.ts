@@ -23,6 +23,8 @@ import {
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { sha256Bytes } from "./aidlc-distribution.ts";
 import {
+  binRoot,
+  installRoot,
   machineTransactionRoot,
   windowsUninstallFencePath,
 } from "./aidlc-install-paths.ts";
@@ -100,28 +102,45 @@ function withinRoot(path: string, root: string): boolean {
   return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 }
 
-function enforceRouteMutationRoot(root: string): void {
+function enforceRouteMutationPlan(
+  root: string,
+  operations: readonly TransactionOperation[],
+): void {
   const scope = process.env.AIDLC_ROUTE_MUTATION_SCOPE;
   if (!scope) return;
   const route = process.env.AIDLC_ROUTE_ID ?? "unknown";
   if (scope === "none") {
     throw new Error(`route ${route} does not permit filesystem mutation`);
   }
-  const machineRoot = canonicalRoot(machineTransactionRoot());
+  const machineRoots = [installRoot(), binRoot()].map(canonicalRoot);
+  const machineControlPaths = [windowsUninstallFencePath()].map(canonicalRoot);
   const projectValue = process.env.AIDLC_ROUTE_PROJECT_DIR;
   const projectRoot = projectValue ? canonicalRoot(projectValue) : null;
-  const rootClass = withinRoot(root, machineRoot)
-    ? "machine"
-    : projectRoot && withinRoot(root, projectRoot)
-    ? "project"
-    : "outside";
-  const permitted = scope === "project-and-machine" ||
-    (scope === "project" && rootClass === "project") ||
-    (scope === "machine" && rootClass === "machine");
-  if (!permitted) {
-    throw new Error(
-      `route ${route} with ${scope} mutation scope cannot mutate ${rootClass} root ${root}`,
-    );
+  const homeRoot = process.env.HOME ? canonicalRoot(process.env.HOME) : null;
+  for (const operation of operations) {
+    const rel = normalizedRelative(operation.path);
+    const target = canonicalRoot(targetPath(root, rel));
+    const isMachine = machineRoots.some((machineRoot) => withinRoot(target, machineRoot)) ||
+      machineControlPaths.includes(target);
+    const isProject = Boolean(projectRoot && withinRoot(target, projectRoot));
+    const isUserHome = Boolean(homeRoot && withinRoot(target, homeRoot));
+    const permitted =
+      (scope === "project" && isProject) ||
+      (scope === "machine" && isMachine) ||
+      (scope === "project-and-machine" && (isProject || isMachine)) ||
+      (scope === "user-home" && isUserHome);
+    if (!permitted) {
+      const rootClass = isMachine
+        ? "machine"
+        : isProject
+        ? "project"
+        : isUserHome
+        ? "user-home"
+        : "outside";
+      throw new Error(
+        `route ${route} with ${scope} mutation scope cannot mutate ${rootClass} path ${target}`,
+      );
+    }
   }
 }
 
@@ -261,8 +280,21 @@ function verifyPlan(plan: TransactionPlan, root: string): void {
 
 export function validateTransactionPlan(plan: TransactionPlan): void {
   const root = canonicalRoot(plan.root);
-  if (plan.operations.length > 0) enforceRouteMutationRoot(root);
+  if (plan.operations.length > 0) enforceRouteMutationPlan(root, plan.operations);
   verifyPlan(plan, root);
+}
+
+function verifyExpectedState(
+  operation: TransactionOperation,
+  target: string,
+  rel: string,
+): void {
+  if (
+    operation.expected !== undefined &&
+    transactionState(target) !== operation.expected
+  ) {
+    throw new Error(`${rel}: source changed after planning`);
+  }
 }
 
 function failpoint(options: TransactionOptions, name: string): void {
@@ -431,7 +463,9 @@ export function executePlan(
   options: TransactionOptions = {},
 ): void {
   const root = canonicalRoot(plan.root);
-  if (plan.operations.length > 0) enforceRouteMutationRoot(root);
+  if (plan.operations.length > 0) {
+    enforceRouteMutationPlan(root, plan.operations);
+  }
   // Reject invalid plans before creating the transaction root, then recheck
   // under the lock to close the preflight race.
   verifyPlan(plan, root);
@@ -441,7 +475,12 @@ export function executePlan(
   const staging = join(root, `.aidlc-txn-${randomUUID()}`);
   let lock: HeldLock | null = null;
   let preserveStaging = false;
-  const committed: Array<{ rel: string; existed: boolean }> = [];
+  const committed: Array<{
+    rel: string;
+    existed: boolean;
+    state: string | "absent";
+    displaced: boolean;
+  }> = [];
   try {
     lock = acquireLock(root, lockPath, staging);
     failpoint(options, "after-lock");
@@ -478,6 +517,7 @@ export function executePlan(
       failpoint(options, `before-snapshot:${boundary}`);
       const rel = normalizedRelative(operation.path);
       const target = targetPath(root, rel);
+      verifyExpectedState(operation, target, rel);
       if (pathExists(target)) snapshot(target, join(staging, "backups", rel));
       failpoint(options, `after-snapshot:${boundary}`);
     }
@@ -488,7 +528,9 @@ export function executePlan(
       failpoint(options, `before-commit:${boundary}`);
       const rel = normalizedRelative(operation.path);
       const target = targetPath(root, rel);
+      verifyExpectedState(operation, target, rel);
       const existed = pathExists(target);
+      let displaced = false;
       if (operation.kind === "remove") {
         if (existed) {
           const removed = join(staging, "removed", rel);
@@ -497,12 +539,28 @@ export function executePlan(
         }
       } else {
         mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-        // POSIX rename-over keeps the old target visible until the replacement
-        // is committed. Existing non-empty trees are intentionally unsupported;
-        // callers add missing subtrees rather than replacing installed trees.
-        renameSync(join(candidates, rel), target);
+        const candidate = join(candidates, rel);
+        if (operation.kind === "tree" && existed) {
+          const removed = join(staging, "removed", rel);
+          mkdirSync(dirname(removed), { recursive: true, mode: 0o700 });
+          renameSync(target, removed);
+          try {
+            renameSync(candidate, target);
+            displaced = true;
+          } catch (error) {
+            renameSync(removed, target);
+            throw error;
+          }
+        } else {
+          renameSync(candidate, target);
+        }
       }
-      committed.push({ rel, existed });
+      committed.push({
+        rel,
+        existed,
+        state: transactionState(target),
+        displaced,
+      });
       // The rename is live even if the following durability sync fails.
       syncPath(dirname(target));
       committedCount++;
@@ -521,13 +579,18 @@ export function executePlan(
       try {
         const target = targetPath(root, entry.rel);
         failpoint(options, `during-rollback:${entry.rel}`);
+        if (transactionState(target) !== entry.state) {
+          throw new Error(`${entry.rel}: destination changed during rollback`);
+        }
         if (entry.existed) {
-          const backup = join(staging, "backups", entry.rel);
           mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-          // rename-over restores files and command pointers atomically. A
-          // remove operation has no live target, while replacement operations
-          // keep the new target visible until this single restore rename.
-          renameSync(backup, target);
+          if (entry.displaced) {
+            rmSync(target, { recursive: true, force: true });
+            renameSync(join(staging, "removed", entry.rel), target);
+          } else {
+            const backup = join(staging, "backups", entry.rel);
+            renameSync(backup, target);
+          }
         } else {
           rmSync(target, { recursive: true, force: true });
         }

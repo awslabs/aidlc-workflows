@@ -566,6 +566,15 @@ describe("documentation parity derives current behavior from authored implementa
     expect(read("bun.lock")).toContain(`"name": "${pkg.name}"`);
   });
 
+  test("README tool inventory is derived from authored aidlc tools", () => {
+    const toolCount = readdirSync(at("core", "tools"))
+      .filter((name) => /^aidlc-.*\.ts$/.test(name))
+      .length;
+    expect(read("README.md")).toContain(
+      `${toolCount} aidlc-*.ts engine and authoring tools`,
+    );
+  });
+
   test("documented model-pinning tier projections match TIER_PROJECTIONS", () => {
     // The authored table is the single source of truth; every prose copy of it
     // is derived here rather than trusted. The cell convention is shared by

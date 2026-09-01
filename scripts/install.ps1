@@ -286,7 +286,7 @@ try {
     --bundle $bundle `
     --repo $releaseRepository `
     --signer-workflow $releaseWorkflow `
-    --source-ref "refs/tags/v$($manifest.version)" | Out-Null
+    --source-ref 'refs/heads/main' | Out-Null
   if ($LASTEXITCODE -ne 0) {
     Stop-Install -Code 4 -Status 'failed' `
       -Message 'release provenance verification failed' `
@@ -296,6 +296,24 @@ try {
   if ($manifestHash -ne (Get-ExpectedHash -Checksums $checksumsPath -Name 'version.json')) {
     Stop-Install -Code 4 -Status 'failed' `
       -Message 'checksum mismatch for version.json'
+  }
+  if (
+    $manifest.sourceRef -ne 'refs/heads/main' -or
+    $manifest.sourceDigest -notmatch '^[a-f0-9]{40}$'
+  ) {
+    Stop-Install -Code 4 -Status 'failed' `
+      -Message 'version.json has an invalid release source identity'
+  }
+  & $ghPath attestation verify $checksumsPath `
+    --bundle $bundle `
+    --repo $releaseRepository `
+    --signer-workflow $releaseWorkflow `
+    --source-ref $manifest.sourceRef `
+    --source-digest $manifest.sourceDigest | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Stop-Install -Code 4 -Status 'failed' `
+      -Message 'release provenance source verification failed' `
+      -Remediation "obtain the release from $releaseRepository"
   }
   $verifiedInstaller = Join-Path $temporary 'install.ps1'
   if ($From) {

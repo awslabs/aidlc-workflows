@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -33,7 +34,10 @@ import {
 } from "../../core/tools/aidlc.ts";
 import { validatePublicConfigArgs } from "../../core/tools/aidlc-init.ts";
 import { launcherRouteUsesPin } from "../../core/tools/aidlc-command.ts";
-import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
+import {
+  projectPinTargetPath,
+  targetTriple,
+} from "../../core/tools/aidlc-install-paths.ts";
 import {
   discoverProjectHarnesses,
   isCompiledModuleUrl,
@@ -150,6 +154,22 @@ function makeProject(): string {
   );
   tempProjects.add(project);
   return project;
+}
+
+function registerPinFixture(
+  project: string,
+  machine: string,
+  version: string,
+  executable: string,
+): void {
+  const target = projectPinTargetPath(project);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, `${executable}\n`);
+  mkdirSync(machine, { recursive: true });
+  writeFileSync(
+    join(machine, "pins.json"),
+    `${JSON.stringify({ [realpathSync(project)]: version }, null, 2)}\n`,
+  );
 }
 
 function makeUnselectedKiroProject(): string {
@@ -644,6 +664,22 @@ describe("t230 dispatcher route parity", () => {
     expect(existsSync(join(trusted, "aidlc", "spaces", "must-not-exist"))).toBe(false);
     expect(existsSync(join(target, "aidlc", "spaces", "must-not-exist"))).toBe(false);
   });
+
+  test("literal --project-dir task text cannot reroute compose policy", () => {
+    const projectDir = makeProject();
+    const literalDir = mkdtempSync(join(tmpdir(), "aidlc-t230-literal-project-"));
+    tempProjects.add(literalDir);
+    const result = viaDispatcher(
+      ["compose", "--", "--project-dir", literalDir],
+      projectDir,
+      { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR },
+    );
+
+    expect(`${result.stdout}${result.stderr}`).not.toContain(
+      "requires an installed project harness or recognized project directory",
+    );
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+  });
 });
 
 describe("t230 version-aware startup", () => {
@@ -687,9 +723,17 @@ describe("t230 version-aware startup", () => {
     const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-machine-"));
     const versionRoot = join(machine, "versions", "9.9.9");
     mkdirSync(join(versionRoot, "runtime", "claude"), { recursive: true });
-    writeFileSync(join(versionRoot, "aidlc"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const executable = join(
+      versionRoot,
+      process.platform === "win32" ? "aidlc.exe" : "aidlc",
+    );
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     writeFileSync(join(project, ".aidlc-version"), "9.9.9\n");
-    const result = viaDispatcher(["engine", "status"], project, { AIDLC_INSTALL_ROOT: machine });
+    registerPinFixture(project, machine, "9.9.9", executable);
+    const result = viaDispatcher(["engine", "status"], project, {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    });
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain("not installed completely");
   });
@@ -717,6 +761,7 @@ describe("t230 version-aware startup", () => {
       }, null, 2)}\n`,
     );
     writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    registerPinFixture(project, machine, AIDLC_VERSION, executable);
     const env = {
       AIDLC_INSTALL_ROOT: machine,
       AIDLC_BIN_DIR: join(machine, "bin"),
@@ -731,6 +776,63 @@ describe("t230 version-aware startup", () => {
     expect(changed.exitCode).toBe(1);
     expect(changed.stderr.toString()).toContain("not installed completely");
   });
+
+  test.skipIf(process.platform === "win32")(
+    "pinned dispatch holds a retained-version reservation until the child exits",
+    () => {
+      const project = makeProject();
+      const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-dispatch-reservation-"));
+      const version = "9.9.8";
+      const root = join(machine, "versions", version);
+      const executable = join(root, "aidlc");
+      const marker = join(project, "reservation-observed.txt");
+      mkdirSync(root, { recursive: true });
+      cpSync(join(REPO_ROOT, "dist-release", "claude"), join(root, "runtime", "claude"), {
+        recursive: true,
+      });
+      const runtimeStampPath = join(
+        root,
+        "runtime",
+        "claude",
+        ".claude",
+        "tools",
+        "data",
+        "aidlc-stamp.json",
+      );
+      const runtimeStamp = JSON.parse(readFileSync(runtimeStampPath, "utf-8")) as {
+        frameworkVersion: string;
+      };
+      runtimeStamp.frameworkVersion = version;
+      writeFileSync(runtimeStampPath, `${JSON.stringify(runtimeStamp, null, 2)}\n`);
+      writeFileSync(
+        executable,
+        `#!/bin/sh\nif find "$AIDLC_INSTALL_ROOT/reservations" -type f -print -quit 2>/dev/null | grep -q .; then printf 'reserved\\n' > ${JSON.stringify(marker)}; else printf 'missing\\n' > ${JSON.stringify(marker)}; fi\n`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        join(root, "version.json"),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          version,
+          distributions: [{ name: "claude" }],
+          assets: [{
+            name: `aidlc-${targetTriple()}`,
+            sha256: createHash("sha256").update(readFileSync(executable)).digest("hex"),
+          }],
+        }, null, 2)}\n`,
+      );
+      writeFileSync(join(project, ".aidlc-version"), `${version}\n`);
+      registerPinFixture(project, machine, version, executable);
+
+      const result = viaDispatcher(["engine", "status"], project, {
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(readFileSync(marker, "utf-8")).toBe("reserved\n");
+      expect(existsSync(join(machine, "reservations"))).toBe(false);
+    },
+  );
 
   test("Kiro IDE adapter routing never waits for its open stdin pipe", async () => {
     const project = makeProject();
@@ -812,6 +914,53 @@ describe("t230 dispatcher global flag translation", () => {
       tool: "aidlc-orchestrate.ts",
       args: ["next", "compose", "--", "--project-dir", "/tmp/literal"],
     });
+    expect(resolveAction([
+      "--project-dir",
+      "/tmp/example",
+      "compose",
+      "--",
+      "--project-dir",
+      "/tmp/literal",
+    ])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: [
+        "next",
+        "compose",
+        "--project-dir",
+        "/tmp/example",
+        "--",
+        "--project-dir",
+        "/tmp/literal",
+      ],
+    });
+  });
+
+  test("install-profile receives only the deliberate user-home mutation scope", () => {
+    const projectDir = makeProject();
+    const home = mkdtempSync(join(tmpdir(), "aidlc-t230-profile-home-"));
+    tempProjects.add(home);
+    const profile = join(home, ".profile");
+    const bin = join(home, ".local", "bin");
+    const result = viaDispatcher(
+      [
+        "system",
+        "lifecycle",
+        "install-profile",
+        "--profile",
+        profile,
+        "--bin-dir",
+        bin,
+      ],
+      projectDir,
+      {
+        HOME: home,
+        AIDLC_INSTALL_ROOT: join(home, ".local", "share", "aidlc"),
+        AIDLC_BIN_DIR: bin,
+      },
+    );
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(readFileSync(profile, "utf-8")).toContain("# BEGIN AI-DLC:PATH");
   });
 
   test("carries --project-dir into routing-only actions", () => {
@@ -827,9 +976,26 @@ describe("t230 dispatcher global flag translation", () => {
 
   test("pin policy is route-aware when --project-dir precedes the command", () => {
     const projectDir = makeProject();
+    const machine = join(projectDir, "machine");
+    const versionRoot = join(machine, "versions", "99.0.0");
+    const executable = join(
+      versionRoot,
+      process.platform === "win32" ? "aidlc.exe" : "aidlc",
+    );
+    mkdirSync(versionRoot, { recursive: true });
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     writeFileSync(join(projectDir, ".aidlc-version"), "99.0.0\n");
+    registerPinFixture(projectDir, machine, "99.0.0", executable);
+    const machineEnv = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
 
-    const active = viaDispatcher(["--project-dir", projectDir, "version"], projectDir);
+    const active = viaDispatcher(
+      ["--project-dir", projectDir, "version"],
+      projectDir,
+      machineEnv,
+    );
     expect(active.exitCode).toBe(0);
     expect(active.stdout.toString()).toMatch(
       /^aidlc \d+\.\d+\.\d+ \(runtime \d+\.\d+\.\d+\)\n$/,
@@ -839,6 +1005,7 @@ describe("t230 dispatcher global flag translation", () => {
     const pinned = viaDispatcher(
       ["--json", "--project-dir", projectDir, "engine", "status"],
       projectDir,
+      machineEnv,
     );
     expect(pinned.exitCode).toBe(1);
     expect(pinned.stderr.toString()).toBe("");
@@ -861,7 +1028,7 @@ describe("t230 dispatcher global flag translation", () => {
         join(projectDir, "missing-release"),
       ],
       projectDir,
-      { AIDLC_INSTALL_ROOT: join(projectDir, "machine") },
+      machineEnv,
     );
     expect(bootstrap.exitCode).toBe(4);
     expect(bootstrap.stderr.toString()).not.toContain("this project requires");
@@ -1024,7 +1191,7 @@ describe("t230 dispatcher route completeness", () => {
       expect(["active", "inspect", "pinned"]).toContain(route.pinPolicy);
       expect(["forbidden", "explicit-only", "interactive-bounded", "required"])
         .toContain(route.networkPolicy);
-      expect(["none", "project", "machine", "project-and-machine"])
+      expect(["none", "project", "machine", "project-and-machine", "user-home"])
         .toContain(route.mutationScope);
       expect(route.outputModes.length).toBeGreaterThan(0);
     }
@@ -1036,7 +1203,7 @@ describe("t230 dispatcher route completeness", () => {
       .toEqual(expect.objectContaining({
         tool: "aidlc-doctor.ts",
         pinPolicy: "active",
-        mutationScope: "machine",
+        mutationScope: "project-and-machine",
       }));
     expect(ROUTES.find((route) => route.id === "top-use"))
       .toEqual(expect.objectContaining({ pinPolicy: "active", mutationScope: "machine" }));
@@ -1086,7 +1253,7 @@ describe("t230 dispatcher route completeness", () => {
       "config-global": { networkPolicy: "forbidden", mutationScope: "machine" },
       "system-lifecycle": {
         networkPolicy: "explicit-only",
-        mutationScope: "project-and-machine",
+        mutationScope: "machine",
       },
       "top-completions": { networkPolicy: "forbidden", mutationScope: "none" },
       "top-rollback": { networkPolicy: "forbidden", mutationScope: "machine" },
@@ -1526,6 +1693,7 @@ describe("t230 dispatcher help and errors", () => {
       { command: "doctor", category: "missing", args: ["doctor", "--output"], message: "--output requires a value" },
       { command: "doctor", category: "duplicate", args: ["doctor", "--verbose", "--verbose"], message: "--verbose may be specified only once" },
       { command: "doctor", category: "incompatible", args: ["doctor", "--json", "--quiet"], message: "mutually exclusive" },
+      { command: "doctor", category: "structured-export", args: ["doctor", "--json", "--export"], message: "--export cannot be combined" },
       { command: "version", category: "unknown", args: ["version", "--wat"], message: "unknown version option --wat" },
       { command: "version", category: "stray", args: ["version", "extra"], message: "unexpected version positional" },
       { command: "version", category: "missing", args: ["version", "--project-dir"], message: "--project-dir requires a path value" },

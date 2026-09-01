@@ -32,14 +32,17 @@ digest check does not prove the file on disk is the attested subject.
 ## 2. Publication boundary
 
 The publication boundary is one GitHub Release for an existing `v*` tag. The
-workflow starts from either a protected tag pushed from a reviewed release-prep
-commit or a manual dispatch naming an existing tag. Its authorization job proves
-that the immutable tag commit is an ancestor of `origin/main`. A manual dispatch
-must itself run on that tag (`refs/tags/<tag>`), so the attestation source ref
-cannot silently remain the branch from which the workflow was opened.
+workflow has no tag-push trigger. A maintainer manually dispatches the workflow
+from `refs/heads/main` and names an existing tag. `authorize` fetches the current
+remote `main` and selected tag, then requires `github.sha`, checked-out `HEAD`,
+`origin/main`, and the dereferenced tag commit to be the same commit. This keeps
+the executed workflow code and attestation source ref on trusted `main` while
+binding the release identity to one exact immutable tag target.
 The protected `release` environment requires non-author approval and protects
-the authorization App credentials. `authorize` first proves the selected tag
-commit is already on `main` using only the normal read token. Only then does it
+the authorization App credentials. Its sole deployment policy is the `main`
+branch because GitHub evaluates environment policies against the dispatch ref,
+not the tag supplied as workflow input. `authorize` proves the exact equality
+above using only the normal read token. Only then does it
 mint a current-repository installation token with Actions read and
 Administration write, use it to read the otherwise-hidden ruleset bypass
 actors, and emit a distinct authorization identity error when the API omits or
@@ -58,9 +61,13 @@ any checksum or manifest data. It then validates `version.json`, verifies every
 manifest asset through both provenance paths, records the complete local digest
 set, runs the real online-install journey from a separate copy, rechecks the
 untouched publication directory, and finally uses
-`gh release create --verify-tag` with that exact directory. There is no draft
-creation or later release edit, so publication cannot switch to server-side
-bytes that changed after verification.
+`gh release create --verify-tag` with that exact directory. GitHub CLI
+internally creates a mutable draft, uploads assets through separate API calls,
+and then publishes it. The repository therefore requires immutable releases
+before publication. After `gh release create` returns, the workflow requires
+the release to be published and immutable, compares the exact remote asset
+inventory with the local 13-file set, downloads every published asset, and
+checks the complete local digest ledger against those downloaded bytes.
 
 Published releases are immutable by policy. A defective artifact is corrected
 by a new patch release. A compromised release is excluded from update
@@ -68,7 +75,10 @@ discovery and linked to its corrective release without deleting the original
 release, tag, attestations, or audit record.
 
 `scripts/package-release.ts` stages `version.json`, `checksums.txt`, installers,
-binaries, and `aidlc-runtime.tar.gz`. The staging job verifies those bytes,
+binaries, and `aidlc-runtime.tar.gz`. Full package generation first removes
+generated harness and plugin roots that no longer exist in source, and release
+assembly independently requires the generated harness/plugin inventory to
+equal the authored inventory before archiving. The staging job verifies those bytes,
 then uploads one `release-candidate` without a provenance bundle. Unix and
 Windows lifecycle jobs checksum and test that exact artifact without signing
 permissions. Because the public offline installer now requires provenance for
@@ -117,15 +127,19 @@ Tag protection and the protected `release` environment are required repository
 settings. They are not represented by files in this repository and must be
 confirmed before the first publication. The authorization job reads those
 settings through a protected-environment GitHub App identity and fails unless
-the environment has required reviewers, self-review and administrator bypass
-are disabled, and `v*` is an allowed deployment-tag pattern. It also requires
+the environment has exactly the `aidlc-admins` team as its reviewer, self-review
+and administrator bypass are disabled, and `main` is the only deployment
+policy. It separately requires immutable releases to be enabled and enforced by
+the repository owner. It also requires
 two separate active tag rulesets over exactly `refs/tags/v*`, with no
 exclusions: a creation-only ruleset with exactly the documented reviewer actor
 in `always` bypass mode, and an update-plus-deletion ruleset with no bypass
-actors. Combined controls, extra actors, wrong modes, hidden actor data, or
-partial namespaces fail closed. The workflow independently rejects a tag whose
-commit is not on `main`; every source-consuming job checks out the authorized
-SHA, and both protected release jobs recheck the remote tag target.
+actors. Any additional active ruleset whose creation, update, or deletion
+controls can apply to `v*` also fails closed, including broader `~ALL` tag
+rulesets. Combined controls, extra actors, wrong modes, hidden actor data, or
+partial namespaces fail closed. Every source-consuming job checks out the
+authorized main SHA, and both protected release jobs recheck the remote tag
+target.
 
 ### Mirror or download tampering
 
@@ -137,11 +151,13 @@ validates the exact manifest and directory inventory, and verifies every
 manifest asset through both provenance paths before release creation. Remote
 and local installers, plus `core/tools/aidlc-release.ts`, first verify
 the attestation for `checksums.txt` against the repository, signer workflow,
-and release tag using `aidlc-release.intoto.jsonl`; only then do they verify the
-`version.json` checksum and each selected asset against both the manifest and
-checksum row. Asset names are basename-only and metadata and asset sizes are
-bounded. Mirrors must carry the complete manifest-driven asset set plus the
-bundle.
+and `refs/heads/main` using `aidlc-release.intoto.jsonl`. They then verify the
+`version.json` checksum, read its authenticated `sourceDigest`, and verify the
+same attestation again with both `--source-ref refs/heads/main` and
+`--source-digest <tag commit>`. Only then do they verify each selected asset
+against both the manifest and checksum row. Asset names are basename-only and
+metadata and asset sizes are bounded. Mirrors must carry the complete
+manifest-driven asset set plus the bundle.
 
 Provenance authenticates a release set; it does not prove freshness. When no
 explicit version is requested, a compromised download source can replay an
@@ -154,11 +170,13 @@ that version explicitly and retain their own accepted-version floor.
 Publication has no destructive automatic rollback. Failed verification inside
 `promote` occurs before `gh release create`, so no GitHub Release exists and
 the immutable `attested-release` workflow artifact plus transparency-log
-entries retain the evidence. A failure during the final create may leave a
-partial release record; the workflow never edits or deletes it automatically.
-The named publication owner inspects the record and publishes a complete
-corrective patch release when needed. The owner assignment is a focused-review
-decision in section 7.
+entries retain the evidence. During `gh release create`, another principal with
+release-write access could alter the internal draft before publication. The
+post-publication inventory and digest checks detect that condition, but once
+published the immutable release cannot be repaired in place. A create, upload,
+or remote-verification failure may therefore leave an incomplete or incorrect
+immutable release record. The workflow never edits or deletes it automatically;
+the named publication owner publishes a corrective patch release.
 
 ### Compromised release
 
@@ -198,18 +216,30 @@ implemented.
 Online verification against GitHub:
 
 ```bash
+tag=vX.Y.Z
+source_digest="$(gh api "repos/awslabs/aidlc-workflows/commits/$tag" --jq .sha)"
 gh attestation verify ./aidlc-linux-x64 \
-  --repo awslabs/aidlc-workflows
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+  --source-ref refs/heads/main \
+  --source-digest "$source_digest"
 ```
 
 Offline or mirror verification from the shipped bundle:
 
 ```bash
+source_digest=<trusted-40-hex-tag-commit>
 gh attestation verify ./aidlc-linux-x64 \
   --bundle ./aidlc-release.intoto.jsonl \
   --repo awslabs/aidlc-workflows \
-  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+  --source-ref refs/heads/main \
+  --source-digest "$source_digest"
 ```
+
+For offline verification, obtain the tag commit through a trusted channel
+before disconnecting; do not derive the expected digest only from the untrusted
+download directory.
 
 Online installers and lifecycle commands use the same trust-root controls:
 
@@ -223,10 +253,10 @@ release base URL. A mirror URL does not implicitly broaden or replace the
 provenance trust root.
 
 Fork release rehearsals must also configure the protected `release`
-environment, its authorization App identity, and both release-tag rulesets.
-Outside `awslabs/aidlc-workflows`, the creation ruleset may name a user
-reviewer in `always` bypass mode because personal-account forks cannot define
-GitHub Teams. The update-plus-deletion ruleset still has no bypass actor.
+environment with exactly the `main` branch deployment policy, its authorization
+App identity, the `aidlc-admins` team as the sole reviewer, immutable releases,
+and both release-tag rulesets. A personal-account fork without teams cannot
+satisfy this production release contract.
 
 Verify every artifact covered by the checksum file:
 
@@ -240,6 +270,8 @@ installers. `version.json` contains:
 - `schemaVersion`
 - `version`
 - `date`
+- `sourceRef`, fixed to `refs/heads/main`
+- `sourceDigest`, the exact 40-hex commit shared by `main` and the release tag
 - `distributions[]` with `name` and `productName`
 - `assets[]` with `name`, `sha256`, `bytes`, and `kind`
 - binary-only `target`
@@ -274,8 +306,9 @@ schema.
 - `promote` receives `contents: write` inside the protected `release`
   environment, authenticates metadata before use, verifies every asset and
   both provenance paths, rehearses the real online installer from a copy,
-  rechecks the original digest set, and only then creates the release from the
-  verified local directory.
+  rechecks the original digest set, creates the release from the verified local
+  directory, then validates immutable state and redownloads every remote asset
+  against that digest set.
 - No job outside the protected `release` environment receives any write
   permission.
 - OIDC supplies short-lived identity to Sigstore; no long-lived signing key is
@@ -324,7 +357,7 @@ The creation ruleset's bypass actor names the same team, so the setting itself
 enforces who can authorize a release tag, and membership rotation never
 requires touching the ruleset. The separate update-plus-deletion ruleset has
 no bypass actor, including for that team. The GitHub Release is published by
-the tag-triggered workflow; the team owns that outcome, and the first responder
+a main-branch manual dispatch; the team owns that outcome, and the first responder
 for a publication failure is by convention the member who authorized the tag,
 though any member may act.
 
@@ -387,8 +420,9 @@ and explicit metadata refresh, but does not block a user-requested
 ## 11. Open items for focused review
 
 - Create the protected `release` environment with non-author approval,
-  self-review and administrator bypass disabled, and the `v*` deployment-tag
-  policy.
+  self-review and administrator bypass disabled, exactly the `aidlc-admins`
+  reviewer team, and exactly the `main` branch deployment policy.
+- Enable immutable releases and require owner enforcement.
 - Install a current-repository GitHub App with Actions read and Administration
   write, then store its App ID as the protected-environment variable
   `AIDLC_RELEASE_AUTH_APP_ID` and its private key as the protected-environment
@@ -399,7 +433,7 @@ and explicit metadata refresh, but does not block a user-requested
   Create a separate active update-plus-deletion ruleset over the same exact
   namespace with no exclusions and no bypass actors.
 - Decide whether repeated protected-environment approvals across `authorize`,
-  `publish`, and `promote` are an acceptable tag-push UX cost. Do not remove
+  `publish`, and `promote` are an acceptable manual-release UX cost. Do not remove
   the environment merely to avoid those approvals; it protects both the App
   private key and public visibility.
 - Confirm the team-based ownership assignment in section 7

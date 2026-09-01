@@ -88,6 +88,37 @@ function exactReleaseTagScope(ruleset: JsonRecord): boolean {
   return sameStrings(refs.include, ["refs/tags/v*"]) && sameStrings(refs.exclude, []);
 }
 
+function releaseTagScopeMayApply(ruleset: JsonRecord): boolean {
+  const conditions = ruleset.conditions;
+  if (!conditions || typeof conditions !== "object" || Array.isArray(conditions)) return true;
+  const refName = (conditions as JsonRecord).ref_name;
+  if (!refName || typeof refName !== "object" || Array.isArray(refName)) return true;
+  const refs = refName as JsonRecord;
+  if (!Array.isArray(refs.include) || !Array.isArray(refs.exclude)) return true;
+  const include = refs.include.filter((value): value is string => typeof value === "string");
+  const exclude = refs.exclude.filter((value): value is string => typeof value === "string");
+  const excludesAll = exclude.some((pattern) =>
+    pattern === "~ALL" ||
+    pattern === "refs/tags/*" ||
+    pattern === "refs/tags/**" ||
+    pattern === "refs/tags/v*"
+  );
+  if (excludesAll) return false;
+  return include.some((pattern) => {
+    if (
+      pattern === "~ALL" ||
+      pattern === "refs/tags/*" ||
+      pattern === "refs/tags/**"
+    ) {
+      return true;
+    }
+    const wildcard = pattern.search(/[*?[]/);
+    const prefix = wildcard === -1 ? pattern : pattern.slice(0, wildcard);
+    return prefix.startsWith("refs/tags/v") ||
+      "refs/tags/v".startsWith(prefix);
+  });
+}
+
 function readRulesets(directory: string): JsonRecord[] {
   const root = resolve(directory);
   const files = readdirSync(root)
@@ -121,7 +152,7 @@ function verifyControls(args: string[]): void {
     const types = ruleTypes(ruleset);
     return ruleset.enforcement === "active" &&
       ruleset.target === "tag" &&
-      exactReleaseTagScope(ruleset) &&
+      releaseTagScopeMayApply(ruleset) &&
       types.some((type) =>
         type === "creation" || type === "update" || type === "deletion"
       );
@@ -177,6 +208,12 @@ function verifyControls(args: string[]): void {
         `update+deletion ruleset, found ${immutability.length}`,
     );
   }
+  if (relevant.length !== 2) {
+    throw new Error(
+      `repository policy failure: expected exactly the two documented active ` +
+        `rulesets applicable to v* creation/update/deletion, found ${relevant.length}`,
+    );
+  }
 }
 
 function verifyCandidate(args: string[]): void {
@@ -194,9 +231,36 @@ function verifyCandidate(args: string[]): void {
   const rawManifest = record(document, "version.json");
   exactKeys(
     rawManifest,
-    ["schemaVersion", "version", "date", "distributions", "assets"],
+    [
+      "schemaVersion",
+      "version",
+      "date",
+      "sourceRef",
+      "sourceDigest",
+      "distributions",
+      "assets",
+    ],
     "version.json",
   );
+  if (rawManifest.sourceRef !== "refs/heads/main") {
+    throw new Error("version.json sourceRef must be refs/heads/main");
+  }
+  if (
+    typeof rawManifest.sourceDigest !== "string" ||
+    !/^[a-f0-9]{40}$/.test(rawManifest.sourceDigest)
+  ) {
+    throw new Error("version.json sourceDigest must be a lowercase 40-hex commit");
+  }
+  const expectedSourceDigest = option(args, "--source-digest");
+  if (
+    expectedSourceDigest !== undefined &&
+    rawManifest.sourceDigest !== expectedSourceDigest
+  ) {
+    throw new Error(
+      `version.json sourceDigest ${String(rawManifest.sourceDigest)} does not match ` +
+        `authorized source ${expectedSourceDigest}`,
+    );
+  }
   if (!Array.isArray(rawManifest.distributions)) {
     throw new Error("version.json distributions must be an array");
   }
@@ -301,7 +365,7 @@ function main(): void {
   throw new Error(
     "usage: verify-release.ts controls --rulesets <dir> --reviewer-id <id> " +
       "--reviewer-type <Team|User> | candidate --directory <dir> --tag <vX.Y.Z> " +
-      "[--list-assets]",
+      "[--source-digest <sha>] [--list-assets]",
   );
 }
 

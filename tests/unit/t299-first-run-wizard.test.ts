@@ -40,6 +40,25 @@ function executable(path: string, output = ""): void {
   );
 }
 
+function treeSnapshot(root: string): Record<string, string> {
+  if (!existsSync(root)) return {};
+  const snapshot: Record<string, string> = {};
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory).sort()) {
+      const path = join(directory, entry);
+      const rel = prefix ? `${prefix}/${entry}` : entry;
+      if (statSync(path).isDirectory()) {
+        snapshot[`${rel}/`] = "";
+        visit(path, rel);
+      } else {
+        snapshot[rel] = readFileSync(path).toString("base64");
+      }
+    }
+  };
+  visit(root, "");
+  return snapshot;
+}
+
 function detection(
   bin: string,
   harnesses: Record<string, { found: boolean; version?: string }> = {
@@ -261,6 +280,23 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(result.project, ".git"))).toBe(true);
   }, 60_000);
 
+  test("late first-run failure restores a pre-existing non-empty harness directory", () => {
+    let before: Record<string, string> = {};
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        const harness = join(project, ".claude");
+        mkdirSync(join(harness, "user", "nested"), { recursive: true });
+        writeFileSync(join(harness, "user", "nested", "keep.txt"), "keep\n");
+        writeFileSync(join(harness, "user-settings.json"), "{\"keep\":true}\n");
+        before = treeSnapshot(harness);
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("No setup changes were kept.");
+    expect(treeSnapshot(join(result.project, ".claude"))).toEqual(before);
+  }, 60_000);
+
   test("late first-run rollback preserves a newer concurrent settings write", () => {
     const newer = `${JSON.stringify({
       schemaVersion: 1,
@@ -290,6 +326,49 @@ describe("t299 first-run setup wizard", () => {
           readFileSync(path, "utf-8") === priorGitignore;
       }),
     ).toBe(true);
+    temporary.push(recovery as string);
+  }, 60_000);
+
+  test("global first-run rollback uses the machine transaction boundary", () => {
+    const machine = temp("aidlc-t299-global-machine-");
+    const settings = join(machine, "aidlc.settings.json");
+    mkdirSync(machine, { recursive: true });
+    writeFileSync(settings, `${JSON.stringify({
+      schemaVersion: 1,
+      flags: { schemaVersion: 1, swarm: false },
+    }, null, 2)}\n`);
+    const newer = `${JSON.stringify({
+      schemaVersion: 1,
+      flags: { schemaVersion: 1, swarm: true },
+    }, null, 2)}\n`;
+    const input = `${[
+      "2",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "3",
+      "",
+    ].join("\n")}\n`;
+    const result = runWizard(input, {
+      env: {
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+        AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3",
+        AIDLC_TEST_FIRST_RUN_ROLLBACK_INTERFERENCE: newer,
+        AIDLC_TEST_FIRST_RUN_ROLLBACK_INTERFERENCE_PATH: settings,
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(readFileSync(settings, "utf-8")).toBe(newer);
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output).toContain("rollback was incomplete");
+    const recovery = /recovery snapshot preserved at ([^\r\n]+)/.exec(output)?.[1];
+    expect(recovery).toBeDefined();
+    expect(existsSync(recovery as string)).toBe(true);
     temporary.push(recovery as string);
   }, 60_000);
 });

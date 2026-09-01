@@ -46,12 +46,16 @@ together:
 
 ```bash
 tmp="$(mktemp -d)"
-gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
+tag="$(gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName)"
+source_digest="$(gh api "repos/awslabs/aidlc-workflows/commits/$tag" --jq .sha)"
+gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo awslabs/aidlc-workflows \
-  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+  --source-ref refs/heads/main \
+  --source-digest "$source_digest"
 sh "$tmp/install.sh"
 rm -rf "$tmp"
 ```
@@ -60,12 +64,16 @@ rm -rf "$tmp"
 
 ```bash
 tmp="$(mktemp -d)"
-gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
+tag="$(gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName)"
+source_digest="$(gh api "repos/awslabs/aidlc-workflows/commits/$tag" --jq .sha)"
+gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo awslabs/aidlc-workflows \
-  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+  --source-ref refs/heads/main \
+  --source-digest "$source_digest"
 sh "$tmp/install.sh"
 rm -rf "$tmp"
 export PATH="$HOME/.local/bin:$PATH"
@@ -86,12 +94,16 @@ of the file.
 ```powershell
 $download = Join-Path $env:TEMP "aidlc-install-$PID"
 New-Item -ItemType Directory -Force $download | Out-Null
-gh release download --repo awslabs/aidlc-workflows --dir $download `
+$tag = gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName
+$sourceDigest = gh api "repos/awslabs/aidlc-workflows/commits/$tag" --jq .sha
+gh release download $tag --repo awslabs/aidlc-workflows --dir $download `
   --pattern install.ps1 --pattern aidlc-release.intoto.jsonl
 gh attestation verify (Join-Path $download install.ps1) `
   --bundle (Join-Path $download aidlc-release.intoto.jsonl) `
   --repo awslabs/aidlc-workflows `
-  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml `
+  --source-ref refs/heads/main `
+  --source-digest $sourceDigest
 & (Join-Path $download install.ps1)
 Remove-Item -Recurse -Force $download
 ```
@@ -134,13 +146,14 @@ for a fork or mirror, together with its release base URL; changing the download
 URL alone does not change the provenance trust root. `AIDLC_GH_BIN` selects an
 explicit GitHub CLI executable for both installers.
 
-Fork release rehearsals also need a protected `release` environment, a
+Fork release rehearsals also need a protected `release` environment restricted
+to exactly the `main` branch, a
 protected-environment GitHub App identity with Actions read and Administration
 write, and two tag rulesets over exactly `refs/tags/v*` with no exclusions.
-The creation-only ruleset has exactly the environment reviewer in `always`
-bypass mode; the update-plus-deletion ruleset has no bypass actors.
-Personal-account forks may use a user reviewer for creation; the canonical
-repository requires its named team.
+The environment and creation-only ruleset both name exactly the `aidlc-admins`
+team; the creation bypass mode is `always`, and the update-plus-deletion
+ruleset has no bypass actors. Immutable releases must also be enabled and
+enforced by the repository owner.
 
 `AIDLC_INSTALL_ROOT` and `AIDLC_BIN_DIR` override the machine and command
 locations. Those paths must be absolute on Unix. The PowerShell installer also
@@ -155,8 +168,9 @@ The installer:
 2. Downloads or reads `version.json`, `checksums.txt`, and
    `aidlc-release.intoto.jsonl`.
 3. Verifies the `checksums.txt` attestation against the repository,
-   signer workflow, and release tag before trusting any checksum.
-4. Verifies the `version.json` SHA-256 before trusting its asset metadata.
+   signer workflow, and `refs/heads/main` before trusting any checksum.
+4. Verifies the `version.json` SHA-256, then re-verifies the attestation against
+   the authenticated `sourceDigest` shared by `main` and the release tag.
 5. Verifies the selected binary and harness archives by SHA-256 and declared
    byte length.
 6. Lets the verified binary validate and transactionally install the release.
@@ -176,8 +190,10 @@ complete inventory, and uploads one immutable workflow artifact. The protected
 before reading it, verifies every manifest asset through both provenance paths,
 records the complete digest set, and runs the real installer journey from a
 separate copy. It then rechecks the untouched publication directory and creates
-the GitHub Release from those exact bytes; no mutable draft or later release
-edit exists. The bundle is intentionally outside `version.json` and
+the GitHub Release from those exact bytes. GitHub CLI uses a short mutable
+draft while uploading, so the repository requires immutable releases and the
+workflow then compares the published inventory and redownloaded bytes against
+the complete local digest set. The bundle is intentionally outside `version.json` and
 `checksums.txt`: those files cover the installable artifacts, while the bundle
 is its own Sigstore trust channel.
 TLS, SHA-256, and that provenance are the permanent trust model. OS
@@ -694,15 +710,20 @@ A fresh clone or CI runner installs the committed version before config:
 
 ```bash
 version=$(cat .aidlc-version)
+tag="v$version"
+source_digest="$(gh api "repos/awslabs/aidlc-workflows/commits/$tag" --jq .sha)"
 tmp="$(mktemp -d)"
-gh release download "v$version" --repo awslabs/aidlc-workflows --dir "$tmp" \
+gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo awslabs/aidlc-workflows \
-  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+  --source-ref refs/heads/main \
+  --source-digest "$source_digest"
 sh "$tmp/install.sh" --version "$version" --quiet --yes
 rm -rf "$tmp"
+aidlc config --pin "$version" --project-dir "$PWD" --quiet
 aidlc config --project-dir "$PWD" --harness claude --mcp none --quiet
 aidlc doctor --project-dir "$PWD" --quiet
 ```
@@ -869,6 +890,7 @@ tag=vX.Y.Z
 tmp="$(mktemp -d)"
 release_repo="${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}"
 release_workflow="${AIDLC_RELEASE_WORKFLOW:-$release_repo/.github/workflows/release.yml}"
+source_digest="$(gh api "repos/$release_repo/commits/$tag" --jq .sha)"
 gh release download "$tag" --repo "$release_repo" --dir "$tmp" \
   --pattern aidlc-runtime.tar.gz \
   --pattern checksums.txt \
@@ -877,7 +899,8 @@ gh attestation verify "$tmp/checksums.txt" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo "$release_repo" \
   --signer-workflow "$release_workflow" \
-  --source-ref "refs/tags/$tag"
+  --source-ref refs/heads/main \
+  --source-digest "$source_digest"
 (cd "$tmp" && grep '  aidlc-runtime.tar.gz$' checksums.txt | sha256sum -c -)
 tar -xzf "$tmp/aidlc-runtime.tar.gz" -C "$tmp"
 RUNTIME_ROOT="$tmp/runtime"

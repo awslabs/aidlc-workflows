@@ -46,6 +46,7 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -55,6 +56,7 @@ import {
 import { join } from "node:path";
 import {
   AIDLC_SRC,
+  REPO_ROOT,
   cleanupTestProject,
   createTestProject,
   seededRecordDir,
@@ -79,6 +81,7 @@ import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-l
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const CORE_DOCTOR = join(REPO_ROOT, "core", "tools", "aidlc-doctor.ts");
 
 // Secret canaries — none of these may appear anywhere in the emitted report.
 const AWS_KEY = "AKIAIOSFODNN7EXAMPLE";
@@ -794,6 +797,59 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const combined = `${res.stdout ?? ""}${res.stderr ?? ""}`;
     // The export path reports the error and does not silently create ./true.
     expect(combined).toMatch(/--output requires a directory path/);
+  }, 30000);
+
+  test("18b: structured modes reject export without appending human prose", () => {
+    const proj = freshProject();
+    const outDir = join(proj, "out");
+    const res = spawnSync(
+      BUN,
+      [
+        CORE_DOCTOR,
+        "doctor",
+        "--json",
+        "--export",
+        "--project-dir",
+        proj,
+        "--output",
+        outDir,
+      ],
+      { encoding: "utf-8", env: { ...process.env } },
+    );
+    expect(res.status).toBe(2);
+    expect(res.stderr).toBe("");
+    expect(JSON.parse(res.stdout ?? "")).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      ok: false,
+      code: 2,
+      status: "usage",
+      message: "--export cannot be combined with --json or --quiet",
+    }));
+    expect(existsSync(outDir)).toBe(false);
+  }, 30000);
+
+  test("18c: explicit export output must stay inside the selected project", () => {
+    const proj = freshProject();
+    const outside = freshProject();
+    const outDir = join(outside, "doctor-output");
+    const res = spawnSync(
+      BUN,
+      [
+        CORE_DOCTOR,
+        "doctor",
+        "--export",
+        "--project-dir",
+        proj,
+        "--output",
+        outDir,
+      ],
+      { encoding: "utf-8", env: { ...process.env } },
+    );
+    expect(res.status).toBe(2);
+    expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toContain(
+      "--output must stay inside the selected project directory",
+    );
+    expect(existsSync(outDir)).toBe(false);
   }, 30000);
 
   // ---- Arden round-3 regressions -------------------------------------------

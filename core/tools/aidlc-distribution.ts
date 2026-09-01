@@ -68,6 +68,30 @@ function validateHashes(value: unknown, label: string): string[] {
   return value;
 }
 
+export function assertProjectionPathHasNoSymlinks(
+  root: string,
+  relativePath: string,
+): void {
+  let current = root;
+  const segments = relativePath.split("/");
+  for (const [index, segment] of segments.entries()) {
+    current = join(current, segment);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`${root}: projected path traverses a symlink: ${relativePath}`);
+    }
+    if (index < segments.length - 1 && !stat.isDirectory()) {
+      throw new Error(`${root}: projected path parent is not a directory: ${relativePath}`);
+    }
+  }
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -104,6 +128,7 @@ export function validateProjectionDescriptor(
   for (const directory of descriptor.managedDirectories) {
     const safe = safeRelativePath(directory, "managed directory", true);
     declare(safe);
+    assertProjectionPathHasNoSymlinks(root, safe);
     const path = join(root, safe);
     if (!existsSync(path) || !lstatSync(path).isDirectory()) {
       throw new Error(`${root}: managed directory is missing or invalid: ${safe}`);
@@ -128,6 +153,7 @@ export function validateProjectionDescriptor(
       ) {
         throw new Error(`${root}: legacy managed file is outside managed directories: ${safe}`);
       }
+      assertProjectionPathHasNoSymlinks(root, safe);
       const path = join(root, safe);
       if (!existsSync(path) || !lstatSync(path).isFile()) {
         throw new Error(`${root}: legacy managed file is missing or invalid: ${safe}`);
@@ -141,6 +167,7 @@ export function validateProjectionDescriptor(
     }
     const safe = safeRelativePath(integration.path, "root integration path");
     declare(safe);
+    assertProjectionPathHasNoSymlinks(root, safe);
     const path = join(root, safe);
     if (
       !existsSync(path) &&

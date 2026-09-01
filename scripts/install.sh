@@ -351,7 +351,7 @@ fi
   --bundle "$TMP/aidlc-release.intoto.jsonl" \
   --repo "$RELEASE_REPOSITORY" \
   --signer-workflow "$RELEASE_WORKFLOW" \
-  --source-ref "refs/tags/v$candidate_version" \
+  --source-ref "refs/heads/main" \
   >/dev/null 2>"$TMP/provenance.err" ||
   fail 4 failed "release provenance verification failed" \
     "obtain the release from $RELEASE_REPOSITORY"
@@ -362,6 +362,21 @@ actual_manifest=$(sha256_file "$TMP/version.json")
 [ "$actual_manifest" = "$expected_manifest" ] || {
   fail 4 failed "Checksum mismatch for version.json."
 }
+source_ref=$(sed -n 's/.*"sourceRef":[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
+source_digest=$(sed -n 's/.*"sourceDigest":[[:space:]]*"\([a-f0-9]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
+[ "$source_ref" = "refs/heads/main" ] ||
+  fail 4 failed "version.json has an invalid release source ref"
+printf '%s\n' "$source_digest" | grep -Eq '^[a-f0-9]{40}$' ||
+  fail 4 failed "version.json has an invalid release source digest"
+"$GH_BIN" attestation verify "$TMP/checksums.txt" \
+  --bundle "$TMP/aidlc-release.intoto.jsonl" \
+  --repo "$RELEASE_REPOSITORY" \
+  --signer-workflow "$RELEASE_WORKFLOW" \
+  --source-ref "$source_ref" \
+  --source-digest "$source_digest" \
+  >/dev/null 2>"$TMP/provenance.err" ||
+  fail 4 failed "release provenance source verification failed" \
+    "obtain the release from $RELEASE_REPOSITORY"
 
 if [ -n "$VERSION" ] && [ "$VERSION" != "$candidate_version" ]; then
   fail 4 failed "release endpoint returned $candidate_version, not requested $VERSION"

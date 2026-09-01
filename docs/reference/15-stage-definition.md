@@ -54,27 +54,28 @@ which artifacts a stage produces while editing its prose.
 ## Authoring flow
 
 ```
-┌─────────┐         ┌──────────────────┐         ┌──────────────────┐         ┌──────────────────┐
-│ Edit    │  ───→   │ Pre-commit hook  │  ───→   │ stage-graph.json │  ───→   │ loadStageGraph() │
-│ stage   │         │ aidlc-graph      │         │ (build artifact, │         │ (runtime,        │
-│ .md YAML│         │ compile          │         │  generated)      │         │  unchanged)      │
-└─────────┘         └──────────────────┘         └──────────────────┘         └──────────────────┘
-     │                                                                                 ▲
-     │                              ┌──────────────────┐                               │
-     └────────────────────────────→ │ CI drift check   │ ──── blocks merge on drift ───┘
-                                    │ compile --check  │
-                                    └──────────────────┘
+Edit stage YAML
+      |
+      v
+bun scripts/package.ts
+      |
+      +--> ignored dist/<harness>/tools/data/stage-graph.json
+      |
+      +--> ignored dist-release/<harness>/tools/data/stage-graph.json
+                    |
+                    v
+             loadStageGraph()
 ```
 
 The YAML is authoritative. The JSON is a generated build artifact. Repository
 packaging regenerates it from source; installed runtimes may also recompile it
 after plugin composition.
 
-`aidlc-graph compile` and `compile --check` ship as CLI subcommands (milestone 9);
-run compile manually after editing stage YAML, and CI enforces `compile
---check` to catch drift. A pre-commit hook that automates this is deferred
-to a later PR. `stage-graph.json` is a compiled artifact — do not edit it
-by hand; edit the YAML and recompile.
+`aidlc-graph compile` and `compile --check` remain runtime and diagnostic
+subcommands, but repository contributors do not preserve a compiled JSON copy
+in source control. Edit the YAML and run `bun scripts/package.ts`; packaging
+creates fresh ignored projections, and `bun scripts/package.ts --check`
+rebuilds twice in temporary roots to check generator determinism.
 
 ---
 
@@ -525,10 +526,9 @@ else. Most stage files already use `## Steps` as their first body heading.
 milestone 7 shipped `parseStageFrontmatter` and `emitStageFrontmatter` in
 `lib.ts` — YAML-only, no prose back-compat path. milestone 8 migrated all 31
 stage files to YAML frontmatter in a single atomic change. milestone 9 expanded
-`aidlc-graph.ts` to compile the YAML into `stage-graph.json` and added
-`compile --check` as the CI drift guard. Running `aidlc engine graph
-compile --check` on a clean tree exits 0; editing any stage YAML without
-recompiling the JSON exits 1 with a clear message.
+`aidlc-graph.ts` to compile the YAML into `stage-graph.json`. The repository now
+generates that file only inside ignored projections; package determinism, not a
+committed compiled-file drift check, is the source-tree gate.
 
 ---
 

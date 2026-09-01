@@ -20,6 +20,7 @@ import { digest, type ReleaseAsset, type ReleaseManifest } from "../core/tools/a
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const RELEASE_SOURCE_REF = "refs/heads/main";
 
 function valueAfter(argv: string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
@@ -38,6 +39,83 @@ function entriesFor(root: string): ArchiveEntry[] {
 function outputName(target: string, source: string): string {
   const normalized = target === "native" ? targetTriple() : target;
   return `aidlc-${normalized}${source.endsWith(".exe") ? ".exe" : ""}`;
+}
+
+function directoryNames(root: string): string[] {
+  if (!existsSync(root)) return [];
+  return readdirSync(root)
+    .filter((name) => statSync(join(root, name)).isDirectory())
+    .sort();
+}
+
+function sameNames(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length &&
+    actual.every((name, index) => name === expected[index]);
+}
+
+function sourceHarnesses(): string[] {
+  return directoryNames(join(REPO_ROOT, "harness"))
+    .filter((name) => existsSync(join(REPO_ROOT, "harness", name, "manifest.ts")));
+}
+
+function sourcePlugins(): string[] {
+  return directoryNames(join(REPO_ROOT, "plugins"))
+    .filter((name) =>
+      existsSync(join(REPO_ROOT, "plugins", name, ".aidlc-plugin", "plugin.json"))
+    );
+}
+
+function verifyGeneratedInventory(): {
+  harnesses: string[];
+  plugins: string[];
+} {
+  const harnesses = sourceHarnesses();
+  const releaseHarnesses = directoryNames(join(REPO_ROOT, "dist-release"));
+  if (!sameNames(releaseHarnesses, harnesses)) {
+    throw new Error(
+      `generated release harness inventory differs from source: expected ` +
+        `${harnesses.join(", ") || "none"}, found ${releaseHarnesses.join(", ") || "none"}`,
+    );
+  }
+
+  const plugins = sourcePlugins();
+  const pluginsRoot = join(REPO_ROOT, "dist", "plugins");
+  const generatedPlugins = directoryNames(pluginsRoot);
+  if (!sameNames(generatedPlugins, plugins)) {
+    throw new Error(
+      `generated plugin inventory differs from source: expected ` +
+        `${plugins.join(", ") || "none"}, found ${generatedPlugins.join(", ") || "none"}`,
+    );
+  }
+  for (const plugin of plugins) {
+    const pluginHarnesses = directoryNames(join(pluginsRoot, plugin));
+    if (!sameNames(pluginHarnesses, harnesses)) {
+      throw new Error(
+        `generated plugin ${plugin} harness inventory differs from source: expected ` +
+          `${harnesses.join(", ")}, found ${pluginHarnesses.join(", ") || "none"}`,
+      );
+    }
+  }
+  return { harnesses, plugins };
+}
+
+function releaseSourceDigest(): string {
+  const configured = process.env.AIDLC_RELEASE_SOURCE_DIGEST?.trim();
+  if (configured) {
+    if (!/^[a-f0-9]{40}$/.test(configured)) {
+      throw new Error("AIDLC_RELEASE_SOURCE_DIGEST must be a lowercase 40-hex commit");
+    }
+    return configured;
+  }
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: REPO_ROOT,
+    encoding: "utf-8",
+  });
+  const digest = result.stdout.trim();
+  if (result.status !== 0 || !/^[a-f0-9]{40}$/.test(digest)) {
+    throw new Error("could not resolve the release source commit");
+  }
+  return digest;
 }
 
 type BinaryInput = {
@@ -164,13 +242,14 @@ function build(argv: string[]): void {
   if (check.status !== 0) {
     throw new Error(`package determinism guard failed\n${check.stderr}`);
   }
+  const generated = verifyGeneratedInventory();
   rmSync(output, { recursive: true, force: true });
   mkdirSync(output, { recursive: true });
   const assets: ReleaseAsset[] = [];
   const distributions: ReleaseManifest["distributions"] = [];
 
   const runtimeEntries: ArchiveEntry[] = [];
-  for (const distribution of readdirSync(join(REPO_ROOT, "dist-release")).sort()) {
+  for (const distribution of generated.harnesses) {
     const root = join(REPO_ROOT, "dist-release", distribution);
     const projection = projectionFiles(root);
     distributions.push({
@@ -184,7 +263,7 @@ function build(argv: string[]): void {
   }
   const pluginsRoot = join(REPO_ROOT, "dist", "plugins");
   if (existsSync(pluginsRoot)) {
-    for (const plugin of readdirSync(pluginsRoot).sort()) {
+    for (const plugin of generated.plugins) {
       const pluginRoot = join(pluginsRoot, plugin);
       if (!statSync(pluginRoot).isDirectory()) continue;
       for (const harness of readdirSync(pluginRoot).sort()) {
@@ -284,6 +363,8 @@ function build(argv: string[]): void {
     schemaVersion: 1,
     version: AIDLC_VERSION,
     date,
+    sourceRef: RELEASE_SOURCE_REF,
+    sourceDigest: releaseSourceDigest(),
     distributions,
     assets,
   };

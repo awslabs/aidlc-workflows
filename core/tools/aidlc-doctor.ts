@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   errorMessage,
   harnessDir,
@@ -301,6 +301,59 @@ function fsSafeTimestamp(): string {
   return isoTimestamp().replace(/[-:]/g, "").replace(/\.\d+/, "");
 }
 
+function canonicalFuturePath(path: string): string {
+  let cursor = resolve(path);
+  const suffix: string[] = [];
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    suffix.unshift(basename(cursor));
+    cursor = parent;
+  }
+  const base = existsSync(cursor) ? realpathSync(cursor) : cursor;
+  return suffix.reduce((current, entry) => join(current, entry), base);
+}
+
+function withinRoot(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" ||
+    (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
+function resolveExportParent(
+  projectDir: string,
+  flags: Record<string, string>,
+): string {
+  if (flags.output === "true") {
+    throw new Error("--output requires a directory path (e.g. --output ./aidlc-report)");
+  }
+  const projectRoot = canonicalFuturePath(projectDir);
+  const output = canonicalFuturePath(
+    flags.output
+      ? flags.output
+      : join(projectDir, "aidlc", "diagnostics"),
+  );
+  if (!withinRoot(output, projectRoot)) {
+    throw new Error("--output must stay inside the selected project directory");
+  }
+  return output;
+}
+
+function emitDoctorUsage(flags: Record<string, string>, message: string): void {
+  if (flags.json === "true") {
+    process.stdout.write(`${JSON.stringify({
+      schemaVersion: 1,
+      ok: false,
+      code: 2,
+      status: "usage",
+      message,
+    })}\n`);
+  } else {
+    process.stdout.write(`${message}\n`);
+  }
+  process.exitCode = 2;
+}
+
 // --export: after the live report, write a redacted diagnostic report from
 // the SAME analysis this run already computed (issue #575). No second read,
 // no cached diagnosis. The export write never changes doctor's exit code.
@@ -308,21 +361,12 @@ function fsSafeTimestamp(): string {
 // it as "true" (bare) or a stray token followed it, so a trailing word can
 // never silently disable the export.
 function writeExport(
-  projectDir: string,
-  flags: Record<string, string>,
+  outParent: string,
   report: DoctorReport,
   analysis: DoctorAnalysis,
 ): void {
   try {
     const tsToken = fsSafeTimestamp();
-    // A bare `--output` (no value) parses to "true"; treat that as an error
-    // rather than creating a directory literally named "true".
-    if (flags.output === "true") {
-      throw new Error("--output requires a directory path (e.g. --output /tmp/aidlc-report)");
-    }
-    const outParent = flags.output
-      ? flags.output
-      : join(projectDir, "aidlc", "diagnostics");
     mkdirSync(outParent, { recursive: true });
     // Merge the legacy environment/config checks (bun present, hooks wired,
     // settings intact) into the exported analysis so report.md/report.json
@@ -357,6 +401,27 @@ export async function main(argv: string[]): Promise<void> {
   configureColor(argv);
   const { flags } = parseArgs(argv);
   const projectDir = resolveProjectDir(flags["project-dir"]);
+  const exporting = "export" in flags;
+  if (flags.output !== undefined && !exporting) {
+    emitDoctorUsage(flags, "--output requires --export");
+    return;
+  }
+  if (
+    exporting &&
+    (flags.json === "true" || flags.quiet === "true")
+  ) {
+    emitDoctorUsage(flags, "--export cannot be combined with --json or --quiet");
+    return;
+  }
+  let exportParent: string | undefined;
+  if (exporting) {
+    try {
+      exportParent = resolveExportParent(projectDir, flags);
+    } catch (error) {
+      emitDoctorUsage(flags, errorMessage(error));
+      return;
+    }
+  }
   const update = await doctorUpdateState(flags);
   const checks: DoctorCheck[] = [];
   const recovery = windowsRecoveryCheck();
@@ -402,7 +467,7 @@ export async function main(argv: string[]): Promise<void> {
       humanReport(report, analysis, projectDir, flags.verbose === "true"),
     );
   }
-  if ("export" in flags) writeExport(projectDir, flags, report, analysis);
+  if (exportParent) writeExport(exportParent, report, analysis);
   process.exitCode = code;
 }
 
