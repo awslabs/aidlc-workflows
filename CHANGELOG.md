@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.0] - 2026-08-31
+
+AI-DLC 2.7.0 promotes the accumulated 2.6.x release cycle to a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** re-copy the complete `dist/<harness>/` tree into each project before starting the next workflow; existing workflow records require no migration.
+
+* `aidlc version` now reports `2.7.0` on Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
+* The 2.6.x fixes and features documented below are included unchanged in this minor release.
+* Breaking changes for CI/scripts: none.
+
 ## [2.6.124] - 2026-08-28
 
 Stop committing machine-local absolute paths in `aidlc-state.md`. The `Project Root` and `Worktree Path` state fields are now written in project-relative form (`.` for the root; a `relative(projectDir, worktreePath)` breadcrumb for a worktree), so a state file shared across machines or checkouts no longer carries a host-specific absolute path. Closes #937.
