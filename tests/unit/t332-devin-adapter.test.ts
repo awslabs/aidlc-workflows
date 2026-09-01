@@ -375,6 +375,32 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
+  test("13a: record-human-turn with object-format tool_response ({success,output,error}) records a HUMAN_TURN audit event", () => {
+    // Regression for the Devin adapter object-format bug: Devin's PostToolUse
+    // delivers tool_response as {success, output, error} where `output` is a
+    // JSON string. The pre-fix adapter returned false from
+    // hasExplicitHumanSelection on any non-string tool_response, so the hook
+    // skipped and NO HUMAN_TURN was recorded — breaking ask_user_question
+    // answer recording and the Plan Approval gate. The normalizer must extract
+    // `output` and the selection must be recognized, minting a HUMAN_TURN.
+    // Asserts the EFFECT (audit event), not just exit 0 — exit 0 passes even
+    // when the hook skips (the original test-13 gap).
+    const dir = scratchProject(true);
+    try {
+      const before = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion_objectResponse as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      expect(after).toBe(before + 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // --- rebuild-stage-graph: exec PostToolUse advisory ---
 
   test("14: rebuild-stage-graph with exec PostToolUse is advisory (exit 0)", () => {

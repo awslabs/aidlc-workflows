@@ -160,6 +160,17 @@
     "tool_response": "{\"approve\":\"yes\"}",
     "tool_use_id": "call_8"
   },
+  "postToolUse_askUserQuestion_objectResponse": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",
+    "transcript_path": "/tmp/devin-test/transcript.jsonl",
+    "cwd": "/tmp/devin-test/proj",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "ask_user_question",
+    "tool_input": { "questions": [{ "id": "approve", "question": "approve?", "header": "gate", "options": [{ "label": "yes" }, { "label": "no" }] }] },
+    "tool_response": { "success": true, "output": "{\"answers\":{\"approve\":{\"answers\":[\"yes\"]}}}", "error": null },
+    "tool_use_id": "call_8b"
+  },
   "postCompaction": {
     "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
     "turn_id": "019eb8c0-1f54-7691-920f-c83b886b1161",

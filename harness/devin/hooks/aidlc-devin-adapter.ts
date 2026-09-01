@@ -119,10 +119,27 @@ interface DevinHookInput {
 //
 // Mirrors the codex adapter: detect whether the user made an explicit
 // selection in an ask_user_question response, and extract the text of that
-// selection. Devin's PostToolUse tool_response may be an object
-// {success, output, error} rather than a raw JSON string; in that case the
-// string-typed guards return their defaults (no explicit selection → skip),
-// which is the correct fail-open behavior for the human-turn recorder.
+// selection. Devin's PostToolUse tool_response is an object
+// {success, output, error} where `output` is a JSON string; the normalizer
+// extracts it before parsing. A non-string tool_response that lacks an
+// `output` string field yields no selection → skip (advisory).
+
+// Normalize Devin's PostToolUse tool_response into the JSON string the
+// selection parsers expect. Devin delivers {success, output, error}; the
+// answer payload is JSON-encoded inside `output`. If the caller already
+// passed a string (test fixtures, codex), pass it through.
+function normalizeToolResponse(toolResponse: unknown): string | null {
+  if (typeof toolResponse === "string") return toolResponse;
+  if (
+    toolResponse !== null &&
+    typeof toolResponse === "object" &&
+    !Array.isArray(toolResponse)
+  ) {
+    const obj = toolResponse as Record<string, unknown>;
+    if (typeof obj.output === "string") return obj.output;
+  }
+  return null;
+}
 
 function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
   const offered = new Map<string, Set<string>>();
@@ -149,10 +166,11 @@ function offeredOptionLabels(toolInput: unknown): Map<string, Set<string>> {
 }
 
 function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): boolean {
-  if (typeof toolResponse !== "string") return false;
+  const json = normalizeToolResponse(toolResponse);
+  if (json === null) return false;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(toolResponse);
+    parsed = JSON.parse(json);
   } catch {
     return false;
   }
@@ -176,9 +194,10 @@ function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): 
 }
 
 function explicitHumanSelectionText(toolResponse: unknown): string {
-  if (typeof toolResponse !== "string") return "";
+  const json = normalizeToolResponse(toolResponse);
+  if (json === null) return "";
   try {
-    const parsed = JSON.parse(toolResponse) as {
+    const parsed = JSON.parse(json) as {
       answers?: Record<string, { answers?: unknown[] }>;
     };
     for (const selection of Object.values(parsed.answers ?? {})) {
