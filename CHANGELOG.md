@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.125] - 2026-08-30
+## [2.7.1] - 2026-09-01
 
 One systemic fix for the class of workflow dead ends where an integrity refusal prescribed a remedy that another guard refused. Every guard refusal now computes its recovery options from the live workflow state, a repeated identical refusal halts into a single recovery question instead of looping, review/summary attempt state is derived through one shared reducer instead of five independent audit scans, and the engine consults the same guards before directing an action, so a step that would be refused is never instructed: the recovery question or the executable next step is offered directly instead. **Upgrade:** re-copy your harness's `dist/<harness>/` tree into the project so the updated tools, hooks, and orchestrator skill replace the old copies.
 
@@ -19,6 +19,20 @@ One systemic fix for the class of workflow dead ends where an integrity refusal 
 * The turn-end Stop hook recognizes engine-issued questions, approval gates, Plan Approval and summary checkpoints, the post-skeleton autonomy ladder, logged decisions, compose choices, background subagents, and conversational turns before its internal `next` probe, so waiting for a human or worker cannot replace the active directive epoch or discard the pending route.
 * Kiro IDE audit-tail status synchronization treats a later unit-major Construction directive as an intentional interleave rather than rewriting state, preserving the directive epoch and Plan Approval challenge after `aidlc-log decision`.
 * Git source-listing reconstruction now preserves `cat-file --batch` headers that cross its 64 KiB read boundary, so Bolt and Swarm worktree creation cannot fail merely because an earlier source file changed the batch alignment.
+
+## [2.7.0] - 2026-09-01
+
+AI-DLC 2.7.0 consolidates the 2.6.x release cycle into a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** replace the complete `dist/<harness>/` tree in one quiescent operation, then run `/aidlc plugin sync` for every installed plugin. Existing 2.6.124 workflow records require no migration. Before replacing an older shell, finish and archive every workflow created before 2.6.1; the new shell rejects that stale state before `--new-intent` can create fresh work. Upgrades from any release before 2.6.124 must also apply every intervening **Upgrade**, **Breaking**, and migration note below; this roll-up does not replace those one-time actions.
+
+* The lifecycle now has 33 stages: Application Design became Domain Design, Contract Design was added, and the Domain, Functional, and Infrastructure Design outputs were consolidated. Consumers of the retired artifact names must use `components.md`, `contract-summary.md`, `entities.md`, `rules.md`, `functional-spec.md`, and `infrastructure-specification.md`; a merge-copy upgrade must also remove the stale `skills/aidlc-application-design/` runner.
+* Classic and Express are first-class scopes, and Classic is the implicit default. Set `AWS_AIDLC_DEFAULT_SCOPE=feature` to retain the previous full-lifecycle default.
+* Human gates, plan approval, review freezes, and source-bound reviewer receipts now use deterministic authority checks. Structured-question protocol guidance requires self-explanatory prompts and reuse of answers already recorded in the current workflow. Every custom or plugin stage that declares `reviewer:` must add `review_artifact:` naming one required Markdown output from `produces[]`; for per-Unit stages that target must cover every applicable Unit kind.
+* Construction resolves the team's affirmed Testing Posture or its documented fallback, supports bounded Build and Test loop-back, and binds review authority to Git and non-Git source state. Autonomous mode skips the remaining stage gates under its final-batch contract, while team-owned Units can converge from independent clones or sibling worktrees through a pinned human-gated merge.
+* Reverse Engineering and CodeKB require complete current-attempt evidence and support generation-checked focused rescans that merge newly analyzed areas without replacing unrelated knowledge.
+* Intent Capture and Requirements Analysis can ingest bounded project documents and existing requirements through a separate trust-marked document-input path.
+* Plugin workflows gained selection-aware composition and doctor checks plus offline create, validate, build, and compose-test tooling. Engine replacement restores the stock graph, so `/aidlc plugin sync` is required after every upgrade; automation must treat exit 1 as an incomplete plugin installation when configured roots are unusable.
+* Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode now share stronger session binding, single-use continuation, hook diagnostics, human-presence checks, and delegated-agent attribution. Any unattended driver that submits prompts without a person present must set `AIDLC_UNATTENDED=1`. Codex users must run `bun scripts/package.ts codex trust --project <absolute-project-path>`, replace existing entries for those hook paths, and start a fresh Codex session. Claude Code users must approve project hooks through `/hooks` and fully restart; a reported `disableAllHooks` setting must be removed or overridden in an editable layer, while `allowManagedHooksOnly` requires an administrator policy change.
+* Integrations that consume adaptive-composer proposals must rename `birthDescription` to `creationDescription`; scripts that consume the retired design artifact names must migrate before reading 2.7.0 outputs.
 
 ## [2.6.124] - 2026-08-28
 
