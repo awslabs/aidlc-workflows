@@ -142,10 +142,10 @@ function readRulesets(directory: string): JsonRecord[] {
 
 function verifyControls(args: string[]): void {
   const rulesets = readRulesets(requiredOption(args, "--rulesets"));
-  const reviewerId = requiredOption(args, "--reviewer-id");
-  const reviewerType = requiredOption(args, "--reviewer-type");
-  if (reviewerType !== "Team" && reviewerType !== "User") {
-    throw new Error(`unsupported reviewer actor type: ${reviewerType}`);
+  const creationActorId = requiredOption(args, "--creation-actor-id");
+  const creationActorType = requiredOption(args, "--creation-actor-type");
+  if (creationActorType !== "Integration") {
+    throw new Error(`unsupported release creation actor type: ${creationActorType}`);
   }
 
   const relevant = rulesets.filter((ruleset) => {
@@ -182,8 +182,8 @@ function verifyControls(args: string[]): void {
     const actors = ruleset.bypass_actors;
     if (actors.length !== 1) return false;
     const actor = record(actors[0], "creation bypass actor");
-    return String(actor.actor_id) === reviewerId &&
-      actor.actor_type === reviewerType &&
+    return String(actor.actor_id) === creationActorId &&
+      actor.actor_type === creationActorType &&
       actor.bypass_mode === "always";
   });
 
@@ -199,7 +199,7 @@ function verifyControls(args: string[]): void {
   if (creation.length !== 1) {
     throw new Error(
       `repository policy failure: expected exactly one active v* creation ruleset ` +
-        `with the documented reviewer always-bypass, found ${creation.length}`,
+        `with the protected release App always-bypass, found ${creation.length}`,
     );
   }
   if (immutability.length !== 1) {
@@ -363,8 +363,8 @@ function main(): void {
     return;
   }
   throw new Error(
-    "usage: verify-release.ts controls --rulesets <dir> --reviewer-id <id> " +
-      "--reviewer-type <Team|User> | candidate --directory <dir> --tag <vX.Y.Z> " +
+    "usage: verify-release.ts controls --rulesets <dir> --creation-actor-id <id> " +
+      "--creation-actor-type <Integration> | candidate --directory <dir> --tag <vX.Y.Z> " +
       "[--source-digest <sha>] [--list-assets]",
   );
 }

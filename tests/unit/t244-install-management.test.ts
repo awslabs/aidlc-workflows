@@ -53,6 +53,7 @@ const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const INSTALL_SH = join(REPO_ROOT, "scripts", "install.sh");
 const INSTALL_PS1 = join(REPO_ROOT, "scripts", "install.ps1");
 const RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
+const RELEASE_PUBLISHER = join(REPO_ROOT, "scripts", "publish-release.ts");
 const V1_RELEASE_DISPATCH_WORKFLOW = join(
   REPO_ROOT,
   ".github",
@@ -1574,8 +1575,8 @@ describe("t244 Windows and completion release surfaces", () => {
       },
       rules: [{ type: "creation" }],
       bypass_actors: [{
-        actor_id: 42,
-        actor_type: "Team",
+        actor_id: 4242,
+        actor_type: "Integration",
         bypass_mode: "always",
       }],
     };
@@ -1605,10 +1606,10 @@ describe("t244 Windows and completion release surfaces", () => {
         "controls",
         "--rulesets",
         directory,
-        "--reviewer-id",
-        "42",
-        "--reviewer-type",
-        "Team",
+        "--creation-actor-id",
+        "4242",
+        "--creation-actor-type",
+        "Integration",
       ], REPO_ROOT);
     };
 
@@ -1791,13 +1792,14 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(parsed.permissions).toEqual({ contents: "read" });
     expect(parsed.jobs["native-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(parsed.jobs["musl-smoke"].strategy?.["fail-fast"]).toBe(false);
-    expect(workflow).toContain("name: Authorize immutable release tag");
+    expect(workflow).toContain("name: Authorize release source and unused tag");
     expect(workflow).toContain("name: Verify release repository controls");
     expect(workflow).toContain("name: Require protected release authorization identity");
     expect(workflow).toContain(
       "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
     );
     expect(workflow).toContain("permission-administration: write");
+    expect(workflow).toContain("permission-contents: write");
     expect(workflow).toContain("AIDLC_RELEASE_AUTH_APP_ID");
     expect(workflow).toContain("AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY");
     expect(workflow).toContain("authorization identity failure");
@@ -1809,17 +1811,17 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).toContain(".enabled == true and .enforced_by_owner == true");
     expect(workflow).toContain('[.[].branch_policies[]][0].name == "main"');
     expect(workflow).toContain("bun scripts/verify-release.ts controls");
+    expect(workflow).toContain('--creation-actor-type Integration');
     expect(workflow).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(workflow).toContain("git fetch --no-tags origin main");
-    expect(workflow).toContain(
-      'test "$tag_sha" = "$main_sha"',
-    );
+    expect(workflow).toContain('test -z "$tag_refs"');
+    expect(workflow).not.toContain("tag_sha=");
     expect(workflow).toContain('test "$GITHUB_REF" = "refs/heads/main"');
     expect(workflow).not.toContain("\n  push:");
     expect(workflow).not.toContain("origin/v2");
-    expect(workflow.indexOf("name: Authorize immutable release tag"))
+    expect(workflow.indexOf("name: Authorize release source and unused tag"))
       .toBeLessThan(workflow.indexOf("name: Mint release authorization token"));
-    expect(workflow.indexOf("name: Authorize immutable release tag"))
+    expect(workflow.indexOf("name: Authorize release source and unused tag"))
       .toBeLessThan(workflow.indexOf("bun scripts/verify-release.ts controls"));
     expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     expect(workflow).toContain("AIDLC_RELEASE_SOURCE_DIGEST:");
@@ -2137,7 +2139,8 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(parsed.jobs.publish.environment).toBe("release");
     const publish = workflowJob(workflow, "publish");
     expect(publish).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
-    expect(publish).toContain("refs/remotes/origin/aidlc-release-tag^{commit}");
+    expect(publish).toContain("git fetch --no-tags origin main");
+    expect(publish).toContain('test -z "$tag_refs"');
     expect(publish).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     expect(publish).toContain("sha256sum -c checksums.txt");
     expect(publish).toContain("name: Attest staged release assets");
@@ -2175,16 +2178,21 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(parsed.jobs["verify-release"]).toBeUndefined();
     expect(workflow).not.toContain("\n  verify-release:\n");
     expect(parsed.jobs.promote.needs).toEqual(["authorize", "publish"]);
-    expect(parsed.jobs.promote.permissions).toEqual({ contents: "write" });
+    expect(parsed.jobs.promote.permissions).toEqual({ contents: "read" });
     expect(parsed.jobs.promote.environment).toBe("release");
     expect(parsed.jobs.promote.if).toBeUndefined();
     const writeCapableJobs = Object.entries(parsed.jobs)
       .filter(([, job]) => job.permissions?.contents === "write");
-    expect(writeCapableJobs.map(([name]) => name).sort()).toEqual(["promote"]);
-    for (const [, job] of writeCapableJobs) {
-      expect(job.environment).toBe("release");
-    }
+    expect(writeCapableJobs).toEqual([]);
     const promote = workflowJob(workflow, "promote");
+    expect(promote).toContain("name: Mint release publication token");
+    expect(promote).toContain("name: Re-verify release repository controls");
+    expect(promote).toContain("permission-contents: write");
+    expect(promote).toContain("permission-administration: write");
+    expect(promote).toContain(
+      `GH_TOKEN: \${{ steps.release-publication-token.outputs.token }}`,
+    );
+    expect(promote.match(/bun scripts\/verify-release\.ts controls/g)).toHaveLength(1);
     expect(promote).toContain(
       "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
     );
@@ -2259,8 +2267,9 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(promote).not.toContain('AIDLC_RELEASE_REPOSITORY="awslabs');
   });
 
-  test("release MUST 5: publication verifies the immutable remote bytes", () => {
+  test("release MUST 5: publication conditionally freezes the verified draft", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
+    const publisher = readFileSync(RELEASE_PUBLISHER, "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
       jobs: Record<string, {
         needs?: string | string[];
@@ -2271,36 +2280,63 @@ describe("t244 Windows and completion release surfaces", () => {
       }>;
     };
     expect(parsed.jobs.promote.needs).toEqual(["authorize", "publish"]);
-    expect(parsed.jobs.promote.permissions).toEqual({ contents: "write" });
+    expect(parsed.jobs.promote.permissions).toEqual({ contents: "read" });
     expect(parsed.jobs.promote.environment).toBe("release");
     expect(parsed.jobs.promote.if).toBeUndefined();
     const verificationStep = parsed.jobs.promote.steps?.find(
       (step) => step.name === "Authenticate and verify immutable release bytes",
     );
     const promotionStep = parsed.jobs.promote.steps?.find(
-      (step) => step.name === "Publish exact verified release bytes",
+      (step) => step.name === "Conditionally publish exact verified release bytes",
     );
     expect(verificationStep).toBeDefined();
     expect(verificationStep?.if).toBeUndefined();
     expect(promotionStep).toBeDefined();
     expect(promotionStep?.if).toBeUndefined();
     const promote = workflowJob(workflow, "promote");
-    expect(promote).toContain(
-      'gh release create "$RELEASE_TAG" "$release"/*',
-    );
-    expect(promote).toContain("--verify-tag");
+    expect(promote).toContain("bun scripts/publish-release.ts");
+    expect(promote).toContain('--repository "$GH_REPO"');
+    expect(promote).toContain('--staging-tag "$STAGING_TAG"');
+    expect(promote).toContain('--target "$AUTHORIZED_SHA"');
+    expect(promote).toContain("--expected-assets 13");
+    expect(promote).not.toContain("gh release create");
     expect(promote).not.toContain("gh release edit");
-    expect(promote).toContain('gh release view "$RELEASE_TAG"');
-    expect(promote).toContain('gh release download "$RELEASE_TAG"');
-    expect(promote).toContain(".isImmutable == true");
+    expect(promote).not.toContain("gh release view");
+    expect(promote).not.toContain("gh release download");
+    expect(promote.indexOf("name: Mint release publication token"))
+      .toBeLessThan(promote.indexOf("name: Re-verify release repository controls"));
+    expect(promote.indexOf("name: Re-verify release repository controls"))
+      .toBeLessThan(promote.indexOf("name: Conditionally publish exact verified release bytes"));
     expect(promote).toContain(
       'sha256sum -c "$RUNNER_TEMP/aidlc-verified-release.sha256"',
     );
-    expect(promote).not.toContain("--draft");
+    expect(publisher).toContain("draft: true");
+    expect(publisher).toContain("releasesUrl}/generate-notes");
+    expect(publisher.match(/name: notes\.name/g)).toHaveLength(2);
+    expect(publisher.match(/body: notes\.body/g)).toHaveLength(2);
+    expect(publisher).toContain("release.name !== notes.name");
+    expect(publisher).toContain("release.body !== notes.body");
+    expect(publisher).toContain("tag_name: options.stagingTag");
+    expect(publisher).toContain("target_commitish: options.targetCommitish");
+    expect(publisher).toContain('"If-Match": etag');
+    expect(publisher).toContain("stale.status !== 412");
+    expect(publisher).toContain("tag_name: options.tag");
+    expect(publisher).toContain("draft: false");
+    expect(publisher).toContain("await requireTagAbsent(");
+    expect(publisher).toContain("await requireTagTarget(");
+    expect(publisher).toContain("release ETag is not coupled to asset creation");
+    expect(publisher).toContain("release ETag is not coupled to asset metadata changes");
+    expect(publisher).toContain("release ETag is not coupled to asset deletion");
+    expect(publisher.match(/await verifyRemoteBytes\(/g)).toHaveLength(2);
+    expect(publisher).toContain(
+      'throw new Error("draft release changed before conditional publication")',
+    );
     expect(promote.indexOf("name: Authenticate and verify immutable release bytes"))
-      .toBeLessThan(promote.indexOf("name: Publish exact verified release bytes"));
+      .toBeLessThan(
+        promote.indexOf("name: Conditionally publish exact verified release bytes"),
+      );
     expect(promote.lastIndexOf("bun scripts/verify-release.ts candidate"))
-      .toBeLessThan(promote.indexOf('gh release create "$RELEASE_TAG"'));
+      .toBeLessThan(promote.indexOf("bun scripts/publish-release.ts"));
     expect(promote).toContain(
       'sha256sum -c "$RUNNER_TEMP/aidlc-verified-release.sha256"',
     );
@@ -2308,27 +2344,31 @@ describe("t244 Windows and completion release surfaces", () => {
       promote.indexOf(
         'sha256sum -c "$RUNNER_TEMP/aidlc-verified-release.sha256"',
       ),
-    ).toBeLessThan(promote.indexOf('gh release create "$RELEASE_TAG"'));
+    ).toBeLessThan(promote.indexOf("bun scripts/publish-release.ts"));
     expect(workflow).not.toContain("inputs.draft");
     expect(workflow).not.toContain(
       "description: Leave the verified release as a draft for manual promotion",
     );
   });
 
-  test("release MUST 6: verification failure retains artifact evidence and publishes nothing", () => {
+  test("release MUST 6: failed staging drafts are retained without publishing v tags", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
+    const publisher = readFileSync(RELEASE_PUBLISHER, "utf-8");
     const publish = workflowJob(workflow, "publish");
     const promote = workflowJob(workflow, "promote");
     expect(publish).toContain("name: attested-release");
     expect(publish).not.toContain("gh release create");
     expect(promote.indexOf("name: Authenticate and verify immutable release bytes"))
-      .toBeLessThan(promote.indexOf('gh release create "$RELEASE_TAG"'));
+      .toBeLessThan(promote.indexOf("bun scripts/publish-release.ts"));
     expect(promote).not.toContain("gh release delete");
     expect(promote).not.toContain("gh release edit");
     expect(promote).not.toContain("always()");
     expect(promote).not.toContain("continue-on-error");
     expect(workflow).not.toContain("gh release delete");
-    expect(workflow).not.toContain("--draft");
+    expect(workflow).not.toContain("gh release create");
+    expect(publisher).toContain("was retained for inspection");
+    expect(publisher).not.toContain("cleanupAllowed");
+    expect(publisher).not.toContain("draft cleanup failed");
   });
 
   test("the default branch preserves a manual v1 release forwarder", () => {

@@ -31,13 +31,13 @@ digest check does not prove the file on disk is the attested subject.
 
 ## 2. Publication boundary
 
-The publication boundary is one GitHub Release for an existing `v*` tag. The
+The publication boundary is one GitHub Release for an unused `v*` tag. The
 workflow has no tag-push trigger. A maintainer manually dispatches the workflow
-from `refs/heads/main` and names an existing tag. `authorize` fetches the current
-remote `main` and selected tag, then requires `github.sha`, checked-out `HEAD`,
-`origin/main`, and the dereferenced tag commit to be the same commit. This keeps
+from `refs/heads/main` and names the new tag. `authorize` fetches the current
+remote `main`, requires `github.sha`, checked-out `HEAD`, and `origin/main` to
+be the same commit, and fails if the selected tag already exists. This keeps
 the executed workflow code and attestation source ref on trusted `main` while
-binding the release identity to one exact immutable tag target.
+reserving creation of the release identity for the final protected transition.
 The protected `release` environment requires non-author approval and protects
 the authorization App credentials. Its sole deployment policy is the `main`
 branch because GitHub evaluates environment policies against the dispatch ref,
@@ -48,26 +48,38 @@ Administration write, use it to read the otherwise-hidden ruleset bypass
 actors, and emit a distinct authorization identity error when the API omits or
 hides that field.
 
-After the authorization and test gates, `publish` rechecks the authorized tag
-SHA, requires the tag to equal `v<version.json.version>`, re-verifies checksums,
+After the authorization and test gates, `publish` rechecks the authorized main
+SHA and the continued absence of the selected tag, requires the tag to equal
+`v<version.json.version>`, re-verifies checksums,
 attests the candidate, exports the Sigstore bundle, validates the exact
 13-file inventory, and uploads it as the immutable `attested-release` workflow
 artifact. `publish` has signing permissions but only `contents: read`.
 
-The protected `promote` job downloads that immutable artifact and receives the
-only `contents: write` job permission. It authenticates `checksums.txt` through
+The protected `promote` job downloads that immutable artifact. Its workflow
+token remains `contents: read`; immediately before publication it mints a
+current-repository release App token with Administration and Contents write,
+then repeats the environment, immutable-release, and complete ruleset
+validation so authorization cannot go stale during the build. It authenticates `checksums.txt` through
 both GitHub's online attestation path and the exported bundle before reading
 any checksum or manifest data. It then validates `version.json`, verifies every
 manifest asset through both provenance paths, records the complete local digest
 set, runs the real online-install journey from a separate copy, rechecks the
-untouched publication directory, and finally uses
-`gh release create --verify-tag` with that exact directory. GitHub CLI
-internally creates a mutable draft, uploads assets through separate API calls,
-and then publishes it. The repository therefore requires immutable releases
-before publication. After `gh release create` returns, the workflow requires
-the release to be published and immutable, compares the exact remote asset
-inventory with the local 13-file set, downloads every published asset, and
-checks the complete local digest ledger against those downloaded bytes.
+untouched publication directory, and creates a private GitHub Release draft.
+`scripts/publish-release.ts` creates the draft under a unique non-release
+staging tag, uploads the exact 13-file set, compares the remote
+inventory, and downloads every draft asset to check it against the local digest
+set. Before publication it performs live, non-destructive API contract probes:
+release ETags must change when a probe asset is created, renamed, and deleted;
+a matching `If-Match` must permit an idempotent draft update; and a stale
+`If-Match` must return `412`. The final update carries the ETag of the exact
+verified draft while atomically changing `tag_name` to the unused `v*` tag,
+binding `target_commitish` to the authorized main SHA, and setting
+`draft: false`. The creation ruleset's sole bypass actor is the release App, so
+ordinary repository writers cannot publish the staging draft as the official
+release. A concurrent release or asset mutation changes the ETag and fails the
+conditional update before publication. If the App update wins, it creates the
+guarded tag and owner-enforced immutable releases prevent any later asset or
+tag change.
 
 Published releases are immutable by policy. A defective artifact is corrected
 by a new patch release. A compromised release is excluded from update
@@ -132,14 +144,14 @@ and administrator bypass are disabled, and `main` is the only deployment
 policy. It separately requires immutable releases to be enabled and enforced by
 the repository owner. It also requires
 two separate active tag rulesets over exactly `refs/tags/v*`, with no
-exclusions: a creation-only ruleset with exactly the documented reviewer actor
-in `always` bypass mode, and an update-plus-deletion ruleset with no bypass
-actors. Any additional active ruleset whose creation, update, or deletion
+exclusions: a creation-only ruleset with exactly the protected release App
+integration in `always` bypass mode, and an update-plus-deletion ruleset with no
+bypass actors. Any additional active ruleset whose creation, update, or deletion
 controls can apply to `v*` also fails closed, including broader `~ALL` tag
 rulesets. Combined controls, extra actors, wrong modes, hidden actor data, or
 partial namespaces fail closed. Every source-consuming job checks out the
-authorized main SHA, and both protected release jobs recheck the remote tag
-target.
+authorized main SHA, and both protected release jobs recheck that the final tag
+is still absent.
 
 ### Mirror or download tampering
 
@@ -167,16 +179,18 @@ that version explicitly and retain their own accepted-version floor.
 
 ### Partial publication failure
 
-Publication has no destructive automatic rollback. Failed verification inside
-`promote` occurs before `gh release create`, so no GitHub Release exists and
-the immutable `attested-release` workflow artifact plus transparency-log
-entries retain the evidence. During `gh release create`, another principal with
-release-write access could alter the internal draft before publication. The
-post-publication inventory and digest checks detect that condition, but once
-published the immutable release cannot be repaired in place. A create, upload,
-or remote-verification failure may therefore leave an incomplete or incorrect
-immutable release record. The workflow never edits or deletes it automatically;
-the named publication owner publishes a corrective patch release.
+Publication has no destructive rollback after the conditional publish succeeds.
+Failed creation, upload, verification, API-contract probing, or ETag comparison
+occurs under the non-release staging tag; the workflow retains that release for
+inspection, while the immutable `attested-release` workflow artifact plus
+transparency-log entries retain the build evidence. If the final API response
+is lost, the publisher rereads the release: an exact immutable release and tag
+are accepted, while an unreadable or ambiguous result is left untouched for the
+named publication owner. No automatic cleanup risks deleting a release that
+another principal may have published under the staging identity; a staging ref
+created by GitHub is retained for the same reason. Once the
+conditional App update succeeds, the official tag and published assets are both
+byte-verified and immutable.
 
 ### Compromised release
 
@@ -303,12 +317,11 @@ schema.
 - `publish` validates the bundle-complete candidate and transfers it through
   the immutable v4 workflow-artifact service; it cannot create or edit a
   GitHub Release.
-- `promote` receives `contents: write` inside the protected `release`
-  environment, authenticates metadata before use, verifies every asset and
-  both provenance paths, rehearses the real online installer from a copy,
-  rechecks the original digest set, creates the release from the verified local
-  directory, then validates immutable state and redownloads every remote asset
-  against that digest set.
+- `promote` keeps its workflow token at `contents: read`, authenticates
+  metadata before use, verifies every asset and both provenance paths,
+  rehearses the real online installer from a copy, and rechecks the original
+  digest set. Only its final protected step mints the release App's
+  `contents: write` token for the conditional staging-tag-to-`v*` publication.
 - No job outside the protected `release` environment receives any write
   permission.
 - OIDC supplies short-lived identity to Sigstore; no long-lived signing key is
@@ -337,8 +350,8 @@ The focused review confirms the assignment and the qualifiers below.
 | Duty | Owner |
 |------|-------|
 | Approve the release-prep PR | `@awslabs/aidlc-admins` |
-| Authorize the protected tag | `@awslabs/aidlc-admins` |
-| Publish the GitHub Release | `@awslabs/aidlc-admins` |
+| Approve protected release execution | `@awslabs/aidlc-admins` |
+| Create the protected tag and GitHub Release | Protected release App |
 | Update latest and installer metadata | `@awslabs/aidlc-admins` |
 | Respond to partial publication failure | `@awslabs/aidlc-admins` |
 | Supersede a compromised release | `@awslabs/aidlc-admins` |
@@ -353,13 +366,14 @@ would otherwise have encoded:
   one who authorized the affected tag, because the compromise vector may be
   that member's credentials.
 
-The creation ruleset's bypass actor names the same team, so the setting itself
-enforces who can authorize a release tag, and membership rotation never
-requires touching the ruleset. The separate update-plus-deletion ruleset has
-no bypass actor, including for that team. The GitHub Release is published by
-a main-branch manual dispatch; the team owns that outcome, and the first responder
-for a publication failure is by convention the member who authorized the tag,
-though any member may act.
+The environment reviewer names the team, while the creation ruleset's sole
+bypass actor is the protected release App. A team approval therefore authorizes
+one App-mediated publication without granting ordinary repository credentials
+the ability to create the official tag. The separate update-plus-deletion
+ruleset has no bypass actor, including for the App or team. The GitHub Release
+is published by a main-branch manual dispatch; the team owns that outcome, and
+the first responder for a publication failure is by convention the member who
+approved the protected run, though any member may act.
 
 ## 8. No OS code-signing
 
@@ -423,15 +437,19 @@ and explicit metadata refresh, but does not block a user-requested
   self-review and administrator bypass disabled, exactly the `aidlc-admins`
   reviewer team, and exactly the `main` branch deployment policy.
 - Enable immutable releases and require owner enforcement.
-- Install a current-repository GitHub App with Actions read and Administration
-  write, then store its App ID as the protected-environment variable
+- Install a current-repository GitHub App with Actions read, Administration
+  write, and Contents write, then store its App ID as the protected-environment variable
   `AIDLC_RELEASE_AUTH_APP_ID` and its private key as the protected-environment
   secret `AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY`. Do not store the private key as
   an ordinary repository secret.
 - Create an active creation-only ruleset covering exactly `refs/tags/v*`, with
-  no exclusions and exactly `@awslabs/aidlc-admins` in `always` bypass mode.
+  no exclusions and exactly the protected release App integration in `always`
+  bypass mode.
   Create a separate active update-plus-deletion ruleset over the same exact
   namespace with no exclusions and no bypass actors.
+  Disable or replace any broader active tag ruleset whose creation, update, or
+  deletion controls also apply to `v*`; leaving it active intentionally fails
+  the exact-policy preflight.
 - Decide whether repeated protected-environment approvals across `authorize`,
   `publish`, and `promote` are an acceptable manual-release UX cost. Do not remove
   the environment merely to avoid those approvals; it protects both the App

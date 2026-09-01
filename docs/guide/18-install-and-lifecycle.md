@@ -149,11 +149,12 @@ explicit GitHub CLI executable for both installers.
 Fork release rehearsals also need a protected `release` environment restricted
 to exactly the `main` branch, a
 protected-environment GitHub App identity with Actions read and Administration
-write, and two tag rulesets over exactly `refs/tags/v*` with no exclusions.
-The environment and creation-only ruleset both name exactly the `aidlc-admins`
-team; the creation bypass mode is `always`, and the update-plus-deletion
-ruleset has no bypass actors. Immutable releases must also be enabled and
-enforced by the repository owner.
+write plus Contents write, and two tag rulesets over exactly `refs/tags/v*`
+with no exclusions. The environment names exactly the `aidlc-admins` team as
+reviewer. The creation-only ruleset names exactly that protected release App
+integration in `always` bypass mode; the update-plus-deletion ruleset has no
+bypass actors. Immutable releases must also be enabled and enforced by the
+repository owner.
 
 `AIDLC_INSTALL_ROOT` and `AIDLC_BIN_DIR` override the machine and command
 locations. Those paths must be absolute on Unix. The PowerShell installer also
@@ -190,10 +191,19 @@ complete inventory, and uploads one immutable workflow artifact. The protected
 before reading it, verifies every manifest asset through both provenance paths,
 records the complete digest set, and runs the real installer journey from a
 separate copy. It then rechecks the untouched publication directory and creates
-the GitHub Release from those exact bytes. GitHub CLI uses a short mutable
-draft while uploading, so the repository requires immutable releases and the
-workflow then compares the published inventory and redownloaded bytes against
-the complete local digest set. The bundle is intentionally outside `version.json` and
+the GitHub Release as a private draft after minting a fresh App token and
+revalidating the environment, immutable-release setting, and complete ruleset
+set. It verifies the draft's complete inventory and
+redownloaded bytes, and probes that release ETags change for asset creation,
+metadata changes, and deletion. It also proves a stale `If-Match` request is
+rejected before conditionally retargeting that exact verified staging draft to
+the unused guarded `v*` tag and publishing it. The protected release App is the
+creation ruleset's sole bypass; the workflow's normal token and ordinary
+repository writers have read-only or non-bypass authority. A concurrent draft
+change therefore returns `412`, and a writer cannot publish the staging draft
+as the official release. Failed staging releases remain available to the
+release owner for inspection; no automatic cleanup deletes a staging release
+or ref that may have acquired independent evidence. The bundle is intentionally outside `version.json` and
 `checksums.txt`: those files cover the installable artifacts, while the bundle
 is its own Sigstore trust channel.
 TLS, SHA-256, and that provenance are the permanent trust model. OS
