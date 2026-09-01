@@ -155,3 +155,18 @@ POLL LOG
   Audit file: 764 lines, last modified 18:57 local (21:57 UTC)
   User is reviewing the 167-line code generation plan with 12 implementation steps.
 
+[Poll #9 @ ~2026-08-31T22:12:00Z] Events=17 | HUMAN_TURN=5 GATE_APPROVED=1 PLAN_BLOCKED=12 PLAN_RECORDED=0 SUBAGENT=0 WC=0 SE=0
+  Stage: Current Stage: code-generation | Last Updated: 2026-08-31T21:51:31Z |
+  User responded to plan approval gate (HUMAN_TURN=5 @ 22:08:44Z).
+  But PLAN_APPROVAL_RECORDED not yet emitted. [Answer] field in questions file is empty.
+  New events since Poll #8:
+    - HUMAN_TURN @ 22:08:44Z (user's 5th turn - plan approval response)
+    - PLAN_APPROVAL_BLOCKED @ 22:09:01Z (1 more block, target empty)
+    - ARTIFACT_UPDATED x2 @ 22:09:34Z, 22:09:43Z (questions file updated)
+    - DECISION_RECORDED @ 22:09:46Z (re-recorded plan approval decision with new fingerprint)
+    - ERROR_LOGGED @ 22:07:43Z (plan approval recording failed - "requires the actual offered choice")
+  [NOTE: PLAN_APPROVAL_BLOCKED = 12 (run 1 had 15, target 0) - IMPROVED but not zero]
+  [NOTE: Plan approval recording may have issues - [Answer] field still empty]
+  [NOTE: No SUBAGENT_COMPLETED yet - subagent dispatch not yet fired]
+  [NOTE: No application code files created yet - waiting for plan approval]
+

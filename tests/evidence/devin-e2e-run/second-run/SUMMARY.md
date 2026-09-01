@@ -94,7 +94,7 @@
 | PLAN_APPROVAL_RECORDED | 0 | Run 1: 1 (manual hack) — **run 2: 0 (genuine approval couldn't be recorded)** |
 | SUBAGENT_COMPLETED | 0 | Run 1: 0 (both runs: not reached) |
 | WORKFLOW_COMPLETED | 0 | Run 1: 1 (run 2: blocked) |
-| SESSION_ENDED | 0 | Run 1: 3 (run 2: session not exited cleanly) |
+| SESSION_ENDED | 1 | Run 1: 3 (run 2: session exited cleanly at 01:31 UTC after user stopped the run) |
 
 ## Root Cause: Harness Adapter Bug in `hasExplicitHumanSelection()`
 
