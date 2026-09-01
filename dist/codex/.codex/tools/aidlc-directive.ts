@@ -1136,7 +1136,7 @@ function checkGuardRemedies(
             `${kind}: remedies[${index}].command must not contain unresolved placeholders`,
           );
         }
-        if (!/^bun \.[A-Za-z0-9_-]+\/tools\/aidlc-[A-Za-z0-9-]+\.ts(?:\s|$)/.test(remedy.command)) {
+        if (!/^bun \.[A-Za-z0-9_.-]+\/tools\/aidlc-[A-Za-z0-9-]+\.ts(?:\s|$)/.test(remedy.command)) {
           errors.push(
             `${kind}: remedies[${index}].command must be a bun-qualified packaged AIDLC tool invocation`,
           );

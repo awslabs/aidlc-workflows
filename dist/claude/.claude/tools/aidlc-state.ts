@@ -61,6 +61,7 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  guardRecoveryFeedbackStatus,
   type GuardAttemptState,
   type GuardRefusal,
   guardRefusalOutput,
@@ -5717,6 +5718,26 @@ function handleReject(args: string[]): void {
       `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
         "cancellation boilerplate. Re-present the original held gate with every offered choice " +
         "and wait for the human to choose one.",
+    );
+  }
+  const feedbackStatus = guardRecoveryFeedbackStatus(
+    pd,
+    content,
+    slug,
+    teamGate?.unit,
+    feedback,
+  );
+  if (feedbackStatus === "awaiting-feedback") {
+    error(
+      `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
+        `feedback. Ask "What should change?", end the turn, and wait for the ` +
+        "human's separate response before retrying.",
+    );
+  }
+  if (feedbackStatus === "mismatch") {
+    error(
+      `Refusing to reject "${slug}": --feedback does not exactly match the ` +
+        "human's separate guard-recovery response. Pass their text unchanged.",
     );
   }
 

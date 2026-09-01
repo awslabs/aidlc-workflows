@@ -4165,6 +4165,12 @@ interface ActiveDirectiveResume {
   issuing_session: string; issuing_intent_uuid: string | null; action?: ResumeAction;
 }
 
+interface ActiveDirectiveGuardRecoveryResponse {
+  status: "awaiting-feedback" | "ready";
+  selection_sha256: string;
+  feedback_sha256?: string;
+}
+
 export interface ActiveDirectiveMarker {
   version: 1 | 2; stage: string; unit?: string; state_sha256: string;
   units?: string[];
@@ -4173,6 +4179,8 @@ export interface ActiveDirectiveMarker {
   code_generation_authority_revision?: number;
   cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
+  ask_type?: string;
+  guard_recovery_response?: ActiveDirectiveGuardRecoveryResponse;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
   active_attempt?: ActiveDirectiveAttempt; resume?: ActiveDirectiveResume;
@@ -4641,6 +4649,9 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   const integer = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
   const attempt = isPlainObject(parsed.active_attempt) ? parsed.active_attempt : null;
   const resume = isPlainObject(parsed.resume) ? parsed.resume : null;
+  const guardRecovery = isPlainObject(parsed.guard_recovery_response)
+    ? parsed.guard_recovery_response
+    : null;
   const kinds: ActiveDirectiveKind[] = ["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"];
   if (
     parsed.version !== 2 || !/^[0-9a-f]{64}$/.test(String(parsed.project_sha256 ?? "")) ||
@@ -4663,6 +4674,21 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
       )) ||
     ("cursor_harness" in parsed &&
       (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
+    ("ask_type" in parsed &&
+      (typeof parsed.ask_type !== "string" || !/^[a-z][a-z0-9-]*$/.test(parsed.ask_type))) ||
+    ("guard_recovery_response" in parsed &&
+      (
+        parsed.kind !== "ask" ||
+        parsed.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+        !guardRecovery ||
+        !["awaiting-feedback", "ready"].includes(String(guardRecovery.status)) ||
+        !/^[0-9a-f]{64}$/.test(String(guardRecovery.selection_sha256 ?? "")) ||
+        (
+          guardRecovery.status === "ready"
+            ? !/^[0-9a-f]{64}$/.test(String(guardRecovery.feedback_sha256 ?? ""))
+            : "feedback_sha256" in guardRecovery
+        )
+      )) ||
     typeof parsed.owner_session !== "string" || parsed.owner_session.length === 0 ||
     !integer(parsed.revision) || !integer(parsed.owner_epoch) || !integer(parsed.context_epoch) ||
     !integer(parsed.event_sequence) || !integer(parsed.human_sequence) || !integer(parsed.engine_sequence) ||
@@ -4885,6 +4911,8 @@ function crossActiveDirectiveBoundary(
   return { ...invalidateActiveDirectiveDelivery(marker), state_sha256: stateSha256,
     intent_uuid: intentUuid, state_present: statePresent,
     kind: "error",
+    ask_type: undefined,
+    guard_recovery_response: undefined,
     part: undefined, parts: undefined, continue_token: undefined, continue_token_sha256: undefined,
     ...(supersedeResume && marker.resume ? { resume: { ...marker.resume, status: "superseded" } } : {}),
   };
@@ -4912,6 +4940,7 @@ export function writeActiveDirectiveMarker(
   projectDir: string,
   marker: Omit<CopilotDirectiveMetadata, "continueToken" | "stage"> & {
     stage: string;
+    ask_type?: string;
     continue_token?: string;
     state_sha256: string;
     units?: string[];
@@ -5186,6 +5215,10 @@ export function writeActiveDirectiveMarker(
       state_sha256: marker.state_sha256,
       kind: marker.kind,
       stage: marker.stage,
+      ...(marker.ask_type
+        ? { ask_type: marker.ask_type }
+        : { ask_type: undefined }),
+      guard_recovery_response: undefined,
       ...(codeGenerationSourceSha256
         ? { code_generation_source_sha256: codeGenerationSourceSha256 }
         : { code_generation_source_sha256: undefined }),
@@ -5318,7 +5351,10 @@ export function hasCurrentSharedResumeWait(projectDir: string): boolean {
   return currentSharedDirectiveWait(projectDir) === "resume";
 }
 
-export function consumeSharedDirectiveAsk(projectDir: string): boolean {
+export function consumeSharedDirectiveAsk(
+  projectDir: string,
+  humanResponseText = "",
+): boolean {
   return transactActiveDirective(projectDir, (marker, target) => {
     let stateContent: string;
     try {
@@ -5326,7 +5362,36 @@ export function consumeSharedDirectiveAsk(projectDir: string): boolean {
     } catch {
       return { marker, result: false, preserve: true };
     }
-    const consumable =
+    const response = humanResponseText.trim();
+    const responseSha256 = response
+      ? stateContentSha256(response)
+      : null;
+    const currentGuardRecovery =
+      marker?.version === 2 &&
+      marker.state_sha256 === stateContentSha256(stateContent) &&
+      marker.kind === "ask" &&
+      marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+      marker.needs_rehydrate === false;
+    if (
+      currentGuardRecovery &&
+      marker.delivery === "consumed" &&
+      marker.guard_recovery_response?.status === "awaiting-feedback" &&
+      responseSha256 !== null
+    ) {
+      return {
+        marker: {
+          ...marker,
+          revision: (marker.revision ?? 0) + 1,
+          guard_recovery_response: {
+            ...marker.guard_recovery_response,
+            status: "ready",
+            feedback_sha256: responseSha256,
+          },
+        },
+        result: true,
+      };
+    }
+    const sharedConsumable =
       marker?.version === 2 &&
       marker.owner_session?.startsWith("sessionless:") === true &&
       marker.state_sha256 === stateContentSha256(stateContent) &&
@@ -5335,7 +5400,11 @@ export function consumeSharedDirectiveAsk(projectDir: string): boolean {
       marker.needs_rehydrate === false &&
       marker.resume?.status !== "waiting" &&
       marker.resume?.status !== "selected";
-    if (!consumable) {
+    const guardRecoveryConsumable =
+      currentGuardRecovery &&
+      (marker.delivery === "issued" || marker.delivery === "delivered") &&
+      responseSha256 !== null;
+    if (!sharedConsumable && !guardRecoveryConsumable) {
       return { marker, result: false, preserve: true };
     }
     return {
@@ -5343,10 +5412,50 @@ export function consumeSharedDirectiveAsk(projectDir: string): boolean {
         ...marker,
         revision: (marker.revision ?? 0) + 1,
         delivery: "consumed",
+        ...(guardRecoveryConsumable
+          ? {
+              guard_recovery_response: {
+                status: "awaiting-feedback" as const,
+                selection_sha256: responseSha256,
+              },
+            }
+          : {}),
       },
       result: true,
     };
   });
+}
+
+export type GuardRecoveryFeedbackStatus =
+  | "not-applicable"
+  | "awaiting-feedback"
+  | "mismatch"
+  | "match";
+
+export function guardRecoveryFeedbackStatus(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string | undefined,
+  feedback: string,
+): GuardRecoveryFeedbackStatus {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  if (
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.stage !== stage ||
+    (marker.unit ?? undefined) !== unit
+  ) {
+    return "not-applicable";
+  }
+  if (marker.guard_recovery_response?.status !== "ready") {
+    return "awaiting-feedback";
+  }
+  return marker.guard_recovery_response.feedback_sha256 ===
+      stateContentSha256(feedback.trim())
+    ? "match"
+    : "mismatch";
 }
 
 export interface ContinuationCursorSnapshot {

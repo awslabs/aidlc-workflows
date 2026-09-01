@@ -138,7 +138,7 @@ try {
           humanResponseText,
         );
       }
-      consumeSharedDirectiveAsk(projectDir);
+      consumeSharedDirectiveAsk(projectDir, humanResponseText);
     }
     markHumanTurn(projectDir);
   }

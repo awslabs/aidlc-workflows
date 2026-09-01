@@ -324,6 +324,15 @@ describe("bounded guard-remedy liveness", () => {
         "bun-qualified packaged AIDLC tool invocation",
       );
     }
+
+    expect(validateDirective({
+      ...base,
+      remedies: [{
+        ...base.remedies[0],
+        command:
+          "bun .ported.harness/tools/aidlc-orchestrate.ts next --stage functional-design",
+      }],
+    }).valid).toBe(true);
   });
 
   test("restart remedies execute through every packaged harness", () => {

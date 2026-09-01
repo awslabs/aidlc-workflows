@@ -129,6 +129,7 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  GUARD_RECOVERY_ASK_TYPE,
   type GuardRefusal,
   guardRecoveryAskForRefusal,
   gridCostSummary,
@@ -434,6 +435,14 @@ function prepareEmission(directive: Directive): PreparedEmission {
       marker = {
         kind: "ask",
         stage,
+        ...(transported.ask_type
+          ? { ask_type: transported.ask_type }
+          : {}),
+        ...(transported.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+          "unit" in transported &&
+          typeof transported.unit === "string"
+          ? { unit: transported.unit }
+          : {}),
         state_sha256: sha256(askState),
       };
     }
