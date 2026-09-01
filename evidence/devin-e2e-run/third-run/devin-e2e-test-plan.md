@@ -49,11 +49,19 @@ Carried forward from run 2 — unchanged:
 
 Same as runs 1 and 2 — confirm before starting. **One addition**: confirm the
 fix is actually in the `dist/devin` tree you are about to copy, or the run will
-reproduce the run-2 block.
+reproduce the run-2 block. **A second addition (ensemble binding fix, commit
+10a0fbd0)**: confirm the `### Devin` binding section, the `profile`-field
+mention, the model-resolution note, and the must-dispatch instruction are in
+the tree, or dispatched-topology stages will run inline and skip the
+`deliver-stage-rules` / `log-subagent` hooks.
 
 | Item | Requirement | Check |
 |------|-------------|-------|
 | Adapter fix present | `normalizeToolResponse` defined in the shipped adapter | `grep -n 'function normalizeToolResponse' dist/devin/.devin/hooks/aidlc-devin-adapter.ts` -> must match (run 2's tree would NOT match) |
+| Ensemble binding present | `### Devin` section in the ensemble protocol | `grep -n '### Devin' dist/devin/.devin/aidlc-common/protocols/stage-protocol-ensemble.md` -> must match (run 2's tree would NOT match) |
+| `profile`-field mechanic | the Devin binding names the `profile` field | `grep -n 'profile' dist/devin/.devin/aidlc-common/protocols/stage-protocol-ensemble.md` -> must match (the hooks match on `tool_input.profile`, not the prompt text) |
+| Model-resolution note | the Devin binding names the default subagent model | `grep -n 'default subagent model\|SWE-1.6' dist/devin/.devin/aidlc-common/protocols/stage-protocol-ensemble.md` -> must match |
+| Must-dispatch instruction | the conductor SKILL carries the must-dispatch paragraph | `grep -n 'Dispatched topologies must dispatch' dist/devin/.devin/skills/aidlc/SKILL.md` -> must match |
 | dist in sync | `bun scripts/package.ts --check` clean | `bun scripts/package.ts --check` -> `package --check: all harness trees in sync` |
 | Devin CLI | >= 3000.3.0 on PATH | `devin --version` -> must show `3000.3.0` or higher |
 | bun | on PATH (non-interactive shells source `~/.zshenv`/`~/.bashrc`) | `which bun` -> must resolve |
@@ -73,6 +81,27 @@ trail would contaminate this run).
    grep -n 'function normalizeToolResponse' dist/devin/.devin/hooks/aidlc-devin-adapter.ts
    # must match line ~131. If it does NOT match, stop — re-run
    # `bun scripts/package.ts` and re-check before proceeding.
+
+   # Ensemble binding fix (commit 10a0fbd0): the conductor must have a
+   # Devin-specific topology binding or it falls back to inline execution.
+   grep -n '### Devin' dist/devin/.devin/aidlc-common/protocols/stage-protocol-ensemble.md
+   # must match. A missing match means the ensemble protocol lacks the
+   # Devin binding section and dispatched-topology stages will run inline.
+
+   grep -n 'profile' dist/devin/.devin/aidlc-common/protocols/stage-protocol-ensemble.md
+   # must match in the ### Devin section — the adapter and the
+   # deliver-stage-rules / plan-approval-guard hooks match on
+   # tool_input.profile, not the prompt text; omitting it silently skips
+   # the hooks.
+
+   grep -n 'default subagent model\|SWE-1.6' dist/devin/.devin/aidlc-common/protocols/stage-protocol-ensemble.md
+   # must match in the ### Devin section — the model-resolution note that
+   # surfaces the dispatch-vs-inline quality tradeoff (dispatched agents
+   # run on SWE-1.6 by default, not the parent's model).
+
+   grep -n 'Dispatched topologies must dispatch' dist/devin/.devin/skills/aidlc/SKILL.md
+   # must match — the belt-and-suspenders must-dispatch instruction in the
+   # conductor SKILL itself.
    ```
 
 2. **Copy the distribution into a fresh git project:**
@@ -91,6 +120,15 @@ trail would contaminate this run).
    grep -n 'function normalizeToolResponse' ~/devin-e2e-test-3/.devin/hooks/aidlc-devin-adapter.ts
    # must match. This is the single most important pre-flight check —
    # a missing match means you copied a stale tree and will reproduce run 2.
+
+   # Ensemble binding fix — confirm the binding and must-dispatch instruction
+   # landed in the copied tree (not just the source repo):
+   grep -n '### Devin' ~/devin-e2e-test-3/.devin/aidlc-common/protocols/stage-protocol-ensemble.md
+   # must match
+   grep -n 'profile' ~/devin-e2e-test-3/.devin/aidlc-common/protocols/stage-protocol-ensemble.md
+   # must match
+   grep -n 'Dispatched topologies must dispatch' ~/devin-e2e-test-3/.devin/skills/aidlc/SKILL.md
+   # must match
    ```
 
 4. **Run the doctor:**
@@ -465,7 +503,7 @@ Same diagnostics as runs 1 and 2, plus the run-3-specific regression check:
 | `no new human reply` errors on `ask_user_question` answers (run-2 symptom recurs) | Same — fix missing | Same diagnostic. Also confirm `bun scripts/package.ts --check` is clean in the source repo. |
 | No welcome message on session start | Hooks not approved / workspace not trusted | Approve workspace trust prompt; on older CLI, run `/hooks` and approve all, fully restart |
 | Question fence echoed as text (not native prompt) | Conductor didn't use `ask_user_question` | Check `question-rendering.md` is present at `.devin/skills/aidlc/question-rendering.md`; check the adapter translates the `ask` directive |
-| No `SUBAGENT_COMPLETED` | Conductor ran `code-generation` inline (not via `run_subagent`) | Now a genuine conductor-side choice (not a block) — record as a finding; the two `run_subagent`-matcher hooks remain unverified and 17/17 is not reachable |
+| No `SUBAGENT_COMPLETED` | Conductor ran `code-generation` inline (not via `run_subagent`) | The ensemble binding fix (commit 10a0fbd0) makes dispatch mandatory — inline execution is now a bug, not a choice. Confirm the `### Devin` binding and the must-dispatch instruction are in the copied tree: `grep -n '### Devin' ~/devin-e2e-test-3/.devin/aidlc-common/protocols/stage-protocol-ensemble.md` and `grep -n 'Dispatched topologies must dispatch' ~/devin-e2e-test-3/.devin/skills/aidlc/SKILL.md` — both must match. If either is missing, you copied a stale tree; re-run Phase 0 step 1-3. If both are present and the conductor still runs inline, the agent slug was not passed as the `profile` field of the `run_subagent` call — the hooks match on `tool_input.profile`, not the prompt text. |
 | No `ARTIFACT_*` in audit | `audit-and-sensors` hook didn't fire | Check the adapter translated the tool name (`edit`->`Edit`, `write`->`Write`) |
 | Workflow doesn't advance past gate | `report` not called after approval | The conductor should call `report --result completed` after your `ask_user_question` answer; if it doesn't, the adapter isn't wiring the answer through |
 | `continue-workflow` doesn't block | No active workflow state | Check `aidlc-state.md` exists and `Current Stage` is set |
@@ -477,6 +515,8 @@ Same diagnostics as runs 1 and 2, plus the run-3-specific regression check:
 cd /home/wiley/sources/aidlc-workflows
 bun scripts/package.ts --check
 grep -n 'function normalizeToolResponse' dist/devin/.devin/hooks/aidlc-devin-adapter.ts  # must match
+grep -n '### Devin' dist/devin/.devin/aidlc-common/protocols/stage-protocol-ensemble.md  # must match
+grep -n 'Dispatched topologies must dispatch' dist/devin/.devin/skills/aidlc/SKILL.md  # must match
 
 # 1. Setup (FRESH project — do not reuse ~/devin-e2e-test-2 from run 2)
 mkdir ~/devin-e2e-test-3 && cd ~/devin-e2e-test-3
@@ -486,6 +526,8 @@ git add -A && git -c user.email=t@t -c user.name=t commit -qm "install aidlc (po
 
 # 2. Confirm the fix landed in the copied tree (THE critical pre-flight)
 grep -n 'function normalizeToolResponse' .devin/hooks/aidlc-devin-adapter.ts  # must match
+grep -n '### Devin' .devin/aidlc-common/protocols/stage-protocol-ensemble.md  # must match
+grep -n 'Dispatched topologies must dispatch' .devin/skills/aidlc/SKILL.md  # must match
 
 # 3. Doctor
 bun .devin/tools/aidlc-utility.ts doctor
