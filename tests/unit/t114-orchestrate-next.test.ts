@@ -80,6 +80,7 @@ import {
   FIXTURES_DIR,
   resetAidlcEnv,
   runOrchestrateNext,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -93,6 +94,10 @@ const SKILL_MD = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
 const BROWNFIELD_INIT_DONE = join(FIXTURES_DIR, "state-brownfield-init-done.md");
 const MID_INCEPTION = join(FIXTURES_DIR, "state-mid-inception.md");
+const CONSTRUCTION_BOLT1 = join(
+  FIXTURES_DIR,
+  "state-construction-bolt1.md",
+);
 
 interface RunResult {
   rc: number;
@@ -112,6 +117,34 @@ function runNext(
     env: { ...process.env, ...extraEnv },
   });
   return { rc: res.status, out: res.out };
+}
+
+function seedPostSkeletonAutonomyState(project: string): void {
+  seedStateFile(project, CONSTRUCTION_BOLT1);
+  const statePath = seededStateFile(project);
+  const state = readFileSync(statePath, "utf-8")
+    .replace(
+      "- **Revision Count**: 0",
+      "- **Revision Count**: 0\n- **Skeleton Stance**: on\n- **Construction Autonomy Mode**: unset",
+    )
+    .replace(
+      "- [ ] functional-design — EXECUTE",
+      "- [x] functional-design — EXECUTE",
+    )
+    .replace(
+      "- [ ] nfr-requirements — EXECUTE",
+      "- [-] nfr-requirements — EXECUTE",
+    )
+    .replace(
+      "- **Current Stage**: functional-design",
+      "- **Current Stage**: nfr-requirements",
+    )
+    .replace(
+      "- **Next Stage**: nfr-requirements",
+      "- **Next Stage**: nfr-design",
+    );
+  writeFileSync(statePath, state, "utf-8");
+  seedBoltDag(project, ["skeleton"]);
 }
 
 let proj = "";
@@ -175,6 +208,57 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
     };
     expect(directive.kind).toBe("load-steering");
     expect(directive.stage_validity).toBeUndefined();
+  });
+});
+
+describe("t114 post-skeleton autonomy ladder", () => {
+  test("next emits a state-bound typed ask before the next Construction stage", () => {
+    proj = createOrchestrationTestProject();
+    seedPostSkeletonAutonomyState(proj);
+
+    const directive = JSON.parse(runNext(proj, []).out) as {
+      kind?: string;
+      ask_type?: string;
+      response_route?: string;
+      question?: string;
+    };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).toBe("autonomy-ladder");
+    expect(directive.response_route).toBe("set-autonomy");
+    expect(directive.question).toContain("Continue autonomously");
+    expect(directive.question).toContain("Gate every Bolt");
+    expect(
+      JSON.parse(
+        readFileSync(
+          join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+          "utf-8",
+        ),
+      ),
+    ).toMatchObject({
+      version: 2,
+      kind: "ask",
+      stage: "nfr-requirements",
+      delivery: "issued",
+      needs_rehydrate: false,
+    });
+  });
+
+  test("a Stop-hook probe can discover the ladder ask without minting presentation evidence", () => {
+    proj = createOrchestrationTestProject();
+    seedPostSkeletonAutonomyState(proj);
+    const directive = JSON.parse(
+      runNext(proj, [], { AIDLC_STOP_HOOK_PROBE: "1" }).out,
+    ) as {
+      kind?: string;
+      ask_type?: string;
+    };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).toBe("autonomy-ladder");
+    expect(
+      existsSync(
+        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+      ),
+    ).toBe(false);
   });
 });
 

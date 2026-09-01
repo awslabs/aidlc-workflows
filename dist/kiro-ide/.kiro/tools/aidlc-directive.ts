@@ -414,6 +414,19 @@ export interface LegacyPlanApprovalRecoveryAskDirective
   waiting_units?: undefined;
 }
 
+export interface AutonomyLadderAskDirective extends AskDirectiveBase {
+  ask_type: "autonomy-ladder";
+  response_route: "set-autonomy";
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
+}
+
 export interface GuardRecoveryAskDirective extends AskDirectiveBase {
   ask_type: "guard-recovery";
   response_route: "execute-remedy";
@@ -436,6 +449,7 @@ export type AskDirective =
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
+  | AutonomyLadderAskDirective
   | GuardRecoveryAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
@@ -792,10 +806,11 @@ export function validateDirective(obj: unknown): ValidationResult {
         o.ask_type !== "new-work-routing" &&
         o.ask_type !== "unit-claim" &&
         o.ask_type !== "legacy-plan-approval-recovery" &&
+        o.ask_type !== "autonomy-ladder" &&
         o.ask_type !== "guard-recovery"
       ) {
         errors.push(
-          `${kind}: ask_type must be one of new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of new-work-routing | unit-claim | legacy-plan-approval-recovery | autonomy-ladder | guard-recovery, got ${String(o.ask_type)}`,
         );
       }
       if (o.ask_type === "new-work-routing") {
@@ -871,6 +886,30 @@ export function validateDirective(obj: unknown): ValidationResult {
             errors.push(
               `${kind}: ${field} is not valid for legacy-plan-approval-recovery`,
             );
+          }
+        }
+      } else if (o.ask_type === "autonomy-ladder") {
+        if (o.response_route !== "set-autonomy") {
+          errors.push(
+            `${kind}: autonomy-ladder response_route must be "set-autonomy"`,
+          );
+        }
+        for (const field of [
+          "new_work_description",
+          "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+          "recovery_choice",
+          "stage",
+          "unit",
+          "reason_codes",
+          "remedies",
+        ] as const) {
+          if (field in o) {
+            errors.push(`${kind}: ${field} is not valid for autonomy-ladder`);
           }
         }
       } else if (o.ask_type === "guard-recovery") {

@@ -15,12 +15,16 @@ import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import {
+  acquireAuditLock,
   clearActiveDirectiveMarker,
+  currentSharedDirectiveWait,
   readActiveDirectiveMarker,
+  readAllAuditShards,
   readPlanApprovalChallenge,
   readPlanApprovalReceipt,
   readPlanApprovalViolation,
   refreshActiveDirectiveMarker,
+  releaseAuditLock,
   sessionsDir,
   writeActiveDirectiveMarker,
 } from "../../core/tools/aidlc-lib.ts";
@@ -44,6 +48,12 @@ const BUN = process.execPath;
 const projects: string[] = [];
 const barriers: string[] = [];
 const DIST_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
+const CORE_HUMAN_TURN_HOOK = join(
+  REPO_ROOT,
+  "core",
+  "hooks",
+  "aidlc-record-human-turn.ts",
+);
 
 afterAll(() => {
   for (const project of projects) cleanupTestProject(project);
@@ -483,6 +493,82 @@ describe("t328 Plan Approval runtime authority", () => {
       choice: "Approve Plan",
       status: "approved",
     });
+  }, 30000);
+
+  test("audit append failure does not strand a consumed engine ask before the next Stop probe", () => {
+    const project = createProject();
+    const state = readFileSync(
+      join(seededRecordDir(project), "aidlc-state.md"),
+      "utf-8",
+    );
+    writeActiveDirectiveMarker(project, {
+      kind: "ask",
+      stage: "code-generation",
+      state_sha256: createHash("sha256").update(state).digest("hex"),
+    });
+    expect(currentSharedDirectiveWait(project)).toBe("engine-ask");
+
+    const probeWitness = join(project, ".stop-probed");
+    writeFileSync(
+      join(project, ".claude", "tools", "aidlc-orchestrate.ts"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        `writeFileSync(${JSON.stringify(probeWitness)}, "probed\\n", "utf-8");`,
+        'console.log(JSON.stringify({ kind: "run-stage", stage: "code-generation" }));',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    expect(acquireAuditLock(project)).toBe(true);
+    try {
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: project,
+      };
+      delete env.AIDLC_UNATTENDED;
+      const human = Bun.spawnSync([BUN, CORE_HUMAN_TURN_HOOK], {
+        cwd: project,
+        env,
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          prompt: "Continue the active work",
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(
+        human.exitCode,
+        `${human.stdout.toString()}\n${human.stderr.toString()}`,
+      ).toBe(0);
+    } finally {
+      releaseAuditLock(project);
+    }
+
+    expect(readAllAuditShards(project)).not.toContain("**Event**: HUMAN_TURN");
+    expect(currentSharedDirectiveWait(project)).toBeNull();
+    expect(readActiveDirectiveMarker(project, state)?.delivery).toBe("consumed");
+
+    const stop = Bun.spawnSync(
+      [BUN, join(project, ".claude", "hooks", "aidlc-continue-workflow.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "Stop",
+          session_id: "audit-failure-engine-ask",
+          stop_hook_active: false,
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(
+      stop.exitCode,
+      `${stop.stdout.toString()}\n${stop.stderr.toString()}`,
+    ).toBe(0);
+    expect(existsSync(probeWitness)).toBe(true);
+    expect(stop.stdout.toString()).toContain('"decision":"block"');
   }, 30000);
 
   test("rotates the source floor and retires authority across generation, Build and Test, resume, and new directives", () => {

@@ -699,12 +699,13 @@ describe("t295 Finding 4: the per-document size check runs BEFORE the read, not 
 
     // Driven as a SUBPROCESS so this test's own RSS (bun's runtime, jest-like
     // harness, everything else already loaded) is not conflated with the
-    // measurement -- the child imports only the tool and calls onboard once.
+    // measurement. The child completes module loading before sampling `before`,
+    // so the measured window contains only one onboard call.
     const driver = join(p, "__t295_rss_probe.ts");
     writeFileSync(
       driver,
-      `const before = process.memoryUsage().rss;\n` +
-        `const m = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))});\n` +
+      `const m = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))});\n` +
+        `const before = process.memoryUsage().rss;\n` +
         `const out = m.onboard(${JSON.stringify(p)}, ${JSON.stringify(SPACE)}, ` +
         `${JSON.stringify(abs)}, ${JSON.stringify(NOW)});\n` +
         `const after = process.memoryUsage().rss;\n` +
@@ -721,9 +722,9 @@ describe("t295 Finding 4: the per-document size check runs BEFORE the read, not 
     expect(refused, "the oversized file must be refused, not indexed").not.toBeNull();
     const grew = after - before;
     // A full buffer of the ~96 MiB file would grow RSS by tens of megabytes.
-    // Comfortable slack (30 MiB) for module loading and GC noise, while still
-    // failing hard if the whole file were ever materialised: 30 MiB is well
-    // under the 96 MiB the file actually contains.
+    // Comfortable slack (30 MiB) for onboard bookkeeping and GC noise, while
+    // still failing hard if the whole file were ever materialised: 30 MiB is
+    // well under the 96 MiB the file actually contains.
     expect(grew, `RSS grew by ${grew} bytes -- the oversized file appears to have been buffered`)
       .toBeLessThan(30 * 1024 * 1024);
   }, 30000);

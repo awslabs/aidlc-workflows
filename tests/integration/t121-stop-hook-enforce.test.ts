@@ -108,7 +108,10 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  recordCopilotHumanSequence,
+  writeSessionPidEntry,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test (mirrors t104)
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -561,6 +564,38 @@ function seedInProgressWithQuestions(
     mkdirSync(stageDir, { recursive: true });
     writeFileSync(join(stageDir, `${slug}-questions.md`), opts.questions, "utf-8");
   }
+}
+
+function seedPendingAutonomyLadder(proj: string): void {
+  writeFileSync(
+    seededStateFile(proj),
+    [
+      "- **Workflow**: feature",
+      "- **Scope**: feature",
+      "- **Lifecycle Phase**: CONSTRUCTION",
+      "- **Current Stage**: code-generation",
+      "- **Skeleton Stance**: on",
+      "- **Construction Autonomy Mode**: unset",
+      "",
+      "## Stage Progress",
+      "- [x] functional-design — EXECUTE",
+      "- [-] code-generation — EXECUTE",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+  seedAuditShard(proj);
+  const dependencyDir = join(
+    seededRecordDir(proj),
+    "inception",
+    "units-generation",
+  );
+  mkdirSync(dependencyDir, { recursive: true });
+  writeFileSync(
+    join(dependencyDir, "unit-of-work-dependency.md"),
+    "# Unit dependencies\n\n```yaml\nunits:\n  - name: skeleton\n    depends_on: []\n```\n",
+    "utf-8",
+  );
 }
 
 /**
@@ -1540,37 +1575,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe("");
   }, 30000);
 
-  test("(e) completed walking skeleton with unset autonomy waits for the ladder before probing", () => {
+  test("(e) completed walking skeleton waits only with an issued autonomy-ladder ask marker", () => {
     const proj = makeProject();
-    writeFileSync(
-      seededStateFile(proj),
-      [
-        "- **Workflow**: feature",
-        "- **Scope**: feature",
-        "- **Lifecycle Phase**: CONSTRUCTION",
-        "- **Current Stage**: code-generation",
-        "- **Skeleton Stance**: on",
-        "- **Construction Autonomy Mode**: unset",
-        "",
-        "## Stage Progress",
-        "- [x] functional-design — EXECUTE",
-        "- [-] code-generation — EXECUTE",
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
-    seedAuditShard(proj);
-    const dependencyDir = join(
-      seededRecordDir(proj),
-      "inception",
-      "units-generation",
-    );
-    mkdirSync(dependencyDir, { recursive: true });
-    writeFileSync(
-      join(dependencyDir, "unit-of-work-dependency.md"),
-      "# Unit dependencies\n\n```yaml\nunits:\n  - name: skeleton\n    depends_on: []\n```\n",
-      "utf-8",
-    );
+    seedPendingAutonomyLadder(proj);
+    seedSessionlessResumeMarker(proj, "ask", "code-generation", false);
     const r = runHook(
       proj,
       '{"stop_hook_active":false}',
@@ -1584,6 +1592,52 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
     expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(false);
+  }, 30000);
+
+  test("(e) ladder-eligible state without presentation evidence probes and re-drives the pending run-stage", () => {
+    const proj = makeProject();
+    seedPendingAutonomyLadder(proj);
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "",
+      "code-generation",
+      "",
+      true,
+    );
+    expect(r.rc).toBe(0);
+    const parsed = JSON.parse(r.out) as {
+      decision?: string;
+      reason?: string;
+    };
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("run-stage directive");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(true);
+  }, 30000);
+
+  test("(e) an ask discovered only by the Stop probe is re-driven until it is presented", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "ask",
+      "",
+      "",
+      "requirements-analysis",
+      "",
+      true,
+    );
+    expect(r.rc).toBe(0);
+    const parsed = JSON.parse(r.out) as {
+      decision?: string;
+      reason?: string;
+    };
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("has not yet been presented");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(true);
   }, 30000);
 
   test("(e) carve-out is positive-only — [-] in-progress still BLOCKS (cap is the only release)", () => {
@@ -3174,6 +3228,37 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     seedActiveWithCheckbox(inProgress, "-");
     seedCopilotDirective(inProgress);
     expect((JSON.parse(runCopilotStop(inProgress).out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(j) a delivered Copilot ask allows before its owning answer and re-drives after the answer", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    seedCopilotDirective(proj, "ask");
+
+    expect(runCopilotStop(proj).out).toBe("");
+
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(recordCopilotHumanSequence(proj, state, COPILOT_SESSION)).toBe(true);
+    const marker = JSON.parse(
+      readFileSync(
+        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        "utf-8",
+      ),
+    ) as {
+      delivery?: string;
+      human_sequence?: number;
+    };
+    expect(marker.delivery).toBe("consumed");
+    expect(marker.human_sequence).toBe(2);
+
+    const afterAnswer = runCopilotStop(proj);
+    expect(afterAnswer.rc).toBe(0);
+    const parsed = JSON.parse(afterAnswer.out) as {
+      decision?: string;
+      reason?: string;
+    };
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("coordination evidence is missing or stale");
   }, 30000);
 
   test("(j) a supplied Copilot directive preserves pending question, decision, compose, and every inverse", () => {

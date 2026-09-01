@@ -179,6 +179,16 @@ function legacyPlanApprovalRecoveryAsk(): Record<string, unknown> {
   };
 }
 
+function autonomyLadderAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    question:
+      "The walking skeleton shipped. Continue autonomously or Gate every Bolt?",
+    ask_type: "autonomy-ladder",
+    response_route: "set-autonomy",
+  };
+}
+
 function print(): Record<string, unknown> {
   return { kind: "print", message: "AIDLC framework version 0.0.0" };
 }
@@ -352,6 +362,13 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     ).toContain(
       'legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"',
     );
+  });
+
+  test("autonomy ladder ask routes its answer directly to set-autonomy", () => {
+    expect(validateDirective(autonomyLadderAsk()).valid).toBe(true);
+    expect(
+      errs({ ...autonomyLadderAsk(), response_route: "report" }),
+    ).toContain('ask: autonomy-ladder response_route must be "set-autonomy"');
   });
 
   test("new-work-routing ask rejects a report response route", () => {

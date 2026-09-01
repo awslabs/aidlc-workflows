@@ -38,6 +38,7 @@
 
 import { afterAll, beforeEach, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -1228,6 +1229,69 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     } finally {
       rmSync(external, { recursive: true, force: true });
     }
+  });
+
+  test("commit reconstruction preserves a batch header split at the 64 KiB refill boundary", () => {
+    git(dir, ["init", "-q", "--object-format=sha1"]);
+    git(dir, ["config", "user.email", "t@test"]);
+    git(dir, ["config", "user.name", "t"]);
+    const first = Buffer.alloc(65_482, 0x61);
+    const second = Buffer.alloc(65_482, 0x62);
+    const third = Buffer.from("tail\n");
+    const paths = [
+      "a-boundary.bin",
+      "b-split-header.bin",
+      "c-refill.bin",
+    ] as const;
+    for (const [path, bytes] of [
+      [paths[0], first],
+      [paths[1], second],
+      [paths[2], third],
+    ] as const) {
+      writeFileSync(join(dir, path), bytes);
+    }
+    git(dir, ["add", "--", ...paths]);
+    git(dir, ["commit", "-qm", "batch boundary"]);
+    const head = spawnSync(
+      "git",
+      ["-C", dir, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const oids = paths.map((path) =>
+      spawnSync(
+        "git",
+        ["-C", dir, "rev-parse", `${head}:${path}`],
+        { encoding: "utf-8" },
+      ).stdout.trim()
+    );
+    const responseBytes = (oid: string, bytes: Buffer): number =>
+      Buffer.byteLength(`${oid} blob ${bytes.length}\n`, "ascii") +
+      bytes.length +
+      1;
+    const firstResponseBytes = responseBytes(oids[0], first);
+    const secondResponseBytes = responseBytes(oids[1], second);
+    const thirdResponseBytes = responseBytes(oids[2], third);
+
+    // The first response leaves byte 65,535 as the first byte of the second
+    // header. The next full refill reaches the third header and overwrites that
+    // borrowed buffer position, so a non-owning partial-line slice is corrupted.
+    expect(oids.every((oid) => /^[0-9a-f]{40}$/.test(oid))).toBe(true);
+    expect(firstResponseBytes).toBe(64 * 1024 - 1);
+    expect(secondResponseBytes).toBe(64 * 1024 - 1);
+    expect(secondResponseBytes - 1 + thirdResponseBytes).toBeGreaterThanOrEqual(
+      64 * 1024,
+    );
+    expect(oids[1][0]).not.toBe(oids[2][1]);
+
+    const listing = gitCommitSourceListing(dir, head, true);
+    expect([...(listing ?? new Map()).entries()]).toEqual(
+      paths.map((path, index) => [
+        `\0${path}`,
+        `100644 ${createHash("sha256")
+          .update([first, second, third][index])
+          .digest("hex")}`,
+      ]),
+    );
   });
 
   test("commit reconstruction never reads a symlinked worktree metadata target", () => {

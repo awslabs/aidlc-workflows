@@ -588,6 +588,24 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(annex).toContain("never through `report`");
   });
 
+  test("every conductor routes the typed autonomy ladder through set-autonomy, not report", () => {
+    const missing: string[] = [];
+    for (const rel of harnessSkills()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        'ask_type: "autonomy-ladder"',
+        'response_route: "set-autonomy"',
+        "Continue autonomously",
+        "Gate every Bolt",
+        "aidlc-bolt.ts set-autonomy --mode autonomous|gated",
+        "never call `report` for this ask",
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("Kiro renders engine asks without a second routing query or replacement prompt", () => {
     const missing: string[] = [];
     for (const harness of ["kiro", "kiro-ide"]) {

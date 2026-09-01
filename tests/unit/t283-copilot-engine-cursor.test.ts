@@ -14,9 +14,15 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
+  consumeCopilotConversation,
+  copilotStopEvidence,
+  recordCopilotHumanSequence,
+} from "../../core/tools/aidlc-lib.ts";
+import {
   cleanupTestProject,
   REPO_ROOT,
   seededRecordDir,
+  seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -239,6 +245,39 @@ function makeCopilotOwned(installed: InstalledProject): void {
   );
 }
 
+function makeDeliveredCopilotAsk(
+  installed: InstalledProject,
+  resumeStatus?: "waiting" | "selected",
+): void {
+  makeCopilotOwned(installed);
+  const value = marker(installed);
+  value.kind = "ask";
+  value.delivery = "delivered";
+  value.needs_rehydrate = false;
+  value.event_sequence = 1;
+  value.human_sequence = 0;
+  value.engine_sequence = 1;
+  delete value.continue_token;
+  delete value.continue_token_sha256;
+  if (resumeStatus) {
+    value.resume = {
+      status: resumeStatus,
+      ...(resumeStatus === "selected" ? { action: "resume" } : {}),
+      issuing_stage: value.stage,
+      issuing_state_sha256: value.state_sha256,
+      issuing_session: "cursor-owner",
+      issuing_intent_uuid: value.intent_uuid,
+    };
+  } else {
+    delete value.resume;
+  }
+  writeFileSync(
+    markerPath(installed),
+    `${JSON.stringify(value, null, 2)}\n`,
+    "utf-8",
+  );
+}
+
 describe("t283 engine-owned continuation cursor", () => {
   test("pre-state tokens use the bare-space cursor and have one race winner", async () => {
     const installed = project(HARNESSES[0], { withState: false });
@@ -334,6 +373,69 @@ describe("t283 engine-owned continuation cursor", () => {
       1,
     );
     expect(marker(installed).owner_session).toBe("cursor-owner");
+  });
+
+  test("the owning human turn closes only a delivered non-resume Copilot ask", () => {
+    const harness = HARNESSES.find((entry) => entry.name === "copilot")!;
+    const installed = project(harness);
+    invoke(installed, "next");
+    makeDeliveredCopilotAsk(installed);
+    const state = readFileSync(seededStateFile(installed.dir), "utf-8");
+
+    expect(
+      copilotStopEvidence(installed.dir, state, "cursor-owner"),
+    ).toMatchObject({
+      status: "directive",
+      directive: { kind: "ask" },
+    });
+    expect(
+      recordCopilotHumanSequence(installed.dir, state, "foreign-owner"),
+    ).toBe(false);
+    expect(marker(installed).delivery).toBe("delivered");
+
+    expect(
+      recordCopilotHumanSequence(installed.dir, state, "cursor-owner"),
+    ).toBe(true);
+    expect(marker(installed)).toMatchObject({
+      kind: "ask",
+      delivery: "consumed",
+      event_sequence: 2,
+      human_sequence: 2,
+      conversation_sequence: 2,
+    });
+    expect(
+      consumeCopilotConversation(installed.dir, state, "cursor-owner"),
+    ).toBe(false);
+    expect(
+      copilotStopEvidence(installed.dir, state, "cursor-owner"),
+    ).toMatchObject({ status: "recovery" });
+
+    for (const resumeStatus of ["waiting", "selected"] as const) {
+      const resume = project(harness);
+      invoke(resume, "next");
+      makeDeliveredCopilotAsk(resume, resumeStatus);
+      const resumeState = readFileSync(seededStateFile(resume.dir), "utf-8");
+      expect(
+        recordCopilotHumanSequence(resume.dir, resumeState, "cursor-owner"),
+      ).toBe(true);
+      expect(marker(resume)).toMatchObject({
+        delivery: "delivered",
+        human_sequence: 2,
+        resume: { status: resumeStatus },
+      });
+      expect(
+        copilotStopEvidence(resume.dir, resumeState, "cursor-owner"),
+      ).toMatchObject({ status: "resume" });
+    }
+
+    const nonAsk = project(harness);
+    invoke(nonAsk, "next");
+    makeCopilotOwned(nonAsk);
+    const nonAskState = readFileSync(seededStateFile(nonAsk.dir), "utf-8");
+    expect(
+      recordCopilotHumanSequence(nonAsk.dir, nonAskState, "cursor-owner"),
+    ).toBe(true);
+    expect(marker(nonAsk).delivery).toBe("delivered");
   });
 
   test("every delivered token advances once and final run-stage is tokenless", () => {

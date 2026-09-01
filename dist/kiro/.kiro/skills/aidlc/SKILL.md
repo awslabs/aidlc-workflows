@@ -97,6 +97,8 @@ For an isolated run's reviewer, add `--single` to both `aidlc-log.ts review` cal
 
 **Typed new-work Other response.** For a `new-work-routing` ask, a reply consisting only of `4` or `Other` does not describe a route: ask exactly **"What would you like me to do instead?"** and END THE TURN without calling a tool. Once the human supplies an actual alternative, call `next "<human alternative>"` with their words unchanged and act on the returned directive; never call `report`.
 
+**Autonomy-ladder ask.** `ask_type: "autonomy-ladder"` is an exception to "every other ask" above. Present only **Continue autonomously** and **Gate every Bolt**. After the human chooses one, follow `response_route: "set-autonomy"` by running the matching `aidlc-bolt.ts set-autonomy --mode autonomous|gated` command from the loaded Construction protocol, then re-run `next`; never call `report` for this ask.
+
 **Settled swarm branch.** When a `run-stage` carries `directive.swarm_settled === true`, branch before ordinary run-stage context or body handling. Load every module named in `directive.protocol_modules`, do not run the stage body or reviewer, and follow the swarm module's settled-swarm re-entry rule: learnings and the single approval gate only.
 
 **Autonomous reviewer boundary.** The complete autonomous review and receipt contract moved to `aidlc-common/protocols/stage-protocol-swarm.md`; load it for every `invoke-swarm` directive, skipping it only if already loaded in this session.

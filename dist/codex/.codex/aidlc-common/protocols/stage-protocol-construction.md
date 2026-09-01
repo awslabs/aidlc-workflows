@@ -51,8 +51,9 @@ a zero-Unit stage has no skeleton or Bolt ceremony at all.
 
 **Ladder prompt (fires once, immediately after walking skeleton gate)**
 
-After an actual walking skeleton's gate approves, present exactly one ladder
-prompt. Do not present it for skeleton-off or zero-Unit execution:
+After an actual walking skeleton's gate approves, the engine emits exactly one
+typed `autonomy-ladder` ask. Present that ladder prompt; do not synthesize it
+from state. The engine does not emit it for skeleton-off or zero-Unit execution:
 
 ```question
 prompt: "The walking skeleton shipped. How should the remaining Bolts run?"
@@ -70,7 +71,7 @@ The shipped option labels still say "remaining Bolts" / "Gate every Bolt"; they 
 - Record the answer in `aidlc-state.md` as `Construction Autonomy Mode: autonomous` or `Construction Autonomy Mode: gated` via `aidlc-bolt.ts set-autonomy --mode <choice>` (which emits `AUTONOMY_MODE_SET` itself).
 - The ladder choice is set-autonomy-owned, like an approval choice is report-owned: do NOT call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Switching to `autonomous` requires the human's fresh turn (the ladder answer) — logging the choice as an interview answer first would consume that turn and the mode switch would refuse.
 - On the default walk, `autonomous` skips the remaining Construction stage gates except halt-and-ask, the Build-and-Test loop-back's rung 4, and the swarm settle `gate: true` re-entry (the conductor auto-approves that settle under autonomy).
-- Session resume: if `Construction Autonomy Mode: unset` but the walking skeleton is already `[x]` complete, re-fire the ladder prompt before executing the next Construction stage.
+- Session resume: if `Construction Autonomy Mode: unset` but the walking skeleton is already `[x]` complete, `next` reissues the typed ladder ask before executing the next Construction stage.
 
 **Subsequent Bolt gate (per autonomy mode)**
 

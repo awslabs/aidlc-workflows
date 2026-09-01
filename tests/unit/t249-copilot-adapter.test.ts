@@ -1186,6 +1186,48 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readAudit(noStateDir)).toBe("");
   });
 
+  test("12a: unattended prompts preserve a delivered Copilot ask for the next Stop", () => {
+    const dir = orchestrationProject();
+    const session = "unattended-ask-owner";
+    driveToRunStage(dir, session);
+    rewriteMarker(dir, (value) => {
+      value.kind = "ask";
+      value.delivery = "delivered";
+      value.needs_rehydrate = false;
+      delete value.continue_token;
+      delete value.continue_token_sha256;
+      delete value.resume;
+    });
+
+    const prompt = runAdapter(
+      dir,
+      "record-human-turn",
+      {
+        ...FIXTURES.userPromptSubmit,
+        cwd: dir,
+        session_id: session,
+        prompt: "automated unattended prompt",
+      },
+      { AIDLC_UNATTENDED: "1" },
+    );
+    expect(prompt.code).toBe(0);
+    expect(readAudit(dir)).not.toContain("HUMAN_TURN");
+    expect(marker(dir)).toMatchObject({
+      kind: "ask",
+      delivery: "delivered",
+      owner_session: session,
+    });
+
+    const stopped = runAdapter(dir, "continue-workflow", {
+      ...FIXTURES.stop,
+      cwd: dir,
+      session_id: session,
+    });
+    expect(stopped.code).toBe(0);
+    expect(stopped.stdout).toBe("");
+    expect(marker(dir).delivery).toBe("delivered");
+  }, 60000);
+
   test("21: real adjacent signed parts reset the cap and direct/source continuation reaches retained run-stage", () => {
     const dir = orchestrationProject();
     const session = "bounded-transport-owner";

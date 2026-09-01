@@ -4871,6 +4871,26 @@ function freshActiveDirectiveMarker(
   };
 }
 
+function freshCopilotDirectiveMarker(
+  target: ActiveDirectiveTarget,
+  stateContent: string,
+  sessionId: string,
+): ActiveDirectiveMarker {
+  const stage = getField(stateContent, "Current Stage")?.trim() || "coordination";
+  const fresh = freshActiveDirectiveMarker(target, stateContent, stage);
+  return {
+    ...fresh,
+    owner_session: sessionId,
+    owner_epoch: 1,
+    active_attempt: {
+      ...fresh.active_attempt!,
+      id: undefined,
+      session_id: sessionId,
+      owner_epoch: 1,
+    },
+  };
+}
+
 function invalidateActiveDirectiveDelivery(marker: ActiveDirectiveMarker): ActiveDirectiveMarker {
   return { ...marker, revision: (marker.revision ?? 0) + 1, delivery: "superseded", needs_rehydrate: true };
 }
@@ -5730,39 +5750,27 @@ export function invalidateActiveDirectiveContext(
   return invalidated;
 }
 
-export function recordCopilotHumanSequence(
-  projectDir: string,
-  stateContent: string,
-  sessionId: string,
-): boolean {
+export function recordCopilotHumanSequence(projectDir: string, stateContent: string, sessionId: string): boolean {
   if (!sessionId || Buffer.byteLength(sessionId) > 512) return false;
   return transactActiveDirective(projectDir, (current, target) => {
-    const context = activeDirectiveContext(target, stateContent);
-    let marker = current;
-    if (marker?.version !== 2 || marker.project_sha256 !== context.projectSha256 ||
-      marker.intent_uuid !== context.intentUuid || marker.state_sha256 !== context.stateSha256 ||
-      marker.state_present !== context.statePresent) {
-      const stage = getField(stateContent, "Current Stage")?.trim() || "coordination";
-      const fresh = freshActiveDirectiveMarker(target, stateContent, stage);
-      marker = {
-        ...fresh,
-        owner_session: sessionId,
-        owner_epoch: 1,
-        active_attempt: {
-          ...fresh.active_attempt!,
-          id: undefined,
-          session_id: sessionId,
-          owner_epoch: 1,
-        },
-      };
-    } else if (marker.owner_session !== sessionId) {
-      return { marker: current, result: false, preserve: true };
+    const c = activeDirectiveContext(target, stateContent);
+    let m = current;
+    if (m?.version !== 2 || m.project_sha256 !== c.projectSha256 ||
+      m.intent_uuid !== c.intentUuid || m.state_sha256 !== c.stateSha256 ||
+      m.state_present !== c.statePresent) {
+      m = freshCopilotDirectiveMarker(target, stateContent, sessionId);
+    } else if (m.owner_session !== sessionId) return { marker: current, result: false, preserve: true };
+    const seq = (m.event_sequence ?? 0) + 1;
+    const close = humanTurnMintAllowed() &&
+      m.kind === "ask" && m.delivery === "delivered" &&
+      !m.needs_rehydrate && m.resume === undefined;
+    if (close) {
+      m.delivery = "consumed";
+      m.conversation_sequence = seq;
     }
-    const sequence = (marker.event_sequence ?? 0) + 1;
     return {
-      marker: { ...marker, revision: (marker.revision ?? 0) + 1, event_sequence: sequence, human_sequence: sequence },
-      result: true,
-    };
+      marker: { ...m, revision: (m.revision ?? 0) + 1, event_sequence: seq, human_sequence: seq },
+      result: true };
   });
 }
 
@@ -6022,14 +6030,9 @@ export function copilotStopEvidence(
       const context = activeDirectiveContext(target, stateContent);
       let marker = current;
       if (marker?.version !== 2) {
-        const stage = getField(stateContent, "Current Stage")?.trim() || "coordination";
-        const fresh = freshActiveDirectiveMarker(target, stateContent, stage);
         marker = {
-          ...fresh,
+          ...freshCopilotDirectiveMarker(target, stateContent, sessionId),
           revision: 1,
-          owner_session: sessionId,
-          owner_epoch: 1,
-          active_attempt: { ...fresh.active_attempt!, id: undefined, session_id: sessionId, owner_epoch: 1 },
         };
       }
       if (marker.owner_session !== sessionId) return { marker, result: { status: "foreign" }, preserve: true };

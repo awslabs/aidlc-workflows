@@ -86,6 +86,8 @@ For an isolated run's reviewer, add `--single` to both `aidlc-log.ts review` cal
 | `invoke-swarm` | Load every module named in `directive.protocol_modules` before acting - including `reviewer` when emitted, plus `construction` and `swarm` - then follow the swarm module's subsection for this harness. The directive kind is the fallback trigger when the hint field is absent. |
 | `present-gate` | _(engine-future — not emitted today; folded into `run-stage`'s `gate` field for now.)_ Run the gate ritual described below. |
 
+**Autonomy-ladder ask.** `ask_type: "autonomy-ladder"` is an exception to "every other ask" above. Present only **Continue autonomously** and **Gate every Bolt**. After the human chooses one, follow `response_route: "set-autonomy"` by running the matching `aidlc-bolt.ts set-autonomy --mode autonomous|gated` command from the loaded Construction protocol, then re-run `next`; never call `report` for this ask.
+
 **Settled swarm branch.** When a `run-stage` carries `directive.swarm_settled === true`, branch before ordinary run-stage context or body handling. Load every module named in `directive.protocol_modules`, do not run the stage body or reviewer, and follow the swarm module's settled-swarm re-entry rule: learnings and the single approval gate only.
 
 **Autonomous reviewer boundary.** The complete autonomous review and receipt contract moved to `aidlc-common/protocols/stage-protocol-swarm.md`; load it for every `invoke-swarm` directive, skipping it only if already loaded in this session.

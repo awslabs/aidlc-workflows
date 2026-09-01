@@ -136,7 +136,6 @@ import {
   currentSharedDirectiveWait,
   docsRoot,
   errorMessage,
-  firstInScopeStageOfPhase,
   findIntentByUuid,
   effectiveUnitGateRhythm,
   getField,
@@ -146,7 +145,6 @@ import {
   hooksHealthDir,
   isoTimestamp,
   isTeamUnitOwnership,
-  loadScopeMetadata,
   matchSubagentInflight,
   parseCheckboxes,
   readActiveDirectiveMarker,
@@ -154,7 +152,6 @@ import {
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
-  resolveBoltDag,
   resolveWorkflowSelection,
   stageDir,
   stateFilePathForSelection,
@@ -647,41 +644,6 @@ function isPendingQuestionStop(
     );
   } catch {
     // Unparseable / odd content — fall through to decideBlock (never trap).
-    return false;
-  }
-}
-
-function isPendingAutonomyLadderStop(
-  projectDir: string,
-  stateContent: string,
-): boolean {
-  try {
-    if (
-      getField(stateContent, "Construction Autonomy Mode")?.trim() !== "unset"
-    ) {
-      return false;
-    }
-    const stance = (getField(stateContent, "Skeleton Stance") ?? "")
-      .trim()
-      .toLowerCase();
-    const scope = (getField(stateContent, "Scope") ?? "").trim();
-    if (!scope) return false;
-    const ceremony =
-      stance === "on" ||
-      (
-        stance === "scope-dependent" &&
-        loadScopeMetadata()[scope]?.skeleton === true
-      );
-    if (!ceremony) return false;
-    const units = resolveBoltDag(projectDir);
-    if (units.state !== "ok" || units.units.length === 0) return false;
-    const first = firstInScopeStageOfPhase("construction", scope);
-    if (first === null) return false;
-    return parseCheckboxes(stateContent).some(
-      (checkbox) =>
-        checkbox.slug === first.slug && checkbox.state === "completed",
-    );
-  } catch {
     return false;
   }
 }
@@ -1255,6 +1217,14 @@ function continuationReason(
   if (kind === "rehydrate") {
     return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier continuation token.`;
   }
+  if (kind === "ask") {
+    return (
+      "The AIDLC engine found a human question that has not yet been presented. " +
+      `Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`, render the emitted ` +
+      "ask exactly, then end the turn. Follow its typed response route only after " +
+      "the human answers."
+    );
+  }
   if (retained && kind === "load-steering" && continueToken) {
     return `The delivered AIDLC steering part${where} is still active. Apply every path/text entry from its already-delivered \`rules_content\`, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\`. Keep applying and continuing every returned load-steering part until \`run-stage\`; do not restart at part 1, and do not summarise or narrate rule chunks to the user.`;
   }
@@ -1301,9 +1271,6 @@ function validStopReleaseReason(
   copilotSession: string,
   questionAuthorityCurrent: boolean,
 ): string | null {
-  if (isPendingAutonomyLadderStop(projectDir, stateContent)) {
-    return "the post-skeleton Construction autonomy choice is waiting on the human; allowing the stop before the shared next probe";
-  }
   if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
     return `current stage ${currentStageSlug(stateContent)} is awaiting approval or being revised; allowing the stop (human-wait carve-out)`;
   }
@@ -1670,10 +1637,11 @@ if (kind === "parked") {
   }
 }
 
-// `ask` → the engine is explicitly waiting for human input (for example,
-// freeform scope routing or a paused Unit). Allow the turn to end so the user
-// can respond, rather than re-feeding the loop.
-if (kind === "ask") {
+// Copilot supplies the already-delivered active directive instead of running a
+// shared `next` probe. A retained ask is therefore positive presentation
+// evidence and may release; a shared ask discovered by this hook's own probe
+// falls through and is re-driven until the conductor actually presents it.
+if (kind === "ask" && directive.retained === true) {
   return allowStop();
 }
 

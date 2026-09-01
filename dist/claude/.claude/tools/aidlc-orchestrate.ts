@@ -90,6 +90,7 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type AutonomyLadderAskDirective,
   type AskDirective,
   type Directive,
   type ErrorDirective,
@@ -580,8 +581,12 @@ function emit(directive: Directive): void {
     prepareEmission(directive),
   );
   const prepared = withLegacyOffer.prepared;
+  const probeDiscoveredAsk =
+    process.env[STOP_HOOK_PROBE_ENV] === "1" &&
+    prepared.marker?.kind === "ask";
   if (
     prepared.marker &&
+    !probeDiscoveredAsk &&
     !isTeamStopHookProbe(prepared.projectDir)
   ) {
     const projectDir = prepared.projectDir;
@@ -927,6 +932,19 @@ function touchEngineMarker(projectDir: string | undefined): void {
 
 function askDirective(question: string): AskDirective {
   return { kind: "ask", question };
+}
+
+function autonomyLadderAskDirective(): AutonomyLadderAskDirective {
+  return {
+    kind: "ask",
+    ask_type: "autonomy-ladder",
+    response_route: "set-autonomy",
+    question:
+      "The walking skeleton shipped. How should the remaining Bolts run? " +
+      "Choose exactly one: Continue autonomously — build the remaining Bolts " +
+      "without stopping to check in, while still stopping on failure; or Gate " +
+      "every Bolt — stop for approval after each Bolt or parallel batch.",
+  };
 }
 
 function newWorkRoutingAskDirective(
@@ -2282,6 +2300,32 @@ function scopeDefaultSkeletonStance(scope: string): SkeletonStance {
   } catch {
     return "off";
   }
+}
+
+function autonomyLadderIsPending(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+): boolean {
+  if (getField(stateContent, AUTONOMY_MODE_FIELD)?.trim() !== "unset") {
+    return false;
+  }
+  const stance = readSkeletonStance(stateContent);
+  const ceremony =
+    stance === "on" ||
+    (
+      stance === "scope-dependent" &&
+      scopeDefaultSkeletonStance(scope) === "on"
+    );
+  if (!ceremony) return false;
+  const units = resolveBoltDag(projectDir);
+  if (units.state !== "ok" || units.units.length === 0) return false;
+  const first = firstInScopeStageOfPhase("construction", scope);
+  if (first === null) return false;
+  return parseCheckboxes(stateContent).some(
+    (checkbox) =>
+      checkbox.slug === first.slug && checkbox.state === "completed",
+  );
 }
 
 // Resolve the determined boolean gate for the skeleton-gate stage once the
@@ -4521,6 +4565,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       flags.intent,
       inferred.scope,
     ));
+    return;
+  }
+
+  // The post-skeleton autonomy ladder is an engine-owned ask. Its issued,
+  // state-bound active-directive marker is the positive evidence that the
+  // question reached the conductor; without that marker the Stop hook probes
+  // and re-drives this branch instead of inferring a human wait from state.
+  if (autonomyLadderIsPending(pd, scope, stateContent)) {
+    emit(autonomyLadderAskDirective());
     return;
   }
 
