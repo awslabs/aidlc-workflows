@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.1] - 2026-09-01
+
+Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.
+
+* Answering **Approve Plan** on a solo workflow now yields a stable approval receipt, so Code Generation starts instead of refusing every developer dispatch as "not currently approved".
+* `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` and driving the workflow as team-owned are no longer needed as workarounds for this deadlock.
+
 ## [2.7.0] - 2026-09-01
 
 AI-DLC 2.7.0 consolidates the 2.6.x release cycle into a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** replace the complete `dist/<harness>/` tree in one quiescent operation, then run `/aidlc plugin sync` for every installed plugin. Existing 2.6.124 workflow records require no migration. Before replacing an older shell, finish and archive every workflow created before 2.6.1; the new shell rejects that stale state before `--new-intent` can create fresh work. Upgrades from any release before 2.6.124 must also apply every intervening **Upgrade**, **Breaking**, and migration note below; this roll-up does not replace those one-time actions.

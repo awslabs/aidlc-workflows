@@ -539,6 +539,23 @@ function isTeamStopHookProbe(projectDir: string | undefined): boolean {
   }
 }
 
+// The Stop hook's own `next` consultation, whatever the Unit Ownership. That
+// probe is READ-ONLY BY CONTRACT: aidlc-continue-workflow.ts parses the prepared
+// directive off stdout and never reads the durable marker, so publishing from a
+// probe buys nothing and costs correctness. Publishing from a bare probe `next`
+// fails preserveCodeGenerationAuthority in writeActiveDirectiveMarker (the base
+// marker is `run-stage`, not swarm planning), so the write bumps
+// code_generation_authority_revision and calls resetPlanApprovalRuntime, which
+// removes the whole plan-approval runtime dir. Recording the human's "Approve
+// Plan" answer needs a turn boundary, so the challenge minted in turn N was
+// destroyed by turn N's own Stop probe and Plan Approval could never stabilize
+// (issue #995). The predicate is deliberately env-only: the deadlock is not
+// specific to team-owned units, and handleContinue already suppresses its cursor
+// advance for every probe rather than only the team ones.
+function isStopHookProbe(): boolean {
+  return process.env[STOP_HOOK_PROBE_ENV] === "1";
+}
+
 function legacyPlanApprovalRecoveryDirective(): AskDirective {
   return {
     kind: "ask",
@@ -557,7 +574,7 @@ function emit(directive: Directive): void {
   const prepared = withLegacyOffer.prepared;
   if (
     prepared.marker &&
-    !isTeamStopHookProbe(prepared.projectDir)
+    !isStopHookProbe()
   ) {
     const projectDir = prepared.projectDir;
     try {
