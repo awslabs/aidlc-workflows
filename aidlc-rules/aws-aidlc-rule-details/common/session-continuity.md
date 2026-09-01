@@ -38,11 +38,15 @@ B) Review a previous stage ([Show available stages])
      `unit-of-work-dependency.md`). The exact files in each subdirectory are enumerated by the
      corresponding construction stage rules.
    - **Code Stages**: Read all code files, plans, AND all previous artifacts
+   - **Cross-Unit Discoveries (Construction resume)**: Also read
+     `aidlc-docs/construction/cross-unit-discoveries.md` if it exists, so a resumed unit reuses prior
+     units' build-time findings rather than re-discovering them. The log's schema and its recording rule
+     are defined in `construction/code-generation.md`.
 4. **Smart Context Loading by Stage**:
    - **Early Stages (Workspace Detection, Reverse Engineering)**: Load workspace analysis
    - **Requirements/Stories**: Load reverse engineering + requirements artifacts
    - **Design Stages**: Load requirements + stories + architecture + design artifacts
-   - **Code Stages**: Load ALL artifacts + existing code files
+   - **Code Stages**: Load ALL artifacts + existing code files + the cross-unit discoveries log (if present)
 5. **Adapt options** based on architectural choice and current phase
 6. **Show specific next steps** rather than generic descriptions
 7. **Log the continuity prompt** in audit.md with timestamp
