@@ -34,6 +34,7 @@ import {
   humanPresenceGuardDisabled,
   idSuffix,
   invalidateLiveClaimPayloadCache,
+  isReadOnlyEngineProbe,
   isNonAnswer,
   isTeamUnitOwnership,
   isoTimestamp,
@@ -864,7 +865,7 @@ export function cachedUnitClaimOverview(
   let claims = cachedClaims(pd);
   if (
     options.writeCache !== false &&
-    process.env.AIDLC_STOP_HOOK_PROBE !== "1"
+    !isReadOnlyEngineProbe()
   ) {
     claims = cacheClaims(pd, claims, cache?.warning);
   }

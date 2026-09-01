@@ -79,6 +79,7 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   activeSpace,
   readAllAuditShards,
@@ -176,6 +177,18 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
           seededStateFile(proj),
           "- **Project Root**: /tmp/aidlc-test",
           `- **Project Root**: ${proj}`,
+        );
+        // The seeded state is already inside Reverse Engineering. Seed the
+        // matching lifecycle boundary so pipeline receipts are attempt-bound
+        // deterministically instead of depending on the live conductor to
+        // infer or repair an incomplete fixture.
+        appendAuditEntry(
+          "STAGE_STARTED",
+          {
+            Stage: TARGET_SLUG,
+            Agent: "aidlc-developer-agent",
+          },
+          proj,
         );
 
         const r = await driveAidlc("/aidlc", {

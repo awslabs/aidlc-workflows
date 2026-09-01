@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:currentSharedDirectiveWait, function:consumeSharedDirectiveAsk, function:hasCurrentSharedResumeWait, function:hasPendingDecision
+// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:currentSharedDirectiveWait, function:consumeSharedDirectiveAsk, function:hasCurrentSharedResumeWait, function:hasPendingDecision, function:retainedSharedDirective
 //
 // Behavioural contract for the Stop hook `aidlc-continue-workflow.ts` — the framework's
 // FIRST flow-altering hook. Migrated from tests/integration/t121-stop-hook-enforce.sh
@@ -183,7 +183,12 @@ function guardFilePath(proj: string): string {
   return join(seededRecordDir(proj), ".aidlc-stop-hook", "block-count.json");
 }
 
-function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): void {
+function seedActiveDirectiveMarker(
+  proj: string,
+  stage: string,
+  unit?: string,
+  kind: "run-stage" | "load-steering" = "run-stage",
+): void {
   const state = readFileSync(seededStateFile(proj), "utf-8");
   const stateSha256 = createHash("sha256").update(state, "utf-8").digest("hex");
   const projectSha256 = createHash("sha256").update(realpathSync(proj)).digest("hex");
@@ -200,9 +205,19 @@ function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): 
       owner_session: ownerSession,
       owner_epoch: 0,
       context_epoch: 0,
-      kind: "run-stage",
+      kind,
       stage,
       ...(unit ? { unit } : {}),
+      ...(kind === "load-steering"
+        ? {
+            part: 2,
+            parts: 3,
+            continue_token: "retained-steering-token",
+            continue_token_sha256: createHash("sha256")
+              .update("retained-steering-token")
+              .digest("hex"),
+          }
+        : {}),
       delivery: "issued",
       needs_rehydrate: false,
       active_attempt: {
@@ -1811,11 +1826,12 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
-  test("(f) a blank Plan Approval without a session challenge cannot suppress the Stop-hook next probe", () => {
+  test("(f) a blank Plan Approval without a session challenge stays blocked on the retained run-stage", () => {
     const proj = makeProject();
     // A blank markdown answer is not authority. Without a protected challenge
-    // for this Stop session, the hook must probe and recover rather than park
-    // forever on an answer that this session can never record.
+    // for this Stop session, the hook must not park forever on an answer that
+    // this session can never record. The current run-stage is still authoritative,
+    // so retain and re-feed it without restarting steering or mutating its marker.
     seedInProgressWithQuestions(proj, {
       slug: "code-generation",
       phase: "construction",
@@ -1841,8 +1857,42 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
-    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(true);
-    expect(readFileSync(markerPath, "utf-8")).not.toBe(markerBefore);
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(false);
+    expect(readFileSync(markerPath, "utf-8")).toBe(markerBefore);
+  }, 30000);
+
+  test("(f) a delivered steering cursor is retained instead of restarting at part one", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    seedActiveDirectiveMarker(
+      proj,
+      "requirements-analysis",
+      undefined,
+      "load-steering",
+    );
+    const markerPath = join(
+      seededRecordDir(proj),
+      ".aidlc-active-directive.json",
+    );
+    const markerBefore = readFileSync(markerPath, "utf-8");
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "",
+      "requirements-analysis",
+    );
+    expect(r.rc).toBe(0);
+    const output = JSON.parse(r.out) as {
+      decision?: string;
+      reason?: string;
+    };
+    expect(output.decision).toBe("block");
+    expect(output.reason).toContain("already-delivered");
+    expect(output.reason).toContain("retained-steering-token");
+    expect(existsSync(join(proj, ".probe-env-witness.json"))).toBe(false);
+    expect(readFileSync(markerPath, "utf-8")).toBe(markerBefore);
   }, 30000);
 
   test("(f) invalidated directive does not strand a blank Plan Approval wait", () => {

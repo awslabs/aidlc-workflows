@@ -98,6 +98,7 @@ import {
   readUnitMergeTransaction,
   readUnitGateRhythm,
   readUnitScopeStamp,
+  refreshActiveDirectiveUnitState,
   recordDir,
   recoveryGuidance,
   requestChangesResetIsExecutable,
@@ -114,6 +115,7 @@ import {
   reviewAttemptWindow,
   reviewerGateGuardDisabled,
   resolveReviewClass,
+  ROUTE_CHECK_ENV,
   resolveWorkflowSelection,
   sourceClaimCovers,
   sourceBaselineAuditFields,
@@ -1885,6 +1887,7 @@ function handleUnit(args: string[]): void {
   // `unit start` calls could both pass the single-active-unit check.
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
+    const previousContent = content;
     const scope = getField(content, "Scope");
     if (usesStageLevelPerUnitArtifacts(scope, content)) {
       error(
@@ -2055,6 +2058,13 @@ function handleUnit(args: string[]): void {
     }
     content = setField(content, "Last Updated", timestamp);
     writeStateFile(pd, content);
+    refreshActiveDirectiveUnitState(
+      pd,
+      slug,
+      unit,
+      previousContent,
+      content,
+    );
     console.log(JSON.stringify({
       emitted: eventType,
       stage: slug,
@@ -2089,7 +2099,7 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
         env: {
           ...process.env,
           AIDLC_PROJECT_DIR: pd,
-          AIDLC_ROUTE_CHECK: "1",
+          [ROUTE_CHECK_ENV]: "1",
           ...(stateSessionOverride
             ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
             : {}),
@@ -2170,7 +2180,7 @@ function requireEngineRoutedWaveUnit(
         env: {
           ...process.env,
           AIDLC_PROJECT_DIR: pd,
-          AIDLC_ROUTE_CHECK: "1",
+          [ROUTE_CHECK_ENV]: "1",
           ...(stateSessionOverride
             ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
             : {}),

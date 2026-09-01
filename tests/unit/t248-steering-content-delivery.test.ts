@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue, hook:aidlc-deliver-stage-rules
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue, hook:aidlc-deliver-stage-rules, function:isReadOnlyEngineProbe, function:isRouteCheckProbe, function:isStopHookProbe
 //
 // Deterministic stage-rule delivery. Rules cross the engine boundary through
 // bounded load-steering directives before run-stage; optional persona/knowledge
@@ -11,16 +11,19 @@ import {
   appendFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import {
   absorbReviewerKnowledge,
   reviewerAgentSet,
@@ -94,8 +97,7 @@ function invoke(
   args: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): { directive: WireDirective; bytes: number } {
-  cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(proj, ".claude", "tools", "aidlc-lib.ts"));
-  cpSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), join(proj, ".claude", "tools", "aidlc-orchestrate.ts"));
+  syncEngine(proj);
   const res = spawnSync(
     BUN,
     [
@@ -113,6 +115,36 @@ function invoke(
     directive: JSON.parse(line) as WireDirective,
     bytes: Buffer.byteLength(line, "utf-8"),
   };
+}
+
+function syncEngine(proj: string): void {
+  cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(proj, ".claude", "tools", "aidlc-lib.ts"));
+  cpSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), join(proj, ".claude", "tools", "aidlc-orchestrate.ts"));
+}
+
+function projectSnapshot(projectDir: string): Record<string, string> {
+  const snapshot: Array<[string, string]> = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === ".git") continue;
+      const path = join(dir, entry.name);
+      const rel = relative(projectDir, path).replaceAll("\\", "/");
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        snapshot.push([rel, `link:${readlinkSync(path)}`]);
+      } else if (stat.isDirectory()) {
+        snapshot.push([`${rel}/`, "dir"]);
+        walk(path);
+      } else if (stat.isFile()) {
+        snapshot.push([
+          rel,
+          createHash("sha256").update(readFileSync(path)).digest("hex"),
+        ]);
+      }
+    }
+  };
+  walk(projectDir);
+  return Object.fromEntries(snapshot.sort(([a], [b]) => a.localeCompare(b)));
 }
 
 function drive(
@@ -393,7 +425,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(otherKey).not.toBe(encodedKey);
   });
 
-  test("team probe steering continues normally while solo probes preserve marker publication", () => {
+  test("Stop probes are read-only for team and solo steering, and route checks bypass transport", () => {
     const team = setupIntegrationProject({
       withState: "state-brownfield-feature.md",
     });
@@ -481,16 +513,138 @@ describe("t248 deterministic steering delivery", () => {
       existsSync(
         join(seededRecordDir(solo), ".aidlc-steering-token-key"),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       existsSync(
         join(seededRecordDir(solo), ".aidlc-active-directive.json"),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       invoke(solo, "continue", [soloProbe.continue_token ?? ""]).directive
         .kind,
     ).not.toBe("error");
+
+    const routeCheck = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(routeCheck);
+    const routed = invoke(
+      routeCheck,
+      "next",
+      [],
+      { ...process.env, AIDLC_ROUTE_CHECK: "1" },
+    ).directive;
+    expect(routed).toMatchObject({
+      kind: "run-stage",
+      stage: "requirements-analysis",
+    });
+    expect(
+      existsSync(
+        join(seededRecordDir(routeCheck), ".aidlc-steering-token-key"),
+      ),
+    ).toBe(false);
+    expect(
+      existsSync(
+        join(seededRecordDir(routeCheck), ".aidlc-active-directive.json"),
+      ),
+    ).toBe(false);
+  });
+
+  test("engine observer modes are byte-pure across transport and active-directive states", () => {
+    const proj = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(proj);
+    appendFileSync(
+      join(
+        proj,
+        "aidlc",
+        "spaces",
+        "default",
+        "memory",
+        "org.md",
+      ),
+      Array.from(
+        { length: 180 },
+        (_, i) => `\n## Observer Purity ${i}\n\n${"x".repeat(320)}\n`,
+      ).join(""),
+    );
+    syncEngine(proj);
+
+    const beforeFirstProbe = projectSnapshot(proj);
+    const firstProbe = invoke(
+      proj,
+      "next",
+      [],
+      { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
+    ).directive;
+    expect(firstProbe).toMatchObject({
+      kind: "load-steering",
+      part: 1,
+    });
+    expect(projectSnapshot(proj)).toEqual(beforeFirstProbe);
+
+    const beforeProbeContinue = projectSnapshot(proj);
+    const probeContinue = invoke(
+      proj,
+      "continue",
+      [firstProbe.continue_token ?? ""],
+      { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
+    ).directive;
+    expect(probeContinue.kind).not.toBe("error");
+    expect(projectSnapshot(proj)).toEqual(beforeProbeContinue);
+
+    const beforeRouteContinue = projectSnapshot(proj);
+    expect(
+      invoke(
+        proj,
+        "continue",
+        [firstProbe.continue_token ?? ""],
+        { ...process.env, AIDLC_ROUTE_CHECK: "1" },
+      ).directive,
+    ).toMatchObject({
+      kind: "run-stage",
+      stage: "requirements-analysis",
+    });
+    expect(projectSnapshot(proj)).toEqual(beforeRouteContinue);
+
+    const delivered = drive(proj, []);
+    expect(delivered.final).toMatchObject({
+      kind: "run-stage",
+      stage: "requirements-analysis",
+    });
+    const beforeRetainedProbe = projectSnapshot(proj);
+    expect(
+      invoke(
+        proj,
+        "next",
+        [],
+        { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" },
+      ).directive,
+    ).toMatchObject({
+      kind: "load-steering",
+      part: 1,
+    });
+    expect(projectSnapshot(proj)).toEqual(beforeRetainedProbe);
+
+    const routeCheck = setupIntegrationProject({
+      withState: "state-brownfield-feature.md",
+    });
+    projects.push(routeCheck);
+    syncEngine(routeCheck);
+    const beforeRouteCheck = projectSnapshot(routeCheck);
+    expect(
+      invoke(
+        routeCheck,
+        "next",
+        [],
+        { ...process.env, AIDLC_ROUTE_CHECK: "1" },
+      ).directive,
+    ).toMatchObject({
+      kind: "run-stage",
+      stage: "requirements-analysis",
+    });
+    expect(projectSnapshot(routeCheck)).toEqual(beforeRouteCheck);
   });
 
   test("sessionless continuation consumes the same token exactly once", () => {

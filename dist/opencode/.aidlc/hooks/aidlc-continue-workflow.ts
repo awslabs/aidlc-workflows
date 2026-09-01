@@ -106,16 +106,16 @@
 //        marker. A conductor that jumps the pointer and then quits is released
 //        here and blocked on Claude. Narrow but real; see the coverage-gap note
 //        on markEngineTouch in aidlc-lib.ts.
-//   8. Every positive wait/release signal above is evaluated BEFORE the shared
-//      non-Copilot `next` probe. That probe intentionally publishes a
-//      sessionless directive so its exact continuation token remains usable when
-//      the hook blocks, but publication must never replace the directive epoch
-//      or protected challenge of a turn that is already waiting legitimately.
-//      Team-owned probes are already read-only, so they may safely re-check with
-//      the probe-derived stage/unit when no current marker supplied that identity.
-//      A RESUME CHOICE is the same rule in marker form: kind `ask` with resume
-//      status `waiting`. Autonomous Construction remains guarded and falls
-//      through to the cap-bounded block.
+//   8. Every positive wait/release signal above is evaluated before any shared
+//      non-Copilot observation. The hook then retains a current issued directive
+//      instead of recomputing it: an active load-steering cursor stays on its
+//      delivered part, and an active run-stage stays a run-stage across the turn
+//      boundary. Only missing, stale, or consumed evidence falls back to a bare
+//      `next`, and that fallback is an explicitly read-only probe: it may return a
+//      directive on stdout but cannot publish it, rotate authority, mint token
+//      keys, or advance a continuation cursor. A RESUME CHOICE is the same rule
+//      in marker form: kind `ask` with resume status `waiting`. Autonomous
+//      Construction remains guarded and falls through to the cap-bounded block.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -1070,6 +1070,44 @@ interface EngineDirective {
   rulesContent?: Array<{ path: string; text: string }>;
 }
 
+function retainedSharedDirective(
+  marker: ReturnType<typeof readActiveDirectiveMarker>,
+): EngineDirective | null {
+  if (
+    marker?.version !== 2 ||
+    marker.delivery !== "issued" ||
+    marker.needs_rehydrate !== false ||
+    (
+      marker.kind !== "load-steering" &&
+      marker.kind !== "run-stage" &&
+      marker.kind !== "invoke-swarm"
+    )
+  ) {
+    return null;
+  }
+  if (
+    marker.kind === "load-steering" &&
+    (
+      typeof marker.continue_token !== "string" ||
+      marker.continue_token.length === 0
+    )
+  ) {
+    return null;
+  }
+  return {
+    kind: marker.kind,
+    stage: marker.stage,
+    ...(marker.unit ? { unit: marker.unit } : {}),
+    ...(marker.units ? { units: marker.units } : {}),
+    ...(marker.continue_token
+      ? { continueToken: marker.continue_token }
+      : {}),
+    ...(marker.part ? { part: marker.part } : {}),
+    ...(marker.parts ? { parts: marker.parts } : {}),
+    retained: true,
+  };
+}
+
 // Run `aidlc-orchestrate.ts next` and return the parsed directive fields the
 // hook needs, or null
 // if the engine could not be consulted (spawn failure, non-zero exit, or
@@ -1090,14 +1128,11 @@ function runEngineNextDirective(
   // null-return below treats as "engine could not be consulted" → fail OPEN
   // (allow the stop). Mirrors aidlc-run-sensors.ts's bounded spawn.
   //
-  // STOP_HOOK_PROBE_ENV MARKS THIS SPAWN AS THE HOOK'S OWN PROBE, and that is
-  // load-bearing for the conversational carve-out — not a debug nicety. The
-  // engine touches `.aidlc-engine-touch` on every advancing invocation, and the
-  // transcript-free carve-out below asks "is the last human turn newer than the
-  // last engine touch?". This consultation runs on EVERY stop, so without the
-  // marker it would refresh the engine mtime first and the answer would be `no`
-  // forever: tier 3 would look implemented and never fire. markEngineTouch() is a
-  // no-op when it sees this env var (aidlc-lib.ts).
+  // STOP_HOOK_PROBE_ENV marks this spawn as an OBSERVER, not a normal engine
+  // advance. Every durable mutation seam in the engine treats it as read-only:
+  // no active-directive publication, continuation-cursor advance, token-key
+  // creation, diary bootstrap, state refresh, cache write, or engine-touch
+  // marker. The stdout directive is the hook's only input.
   const proc = Bun.spawnSync({
     cmd: [
       "bun",
@@ -1231,6 +1266,9 @@ function continuationReason(
   if (retained && kind === "run-stage") {
     return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
   }
+  if (retained && kind === "invoke-swarm") {
+    return `The exact delivered AIDLC swarm dispatch${where} is still active. Complete that exact dispatch and merge/report its real outcome before asking the engine for another move.`;
+  }
   if (kind === "load-steering" && continueToken) {
     const exactContent = JSON.stringify(rulesContent ?? []);
     // Print order and execution order intentionally differ. The opaque token
@@ -1264,6 +1302,7 @@ function validStopReleaseReason(
   stateContent: string,
   activeStage: string | undefined,
   activeUnit: string | undefined,
+  activeUnits: string[] | undefined,
   rawSessionId: unknown,
   sessionId: string,
   transcriptPath: string | null,
@@ -1274,18 +1313,27 @@ function validStopReleaseReason(
   if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
     return `current stage ${currentStageSlug(stateContent)} is awaiting approval or being revised; allowing the stop (human-wait carve-out)`;
   }
-  if (
-    isPendingQuestionStop(
-      projectDir,
-      stateContent,
-      activeStage,
-      activeUnit,
-      sessionId,
-      questionAuthorityCurrent,
-    )
-  ) {
-    const pendingStage = activeStage ?? currentStageSlug(stateContent);
-    return `active stage ${pendingStage} has an unanswered question; allowing the stop (pending-question carve-out)`;
+  const questionUnits =
+    activeUnit !== undefined
+      ? [activeUnit]
+      : activeUnits && activeUnits.length > 0
+        ? activeUnits
+        : [undefined];
+  for (const questionUnit of questionUnits) {
+    if (
+      isPendingQuestionStop(
+        projectDir,
+        stateContent,
+        activeStage,
+        questionUnit,
+        sessionId,
+        questionAuthorityCurrent,
+      )
+    ) {
+      const pendingStage = activeStage ?? currentStageSlug(stateContent);
+      const unitContext = questionUnit ? ` for Unit ${questionUnit}` : "";
+      return `active stage ${pendingStage}${unitContext} has an unanswered question; allowing the stop (pending-question carve-out)`;
+    }
   }
   if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
     const teamPending =
@@ -1535,11 +1583,17 @@ const activeUnitBeforeProbe =
       ? activeMarkerBeforeProbe.unit
       : undefined
   );
+const activeUnitsBeforeProbe =
+  activeMarkerBeforeProbe &&
+    activeMarkerBeforeProbe.stage === activeStageBeforeProbe
+    ? activeMarkerBeforeProbe.units
+    : undefined;
 const validStopReason = validStopReleaseReason(
   projectDir,
   stateContent,
   activeStageBeforeProbe,
   activeUnitBeforeProbe,
+  activeUnitsBeforeProbe,
   rawSessionId,
   sessionId,
   transcriptPath,
@@ -1551,11 +1605,14 @@ if (validStopReason !== null) {
   recordHookDrop(projectDir, HOOK_NAME, validStopReason);
   return allowStop();
 }
+const retainedShared = copilotEvidence
+  ? null
+  : retainedSharedDirective(activeMarkerBeforeProbe);
 const directive: EngineDirective | null = copilotEvidence
   ? retainedDirective
     ? { ...retainedDirective, retained: true }
     : { kind: "rehydrate", retained: true }
-  : runEngineNextDirective(projectDir, sessionId);
+  : retainedShared ?? runEngineNextDirective(projectDir, sessionId);
 if (directive === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
   return allowStop();
@@ -1568,6 +1625,13 @@ const activeUnit =
   (
     activeMarker && activeMarker.stage === activeStage
       ? activeMarker.unit
+      : undefined
+  );
+const activeUnits =
+  directive.units ??
+  (
+    activeMarker && activeMarker.stage === activeStage
+      ? activeMarker.units
       : undefined
   );
 if (isTeamUnitOwnership(stateContent)) {
@@ -1584,6 +1648,7 @@ if (isTeamUnitOwnership(stateContent)) {
     stateContent,
     activeStage,
     activeUnit,
+    activeUnits,
     rawSessionId,
     sessionId,
     transcriptPath,
@@ -1657,7 +1722,7 @@ if (copilotSession && copilotEvidence &&
         projectDir,
         stateContent,
         copilotSession,
-        [kind, activeStage ?? "", activeUnit ?? "", directive.part ?? "", directive.parts ?? "", copilotEvidence.tokenSha256, copilotEvidence.stateSha256, copilotEvidence.resumeStatus, copilotEvidence.resumeAction, copilotEvidence.ownerSession, copilotEvidence.ownerEpoch].join("|"),
+        [kind, activeStage ?? "", activeUnit ?? "", JSON.stringify(directive.units ?? []), directive.part ?? "", directive.parts ?? "", copilotEvidence.tokenSha256, copilotEvidence.stateSha256, copilotEvidence.resumeStatus, copilotEvidence.resumeAction, copilotEvidence.ownerSession, copilotEvidence.ownerEpoch].join("|"),
         stopHookActive,
         blockCap(stateContent),
       );

@@ -131,7 +131,8 @@ export function claimCopilotCommand(): { allowed: true; attemptId: string } {
 }
 export function settleCopilotCommand(): string { return "settled"; }
 export function settleCopilotIntentBoundary(): boolean { return false; }
-export function recordCopilotHumanSequence(): boolean { return true; }\n`;
+export function recordCopilotHumanSequence(): boolean { return true; }
+export function validateUnitName(): null { return null; }\n`;
 
 interface Scratch {
   projectRoot: string;

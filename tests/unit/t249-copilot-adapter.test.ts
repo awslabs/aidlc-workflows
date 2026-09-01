@@ -1389,6 +1389,100 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     ).toBe("");
   });
 
+  test("21a2: invoke-swarm output retains its Unit batch and a new batch resets Stop progress", () => {
+    const dir = orchestrationProject();
+    const session = "swarm-owner";
+    const spec = commandSpec(dir, "direct", ["next"]);
+    const claim = noIdClaim(dir, session, spec);
+    const state = readFileSync(seededStateFile(dir), "utf-8");
+    const pendingAttempt = marker(dir).active_attempt as Record<
+      string,
+      unknown
+    >;
+    const units = ["alpha", "beta"];
+    const output = JSON.stringify({
+      kind: "invoke-swarm",
+      stage: "code-generation",
+      units,
+    });
+    const resultSha256 = createHash("sha256")
+      .update(output, "utf-8")
+      .digest("hex");
+    const priorHarness = process.env.AIDLC_HARNESS_NAME;
+    process.env.AIDLC_HARNESS_NAME = "copilot";
+    let publication: ReturnType<typeof writeActiveDirectiveMarker>;
+    try {
+      publication = writeActiveDirectiveMarker(
+        dir,
+        {
+          kind: "invoke-swarm",
+          stage: "code-generation",
+          units,
+          state_sha256: createHash("sha256")
+            .update(state, "utf-8")
+            .digest("hex"),
+        },
+        {
+          attemptId: claim.attemptId,
+          commandKind: "next",
+          commandSha256: String(pendingAttempt.command_sha256),
+          resultSha256,
+        },
+      );
+    } finally {
+      if (priorHarness === undefined) delete process.env.AIDLC_HARNESS_NAME;
+      else process.env.AIDLC_HARNESS_NAME = priorHarness;
+    }
+    expect(publication).toBe("copilot-committed");
+    const post = runAdapter(
+      dir,
+      "post-tool",
+      commandPayload(
+        dir,
+        session,
+        claim.updated,
+        undefined,
+        true,
+        output,
+      ),
+    );
+    expect(post.code).toBe(0);
+    expect(marker(dir)).toMatchObject({
+      kind: "invoke-swarm",
+      units,
+      delivery: "delivered",
+      needs_rehydrate: false,
+      active_attempt: {
+        id: claim.attemptId,
+        status: "settled",
+      },
+    });
+
+    const firstStop = runAdapter(dir, "continue-workflow", {
+      ...FIXTURES.stop,
+      cwd: dir,
+      session_id: session,
+    });
+    expect(
+      (JSON.parse(firstStop.stdout) as { decision?: string }).decision,
+    ).toBe("block");
+    expect(firstStop.stdout).toContain("exact delivered AIDLC swarm dispatch");
+    expect(marker(dir).stop_count).toBe(1);
+
+    rewriteMarker(dir, (value) => {
+      value.units = ["gamma"];
+    });
+    const nextBatchStop = runAdapter(dir, "continue-workflow", {
+      ...FIXTURES.stop,
+      cwd: dir,
+      session_id: session,
+    });
+    expect(
+      (JSON.parse(nextBatchStop.stdout) as { decision?: string }).decision,
+    ).toBe("block");
+    expect(marker(dir).stop_count).toBe(1);
+  }, 30000);
+
   test.skipIf(COMPILED_BINARY === null)("21b: real compiled dispatcher normalizes next/continue and --resume shorthand", () => {
     const dir = orchestrationProject();
     const session = "real-compiled-owner";

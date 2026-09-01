@@ -1,4 +1,4 @@
-// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation
+// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:refreshActiveDirectiveUnitState
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
@@ -22,8 +22,10 @@ import {
   readAllAuditShards,
   readPlanApprovalChallenge,
   readPlanApprovalReceipt,
+  readPlanApprovalResponse,
   readPlanApprovalViolation,
   refreshActiveDirectiveMarker,
+  refreshActiveDirectiveUnitState,
   releaseAuditLock,
   sessionsDir,
   writeActiveDirectiveMarker,
@@ -88,7 +90,12 @@ function initGitBaseline(project: string): void {
 }
 
 function createProject(
-  options: { expressConstruction?: boolean } = {},
+  options: {
+    expressConstruction?: boolean;
+    unit?: string;
+    units?: string[];
+    inlineUnits?: string[];
+  } = {},
 ): string {
   const project = setupIntegrationProject({
     withState: "state-brownfield-feature.md",
@@ -104,32 +111,71 @@ function createProject(
       /^- \[[ xSR?-]\] code-generation(\s+—\s+)EXECUTE$/m,
       "- [-] code-generation$1EXECUTE",
     );
-  const scopedState = options.expressConstruction
+  let scopedState =
+    options.expressConstruction ||
+      options.unit ||
+      options.units ||
+      options.inlineUnits
     ? state
-      .replace(/^- \*\*Scope\*\*:.*$/m, "- **Scope**: express")
-      .replace(/^- \*\*Depth\*\*:.*$/m, "- **Depth**: Minimal")
-      .replace(/^- \*\*Test Strategy\*\*:.*$/m, "- **Test Strategy**: Minimal")
+      .replace(
+        /^- \*\*Scope\*\*:.*$/m,
+        `- **Scope**: ${options.expressConstruction ? "express" : "feature"}`,
+      )
+      .replace(
+        /^- \*\*Depth\*\*:.*$/m,
+        `- **Depth**: ${options.expressConstruction ? "Minimal" : "Standard"}`,
+      )
+      .replace(
+        /^- \*\*Test Strategy\*\*:.*$/m,
+        `- **Test Strategy**: ${options.expressConstruction ? "Minimal" : "Standard"}`,
+      )
       .replace(
         /^- \*\*Lifecycle Phase\*\*:.*$/m,
         "- **Lifecycle Phase**: CONSTRUCTION",
       )
     : state;
+  if (options.units) {
+    scopedState = scopedState.replace(
+      /^(- \*\*Revision Count\*\*:.*)$/m,
+      "$1\n- **Construction Iteration**: stage-major\n- **Construction Autonomy Mode**: autonomous",
+    );
+  }
+  if (options.inlineUnits) {
+    scopedState = scopedState.replace(
+      /^(- \*\*Revision Count\*\*:.*)$/m,
+      "$1\n- **Construction Iteration**: stage-major\n- **Construction Autonomy Mode**: gated",
+    );
+  }
   writeFileSync(statePath, scopedState, "utf-8");
   mkdirSync(join(project, "src"), { recursive: true });
   writeFileSync(join(project, "src", "base.ts"), "export const base = 1;\n");
   initGitBaseline(project);
+  const dagUnits = options.units ?? options.inlineUnits;
+  if (dagUnits) {
+    writeFileSync(
+      join(seededRecordDir(project), "runtime-graph.json"),
+      `${JSON.stringify({
+        bolt_dag: {
+          batches: [dagUnits],
+          units: dagUnits.map((name) => ({ name })),
+        },
+      })}\n`,
+    );
+  }
   writeActiveDirectiveMarker(project, {
-    kind: "run-stage",
+    kind: options.units ? "invoke-swarm" : "run-stage",
     stage: "code-generation",
+    ...(options.unit ? { unit: options.unit } : {}),
+    ...(options.units ? { units: options.units } : {}),
     state_sha256: createHash("sha256").update(scopedState).digest("hex"),
   });
   return project;
 }
 
-function seedPlan(project: string): string {
-  const authority = resolveCodeGenerationAuthority(project, { unit: null });
+function seedPlan(project: string, unit: string | null = null): string {
+  const authority = resolveCodeGenerationAuthority(project, { unit });
   const contract = resolveTestingPosture(project);
-  const dir = codeGenerationRecordDir(project, null);
+  const dir = codeGenerationRecordDir(project, unit);
   mkdirSync(dir, { recursive: true });
   const plan =
     `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Implement\n`;
@@ -200,7 +246,11 @@ function runStatusSync(
   );
 }
 
-function decisionArgs(questions: string, session: string): string[] {
+function decisionArgs(
+  questions: string,
+  session: string,
+  unit: string | null = null,
+): string[] {
   return [
     "--stage",
     "code-generation",
@@ -210,17 +260,22 @@ function decisionArgs(questions: string, session: string): string[] {
     questions,
     "--session",
     session,
-    "--stage-level",
+    ...(unit === null ? ["--stage-level"] : ["--unit", unit]),
   ];
 }
 
-function approve(project: string, questions: string, session: string): void {
+function approve(
+  project: string,
+  questions: string,
+  session: string,
+  unit: string | null = null,
+): void {
   appendAuditEntry(
     "SESSION_STARTED",
     { Source: "startup", Session: session },
     project,
   );
-  const identity = decisionArgs(questions, session);
+  const identity = decisionArgs(questions, session, unit);
   expect(
     runLog(project, [
       "decision",
@@ -263,7 +318,7 @@ function approve(project: string, questions: string, session: string): void {
     answer.exitCode,
     `${answer.stdout?.toString() ?? ""}\n${answer.stderr?.toString() ?? ""}`,
   ).toBe(0);
-  expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
+  expect(evaluateCodeGenerationApproval(project, { unit }).ok).toBe(true);
 }
 
 describe("t328 Plan Approval runtime authority", () => {
@@ -360,7 +415,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
   }, 30000);
 
-  test("Claude Stop preserves an Express stage-level Plan Approval until the human answers", () => {
+  test("Claude Stop preserves an Express Plan Approval through challenge, response, and receipt", () => {
     const project = createProject({ expressConstruction: true });
     expect(runStatusSync(project, "code-generation").exitCode).toBe(0);
     const statusSyncedState = readFileSync(
@@ -466,6 +521,39 @@ describe("t328 Plan Approval runtime authority", () => {
       },
     );
     expect(human.exitCode, human.stderr.toString()).toBe(0);
+    const responseBeforeReceipt = readPlanApprovalResponse(project, session);
+    expect(responseBeforeReceipt).toMatchObject({
+      choice: "Approve Plan",
+    });
+    const stopAfterResponse = Bun.spawnSync(
+      [BUN, join(project, ".claude", "hooks", "aidlc-continue-workflow.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "Stop",
+          session_id: session,
+          stop_hook_active: false,
+          transcript_path: join(project, "missing-transcript.jsonl"),
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(
+      stopAfterResponse.exitCode,
+      `${stopAfterResponse.stdout.toString()}\n${stopAfterResponse.stderr.toString()}`,
+    ).toBe(0);
+    expect(JSON.parse(stopAfterResponse.stdout.toString())).toMatchObject({
+      decision: "block",
+    });
+    expect(readActiveDirectiveMarker(project, state)).toEqual(markerBefore);
+    expect(readPlanApprovalChallenge(project, session)).toEqual(
+      challengeBefore,
+    );
+    expect(readPlanApprovalResponse(project, session)).toEqual(
+      responseBeforeReceipt,
+    );
     writeFileSync(
       questions,
       readFileSync(questions, "utf-8").replace(
@@ -493,6 +581,529 @@ describe("t328 Plan Approval runtime authority", () => {
       choice: "Approve Plan",
       status: "approved",
     });
+  }, 30000);
+
+  test("Claude Stop preserves a per-Unit Plan Approval before and after the human response", () => {
+    const unit = "alpha";
+    const project = createProject({ unit });
+    const questions = seedPlan(project, unit);
+    const session = "unit-plan-approval-stop";
+    appendAuditEntry(
+      "SESSION_STARTED",
+      { Source: "startup", Session: session },
+      project,
+    );
+    const identity = decisionArgs(questions, session, unit);
+    expect(
+      runLog(project, [
+        "decision",
+        ...identity,
+        "--decision",
+        "Approve this exact Code Generation plan?",
+        "--options",
+        "Approve Plan,Request Changes",
+      ]).exitCode,
+    ).toBe(0);
+
+    const state = readFileSync(
+      join(seededRecordDir(project), "aidlc-state.md"),
+      "utf-8",
+    );
+    const markerBefore = readActiveDirectiveMarker(project, state);
+    const challengeBefore = readPlanApprovalChallenge(project, session);
+    expect(challengeBefore).not.toBeNull();
+    const stopBeforeAnswer = Bun.spawnSync(
+      [BUN, join(project, ".claude", "hooks", "aidlc-continue-workflow.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "Stop",
+          session_id: session,
+          stop_hook_active: false,
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(stopBeforeAnswer.exitCode, stopBeforeAnswer.stderr.toString()).toBe(
+      0,
+    );
+    expect(stopBeforeAnswer.stdout.toString()).toBe("");
+
+    const human = Bun.spawnSync(
+      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: session,
+          prompt: "Approve Plan",
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(human.exitCode, human.stderr.toString()).toBe(0);
+    const responseBeforeReceipt = readPlanApprovalResponse(project, session);
+    expect(responseBeforeReceipt).toMatchObject({ choice: "Approve Plan" });
+
+    const stopAfterAnswer = Bun.spawnSync(
+      [BUN, join(project, ".claude", "hooks", "aidlc-continue-workflow.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "Stop",
+          session_id: session,
+          stop_hook_active: false,
+          transcript_path: join(project, "missing-transcript.jsonl"),
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(stopAfterAnswer.exitCode, stopAfterAnswer.stderr.toString()).toBe(0);
+    expect(JSON.parse(stopAfterAnswer.stdout.toString())).toMatchObject({
+      decision: "block",
+    });
+    expect(readActiveDirectiveMarker(project, state)).toEqual(markerBefore);
+    expect(readPlanApprovalChallenge(project, session)).toEqual(
+      challengeBefore,
+    );
+    expect(readPlanApprovalResponse(project, session)).toEqual(
+      responseBeforeReceipt,
+    );
+
+    writeFileSync(
+      questions,
+      readFileSync(questions, "utf-8").replace(
+        /\[Answer\]:\s*$/,
+        "[Answer]: Approve Plan",
+      ),
+    );
+    expect(
+      runLog(project, [
+        "answer",
+        ...identity,
+        "--details",
+        "Approve Plan",
+      ]).exitCode,
+    ).toBe(0);
+    expect(evaluateCodeGenerationApproval(project, { unit }).ok).toBe(true);
+  }, 30000);
+
+  test("Claude Stop preserves per-Unit Plan Approval throughout an invoke-swarm lifecycle", () => {
+    const unit = "alpha";
+    const project = createProject({ units: [unit, "beta"] });
+    appendAuditEntry(
+      "STAGE_STARTED",
+      { Stage: "code-generation", Agent: "aidlc-developer-agent" },
+      project,
+    );
+    const questions = seedPlan(project, unit);
+    const session = "swarm-plan-approval-stop";
+    appendAuditEntry(
+      "SESSION_STARTED",
+      { Source: "startup", Session: session },
+      project,
+    );
+    const identity = decisionArgs(questions, session, unit);
+    expect(
+      runLog(project, [
+        "decision",
+        ...identity,
+        "--decision",
+        "Approve this exact Code Generation plan?",
+        "--options",
+        "Approve Plan,Request Changes",
+      ]).exitCode,
+    ).toBe(0);
+
+    const state = readFileSync(
+      join(seededRecordDir(project), "aidlc-state.md"),
+      "utf-8",
+    );
+    const markerBefore = readActiveDirectiveMarker(project, state);
+    const authority = resolveCodeGenerationAuthority(project, { unit });
+    const challengeBefore = readPlanApprovalChallenge(project, session);
+    expect(markerBefore).toMatchObject({
+      kind: "invoke-swarm",
+      units: [unit, "beta"],
+    });
+    expect(challengeBefore).not.toBeNull();
+
+    const runStop = (withTranscript: boolean) =>
+      Bun.spawnSync(
+        [BUN, join(project, ".claude", "hooks", "aidlc-continue-workflow.ts")],
+        {
+          cwd: project,
+          env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+          stdin: Buffer.from(JSON.stringify({
+            hook_event_name: "Stop",
+            session_id: session,
+            stop_hook_active: false,
+            ...(withTranscript
+              ? { transcript_path: join(project, "missing-transcript.jsonl") }
+              : {}),
+          })),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+
+    const stopBeforeAnswer = runStop(false);
+    expect(stopBeforeAnswer.exitCode, stopBeforeAnswer.stderr.toString()).toBe(
+      0,
+    );
+    expect(stopBeforeAnswer.stdout.toString()).toBe("");
+
+    const human = Bun.spawnSync(
+      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdin: Buffer.from(JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: session,
+          prompt: "Approve Plan",
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(human.exitCode, human.stderr.toString()).toBe(0);
+    const responseBeforeReceipt = readPlanApprovalResponse(project, session);
+    expect(responseBeforeReceipt).toMatchObject({ choice: "Approve Plan" });
+
+    const stopAfterAnswer = runStop(true);
+    expect(stopAfterAnswer.exitCode, stopAfterAnswer.stderr.toString()).toBe(0);
+    expect(JSON.parse(stopAfterAnswer.stdout.toString())).toMatchObject({
+      decision: "block",
+    });
+    expect(readActiveDirectiveMarker(project, state)).toEqual(markerBefore);
+    expect(readPlanApprovalChallenge(project, session)).toEqual(
+      challengeBefore,
+    );
+    expect(readPlanApprovalResponse(project, session)).toEqual(
+      responseBeforeReceipt,
+    );
+
+    writeFileSync(
+      questions,
+      readFileSync(questions, "utf-8").replace(
+        /\[Answer\]:\s*$/,
+        "[Answer]: Approve Plan",
+      ),
+    );
+    expect(
+      runLog(project, [
+        "answer",
+        ...identity,
+        "--details",
+        "Approve Plan",
+      ]).exitCode,
+    ).toBe(0);
+    const receiptBeforeGeneration = readPlanApprovalReceipt(project, {
+      targetId: authority.targetId,
+      directiveEpoch: authority.directiveEpoch,
+    });
+    expect(receiptBeforeGeneration).toMatchObject({ status: "approved" });
+    expect(runStop(true).exitCode).toBe(0);
+    expect(readActiveDirectiveMarker(project, state)).toEqual(markerBefore);
+    expect(evaluateCodeGenerationApproval(project, { unit }).ok).toBe(true);
+
+    beginCodeGeneration(project, { unit });
+    const generationReceipt = readPlanApprovalReceipt(project, {
+      targetId: authority.targetId,
+      directiveEpoch: authority.directiveEpoch,
+    });
+    expect(generationReceipt).toMatchObject({ status: "generation" });
+    expect(runStop(true).exitCode).toBe(0);
+    expect(readActiveDirectiveMarker(project, state)).toEqual(markerBefore);
+    expect(
+      readPlanApprovalReceipt(project, {
+        targetId: authority.targetId,
+        directiveEpoch: authority.directiveEpoch,
+      }),
+    ).toEqual(generationReceipt);
+    expect(evaluateCodeGenerationApproval(project, { unit }).ok).toBe(true);
+  }, 30000);
+
+  test("Claude Stop preserves approved and generation-active authority for stage and Unit targets", () => {
+    for (const unit of [null, "alpha"] as const) {
+      for (const generationStarted of [false, true]) {
+        const project = createProject({
+          expressConstruction: unit === null,
+          ...(unit ? { unit } : {}),
+        });
+        const questions = seedPlan(project, unit);
+        const session = [
+          unit ?? "stage",
+          generationStarted ? "generation" : "approved",
+          "stop",
+        ].join("-");
+        approve(project, questions, session, unit);
+        if (generationStarted) {
+          beginCodeGeneration(project, { unit });
+        }
+
+        const state = readFileSync(
+          join(seededRecordDir(project), "aidlc-state.md"),
+          "utf-8",
+        );
+        const markerBefore = readActiveDirectiveMarker(project, state);
+        const authority = resolveCodeGenerationAuthority(project, { unit });
+        const receiptBefore = readPlanApprovalReceipt(project, {
+          targetId: authority.targetId,
+          directiveEpoch: authority.directiveEpoch,
+        });
+        expect(markerBefore?.kind).toBe("run-stage");
+        expect(receiptBefore).toMatchObject({
+          choice: "Approve Plan",
+          status: generationStarted ? "generation" : "approved",
+        });
+
+        const stop = Bun.spawnSync(
+          [
+            BUN,
+            join(project, ".claude", "hooks", "aidlc-continue-workflow.ts"),
+          ],
+          {
+            cwd: project,
+            env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+            stdin: Buffer.from(JSON.stringify({
+              hook_event_name: "Stop",
+              session_id: session,
+              stop_hook_active: false,
+              transcript_path: join(project, "missing-transcript.jsonl"),
+            })),
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        );
+        expect(
+          stop.exitCode,
+          `${stop.stdout.toString()}\n${stop.stderr.toString()}`,
+        ).toBe(0);
+        expect(JSON.parse(stop.stdout.toString())).toMatchObject({
+          decision: "block",
+        });
+        expect(readActiveDirectiveMarker(project, state)).toEqual(markerBefore);
+        expect(
+          readPlanApprovalReceipt(project, {
+            targetId: authority.targetId,
+            directiveEpoch: authority.directiveEpoch,
+          }),
+        ).toEqual(receiptBefore);
+        expect(evaluateCodeGenerationApproval(project, { unit }).ok).toBe(
+          true,
+        );
+      }
+    }
+  }, 30000);
+
+  test("approved per-Unit authority survives unit start and authorizes developer dispatch", () => {
+    const unit = "alpha";
+    const project = createProject({
+      unit,
+      inlineUnits: [unit],
+    });
+    const questions = seedPlan(project, unit);
+    approve(project, questions, "unit-start-dispatch", unit);
+
+    const statePath = join(seededRecordDir(project), "aidlc-state.md");
+    const stateBefore = readFileSync(statePath, "utf-8");
+    const markerBefore = readActiveDirectiveMarker(project, stateBefore);
+    const authorityBefore = resolveCodeGenerationAuthority(project, { unit });
+    const receiptBefore = readPlanApprovalReceipt(project, {
+      targetId: authorityBefore.targetId,
+      directiveEpoch: authorityBefore.directiveEpoch,
+    });
+    expect(markerBefore).toMatchObject({
+      kind: "run-stage",
+      stage: "code-generation",
+      unit,
+    });
+    expect(receiptBefore).toMatchObject({ status: "approved" });
+    const unrelatedState = stateBefore.replace(
+      "- **Current Stage**: code-generation",
+      "- **Current Stage**: build-and-test",
+    );
+    expect(
+      refreshActiveDirectiveUnitState(
+        project,
+        "code-generation",
+        unit,
+        stateBefore,
+        unrelatedState,
+      ),
+    ).toBe(false);
+    expect(readActiveDirectiveMarker(project, stateBefore)).toEqual(
+      markerBefore,
+    );
+
+    const started = Bun.spawnSync(
+      [
+        BUN,
+        join(DIST_ROOT, "tools", "aidlc-state.ts"),
+        "unit",
+        "start",
+        "--stage",
+        "code-generation",
+        "--unit",
+        unit,
+        "--project-dir",
+        project,
+      ],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(
+      started.exitCode,
+      `${started.stdout.toString()}\n${started.stderr.toString()}`,
+    ).toBe(0);
+
+    const stateAfter = readFileSync(statePath, "utf-8");
+    expect(stateAfter).toContain(`- **Active Unit**: ${unit}`);
+    const markerAfter = readActiveDirectiveMarker(project, stateAfter);
+    expect(markerAfter).toMatchObject({
+      kind: "run-stage",
+      stage: "code-generation",
+      unit,
+      code_generation_authority_revision:
+        markerBefore?.code_generation_authority_revision,
+      code_generation_authority_state_sha256: markerBefore?.state_sha256,
+    });
+    expect(markerAfter?.state_sha256).not.toBe(
+      markerAfter?.code_generation_authority_state_sha256,
+    );
+    expect(resolveCodeGenerationAuthority(project, { unit })).toEqual(
+      authorityBefore,
+    );
+    expect(
+      readPlanApprovalReceipt(project, {
+        targetId: authorityBefore.targetId,
+        directiveEpoch: authorityBefore.directiveEpoch,
+      }),
+    ).toEqual(receiptBefore);
+    expect(evaluateCodeGenerationApproval(project, { unit }).ok).toBe(true);
+
+    const contract = resolveTestingPosture(project).contract_sha256;
+    const dispatchDeveloper = () =>
+      Bun.spawnSync(
+        [
+          BUN,
+          join(
+            project,
+            ".claude",
+            "hooks",
+            "aidlc-plan-approval-guard.ts",
+          ),
+        ],
+        {
+          cwd: project,
+          env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+          stdin: Buffer.from(JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Task",
+            tool_input: {
+              subagent_type: "aidlc-developer-agent",
+              prompt:
+                `AIDLC-UNIT: ${unit}\n` +
+                `AIDLC-TESTING-CONTRACT: ${contract}\n` +
+                "Implement the approved plan.",
+            },
+          })),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+    const dispatch = dispatchDeveloper();
+    expect(
+      dispatch.exitCode,
+      `${dispatch.stdout.toString()}\n${dispatch.stderr.toString()}`,
+    ).toBe(0);
+
+    const lifecycle = (
+      action: "pause" | "resume" | "complete",
+      extra: string[] = [],
+    ) =>
+      Bun.spawnSync(
+        [
+          BUN,
+          join(DIST_ROOT, "tools", "aidlc-state.ts"),
+          "unit",
+          action,
+          "--stage",
+          "code-generation",
+          "--unit",
+          unit,
+          ...extra,
+          "--project-dir",
+          project,
+        ],
+        {
+          cwd: project,
+          env: {
+            ...process.env,
+            CLAUDE_PROJECT_DIR: project,
+            ...(action === "complete"
+              ? { AIDLC_SKIP_ARTIFACT_GUARD: "1" }
+              : {}),
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+
+    const paused = lifecycle("pause", [
+      "--reason",
+      "waiting for input",
+      "--next-action",
+      "resume generation",
+    ]);
+    expect(
+      paused.exitCode,
+      `${paused.stdout.toString()}\n${paused.stderr.toString()}`,
+    ).toBe(0);
+    const pausedDispatch = dispatchDeveloper();
+    expect(pausedDispatch.exitCode).toBe(2);
+    expect(
+      `${pausedDispatch.stdout.toString()}\n${pausedDispatch.stderr.toString()}`,
+    ).toContain(`unit "${unit}" is paused`);
+    expect(evaluateCodeGenerationApproval(project, { unit }).ok).toBe(true);
+
+    const resumed = lifecycle("resume");
+    expect(
+      resumed.exitCode,
+      `${resumed.stdout.toString()}\n${resumed.stderr.toString()}`,
+    ).toBe(0);
+    const resumedDispatch = dispatchDeveloper();
+    expect(
+      resumedDispatch.exitCode,
+      `${resumedDispatch.stdout.toString()}\n${resumedDispatch.stderr.toString()}`,
+    ).toBe(0);
+    expect(resolveCodeGenerationAuthority(project, { unit })).toEqual(
+      authorityBefore,
+    );
+
+    const completed = lifecycle("complete");
+    expect(
+      completed.exitCode,
+      `${completed.stdout.toString()}\n${completed.stderr.toString()}`,
+    ).toBe(0);
+    expect(evaluateCodeGenerationApproval(project, { unit }).ok).toBe(true);
+    const completedDispatch = dispatchDeveloper();
+    expect(completedDispatch.exitCode).toBe(2);
+    expect(
+      `${completedDispatch.stdout.toString()}\n${completedDispatch.stderr.toString()}`,
+    ).toContain(`unit "${unit}" is not active`);
   }, 30000);
 
   test("audit append failure does not strand a consumed engine ask before the next Stop probe", () => {

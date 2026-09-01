@@ -140,7 +140,10 @@ import {
   inspectContinuationCursor,
   isPluginEnabled,
   isPerUnitStage,
+  isReadOnlyEngineProbe,
   isRegularFile,
+  isRouteCheckProbe,
+  isStopHookProbe,
   isTeamUnitOwnership,
   KNOWN_CODEKB_STAGES,
   listIntents,
@@ -185,7 +188,6 @@ import {
   type StageEntry,
   type AuditShardEvent,
   stateFilePath,
-  STOP_HOOK_PROBE_ENV,
   stateFilePathForSelection,
   teamUnitGateStatus,
   unitDependencyPath,
@@ -389,7 +391,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ? loadStateFileIfPresent(engineProjectDir)
       : null;
   let transported =
-    directive.kind === "run-stage" && route
+    directive.kind === "run-stage" && route && !isRouteCheckProbe()
       ? transportRunStage(directive, route)
       : directive;
   if (activeStageValidityAdvisory) {
@@ -560,20 +562,6 @@ function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
 }
 
-function isTeamStopHookProbe(projectDir: string | undefined): boolean {
-  if (
-    process.env.AIDLC_STOP_HOOK_PROBE !== "1" ||
-    !projectDir
-  ) {
-    return false;
-  }
-  try {
-    return isTeamUnitOwnership(readStateFile(projectDir));
-  } catch {
-    return false;
-  }
-}
-
 function legacyPlanApprovalRecoveryDirective(): AskDirective {
   return {
     kind: "ask",
@@ -590,13 +578,9 @@ function emit(directive: Directive): void {
     prepareEmission(directive),
   );
   const prepared = withLegacyOffer.prepared;
-  const probeDiscoveredAsk =
-    process.env[STOP_HOOK_PROBE_ENV] === "1" &&
-    prepared.marker?.kind === "ask";
   if (
     prepared.marker &&
-    !probeDiscoveredAsk &&
-    !isTeamStopHookProbe(prepared.projectDir)
+    !isReadOnlyEngineProbe()
   ) {
     const projectDir = prepared.projectDir;
     try {
@@ -2009,7 +1993,7 @@ export function bootstrapDirectiveMemory(
     if (
       !codekbCtx ||
       memoryPath.includes("{") ||
-      process.env[STOP_HOOK_PROBE_ENV] === "1"
+      isReadOnlyEngineProbe()
     ) {
       return;
     }
@@ -3595,15 +3579,14 @@ function encodeSteeringToken(
   payload: SteeringTokenPayload,
   projectDir: string,
 ): { token: string | null; error: string | null } {
-  const probe = isTeamStopHookProbe(projectDir);
-  const loaded = steeringTokenKey(projectDir, !probe);
-  const key = probe
-    ? (loaded.error === null ? probeSteeringTokenKey(projectDir) : null)
-    : loaded.key;
-  if (!key) return { token: null, error: loaded.error };
+  const probe = isStopHookProbe();
+  const loaded = probe
+    ? { key: probeSteeringTokenKey(projectDir), error: null }
+    : steeringTokenKey(projectDir, true);
+  if (!loaded.key) return { token: null, error: loaded.error };
   const envelope: SteeringTokenEnvelope = {
     p: payload,
-    m: steeringTokenMac(payload, key),
+    m: steeringTokenMac(payload, loaded.key),
     ...(probe ? { probe: true } : {}),
   };
   return {
@@ -3809,10 +3792,13 @@ function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
 }
 
-// The `next` handler reads workflow state and emits exactly one directive. Rule
-// transport may lazily mint its machine-local MAC key. Ordinary routing never
-// mutates shared workflow state; `--single` adds only its synthetic audit start
-// and cannot move the main workflow pointer.
+// The `next` handler reads workflow state and emits exactly one directive. A
+// normal rule-transport request may lazily mint its machine-local MAC key.
+// Internal observer modes are strictly read-only: route checks bypass transport,
+// while Stop probes use a deterministic first-hop token and never publish the
+// prepared directive. Ordinary routing never mutates shared workflow state;
+// `--single` adds only its synthetic audit start and cannot move the main
+// workflow pointer.
 function handleNext(args: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
   const flags = parseNextFlags(args);
@@ -4610,9 +4596,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
           // walk: no registry access and no fan-out directive.
           throw new Error("claimless-team-mode");
         }
-        const readOnlyBoard =
-          process.env.AIDLC_STOP_HOOK_PROBE === "1" ||
-          process.env.AIDLC_ROUTE_CHECK === "1";
+        const readOnlyBoard = isReadOnlyEngineProbe();
         const overview = cachedUnitClaimOverview(pd, {
           writeCache: !readOnlyBoard,
         });
@@ -6227,8 +6211,7 @@ function refreshTeamUnitProgress(
   model: TeamUnitProgressModel,
 ): string {
   if (
-    process.env.AIDLC_ROUTE_CHECK === "1" ||
-    process.env.AIDLC_STOP_HOOK_PROBE === "1"
+    isReadOnlyEngineProbe()
   ) {
     return readStateFile(projectDir);
   }
@@ -6283,8 +6266,7 @@ function emitTeamUnitMajorRunStage(
   let refreshedState: string;
   try {
     if (
-      process.env.AIDLC_STOP_HOOK_PROBE === "1" ||
-      process.env.AIDLC_ROUTE_CHECK === "1"
+      isReadOnlyEngineProbe()
     ) {
       refreshedState = stateContent;
     } else {
@@ -6307,8 +6289,7 @@ function emitTeamUnitMajorRunStage(
   const syncScopedStage = (stage: string, unit: string): boolean => {
     if (
       !scopeStamp ||
-      process.env.AIDLC_STOP_HOOK_PROBE === "1" ||
-      process.env.AIDLC_ROUTE_CHECK === "1"
+      isReadOnlyEngineProbe()
     ) {
       return true;
     }
@@ -6781,6 +6762,7 @@ function ensureSingleStageStarted(
   projectDir: string,
   node: GraphStage,
 ): string | null {
+  if (isReadOnlyEngineProbe()) return null;
   if (singleStageAttemptIsOpen(projectDir, node.slug)) return null;
   return appendSingleStageAuditEvents(projectDir, [{
     eventType: "STAGE_STARTED",
@@ -8954,7 +8936,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     writePrepared(prepared);
     return;
   }
-  if (process.env.AIDLC_STOP_HOOK_PROBE === "1") {
+  if (isReadOnlyEngineProbe()) {
     writePrepared(prepared);
     return;
   }

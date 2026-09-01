@@ -75,6 +75,7 @@ import {
   settleCopilotIntentBoundary,
   stateFilePath,
   stateFilePathForSelection,
+  validateUnitName,
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -535,10 +536,22 @@ export async function run(
       const value = JSON.parse(lines[0]?.trim() ?? "") as Record<string, unknown>;
       const kinds = new Set(["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"]);
       if (!kinds.has(String(value.kind))) return null;
+      const units =
+        Array.isArray(value.units) &&
+          value.units.length > 0 &&
+          value.units.length <= 1_024 &&
+          value.units.every(
+            (unit) =>
+              typeof unit === "string" && validateUnitName(unit) === null,
+          ) &&
+          new Set(value.units).size === value.units.length
+          ? value.units as string[]
+          : undefined;
       const directive: CopilotDirectiveMetadata = {
         kind: value.kind as CopilotDirectiveMetadata["kind"],
         ...(typeof value.stage === "string" && /^[a-z][a-z0-9-]*$/.test(value.stage) ? { stage: value.stage } : {}),
         ...(typeof value.unit === "string" && Buffer.byteLength(value.unit) <= 4 * 1024 ? { unit: value.unit } : {}),
+        ...(units ? { units } : {}),
         ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
         ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
         ...(typeof value.continue_token === "string" && Buffer.byteLength(value.continue_token) <= 16 * 1024 ? { continueToken: value.continue_token } : {}),
@@ -546,6 +559,7 @@ export async function run(
       };
       if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;
       if (directive.kind === "run-stage" && !directive.stage) return null;
+      if (directive.kind === "invoke-swarm" && (!directive.stage || !directive.units)) return null;
       return directive;
     } catch { return null; }
   }

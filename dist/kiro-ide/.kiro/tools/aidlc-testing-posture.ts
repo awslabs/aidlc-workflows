@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
+  activeUnitCheckpoint,
   auditBlockField,
   docsRoot,
   getField,
@@ -33,6 +34,7 @@ import {
   stateFilePath,
   toPosix,
   UNBINDABLE_FINGERPRINT,
+  unitLifecycleReceiptsInUse,
   validateUnitName,
   visibleMarkdownLines,
   withActiveDirectiveLock,
@@ -1018,7 +1020,9 @@ export function resolveCodeGenerationAuthority(
     version: marker.version,
     project: marker.project_sha256,
     intent: marker.intent_uuid,
-    state: marker.state_sha256,
+    state:
+      marker.code_generation_authority_state_sha256 ??
+      marker.state_sha256,
     stage: marker.stage,
     directive_unit: marker.unit ?? null,
     kind: marker.kind,
@@ -1745,7 +1749,32 @@ export function beginCodeGeneration(
   target: CodeGenerationTarget,
 ): void {
   withAuditLock(projectDir, () => {
-    withActiveDirectiveLock(projectDir, () => {
+    withActiveDirectiveLock(projectDir, (marker) => {
+      if (target.unit !== null && marker?.kind === "run-stage") {
+        const checkpoint = activeUnitCheckpoint(
+          projectDir,
+          "code-generation",
+        );
+        if (
+          unitLifecycleReceiptsInUse(projectDir, "code-generation") &&
+          (
+            checkpoint?.unit !== target.unit ||
+            checkpoint.state !== "in-progress"
+          )
+        ) {
+          if (
+            checkpoint?.unit === target.unit &&
+            checkpoint.state === "paused"
+          ) {
+            throw new Error(
+              `Code Generation unit "${target.unit}" is paused; resume it before developer dispatch or workspace mutation`,
+            );
+          }
+          throw new Error(
+            `Code Generation unit "${target.unit}" is not active; run its unit start checkpoint before developer dispatch or workspace mutation`,
+          );
+        }
+      }
       const approval = evaluateCodeGenerationApproval(projectDir, target);
       if (!approval.ok || !approval.approvalFingerprint) {
         throw new Error(approval.reason || "Code Generation requires Plan Approval");

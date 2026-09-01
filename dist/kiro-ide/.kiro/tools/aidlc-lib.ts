@@ -4177,6 +4177,7 @@ export interface ActiveDirectiveMarker {
   revision?: number; project_sha256?: string; intent_uuid?: string | null; state_present?: boolean;
   code_generation_source_sha256?: string;
   code_generation_authority_revision?: number;
+  code_generation_authority_state_sha256?: string;
   cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
   ask_type?: string;
@@ -4190,6 +4191,7 @@ export interface ActiveDirectiveMarker {
 
 export interface CopilotDirectiveMetadata {
   kind: ActiveDirectiveKind; stage?: string; unit?: string;
+  units?: string[];
   part?: number; parts?: number; continueToken?: string;
   resultSha256?: string;
 }
@@ -4662,6 +4664,10 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
       )) ||
     ("code_generation_authority_revision" in parsed &&
       !integer(parsed.code_generation_authority_revision)) ||
+    ("code_generation_authority_state_sha256" in parsed &&
+      !/^[0-9a-f]{64}$/.test(
+        String(parsed.code_generation_authority_state_sha256 ?? ""),
+      )) ||
     ("units" in parsed &&
       (
         !Array.isArray(parsed.units) ||
@@ -5213,6 +5219,13 @@ export function writeActiveDirectiveMarker(
           ? priorAuthorityRevision
           : nextRevision
         : undefined;
+    const codeGenerationAuthorityStateSha256 =
+      marker.stage === "code-generation"
+        ? preserveCodeGenerationAuthority
+          ? base.code_generation_authority_state_sha256 ??
+            base.state_sha256
+          : marker.state_sha256
+        : undefined;
     shouldResetRuntime = !preserveCodeGenerationAuthority;
     const nextAttempt = matchingAttempt && attempt
       ? {
@@ -5248,6 +5261,12 @@ export function writeActiveDirectiveMarker(
               codeGenerationAuthorityRevision,
           }
         : { code_generation_authority_revision: undefined }),
+      ...(codeGenerationAuthorityStateSha256 !== undefined
+        ? {
+            code_generation_authority_state_sha256:
+              codeGenerationAuthorityStateSha256,
+          }
+        : { code_generation_authority_state_sha256: undefined }),
       ...(marker.unit ? { unit: marker.unit } : { unit: undefined }),
       ...(requestedUnits.length > 0
         ? { units: requestedUnits }
@@ -5310,6 +5329,72 @@ export function refreshActiveDirectiveMarker(
   });
   if (refreshed) resetPlanApprovalRuntime(projectDir);
   return refreshed;
+}
+
+export function refreshActiveDirectiveUnitState(
+  projectDir: string,
+  stage: string,
+  unit: string,
+  previousStateContent: string,
+  nextStateContent: string,
+): boolean {
+  const unitRuntimeFields = [
+    "Active Unit",
+    "Unit State",
+    "Unit Pause Reason",
+    "Unit Next Action",
+    "Last Updated",
+  ];
+  const withoutUnitRuntimeFields = (content: string): string =>
+    unitRuntimeFields.reduce(
+      (current, field) => removeField(current, field),
+      content,
+    );
+  if (
+    withoutUnitRuntimeFields(previousStateContent) !==
+      withoutUnitRuntimeFields(nextStateContent)
+  ) {
+    return false;
+  }
+  const previousStateSha256 = stateContentSha256(previousStateContent);
+  const nextStateSha256 = stateContentSha256(nextStateContent);
+  return transactActiveDirective(projectDir, (marker) => {
+    if (
+      !marker ||
+      marker.stage !== stage ||
+      marker.state_sha256 !== previousStateSha256
+    ) {
+      return { marker, result: false, preserve: true };
+    }
+    const targetMatches =
+      marker.kind === "run-stage"
+        ? marker.unit === unit
+        : marker.kind === "invoke-swarm" &&
+          (marker.units ?? []).includes(unit);
+    if (!targetMatches) {
+      return { marker, result: false, preserve: true };
+    }
+    if (marker.version === 1) {
+      return {
+        marker: { ...marker, state_sha256: nextStateSha256 },
+        result: true,
+      };
+    }
+    return {
+      marker: {
+        ...marker,
+        state_sha256: nextStateSha256,
+        ...(stage === "code-generation"
+          ? {
+              code_generation_authority_state_sha256:
+                marker.code_generation_authority_state_sha256 ??
+                previousStateSha256,
+            }
+          : {}),
+      },
+      result: true,
+    };
+  });
 }
 
 export function readActiveDirectiveMarker(
@@ -5779,6 +5864,13 @@ export function advanceContinuationCursor(
             nextRevision
           : nextRevision
         : undefined;
+    const codeGenerationAuthorityStateSha256 =
+      successor.stage === "code-generation"
+        ? preserveCodeGenerationAuthority
+          ? base.code_generation_authority_state_sha256 ??
+            base.state_sha256
+          : successor.state_sha256
+        : undefined;
     shouldResetRuntime = !preserveCodeGenerationAuthority;
     const next: ActiveDirectiveMarker = {
       ...base,
@@ -5797,6 +5889,12 @@ export function advanceContinuationCursor(
               codeGenerationAuthorityRevision,
           }
         : { code_generation_authority_revision: undefined }),
+      ...(codeGenerationAuthorityStateSha256 !== undefined
+        ? {
+            code_generation_authority_state_sha256:
+              codeGenerationAuthorityStateSha256,
+          }
+        : { code_generation_authority_state_sha256: undefined }),
       ...(successor.unit ? { unit: successor.unit } : { unit: undefined }),
       ...(requestedUnits.length > 0
         ? { units: requestedUnits }
@@ -6049,14 +6147,30 @@ export function settleCopilotCommand(
         active_attempt: { ...attempt, status: "failed" },
       }, result: "settled" as const };
     }
-    const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked", "notice"].includes(directive.kind);
+    const retainedKind = [
+      "load-steering",
+      "run-stage",
+      "invoke-swarm",
+      "ask",
+      "done",
+      "parked",
+      "notice",
+    ].includes(directive.kind);
     const enginePublished = (input.commandKind === "next" || input.commandKind === "continue") &&
-      (directive.kind === "load-steering" || directive.kind === "run-stage");
+      (
+        directive.kind === "load-steering" ||
+        directive.kind === "run-stage" ||
+        directive.kind === "invoke-swarm"
+      );
+    const unitsBound =
+      directive.kind !== "invoke-swarm" ||
+      JSON.stringify(marker.units ?? []) === JSON.stringify(directive.units ?? []);
     const resultBound = !enginePublished ||
       typeof directive.resultSha256 === "string" && directive.resultSha256 === attempt.result_sha256 &&
       Number.isInteger(attempt.result_revision) && (attempt.result_revision ?? 0) <= (marker.revision ?? 0) &&
       marker.kind === directive.kind && marker.stage === (directive.stage ?? marker.stage) &&
-      marker.continue_token_sha256 === (directive.continueToken ? stateContentSha256(directive.continueToken) : undefined);
+      marker.continue_token_sha256 === (directive.continueToken ? stateContentSha256(directive.continueToken) : undefined) &&
+      unitsBound;
     if (!resultBound) {
       return {
         marker: { ...invalidateActiveDirectiveDelivery(base), active_attempt: { ...attempt, status: "failed" } },
@@ -6085,7 +6199,14 @@ export function settleCopilotCommand(
       };
     } else if (resume?.status === "selected") {
       const closesResume = resume.action === "resume" && input.commandKind === "next";
-      if (closesResume && (directive.kind === "load-steering" || directive.kind === "run-stage")) {
+      if (
+        closesResume &&
+        (
+          directive.kind === "load-steering" ||
+          directive.kind === "run-stage" ||
+          directive.kind === "invoke-swarm"
+        )
+      ) {
         resume = { ...resume, status: "superseded" };
       }
     }
@@ -6113,6 +6234,9 @@ export function settleCopilotCommand(
       kind: directive.kind,
       stage: directive.stage ?? marker.stage,
       ...(unit ? { unit } : { unit: undefined }),
+      ...(directive.units && directive.units.length > 0
+        ? { units: directive.units }
+        : { units: undefined }),
       ...(directive.part ? { part: directive.part } : { part: undefined }),
       ...(directive.parts ? { parts: directive.parts } : { parts: undefined }),
       ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
@@ -6168,6 +6292,7 @@ export function copilotStopEvidence(
             kind: marker.kind,
             stage: marker.stage,
             ...(marker.unit ? { unit: marker.unit } : {}),
+            ...(marker.units ? { units: marker.units } : {}),
             ...(marker.part ? { part: marker.part } : {}),
             ...(marker.parts ? { parts: marker.parts } : {}),
             ...(marker.continue_token ? { continueToken: marker.continue_token } : {}),
@@ -15347,11 +15472,26 @@ export function engineTouchMarkerPath(projectDir: string, intent?: string, space
   return join(docsRoot(projectDir, intent, space), ".aidlc-engine-touch");
 }
 
-// The env marker that identifies the Stop hook's OWN read-only `next` probe.
-// Set by aidlc-continue-workflow.ts on its spawn; read by aidlc-orchestrate.ts
-// to suppress the engine touch. Without this the carve-out can never fire (see
-// above).
+// Internal observer modes. Both ask the orchestration engine to calculate a
+// route without committing it:
+//   - the Stop hook checks whether work is pending at a turn boundary;
+//   - aidlc-state checks that a requested Unit is the one the engine routes.
+// Observer calls must not publish directives, advance continuation cursors,
+// mint token keys, bootstrap diaries, refresh state, or touch turn markers.
 export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
+export const ROUTE_CHECK_ENV = "AIDLC_ROUTE_CHECK";
+
+export function isStopHookProbe(): boolean {
+  return process.env[STOP_HOOK_PROBE_ENV] === "1";
+}
+
+export function isRouteCheckProbe(): boolean {
+  return process.env[ROUTE_CHECK_ENV] === "1";
+}
+
+export function isReadOnlyEngineProbe(): boolean {
+  return isStopHookProbe() || isRouteCheckProbe();
+}
 
 // Touch a turn-shape marker. Only the mtime carries meaning, so the body is a
 // timestamp purely as a debugging affordance. The CALL never throws: these
@@ -15415,8 +15555,8 @@ export function markHumanTurn(projectDir: string, intent?: string, space?: strin
 
 // Record that the workflow engine was ADVANCED (not merely probed). Called from
 // aidlc-orchestrate.ts's `next` / `report` / `park` entry points. A no-op in three
-// cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe — see above),
-// for read-only utility routing (excluded at the call site), and before creation.
+// cases: during an internal read-only engine probe (see above), for read-only
+// utility routing (excluded at the call site), and before creation.
 //
 // KNOWN COVERAGE GAP — the marker sees LESS than the transcript predicate does.
 // isEngineToolCall (below) counts as engagement any non-read-only aidlc-jump /
@@ -15437,7 +15577,7 @@ export function markHumanTurn(projectDir: string, intent?: string, space?: strin
 // docs/reference/06-hooks-and-tools.md rather than leaving a stale promise of
 // parity behind.
 export function markEngineTouch(projectDir: string, intent?: string, space?: string): void {
-  if (process.env[STOP_HOOK_PROBE_ENV] === "1") return;
+  if (isReadOnlyEngineProbe()) return;
   if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(engineTouchMarkerPath(projectDir, intent, space));
 }
