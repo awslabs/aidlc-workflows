@@ -105,6 +105,11 @@ export interface Consume {
   artifact: string;
   required: boolean;
   conditional_on?: "brownfield" | "greenfield";
+  // POC (feat/typed-dependency-edges): declare what the consumer actually
+  // depends on. "content" = propagate only when producer output bytes change.
+  // "structure" = propagate only when file set / paths / kinds change.
+  // Absent = pessimistic (any change propagates), preserving pre-PoC behavior.
+  sensitivity?: "structure" | "content";
 }
 
 // Per-rule resolution row baked into each stage's rules_in_context.
