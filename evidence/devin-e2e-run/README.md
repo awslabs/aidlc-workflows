@@ -17,7 +17,7 @@ mirroring the convention established by `evidence/p3-kiro-routing/`.
 |-----|------|-------|------|--------|
 | `first-run/`  | 2026-08-31 | express (9 stages) | print (`devin -p`) | PASS (15/17 hooks verified; plan approval manual hack; subagent dispatch not tested) |
 | `second-run/` | 2026-08-31 | express (9 stages) | interactive (`devin`) | BLOCKED at code-generation plan approval — adapter bug found (`hasExplicitHumanSelection` doesn't handle Devin's object-format `tool_response`, breaking all `ask_user_question` answer recording); `ask_user_question` rendering verified (run-1 gap closed); 14/17 hooks verified |
-| `third-run/`  | planned   | —                  | —    | pending (fix adapter bug first, then re-run) |
+| `third-run/`  | planned   | express (9 stages) | interactive (`devin`) | pending — post-fix verification run; adapter bug fixed in `f51d55d3` (`normalizeToolResponse`), unit test `t332` 13a green, `dist/devin` in sync; plan targets 17/17 hooks (closes run-2 `record-human-turn` FAIL + runs-1-and-2 `deliver-stage-rules`/`log-subagent` NOT TESTED) |
 
 ## Per-run layout
 
