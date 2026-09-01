@@ -176,7 +176,8 @@ but do not yet have committed release versions.
   CREATE, VALIDATE, BUILD, and TEST authoring tiers ship as
   the standalone `aidlc-plugin-create.ts`, `aidlc-plugin-validate.ts`,
   `aidlc-plugin-build.ts`, and `aidlc-plugin-test.ts` tools. The top-level
-  command routes remain proposed in
+  `plugin validate` and `plugin build` routes also ship. Top-level
+  `plugin create` and `plugin test` routes remain proposed in
   [#723](https://github.com/awslabs/aidlc-workflows/issues/723).
   Remote discovery, trust, a first-party marketplace and a graduation path are
   also proposed in #723.
@@ -192,10 +193,12 @@ but do not yet have committed release versions.
 
 - [#731](https://github.com/awslabs/aidlc-workflows/pull/731) shipped
   DocumentKB's first indexing and citation slice. Summaries and tags shipped in
-  [#894](https://github.com/awslabs/aidlc-workflows/pull/894), completing the
-  tracked [#714](https://github.com/awslabs/aidlc-workflows/issues/714) RFC.
-- [#694](https://github.com/awslabs/aidlc-workflows/issues/694) proposes auditable
-  supplemental-knowledge selection and delivery across stage topologies.
+  [#894](https://github.com/awslabs/aidlc-workflows/pull/894), completing that
+  metadata slice of the tracked
+  [#714](https://github.com/awslabs/aidlc-workflows/issues/714) RFC.
+- [#694](https://github.com/awslabs/aidlc-workflows/issues/694) tracks
+  intent-aware discovery and auditable supplemental-knowledge delivery across
+  stage topologies.
 
 ### Product discovery
 

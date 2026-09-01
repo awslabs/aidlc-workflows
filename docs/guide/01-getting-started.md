@@ -192,7 +192,7 @@ instead - [Running on Kiro CLI](harnesses/kiro-cli.md),
 [AI-DLC on GitHub Copilot](harnesses/copilot.md) - each covers the prerequisites
 and post-copy steps that differ.
 
-The `cp` commands below run from a clone of this repository on the `v2`
+The `cp` commands below run from a clone of this repository on the `main`
 branch:
 
 ```bash

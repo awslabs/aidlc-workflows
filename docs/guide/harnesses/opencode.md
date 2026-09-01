@@ -40,7 +40,7 @@ script (top-level dispatch, `process.exit`) crashes the session
 
 The copies below come from a clone of the
 [aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`v2` branch:
+`main` branch:
 
 ```bash
 git clone --branch main https://github.com/awslabs/aidlc-workflows.git

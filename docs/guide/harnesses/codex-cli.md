@@ -26,7 +26,7 @@ never hand-edit it (the drift guard fails CI).
 
 The copies below come from a clone of the
 [aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`v2` branch:
+`main` branch:
 
 ```bash
 git clone --branch main https://github.com/awslabs/aidlc-workflows.git
