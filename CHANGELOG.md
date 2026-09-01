@@ -1,13 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.7.0] - 2026-08-31
+## [2.7.0] - 2026-09-01
 
-AI-DLC 2.7.0 promotes the accumulated 2.6.x release cycle to a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** re-copy the complete `dist/<harness>/` tree into each project before starting the next workflow; existing workflow records require no migration.
+AI-DLC 2.7.0 consolidates the 2.6.x release cycle into a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** finish workflows created before 2.6.1 on their existing shell or start a fresh intent after upgrading, replace the complete `dist/<harness>/` tree in one quiescent operation, and then run `/aidlc plugin sync` for every installed plugin. Existing 2.6.124 workflow records require no migration.
 
-* `aidlc version` now reports `2.7.0` on Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
-* The 2.6.x fixes and features documented below are included unchanged in this minor release.
-* Breaking changes for CI/scripts: none.
+* The lifecycle now has 33 stages: Application Design became Domain Design, Contract Design was added, and the Domain, Functional, and Infrastructure Design outputs were consolidated. Consumers of the retired artifact names must use `components.md`, `contract-summary.md`, `entities.md`, `rules.md`, `functional-spec.md`, and `infrastructure-specification.md`; a merge-copy upgrade must also remove the stale `skills/aidlc-application-design/` runner.
+* Classic and Express are first-class scopes, and Classic is the implicit default. Set `AWS_AIDLC_DEFAULT_SCOPE=feature` to retain the previous full-lifecycle default.
+* Human gates, structured questions, answer reuse, plan approval, review freezes, and source-bound reviewer receipts now share deterministic authority checks. Before upgrading, every custom or plugin stage that declares `reviewer:` must add `review_artifact:` naming one required Markdown output from `produces[]`.
+* Construction now carries an affirmed Testing Posture through planning and generation, supports bounded Build and Test loop-back, binds review authority to Git and non-Git source state, and can converge autonomous or team-owned work through reviewed worktrees without bypassing approval gates.
+* Reverse Engineering and CodeKB now require complete current-attempt evidence, support safe focused rescans that merge rather than replace unrelated knowledge, and accept bounded project documents and existing requirements through trust-marked read paths.
+* Plugin workflows gained selection-aware composition and doctor checks plus offline create, validate, build, and compose-test tooling. Engine replacement restores the stock graph, so `/aidlc plugin sync` is required after every upgrade; automation must treat exit 1 as an incomplete plugin installation when configured roots are unusable.
+* Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode now share stronger session binding, single-use continuation, hook diagnostics, human-presence checks, and delegated-agent attribution. Codex users must regenerate project trust entries after replacing the shell, and Claude Code users must approve project hooks and restart when doctor reports managed or disabled hooks.
+* Integrations that consume adaptive-composer proposals must rename `birthDescription` to `creationDescription`; scripts that consume the retired design artifact names must migrate before reading 2.7.0 outputs.
 
 ## [2.6.124] - 2026-08-28
 
