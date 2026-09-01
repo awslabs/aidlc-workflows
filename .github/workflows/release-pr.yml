@@ -2,7 +2,8 @@
 # implementation remains on v1. This default-branch entry forwards manual
 # requests to that maintained implementation.
 
-name: Release PR (v1)
+name: Dispatch v1 Release PR
+run-name: Dispatch-only v1 Release PR request
 
 on:
   workflow_dispatch:
@@ -16,9 +17,10 @@ permissions: {}
 
 jobs:
   dispatch-v1:
-    name: Dispatch v1 Release PR
+    name: Dispatch request only
     permissions:
       actions: write
+      contents: read
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -27,6 +29,14 @@ jobs:
     steps:
       - name: Run the v1 workflow
         run: |
+          if ! gh api \
+              --method GET \
+              "repos/$REPO/contents/.github/workflows/release-pr.yml" \
+              -f ref=v1 \
+              >/dev/null; then
+            echo "::error::The v1 ref does not contain release-pr.yml."
+            exit 1
+          fi
           if [ -n "$INPUT_VERSION" ]; then
             gh workflow run release-pr.yml \
               --ref v1 \
@@ -37,4 +47,10 @@ jobs:
               --ref v1 \
               --repo "$REPO"
           fi
-          echo "Dispatched release-pr.yml from v1"
+          echo "::notice::Dispatch accepted. This run does not report the child Release PR result."
+          {
+            echo "## Dispatch accepted"
+            echo
+            echo "GitHub accepted the request for \`release-pr.yml\` on \`v1\`."
+            echo "This run does not report the outcome of the child Release PR workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

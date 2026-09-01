@@ -3,7 +3,8 @@
 # The selected v1 release tag contains the implementation that creates the
 # draft GitHub Release.
 
-name: Release (v1)
+name: Dispatch v1 Release
+run-name: Dispatch-only v1 Release request for ${{ inputs.tag || 'missing tag' }}
 
 on:
   workflow_dispatch:
@@ -17,9 +18,10 @@ permissions: {}
 
 jobs:
   dispatch-v1-tag:
-    name: Dispatch v1 release tag
+    name: Dispatch request only
     permissions:
       actions: write
+      contents: read
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -36,7 +38,21 @@ jobs:
             echo "::error::Release tag must match vMAJOR.MINOR.PATCH."
             exit 1
           fi
+          if ! gh api \
+              --method GET \
+              "repos/$REPO/contents/.github/workflows/release.yml" \
+              -f "ref=$INPUT_TAG" \
+              >/dev/null; then
+            echo "::error::$INPUT_TAG does not contain the v1 release workflow."
+            exit 1
+          fi
           gh workflow run release.yml \
             --ref "$INPUT_TAG" \
             --repo "$REPO"
-          echo "Dispatched release.yml from $INPUT_TAG"
+          echo "::notice::Dispatch accepted. This run does not report the child Release result."
+          {
+            echo "## Dispatch accepted"
+            echo
+            echo "GitHub accepted the request for \`release.yml\` on \`$INPUT_TAG\`."
+            echo "This run does not report the outcome of the child Release workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
