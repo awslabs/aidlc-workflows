@@ -6,6 +6,16 @@ A Vision Document defines the **business goals**, **target outcomes**, and **sco
 
 A well-written Vision Document reduces ambiguity during Requirements Analysis, improves User Story quality, and prevents scope creep during Construction.
 
+## How to Provide This Document to the Agent
+
+There is no required location for your Vision Document. Place it anywhere in your project
+and reference it in your initial request to the agent — for example,
+`read ./vision.md and start the AI-DLC workflow`. You can also paste the document's
+contents directly into the chat.
+
+AI-DLC does not enforce a folder convention, so use whatever location fits your project.
+The agent uses what you reference or paste as the primary input to the Inception Phase.
+
 ## When to Write a Vision Document
 
 - Before starting any new project or major initiative

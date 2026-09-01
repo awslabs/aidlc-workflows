@@ -4,6 +4,18 @@ AI-DLC (AI-Driven Development Life Cycle) is a structured workflow that guides a
 
 ---
 
+## How to Provide These Documents to the Agent
+
+There is no required location for your input documents. Place them anywhere in your project
+and reference them in your initial request to the agent — for example,
+`read ./vision.md and ./tech-env.md and start the AI-DLC workflow`. You can also paste a
+document's contents directly into the chat.
+
+AI-DLC does not enforce a folder convention, so use whatever location fits your project.
+The agent uses what you reference or paste as the primary input to the Inception Phase.
+
+---
+
 ## What You Need to Provide
 
 ### 1. Vision Document -- what to build and why
