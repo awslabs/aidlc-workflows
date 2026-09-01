@@ -55,11 +55,11 @@ graph LR
     C7 -->|"Verification Gate 3"| O1
     O7 -.->|"Feedback Loop"| I1
 
-    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
-    style INCEPTION fill:#e3f2fd,stroke:#2196f3
-    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800
-    style OPERATION fill:#fce4ec,stroke:#e91e63
+    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
+    style INCEPTION fill:#e3f2fd,stroke:#2196f3,color:#000
+    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800,color:#000
+    style OPERATION fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 ---
@@ -91,14 +91,14 @@ flowchart TD
     S16 -.->|CONDITIONAL| S17
     S17 ==>|ALWAYS| VG1
 
-    style S11 fill:#c8e6c9,stroke:#388e3c
-    style S14 fill:#c8e6c9,stroke:#388e3c
-    style S17 fill:#c8e6c9,stroke:#388e3c
-    style S12 fill:#fff9c4,stroke:#f9a825
-    style S13 fill:#fff9c4,stroke:#f9a825
-    style S15 fill:#fff9c4,stroke:#f9a825
-    style S16 fill:#fff9c4,stroke:#f9a825
-    style VG1 fill:#ef9a9a,stroke:#c62828
+    style S11 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S14 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S17 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S12 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S13 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S15 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S16 fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG1 fill:#ef9a9a,stroke:#c62828,color:#000
 ```
 
 ---
@@ -149,16 +149,16 @@ flowchart TD
     S28 -.->|CONDITIONAL| S27
     S27 ==>|ALWAYS| VG2
 
-    style S21 fill:#bbdefb,stroke:#1565c0
-    style S22 fill:#c8e6c9,stroke:#388e3c
-    style S27 fill:#c8e6c9,stroke:#388e3c
-    style S22a fill:#fff9c4,stroke:#f9a825
-    style S23 fill:#fff9c4,stroke:#f9a825
-    style S24 fill:#fff9c4,stroke:#f9a825
-    style S25 fill:#fff9c4,stroke:#f9a825
-    style S26 fill:#fff9c4,stroke:#f9a825
-    style VG2 fill:#ef9a9a,stroke:#c62828
-    style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5
+    style S21 fill:#bbdefb,stroke:#1565c0,color:#000
+    style S22 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S27 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S22a fill:#fff9c4,stroke:#f9a825,color:#000
+    style S23 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S24 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S25 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S26 fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG2 fill:#ef9a9a,stroke:#c62828,color:#000
+    style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5,color:#000
 ```
 
 ---
@@ -196,15 +196,15 @@ flowchart TD
     S36 -.->|"skip CI if\nnot in scope"| VG3
     S37 -.-> VG3
 
-    style PER_STAGE fill:#fff3e0,stroke:#e65100
-    style S35 fill:#bbdefb,stroke:#1565c0
-    style S31 fill:#fff9c4,stroke:#f9a825
-    style S32 fill:#fff9c4,stroke:#f9a825
-    style S33 fill:#fff9c4,stroke:#f9a825
-    style S34 fill:#fff9c4,stroke:#f9a825
-    style S36 fill:#c8e6c9,stroke:#388e3c
-    style S37 fill:#fff9c4,stroke:#f9a825
-    style VG3 fill:#ef9a9a,stroke:#c62828
+    style PER_STAGE fill:#fff3e0,stroke:#e65100,color:#000
+    style S35 fill:#bbdefb,stroke:#1565c0,color:#000
+    style S31 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S32 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S33 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S34 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S36 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S37 fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG3 fill:#ef9a9a,stroke:#c62828,color:#000
 ```
 
 ---
@@ -233,15 +233,15 @@ flowchart TD
     S47 -->|"Approve"| DONE(["Workflow Complete"])
     S47 -->|"Start New Cycle"| IDEATION(["Return to Ideation 1.1"])
 
-    style S41 fill:#fce4ec,stroke:#c62828
-    style S42 fill:#fce4ec,stroke:#c62828
-    style S43 fill:#fce4ec,stroke:#c62828
-    style S44 fill:#fce4ec,stroke:#c62828
-    style S45 fill:#fce4ec,stroke:#c62828
-    style S46 fill:#fce4ec,stroke:#c62828
-    style S47 fill:#fce4ec,stroke:#c62828
-    style DONE fill:#a5d6a7,stroke:#2e7d32
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
+    style S41 fill:#fce4ec,stroke:#c62828,color:#000
+    style S42 fill:#fce4ec,stroke:#c62828,color:#000
+    style S43 fill:#fce4ec,stroke:#c62828,color:#000
+    style S44 fill:#fce4ec,stroke:#c62828,color:#000
+    style S45 fill:#fce4ec,stroke:#c62828,color:#000
+    style S46 fill:#fce4ec,stroke:#c62828,color:#000
+    style S47 fill:#fce4ec,stroke:#c62828,color:#000
+    style DONE fill:#a5d6a7,stroke:#2e7d32,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
 ```
 
 ---
@@ -307,11 +307,11 @@ flowchart TD
     DLA -->|"delivery plan"| DEVA
     OA ==>|"feedback loop:\noperational insights"| PA
 
-    style ORCH fill:#e1bee7,stroke:#7b1fa2
-    style PA fill:#c8e6c9,stroke:#388e3c
-    style OA fill:#fce4ec,stroke:#c62828
-    style DEVA fill:#fff3e0,stroke:#e65100
-    style AA fill:#bbdefb,stroke:#1565c0
+    style ORCH fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style PA fill:#c8e6c9,stroke:#388e3c,color:#000
+    style OA fill:#fce4ec,stroke:#c62828,color:#000
+    style DEVA fill:#fff3e0,stroke:#e65100,color:#000
+    style AA fill:#bbdefb,stroke:#1565c0,color:#000
 ```
 
 ---
@@ -365,10 +365,10 @@ flowchart LR
         MB1 --> MB2 --> MB3 --> MB4 --> MB5 --> MB6
     end
 
-    style INLINE fill:#e8f5e9,stroke:#4caf50
-    style SUBAGENT fill:#e3f2fd,stroke:#2196f3
-    style TWOSTEP fill:#fff3e0,stroke:#ff9800
-    style MOB fill:#f3e5f5,stroke:#9c27b0
+    style INLINE fill:#e8f5e9,stroke:#4caf50,color:#000
+    style SUBAGENT fill:#e3f2fd,stroke:#2196f3,color:#000
+    style TWOSTEP fill:#fff3e0,stroke:#ff9800,color:#000
+    style MOB fill:#f3e5f5,stroke:#9c27b0,color:#000
 ```
 
 ---
@@ -426,10 +426,10 @@ flowchart TD
     SCOPE_DETECT -->|"Freeform text"| FREEFORM --> CONFIRM_SCOPE
     CONFIRM_SCOPE --> CREATE
 
-    style START fill:#e1bee7,stroke:#7b1fa2
-    style RESUME_MENU fill:#bbdefb,stroke:#1565c0
-    style CREATE fill:#c8e6c9,stroke:#388e3c
-    style WARN fill:#ffcdd2,stroke:#c62828
+    style START fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style RESUME_MENU fill:#bbdefb,stroke:#1565c0,color:#000
+    style CREATE fill:#c8e6c9,stroke:#388e3c,color:#000
+    style WARN fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
 ---
@@ -529,16 +529,16 @@ flowchart TD
 
     ADD_STAGE --> ADD_EXEC
 
-    style COMPLETE fill:#e8f5e9,stroke:#388e3c
-    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0
-    style ASK fill:#bbdefb,stroke:#1565c0
-    style APPROVE fill:#a5d6a7,stroke:#2e7d32
-    style CHANGES fill:#fff9c4,stroke:#f9a825
-    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00
-    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0
-    style ACCEPT fill:#ffccbc,stroke:#bf360c
-    style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2
-    style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c
+    style COMPLETE fill:#e8f5e9,stroke:#388e3c,color:#000
+    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0,color:#000
+    style ASK fill:#bbdefb,stroke:#1565c0,color:#000
+    style APPROVE fill:#a5d6a7,stroke:#2e7d32,color:#000
+    style CHANGES fill:#fff9c4,stroke:#f9a825,color:#000
+    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00,color:#000
+    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0,color:#000
+    style ACCEPT fill:#ffccbc,stroke:#bf360c,color:#000
+    style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c,color:#000
 ```
 
 ---
@@ -617,10 +617,10 @@ flowchart TD
         NS4 -->|"begin target stage"| IP4B
     end
 
-    style NORMAL fill:#e8f5e9,stroke:#4caf50
-    style SKIP fill:#fff9c4,stroke:#f9a825
-    style REDO fill:#e3f2fd,stroke:#2196f3
-    style JUMP fill:#fce4ec,stroke:#e91e63
+    style NORMAL fill:#e8f5e9,stroke:#4caf50,color:#000
+    style SKIP fill:#fff9c4,stroke:#f9a825,color:#000
+    style REDO fill:#e3f2fd,stroke:#2196f3,color:#000
+    style JUMP fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 ---

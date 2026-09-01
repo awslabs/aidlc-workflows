@@ -6613,7 +6613,7 @@ function handleFork(args: string[]): void {
     // `<worktreePath>/aidlc-docs/aidlc-state.md` existence against Bolt Refs.
     let wtContent = mainContent;
     try {
-      wtContent = setFieldStrict(wtContent, "Worktree Path", wtPath);
+      wtContent = setFieldStrict(wtContent, "Worktree Path", relative(pd, wtPath).replaceAll("\\", "/"));
     } catch (e) {
       errorWithSlug(slug, `failed to set Worktree Path on worktree state: ${errorMessage(e)}`);
     }

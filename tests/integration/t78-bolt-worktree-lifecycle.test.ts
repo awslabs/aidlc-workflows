@@ -354,6 +354,20 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(existsSync(join(wtRecordDir(proj, slug), "aidlc-state.md"))).toBe(true);
     });
 
+    test("L1: forked Worktree Path is written project-relative, never an absolute machine path [#937]", () => {
+      // Regression for #937: aidlc-state.ts:6616 writes `Worktree Path` as
+      // relative(projectDir, worktreePath) (forward-slashed) so a committed state
+      // file carries no host-specific absolute path. The .sh + T2 only proved the
+      // forked file EXISTS; this pins its VALUE.
+      const wtState = readFileSync(join(wtRecordDir(proj, slug), "aidlc-state.md"), "utf-8");
+      const line = wtState.split("\n").find((l) => l.startsWith("- **Worktree Path**:")) ?? "";
+      const value = line.replace("- **Worktree Path**:", "").trim();
+      expect(value).toBe(`.aidlc/worktrees/bolt-${slug}`);
+      // the absolute project path must never leak into committed state
+      expect(value.startsWith("/")).toBe(false);
+      expect(value.includes(proj)).toBe(false);
+    });
+
     test("L1: forked worktree audit file exists [.sh T3]", () => {
       // Audit is now a per-clone shard DIR; audit-fork copies the main shard into
       // <wt>/<record>/audit/, so at least one *.md shard exists there.

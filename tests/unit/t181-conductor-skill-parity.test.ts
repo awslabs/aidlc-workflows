@@ -9,7 +9,7 @@
 // (per-intent layout, --init retirement, intent/space verbs, multi-repo --repo,
 // the "offer a second intent" conductor prose) updated every authored conductor
 // SKILL — EXCEPT harness/kiro-ide/skills/aidlc/SKILL.md, which was a stale fork
-// byte-identical to kiro CLI's SKILL at origin/v2 and never re-synced across the
+// byte-identical to kiro CLI's SKILL at origin/main and never re-synced across the
 // 43-commit stack. It shipped GREEN because NO test reads a per-harness conductor
 // SKILL: `package.ts --check` only proves dist==authored, so a self-consistent-
 // but-stale authored SKILL passes. This gate closes that hole in BOTH directions:

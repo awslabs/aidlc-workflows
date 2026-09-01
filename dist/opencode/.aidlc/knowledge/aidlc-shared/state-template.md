@@ -30,7 +30,7 @@ Authoritative generated views:
 - **Test Strategy**: [Minimal/Standard/Comprehensive]
 
 ## Workspace State
-- **Project Root**: [absolute workspace path]
+- **Project Root**: [project-relative path, normally `.`; re-derived at runtime, never trusted as an absolute path]
 - **Languages**: [detected languages]
 - **Frameworks**: [detected frameworks]
 - **Build System**: [detected build system]

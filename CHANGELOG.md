@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.126] - 2026-09-01
+## [2.7.3] - 2026-09-01
 
 Post-merge fixes for the devin release-engineering PR (#1): closes an unasserted build gate, removes a tautological test assertion, and refreshes a stale test header. **Upgrade:** no action required beyond re-copying `dist/devin/` if you use the compiled single-binary release; the runtime-paths and build-binaries changes from #1 are unchanged.
 
@@ -9,7 +9,7 @@ Post-merge fixes for the devin release-engineering PR (#1): closes an unasserted
 * t305: removed a tautological count assertion (`HARNESS_MATRIX.length` vs the same computation it derives from). The per-harness sweep loop below it is the real coverage and is unchanged.
 * t250: refreshed the header comment and test name to reflect the 8-harness derived roster (was stale at "six annexes" after #1 switched from a hardcoded list).
 
-## [2.6.125] - 2026-09-01
+## [2.7.2] - 2026-09-01
 
 Devin's dispatched-topology stages (`subagent`, `pipeline`, `mob`) now dispatch via `run_subagent` as designed, firing the `deliver-stage-rules` and `log-subagent` hooks; the conductor no longer falls back to inline execution when the ensemble protocol lacks a Devin binding section. **Upgrade:** re-copy `dist/devin/` into your project so the updated ensemble protocol and conductor SKILL replace the prior copies, then fully restart Devin CLI. The agent slug must be passed as the `profile` field of each `run_subagent` call or the `deliver-stage-rules` / `plan-approval-guard` hooks do not fire.
 
@@ -19,7 +19,7 @@ Devin's dispatched-topology stages (`subagent`, `pipeline`, `mob`) now dispatch 
 * All harnesses: the ensemble protocol now carries a `### Devin` binding section (was missing — Devin was the only shipped harness without one). The protocol file is identical across harness dist trees, so every `dist/<harness>/` gets the new section.
 * New test `tests/unit/t333-ensemble-harness-bindings.test.ts` pins the invariant going forward: every shipped harness has a `### <Display Name>` binding section, and the Devin section names `run_subagent`, `profile`, `is_background`, and the default subagent model.
 
-## [2.6.124] - 2026-08-29
+## [2.7.1] - 2026-09-01
 
 AI-DLC now runs natively on the **Devin CLI** harness — the eighth distribution from the one harness-neutral core. **Upgrade:** no action needed for existing harnesses; to use Devin, copy `dist/devin/` into your project, approve its hooks via `/hooks`, then fully restart Devin CLI.
 
@@ -27,6 +27,30 @@ AI-DLC now runs natively on the **Devin CLI** harness — the eighth distributio
 * `/aidlc` invokes the orchestrator; `/aidlc --doctor` validates the Devin setup (adapter presence, the four wiring files, a `devin` CLI version floor of 3000.3.0, and a hook-approval advisory); `/aidlc --status` substitutes for the statusline Devin does not have.
 * Structured gates render via Devin's native `ask_user_question` tool; subagent dispatch uses `run_subagent`; the engine binary is invoked via `exec` (`bun .devin/tools/...`).
 * The doctor's `.devin` arm and the dual-harness coexistence list now recognize `.devin`; the test matrix (`tests/harness/harness-matrix.ts`) registers `devin` with `memoryInclude: "devin-rules"` and `reviewerScopeRegistration: "devin-hooks"`, and `tests/unit/t331-devin-packaging.test.ts` pins the dist parity, wiring shape, and doctor smoke.
+
+## [2.7.0] - 2026-09-01
+
+AI-DLC 2.7.0 consolidates the 2.6.x release cycle into a new minor baseline without changing runtime behavior from 2.6.124. **Upgrade:** replace the complete `dist/<harness>/` tree in one quiescent operation, then run `/aidlc plugin sync` for every installed plugin. Existing 2.6.124 workflow records require no migration. Before replacing an older shell, finish and archive every workflow created before 2.6.1; the new shell rejects that stale state before `--new-intent` can create fresh work. Upgrades from any release before 2.6.124 must also apply every intervening **Upgrade**, **Breaking**, and migration note below; this roll-up does not replace those one-time actions.
+
+* The lifecycle now has 33 stages: Application Design became Domain Design, Contract Design was added, and the Domain, Functional, and Infrastructure Design outputs were consolidated. Consumers of the retired artifact names must use `components.md`, `contract-summary.md`, `entities.md`, `rules.md`, `functional-spec.md`, and `infrastructure-specification.md`; a merge-copy upgrade must also remove the stale `skills/aidlc-application-design/` runner.
+* Classic and Express are first-class scopes, and Classic is the implicit default. Set `AWS_AIDLC_DEFAULT_SCOPE=feature` to retain the previous full-lifecycle default.
+* Human gates, plan approval, review freezes, and source-bound reviewer receipts now use deterministic authority checks. Structured-question protocol guidance requires self-explanatory prompts and reuse of answers already recorded in the current workflow. Every custom or plugin stage that declares `reviewer:` must add `review_artifact:` naming one required Markdown output from `produces[]`; for per-Unit stages that target must cover every applicable Unit kind.
+* Construction resolves the team's affirmed Testing Posture or its documented fallback, supports bounded Build and Test loop-back, and binds review authority to Git and non-Git source state. Autonomous mode skips the remaining stage gates under its final-batch contract, while team-owned Units can converge from independent clones or sibling worktrees through a pinned human-gated merge.
+* Reverse Engineering and CodeKB require complete current-attempt evidence and support generation-checked focused rescans that merge newly analyzed areas without replacing unrelated knowledge.
+* Intent Capture and Requirements Analysis can ingest bounded project documents and existing requirements through a separate trust-marked document-input path.
+* Plugin workflows gained selection-aware composition and doctor checks plus offline create, validate, build, and compose-test tooling. Engine replacement restores the stock graph, so `/aidlc plugin sync` is required after every upgrade; automation must treat exit 1 as an incomplete plugin installation when configured roots are unusable.
+* Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode now share stronger session binding, single-use continuation, hook diagnostics, human-presence checks, and delegated-agent attribution. Any unattended driver that submits prompts without a person present must set `AIDLC_UNATTENDED=1`. Codex users must run `bun scripts/package.ts codex trust --project <absolute-project-path>`, replace existing entries for those hook paths, and start a fresh Codex session. Claude Code users must approve project hooks through `/hooks` and fully restart; a reported `disableAllHooks` setting must be removed or overridden in an editable layer, while `allowManagedHooksOnly` requires an administrator policy change.
+* Integrations that consume adaptive-composer proposals must rename `birthDescription` to `creationDescription`; scripts that consume the retired design artifact names must migrate before reading 2.7.0 outputs.
+
+## [2.6.124] - 2026-08-28
+
+Stop committing machine-local absolute paths in `aidlc-state.md`. The `Project Root` and `Worktree Path` state fields are now written in project-relative form (`.` for the root; a `relative(projectDir, worktreePath)` breadcrumb for a worktree), so a state file shared across machines or checkouts no longer carries a host-specific absolute path. Closes #937.
+
+**Upgrade / scope:** this changes only what is written **from now on** — newly created or next-updated state records. Re-copying `dist/<harness>/` refreshes the tools but does **not** rewrite any existing `aidlc/**/aidlc-state.md` in a project; an existing state file keeps its previous absolute `Project Root` / `Worktree Path` until the engine next writes those fields in the normal course of a run. No migration is performed and none is required: both fields are re-derived at runtime (`projectRootFor` walks up to the real `aidlc/` dir; the committed `Project Root` is an unreached fallback and `Worktree Path` is a decorative breadcrumb), so a stale absolute value is inert until it is overwritten.
+
+* `Project Root` template + writer emit project-relative `.` instead of an absolute `${projectDir}`.
+* `Worktree Path` writer emits `relative(projectDir, worktreePath)` (forward-slashed), matching the audit log's existing relative form.
+* Regression coverage: `t78` pins a forked worktree's `Worktree Path` to the project-relative `.aidlc/worktrees/bolt-<slug>` (never an absolute path); `t70` and the `t152` Windows-portability guard pin `Project Root` = `.`.
 
 ## [2.6.123] - 2026-08-28
 
