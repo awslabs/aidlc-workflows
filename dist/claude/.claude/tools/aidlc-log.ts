@@ -2061,8 +2061,8 @@ function handleReview(args: string[]): void {
         !appendedAfterRequest
       ) {
         refuseReview(
-          `Cannot record the verdict for "${flags.stage}" because its output ` +
-            `documents changed after review iteration ${iteration} started. ` +
+          `Cannot record the verdict for "${flags.stage}" because ` +
+            `its output documents changed after review iteration ${iteration} started. ` +
             "Restore the bytes the reviewer was dispatched on and re-run that exact " +
             "iteration; --retry-pending cannot rebaseline changed content.",
         );

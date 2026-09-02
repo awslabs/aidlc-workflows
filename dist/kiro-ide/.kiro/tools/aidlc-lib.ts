@@ -7621,6 +7621,7 @@ export function writeRecordFileNoFollow(
 
 /** Remove a framework-owned record file under `recordRoot`, never through a symlink. */
 export function removeRecordFileNoFollow(recordRoot: string, relativePath: string): void {
+  refuseEngineObserverWrite("removeRecordFileNoFollow");
   const target = recordFileTargetOrThrow(recordRoot, relativePath);
   rmSync(target, { force: true });
 }
