@@ -160,6 +160,32 @@ output-document bytes does not clear audit-recorded artifact staleness. After a
 session restart, retry the same pending request before replacing the Review
 section. The gate remains closed until the matching verdict is recorded.
 
+### Plan Approval asked twice for the same plan
+
+**Symptom**: Code Generation presents the Plan Approval question again for a plan
+you already approved.
+
+Plan Approval binds to the plan, unit test instructions, and Testing Contract
+content, to the target, and to the current stage attempt. It is NOT reopened by
+re-running `/aidlc`, by a session restart or a context compaction, by a Stop-hook
+probe, or by `/aidlc --status`. Ticking a plan checkbox and recording a reviewer
+verdict on the plan do not reopen it either.
+
+If you are asked again, one of these moved:
+
+- the plan or instructions content (anything beyond a ticked task marker or a
+  terminal `## Review` section)
+- the Testing Posture, scope, test strategy, or project type
+- the active Unit or stage target
+- the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
+  workflow restart
+- the workspace source, if it changed after the plan was fingerprinted
+
+The refusal message names which one. On a workspace-source change the remedy is
+always the same: re-run the fingerprint command, record both tags it prints, and
+present the plan again. A fingerprint recorded by an older version of the tool
+reads as "predates the content-bound format" and needs the same re-run.
+
 ---
 
 ## Context Compaction

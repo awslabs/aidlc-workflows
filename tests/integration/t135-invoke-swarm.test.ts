@@ -96,6 +96,8 @@ import {
   toPosix,
   writeActiveDirectiveMarker,
   writePlanApprovalReceipt,
+  stateDigest,
+  workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -316,7 +318,7 @@ function seedApprovedCodeGenerationPlan(
       kind: "run-stage",
       stage: "code-generation",
       unit,
-      state_sha256: createHash("sha256").update(state).digest("hex"),
+      state_sha256: stateDigest(state),
     });
   }
   const contract = resolveTestingPosture(proj);
@@ -344,6 +346,7 @@ function seedApprovedCodeGenerationPlan(
     [
       "## Plan Approval",
       `[Approval Fingerprint]: ${fingerprint}`,
+      `[Planned Source]: ${workspaceSourceFingerprint(proj) ?? "unbindable"}`,
       "A. Approve Plan",
       "B. Request Changes",
       "[Answer]: Approve Plan",
@@ -358,6 +361,7 @@ function seedApprovedCodeGenerationPlan(
     intentId: authority.intentId,
     directiveEpoch: authority.directiveEpoch,
     runFloor: authority.runFloor,
+    plannedSourceSha256: workspaceSourceFingerprint(proj) ?? "unbindable",
     fingerprint,
     questionsFile: toPosix(relative(proj, questionsPath)),
     promptSha256: createHash("sha256")

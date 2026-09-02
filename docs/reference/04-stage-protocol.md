@@ -162,9 +162,11 @@ Modify/Keep decisions before the gate and MUST produce a fresh
 all earlier reviews and the completion precondition refuses stale coverage.
 Under unit-major the replay stays on this serial walk and never swarms.
 
-Plan Approval is not reopened for this repair. The approved answer and non-empty
-plan survive the jump, the Loop-Back Log records the plan delta, and a gated
-"Retry with fix" answer is the human's re-approval of that revised approach.
+The jump opens a new stage attempt, so Plan Approval IS re-run for the repaired
+plan: blank `[Answer]:`, regenerate the fingerprint, and record a fresh
+decision/human-turn/answer receipt before any fix generation. The Loop-Back Log
+records the plan delta. The gated "Retry with fix" answer authorizes the jump, not
+the plan content.
 
 ### Conditional 3rd Option
 

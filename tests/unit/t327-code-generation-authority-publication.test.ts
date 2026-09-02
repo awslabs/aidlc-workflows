@@ -335,6 +335,7 @@ describe("t327 Code Generation authority publication", () => {
       promptSha256: "b".repeat(64),
       sourceFloor: "c".repeat(64),
       markerRevision: offer?.markerRevision ?? 0,
+      plannedSourceSha256: "c".repeat(64),
       options: offer?.options ?? ["", ""],
       requireExactOptionLabels: true,
       hashedOptionLabels: true,

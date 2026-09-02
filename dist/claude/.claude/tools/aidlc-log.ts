@@ -13,7 +13,6 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
-  boltSlugForUnit,
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   emitError,
@@ -28,7 +27,6 @@ import {
   humanPresenceGuardDisabled,
   isAutonomousConstructionDecision,
   isAutonomousSwarmStage,
-  isTeamUnitOwnership,
   loadStageGraphAll,
   isNonAnswer,
   latestPipelineLinkArtifactMtime,
@@ -44,12 +42,12 @@ import {
   recordDir,
   relativeRecordDir,
   recoveryGuidance,
-  reviewCompletionMatchesRequest,
   reviewArtifactSnapshot,
   reviewAppendixDigest,
   reviewAppendixEvidenceBytes,
-  reviewRequestBindingFromBlock,
   resolveBoltDag,
+  reviewAttemptAccounting,
+  reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
   resolveProjectDir,
   resolveWorkflowSelection,
@@ -71,9 +69,7 @@ import {
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
 import type {
-  AuditShardEvent,
   ReviewClass,
-  ReviewRequestBinding,
   ReviewVerdict,
 } from "./aidlc-lib.js";
 import {
@@ -1017,338 +1013,6 @@ function handleLink(args: string[]): void {
 // PER UNIT, so pass --unit; the approve guard requires one review per unit.
 const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
 
-type ReviewAttemptSummary = {
-  requestCount: number;
-  boltStarted: boolean;
-  boltBatch: string | null;
-  boltSlug: string | null;
-  pendingIterations: Set<number>;
-  pendingRequests: Map<
-    number,
-    {
-      binding: ReviewRequestBinding | null;
-      retried: boolean;
-    }
-  >;
-  recoveryIteration: number | null;
-  recoverySpent: boolean;
-  ambiguity: string | null;
-};
-
-// Count requests in the current stage/unit attempt. The same chronological
-// floors used by receipt freshness reset the budget on workflow start, jump,
-// stage re-entry, or gate rejection. A matching BOLT_STARTED is a stronger
-// per-unit floor because the forked audit inherits the main workflow's prior
-// rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
-function reviewAttemptSummary(
-  rows: AuditShardEvent[],
-  stateContent: string,
-  stage: { slug: string; for_each?: string; workspace_requires?: boolean },
-  reviewer: string,
-  unit: string | undefined,
-  workflow: string | undefined,
-  attemptWindow?: ReturnType<typeof reviewAttemptWindow> | null,
-): ReviewAttemptSummary {
-  const relevant = new Set([
-    "WORKFLOW_STARTED",
-    "STAGE_STARTED",
-    "STAGE_COMPLETED",
-    "STAGE_JUMPED",
-    "GATE_REJECTED",
-    "BOLT_STARTED",
-    "BOLT_COMPLETED",
-    "BOLT_FAILED",
-    "REVIEW_REQUESTED",
-    "REVIEW_COMPLETED",
-  ]);
-  const events = rows
-    .filter((row) => relevant.has(row.event))
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      if (a.shard === b.shard) return a.pos - b.pos;
-      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-      return a.pos - b.pos;
-    });
-  const tiedAcrossShards = (index: number): boolean =>
-    events.some(
-      (row, other) =>
-        other !== index &&
-        row.timestamp === events[index].timestamp &&
-        row.shard !== events[index].shard,
-    );
-  const tiedOnlyToWorkflowBoundary = (index: number): boolean => {
-    let sawBoundary = false;
-    for (let other = 0; other < events.length; other++) {
-      if (
-        other === index ||
-        events[other].timestamp !== events[index].timestamp ||
-        events[other].shard === events[index].shard
-      ) {
-        continue;
-      }
-      if (
-        events[other].event !== "WORKFLOW_STARTED" &&
-        events[other].event !== "STAGE_JUMPED"
-      ) {
-        return false;
-      }
-      sawBoundary = true;
-    }
-    return sawBoundary;
-  };
-
-  const unitMajor =
-    stage.for_each === "unit-of-work" &&
-    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
-  const teamOwnership =
-    stage.for_each === "unit-of-work" &&
-    isTeamUnitOwnership(stateContent);
-  let floor = -1;
-  let boltStarted = false;
-  let boltBatch: string | null = null;
-  let boltSlug: string | null = null;
-  const expectedBoltSlug = unit === undefined ? null : boltSlugForUnit(unit);
-  let ambiguity: string | null = null;
-  for (let i = 0; i < events.length; i++) {
-    const entry = events[i];
-    if (workflow !== undefined) {
-      if (
-        entry.event === "STAGE_COMPLETED" &&
-        auditBlockField(entry.block, "Stage") === stage.slug &&
-        auditBlockField(entry.block, "Workflow") === workflow
-      ) {
-        floor = i;
-      }
-      continue;
-    }
-    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
-      if (teamOwnership && tiedAcrossShards(i)) {
-        ambiguity = `cross-shard boundary tie at ${entry.timestamp}`;
-      }
-      floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-      if (!teamOwnership || !tiedAcrossShards(i)) ambiguity = null;
-      continue;
-    }
-    if (
-      entry.event === "BOLT_STARTED" &&
-      unit !== undefined
-    ) {
-      const names = (auditBlockField(entry.block, "Bolt names") ?? "")
-        .split(",")
-        .map((name) => name.trim());
-      const startedSlug = auditBlockField(entry.block, "Bolt slug");
-      if (
-        !names.includes(unit) ||
-        (startedSlug !== null && startedSlug !== expectedBoltSlug)
-      ) {
-        continue;
-      }
-      if (tiedAcrossShards(i)) ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
-      floor = i;
-      boltStarted = true;
-      boltBatch = auditBlockField(entry.block, "Batch number");
-      boltSlug = startedSlug;
-      if (!tiedAcrossShards(i)) ambiguity = null;
-      continue;
-    }
-    if (
-      (entry.event === "BOLT_COMPLETED" || entry.event === "BOLT_FAILED") &&
-      unit !== undefined
-    ) {
-      const terminalNames = (
-        auditBlockField(
-          entry.block,
-          entry.event === "BOLT_FAILED" ? "Failed Bolt" : "Bolt names",
-        ) ?? ""
-      )
-        .split(",")
-        .map((name) => name.trim());
-      const terminalSlug = auditBlockField(entry.block, "Bolt slug");
-      const paired =
-        boltSlug !== null && terminalSlug !== null
-          ? boltSlug === terminalSlug
-          : terminalNames.includes(unit);
-      if (!paired) continue;
-      const tied = tiedAcrossShards(i);
-      if (tied) ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
-      else ambiguity = null;
-      floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-      continue;
-    }
-    if (entry.event === "GATE_REJECTED") {
-      const gateStages = (
-        auditBlockField(entry.block, "Gate Stages") ??
-          auditBlockField(entry.block, "Stage") ??
-          ""
-      ).split(",").map((value) => value.trim());
-      if (!gateStages.includes(stage.slug)) continue;
-      const rejectedUnit = auditBlockField(entry.block, "Unit");
-      if (teamOwnership && unit !== undefined && rejectedUnit !== unit) continue;
-      if (teamOwnership && unit === undefined && rejectedUnit !== null) continue;
-      const tied = tiedAcrossShards(i);
-      if (tied) ambiguity = `cross-shard gate boundary tie at ${entry.timestamp}`;
-      else ambiguity = null;
-      floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-    } else if (
-      auditBlockField(entry.block, "Stage") === stage.slug &&
-      entry.event === "STAGE_STARTED" &&
-      !unitMajor &&
-      !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
-    ) {
-      const tied = tiedAcrossShards(i);
-      if (tied) ambiguity = `cross-shard stage boundary tie at ${entry.timestamp}`;
-      else ambiguity = null;
-      floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-    }
-  }
-  if (
-    unit !== undefined &&
-    ambiguity?.startsWith("cross-shard Bolt boundary tie at ") &&
-    attemptWindow?.mergedBoltUnits.has(unit) === true &&
-    !attemptWindow.openBoltUnits.has(unit)
-  ) {
-    const timestamp = ambiguity.slice(
-      "cross-shard Bolt boundary tie at ".length,
-    );
-    const tied = attemptWindow.events.filter(
-      (event) => event.timestamp === timestamp,
-    );
-    const tiedShards = new Set(tied.map((event) => event.shard));
-    const lifecycleOnly =
-      tied.length > 1 &&
-      tiedShards.size > 1 &&
-      tied.every((event) => {
-        // AUDIT_MERGED is referee merge plumbing (main-emitted, merge
-        // protected); it carries no reviewer authority and cannot make the
-        // tie ambiguous for this unit's lifecycle accounting.
-        if (event.event === "AUDIT_MERGED") return true;
-        if (
-          event.event !== "BOLT_STARTED" &&
-          event.event !== "BOLT_COMPLETED" &&
-          event.event !== "BOLT_FAILED"
-        ) {
-          return false;
-        }
-        const field =
-          event.event === "BOLT_FAILED"
-            ? auditBlockField(event.block, "Failed Bolt")
-            : auditBlockField(event.block, "Bolt names");
-        return (field ?? "")
-          .split(",")
-          .map((name) => name.trim())
-          .includes(unit);
-      });
-    if (lifecycleOnly) {
-      ambiguity = null;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
-    }
-  }
-
-  let requestCount = 0;
-  let recoveryIteration: number | null = null;
-  let recoverySpent = false;
-  const pendingIterations = new Set<number>();
-  const pendingRequests = new Map<
-    number,
-    {
-      binding: ReviewRequestBinding | null;
-      retried: boolean;
-    }
-  >();
-  for (let i = floor + 1; i < events.length; i++) {
-    const entry = events[i];
-    if (
-      entry.event !== "REVIEW_REQUESTED" &&
-      entry.event !== "REVIEW_COMPLETED"
-    ) {
-      continue;
-    }
-    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
-    if (auditBlockField(entry.block, "Reviewer") !== reviewer) continue;
-    const eventUnit = auditBlockField(entry.block, "Unit") || undefined;
-    if (eventUnit !== unit) continue;
-    const eventWorkflow = auditBlockField(entry.block, "Workflow") || undefined;
-    if (
-      workflow !== undefined
-        ? eventWorkflow !== workflow
-        : eventWorkflow?.startsWith("single-stage:")
-    ) {
-      continue;
-    }
-    if (
-      tiedAcrossShards(i) &&
-      !(!teamOwnership && tiedOnlyToWorkflowBoundary(i))
-    ) {
-      ambiguity = `cross-shard review authority tie at ${entry.timestamp}`;
-      continue;
-    }
-    const rawIteration = auditBlockField(entry.block, "Iteration");
-    if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
-    const iteration = Number(rawIteration);
-    if (entry.event === "REVIEW_REQUESTED") {
-      const binding = reviewRequestBindingFromBlock(entry.block);
-      if (binding === null) continue;
-      if (auditBlockField(entry.block, "Retry") !== "pending-request") {
-        requestCount++;
-      }
-      if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
-        recoveryIteration = iteration;
-        recoverySpent = true;
-      }
-      pendingIterations.add(iteration);
-      const previous = pendingRequests.get(iteration);
-      const modernBinding =
-        binding.appendixArtifact !== null &&
-        binding.appendixOffset !== null &&
-        (binding.priorAppendixLength === null ||
-          binding.priorAppendixLength === 0 ||
-          binding.reviewChallenge !== null) &&
-        (!stage.workspace_requires || binding.sourceFingerprint !== null);
-      pendingRequests.set(iteration, {
-        binding,
-        retried:
-          previous?.retried === true ||
-          (auditBlockField(entry.block, "Retry") === "pending-request" &&
-            modernBinding),
-      });
-    } else {
-      const pending = pendingRequests.get(iteration);
-      if (
-        pending?.binding &&
-        reviewCompletionMatchesRequest(pending.binding, entry.block)
-      ) {
-        pendingIterations.delete(iteration);
-        pendingRequests.delete(iteration);
-      }
-    }
-  }
-  return {
-    requestCount,
-    boltStarted,
-    boltBatch,
-    boltSlug,
-    pendingIterations,
-    pendingRequests,
-    recoveryIteration,
-    recoverySpent,
-    ambiguity,
-  };
-}
-
 function reviewBudgetMessage(stage: string, ordinal: number, budget: number): string {
   return (
     `Cannot request review pass ${ordinal} for "${stage}" because this stage allows ` +
@@ -1494,47 +1158,27 @@ function handleReview(args: string[]): void {
     }
     const autonomousCandidate =
       flags.unit !== undefined && isAutonomousSwarmStage(pd, state, node);
-    const teamOwnership = isTeamUnitOwnership(state);
     const unitResolution =
       node.for_each === "unit-of-work" ? resolveBoltDag(pd, intent, space) : null;
-    const attemptWindow =
-      node.for_each === "unit-of-work"
-        ? reviewAttemptWindow(pd, state, node)
-        : null;
-    const attempt = reviewAttemptSummary(
-      readAuditShardEvents(pd, intent, space).filter(
-        (row) => {
-          if (!flags.unit || !teamOwnership) return true;
-          const eventUnit = auditBlockField(row.block, "Unit");
-          if (eventUnit !== null) {
-            return eventUnit !== flags.unit ||
-              eventMatchesClaimAttempt(pd, row.block, eventUnit);
-          }
-          const boltSlug = auditBlockField(row.block, "Bolt slug");
-          const boltNames = auditBlockField(row.block, "Bolt names");
-          if (
-            boltNames === flags.unit &&
-            boltSlug === boltSlugForUnit(flags.unit) &&
-            (
-              row.event === "BOLT_STARTED" ||
-              row.event === "BOLT_COMPLETED" ||
-              row.event === "BOLT_FAILED"
-            )
-          ) {
-            return eventMatchesClaimAttempt(pd, row.block, flags.unit);
-          }
-          return true;
-        },
-      ),
+    const attemptWindow = reviewAttemptWindow(pd, state, node);
+    const attempt = reviewAttemptAccounting(
+      attemptWindow,
       state,
       node,
       flags.reviewer,
       flags.unit,
       fields.Workflow,
-      attemptWindow,
+      {
+        eventFilter: (row) =>
+          reviewAttemptEventMatchesCurrentClaim(
+            pd,
+            state,
+            flags.unit,
+            row,
+          ),
+      },
     );
-    const mergedBoltUnits =
-      attemptWindow?.mergedBoltUnits ?? new Set<string>();
+    const mergedBoltUnits = attemptWindow.mergedBoltUnits;
     if (enforceAdmissibility && flags.unit) {
       const resolution = unitResolution ?? resolveBoltDag(pd, intent, space);
       if (resolution.state === "malformed") {
@@ -1547,7 +1191,7 @@ function handleReview(args: string[]): void {
       if (
         resolution.state === "none" &&
         !attempt.boltStarted &&
-        !attemptWindow?.mergedBoltUnits.has(flags.unit)
+        !attemptWindow.mergedBoltUnits.has(flags.unit)
       ) {
         refuseReview(
           `Cannot record review for "${flags.stage}" unit "${flags.unit}": no authoritative ` +
@@ -1612,7 +1256,7 @@ function handleReview(args: string[]): void {
         ? null
         : freshReviewReceipts(pd, state, node, {
             reviewClass,
-            attemptWindow: attemptWindow ?? undefined,
+            attemptWindow,
           });
     const requireRequiredArtifacts =
       process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1" &&

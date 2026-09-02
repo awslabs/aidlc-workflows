@@ -152,6 +152,13 @@ Everything else in this section is silent. Nothing is said about invoking, handi
      (`**Reviewer:** <reviewer-agent-name>`), so the `SUBAGENT_COMPLETED` audit
      event records which reviewer ran. The reviewer's persona owns this contract.
 
+   When the review artifact is also the subject of a Plan Approval (Code Generation
+   declares `code-generation-plan` as both), appending the verdict does NOT reopen
+   that approval. The approval fingerprint is taken over the plan BODY: a terminal
+   `## Review` appendix is projected out before hashing. Only a `## Review` in
+   terminal position is projected out, so a heading placed mid-plan, inside a fence,
+   or inside an HTML comment still counts as plan content and does reopen approval.
+
 3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from `directive.review_artifact` and validate it. The review is complete only when every pre-dispatch artifact byte and the request-time source fingerprint still match and the entire appended suffix is exactly ONE terminal owned `## Review` section with the canonical verdict, reviewer, and iteration fields above, plus the conditional request-challenge field when issued. Validation uses Bun's Markdown parser: fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint top-level ownership, and rendered Markdown or raw-HTML H1/H2 headings are terminal-section escapes. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), semantic bytes before the heading, a later top-level heading, a section with no canonical verdict line, a missing/wrong/duplicate request challenge when one was issued, forged/missing/conflicting duplicate ownership fields, or duplicated sections/verdicts (conflicting - never guess which was meant). A malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
 
    **On an incomplete attempt:** no verdict exists to record, so the step-1

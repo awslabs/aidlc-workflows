@@ -55,6 +55,8 @@ import {
   toPosix,
   writeActiveDirectiveMarker,
   writePlanApprovalReceipt,
+  stateDigest,
+  workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
 
@@ -472,7 +474,7 @@ function seedActiveDirective(proj: string, stage: string, unit?: string): void {
     kind: "run-stage",
     stage,
     ...(unit ? { unit } : {}),
-    state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+    state_sha256: stateDigest(state),
   });
 }
 
@@ -530,7 +532,9 @@ function seedUnit(
       join(dir, "code-generation-questions.md"),
       `## ${opts.heading ?? "Plan Approval"}\n${
         opts.questionText === undefined ? "" : `\n${opts.questionText}\n`
-      }[Approval Fingerprint]: ${fingerprint}\n[Answer]:${
+      }[Approval Fingerprint]: ${fingerprint}\n[Planned Source]: ${
+        workspaceSourceFingerprint(proj) ?? "unbindable"
+      }\n[Answer]:${
         opts.answer === null ? "" : ` ${opts.answer}`
       }\n`,
       "utf-8",
@@ -561,6 +565,7 @@ function seedUnit(
           .digest("hex"),
         sourceFloor: authority.sourceFloor,
         markerRevision: authority.markerRevision,
+        plannedSourceSha256: workspaceSourceFingerprint(proj) ?? "unbindable",
         session: "fixture-session",
         challengeId: "fixture-challenge",
         choice: "Approve Plan",
@@ -684,7 +689,13 @@ describe("t265b hook lifecycle", () => {
         { encoding: "utf-8" },
       );
       expect(fingerprint.status).toBe(0);
-      expect(fingerprint.stdout.trim()).toMatch(/^sha256:[0-9a-f]{64}$/);
+      // The command prints the two tag lines the Plan Approval section must carry:
+      // the content fingerprint, and the workspace source the plan was written
+      // against (so drift between planning and approval is answerable).
+      expect(fingerprint.stdout.trim().split("\n")).toEqual([
+        expect.stringMatching(/^\[Approval Fingerprint\]: sha256:v2:[0-9a-f]{64}$/),
+        expect.stringMatching(/^\[Planned Source\]: (?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/),
+      ]);
       expect(runHook(proj, STAGE_DISPATCH(proj, "Implement the stage-level plan")).code).toBe(2);
 
       seedUnit(proj, null, { plan: true, answer: "A. Approve Plan" });
@@ -1092,7 +1103,12 @@ describe("t265b hook lifecycle", () => {
         answerStderr!,
       ]);
       expect(exitCode).not.toBe(0);
-      expect(stderr).toContain("pre-planning source floor");
+      // The source is re-read after the audit lock is held, so a mutation that
+      // lands during the wait is caught. The remedy is always executable:
+      // re-fingerprint the plan and present it again.
+      expect(stderr).toContain(
+        "Re-run the fingerprint command and re-present the plan",
+      );
       expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
     } finally {
       releaseAuditLock(proj);
@@ -1114,7 +1130,7 @@ describe("t265b hook lifecycle", () => {
         `${JSON.stringify({
           version: 1,
           stage: "code-generation",
-          state_sha256: createHash("sha256").update(state).digest("hex"),
+          state_sha256: stateDigest(state),
         })}\n`,
       );
       expect(runHook(proj, WRITE(source)).code).toBe(2);
@@ -1224,13 +1240,15 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("approved bytes cannot replay across targets or a reissued directive", () => {
+  test("approved bytes cannot replay across targets, and survive a reissued directive", () => {
     const proj = scratchProject();
     try {
       seedState(proj);
       seedUnit(proj, "todo-core", { plan: true, answer: "Approve Plan" });
       expect(evaluateCodeGenerationApproval(proj, { unit: "todo-core" }).ok).toBe(true);
 
+      // Copying one Unit's approved bytes into another Unit's record dir cannot
+      // authorize that Unit: the target is part of what the human approved.
       const sourceDir = codeGenerationRecordDir(proj, "todo-core");
       const replayDir = codeGenerationRecordDir(proj, "auth");
       cpSync(sourceDir, replayDir, { recursive: true });
@@ -1239,10 +1257,16 @@ describe("t265b hook lifecycle", () => {
       expect(crossTarget.ok).toBe(false);
       expect(crossTarget.fingerprintValid).toBe(false);
 
+      // Re-issuing the directive for the SAME target and attempt, on the other
+      // hand, must leave the approval standing. The engine reissues constantly (a
+      // resume, a fresh session, a Stop-hook consultation), and none of that is a
+      // change to what the human approved. Treating it as one is what made an
+      // approval impossible to record.
       seedActiveDirective(proj, "code-generation", "todo-core");
       const reissued = evaluateCodeGenerationApproval(proj, { unit: "todo-core" });
-      expect(reissued.ok).toBe(false);
-      expect(reissued.fingerprintValid).toBe(false);
+      expect(reissued.reason).toBe("approved");
+      expect(reissued.ok).toBe(true);
+      expect(reissued.fingerprintValid).toBe(true);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

@@ -82,7 +82,6 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -99,6 +98,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
@@ -404,7 +404,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
           ? JSON.stringify({
             version: 1,
             stage: "unknown-stage",
-            state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+            state_sha256: stateDigest(state),
           })
           : marker;
       writeFileSync(

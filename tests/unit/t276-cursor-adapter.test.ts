@@ -30,7 +30,6 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -51,6 +50,7 @@ import {
   readAllAuditShards,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
+  stateDigest,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
 import {
   createTestProject,
@@ -337,7 +337,7 @@ describe("t276 cursor adapter payload conversion", () => {
     writeActiveDirectiveMarker(proj, {
       kind: "run-stage",
       stage: "code-generation",
-      state_sha256: createHash("sha256").update(state).digest("hex"),
+      state_sha256: stateDigest(state),
     });
     for (const input of [
       payload("preToolUseShell", proj, {

@@ -18,6 +18,7 @@ If an item does not apply, leave it unchecked.
 * [ ] I have performed a self-review of this change
 * [ ] Changes have been tested
 * [ ] Changes are documented
+* [ ] If this change adds an input to any fingerprint, epoch, or receipt identity, the description names the human-visible change it detects
 
 ## Test plan
 

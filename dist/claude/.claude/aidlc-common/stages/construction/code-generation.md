@@ -217,12 +217,33 @@ For a zero-Unit directive, use the explicit `--stage-level` target; the tool the
 bun .claude/tools/aidlc-testing-posture.ts fingerprint --stage-level
 ```
 
-Write the returned hash into the Plan Approval section as
-`[Approval Fingerprint]: sha256:<hash>`, followed by both options below and a
-blank `[Answer]:` tag:
+The command prints two copy-ready tag lines. Write BOTH into the Plan Approval
+section verbatim, followed by both options below and a blank `[Answer]:` tag:
+
+```
+[Approval Fingerprint]: sha256:v2:<hex>
+[Planned Source]: <hex or the word unbindable>
+```
 
 - "Approve Plan" — proceed to code generation
 - "Request Changes" — revise the plan
+
+`[Approval Fingerprint]` is the content binding. It covers a stable projection
+of the plan and the unit test instructions, the embedded Testing Contract hash,
+the target, the intent, and the current stage attempt. The projection erases
+exactly the two edits this stage itself orders after approval: a terminal
+`## Review` appendix (the reviewer's, because the plan is this stage's review
+artifact) and ticked list task markers (`[x]`, `[X]`, `[-]` all read as `[ ]`).
+It also normalizes line endings, per-line trailing whitespace, and runs of blank
+lines. Everything else is byte-exact, including the fenced Testing Contract JSON
+and any text inside code fences, so rewording a step, reordering steps, or
+changing a number, a path, or the contract hash all reopen approval.
+
+`[Planned Source]` is the workspace source this plan was written against. The
+answer command refuses if live source has moved since, and the remedy is always
+the same: re-run this command, record both tags again, and re-present the plan.
+A tag recorded in the older `sha256:<hex>` form (no `v2:`) is recognized and
+answered with the same instruction rather than an unexplained mismatch.
 
 When the active directive carries `legacy_plan_approval_choices`, those two
 nonce-labelled values are the presentation-only choices for legacy Kiro IDE.
@@ -261,27 +282,33 @@ Again use `--stage-level` instead of `--unit` for zero-Unit work. The markdown
 answer and `PLAN_APPROVAL_RECORDED` audit row are context/provenance only.
 Generation remains blocked until this command consumes the protected
 session-bound challenge/response and writes its runtime receipt under
-`aidlc/.aidlc-sessions/`. A conductor-authored answer or forged audit row cannot
+`aidlc/.aidlc-sessions/plan-approval/`. That receipt binds the human's choice to
+the exact plan, instructions, and Testing Contract content, to the target, and to
+the current stage attempt. A conductor-authored answer or forged audit row cannot
 create that authority.
 
 On "Request Changes", record that choice through the same answer command, revise
 the plan and unit test instructions as needed, reset `[Answer]:` to blank,
 regenerate the Testing Contract and fingerprint, record a fresh decision, and
-present the question again. Any post-approval file, testing-posture, scope,
-strategy, project-type, active-target, stage-attempt, or directive reissue
-invalidates the fingerprint/receipt and reopens Plan Approval. Do not begin Step
+present the question again. Any post-approval change to the plan, instructions,
+or Testing Contract content, to the testing posture, scope, strategy, or project
+type, to the active target, or to the stage attempt (a jump, a rejection, or a
+workflow restart) invalidates the fingerprint/receipt and reopens Plan Approval.
+Re-running `next`, a Stop-hook probe, a status query, or a reissued directive for
+the same target and attempt does NOT reopen it: approval binds to content and
+attempt, never to which directive asked the question. Do not begin Step
 4, dispatch the developer agent, or infer approval from a forwarding-loop
 continuation. Only the matching durable receipt authorizes generation.
 
 > **Build-and-Test loop-back:** The construction protocol module
 > (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
-> A jump/reissued directive changes the Plan
-> Approval authority epoch. Preserve the Loop-Back Log, but reset the Plan
+> A backward jump opens a new stage attempt, so the
+> prior approval no longer applies. Preserve the Loop-Back Log, but reset the Plan
 > Approval `[Answer]:`, regenerate the fingerprint under the replayed
 > code-generation directive, and run the full decision/human-turn/answer receipt
 > sequence again. The earlier "Retry with fix" choice authorizes the jump; it
-> does not mint approval for plan bytes or a directive the human has not yet
-> reviewed.
+> does not mint approval for plan content the human has not yet reviewed under
+> the new attempt.
 
 ### Step 4: PART 2 — Generation
 
@@ -303,10 +330,16 @@ Include in the delegation prompt:
   missing, different, or stale hash.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
 - A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
-- The approved code-generation-plan.md (full content)
+- The approved code-generation-plan.md, BODY ONLY: every line up to a terminal
+  `## Review` appendix, and none of that appendix. The plan is also this stage's
+  review artifact, so the reviewer appends its verdict to the same file. Only the
+  body was approved, and only the body is work. Never pass appendix text to the
+  subagent as instructions
 - The approved unit-test-instructions.md (full content)
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
-- Instructions to execute each plan step sequentially and mark checkboxes as completed
+- Instructions to execute each plan step sequentially and mark checkboxes as
+  completed. Task markers are excluded from the approval fingerprint, so ticking
+  a box never invalidates the approved plan; any other edit to the plan does
 - The instruction that the approved Testing Contract embedded in the plan is
   authoritative for Part 2. The subagent must not independently re-resolve or
   reinterpret memory. TDD records each Red command's failing output before
@@ -394,7 +427,7 @@ Summary of code produced (files, tests, key decisions), then:
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
-> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including during Construction, except for the explicit Build-and-Test loop-back replay carve-out above: generation must never begin before the human chooses "Approve Plan", and the carve-out reuses that preserved approval rather than inferring a new one. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. On the default stage-major walk a single stage-level gate covers every Unit after the last Unit settles. Under an autonomous swarm the engine presents that Code Generation stage gate only after the final DAG batch has converged (intermediate batches merge without a gate). The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation.
+> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including during Construction: generation must never begin before the human chooses "Approve Plan". The Build-and-Test loop-back replay described above is not an exception to that stop. It opens a new stage attempt and therefore re-runs Plan Approval on the repaired plan, rather than inferring approval from the "Retry with fix" choice. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. On the default stage-major walk a single stage-level gate covers every Unit after the last Unit settles. Under an autonomous swarm the engine presents that Code Generation stage gate only after the final DAG batch has converged (intermediate batches merge without a gate). The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation.
 
 ## Sensors
 

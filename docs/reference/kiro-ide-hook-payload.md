@@ -169,8 +169,9 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   later mutation calls remain blocked even when live authority can no longer be
   parsed. Adapter-owned `next` recovery clears that poison only after the engine
   returns a valid non-error directive. Raw audit appends have no authority.
-  Fresh directives retire runtime state and rotate the source floor after
-  generation.
+  A new stage attempt retires the approval; a fresh directive for the same target
+  and attempt does not. Generation start re-baselines the source the plan is bound
+  to, and refuses rather than deletes if the workspace source moved first.
 - **session-start** — reads the modern `session_id` and persists it under the
   gitignored runtime session directory; the legacy channel derives a stable
   per-host-instance ID from `VSCODE_IPC_HOOK`/`VSCODE_PID`.

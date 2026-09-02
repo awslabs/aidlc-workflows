@@ -42,6 +42,7 @@ import {
   readIntentRegistry,
   writePlanApprovalLegacyOffer,
   writeActiveDirectiveMarker,
+  stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -138,7 +139,7 @@ function seedCodeGenerationDirective(dir: string, unit?: string): void {
     kind: "run-stage",
     stage: "code-generation",
     ...(unit ? { unit } : {}),
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
 }
 
@@ -2471,7 +2472,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       writeActiveDirectiveMarker(dir, {
         kind: "run-stage",
         stage: "code-generation",
-        state_sha256: createHash("sha256").update(state).digest("hex"),
+        state_sha256: stateDigest(state),
       });
       expect(
         runIdeStdin(

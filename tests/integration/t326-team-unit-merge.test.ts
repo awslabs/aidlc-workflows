@@ -497,9 +497,7 @@ function completeUnitOnMain(projectDir: string, unit: string): void {
     {
       targetId: `unit:${unit}`,
       intentId: "main-fixture",
-      directiveEpoch: `sha256:${"1".repeat(64)}`,
       runFloor: "unstarted#0",
-      sourceFloor: `sha256:${"2".repeat(64)}`,
     },
   );
   writeFileSync(join(codeDir, "code-generation-plan.md"), plan);
@@ -2383,7 +2381,7 @@ describe("t326 pinned team Unit merge", () => {
     writeFileSync(
       auditPath,
       audit.replace(
-        /(\*\*Event\*\*: PLAN_APPROVAL_RECORDED[\s\S]*?\*\*Approval Fingerprint\*\*: )sha256:[0-9a-f]{64}/,
+        /(\*\*Event\*\*: PLAN_APPROVAL_RECORDED[\s\S]*?\*\*Approval Fingerprint\*\*: )sha256:(?:v2:)?[0-9a-f]{64}/,
         `$1sha256:${"0".repeat(64)}`,
       ),
     );

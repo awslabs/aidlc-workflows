@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 817,
+    "total": 837,
     "enumeratedByClass": {
-      "function": 519,
+      "function": 539,
       "audit": 91,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 299,
+      "function": 309,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -1280,6 +1280,32 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:attemptEventAfterFrontier",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:attemptEventDefinitelyBefore",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-authority-rebinding.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:attemptEventIsCrossShardTied",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:auditBlockField",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1460,6 +1486,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:candidateReviewCoverageProjection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1863,6 +1896,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:collectStalePlanApprovalReceipts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-authority-rebinding.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:compileStageGraph",
       "minMechanism": "none",
       "coveredBy": [
@@ -1970,6 +2015,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:contentBeforeTerminalReviewAppendix",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2261,6 +2313,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:EngineModeViolationError",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2996,11 +3055,47 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isReadOnlyEngineProbe",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t330-authority-rebinding.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isRegularFile",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isRouteCheckProbe",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t330-authority-rebinding.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isStopHookProbe",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t330-authority-rebinding.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3436,6 +3531,18 @@
         {
           "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:maximalAttemptEvents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-authority-rebinding.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -3919,6 +4026,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:projectStateForDigest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-authority-rebinding.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:READ_ONLY_FLAGS",
       "minMechanism": "none",
       "coveredBy": [
@@ -4360,6 +4479,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:refuseEngineObserverWrite",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-authority-rebinding.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:relativeCodekbDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -4535,13 +4666,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:resetPlanApprovalRuntime",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4801,6 +4925,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewAttemptAccounting",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewAttemptEventMatchesCurrentClaim",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewAttemptWindow",
       "minMechanism": "none",
       "coveredBy": [
@@ -4860,6 +4998,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewInvalidationAttemptView",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewRequestBindingFromBlock",
       "minMechanism": "none",
       "coveredBy": [
@@ -4869,6 +5014,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ROUTE_CHECK_ENV",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5204,6 +5356,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:sortAttemptEvents",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:sourceBaselineAuditFields",
       "minMechanism": "none",
       "coveredBy": [
@@ -5346,6 +5505,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:stalePlanApprovalReceiptsForTarget",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-authority-rebinding.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:stateDigest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-authority-rebinding.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -6185,6 +6368,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:worktreeReviewAttemptProjection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",

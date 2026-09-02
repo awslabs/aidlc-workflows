@@ -67,6 +67,62 @@ All seventeen TypeScript hooks:
 - Resolve `$CLAUDE_PROJECT_DIR` with multiple fallback methods
 - Share locking and utility functions from `lib.ts`
 
+### Observers never write authority
+
+Some engine invocations exist only to LEARN the current directive. There are
+exactly two, both identified by an environment variable on their spawn:
+
+- the Stop hook's `next` probe (`AIDLC_STOP_HOOK_PROBE=1`), which asks whether
+  work is still pending before allowing a turn to end;
+- the route check that `aidlc-state.ts unit start` and wave completion spawn
+  (`AIDLC_ROUTE_CHECK=1`), a `next` plus any follow-on `continue`, which asks
+  which Unit the engine would route now. A route check skips rule transport
+  entirely, so it normally reads the run-stage directive straight off stdout.
+
+Both read the directive off stdout and never consult the durable marker
+afterwards, so writing from one buys nothing and costs correctness.
+
+**The authority artifacts.** Neither observer creates, rotates, consumes or
+deletes any of: the Plan Approval challenge, response or receipt under
+`aidlc/.aidlc-sessions/plan-approval/`; the reserved ledger receipts
+(`PLAN_APPROVAL_RECORDED`, `HUMAN_TURN`, `GATE_*`, `REVIEW_REQUESTED`,
+`REVIEW_COMPLETED`, `UNIT_*`); `aidlc-state.md`; the active-directive marker and
+its revision; the steering-token key; the continuation cursor. A probe also mints
+no synthetic `STAGE_STARTED`, refreshes no claim cache, and bootstraps no diary.
+
+The one write NOT on that list is the advisory engine-turn marker
+`.aidlc-engine-touch`, whose mtime is a Stop-hook optimisation and carries no
+authority. The Stop probe must suppress it or the conversational carve-out below
+would be permanently dead; the route check does not, because `unit start` is real
+workflow engagement.
+
+**The barrier.** The guarantee is a property of the code shape, not of an
+enumeration someone has to remember. Alongside the per-call-site suppressions, a
+typed `EngineModeViolationError` sits at the durable write primitives: the
+active-directive transaction commit, `writeStateFile`, `writeFileAtomic`,
+`writeBufferAtomic`, and `appendAuditBlockAtPath` (the single funnel every audit
+append passes through). An observer that reaches one throws and exits non-zero
+instead of writing. Both producers already fail safe on a non-zero engine exit:
+the Stop hook allows the stop and records a drop, and `unit start` surfaces the
+error rather than starting the Unit. A silent no-op was rejected deliberately,
+because it would hide the defect the barrier exists to expose.
+
+**`next` is idempotent, not merely side-effect-light.** When the active-directive
+marker already records this exact directive for this state (same stage, same
+Unit, same rule bundle, same directive body, and for a partial rule delivery a
+continuation token that still verifies), `next` returns the issued directive
+verbatim: no marker rewrite, no revision bump, no fresh token. Only the transport
+is short-circuited. Routing is always recomputed, so a paused Unit, a moved gate,
+or a completed Unit produces its own directive and stale work can never be
+re-issued. Asking the engine what to do twice therefore answers the same thing
+twice and changes nothing, which is what makes it safe to ask from a hook.
+
+This is the mechanical half of the two authority rules in
+[`12-state-machine.md`](12-state-machine.md#authority-invariants): a query never
+writes, and authority binds to content and attempt rather than to the identity of
+the directive that issued a prompt.
+
+
 ### Audit Event Flow
 
 ```mermaid
@@ -150,7 +206,7 @@ These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validatio
 **Design notes:**
 - Stage Jump tasks (no `[slug]`) and dependency-wiring TaskUpdates (no activeForm) are naturally filtered out.
 - The hook calls the existing `set-status` subcommand — no new code path needed.
-- When the activated slug matches the state-bound active-directive marker, `set-status` refreshes that marker's state digest while preserving its unit. For an interleaved unit-major directive it also leaves `Current Stage`, `In Progress`, and the durable cursor checkbox unchanged, so the completed-grid gate cascade still begins at the block's first stage.
+- When the activated slug matches the state-bound active-directive marker, `set-status` refreshes that marker's state digest while preserving its unit. The digest is taken over a projection of `aidlc-state.md` that omits the cache layer, so a status sync that touched only cache fields leaves the marker completely alone rather than superseding the live directive. Either way a recorded Plan Approval is unaffected: it binds to plan content and stage attempt, not to the marker. For an interleaved unit-major directive it also leaves `Current Stage`, `In Progress`, and the durable cursor checkbox unchanged, so the completed-grid gate cascade still begins at the block's first stage.
 
 ### PostToolUse: run-sensors.ts
 
@@ -192,7 +248,12 @@ stdout. Two processes racing the same current token therefore have exactly one
 winner; later contenders see the successor and receive a stale-token error.
 
 Fresh `next` uses the same lock and must publish its first work directive before
-stdout on all harnesses. It is an explicit reset. Because steering tokens are
+stdout on all harnesses. It is an explicit reset. A `next` whose answer is the
+directive the marker ALREADY records for this state publishes nothing at all: it
+returns that directive verbatim, with no revision bump and no fresh token, so
+re-asking does not reset anything. Publishing is continuation bookkeeping, never
+an authority event: it does not clear a Plan Approval challenge, retire a
+receipt, or reset the plan-approval runtime state. Because steering tokens are
 deterministic, a reset may reauthorize the same token bytes: if `next` commits
 before a concurrent `continue`, that continuation may consume the reset token;
 if `continue` commits first, the later `next` supersedes its successor and
@@ -326,13 +387,13 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 
 1. **stdin idiom:** Mirrors `log-subagent.ts` — a TTY means no Claude Code JSON is coming (test/debug), so it allows the stop. Otherwise it reads the Stop-hook JSON, from which it needs only `stop_hook_active`.
 2. **No-op outside AIDLC:** If there is no active intent's `aidlc-state.md` under the project dir, there is nothing to enforce — it allows the stop. The frontmatter `Stop` matcher already scopes the hook to `/aidlc`; this is defence in depth so a non-AIDLC session is never blocked.
-3. **Compose the engine:** Runs `bun .claude/tools/aidlc-orchestrate.ts next --project-dir <dir>` and parses the directive `kind`. It does not re-derive state — it composes the engine.
+3. **Observe the engine:** Runs `bun .claude/tools/aidlc-orchestrate.ts next --project-dir <dir>` as a read-only observation (`AIDLC_STOP_HOOK_PROBE=1` on the spawn) and parses the directive `kind`. It does not re-derive state — it composes the engine. The probe publishes no directive, rotates no Plan Approval authority, clears no challenge or receipt, and touches no marker; see [Observers never write authority](#observers-never-write-authority).
 4. **`done` → allow:** If the directive is `done`, the workflow is complete; the hook emits nothing and exits 0 (the precedent non-blocking pattern), then clears the recursion counter.
 5. **`notice` → allow:** If the directive is `notice`, the engine has produced a terminal informational hand-off (currently the unscoped-main team Unit fan-out notice); the hook allows the stop and clears the counter without advancing state.
 6. **`parked` -> allow:** If the directive is `parked`, the workflow was intentionally parked mid-flow for a later session (`aidlc-orchestrate park`); the hook allows the stop and clears the counter, exactly like `done`. This is the supported multi-session exit: without it, the only clean stop is `done`, which an agent on a long workflow can only reach by rubber-stamping the remaining stages (#367). **Autonomy guard (#365):** the `parked` allow is suppressed under autonomous Construction (`Construction Autonomy Mode: autonomous`), so a `parked` directive there falls through to the cap-bounded block and the loop keeps moving.
 7. **Legitimate turn stop -> allow:** If the directive is pending but the conductor is correctly parked on a human, a matching in-flight background subagent, a compose gate, a Resume choice, or a conversational response, the hook allows the stop and records a drop rather than spamming the nudge. Qualifying evidence includes Esc, a state-bound sessionless Resume marker (`ask` + `waiting`), the current stage checkbox `[?]`/`[R]`, an active team `(stage, Unit)` gate's audit status, an in-progress stage with an unanswered file-backed question, a current-stage `DECISION_RECORDED` with no later `QUESTION_ANSWERED`, a fresh compose marker, a fresh in-flight entry for the current session, or a conversational ending turn. Background and Resume state are session-isolated; autonomous Construction suppresses the applicable waits. Positive-confirmation only: missing, stale, foreign-session, or malformed evidence falls through to the bounded block below. See "Turn-stop carve-outs" below.
 8. **Pending -> block and inject:** For any other (pending) directive - `run-stage`, `dispatch-subagent`, `invoke-swarm`, `present-gate`, `ask`, `print`, `error` - it prints `{"decision":"block","reason":<on-task continuation>}`, so the same session resumes with the next move injected. The injected `reason` also names `aidlc-orchestrate park` as the clean-pause alternative, so a conductor that wants to stop a long workflow parks rather than advancing.
-9. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn.
+9. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn. Failing open never means falling through to a write: the probe path has no write to fall through to, and a barrier violation is one of the non-zero exits this step absorbs.
 
 **Copilot delivered-directive path.** Copilot's PostToolUse adapter records only
 bounded routing and continuation metadata for a successfully delivered
@@ -344,7 +405,7 @@ available, workflow-state digest, owner/context epoch, and command attempt.
 Compaction or state drift invalidates delivery. Missing or invalid evidence
 returns bounded fresh-`next` recovery and never replays an old continuation.
 
-**Security property — the `reason` is an on-task continuation, never an override.** The injected `reason` names the work the conductor still owes ("run the forwarding loop, act on the directive, then report"), never an instruction to do something new or out-of-band. Override-shaped directives are refused by the conductor's own safety training; that refusal is the security property. A buggy or compromised engine therefore can only ever *continue* sanctioned work — it cannot hijack the session to act against the user.
+**Security property — the `reason` is an on-task continuation, never an override.** The injected `reason` names the work the conductor still owes ("run the forwarding loop, act on the directive, then report"), never an instruction to do something new or out-of-band. Override-shaped directives are refused by the conductor's own safety training; that refusal is the security property. A buggy or compromised engine therefore can only ever *continue* sanctioned work — it cannot hijack the session to act against the user. The same property holds for authority: the Stop hook can only ask the conductor to continue. It cannot mint, rotate, or clear Plan Approval evidence.
 
 **Recursion guard — a stuck block can never trap the session.** A block that re-fires forever is the one way a hook could trap a turn, so recursion is bounded two ways, both native:
 
@@ -369,13 +430,13 @@ returns bounded fresh-`next` recovery and never replays an old continuation.
   | `transcript_path` on the Stop payload | Claude Code, Codex | Parse the turn history and classify each tool call with `isEngineToolCall`. Highest fidelity; preferred wherever delivered. |
   | Marker mtimes | Kiro IDE, Kiro CLI, opencode | Compare `<record>/.aidlc-human-turn` against `<record>/.aidlc-engine-touch`. A human turn **newer** than the last engine advance is the marker spelling of the same question — but it answers it **more coarsely**; see the coverage gap below. |
 
-  These harnesses expose no turn history to a hook at all. opencode's `session.idle` carries no transcript, and the Kiro `Stop` payload carries only `{session_id, hook_event_name, cwd}` — captured live on IDE 1.x: no transcript, no turn id. (The richer `{tool_name, tool_input, tool_response}` shape belongs to the *tool* triggers, not `Stop`. And "v1"/"v2" name the hook **registration schema**, not the payload — see [kiro-ide-hook-payload.md](kiro-ide-hook-payload.md).) So the framework writes the two facts itself on the seams that already exist: the `UserPromptSubmit` mint touches `.aidlc-human-turn` alongside its `HUMAN_TURN` ledger event, and `aidlc-orchestrate` touches `.aidlc-engine-touch` on every advancing `next` / `report` / `park`. Markers were chosen over reading the audit ledger because **`next` is read-only and emits no audit event** - a ledger-only predicate would be blind to a conductor that consulted the engine and then bailed mid-loop, which is the exact failure the forwarding loop exists to catch.
+  These harnesses expose no turn history to a hook at all. opencode's `session.idle` carries no transcript, and the Kiro `Stop` payload carries only `{session_id, hook_event_name, cwd}` — captured live on IDE 1.x: no transcript, no turn id. (The richer `{tool_name, tool_input, tool_response}` shape belongs to the *tool* triggers, not `Stop`. And "v1"/"v2" name the hook **registration schema**, not the payload — see [kiro-ide-hook-payload.md](kiro-ide-hook-payload.md).) So the framework writes the two facts itself on the seams that already exist: the `UserPromptSubmit` mint touches `.aidlc-human-turn` alongside its `HUMAN_TURN` ledger event, and `aidlc-orchestrate` touches `.aidlc-engine-touch` on every advancing `next` / `report` / `park`. Markers were chosen over reading the audit ledger because **`next` emits no audit event** (the one exception is the synthetic `STAGE_STARTED` boundary that `next --single` records) and because it is a query with respect to authority: it writes no receipt, rotates no approval, and advances no stage. Its durable side effects are bookkeeping - this engine-touch marker, the gitignored continuation cursor and steering-token key, the active-directive marker - and a `next` that re-answers with the directive already issued writes none of them. The Stop-hook probe suppresses the touch as well. But a ledger-only predicate would be blind to a conductor that consulted the engine and then bailed mid-loop, which is the exact failure the forwarding loop exists to catch.
 
   **Coverage gap — the marker path is more permissive than the transcript path.** The two predicates agree on the read-only exemption, but not on everything. `isEngineToolCall` counts as engagement any non-read-only `aidlc-jump` / `aidlc-bolt` / `aidlc-swarm` call and the mutating `aidlc-state` verbs (`approve`, `advance`, `skip`, `set`, …). **None of those tools touch the engine marker** — its only writers are `aidlc-orchestrate`'s three subcommands. So on a transcript-free harness a conductor that runs `aidlc-jump` (mutating the stage pointer, emitting audit) and then ends its turn without consulting the engine reads as *conversational* and is released, where the same turn blocks on Claude Code and Codex. Those turns were nudged before the marker path existed, so this is a genuine — if narrow — relaxation on Kiro and opencode, not merely an unimplemented nicety. Closing it means touching the marker from a seam all four tools cross (the audit-emission path, or `writeStateFile`), which widens the blast radius well past this carve-out, so it is documented rather than closed.
 
   **Session scope.** Both markers are per-*intent* and carry no session key, whereas the transcript predicate was inherently per-session. Two concurrent sessions on one intent (an IDE window plus a CLI run, say) can cross-talk: session B's prompt mint can make session A's engaged stop read as conversational. The window is narrow and the failure mode is a released stop rather than a wrong transition, so it is accepted for now; the Kiro payload does carry `session_id` if it is ever worth closing.
 
-  **The load-bearing subtlety:** the Stop hook consults the engine itself (it runs `aidlc-orchestrate next` to learn whether work is pending). If that probe touched the engine marker, the engine mtime would always be newer than the human mtime and the predicate would be false forever - the carve-out would look implemented and do nothing. The hook therefore sets `AIDLC_STOP_HOOK_PROBE=1` on its spawn and the engine skips the touch when it sees it.
+  **The load-bearing subtlety:** the Stop hook consults the engine itself (it runs `aidlc-orchestrate next` to learn whether work is pending). If that probe touched the engine marker, the engine mtime would always be newer than the human mtime and the predicate would be false forever - the carve-out would look implemented and do nothing. The hook therefore sets `AIDLC_STOP_HOOK_PROBE=1` on its spawn, and the engine suppresses every durable side effect when it sees it, the touch included.
 
   **The probe is read-only, and that includes the directive marker.** The hook reads the prepared directive off the probe's *stdout* and never reads the durable `.aidlc-active-directive.json`, so the engine also suppresses that publication (and, in `continue`, the cursor advance) for any probe-marked invocation — solo and team alike. Publishing from a bare probe `next` bumped `code_generation_authority_revision` and reset the plan-approval runtime on every turn boundary, which destroyed the Plan Approval challenge minted in the same turn and deadlocked Code Generation on solo workflows (#995). The conductor's own non-probe `next` publishes normally, so forward progress is unchanged.
 
@@ -462,9 +523,9 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 **Trigger:** Before developer-agent dispatches and mutation-capable file, patch, and shell calls
 **Purpose:** Enforce Code Generation's plan-before-generation ordering (stage Steps 2-4) deterministically
 
-This is one of the framework's flow-altering hooks and `PreToolUse` controls. The stage prose says generation never begins before the human answers "Approve Plan" - a field report showed a conductor generating the code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary. The stage-completion artifact guard cannot catch that inversion (it fires at completion, when the backfilled plan already exists), so this hook refuses both delegated and inline generation before it starts.
+This is one of the framework's flow-altering hooks and `PreToolUse` controls. The stage prose says generation never begins before the human answers "Approve Plan" - a field report showed a conductor generating the code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary. The stage-completion artifact guard cannot catch that inversion (it fires at completion, when the backfilled plan already exists), so this hook refuses both delegated and inline generation before it starts. A second field report showed the opposite failure: a valid approval was destroyed between the turn that offered it and the turn that recorded the answer, because the question path republished the directive and the republication deleted the plan-approval runtime state. Approval now binds to content and attempt, so re-asking the engine cannot withdraw it.
 
-**Decision.** The guard requires a current v2 code-generation directive; there is no Current Stage fallback. A run-stage selects its exact Unit or the zero-Unit stage target; an `invoke-swarm` marker carries its concrete active Unit list. The fingerprint binds plan/instructions/contract bytes to project+intent, target, stage-attempt floor, directive authority epoch, and source floor. Markdown `[Answer]: Approve Plan` and `PLAN_APPROVAL_RECORDED` audit text are context/provenance only. `aidlc-log.ts decision` and `answer` require the exact `--session` injected by SessionStart. Prompt-submit and native Claude `AskUserQuestion` PostToolUse responses create protected evidence only when the actual text resolves to an offered choice. Identical swarm planning republication preserves approved unit receipts; direct reissues invalidate them. The first authorized generation mutation changes the receipt from approved to generation, so the next directive rotates the floor.
+**Decision.** The guard requires a current v2 code-generation directive; there is no Current Stage fallback. A run-stage selects its exact Unit or the zero-Unit stage target; an `invoke-swarm` marker carries its concrete active Unit list. The fingerprint binds the plan and instructions content, plus the Testing Contract hash, to project+intent, target, and the stage-attempt floor. It is taken over a projection that excludes a terminal reviewer-owned `## Review` appendix and ticked plan task markers, so recording a review or ticking a step never reopens approval; any other edit does. The workspace source the plan was written against is bound separately, by the `[Planned Source]` tag the fingerprint command prints. Markdown `[Answer]: Approve Plan` and `PLAN_APPROVAL_RECORDED` audit text are context/provenance only. `aidlc-log.ts decision` and `answer` require the exact `--session` injected by SessionStart. Prompt-submit and native Claude `AskUserQuestion` PostToolUse responses create protected evidence only when the actual text resolves to an offered choice. Re-running `next`, a Stop-hook probe, a route check, or a reissued directive for the same target and attempt preserves an approved receipt, whether the planning was inline or swarm-republished; a plan, instructions, or contract edit, a posture/scope/strategy/type change, a new stage attempt, a source change, or a human Request Changes invalidates it. The first authorized generation mutation changes the receipt from approved to generation, which consumes the approval for that attempt.
 
 **Per harness.** Claude, Codex, Cursor, opencode, and Copilot route native dispatch/mutation payloads to the shared hook. Kiro CLI agent-v1 registers it on the conductor and every writable worker; v3/KAS ships standalone prompt-submit and PreToolUse registrations. Kiro IDE ships v2 and legacy PreToolUse registrations. Populated arguments use the shared target-aware guard. Legacy argument-less calls permit only measured `fs_write`/`str_replace` planning; unsupported writes create a protected violation. The next opaque shell attempt runs only the adapter-owned engine recovery chain, blocks the unknown original command, and restores canonical planning. Unknown tools are mutation-capable unless explicitly safe reads. Source discovery hard-excludes dependency/cache/virtualenv trees, preserves tracked files under conditional build/output names, and hashes source-like external directory targets under bounded file/byte limits.
 
