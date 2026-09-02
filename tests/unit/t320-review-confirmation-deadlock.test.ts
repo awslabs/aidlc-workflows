@@ -22,6 +22,7 @@ import {
   createTestProject,
   seedAidlcMemory,
   seedBoltDag,
+  recordArtifactWriteViaHook,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -159,7 +160,7 @@ function writeArtifact(
   content = "# Requirements\n",
 ): void {
   writeFileSync(artifact, content);
-  appendAuditEntry(event, { File: artifact, Tool: "Write" }, proj);
+  recordArtifactWriteViaHook(proj, artifact, event === "ARTIFACT_UPDATED" ? "Edit" : "Write");
 }
 
 function review(proj: string, verdict?: "READY" | "NOT-READY") {
@@ -296,9 +297,11 @@ describe("t320 review/summary deadlock prevention", () => {
     const wrongOrder = review(proj);
     expect(wrongOrder.status).not.toBe(0);
     expect(wrongOrder.stderr).toContain(
-      "was not saved after the confirmed answers",
+      "was last saved before the confirmed answers",
     );
-    expect(wrongOrder.stderr).toContain("Save the document after confirmation");
+    expect(wrongOrder.stderr).toContain(
+      "Save the document again, so its write descends from the current confirmation",
+    );
     expect(wrongOrder.stderr).not.toContain("Request Changes decision");
     writeArtifact(proj, artifact, "ARTIFACT_UPDATED", "# Requirements v2\n");
     expect(review(proj).status).toBe(0);

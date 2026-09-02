@@ -8,7 +8,7 @@
 // relevant" behaviour.
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   auditFilePath,
   type ClaudeCodeHookInput,
@@ -18,9 +18,13 @@ import {
   hookDebug,
   hooksHealthDir,
   isClaudeCodeHookInput,
+  activeSummaryAuthorizationForRecordPath,
   isoTimestamp,
+  loadStageGraphAll,
   recordHookDrop,
   resolveProjectDirFromHook,
+  SUMMARY_AUTHORIZATION_FIELD,
+  withAuditLock,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
@@ -162,12 +166,42 @@ if (tool === "Edit") {
   eventType = isNew ? "ARTIFACT_CREATED" : "ARTIFACT_UPDATED";
 }
 
+// A write under the record descends from the summary confirmation that is the
+// active authorization for its stage (and Unit) at the moment of the write. The
+// row carries that authorization's id, so completion can ask "does this output
+// descend from the current confirmation" instead of "did it land after the
+// receipt". A write with no active authorization for its scope carries no id.
+//
+// The lookup and the append share one audit-lock hold: the answer command
+// writes the registry and appends its receipt under the same lock, so a
+// registry can never be observed here without the receipt that minted it (nor
+// during a rollback that removes it).
+const fields: Record<string, string> = {
+  Tool: tool,
+  File: auditFileValue,
+  Context: context,
+};
+let stageSlugs: ReadonlySet<string> = new Set();
+if (underRecord && fileNorm.length > recordRoot.length) {
+  try {
+    stageSlugs = new Set(loadStageGraphAll().map((stage) => stage.slug));
+  } catch (e) {
+    hookDebug(projectDir, "write-audit-log", "stage graph unreadable", { error: errorMessage(e) });
+  }
+}
+
 try {
-  appendAuditEntry(eventType, {
-    Tool: tool,
-    File: auditFileValue,
-    Context: context,
-  }, projectDir);
+  withAuditLock(projectDir, () => {
+    if (underRecord && fileNorm.length > recordRoot.length) {
+      const authorization = activeSummaryAuthorizationForRecordPath(
+        projectDir,
+        fileNorm.slice(recordRoot.length + 1),
+        stageSlugs,
+      );
+      if (authorization !== null) fields[SUMMARY_AUTHORIZATION_FIELD] = authorization.id;
+    }
+    appendAuditEntryUnlocked(eventType, fields, projectDir);
+  });
   hookDebug(projectDir, "write-audit-log", "emitted", { eventType, file: auditFileValue, context });
 } catch (e) {
   // Hook must be a no-op on any audit emission failure to avoid breaking the

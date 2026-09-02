@@ -67,6 +67,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  recordArtifactWriteViaHook,
   runOrchestrateNext,
   seedAuditFile,
   seededAuditShard,
@@ -503,11 +504,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
 
     const artifact = join(stageDir, "requirements.md");
     writeFileSync(artifact, "# Requirements\n");
-    appendAuditEntry(
-      "ARTIFACT_CREATED",
-      { File: artifact, Tool: "Write" },
-      proj,
-    );
+    recordArtifactWriteViaHook(proj, artifact);
 
     const result = runSummaryGuarded(TOOL, [
       "report",
@@ -585,11 +582,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     ]) {
       const artifact = join(stageDir, `${name}.md`);
       writeFileSync(artifact, `# ${name}\n`);
-      appendAuditEntry(
-        "ARTIFACT_CREATED",
-        { File: artifact, Tool: "Write" },
-        proj,
-      );
+      recordArtifactWriteViaHook(proj, artifact);
     }
 
     const result = runSummaryGuarded(TOOL, [
@@ -640,11 +633,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     );
     const artifact = join(stageDir, "requirements.md");
     writeFileSync(artifact, "# Requirements\n");
-    appendAuditEntry(
-      "ARTIFACT_CREATED",
-      { File: artifact, Tool: "Write" },
-      proj,
-    );
+    recordArtifactWriteViaHook(proj, artifact);
 
     const result = runSummaryGuarded(TOOL, [
       "report",

@@ -204,6 +204,16 @@ artifact the review is about (the gate's `**Review:**` path and the
 it. A terminal `## Review` section inside an artifact is a review recorded
 before review records existed: readable for migration, never written anew.
 
+**Summary authorizations are not artifacts either.** The active summary
+confirmation for a stage (and Unit) lives at
+`<record>/.aidlc-summary-authorization/<stage>/<unit or stage-level>.json`,
+written by `aidlc-log.ts answer --checkpoint summary-confirmation` on `Looks
+correct` and removed on `Request changes`. It holds the `Summary Authorization
+Id` the receipt row carries; the write-audit hook reads it to stamp the stage's
+`ARTIFACT_CREATED`/`ARTIFACT_UPDATED` rows, and completion compares those stamps
+to the current receipt. It is not an output, is never reviewed, and is not
+listed in `produces[]`.
+
 **Codekb is the space-level exception.** Reverse-engineering's 9 artifacts
 (`business-overview`, `architecture`, `code-structure`, `api-documentation`,
 `component-inventory`, `technology-stack`, `dependencies`,

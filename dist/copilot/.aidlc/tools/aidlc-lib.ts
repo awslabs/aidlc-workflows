@@ -7515,6 +7515,309 @@ function summaryArtifactPaths(
     .filter((path) => existsSync(path));
 }
 
+/** The audit events the summary-confirmation evidence reads. */
+export const SUMMARY_EVIDENCE_EVENTS = new Set([
+  "WORKFLOW_STARTED",
+  "STAGE_STARTED",
+  "STAGE_JUMPED",
+  "STAGE_COMPLETED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "ARTIFACT_CREATED",
+  "ARTIFACT_UPDATED",
+]);
+
+/** The newest row per shard among `candidates`, then only those at the newest timestamp. */
+function latestEventFrontier(candidates: AuditShardEvent[]): AuditShardEvent[] {
+  const byShard = new Map<string, AuditShardEvent>();
+  for (const entry of candidates) {
+    const previous = byShard.get(entry.shard);
+    if (!previous || entry.pos > previous.pos) byShard.set(entry.shard, entry);
+  }
+  const latestTimestamp = [...byShard.values()].reduce(
+    (latest, entry) => (entry.timestamp > latest ? entry.timestamp : latest),
+    "",
+  );
+  return [...byShard.values()].filter((entry) => entry.timestamp === latestTimestamp);
+}
+
+/**
+ * The attempt boundary the summary confirmation binds to: for an isolated run
+ * its last STAGE_COMPLETED, otherwise the newest WORKFLOW_STARTED, STAGE_JUMPED,
+ * or (stage-major) STAGE_STARTED for the stage. Empty when the ledger has none.
+ */
+export function summaryAttemptFloors(
+  events: AuditShardEvent[],
+  stageSlug: string,
+  workflow: string | undefined,
+  unitMajor: boolean,
+): AuditShardEvent[] {
+  const candidates = events.filter((entry) => {
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (workflow !== undefined) {
+      return (
+        entry.event === "STAGE_COMPLETED" &&
+        eventWorkflow === workflow &&
+        auditBlockField(entry.block, "Stage") === stageSlug
+      );
+    }
+    if (eventWorkflow?.startsWith("single-stage:")) return false;
+    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
+      return true;
+    }
+    return (
+      auditBlockField(entry.block, "Stage") === stageSlug &&
+      entry.event === "STAGE_STARTED" &&
+      !unitMajor
+    );
+  });
+  return latestEventFrontier(candidates);
+}
+
+/** A stable name for an attempt boundary, from the floor rows' own identities. */
+export function summaryAttemptIdentity(floors: readonly AuditShardEvent[]): string {
+  if (floors.length === 0) return "unstarted";
+  return floors
+    .map((floor) => `${floor.event}:${floor.timestamp}:${floor.shard}:${floor.pos}`)
+    .sort()
+    .join("|");
+}
+
+// --- Summary authorization -------------------------------------------------
+//
+// A human's summary confirmation authorizes the outputs generated from it. The
+// authorization has an id: a digest of the attempt, the stage, the Unit, the
+// workflow, the questions file, the confirmed content, and the positive choice.
+// The receipt row carries it, the artifact audit hook stamps it on every
+// ARTIFACT_CREATED/UPDATED row written while it is the active authorization for
+// that scope, and completion asks whether every required output's newest write
+// descends from the current id. Identical confirmations mint the same id, so a
+// repeated "Looks correct" reaffirms instead of revoking; changed answers mint a
+// different id, so the outputs must be regenerated under it. The order in which
+// the receipt and the writes landed no longer decides anything.
+
+/**
+ * The real path a framework-owned record file will occupy under `recordRoot`,
+ * reached through no symlinked component: a redirected registry directory is
+ * refused before anything is created, written, or removed through it.
+ */
+export function recordFileTargetOrThrow(recordRoot: string, relativePath: string): string {
+  return assertNoSymlinkInChainOrThrow(realpathSync(recordRoot), relativePath);
+}
+
+/** Write a framework-owned record file under `recordRoot` through no symlink, creating parents. */
+export function writeRecordFileNoFollow(
+  recordRoot: string,
+  relativePath: string,
+  data: string | Buffer,
+): string {
+  const anchorReal = realpathSync(recordRoot);
+  const target = assertNoSymlinkInChainOrThrow(anchorReal, relativePath);
+  mkdirSync(dirname(target), { recursive: true });
+  // The parents exist now; none of them, nor the leaf, may be a link.
+  assertNoSymlinkInChainOrThrow(anchorReal, relativePath);
+  writeBufferAtomic(target, typeof data === "string" ? Buffer.from(data, "utf-8") : data);
+  return target;
+}
+
+/** Remove a framework-owned record file under `recordRoot`, never through a symlink. */
+export function removeRecordFileNoFollow(recordRoot: string, relativePath: string): void {
+  const target = recordFileTargetOrThrow(recordRoot, relativePath);
+  rmSync(target, { force: true });
+}
+
+export const SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
+export const SUMMARY_AUTHORIZATION_FIELD = "Summary Authorization Id";
+const SUMMARY_AUTHORIZATION_ID_RE = /^[0-9a-f]{64}$/;
+
+export interface SummaryAuthorization {
+  version: 1;
+  id: string;
+  stage: string;
+  unit: string | null;
+  workflow: string | null;
+  attempt: string;
+  questions_file: string;
+  questions_sha256: string;
+  choice: string;
+  recorded_at: string;
+}
+
+export function summaryAuthorizationId(input: {
+  attempt: string;
+  stage: string;
+  unit: string | null;
+  workflow: string | null;
+  questionsFile: string;
+  questionsSha256: string;
+  choice: string;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        input.attempt,
+        input.stage,
+        input.unit,
+        input.workflow,
+        input.questionsFile,
+        input.questionsSha256,
+        input.choice,
+      ]),
+    )
+    .digest("hex");
+}
+
+export function isSummaryAuthorizationId(value: string | null): value is string {
+  return value !== null && SUMMARY_AUTHORIZATION_ID_RE.test(value);
+}
+
+/** The record-relative slot of one scope's active authorization: `.aidlc-summary-authorization/<stage>/<unit or stage-level>.json`. */
+export function summaryAuthorizationRelativePath(stage: string, unit: string | null): string {
+  const unitProblem = unit === null ? null : validateUnitName(unit);
+  if (unitProblem !== null) throw new Error(unitProblem);
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
+  return `${SUMMARY_AUTHORIZATION_DIR}/${stage}/${unit ?? "stage-level"}.json`;
+}
+
+/** The active authorization for one scope: `<record>/.aidlc-summary-authorization/<stage>/<unit or stage-level>.json`. */
+export function summaryAuthorizationRecordPath(
+  recordRoot: string,
+  stage: string,
+  unit: string | null,
+): string {
+  return join(recordRoot, ...summaryAuthorizationRelativePath(stage, unit).split("/"));
+}
+
+/**
+ * Where a scope's authorization will be written or removed, verified before
+ * the receipt that depends on it is recorded: throws when the registry path
+ * is redirected through a symlink or the record cannot be resolved.
+ */
+export function summaryAuthorizationTargetOrThrow(
+  projectDir: string,
+  stage: string,
+  unit: string | null,
+): string {
+  const record = recordDir(projectDir);
+  if (record === null) throw new Error("Cannot resolve the active intent record.");
+  return recordFileTargetOrThrow(record, summaryAuthorizationRelativePath(stage, unit));
+}
+
+export function writeSummaryAuthorization(
+  projectDir: string,
+  authorization: SummaryAuthorization,
+): void {
+  const record = recordDir(projectDir);
+  if (record === null) throw new Error("Cannot resolve the active intent record.");
+  writeRecordFileNoFollow(
+    record,
+    summaryAuthorizationRelativePath(authorization.stage, authorization.unit),
+    `${JSON.stringify(authorization, null, 2)}\n`,
+  );
+}
+
+export function clearSummaryAuthorization(
+  projectDir: string,
+  stage: string,
+  unit: string | null,
+): void {
+  const record = recordDir(projectDir);
+  if (record === null) return;
+  removeRecordFileNoFollow(record, summaryAuthorizationRelativePath(stage, unit));
+}
+
+export function readSummaryAuthorization(
+  projectDir: string,
+  stage: string,
+  unit: string | null,
+): SummaryAuthorization | null {
+  const record = recordDir(projectDir);
+  if (record === null) return null;
+  let parsed: unknown;
+  try {
+    // Reached through no symlinked component and read without following one:
+    // a redirected registry is not this record's authorization.
+    const path = recordFileTargetOrThrow(record, summaryAuthorizationRelativePath(stage, unit));
+    parsed = JSON.parse(readRegularFileNoFollowOrThrow(path, "summary authorization", 64 * 1024).toString("utf-8"));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  const fields = parsed as Record<string, unknown>;
+  const optionalString = (value: unknown): value is string | null =>
+    value === null || typeof value === "string";
+  if (
+    fields.version !== 1 ||
+    !isSummaryAuthorizationId(typeof fields.id === "string" ? fields.id : null) ||
+    fields.stage !== stage ||
+    (fields.unit ?? null) !== unit ||
+    !optionalString(fields.workflow ?? null) ||
+    typeof fields.attempt !== "string" ||
+    typeof fields.questions_file !== "string" ||
+    typeof fields.questions_sha256 !== "string" ||
+    typeof fields.choice !== "string" ||
+    typeof fields.recorded_at !== "string"
+  ) {
+    return null;
+  }
+  return {
+    version: 1,
+    id: fields.id as string,
+    stage,
+    unit,
+    workflow: (fields.workflow as string | null | undefined) ?? null,
+    attempt: fields.attempt,
+    questions_file: fields.questions_file,
+    questions_sha256: fields.questions_sha256,
+    choice: fields.choice,
+    recorded_at: fields.recorded_at,
+  };
+}
+
+/**
+ * The authorization a write at `relativePath` (record-relative, forward
+ * slashes) descends from: the active confirmation for the path's stage and
+ * Unit. A per-Unit path with no confirmation of its own falls back to the
+ * stage-level one ONLY when that confirmation belongs to the isolated
+ * `single-stage:<stage>` run, which confirms its one Unit at stage level and
+ * whose completion check reads it the same way; a main-workflow stage-level
+ * confirmation never authorizes a Unit's outputs. Null when the path is not a
+ * stage output or no confirmation is active for it.
+ */
+export function activeSummaryAuthorizationForRecordPath(
+  projectDir: string,
+  relativePath: string,
+  stageSlugs: ReadonlySet<string>,
+): SummaryAuthorization | null {
+  const scope = summaryScopeForRecordPath(relativePath, stageSlugs);
+  if (scope === null) return null;
+  if (scope.unit === null) return readSummaryAuthorization(projectDir, scope.stage, null);
+  const perUnit = readSummaryAuthorization(projectDir, scope.stage, scope.unit);
+  if (perUnit !== null) return perUnit;
+  const stageLevel = readSummaryAuthorization(projectDir, scope.stage, null);
+  return stageLevel !== null && stageLevel.workflow === `single-stage:${scope.stage}`
+    ? stageLevel
+    : null;
+}
+
+/**
+ * The summary scope a record-relative artifact path belongs to: per-Unit
+ * Construction outputs live at `construction/<unit>/<stage>/...`, everything
+ * else at `<phase>/<stage>/...`. A Construction path whose second segment is a
+ * stage slug is stage-level; otherwise that segment is the Unit. Null for
+ * paths that are not stage outputs.
+ */
+export function summaryScopeForRecordPath(
+  relativePath: string,
+  stageSlugs: ReadonlySet<string>,
+): { stage: string; unit: string | null } | null {
+  const parts = relativePath.split("/");
+  if (parts.length < 3) return null;
+  if (parts[0] === "construction" && parts.length >= 4 && !stageSlugs.has(parts[1])) {
+    return { stage: parts[2], unit: parts[1] };
+  }
+  return { stage: parts[1], unit: null };
+}
+
 // Verify that every question-bearing iteration has a fresh human-backed
 // consolidated-summary receipt and that generated artifacts postdate it.
 // `workflow` identifies an isolated run; main-workflow callers omit it.
@@ -7654,17 +7957,8 @@ export function checkSummaryConfirmationEvidence(
     );
   }
 
-  const relevant = new Set([
-    "WORKFLOW_STARTED",
-    "STAGE_STARTED",
-    "STAGE_JUMPED",
-    "STAGE_COMPLETED",
-    "SUMMARY_CONFIRMATION_RECORDED",
-    "ARTIFACT_CREATED",
-    "ARTIFACT_UPDATED",
-  ]);
   const events = readAuditShardEvents(projectDir)
-    .filter((entry) => relevant.has(entry.event));
+    .filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
   if (events.length === 0) {
     return failure(
       "SUMMARY_RECEIPT_MISSING",
@@ -7674,21 +7968,7 @@ export function checkSummaryConfirmationEvidence(
     );
   }
 
-  const latestFrontier = (candidates: AuditShardEvent[]): AuditShardEvent[] => {
-    const byShard = new Map<string, AuditShardEvent>();
-    for (const entry of candidates) {
-      const previous = byShard.get(entry.shard);
-      if (!previous || entry.pos > previous.pos) byShard.set(entry.shard, entry);
-    }
-    const latestTimestamp = [...byShard.values()].reduce(
-      (latest, entry) =>
-        entry.timestamp > latest ? entry.timestamp : latest,
-      "",
-    );
-    return [...byShard.values()].filter(
-      (entry) => entry.timestamp === latestTimestamp,
-    );
-  };
+  const latestFrontier = latestEventFrontier;
   const latestEvent = (
     candidates: AuditShardEvent[],
   ): { event: AuditShardEvent | null; ambiguousTimestamp?: string } => {
@@ -7722,29 +8002,7 @@ export function checkSummaryConfirmationEvidence(
     isPerUnitStage(stage) &&
     getField(options.stateContent ?? "", "Construction Iteration")?.trim() ===
       "unit-major";
-  const floorCandidates = events.filter((entry) => {
-    const eventWorkflow = auditBlockField(entry.block, "Workflow");
-    if (workflow !== undefined) {
-      return (
-        entry.event === "STAGE_COMPLETED" &&
-        eventWorkflow === workflow &&
-        auditBlockField(entry.block, "Stage") === stage.slug
-      );
-    }
-    if (eventWorkflow?.startsWith("single-stage:")) return false;
-    if (
-      entry.event === "WORKFLOW_STARTED" ||
-      entry.event === "STAGE_JUMPED"
-    ) {
-      return true;
-    }
-    return (
-      auditBlockField(entry.block, "Stage") === stage.slug &&
-      entry.event === "STAGE_STARTED" &&
-      !unitMajor
-    );
-  });
-  const floors = latestFrontier(floorCandidates);
+  const floors = summaryAttemptFloors(events, stage.slug, workflow, unitMajor);
   const afterFloor = (entry: AuditShardEvent): true | false | null => {
     if (floors.length === 0) return true;
     const relations = floors.map((floor): true | false | null => {
@@ -8017,6 +8275,38 @@ export function checkSummaryConfirmationEvidence(
         }
         return false;
       };
+      // A receipt that carries an authorization id decides by descent, not by
+      // order: the artifact's newest write must have been stamped with the id
+      // this receipt minted. An identical re-confirmation mints the same id, so
+      // the write still descends; changed answers mint another, so it does not.
+      // Only receipts from before authorization ids fall through to the
+      // write-after-receipt ordering below.
+      const receiptAuthorization = auditBlockField(receipt.block, SUMMARY_AUTHORIZATION_FIELD);
+      if (isSummaryAuthorizationId(receiptAuthorization)) {
+        const newestWrites = latestFrontier(writes);
+        const unauthorized = newestWrites.filter(
+          (entry) => auditBlockField(entry.block, SUMMARY_AUTHORIZATION_FIELD) !== receiptAuthorization,
+        );
+        if (newestWrites.length === 0 || unauthorized.length > 0) {
+          const stampedElsewhere = unauthorized.some(
+            (entry) => auditBlockField(entry.block, SUMMARY_AUTHORIZATION_FIELD) !== null,
+          );
+          return failure(
+            "SUMMARY_ARTIFACT_UNAUTHORIZED",
+            `Refusing to continue "${stage.slug}": this stage's output document ` +
+              `${artifact} ${
+                newestWrites.length === 0
+                  ? "has no recorded write"
+                  : stampedElsewhere
+                    ? "was last saved under a different summary confirmation"
+                    : "was last saved before the confirmed answers"
+              }. Save the document again, so its write descends from the current ` +
+              "confirmation, then continue.",
+            "stale",
+          );
+        }
+        continue;
+      }
       const writeAfterReceipt = writes.some((entry) =>
         strictlyAfter(entry, receipt)
       );

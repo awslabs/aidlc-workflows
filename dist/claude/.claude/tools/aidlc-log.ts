@@ -7,22 +7,28 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
+  clearSummaryAuthorization,
+  isPerUnitStage,
+  SUMMARY_AUTHORIZATION_FIELD,
+  SUMMARY_EVIDENCE_EVENTS,
+  type SummaryAuthorization,
+  summaryAttemptFloors,
+  summaryAttemptIdentity,
+  summaryAuthorizationId,
+  removeRecordFileNoFollow,
+  SUMMARY_AUTHORIZATION_DIR,
+  summaryAuthorizationRelativePath,
+  summaryAuthorizationTargetOrThrow,
+  writeRecordFileNoFollow,
+  writeSummaryAuthorization,
   emitError,
   errorMessage,
   evaluateGuardRefusal,
@@ -179,6 +185,16 @@ function parseFlags(
     }
   }
   return { positional, flags };
+}
+
+// Whether anything sits at the path, symlink included, without following it.
+function lstatExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function summaryQuestionEvidence(
@@ -719,16 +735,102 @@ function handleAnswer(args: string[]): void {
             + `wait for the human's choice, then try again.${unattendedHumanPresenceHint()}`,
         );
       }
+      // The confirmation authorizes the outputs generated from it. Mint the
+      // authorization id from the attempt, the scope, and the confirmed content
+      // (identical confirmations mint the same id; changed answers a new one),
+      // record it on the receipt, and make it the active authorization for the
+      // scope so every later write of a stage output is stamped with it. A
+      // "Request changes" reply withdraws the active authorization instead.
+      const unitMajor =
+        stageNode !== undefined &&
+        isPerUnitStage(stageNode) &&
+        getField(content ?? "", "Construction Iteration")?.trim() === "unit-major";
+      const floors = summaryAttemptFloors(
+        readAuditShardEvents(pd).filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event)),
+        flags.stage,
+        workflow,
+        unitMajor,
+      );
+      const authorization: SummaryAuthorization = {
+        version: 1,
+        id: "",
+        stage: flags.stage,
+        unit: flags.unit ?? null,
+        workflow: workflow ?? null,
+        attempt: summaryAttemptIdentity(floors),
+        questions_file: summaryEvidence!.relativePath,
+        questions_sha256: summaryEvidence!.sha256,
+        choice: flags.details,
+        recorded_at: isoTimestamp(),
+      };
+      authorization.id = summaryAuthorizationId({
+        attempt: authorization.attempt,
+        stage: authorization.stage,
+        unit: authorization.unit,
+        workflow: authorization.workflow,
+        questionsFile: authorization.questions_file,
+        questionsSha256: authorization.questions_sha256,
+        choice: authorization.choice,
+      });
+      const positive = flags.details === "Looks correct";
+      if (positive) fields[SUMMARY_AUTHORIZATION_FIELD] = authorization.id;
+      // Registry first, receipt second, both under the audit lock. A registry
+      // that cannot be written (a redirected `.aidlc-summary-authorization`, a
+      // file where the stage directory belongs, a full disk) refuses the answer
+      // BEFORE any receipt exists, so the pending question and the human's turn
+      // are still there for a retry once the cause is fixed. If the receipt
+      // then fails to append, the registry is restored to what it was, so no
+      // authorization exists without the receipt that minted it.
+      let previousRegistry: Buffer | null = null;
+      try {
+        const target = summaryAuthorizationTargetOrThrow(pd, authorization.stage, authorization.unit);
+        previousRegistry = lstatExists(target)
+          ? readRegularFileNoFollowOrThrow(target, "summary authorization", 64 * 1024)
+          : null;
+        if (positive) {
+          writeSummaryAuthorization(pd, authorization);
+        } else {
+          clearSummaryAuthorization(pd, authorization.stage, authorization.unit);
+        }
+      } catch (e) {
+        error(
+          `Cannot record the summary choice: its authorization record could not be ` +
+            `saved (${errorMessage(e)}). Nothing was recorded; the pending question is ` +
+            "still answerable. Repair the record directory and run this command again.",
+        );
+      }
       try {
         emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", fields);
       } catch (e) {
-        error(`Audit emission failed: ${errorMessage(e)}`);
+        // Restore the registry to its exact prior bytes (or absence) so no
+        // authorization exists without the receipt that minted it. A restore
+        // that itself fails is part of the report: the registry is then in a
+        // state the human must know about before retrying.
+        let rollback = "";
+        try {
+          const registryRelative = summaryAuthorizationRelativePath(
+            authorization.stage,
+            authorization.unit,
+          );
+          if (previousRegistry === null) {
+            removeRecordFileNoFollow(recordDir(pd) as string, registryRelative);
+          } else {
+            writeRecordFileNoFollow(recordDir(pd) as string, registryRelative, previousRegistry);
+          }
+        } catch (restoreError) {
+          rollback =
+            ` The authorization record could not be restored either (${errorMessage(restoreError)}); ` +
+            `remove ${SUMMARY_AUTHORIZATION_DIR}/${authorization.stage}/${authorization.unit ?? "stage-level"}.json ` +
+            "under the intent record before retrying.";
+        }
+        error(`Audit emission failed: ${errorMessage(e)}.${rollback}`);
       }
       console.log(
         JSON.stringify({
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
           checkpoint: "summary-confirmation",
           stage: flags.stage,
+          ...(positive ? { summary_authorization_id: authorization.id } : {}),
         }),
       );
       return;
@@ -1373,7 +1475,6 @@ function handleReview(args: string[]): void {
     floor: string,
     iteration: number,
   ): {
-    draftAbsolute: string;
     draftRelative: string;
     draftRelativeToRecord: string;
     recordRelative: string;
@@ -1383,20 +1484,10 @@ function handleReview(args: string[]): void {
     const attemptId = reviewAttemptId(floor);
     const draft = reviewDraftRelativePath(flags.stage as string, flags.unit, attemptId, iteration);
     return {
-      draftAbsolute: join(record, ...draft.split("/")),
       draftRelative: toPosix(relative(pd, join(record, ...draft.split("/")))),
       draftRelativeToRecord: draft,
       recordRelative: reviewRecordRelativePath(flags.stage as string, flags.unit, attemptId, iteration),
     };
-  };
-  // Whether anything sits at the path, symlink included, without following it.
-  const lstatExists = (path: string): boolean => {
-    try {
-      lstatSync(path);
-      return true;
-    } catch {
-      return false;
-    }
   };
 
   // REVIEW_REQUESTED owns its ordinal: require a positive integer, count prior
@@ -1417,7 +1508,17 @@ function handleReview(args: string[]): void {
     // the same iteration left behind is not this dispatch's review.
     const openReviewDraftSlot = (floor: string): void => {
       const slot = reviewSlot(floor, iteration);
-      rmSync(slot.draftAbsolute, { force: true });
+      // Never through a symlinked `.aidlc-reviews`: a redirected slot is not
+      // this record's, so the request refuses instead of clearing a path
+      // outside the intent record.
+      try {
+        removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
+      } catch (e) {
+        refuseReview(
+          `Cannot start review for "${flags.stage}": the review slot ` +
+            `${slot.draftRelativeToRecord} cannot be opened (${errorMessage(e)}).`,
+        );
+      }
       reviewFile = slot.draftRelative;
     };
     try {
@@ -2156,20 +2257,26 @@ function handleReview(args: string[]): void {
           recorded_at: isoTimestamp(),
         };
         const serialized = serializeReviewRecord(record);
-        const recordAbsolute = join(
-          recordDir(pd) as string,
-          ...slot.recordRelative.split("/"),
-        );
-        mkdirSync(dirname(recordAbsolute), { recursive: true });
-        writeFileSync(recordAbsolute, serialized, "utf-8");
+        // The record is written through no symlinked component: a redirected
+        // `.aidlc-reviews` refuses the completion instead of writing the
+        // review outside the intent record.
+        try {
+          writeRecordFileNoFollow(recordDir(pd) as string, slot.recordRelative, serialized);
+        } catch (e) {
+          refuseReview(
+            `Cannot record the verdict for "${flags.stage}": the review record ` +
+              `${slot.recordRelative} cannot be written (${errorMessage(e)}).`,
+          );
+        }
         fields["Review Record"] = slot.recordRelative;
         fields["Review Record Digest"] = reviewRecordDigest(serialized);
         recordPath = slot.recordRelative;
       }
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
-      // The draft was the reviewer's input; the record now holds it.
+      // The draft was the reviewer's input; the record now holds it. The
+      // chain was verified when the draft was read, so this cannot redirect.
       if (body !== null && reviewFileFlag === undefined) {
-        rmSync(slot.draftAbsolute, { force: true });
+        removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
       }
     }, intent, space);
   } catch (e) {

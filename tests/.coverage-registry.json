@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 877,
+    "total": 895,
     "enumeratedByClass": {
-      "function": 579,
+      "function": 597,
       "audit": 91,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 350,
+      "function": 359,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -1165,6 +1165,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:activeSummaryAuthorizationForRecordPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:activeUnitCheckpoint",
       "minMechanism": "none",
       "coveredBy": [
@@ -1574,6 +1586,10 @@
         {
           "file": "tests/unit/t320-review-confirmation-deadlock.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1814,6 +1830,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearSummaryAuthorization",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3311,6 +3339,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isSummaryAuthorizationId",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isTeamUnitOwnership",
       "minMechanism": "none",
       "coveredBy": [
@@ -4626,6 +4666,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readSummaryAuthorization",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readUnitClaimRegistryCache",
       "minMechanism": "none",
       "coveredBy": [
@@ -4727,6 +4779,13 @@
     {
       "unitClass": "function",
       "unitId": "function:recordDirMatches",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordFileTargetOrThrow",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4877,6 +4936,13 @@
     {
       "unitClass": "function",
       "unitId": "function:removeField",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:removeRecordFileNoFollow",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -6097,6 +6163,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SUMMARY_AUTHORIZATION_DIR",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SUMMARY_AUTHORIZATION_FIELD",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SUMMARY_CONFIRMATION_CHECKPOINT",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6113,6 +6193,70 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SUMMARY_EVIDENCE_EVENTS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryAttemptFloors",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryAttemptIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryAuthorizationId",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryAuthorizationRecordPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryAuthorizationRelativePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryAuthorizationTargetOrThrow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -6145,6 +6289,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryScopeForRecordPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7051,6 +7207,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeRecordFileNoFollow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeSessionBinding",
       "minMechanism": "none",
       "coveredBy": [
@@ -7121,6 +7284,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSummaryAuthorization",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7565,6 +7740,10 @@
         },
         {
           "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8823,6 +9002,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t31.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t332-summary-authorization.test.ts",
           "mechanism": "cli"
         }
       ],

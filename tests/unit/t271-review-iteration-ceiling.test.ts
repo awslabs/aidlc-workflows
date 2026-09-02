@@ -36,6 +36,7 @@ import {
   existsSync,
   linkSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   symlinkSync,
@@ -1273,6 +1274,51 @@ describe("t271 review iteration ceiling", () => {
     // The retried dispatch's review completes normally.
     expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
     expect(readFileSync(artifact, "utf-8")).toBe(original);
+  });
+
+  test("a symlinked .aidlc-reviews container refuses the request and the completion, touching nothing outside", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const outside = join(createTestProject(), "elsewhere");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "keep.md"), "keep\n", "utf-8");
+    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-reviews"));
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    // The request cannot open its slot through the link.
+    const requested = runReview(proj, request);
+    expect(requested.status).not.toBe(0);
+    expect(requested.stderr).toContain("is a symlink");
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(0);
+    expect(readdirSync(outside)).toEqual(["keep.md"]);
+    // With the link removed the request opens; re-linked, the completion cannot
+    // write its record through it either.
+    unlinkSync(join(seededRecordDir(proj), ".aidlc-reviews"));
+    const opened = runReview(proj, request);
+    expect(opened.status, opened.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(opened.stdout) as { reviewFile: string };
+    const draft = join(proj, reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(draft, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+    renameSync(join(seededRecordDir(proj), ".aidlc-reviews"), join(proj, "detached-reviews"));
+    symlinkSync(outside, join(seededRecordDir(proj), ".aidlc-reviews"));
+    const completed = runReview(proj, [...request, "--verdict", "READY"], {
+      AIDLC_TEST_NO_REVIEW_FILE: "1",
+    });
+    expect(completed.status).not.toBe(0);
+    expect(completed.stderr).toContain("is a symlink");
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+    expect(readdirSync(outside)).toEqual(["keep.md"]);
+    unlinkSync(join(seededRecordDir(proj), ".aidlc-reviews"));
+    renameSync(join(proj, "detached-reviews"), join(seededRecordDir(proj), ".aidlc-reviews"));
+    const recorded = runReview(proj, [...request, "--verdict", "READY"], {
+      AIDLC_TEST_NO_REVIEW_FILE: "1",
+    });
+    expect(recorded.status, recorded.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
   });
 
   test("a review file that is not a plain file is refused, never read through", () => {

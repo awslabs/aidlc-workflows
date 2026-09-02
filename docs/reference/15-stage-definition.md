@@ -134,12 +134,23 @@ and a later human turn, binding it to the questions-file digest and its recorded
 `Hash Scope` (`confirmed-content-v1` for the normalized canonical questions
 content, including all visible Q<n> and feedback sections in file order; one
 post-summary `Assumption Confirmation` section is excluded; unscoped legacy
-receipts use the whole-file SHA-256). Completion refuses a missing or stale receipt, a changed
-confirmed section or forbidden heading, or a declared artifact without a native
-write after the receipt. A legacy in-flight receipt must be re-confirmed to
-create a scoped receipt before that permitted append can be accepted. Per-unit stages require one
-unit-scoped receipt per applicable Unit; isolated runs use the same check with
-their `single-stage:<slug>` workflow identity.
+receipts use the whole-file SHA-256). A `Looks correct` receipt also carries a
+`Summary Authorization Id` (a digest of the attempt, stage, Unit, workflow,
+questions path, confirmed content, and choice) that becomes the scope's active
+authorization; the write-audit hook stamps that id on every later
+`ARTIFACT_CREATED`/`ARTIFACT_UPDATED` row for the stage's outputs. Completion
+refuses a missing or stale receipt, a changed confirmed section or forbidden
+heading, or a declared artifact whose newest native write does not carry the
+current receipt's id (the output does not descend from the current
+confirmation). Identical re-confirmations mint the same id, so a repeated
+`Looks correct` reaffirms instead of revoking; changed answers mint a new id, so
+the outputs must be saved again under it; the order in which the receipt and the
+writes landed decides nothing. A legacy receipt without an id still requires a
+native write after the receipt, and a legacy in-flight receipt must be
+re-confirmed to create a scoped receipt before that permitted append can be
+accepted. Per-unit stages require one unit-scoped receipt per applicable Unit;
+isolated runs use the same check with their `single-stage:<slug>` workflow
+identity.
 
 ### `workspace_requires`
 
