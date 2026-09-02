@@ -119,10 +119,16 @@ const manifest: HarnessManifest = {
   ],
 
   // AGENTS.md at the project root — Devin's primary rules file, read
-  // automatically by CLI, Devin Local and Devin Cloud. NOTE the 32 KiB always-on
-  // cap (CLI changelog v2026.4.17-0): an oversized always-on file is TRUNCATED
-  // with a path hint rather than rejected, so onboarding must stay well under it.
-  // A guard in tests asserts this.
+  // automatically by CLI, Devin Local and Devin Cloud. NOTE the always-on cap
+  // (CLI changelog v2026.4.17-0 documents 32 KiB): an oversized always-on file is
+  // TRUNCATED with a path hint rather than rejected.
+  //
+  // ⚠ MEASURED 2026-09-02: the effective threshold is roughly HALF the documented
+  // figure, and the file this emits (19,908 bytes) IS truncated live on 3000.6.7,
+  // while 15,309 is not. The t331 guard only asserts the 32 KiB vendor ceiling, so
+  // it passes anyway — see DEVIN-FACTS.md § 18.1 and the guide. Likely a budget
+  // SHARED with every other always-on rule (Devin imports ~/.claude/CLAUDE.md by
+  // default), which would make the usable size depend on the user's own files.
   onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
 
   // Generated stage/scope runners are USER-invocable only. Devin has NO

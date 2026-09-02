@@ -49,11 +49,32 @@ describe("devin distribution shape", () => {
     expect(existsSync(join(DIST, hj.harnessDir))).toBe(true);
   });
 
-  test("AGENTS.md is at the dist root and under Devin's 32 KiB always-on cap", () => {
-    // Devin CLI caps an always-on rule file at 32 KiB and TRUNCATES the overflow
-    // with a path hint rather than erroring (CLI changelog v2026.4.17-0). The V1
-    // Windsurf package shipped a 135,044-byte AGENTS.md = 4.1x the cap, so ~3/4 of
-    // the methodology silently never reached the model.
+  test("AGENTS.md is at the dist root and under the vendor-documented 32 KiB ceiling", () => {
+    // Devin CLI TRUNCATES an oversized always-on rule rather than erroring (CLI
+    // changelog v2026.4.17-0, documented as 32 KiB). The V1 Windsurf package shipped
+    // a 135,044-byte AGENTS.md = 4.1x that, so ~3/4 of the methodology silently never
+    // reached the model. This assertion is the vendor ceiling and nothing more.
+    //
+    // ⚠ PASSING THIS DOES NOT MEAN THE FILE IS NOT TRUNCATED. Measured live on CLI
+    // 3000.6.7 by probing for the binary's own `Rule content truncated` marker in the
+    // injected context (a clean 65-byte control returns NO, so the instrument is
+    // sound):
+    //
+    //     15,309 bytes -> NOT truncated
+    //     19,908 bytes -> TRUNCATED     <- the size this harness actually ships
+    //
+    // So the effective threshold is roughly HALF the documented figure, and today's
+    // emitted AGENTS.md is over it. The best explanation consistent with every data
+    // point -- not proven -- is that the ~32 KiB budget is SHARED across all
+    // always-on rules rather than per file: `~/.claude/CLAUDE.md` is always-on too
+    // (Devin imports it by default) and was 11,253 bytes on the measuring machine,
+    // which puts the total just over 32,768 at 19,908 and comfortably under at 15,309.
+    //
+    // Fixing it is a cross-harness design decision, not a devin tweak: every harness's
+    // onboarding file is 18-19.4 KB because they all render the same
+    // core/templates/onboarding.md, and devin is simply the only one with a hard cap.
+    // The obvious lever is `## AI-DLC Structure`, 10,570 bytes = 53% of the file, which
+    // could move to a load-on-demand reference. See DEVIN-FACTS.md § 18.1.
     const p = join(DIST, "AGENTS.md");
     expect(existsSync(p)).toBe(true);
     expect(readFileSync(p).byteLength).toBeLessThan(32768);

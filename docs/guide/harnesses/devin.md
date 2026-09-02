@@ -177,13 +177,37 @@ because Devin stopped deduplicating same-named skills in CLI v3000.2.17).
   `.windsurf/`. It is not used here only because `AGENTS.md` is already always-on
   and already carries the pointer, and neither surface expands `@`-imports - so a
   second file would spend context restating the same thing.
-- **Keep `AGENTS.md` small; there is a 32 KiB always-on budget.** Per the Devin
-  CLI changelog (v2026.4.17-0) an oversized always-on file is truncated with a
-  path hint rather than rejected. Treat the figure as a working budget rather than
-  a verified constant: the current docs state no limit, and it is not reproducible
-  through `devin rules show`, which returned a deliberately oversized file in
-  full. The shipped file is ~17.5 KB and a packaging test asserts it stays under
-  32 KiB, so the framework side is guarded - the caution is about what *you* add.
+- **⚠ The always-on budget is real, it is smaller than documented, and the shipped
+  `AGENTS.md` is currently over it.** The changelog (v2026.4.17-0) documents 32 KiB,
+  truncating the overflow with a path hint rather than erroring. Measured live on
+  CLI 3000.6.7 by probing the injected context for the binary's own
+  `Rule content truncated` marker (a 65-byte control returns clean, so the
+  instrument is sound):
+
+  | `AGENTS.md` | truncated? |
+  |---|---|
+  | 15,309 bytes | no |
+  | **19,908 bytes — what this harness ships today** | **yes** |
+
+  So the effective threshold is roughly **half** the documented figure. The best
+  explanation consistent with every measurement — not proven — is that the budget is
+  **shared across all always-on rules rather than per file**: Devin imports
+  `~/.claude/CLAUDE.md` by default and it is also always-on (11,253 bytes on the
+  measuring machine), which puts the total just over 32,768 at 19,908 and comfortably
+  under at 15,309. If that is right, **the budget you actually get depends on your own
+  global rules**, and the practical advice is to keep the total of every always-on
+  file — not just this one — well under 32 KiB.
+
+  Note `devin rules show` is **not** a way to check this: it returned a deliberately
+  oversized file in full at 39 KB, 60 KB, 130 KB and 260 KB with no notice, because it
+  is a raw display path that bypasses the cap.
+
+  The packaging test asserts only the 32 KiB vendor ceiling, so **passing it does not
+  mean the file is intact.** Reducing it is a cross-harness change rather than a Devin
+  tweak: every harness's onboarding file is 18-19.4 KB because they all render the same
+  `core/templates/onboarding.md`, and Devin is the only one that truncates. The obvious
+  lever is the `## AI-DLC Structure` section, 53% of the file, which could move to a
+  load-on-demand reference.
 - **Question-asking stages run inline.** Devin withholds its ask-human tool from
   subagents, so a stage that must ask the human cannot be delegated.
 - **Restricted Mode (Devin Desktop) disables every agent and every hook,

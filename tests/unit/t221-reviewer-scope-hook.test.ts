@@ -769,6 +769,71 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
+  // The arm above pins THIS harness's wiring choice: an explicit Devin-name tool
+  // list. That is a legitimate choice but it is not the underlying invariant, and a
+  // test that conflates the two rejects a correct alternative. A competing Devin
+  // harness registers the same three guards with `matcher: ""`, which fires them for
+  // EVERY tool -- broader, not narrower, and safe because the guards fail open on a
+  // tool they do not recognise: aidlc-reviewer-scope.ts's candidateStrings() ends in
+  // `default: break`, so an unmatched tool yields no candidates and no block.
+  //
+  // So this arm asserts what actually has to be true, in a form both designs satisfy:
+  //   1. all three guards are REGISTERED on PreToolUse, and
+  //   2. they SHARE one matcher (the transposition bug was two of them diverging), and
+  //   3. that matcher either fires for everything, or covers the full read+write+shell
+  //      set -- never a narrow subset like the shell alone.
+  test("Devin's three PreToolUse guards share a matcher that cannot under-cover", () => {
+    const GUARDS = ["reviewer-scope", "review-freeze", "state-transition-guard"] as const;
+    const FULL_SET = [
+      "read", "notebook_read", "edit", "apply_patch",
+      "write", "notebook_edit", "glob", "grep", "exec",
+    ];
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "devin-hooks",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+
+    for (const harness of harnesses) {
+      const wiring = JSON.parse(
+        readFileSync(join(harness.engineRoot, "hooks.v1.json"), "utf-8"),
+      ) as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+      const pre = wiring.PreToolUse ?? [];
+
+      // Match the adapter SUBCOMMAND, not the whole command string. The path spelling
+      // is a harness-author choice -- a relative `bun .devin/hooks/...` and a quoted
+      // `bun "$DEVIN_PROJECT_DIR/.devin/hooks/..."` are both valid, and the quoted form
+      // leaves a `"` before the subcommand. An endsWith on the full command silently
+      // matches neither, so the assertion would "fail" on a correctly wired tree.
+      const dispatches = (h: { command: string }, guard: string): boolean =>
+        new RegExp(`aidlc-devin-adapter\\.ts"?\\s+${guard}\\s*$`).test(h.command.trim());
+
+      const matchers = GUARDS.map((guard) => {
+        const group = pre.find((g) => g.hooks.some((h) => dispatches(h, guard)));
+        expect(group, `${harness.name}: ${guard} registered on PreToolUse`).toBeDefined();
+        return group?.matcher ?? "";
+      });
+
+      // (2) One matcher across all three, whatever it is.
+      for (let i = 1; i < matchers.length; i++) {
+        expect(
+          matchers[i],
+          `${harness.name}: ${GUARDS[i]} shares ${GUARDS[0]}'s matcher`,
+        ).toBe(matchers[0]);
+      }
+
+      // (3) Fires for everything, or covers the full set. Anything else under-covers.
+      const shared = matchers[0];
+      if (shared !== "") {
+        for (const tool of FULL_SET) {
+          expect(
+            new RegExp(`\\b${tool}\\b`).test(shared),
+            `${harness.name}: shared guard matcher "${shared}" covers ${tool}`,
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
   test("Codex hooks.json wires the adapter's reviewer-scope target on PreToolUse", () => {
     const harnesses = HARNESS_MATRIX.filter(
       (harness) => harness.capabilities.reviewerScopeRegistration === "codex-hooks",

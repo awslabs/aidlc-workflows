@@ -3,10 +3,15 @@
 //
 // AGENTS.md is Devin's PRIMARY rules file, read automatically by Devin CLI and
 // Devin Local. (Devin Cloud reads it too per the vendor docs, but this distribution
-// makes no cloud claim — untested.) It is also ALWAYS-ON, and Devin CLI caps an
-// always-on rule file at 32 KiB, TRUNCATING the overflow with a path hint rather
-// than erroring (CLI changelog v2026.4.17-0). So these fills stay tight; a test
-// asserts the rendered file is under the cap.
+// makes no cloud claim — untested.) It is also ALWAYS-ON, and Devin CLI TRUNCATES
+// an oversized always-on rule with a path hint rather than erroring (CLI changelog
+// v2026.4.17-0 documents 32 KiB). So these fills stay tight.
+//
+// ⚠ TIGHT IS NOT ENOUGH TODAY: measured on 3000.6.7, the rendered 19,908-byte file
+// IS truncated (15,309 is not), so the effective cap is about half the documented
+// one. The t331 guard only checks the 32 KiB vendor ceiling. The bulk is not these
+// fills but the shared core/templates/onboarding.md — every harness renders 18-19.4
+// KB and Devin is the only one that truncates. See DEVIN-FACTS.md § 18.1.
 //
 // Devin has no equivalent of Claude Code's `companyAnnouncements` setting (which
 // renders an orientation banner at session start), so the orientation a Claude user
