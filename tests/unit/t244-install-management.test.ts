@@ -2270,7 +2270,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(promote).not.toContain('AIDLC_RELEASE_REPOSITORY="awslabs');
   });
 
-  test("release MUST 5: publication conditionally freezes the verified draft", () => {
+  test("release MUST 5: publication re-verifies the exact verified draft", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
     const publisher = readFileSync(RELEASE_PUBLISHER, "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
@@ -2290,7 +2290,7 @@ describe("t244 Windows and completion release surfaces", () => {
       (step) => step.name === "Authenticate and verify immutable release bytes",
     );
     const promotionStep = parsed.jobs.promote.steps?.find(
-      (step) => step.name === "Conditionally publish exact verified release bytes",
+      (step) => step.name === "Publish and re-verify exact verified release bytes",
     );
     expect(verificationStep).toBeDefined();
     expect(verificationStep?.if).toBeUndefined();
@@ -2309,7 +2309,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(promote.indexOf("name: Mint release publication token"))
       .toBeLessThan(promote.indexOf("name: Re-verify release repository controls"));
     expect(promote.indexOf("name: Re-verify release repository controls"))
-      .toBeLessThan(promote.indexOf("name: Conditionally publish exact verified release bytes"));
+      .toBeLessThan(promote.indexOf("name: Publish and re-verify exact verified release bytes"));
     expect(promote).toContain(
       'sha256sum -c "$RUNNER_TEMP/aidlc-verified-release.sha256"',
     );
@@ -2321,22 +2321,28 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(publisher).toContain("release.body !== notes.body");
     expect(publisher).toContain("tag_name: options.stagingTag");
     expect(publisher).toContain("target_commitish: options.targetCommitish");
-    expect(publisher).toContain('"If-Match": etag');
-    expect(publisher).toContain("stale.status !== 412");
+    // GitHub rejects conditional headers on release updates with 400, so the
+    // publisher must never send one; safety comes from re-verification.
+    expect(publisher).not.toContain('"If-Match"');
+    expect(publisher).not.toContain("412");
     expect(publisher).toContain("tag_name: options.tag");
     expect(publisher).toContain("draft: false");
     expect(publisher).toContain("await requireTagAbsent(");
     expect(publisher).toContain("await requireTagTarget(");
-    expect(publisher).toContain("release ETag is not coupled to asset creation");
-    expect(publisher).toContain("release ETag is not coupled to asset metadata changes");
-    expect(publisher).toContain("release ETag is not coupled to asset deletion");
+    expect(publisher).toContain("aidlc-staging-");
+    expect(publisher).toContain("must be removed first");
+    expect(publisher).toContain("gh release delete");
+    expect(publisher).toContain("class PublicationEvidenceError");
     expect(publisher.match(/await verifyRemoteBytes\(/g)).toHaveLength(2);
     expect(publisher).toContain(
-      'throw new Error("draft release changed before conditional publication")',
+      "draft release changed while remote bytes were verified",
+    );
+    expect(publisher).toContain(
+      "treat it as compromised and supersede it with a corrective release",
     );
     expect(promote.indexOf("name: Authenticate and verify immutable release bytes"))
       .toBeLessThan(
-        promote.indexOf("name: Conditionally publish exact verified release bytes"),
+        promote.indexOf("name: Publish and re-verify exact verified release bytes"),
       );
     expect(promote.lastIndexOf("bun scripts/verify-release.ts candidate"))
       .toBeLessThan(promote.indexOf("bun scripts/publish-release.ts"));

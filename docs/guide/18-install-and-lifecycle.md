@@ -195,17 +195,21 @@ records the complete digest set, and runs the real installer journey from a
 separate copy. It then rechecks the untouched publication directory and creates
 the GitHub Release as a private draft after minting a fresh App token and
 revalidating the environment, immutable-release setting, and complete ruleset
-set. It verifies the draft's complete inventory and
-redownloaded bytes, and probes that release ETags change for asset creation,
-metadata changes, and deletion. It also proves a stale `If-Match` request is
-rejected before conditionally retargeting that exact verified staging draft to
-the unused guarded `v*` tag and publishing it. The protected release App is the
-creation ruleset's sole bypass; the workflow's normal token and ordinary
-repository writers have read-only or non-bypass authority. A concurrent draft
-change therefore returns `412`, and a writer cannot publish the staging draft
-as the official release. Failed staging releases remain available to the
-release owner for inspection; no automatic cleanup deletes a staging release
-or ref that may have acquired independent evidence. The bundle is intentionally outside `version.json` and
+set. It refuses to run while a staging draft from an earlier run remains,
+verifies the new draft's complete inventory and redownloaded bytes, and re-reads
+the draft to confirm nothing moved while the bytes were read. GitHub rejects
+conditional headers on release updates, so the publish update that retargets
+the verified staging draft to the unused guarded `v*` tag is unconditional and
+is followed by a full re-verification of the published release (identity, asset
+ids, tag commit, and bytes). The protected release App is the creation
+ruleset's sole bypass; the workflow's normal token and ordinary repository
+writers have read-only or non-bypass authority, so a writer cannot publish the
+staging draft as the official release. A replacement in the final window is
+detected after publication and reported as a compromised release to supersede.
+Ordinary failures delete the staging draft this run created; a draft whose
+content changed under the publisher is retained as evidence, the log names the
+`gh release delete` command that removes it, and the next run refuses to stage
+until it is gone. The bundle is intentionally outside `version.json` and
 `checksums.txt`: those files cover the installable artifacts, while the bundle
 is its own Sigstore trust channel.
 TLS, SHA-256, and that provenance are the permanent trust model. OS

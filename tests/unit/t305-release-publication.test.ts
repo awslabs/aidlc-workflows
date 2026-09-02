@@ -14,12 +14,12 @@ type MockAsset = {
 };
 
 type MockOptions = {
-  coupleAssetEtag?: boolean;
   finalTagPreexists?: boolean;
-  ignoreIfMatch?: boolean;
+  leftoverStagingDrafts?: string[];
+  failFinalTagLookupAfterUpload?: boolean;
   malformedPublishResponse?: boolean;
   mutateDuringVerification?: boolean;
-  mutateNotesAfterSupport?: boolean;
+  mutateNotesAfterVerification?: boolean;
   publishErrorBodyFails?: boolean;
   publishReturnsError?: boolean;
   raceBeforePublish?: boolean;
@@ -27,6 +27,7 @@ type MockOptions = {
 
 type MockState = {
   deleted: boolean;
+  listed: boolean;
   tag: string;
   targetCommitish: string;
   name: string;
@@ -80,6 +81,7 @@ function serveMock(options: MockOptions = {}): {
 } {
   const state: MockState = {
     deleted: false,
+    listed: false,
     tag: "aidlc-staging-run-1",
     targetCommitish: "1".repeat(40),
     name: "Release v1.2.3",
@@ -99,10 +101,29 @@ function serveMock(options: MockOptions = {}): {
   let baseUrl = "";
   let draftDownloadCount = 0;
   let mutateOnNextReleaseRead = false;
+  let finalTagLookups = 0;
   const etag = (): string => `W/"release-${revision}"`;
-  const ifMatchEtag = (): string => etag().replace(/^W\//, "");
   const mutateAssetState = (): void => {
-    if (options.coupleAssetEtag !== false) revision++;
+    revision++;
+  };
+  // GitHub rejects every conditional header on unsafe methods with this exact
+  // 400; a publisher that relies on If-Match can never publish.
+  const conditionalRejection = (request: Request): Response | null => {
+    if (request.method === "GET") return null;
+    for (const header of ["if-match", "if-none-match", "if-unmodified-since", "if-modified-since"]) {
+      if (request.headers.has(header)) {
+        return json({
+          message: "Bad Request",
+          documentation_url:
+            "https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests-if-appropriate",
+          errors: [
+            "Conditional request headers are not allowed in unsafe requests unless supported by the endpoint",
+          ],
+          status: "400",
+        }, 400);
+      }
+    }
+    return null;
   };
   const release = () => ({
     id: 1,
@@ -130,6 +151,8 @@ function serveMock(options: MockOptions = {}): {
       if (request.headers.get("authorization") !== "Bearer test-token") {
         return json({ message: "unauthorized" }, 401);
       }
+      const rejected = conditionalRejection(request);
+      if (rejected) return rejected;
 
       if (
         url.pathname === "/repos/owner/repo/releases/generate-notes" &&
@@ -150,6 +173,19 @@ function serveMock(options: MockOptions = {}): {
           name: "Release v1.2.3",
           body: "generated notes\n",
         });
+      }
+
+      if (url.pathname === "/repos/owner/repo/releases" && method === "GET") {
+        state.listed = true;
+        return json([
+          ...(options.leftoverStagingDrafts ?? []).map((tag, index) => ({
+            id: 900 + index,
+            tag_name: tag,
+            draft: true,
+          })),
+          { id: 800, tag_name: "v1.0.0", draft: false },
+          { id: 801, tag_name: "aidlc-staging-published-elsewhere", draft: false },
+        ]);
       }
 
       if (url.pathname === "/repos/owner/repo/releases" && method === "POST") {
@@ -192,6 +228,14 @@ function serveMock(options: MockOptions = {}): {
         /^\/repos\/owner\/repo\/git\/ref\/tags\/([^/]+)$/.exec(url.pathname);
       if (tagMatch && method === "GET") {
         const tag = decodeURIComponent(tagMatch[1]);
+        if (tag === "v1.2.3") {
+          finalTagLookups++;
+          // The first lookup runs before the draft exists; the second is the
+          // pre-publication recheck after every asset was uploaded.
+          if (options.failFinalTagLookupAfterUpload && finalTagLookups === 2) {
+            return json({ message: "upstream unavailable" }, 502);
+          }
+        }
         const target = tag === "v1.2.3"
           ? state.finalTagTarget
           : tag === "aidlc-staging-run-1"
@@ -248,7 +292,10 @@ function serveMock(options: MockOptions = {}): {
               state: "uploaded",
             });
           }
-          if (state.draft && options.mutateDuringVerification) {
+          if (
+            state.draft &&
+            (options.mutateDuringVerification || options.mutateNotesAfterVerification)
+          ) {
             draftDownloadCount++;
             if (draftDownloadCount === 3) mutateOnNextReleaseRead = true;
           }
@@ -281,15 +328,22 @@ function serveMock(options: MockOptions = {}): {
         if (method === "GET") {
           if (mutateOnNextReleaseRead) {
             mutateOnNextReleaseRead = false;
-            state.verificationMutationInjected = true;
-            if (state.assets[0]) {
-              state.assets[0].bytes = new TextEncoder().encode("tampered!\n");
+            if (options.mutateNotesAfterVerification) {
+              state.notesMutationInjected = true;
+              state.name = "Injected title";
+              state.body = "Injected body\n";
+            } else {
+              state.verificationMutationInjected = true;
+              if (state.assets[0]) {
+                state.assets[0].bytes = new TextEncoder().encode("tampered!\n");
+              }
             }
             revision++;
           }
           return json(release(), 200, { ETag: etag() });
         }
         if (method === "DELETE") {
+          if (!state.draft) return json({ message: "immutable releases cannot be deleted" }, 422);
           state.deleted = true;
           return new Response(null, { status: 204 });
         }
@@ -308,15 +362,9 @@ function serveMock(options: MockOptions = {}): {
           ) {
             state.raceInjected = true;
             if (state.assets[0]) {
-              state.assets[0].bytes = new TextEncoder().encode("concurrent replacement\n");
+              state.assets[0].bytes = new TextEncoder().encode("tampered!\n");
             }
             revision++;
-          }
-          if (
-            !options.ignoreIfMatch &&
-            request.headers.get("if-match") !== ifMatchEtag()
-          ) {
-            return json({ message: "precondition failed" }, 412);
           }
           if (body.draft === false) {
             if (
@@ -336,16 +384,6 @@ function serveMock(options: MockOptions = {}): {
             state.immutable = true;
           }
           revision++;
-          if (
-            body.draft === true &&
-            options.mutateNotesAfterSupport &&
-            !state.notesMutationInjected
-          ) {
-            state.notesMutationInjected = true;
-            state.name = "Injected title";
-            state.body = "Injected body\n";
-            revision++;
-          }
           if (body.draft === false && options.publishReturnsError) {
             return json({ message: "response lost after commit" }, 502);
           }
@@ -389,8 +427,8 @@ async function run(
   });
 }
 
-describe("t305 conditional immutable release publication", () => {
-  test("publishes only the exact verified draft through a matching ETag", async () => {
+describe("t305 verified immutable release publication", () => {
+  test("publishes the exact verified draft without conditional request headers", async () => {
     const { baseUrl, state } = serveMock();
     const result = await run(baseUrl);
 
@@ -400,6 +438,7 @@ describe("t305 conditional immutable release publication", () => {
       "install.sh",
       "version.json",
     ]);
+    expect(state.listed).toBe(true);
     expect(state.deleted).toBe(false);
     expect(state.tag).toBe("v1.2.3");
     expect(state.name).toBe("Release v1.2.3");
@@ -412,45 +451,73 @@ describe("t305 conditional immutable release publication", () => {
     expect(state.assets.map((asset) => asset.name).sort()).toEqual(result.assets);
   });
 
-  test("a concurrent draft mutation returns 412 and retains only the staging draft", async () => {
+  test("refuses to stage while a draft from an earlier run remains", async () => {
+    const { baseUrl, state } = serveMock({
+      leftoverStagingDrafts: ["aidlc-staging-run-0", "aidlc-staging-old-9"],
+    });
+    await expect(run(baseUrl)).rejects.toThrow(
+      "staging drafts from an earlier run must be removed first: aidlc-staging-old-9, aidlc-staging-run-0; " +
+        "inspect each, then run: gh release delete <staging-tag> --repo owner/repo --yes",
+    );
+
+    expect(state.assets).toEqual([]);
+    expect(state.stagingTagTarget).toBeNull();
+    expect(state.notesTag).toBeNull();
+  });
+
+  test("deletes its own staging draft after an ordinary API failure", async () => {
+    const { baseUrl, state } = serveMock({ failFinalTagLookupAfterUpload: true });
+    await expect(run(baseUrl)).rejects.toThrow("GitHub API 502");
+
+    expect(state.assets.length).toBe(3);
+    expect(state.deleted).toBe(true);
+    expect(state.draft).toBe(true);
+    expect(state.immutable).toBe(false);
+    expect(state.finalTagTarget).toBeNull();
+  });
+
+  test("retains the draft as evidence when its bytes change during verification", async () => {
+    const { baseUrl, state } = serveMock({ mutateDuringVerification: true });
+    await expect(run(baseUrl)).rejects.toThrow(
+      "draft release changed while remote bytes were verified",
+    );
+
+    expect(state.verificationMutationInjected).toBe(true);
+    expect(state.deleted).toBe(false);
+    expect(state.draft).toBe(true);
+    expect(state.immutable).toBe(false);
+    expect(state.finalTagTarget).toBeNull();
+  });
+
+  test("retains the draft as evidence when its notes change before publication", async () => {
+    const { baseUrl, state } = serveMock({ mutateNotesAfterVerification: true });
+    await expect(run(baseUrl)).rejects.toThrow(
+      "draft release changed while remote bytes were verified",
+    );
+
+    expect(state.notesMutationInjected).toBe(true);
+    expect(state.name).toBe("Injected title");
+    expect(state.deleted).toBe(false);
+    expect(state.draft).toBe(true);
+    expect(state.finalTagTarget).toBeNull();
+  });
+
+  test("reports a publication whose assets were replaced in the final window as compromised", async () => {
+    // GitHub cannot make the publish update conditional, so a replacement
+    // between the last verification read and the update is detected after the
+    // fact: the immutable release exists and must be superseded.
     const { baseUrl, state } = serveMock({ raceBeforePublish: true });
     await expect(run(baseUrl)).rejects.toThrow(
-      "draft release changed before conditional publication",
+      "published release v1.2.3 differs from the verified candidate " +
+        "(downloaded release asset differs for checksums.txt); " +
+        "treat it as compromised and supersede it with a corrective release",
     );
 
     expect(state.raceInjected).toBe(true);
-    expect(state.draft).toBe(true);
-    expect(state.immutable).toBe(false);
-    expect(state.tag).toBe("aidlc-staging-run-1");
-    expect(state.finalTagTarget).toBeNull();
-    expect(state.stagingTagTarget).toBe("1".repeat(40));
     expect(state.deleted).toBe(false);
-  });
-
-  test("fails closed when the API ignores If-Match", async () => {
-    const { baseUrl, state } = serveMock({ ignoreIfMatch: true });
-    await expect(run(baseUrl)).rejects.toThrow(
-      "release API did not enforce a stale If-Match precondition",
-    );
-
-    expect(state.draft).toBe(true);
-    expect(state.immutable).toBe(false);
-    expect(state.finalTagTarget).toBeNull();
-    expect(state.stagingTagTarget).toBe("1".repeat(40));
-    expect(state.deleted).toBe(false);
-  });
-
-  test("fails closed when release ETags are not coupled to asset mutations", async () => {
-    const { baseUrl, state } = serveMock({ coupleAssetEtag: false });
-    await expect(run(baseUrl)).rejects.toThrow(
-      "release ETag did not change after asset uploads",
-    );
-
-    expect(state.draft).toBe(true);
-    expect(state.immutable).toBe(false);
-    expect(state.finalTagTarget).toBeNull();
-    expect(state.stagingTagTarget).toBe("1".repeat(40));
-    expect(state.deleted).toBe(false);
+    expect(state.draft).toBe(false);
+    expect(state.immutable).toBe(true);
+    expect(state.tag).toBe("v1.2.3");
   });
 
   test("refuses an occupied official tag before creating a staging release", async () => {
@@ -471,20 +538,11 @@ describe("t305 conditional immutable release publication", () => {
 
     expect(result.tag).toBe("v1.2.3");
     expect(state.tag).toBe("v1.2.3");
+    expect(state.deleted).toBe(false);
     expect(state.draft).toBe(false);
     expect(state.immutable).toBe(true);
     expect(state.finalTagTarget).toBe("1".repeat(40));
     expect(state.stagingTagTarget).toBe("1".repeat(40));
-  });
-
-  test("rejects draft release-note mutation before publication", async () => {
-    const { baseUrl, state } = serveMock({ mutateNotesAfterSupport: true });
-    await expect(run(baseUrl)).rejects.toThrow("release identity mismatch");
-
-    expect(state.notesMutationInjected).toBe(true);
-    expect(state.name).toBe("Injected title");
-    expect(state.draft).toBe(true);
-    expect(state.finalTagTarget).toBeNull();
   });
 
   test("recovers a committed release after a malformed 200 response", async () => {
@@ -494,6 +552,7 @@ describe("t305 conditional immutable release publication", () => {
     expect(result.tag).toBe("v1.2.3");
     expect(state.name).toBe("Release v1.2.3");
     expect(state.body).toBe("generated notes\n");
+    expect(state.deleted).toBe(false);
     expect(state.draft).toBe(false);
     expect(state.immutable).toBe(true);
     expect(state.finalTagTarget).toBe("1".repeat(40));
@@ -504,20 +563,9 @@ describe("t305 conditional immutable release publication", () => {
     const result = await run(baseUrl);
 
     expect(result.tag).toBe("v1.2.3");
+    expect(state.deleted).toBe(false);
     expect(state.draft).toBe(false);
     expect(state.immutable).toBe(true);
     expect(state.finalTagTarget).toBe("1".repeat(40));
-  });
-
-  test("rejects a same-size asset replacement during remote verification", async () => {
-    const { baseUrl, state } = serveMock({ mutateDuringVerification: true });
-    await expect(run(baseUrl)).rejects.toThrow(
-      "draft release changed while remote bytes were verified",
-    );
-
-    expect(state.verificationMutationInjected).toBe(true);
-    expect(state.draft).toBe(true);
-    expect(state.immutable).toBe(false);
-    expect(state.finalTagTarget).toBeNull();
   });
 });

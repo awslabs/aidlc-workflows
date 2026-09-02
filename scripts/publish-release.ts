@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { createReadStream, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -444,20 +444,57 @@ async function verifyRemoteBytes(
   }
 }
 
-async function conditionalPatch(
-  releaseUrl: string,
+// Raised when the remote release no longer matches the bytes and metadata
+// this run uploaded and verified. The staging draft (or the published release)
+// is then evidence of interference and is retained for the release owner.
+class PublicationEvidenceError extends Error {}
+
+function assertSameAssets(
+  verified: ReleaseRecord,
+  current: ReleaseRecord,
+  when: string,
+): void {
+  const ids = (record: ReleaseRecord) =>
+    JSON.stringify(
+      [...record.assets]
+        .sort((a, b) => a.id - b.id)
+        .map((asset) => [asset.id, asset.name, asset.size, asset.state]),
+    );
+  if (ids(verified) !== ids(current)) {
+    throw new PublicationEvidenceError(
+      `release assets changed ${when}; the verified inventory was replaced`,
+    );
+  }
+}
+
+async function leftoverStagingDrafts(
+  releasesUrl: string,
   token: string,
-  etag: string,
-  body: Record<string, unknown>,
-): Promise<Response> {
-  return await request(releaseUrl, token, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      "If-Match": etag,
-    },
-    body: JSON.stringify(body),
-  });
+): Promise<string[]> {
+  const leftovers: string[] = [];
+  let next: string | null = `${releasesUrl}?per_page=100`;
+  while (next) {
+    const response = await request(next, token);
+    if (response.status !== 200) throw await responseFailure(response);
+    const page = await response.json();
+    if (!Array.isArray(page)) throw new Error("release list API response must be an array");
+    for (const entry of page) {
+      if (
+        entry &&
+        typeof entry === "object" &&
+        "draft" in entry &&
+        entry.draft === true &&
+        "tag_name" in entry &&
+        typeof entry.tag_name === "string" &&
+        entry.tag_name.startsWith("aidlc-staging-")
+      ) {
+        leftovers.push(entry.tag_name);
+      }
+    }
+    const link = response.headers.get("link") ?? "";
+    next = /<([^>]+)>;\s*rel="next"/.exec(link)?.[1] ?? null;
+  }
+  return leftovers.sort();
 }
 
 export async function publishRelease(
@@ -497,6 +534,17 @@ export async function publishRelease(
     options.stagingTag,
     options.token,
   );
+  // A leftover draft means an earlier run stopped after creating evidence or
+  // failed to clean up. It must be inspected and removed deliberately before
+  // another candidate is staged, so drafts never accumulate unnoticed.
+  const leftovers = await leftoverStagingDrafts(releasesUrl, options.token);
+  if (leftovers.length > 0) {
+    throw new Error(
+      `staging draft${leftovers.length === 1 ? "" : "s"} from an earlier run must be removed first: ${
+        leftovers.join(", ")
+      }; inspect each, then run: gh release delete <staging-tag> --repo ${options.repository} --yes`,
+    );
+  }
   const notes = releaseNotes(
     (await requestJson<unknown>(
       `${releasesUrl}/generate-notes`,
@@ -535,33 +583,46 @@ export async function publishRelease(
     `repos/${options.repository}/releases/${release.id}`,
   );
   const assetUploadUrl = uploadEndpoint(apiBaseUrl, release.upload_url);
+  let verified: ReleaseRecord | null = null;
+  let publishAttempted = false;
 
   const completePublished = async (
     candidate: ReleaseRecord,
   ): Promise<PublishedRelease> => {
-    assertReleaseIdentity(
-      candidate,
-      options.tag,
-      options.targetCommitish,
-      notes,
-      false,
-      true,
-    );
-    assertAssetInventory(candidate, local);
-    await requireTagTarget(
-      apiBaseUrl,
-      options.repository,
-      options.tag,
-      options.targetCommitish,
-      options.token,
-    );
-    await verifyRemoteBytes(
-      apiBaseUrl,
-      options.repository,
-      candidate,
-      local,
-      options.token,
-    );
+    try {
+      assertReleaseIdentity(
+        candidate,
+        options.tag,
+        options.targetCommitish,
+        notes,
+        false,
+        true,
+      );
+      assertAssetInventory(candidate, local);
+      if (verified) assertSameAssets(verified, candidate, "between verification and publication");
+      await requireTagTarget(
+        apiBaseUrl,
+        options.repository,
+        options.tag,
+        options.targetCommitish,
+        options.token,
+      );
+      await verifyRemoteBytes(
+        apiBaseUrl,
+        options.repository,
+        candidate,
+        local,
+        options.token,
+      );
+    } catch (error) {
+      // The release is already public and immutable: it cannot be withdrawn,
+      // only superseded. Report it as a compromised publication.
+      throw new PublicationEvidenceError(
+        `published release ${options.tag} differs from the verified candidate (${
+          error instanceof Error ? error.message : String(error)
+        }); treat it as compromised and supersede it with a corrective release`,
+      );
+    }
     log(`published immutable release ${options.tag} with ${local.length} verified assets`);
     return {
       id: candidate.id,
@@ -594,6 +655,52 @@ export async function publishRelease(
     return await completePublished(observed);
   };
 
+  // Deletes the staging draft after a failure this run caused (API errors,
+  // network faults, malformed responses). Anything that indicates another
+  // principal touched the release is retained instead: a draft whose content
+  // no longer matches what was uploaded, a release that is no longer our
+  // draft, or any state reached after publication was attempted.
+  const cleanupOrRetain = async (error: unknown): Promise<void> => {
+    const reason = error instanceof Error ? error.message : String(error);
+    const retained = (why: string) =>
+      log(
+        `release ${release.id} for staging tag ${options.stagingTag} was retained for inspection: ${why}; ` +
+          `remove it deliberately with: gh release delete ${options.stagingTag} --repo ${options.repository} --yes`,
+      );
+    if (publishAttempted) {
+      retained("publication was attempted, so the release may already be public");
+      return;
+    }
+    if (error instanceof PublicationEvidenceError) {
+      retained(reason);
+      return;
+    }
+    let observed: ReleaseRecord;
+    try {
+      observed = (await getRelease(releaseUrl, options.token)).release;
+    } catch (observationError) {
+      retained(
+        `its current state could not be read: ${
+          observationError instanceof Error
+            ? observationError.message
+            : String(observationError)
+        }`,
+      );
+      return;
+    }
+    if (!observed.draft || observed.immutable || observed.tag_name !== options.stagingTag) {
+      retained("it is no longer this run's staging draft");
+      return;
+    }
+    const deleted = await request(releaseUrl, options.token, { method: "DELETE" });
+    if (deleted.status !== 204) {
+      await deleted.text();
+      retained(`deleting it returned HTTP ${deleted.status}`);
+      return;
+    }
+    log(`deleted staging draft ${options.stagingTag} after the failure: ${reason}`);
+  };
+
   try {
     assertReleaseIdentity(
       release,
@@ -603,8 +710,6 @@ export async function publishRelease(
       true,
       false,
     );
-    const initial = await getRelease(releaseUrl, options.token);
-
     for (const asset of local) {
       await uploadAsset(
         assetUploadUrl,
@@ -613,132 +718,58 @@ export async function publishRelease(
         Bun.file(asset.path),
       );
     }
-    let current = await getRelease(releaseUrl, options.token);
-    if (current.etag === initial.etag) {
-      throw new Error("release ETag did not change after asset uploads");
-    }
 
-    const probeName = `aidlc-publication-etag-probe-${randomUUID()}.txt`;
-    const probe = await uploadAsset(
-      assetUploadUrl,
-      options.token,
-      probeName,
-      new TextEncoder().encode("aidlc publication ETag probe\n"),
-    );
-    const afterProbe = await getRelease(releaseUrl, options.token);
-    if (afterProbe.etag === current.etag) {
-      throw new Error("release ETag is not coupled to asset creation");
-    }
-
-    const renamedProbe = `${probeName}.renamed`;
-    const renamed = await requestJson<unknown>(
-      apiUrl(
+    // Verify the exact remote state: identity, inventory, and every byte.
+    const snapshot = await getRelease(releaseUrl, options.token);
+    try {
+      assertReleaseIdentity(
+        snapshot.release,
+        options.stagingTag,
+        options.targetCommitish,
+        notes,
+        true,
+        false,
+      );
+      assertAssetInventory(snapshot.release, local);
+      await verifyRemoteBytes(
         apiBaseUrl,
-        `repos/${options.repository}/releases/assets/${probe.id}`,
-      ),
-      options.token,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: renamedProbe }),
-      },
-      200,
-    );
-    if (assetRecord(renamed.value).name !== renamedProbe) {
-      throw new Error("release asset metadata probe was not applied");
-    }
-    const afterRename = await getRelease(releaseUrl, options.token);
-    if (afterRename.etag === afterProbe.etag) {
-      throw new Error("release ETag is not coupled to asset metadata changes");
-    }
-
-    const deleted = await request(
-      apiUrl(
-        apiBaseUrl,
-        `repos/${options.repository}/releases/assets/${probe.id}`,
-      ),
-      options.token,
-      { method: "DELETE" },
-    );
-    if (deleted.status !== 204) throw await responseFailure(deleted);
-    current = await getRelease(releaseUrl, options.token);
-    if (current.etag === afterRename.etag) {
-      throw new Error("release ETag is not coupled to asset deletion");
-    }
-    assertReleaseIdentity(
-      current.release,
-      options.stagingTag,
-      options.targetCommitish,
-      notes,
-      true,
-      false,
-    );
-    assertAssetInventory(current.release, local);
-
-    const supported = await conditionalPatch(
-      releaseUrl,
-      options.token,
-      current.etag,
-      { draft: true },
-    );
-    if (supported.status !== 200) throw await responseFailure(supported);
-    release = releaseRecord(await supported.json());
-    assertReleaseIdentity(
-      release,
-      options.stagingTag,
-      options.targetCommitish,
-      notes,
-      true,
-      false,
-    );
-    assertAssetInventory(release, local);
-
-    current = await getRelease(releaseUrl, options.token);
-    const stale = await conditionalPatch(
-      releaseUrl,
-      options.token,
-      `"aidlc-stale-etag-${randomUUID()}"`,
-      { draft: true },
-    );
-    if (stale.status !== 412) {
-      throw new Error(
-        `release API did not enforce a stale If-Match precondition; status ${stale.status}`,
+        options.repository,
+        snapshot.release,
+        local,
+        options.token,
+      );
+    } catch (error) {
+      if (error instanceof PublicationEvidenceError) throw error;
+      throw new PublicationEvidenceError(
+        error instanceof Error ? error.message : String(error),
       );
     }
-    await stale.text();
-    const afterStale = await getRelease(releaseUrl, options.token);
-    if (afterStale.etag !== current.etag) {
-      throw new Error("stale If-Match request changed the draft release");
-    }
-    assertReleaseIdentity(
-      afterStale.release,
-      options.stagingTag,
-      options.targetCommitish,
-      notes,
-      true,
-      false,
-    );
-    assertAssetInventory(afterStale.release, local);
-    await verifyRemoteBytes(
-      apiBaseUrl,
-      options.repository,
-      afterStale.release,
-      local,
-      options.token,
-    );
+    // The draft must not have moved while its bytes were read. GitHub does not
+    // honour If-Match on release updates (it answers 400), so this re-read is
+    // the last observation before publication; the window between it and the
+    // update is closed after the fact by completePublished().
     const afterVerification = await getRelease(releaseUrl, options.token);
-    if (afterVerification.etag !== afterStale.etag) {
-      throw new Error("draft release changed while remote bytes were verified");
+    if (afterVerification.etag !== snapshot.etag) {
+      throw new PublicationEvidenceError(
+        "draft release changed while remote bytes were verified",
+      );
     }
-    assertReleaseIdentity(
-      afterVerification.release,
-      options.stagingTag,
-      options.targetCommitish,
-      notes,
-      true,
-      false,
-    );
-    assertAssetInventory(afterVerification.release, local);
+    try {
+      assertReleaseIdentity(
+        afterVerification.release,
+        options.stagingTag,
+        options.targetCommitish,
+        notes,
+        true,
+        false,
+      );
+    } catch (error) {
+      throw new PublicationEvidenceError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    assertSameAssets(snapshot.release, afterVerification.release, "while remote bytes were verified");
+    verified = afterVerification.release;
     await requireTagAbsent(
       apiBaseUrl,
       options.repository,
@@ -746,27 +777,24 @@ export async function publishRelease(
       options.token,
     );
 
+    publishAttempted = true;
     let publishedResponse: Response;
     try {
-      publishedResponse = await conditionalPatch(
-        releaseUrl,
-        options.token,
-        afterVerification.etag,
-        {
+      publishedResponse = await request(releaseUrl, options.token, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           tag_name: options.tag,
           target_commitish: options.targetCommitish,
           name: notes.name,
           body: notes.body,
           draft: false,
-        },
-      );
+        }),
+      });
     } catch (error) {
       return await recoverAmbiguousPublish(
         error instanceof Error ? error : new Error(String(error)),
       );
-    }
-    if (publishedResponse.status === 412) {
-      throw new Error("draft release changed before conditional publication");
     }
     if (publishedResponse.status !== 200) {
       return await recoverAmbiguousPublish(
@@ -775,16 +803,14 @@ export async function publishRelease(
     }
     try {
       release = releaseRecord(await publishedResponse.json());
-      return await completePublished(release);
     } catch (error) {
       return await recoverAmbiguousPublish(
         error instanceof Error ? error : new Error(String(error)),
       );
     }
+    return await completePublished(release);
   } catch (error) {
-    log(
-      `release ${release.id} for staging tag ${options.stagingTag} was retained for inspection`,
-    );
+    await cleanupOrRetain(error);
     throw error;
   }
 }

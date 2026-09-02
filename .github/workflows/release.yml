@@ -858,7 +858,7 @@ jobs:
             --rulesets "$rulesets" \
             --creation-actor-id "$RELEASE_AUTH_APP_ID" \
             --creation-actor-type Integration
-      - name: Conditionally publish exact verified release bytes
+      - name: Publish and re-verify exact verified release bytes
         shell: bash
         env:
           GH_TOKEN: ${{ steps.release-publication-token.outputs.token }}

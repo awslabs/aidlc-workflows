@@ -65,21 +65,27 @@ any checksum or manifest data. It then validates `version.json`, verifies every
 manifest asset through both provenance paths, records the complete local digest
 set, runs the real online-install journey from a separate copy, rechecks the
 untouched publication directory, and creates a private GitHub Release draft.
-`scripts/publish-release.ts` creates the draft under a unique non-release
-staging tag, uploads the exact 13-file set, compares the remote
-inventory, and downloads every draft asset to check it against the local digest
-set. Before publication it performs live, non-destructive API contract probes:
-release ETags must change when a probe asset is created, renamed, and deleted;
-a matching `If-Match` must permit an idempotent draft update; and a stale
-`If-Match` must return `412`. The final update carries the ETag of the exact
-verified draft while atomically changing `tag_name` to the unused `v*` tag,
+`scripts/publish-release.ts` first refuses to run while any `aidlc-staging-*`
+draft from an earlier run still exists, so leftovers are inspected and removed
+deliberately rather than accumulating. It then creates the draft under a unique
+non-release staging tag, uploads the exact 13-file set, compares the remote
+inventory, downloads every draft asset to check it against the local digest
+set, and re-reads the release to confirm its ETag, identity, and asset ids did
+not move while the bytes were read. GitHub does not support conditional
+requests on release updates: any `If-Match` on `PATCH /releases/{id}` is
+rejected with `400 Conditional request headers are not allowed in unsafe
+requests`, so the final update cannot be made atomic. The publisher therefore
+issues the update unconditionally (changing `tag_name` to the unused `v*` tag,
 binding `target_commitish` to the authorized main SHA, and setting
-`draft: false`. The creation ruleset's sole bypass actor is the release App, so
-ordinary repository writers cannot publish the staging draft as the official
-release. A concurrent release or asset mutation changes the ETag and fails the
-conditional update before publication. If the App update wins, it creates the
-guarded tag and owner-enforced immutable releases prevent any later asset or
-tag change.
+`draft: false`) and immediately re-verifies the published release: identity,
+the same asset ids, the tag's commit, and every asset's bytes must equal the
+verified candidate. The creation ruleset's sole bypass actor is the release
+App, so ordinary repository writers cannot publish the staging draft as the
+official release. A replacement that lands in the window between the last
+verification read and the update is detected after the fact, not prevented:
+the run fails naming the published release as compromised, and because
+owner-enforced immutable releases prevent any later asset or tag change it can
+only be superseded by a corrective release (see below).
 
 Published releases are immutable by policy. A defective artifact is corrected
 by a new patch release. A compromised release is excluded from update
@@ -179,18 +185,22 @@ that version explicitly and retain their own accepted-version floor.
 
 ### Partial publication failure
 
-Publication has no destructive rollback after the conditional publish succeeds.
-Failed creation, upload, verification, API-contract probing, or ETag comparison
-occurs under the non-release staging tag; the workflow retains that release for
-inspection, while the immutable `attested-release` workflow artifact plus
-transparency-log entries retain the build evidence. If the final API response
-is lost, the publisher rereads the release: an exact immutable release and tag
-are accepted, while an unreadable or ambiguous result is left untouched for the
-named publication owner. No automatic cleanup risks deleting a release that
-another principal may have published under the staging identity; a staging ref
-created by GitHub is retained for the same reason. Once the
-conditional App update succeeds, the official tag and published assets are both
-byte-verified and immutable.
+Publication has no destructive rollback after the publish update succeeds.
+A failure this run caused before publication (a GitHub API error, a network
+fault, a malformed response) deletes the staging draft it created, after
+confirming the release is still this run's draft, so failed attempts leave no
+drafts behind. A failure that indicates interference retains the release for
+inspection instead: a draft whose identity, asset ids, or bytes no longer
+match what was uploaded, a release that is no longer this run's draft, or any
+state reached once publication was attempted. The log names the retained
+release and the exact `gh release delete <staging-tag> --repo <repository>
+--yes` command; the next run refuses to stage until it is gone. The immutable
+`attested-release` workflow artifact plus transparency-log entries retain the
+build evidence in every case. If the final API response is lost, the publisher
+rereads the release: an exact immutable release and tag are accepted, while an
+unreadable or ambiguous result is left untouched for the named publication
+owner. Once the App update succeeds, the official tag and published assets are
+both byte-verified and immutable.
 
 ### Compromised release
 
@@ -321,7 +331,7 @@ schema.
   metadata before use, verifies every asset and both provenance paths,
   rehearses the real online installer from a copy, and rechecks the original
   digest set. Only its final protected step mints the release App's
-  `contents: write` token for the conditional staging-tag-to-`v*` publication.
+  `contents: write` token for the staging-tag-to-`v*` publication and its re-verification.
 - No job outside the protected `release` environment receives any write
   permission.
 - OIDC supplies short-lived identity to Sigstore; no long-lived signing key is
