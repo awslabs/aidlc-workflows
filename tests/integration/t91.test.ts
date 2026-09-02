@@ -124,6 +124,10 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "aidlc-lib.ts"),
   );
   copyFileSync(
+    join(SRC_TOOLS, "aidlc-settings.ts"),
+    join(proj, ".claude", "tools", "aidlc-settings.ts"),
+  );
+  copyFileSync(
     join(SRC_TOOLS, "aidlc-artifact-vocabulary.ts"),
     join(proj, ".claude", "tools", "aidlc-artifact-vocabulary.ts"),
   );

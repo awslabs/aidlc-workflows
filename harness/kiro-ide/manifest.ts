@@ -11,6 +11,7 @@
 //     for pre-1.0 coexistence.
 
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
+import { TRUSTED_COMMAND_PREFIX } from "../../core/tools/aidlc-command.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
 const DELEGATION_AGENTS = [
@@ -57,9 +58,52 @@ function personaFrontmatter(agent: string): string[] {
 
 const manifest: HarnessManifest = {
   name: "kiro-ide",
+  productName: "Kiro IDE",
+  configNextStep: "open this project in Kiro IDE, then run `/aidlc --doctor`",
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
+  rootIntegrations: [
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      legacySignatures: {
+        wholeFileHashes: [
+          "sha256:648f12cb08d05e7bdf97ad4e69e36b7d2b76687d047811d58d196623fd9191bf",
+        ],
+      },
+    },
+    {
+      path: "AGENTS.md",
+      policy: "managed-block",
+      marker: "agents",
+      legacySignatures: {
+        wholeFileHashes: [
+          "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
+          "sha256:8159f54fcfe2a2ef807227cb12a3c83327e3851672ea47294812dde411f0de69",
+          "sha256:8d59f353b5575abe6ee12e8abd5ac75f55461bd7307d677d64388c16690e5afa",
+          "sha256:aef608b826a4993d47e3de98679a81abe4823c7c73556def4a339c5cb92999e7",
+          "sha256:b58a882d1b56bbb5cdb9a3c356b1428eb8d2593f4a9ca22118b98ca7cd0bae9c",
+          "sha256:c5d2188b046cd75d8cb7214f32faa85cbc1539cddda4a0fae9bfe8fad90c237c",
+          "sha256:dead4d5ea47849f489e05baeae418d5d26efc6cd14dd2201351a474376f8efde",
+          "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
+          // The pre-v2-sync shipped variant (2.6.123 merge changed the bytes).
+          "sha256:990d80744904bfa3f9923b8a04bbb2e69b454154346915edca1e1a4ef7e31c07",
+        ],
+      },
+    },
+  ],
+  nativeRootIntegrations: [
+    {
+      content: `${JSON.stringify({
+        "kiroAgent.trustedCommands": [`${TRUSTED_COMMAND_PREFIX} *`],
+      }, null, 2)}\n`,
+      path: ".vscode/settings.json",
+      policy: "json-array",
+      jsonKey: "kiroAgent.trustedCommands",
+    },
+  ],
 
   // Same core projection as kiro CLI.
   coreDirs: [
@@ -119,7 +163,7 @@ const manifest: HarnessManifest = {
     // runtime ignored, the shared work (memory/codekb/registry/state/audit shards/
     // artifacts) committed. Authored as dot-gitignore so it does not act as a live
     // ignore inside harness/kiro-ide/; projectRoot routes it to dist/kiro-ide/.gitignore
-    // + the --check drift guard. (Kiro IDE DOES support a promptSubmit seam (the
+    // + the --check determinism guard. (Kiro IDE DOES support a promptSubmit seam (the
     // human-turn mint hook) and a preToolUse seam (the exit-2 human-presence hard
     // block) - both spike-proven on the IDE; the latch lines describe what is wired,
     // not a platform limit.)

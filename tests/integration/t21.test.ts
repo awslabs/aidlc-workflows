@@ -9,7 +9,7 @@
 // P4 MIGRATION. The user-facing `/aidlc --init` is RETIRED. A workflow STARTS by
 // naming a scope (or describing what to build); the engine NAMES the deterministic
 // `intent-create` move and the conductor runs
-// `bun .claude/tools/aidlc-utility.ts intent-create --scope <scope> ...`. Creation no
+// `bun .claude/tools/aidlc.ts engine intent create --scope <scope> ...`. Creation no
 // longer scaffolds a flat aidlc-docs/ tree — it writes PER-INTENT: state at
 // aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md, audit as per-clone
 // shards under <record>/audit/, and the per-phase artifact dirs under that
@@ -31,7 +31,7 @@
 // (t21b - the second creation target - is a SEPARATE port.)
 //
 // THE DETERMINISTIC SURFACE. The conductor runs
-//   `bun .claude/tools/aidlc-utility.ts intent-create --scope <scope> ...`
+//   `bun .claude/tools/aidlc.ts engine intent create --scope <scope> ...`
 // via Bash and prints its stdout VERBATIM. handleIntentCreate (aidlc-utility.ts:1986)
 // does the scan + state-init in one deterministic tool call, then writes the
 // per-intent aidlc-state.md (the State-Version-7 template) and appends a fixed
@@ -64,7 +64,7 @@
 //     assert the named events — a stronger statement of WHY the audit grew.
 //
 // Known-answer literals (read from the SHIPPED handler, not guessed):
-//   - creation dispatch:         engine NAMES `intent-create --scope <scope>` (aidlc-orchestrate.ts:302), conductor runs it
+//   - creation dispatch:         engine NAMES `intent create --scope <scope>` (aidlc-orchestrate.ts:302), conductor runs it
 //   - creation stdout anchors:   "Intent created:" / "State initialized:" / "Project type:" (utility.ts:2374-2382)
 //   - State Version value:    "7"  (creation template)
 //   - 3 new state fields:     Worktree Path / Bolt Refs / Practices Affirmed Timestamp

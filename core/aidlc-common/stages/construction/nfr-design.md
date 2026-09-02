@@ -1,5 +1,6 @@
 ---
 slug: nfr-design
+name: NFR Design
 phase: construction
 execution: CONDITIONAL
 condition: NFR Requirements was executed and NFR patterns need design. Skip if NFR Requirements was skipped.
@@ -152,7 +153,7 @@ concrete design solution:
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage nfr-design --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage nfr-design --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 7: Completion

@@ -1049,7 +1049,7 @@ describe("t161 active-directive owner lock and doctor findings", () => {
       ], { encoding: "utf-8" });
       const doctorOutput = `${doctor.stdout ?? ""}\n${doctor.stderr ?? ""}`;
       expect(doctorOutput).toContain("active-directive lock");
-      expect(doctorOutput).toContain("unstamped) — cleared");
+      expect(doctorOutput).toContain("unstamped) - cleared");
       expect(doctorOutput).toContain("legacy active-directive transaction");
       expect(doctorOutput).toContain("not cleared");
       const findings = detectLeakedLocks(fixture.projectDir, true);

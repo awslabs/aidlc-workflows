@@ -339,18 +339,49 @@ describe("t260 single active unit", () => {
 
   test("unit start uses top-level next/continue verbs through the compiled dispatcher seam", () => {
     constructionProject();
-    const dispatcher = join(proj, "aidlc-compiled-shim");
-    writeFileSync(
-      dispatcher,
-      [
-        "#!/usr/bin/env bun",
-        `import { main } from ${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc.ts")).href)};`,
-        "await main(process.argv.slice(2));",
-        "",
-      ].join("\n"),
-      "utf-8",
+    const dispatcherSource = join(proj, "aidlc-compiled-shim.ts");
+    const dispatcher = join(
+      proj,
+      process.platform === "win32" ? "aidlc-compiled-shim.exe" : "aidlc-compiled-shim",
     );
-    chmodSync(dispatcher, 0o755);
+    if (process.platform === "win32") {
+      writeFileSync(
+        dispatcherSource,
+        [
+          'import { spawnSync } from "node:child_process";',
+          `const result = spawnSync(${JSON.stringify(process.execPath)}, [${JSON.stringify(join(AIDLC_SRC, "tools", "aidlc.ts"))}, ...process.argv.slice(2)], {`,
+          '  stdio: "inherit",',
+          "  env: process.env,",
+          "});",
+          "process.exit(result.status ?? 1);",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      const built = Bun.spawnSync([
+        process.execPath,
+        "build",
+        "--compile",
+        dispatcherSource,
+        "--outfile",
+        dispatcher,
+      ]);
+      if (built.exitCode !== 0) {
+        throw new Error(`fake compiled dispatcher build failed: ${built.stderr.toString()}`);
+      }
+    } else {
+      writeFileSync(
+        dispatcher,
+        [
+          "#!/usr/bin/env bun",
+          `import { main } from ${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc.ts")).href)};`,
+          "await main(process.argv.slice(2));",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      chmodSync(dispatcher, 0o755);
+    }
 
     const started = unitVerb(proj, "start", "unit-a", [], {
       AIDLC_COMPILED_EXECUTABLE: dispatcher,

@@ -255,8 +255,8 @@ The framework is **authored once and generated per harness** — today Claude
 Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and
 any capable CLI you port it to. The
 hand-authored source is a harness-neutral `core/` plus a thin `harness/<name>/`
-surface per CLI; `bun scripts/package.ts` regenerates the committed,
-drift-guarded `dist/<harness>/` trees:
+surface per CLI; `bun scripts/package.ts` materializes ignored local
+`dist/<harness>/` trees:
 
 ```
 core/                  # hand-authored, harness-neutral (tools, aidlc-common,
@@ -266,11 +266,11 @@ harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
                        #   harness files (+ emit.ts for codex)
 scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
                        #   harness, compile the graph, generate runners, emit;
-                       #   `--check` is the byte-parity drift guard
+                       #   writes both channels; `--check` builds twice and compares
 scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/
-dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
+dist/<harness>/        # GENERATED + ignored: claude/.claude, kiro/.kiro,
                        #   kiro-ide/.kiro, codex/{.codex,.agents},
                        #   opencode/{.aidlc,.opencode}, copilot/{.aidlc,.github} — never hand-edited
 ```
@@ -284,10 +284,258 @@ resolution uses the name to distinguish shared engine directories and
 `rulesSubdir()` reads the rename. One set of tool sources runs in every harness. See
 [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md).
 
+`dist/` and `dist-release/` are ignored local projections of the same authored
+tree. The source/development channel under `dist/` invokes the generated TypeScript
+dispatcher through Bun. The release channel under `dist-release/` routes
+hooks, generated commands, adapters, and host trust entries through the
+native `aidlc` dispatcher. Native-only root integrations, such as host
+trust seeds, are added only to the release projection. Neither root is
+committed. `package.ts --check` builds the complete projection set twice in
+independent temporary roots and byte-compares those results. CI, tests, binary
+builds, and release packaging regenerate before consuming either local root.
+
+### Projection identity and ownership
+
+Every generated harness directory carries three distinct metadata contracts
+under `tools/data/`:
+
+- `harness.json` is runtime configuration: distribution identity, product
+  name, next-step text, harness/rules directories, and mutable project choices
+  such as plugin selection and the optional `models`, `runtime`, `providers`,
+  `trust`, `flags`, and `project` records.
+- `agent-tiers.json` is the shipped agent-name to tier map generated from
+  `core/agents/*.md` frontmatter. Runtime model policy reads this file instead
+  of hardcoding agent rosters.
+- `aidlc-stamp.json` is immutable projection identity: schema, framework
+  version, distribution, and harness directory.
+- `aidlc-projection.json` is the exhaustive install descriptor. It classifies
+  every top-level output as a framework-managed directory or a root integration
+  with one typed merge policy (`managed-block`, `json-map`, `json-array`, or
+  `whole-file`). Optional integrations and exact legacy hashes are declared
+  here; an unclassified top-level entry makes packaging or loading fail.
+
+`aidlc config` validates the stamp and descriptor before planning. It writes a
+fourth file, `aidlc-manifest.json`, into the installed harness as the
+project-specific ownership baseline: upstream version, per-file hashes, root
+contributions, and the selected optional-integration mode. Refresh uses that
+baseline to update unchanged framework bytes, preserve local modifications,
+merge root integrations, and remove retired owned content. Copy-channel hashes
+recorded in the native descriptor allow an exact, unmodified legacy copy install
+to be adopted; unknown bytes are never inferred as framework-owned.
+
+### Model policy projection
+
+`aidlc config models` is a section under the existing public `config` command,
+not a seventh public command. Policy lives in the shared settings hierarchy,
+not in harness metadata:
+
+- machine install root `aidlc.settings.json`
+- project-root `aidlc.settings.json`
+- project-root `aidlc.settings.local.json`
+
+Layers merge leaf-by-leaf in that order, then environment overrides win. The
+local file is personal and gitignored; the project file is team-shared.
+
+```json
+{
+  "schemaVersion": 1,
+  "models": {
+    "schemaVersion": 1,
+    "preset": "thorough",
+    "groups": {
+      "reviewing": { "effort": "xhigh" }
+    },
+    "agents": {
+      "architect": {
+        "effort": "xhigh",
+        "model": { "claude": "provider/raw-id" }
+      }
+    },
+    "profiles": {
+      "my-profile": {
+        "groups": {
+          "reviewing": { "effort": "medium" }
+        }
+      }
+    }
+  },
+  "flags": {
+    "schemaVersion": 1,
+    "swarm": true
+  }
+}
+```
+
+The resolver applies per-agent exception, group dial, shipped tier default, then
+session inherit. The shipped-default layer calls the shared tier projection
+module and the active tier cap resolver; it does not duplicate model tables.
+The same surface writers are used at package time and config refresh time for
+Claude and Cursor Markdown, Codex TOML, opencode Markdown, and Kiro agent JSON
+plus `chat.modelDefaults`.
+
+Refresh passes the resolved settings chain into a pristine staged projection
+and rewrites model and flag surfaces before `planManagedFiles` hashes staged
+bytes. No policy key is copied into `harness.json`. A later plain
+`aidlc config` therefore reapplies the resolved policy, while manual edits to
+owned agent surfaces still produce normal refresh conflicts.
+
+Unsupported policy is explicit. The resolver reports harness honesty and
+clamps only downward to the nearest vocabulary value. It never writes a key the
+selected harness ignores, never validates against a live provider, and never
+routes model policy through stage files.
+
+### Runtime, provider, and trust diagnostics
+
+`core/tools/aidlc-config-diagnostics.ts` is the shared implementation for
+`aidlc config runtime`, `aidlc config providers`, `aidlc config trust`, and the
+matching doctor rows. Each section stores a schema-versioned answer record in
+`harness.json`; the runtime loader ignores these optional sibling keys.
+
+The runtime probe derives a login-independent hook PATH, resolves only the
+commands required by the installed hook bytes, and probes the selected harness
+CLI. The recorded absolute paths are diagnostic evidence, not rewritten hook
+commands: host allowlists and Codex trust hashes bind the bare command prefix.
+
+Provider detection reads local AWS environment, profile, credential, role, and
+SSO-cache evidence only. Bedrock region and profile answers are applied to the
+staged projection before managed-file hashing. Claude also rewrites the staged
+AWS MCP endpoint and metadata to the same region. Codex model and effort keys
+remain untouched. OpenCode provider options are written only after the user
+accepts the offer. Instruct-only harnesses record acknowledgement rather than
+inert provider keys.
+
+Provider actions that cannot be checked offline live in the provider record as
+a small pending-action list. Config and doctor derive the human text from the
+action ID; the record stores only the ID and pending or done status.
+
+Trust diagnostics read the existing host surfaces. Codex checks the complete
+project-specific seed set in the user config, Kiro IDE checks the installed
+trusted command entry, and every harness checks required sibling directories.
+No trust seed or permission-rule generator is called by config trust.
+
+Every successful non-dry-run config transaction then runs a cheap post-apply
+sweep against the installed bytes. The runtime leg resolves only the binary
+needed by actual hook command files on the non-interactive PATH and deliberately
+skips the harness CLI version probe. The trust leg reads host trust surfaces,
+and the provider leg reads only recorded pending actions. Human and quiet
+output name exact section follow-ups while JSON carries the structured
+`outstandingActions` array; the exit code remains 0 because the transaction
+committed successfully.
+
+Doctor derives its instruction-file row from
+`tools/data/aidlc-manifest.json`. Managed-block integrations are checked for one
+ordered marker pair and the recorded block hash, while framework-owned
+whole-file instruction surfaces are checked against their recorded file hash.
+The row distinguishes intact, missing, and locally modified states and selects
+the invoking harness in a multi-harness project.
+
+### Flags and project choices
+
+`aidlc config flags` stores a schema-versioned `flags` record in
+`harness.json`. `readShippedHarnessData` parses that record alongside the
+existing plugin selection, and `resolveProjectFlag` provides the common
+environment-first lookup. Existing tools and hooks keep their real environment
+variable behavior; only an absent variable falls back to the record. The
+orchestrator skills use the same precedence for the conductor-owned swarm
+choice.
+
+The flags record contains default scope, swarm, hook debug, sensor timeout, and
+the fixed inventory of documented bypass environment names. Scope validation
+reads the installed scope frontmatter. Claude's staged settings writer also
+updates `AWS_AIDLC_DEFAULT_SCOPE`, because the shipped session environment is
+otherwise higher precedence than the record.
+
+`aidlc config project` stores MCP and completion answers in a schema-versioned
+`project` record while continuing to store plugin selection in the established
+top-level `plugins` array. Installed plugins are discovered from graph, scope,
+and plugin sidecar data. The normal refresh guard protects all project choice
+mutations from changing a live workflow plan.
+
+Recorded MCP consent feeds the existing root-integration merge mode during the
+same transaction and on later plain refreshes for Claude's consent-managed
+`.mcp.json`. MCP diagnostics classify host surfaces instead of assuming the
+Claude layout: Kiro's settings file is always shipped, so `defaults` verifies
+its presence and `none` is instruct-only; a harness with no current MCP file
+records the answer without an unfixable drift. Completion answers produce an
+exact native or copy-channel instruction; config never writes a shell profile
+or another machine-scoped file.
+
+During refresh, the three records are merged into the pristine staged
+`harness.json`. The provider writer then updates staged host files before
+`planManagedFiles` hashes them. A plain later `aidlc config` therefore reapplies
+recorded provider answers, while reset returns to the unchanged shipped
+fallback bytes.
+
+### Dispatcher route policy
+
+`core/tools/aidlc.ts` is both channels' route registry and the compiled binary's
+entry point. Each route declares project requirements, output modes, network
+policy, mutation scope, visibility, and one of three pin policies:
+
+- `active` runs the currently active binary for machine lifecycle and
+  management commands.
+- `inspect` also stays on the active binary so `doctor`, `init`, and `use` can
+  diagnose or repair a broken project pin.
+- `pinned` is the project engine path. A valid `.aidlc-version` causes one
+  re-exec into that retained version before project data is loaded; an absent or
+  incomplete retained version fails closed with the install command.
+
+The dispatcher passes the resolved route policy to delegates in `AIDLC_ROUTE_*`
+variables. Release acquisition and the transaction engine enforce the network
+and mutation boundaries, while a per-session fingerprint cache avoids repeating
+a full retained-version inspection without weakening pin validation.
+
+### Shared transaction engine
+
+Install-mechanism mutations use `core/tools/aidlc-transaction.ts`. A plan is a
+set of non-overlapping, root-relative `write`, `copy`, `tree`, `remove`, or
+`symlink` operations with expected destination state; copied sources also carry
+a content hash. The engine rejects path escapes, symlink traversal, special
+files, filesystem-boundary crossings, source drift, and overlapping targets
+before mutation, then repeats validation while holding its root lock.
+
+Candidates are staged and fsynced before live writes, current targets are
+snapshotted, and commits use rename boundaries. Candidate and committed
+validators let callers prove domain invariants; any staging, commit, validation,
+or audit failure restores committed paths in reverse order. A failed rollback
+preserves recovery evidence, and the next transaction quarantines abandoned
+staging rather than deleting it. Project init/refresh, machine lifecycle,
+project pins, plugin selection, and plugin sync all build plans for this engine.
+
+### Release assembly and provenance
+
+`scripts/build-binaries.ts` regenerates projections, compiles the dispatcher
+from `dist-release/claude/.claude/tools/aidlc.ts`, stages every native runtime beside
+each target artifact for smoke gates, and writes one
+`build-results-<target>.json`. A host-runnable artifact is `VERIFIED` only after
+the complete native/final-layout gate set; a cross artifact is explicitly
+`UNVERIFIED` with `inspection-only` evidence.
+
+`scripts/package-release.ts` first regenerates the local projections, runs the
+two-build package determinism guard, validates those records (and the complete
+seven-target matrix in release mode), archives each
+`dist-release/<harness>/`, and emits the flat `version.json` plus
+`checksums.txt`, both installers, and binaries. The staging job re-verifies and
+uploads that candidate without signing. Unix and Windows lifecycle jobs verify
+its checksums and test it. After the release-environment gate, `publish`
+downloads the same candidate, re-verifies it, attests it, adds the exported
+`aidlc-release.intoto.jsonl` bundle, validates the complete inventory, and
+uploads one immutable `attested-release` workflow artifact. The protected
+`promote` job authenticates `checksums.txt` through online and bundled
+provenance before reading it, verifies every manifest asset, runs the online
+journey from a separate copy, rechecks the original digest set, verifies that
+the dedicated publication repository has no ordinary writer beyond trusted
+organization owners, then creates the GitHub Release there from the untouched
+publication directory. The bundle is a separate trust channel and is
+intentionally absent from `version.json` and `checksums.txt`. This pipeline does
+not implement the deferred npm channel. See
+[Supply-Chain Security](19-supply-chain-security.md).
+
 ## Directory Structure
 
-The shipped Claude distribution (`dist/claude/.claude/`, regenerated
-byte-for-byte from `core/` + `harness/claude/`):
+The source-generated Claude projection (`dist/claude/.claude/`, materialized
+from `core/` + `harness/claude/`; the release archive carries the native form
+under `runtime/claude/.claude/`):
 
 ```
 dist/claude/.claude/

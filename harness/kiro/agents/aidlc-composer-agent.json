@@ -47,34 +47,34 @@
     "preToolUse": [
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard aidlc-composer-agent",
+        "command": "{{INVOKE}} engine adapter kiro state-transition-guard aidlc-composer-agent",
         "timeout_ms": 15000
       },
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "command": "{{INVOKE}} engine adapter kiro review-freeze",
         "timeout_ms": 15000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "command": "{{INVOKE}} engine adapter kiro review-freeze",
         "timeout_ms": 15000
       },
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
         "timeout_ms": 15000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
         "timeout_ms": 15000
       }
     ],
     "postToolUse": [
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors",
+        "command": "{{INVOKE}} engine adapter kiro audit-and-sensors",
         "timeout_ms": 120000
       }
     ]

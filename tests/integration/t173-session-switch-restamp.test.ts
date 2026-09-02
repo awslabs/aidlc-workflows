@@ -105,7 +105,7 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     //    handleIntent reads marker (S1) and re-stamps S1 → export-bug.
     const sw = util(proj, b.slug);
     expect(sw.exitCode).toBe(0);
-    expect(sw.stdout).toContain(`Active intent → ${b.dirName}`);
+    expect(sw.stdout).toContain(`Active intent -> ${b.dirName}`);
 
     // 3) RESUME S1: stamp S1 (export-bug) == live cursor (export-bug) → NO offer.
     //    Without the fix the stamp would still read auth-service → false nag.
@@ -133,7 +133,7 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
     //    on S2's record (S2 → export-bug) and moves the cursor — NOT on S1's.
     const sw = util(proj, b.slug);
     expect(sw.exitCode).toBe(0);
-    expect(sw.stdout).toContain(`Active intent → ${b.dirName}`);
+    expect(sw.stdout).toContain(`Active intent -> ${b.dirName}`);
 
     // 4) RESUME S1: its stamp is still auth-service; live cursor is export-bug →
     //    a GENUINE drift S1 never caused → OFFER fires, naming the way back to A.

@@ -8,6 +8,7 @@ import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
+  aidlcInvocation,
   resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
 import {
@@ -18,6 +19,19 @@ export {
   artifactFilename,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
+import {
+  _resetSettingsCacheForTests,
+  RECORDABLE_PROJECT_BYPASSES,
+  resolveAidlcSettings,
+  type ProjectFlagsRecord,
+  type RecordableProjectBypass,
+} from "./aidlc-settings.ts";
+export {
+  normalizeProjectFlagsRecord,
+  RECORDABLE_PROJECT_BYPASSES,
+  type ProjectFlagsRecord,
+  type RecordableProjectBypass,
+} from "./aidlc-settings.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
@@ -282,7 +296,19 @@ function readShippedHarnessData(): ShippedHarnessData {
       rulesSubdir?: unknown;
       plugins?: unknown;
       runnerFrontmatterAdditions?: unknown;
+      models?: unknown;
+      flags?: unknown;
     };
+    const policyKeys = ["models", "flags"].filter((key) =>
+      Object.hasOwn(parsed, key)
+    );
+    if (policyKeys.length > 0) {
+      throw new Error(
+        `${p}: harness.json contains legacy policy key(s) ${policyKeys.join(", ")}. ` +
+          `Remove ${policyKeys.join(", ")} from ${p}, then run ` +
+          `'${aidlcInvocation()} config' to record policy in aidlc.settings.json.`,
+      );
+    }
     let plugins: ReadonlySet<string> | null = null;
     if (Object.hasOwn(parsed, "plugins")) {
       if (!Array.isArray(parsed.plugins)) {
@@ -465,6 +491,38 @@ export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
 }
 
+export function projectFlags(): ProjectFlagsRecord | null {
+  return resolveAidlcSettings(resolveProjectDir()).flags;
+}
+
+const PROJECT_FLAG_FIELDS: Record<string, keyof ProjectFlagsRecord> = {
+  AWS_AIDLC_DEFAULT_SCOPE: "defaultScope",
+  AIDLC_USE_SWARM: "swarm",
+  AIDLC_HOOK_DEBUG: "hookDebug",
+  AIDLC_SENSOR_TIMEOUT_MS: "sensorTimeoutMs",
+};
+
+export function resolveProjectFlag(
+  envName: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (Object.hasOwn(env, envName)) return env[envName];
+  const flags = projectFlags();
+  if (!flags) return undefined;
+  if (
+    (RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(envName)
+  ) {
+    return flags.bypasses?.includes(envName as RecordableProjectBypass)
+      ? "1"
+      : undefined;
+  }
+  const field = PROJECT_FLAG_FIELDS[envName];
+  const value = field ? flags[field] : undefined;
+  if (typeof value === "boolean") return value ? "1" : "";
+  if (typeof value === "number") return String(value);
+  return typeof value === "string" ? value : undefined;
+}
+
 export function runnerFrontmatterAdditions(): readonly string[] {
   return readShippedHarnessData().runnerFrontmatterAdditions;
 }
@@ -481,6 +539,7 @@ export function stageEnabledBySelection(stage: { plugin?: string; phase?: string
 
 export function _resetHarnessDataForTests(): void {
   _shippedHarnessData = null;
+  _resetSettingsCacheForTests();
 }
 
 export function rulesSubdir(): string {
@@ -660,11 +719,6 @@ export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
   "archive",
   "rename",
   "show",
-  // Retired verb, still reserved: `intent birth` was the create verb before it
-  // was renamed, so a record named "birth" could not exist in an install made
-  // while it was grammar. Keeping it reserved means such a record stays
-  // switch-reachable and doctor keeps flagging it, instead of the name silently
-  // becoming creatable and colliding.
   "birth",
 ]);
 
@@ -694,10 +748,9 @@ function missingWorkspaceName(
   noun: WorkspaceNoun,
   verb: "switch" | "create" | "space-create",
 ): WorkspaceCommand {
-  const usage =
-    verb === "space-create"
-      ? "space-create <name>"
-      : `${noun} ${verb} <name>`;
+  const usage = verb === "space-create"
+    ? "space-create <name>"
+    : `${noun} ${verb} <name>`;
   return {
     kind: "error",
     noun,
@@ -707,13 +760,18 @@ function missingWorkspaceName(
   };
 }
 
-function reservedFutureWorkspaceVerb(noun: WorkspaceNoun, verb: string): WorkspaceCommand {
+function reservedFutureWorkspaceVerb(
+  noun: WorkspaceNoun,
+  verb: string,
+): WorkspaceCommand {
   return {
     kind: "error",
     noun,
     code: "reserved-future-verb",
     verb,
-    message: `${noun} ${verb} is reserved for a future workspace verb and is not implemented yet. Use ${noun} switch ${verb} to select an existing record with that name.`,
+    message:
+      `${noun} ${verb} is reserved for a future workspace verb and is not implemented yet. ` +
+      `Use ${noun} switch ${verb} to select an existing record with that name.`,
   };
 }
 
@@ -721,11 +779,16 @@ function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
   return token === "intent" || token === "space";
 }
 
-function isReservedFutureWorkspaceVerb(token: string | undefined): token is string {
+function isReservedFutureWorkspaceVerb(
+  token: string | undefined,
+): token is string {
   return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
-function explicitWorkspaceList(noun: WorkspaceNoun, tokens: string[]): WorkspaceCommand {
+function explicitWorkspaceList(
+  noun: WorkspaceNoun,
+  tokens: string[],
+): WorkspaceCommand {
   return { kind: "list", noun, json: tokens[2] === "--json" };
 }
 
@@ -734,7 +797,9 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
 
   if (head === "space-create") {
     const name = tokens[1];
-    if (name === undefined) return missingWorkspaceName("space", "space-create");
+    if (name === undefined) {
+      return missingWorkspaceName("space", "space-create");
+    }
     return { kind: "create", noun: "space", name };
   }
 
@@ -742,19 +807,15 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
 
   const noun = head;
   const verbOrName = tokens[1];
-
   if (verbOrName === undefined) {
     return { kind: "list", noun, json: false };
   }
-
   if (verbOrName === "--json") {
     return { kind: "list", noun, json: true };
   }
-
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
   }
-
   if (isReservedFutureWorkspaceVerb(verbOrName)) {
     return reservedFutureWorkspaceVerb(noun, verbOrName);
   }
@@ -788,21 +849,13 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
   return { kind: "switch", noun, name: verbOrName, explicit: false };
 }
 
-export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[] | null {
+export function workspaceCommandUtilityArgv(
+  command: WorkspaceCommand,
+): string[] | null {
   switch (command.kind) {
     case "list":
       return command.json ? [command.noun, "--json"] : [command.noun];
     case "switch":
-      // Explicit `switch <name>` must forward the literal "switch" token so
-      // the utility reads <name> as the switch target even when it shadows a
-      // verb (e.g. `intent switch create` reaching a pre-existing intent named
-      // "create" instead of re-reading "create" as the create verb). Bare-name
-      // sugar (`space teamB`, explicit: false) is unaffected by that bug and
-      // must keep the original 2-token shape: the utility's bare
-      // `[noun, name]` form IS the switch (see handleIntent/handleSpace's
-      // "verbOrTarget = name when not a recognized verb" branch), and every
-      // downstream consumer (the classifier's terminal print, the Kiro
-      // adapter, t114/t178/t198) pins that shape as still-desired behavior.
       return command.explicit
         ? [command.noun, "switch", command.name]
         : [command.noun, command.name];
@@ -948,7 +1001,42 @@ export const RESERVED_RECORD_NAME_LIST = Object.freeze(
 // creation chokepoints keeps new records reachable. Pre-existing records with
 // these names remain reachable via explicit `switch`; doctor flags them as an
 // advisory so humans can rename them deliberately.
-export const RESERVED_RECORD_NAMES: ReadonlySet<string> = new Set(RESERVED_RECORD_NAME_LIST);
+export const RESERVED_RECORD_NAMES: ReadonlySet<string> = new Set(
+  RESERVED_RECORD_NAME_LIST,
+);
+
+export type PluginCommand =
+  | { kind: "not-plugin" }
+  | { kind: "help" }
+  | { kind: "error"; message: string }
+  | { kind: "run"; argv: string[] };
+
+export function parsePluginCommand(args: string[]): PluginCommand {
+  if (args[0] !== "plugin") return { kind: "not-plugin" };
+  const verb = args[1];
+  if (verb === "help" || verb === "-h" || verb === "--help") {
+    return { kind: "help" };
+  }
+  const target = verb === "select"
+    ? "select-plugins"
+    : verb === "list"
+    ? "plugin-list"
+    : verb === "sync"
+    ? "plugin-sync"
+    : verb === "validate"
+    ? "plugin-validate"
+    : verb === "build"
+    ? "plugin-build"
+    : undefined;
+  if (target !== undefined) {
+    return { kind: "run", argv: [target, ...args.slice(2)] };
+  }
+  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
+  return {
+    kind: "error",
+    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+  };
+}
 
 // A classified terminal command: the aidlc-utility.ts subcommand to run, plus an
 // optional positional arg (the <name> for a workspace verb). `source` records
@@ -962,41 +1050,6 @@ export interface TerminalCommand {
   source: "read-only-flag" | "workspace-verb" | "plugin-verb" | "knowledge-verb";
 }
 
-export type PluginCommand =
-  | { kind: "not-plugin" }
-  | { kind: "help" }
-  | { kind: "error"; message: string }
-  | { kind: "run"; argv: string[] };
-
-// Parse the public `plugin` noun once for every entrypoint. The slash
-// orchestrator, Kiro's pre-LLM interceptor, and the binary dispatcher must all
-// agree that these are terminal utilities rather than freeform workflow text.
-export function parsePluginCommand(args: string[]): PluginCommand {
-  if (args[0] !== "plugin") return { kind: "not-plugin" };
-  const verb = args[1];
-  if (verb === "help" || verb === "-h" || verb === "--help") {
-    return { kind: "help" };
-  }
-  const target = verb === "select"
-    ? "select-plugins"
-    : verb === "list"
-      ? "plugin-list"
-      : verb === "sync"
-        ? "plugin-sync"
-        : verb === "validate"
-          ? "plugin-validate"
-          : verb === "build"
-            ? "plugin-build"
-        : undefined;
-  if (target !== undefined) {
-    return { kind: "run", argv: [target, ...args.slice(2)] };
-  }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
-  return {
-    kind: "error",
-    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
-  };
-}
 
 function terminalCommandFromPluginCommand(
   command: PluginCommand,
@@ -1105,13 +1158,20 @@ function terminalCommandFromKnowledgeCommand(
 }
 
 // The allowlisted trailing flags `--doctor` accepts (diagnostic export). Kept
+
+// The allowlisted trailing flags `--doctor` accepts. Kept
 // as a set here so the engine (parseNextFlags) and this classifier — the two
 // terminal-command deciders — stay byte-for-byte in agreement. A fixed
 // allowlist, so an arbitrary token can never ride the read-only path into the
 // tool.
-export const DOCTOR_EXPORT_FLAGS: ReadonlySet<string> = new Set(["--export", "--output"]);
+export const DOCTOR_EXPORT_FLAGS: ReadonlySet<string> = new Set([
+  "--export",
+  "--output",
+  "--verbose",
+]);
 
-// Collect the allowlisted `--doctor` export args (`--export`, `--output <dir>`)
+// Collect the allowlisted `--doctor` args (`--export`, `--output <dir>`,
+// `--verbose`)
 // from the token stream after the `--doctor` match, so the seam runs the same
 // command the engine's directive names. Mirrors parseNextFlags in the engine.
 function collectDoctorExportArgs(args: string[], doctorIdx: number): string[] {
@@ -1199,9 +1259,9 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
     const a = args[i];
     if (READ_ONLY_FLAGS.has(a)) {
       const subcommand = a.replace(/^--/, "");
-      // --doctor carries allowlisted export args (--export, --output <dir>) so
-      // the documented export surface reaches the tool through the Kiro/Codex
-      // seam too, not only a direct invocation. Carried via `args` (v2's
+      // --doctor carries allowlisted args (--export, --output <dir>, --verbose)
+      // so the documented diagnostic surfaces reach the tool through the
+      // Kiro/Codex seam too, not only a direct invocation. Carried via `args` (v2's
       // forwarded-args field), mirrored by the engine's parseNextFlags.
       if (a === "--doctor") {
         const extra = collectDoctorExportArgs(args, i);
@@ -1333,6 +1393,21 @@ export function decodeHarnessPlainText(
 // strings match, which is a pre-existing class shared with the old detectors.
 // That direction fails closed: over-detection nudges, never releases.
 
+// Authored methodology uses the native dispatcher's hidden engine namespace.
+// Canonicalize only the engine tools these detectors own so the Bun and native
+// spellings share one classification policy. Other engine tools remain untouched.
+function canonicalEngineCommand(text: string): string {
+  return text
+    .replace(
+      /\baidlc\s+engine\s+orchestrate\s+help\b/g,
+      "aidlc help",
+    )
+    .replace(
+      /\baidlc\s+engine\s+(orchestrate|state|jump|bolt|swarm|scope|config|status|recompose)\b/g,
+      "aidlc $1",
+    );
+}
+
 // A workflow-engine tool call: a Bash invocation of legacy
 // aidlc-orchestrate/aidlc-state, a new-grammar `aidlc ...` engine command, or a
 // tool whose name itself references aidlc. These are the calls that mean "the
@@ -1346,7 +1421,9 @@ export function isEngineToolCall(name: string, input: unknown): boolean {
       : "";
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
-  const text = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
+  const text = canonicalEngineCommand(
+    /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name,
+  );
   // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
   // workflow engagement (a chat turn that ran git/cat/ls etc.).
   if (
@@ -1515,20 +1592,22 @@ const runtimeCompileSelf = new RegExp(
 export function classifyRuntimeCompileCommand(
   command: string,
 ): "reject" | "fire" | "pass" {
-  const invokesRuntime = shellCommandSegments(command)
-    .some((segment) => /^\s*aidlc\s+runtime\b/.test(segment));
+  const canonical = canonicalEngineCommand(command);
+  const invokesRuntime = shellCommandSegments(command).some((segment) =>
+    /^\s*aidlc\s+engine\s+runtime\s+compile\b/.test(segment)
+  );
   if (runtimeCompileSelf.test(command) || invokesRuntime) {
     return "reject";
   }
   if (
-    runtimeCompileTool.test(command) ||
-    runtimeCompileReport.test(command) ||
-    /\baidlc\s+(?:state|jump|bolt|unit)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(command) ||
-    /\baidlc\s+report\b|\baidlc\s+orchestrate\s+report\b|\baidlc\s+next\b.*\breport\b/.test(command)
+    runtimeCompileTool.test(canonical) ||
+    runtimeCompileReport.test(canonical) ||
+    /\baidlc\s+(?:state|jump|bolt|unit|recompose)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(canonical) ||
+    /\baidlc\s+report\b|\baidlc\s+orchestrate\s+report\b|\baidlc\s+next\b.*\breport\b/.test(canonical)
   ) {
-    // Utility split rationale: the new grammar keeps D2 parity for the public
-    // one-shots (status/doctor/version/help fire, because the old regex catches
-    // ANY aidlc-utility.ts call), but deliberately does NOT fire for the new
+    // Semantic-route rationale: keep D2 parity for the public/read-only
+    // one-shots while the utility implementation remains the backing tool.
+    // Deliberately do not fire for the new
     // workspace/gen/sensor/intent/space nouns. Old-shape utility calls keep
     // firing via the retained old regex.
     return "fire";
@@ -6915,7 +6994,7 @@ export function summaryConfirmationAnswer(content: string): string | null {
 }
 
 export function summaryConfirmationGuardDisabled(): boolean {
-  return process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD === "1";
+  return resolveProjectFlag("AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD") === "1";
 }
 
 // Test-only bypass for synthetic gate-transition fixtures that intentionally
@@ -10922,7 +11001,12 @@ function readSyncBufferedLine(
         ? Buffer.from(chunks[0])
         : Buffer.concat(chunks, total);
     }
-    const chunk = reader.buffer.subarray(reader.offset, reader.end);
+    // COPY the partial chunk: the next loop iteration refills reader.buffer in
+    // place, and a subarray view kept across that refill would silently show
+    // the refilled bytes. That corrupted any line spanning the 64 KiB refill
+    // boundary (content-layout dependent, so it escaped until a payload
+    // shifted a cat-file header onto the boundary).
+    const chunk = Buffer.from(reader.buffer.subarray(reader.offset, reader.end));
     chunks.push(chunk);
     total += chunk.length;
     reader.offset = reader.end;
@@ -16548,7 +16632,7 @@ export function isAutonomousSwarmStage(
 // dedicated guard test clears it), and it is the documented bypass for
 // synthetic CI runs that drive approve/answer against bare fixtures.
 export function humanPresenceGuardDisabled(): boolean {
-  return process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD === "1";
+  return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
 }
 
 // An unattended driver is the only component that knows its prompt-submit
@@ -18173,7 +18257,24 @@ export function writeFileAtomic(path: string, data: string): void {
     writeFileSync(fd, data, "utf-8");
     closeSync(fd);
     fd = undefined;
-    renameSync(tmp, path);
+    const attempts = process.platform === "win32" ? 100 : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        renameSync(tmp, path);
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        const retryable = process.platform === "win32" &&
+          ["EACCES", "EBUSY", "EEXIST", "ENOTEMPTY", "EPERM"].includes(code ?? "") &&
+          attempt + 1 < attempts;
+        if (!retryable) throw error;
+        // Windows can transiently deny rename-over while another process or
+        // scanner still has the previous file open. The caller's lock already
+        // serializes writers; retry the atomic replacement instead of letting a
+        // swallowed hook error lose the completed read-modify-write.
+        Bun.sleepSync(5);
+      }
+    }
     ownsTmp = false;
   } catch (err) {
     if (fd !== undefined) {
@@ -22106,7 +22207,7 @@ export function recordHookDrop(
 //      projectDir cannot be resolved (rare), only the env var is consulted.
 // Never throws; logging must never break a hook's advisory exit-0 contract.
 export function hookDebugEnabled(projectDir?: string): boolean {
-  if (process.env.AIDLC_HOOK_DEBUG) return true;
+  if (resolveProjectFlag("AIDLC_HOOK_DEBUG")) return true;
   if (projectDir) {
     try {
       return existsSync(join(workspaceRoot(projectDir), ".aidlc-hook-debug"));
@@ -22273,6 +22374,9 @@ export function escapeRegex(str: string): string {
 
 // --- CLI argument parsing ---
 
+// `--` ends option parsing: every later token is literal and lands in
+// `positional`, so text such as "--project-dir <path>" after the delimiter can
+// never be read as a flag by any tool built on this parser.
 export function parseArgs(args: string[]): {
   positional: string[];
   flags: Record<string, string>;
@@ -22285,6 +22389,10 @@ export function parseArgs(args: string[]): {
   const blankFlags = new Set<string>();
   let i = 0;
   while (i < args.length) {
+    if (args[i] === "--") {
+      positional.push(...args.slice(i + 1));
+      break;
+    }
     if (args[i].startsWith("--")) {
       const token = args[i].slice(2);
       const equals = token.indexOf("=");

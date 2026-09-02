@@ -7,7 +7,7 @@
 // engineering auto-skipped -> every design stage ran blind.
 //
 // Two mechanisms, one covers id (intent-create, mechanism cli):
-//  - CLI-boundary cases spawn `bun aidlc-utility.ts intent-create --scope poc
+//  - CLI-boundary cases spawn `bun aidlc.ts engine intent create --scope poc
 //    --project-dir <p>` (t20's pattern) and read the state file / audit shard /
 //    stdout - the observable contract of the creation pipeline (scan -> state +
 //    audit + stdout warning).
@@ -48,7 +48,7 @@ interface CliResult {
   stderr: string;
 }
 
-/** Spawn `bun aidlc-utility.ts intent-create --scope poc --project-dir <p>`. */
+/** Spawn `bun aidlc.ts engine intent create --scope poc --project-dir <p>`. */
 function runIntentCreate(p: string): CliResult {
   const res = spawnSync(
     BUN,

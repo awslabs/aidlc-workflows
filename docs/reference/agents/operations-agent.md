@@ -77,4 +77,4 @@ or monitoring dashboards.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-operations-agent](../../guide/agents/operations-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-operations-agent.md`](../../../dist/claude/.claude/agents/aidlc-operations-agent.md)
+- Authored source: [`core/agents/aidlc-operations-agent.md`](../../../core/agents/aidlc-operations-agent.md)

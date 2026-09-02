@@ -1,13 +1,13 @@
 # AI-DLC on Cursor
 
-`dist/cursor/` is one of the framework's harness distributions, for
+The Cursor runtime is one of the framework's harness distributions, for
 [Cursor](https://cursor.com). One tree serves both the **Cursor IDE** and the
 **Cursor CLI** (`agent`): they share the same `.cursor/` discovery. One
 deterministic core, many harnesses: the engine, state machine, audit log,
 graph, swarm referee, and learnings gate are byte-identical across every
-distribution - only the shell differs. The tree is **generated** from `core/` +
-`harness/cursor/` by `bun scripts/package.ts cursor`; never hand-edit it (the
-drift guard fails CI).
+distribution - only the shell differs. The source/development tree is
+**generated** into ignored local `dist/cursor/` from `core/` +
+`harness/cursor/` by `bun scripts/package.ts cursor`; never hand-edit it.
 
 ## Layout
 
@@ -34,8 +34,9 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   this install's `.cursor/` surfaces. Verified against cursor-agent 2026.07;
   hooks (`.cursor/hooks.json`) and skills (`.cursor/skills/`) are
   current-line features.
-- **bun** - same requirement as every harness; every tool and hook runs via
-  bun. `bun` must be on the PATH the shells Cursor spawns can see.
+- **bun** only for source development or the optional manual-copy
+  `install.ts` helper. Once installed, native and versioned release runtimes
+  invoke `aidlc`.
 - **A paid Cursor plan for named models** - Free accounts can only use `Auto`.
   The tiered persona surfaces ship with **no model pins** (all tiers project to
   null on Cursor: model availability is plan-dependent), so every agent
@@ -46,32 +47,46 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
 
 ## Install
 
-1. Install the distribution into your project:
+### Native channel (recommended)
 
-   ```bash
-   bun dist/cursor/install.ts your-project
-   ```
+Install the native command as described in
+[Install and Lifecycle](../18-install-and-lifecycle.md), then:
 
-   The installer preflights the full copy, refuses project-owned collisions,
-   preserves `.cursor/.gitignore` and existing method memory, structurally
-   merges `.cursor/hooks.json` and `.cursor/cli.json`, and adds marked AI-DLC
-   sections to existing `AGENTS.md` and `.gitignore` files instead of replacing
-   them. It records framework ownership in `.cursor/aidlc-install.json`;
-   re-running it upgrades managed files while preserving `aidlc/active-space`
-   and explicit plugin selection/composed state, and reapplying that space to
-   all mutable rule and persona pointers, including files restored after deletion.
-   Plugin-composed stage files are preserved only when a contribution sidecar or
-   seam sentinel identifies that stage, and the installer prints every managed
-   path it preserves; unrelated core stages continue through normal receipt-hash
-   collision/upgrade handling.
-   The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method
-   tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready"
-   check without it.
+```bash
+cd your-project
+aidlc config --harness cursor
+aidlc doctor
+```
 
-2. Open the project in the Cursor IDE (or start `agent` in it) and run
-   `/aidlc --doctor`, then `/aidlc` followed by what you want to build.
-   Native utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>`
-   (or `--phase <name>`), and `/aidlc-scope <name>`.
+### Versioned manual-copy alternative
+
+Download and extract a specific release's `aidlc-runtime.tar.gz` as described in
+[Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
+then install that versioned projection:
+
+```bash
+bun "$RUNTIME_ROOT/cursor/install.ts" your-project
+```
+
+The installer preflights the full copy, refuses project-owned collisions,
+preserves `.cursor/.gitignore` and existing method memory, structurally
+merges `.cursor/hooks.json` and `.cursor/cli.json`, and adds marked AI-DLC
+sections to existing `AGENTS.md` and `.gitignore` files instead of replacing
+them. It records framework ownership in `.cursor/aidlc-install.json`;
+re-running it upgrades managed files while preserving `aidlc/active-space`
+and explicit plugin selection/composed state, and reapplying that space to
+all mutable rule and persona pointers, including files restored after deletion.
+Plugin-composed stage files are preserved only when a contribution sidecar or
+seam sentinel identifies that stage, and the installer prints every managed
+path it preserves; unrelated core stages continue through normal receipt-hash
+collision/upgrade handling. The `aidlc/` shell ships the pre-built
+`aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor`
+fails its "workspace shell ready" check without it.
+
+Open the project in the Cursor IDE (or start `agent` in it) and run
+`/aidlc --doctor`, then `/aidlc` followed by what you want to build. Native
+utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
+`--phase <name>`), and `/aidlc-scope <name>`.
 
 ## What's different on this harness
 
@@ -169,6 +184,9 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   run gated workflows in an interactive Cursor session. This is a property of
   the framework's presence gate, not a Cursor limitation - every harness mints
   presence from a human-prompt event.
+- **In-session configuration is interactive.** Use `/aidlc --config [section]`
+  in a Cursor chat so the conductor can gather choices before landing exact
+  deterministic config flags.
 
 ## Verifying an install
 

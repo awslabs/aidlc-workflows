@@ -8,8 +8,8 @@ file in `<record>/project-description.json`; the `Project` field below is its
 safe single-line preview.
 
 Authoritative generated views:
-- Stage graph: `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts stage-table`
-- Scope grid: `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts scope-table`
+- Stage graph: `{{INVOKE}} engine gen stage-table`
+- Scope grid: `{{INVOKE}} engine gen scope-table`
 
 ## Project Information
 - **Project**: [single-line project description preview]

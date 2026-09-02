@@ -74,7 +74,7 @@ describe("classifyTerminalCommand() — read-only flags (match anywhere)", () =>
     });
   });
 
-  test("--doctor carries allowlisted export args (--export, --output <dir>) as args", () => {
+  test("--doctor carries allowlisted export and verbose args", () => {
     // The diagnostic export surface must reach the tool through the terminal
     // path the Kiro adapter runs, so --doctor collects its allowlisted trailing
     // flags into args. A bare --doctor has none (no spurious key).
@@ -87,6 +87,11 @@ describe("classifyTerminalCommand() — read-only flags (match anywhere)", () =>
       subcommand: "doctor",
       source: "read-only-flag",
       args: ["--export"],
+    });
+    expect(classifyTerminalCommand(["--doctor", "--verbose"])).toEqual({
+      subcommand: "doctor",
+      source: "read-only-flag",
+      args: ["--verbose"],
     });
     // Bare --doctor: no args field at all.
     expect(classifyTerminalCommand(["--doctor"])).toEqual({

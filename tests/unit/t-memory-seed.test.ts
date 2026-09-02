@@ -22,7 +22,7 @@
 //
 // MECHANISM. (a) imports frameworkMemorySeedDir in-process from the shipped dist
 // tree (the `none` floor for an exported lib fn). (b)/(c) SPAWN the real engine
-// CLI (`aidlc-utility.ts intent-create`) so the actual first-run path - creation →
+// CLI (`aidlc.ts engine intent create`) so the actual first-run path - creation →
 // ensureWorkspaceDirs → the guarded cpSync — is exercised end-to-end, with the
 // seed resolved relative to the SPAWNED tool's own location (DATA_DIR). Zero
 // tokens, zero network.

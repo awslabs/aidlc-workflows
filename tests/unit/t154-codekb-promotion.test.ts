@@ -46,8 +46,8 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { parseStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // AIDLC_SRC === <repo>/dist/claude/.claude — the shipped tree (fixtures.ts:42),
-// the same one t05/t87 read. Assert on the DIST output so a stale dist (a core
-// edit not re-packaged) is caught here as well as by `package.ts --check`.
+// the same one t05/t87 read. Assert on the regenerated DIST output so the
+// projection consumed by tests is covered directly.
 const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
 // Knowledge tree (per-agent reference docs). RE artifact templates live here
 // (aidlc-developer-agent/re-artifacts.md), so the bare-codekb sweep must cover
@@ -135,10 +135,12 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     expect(decisionsStart).toBeGreaterThan(-1);
     expect(aggregateStart).toBeGreaterThan(decisionsStart);
     expect(body.slice(decisionsStart, aggregateStart)).not.toContain(
-      "aidlc-orchestrate.ts report",
+      "bun .claude/tools/aidlc.ts engine orchestrate report",
     );
     const aggregate = body.slice(aggregateStart, step2Start);
-    expect(aggregate.match(/aidlc-orchestrate\.ts report/g)).toHaveLength(1);
+    expect(
+      aggregate.match(/bun \.claude\/tools\/aidlc\.ts engine orchestrate report/g),
+    ).toHaveLength(1);
     expect(aggregate).toMatch(/report the stage as\s+skipped exactly once/);
     expect(aggregate).toContain("directive.single === true");
     expect(aggregate).toContain('report --single --stage "reverse-engineering" --result completed');

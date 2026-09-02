@@ -75,4 +75,4 @@ runbooks, or release approval workflows.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-pipeline-deploy-agent](../../guide/agents/pipeline-deploy-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-pipeline-deploy-agent.md`](../../../dist/claude/.claude/agents/aidlc-pipeline-deploy-agent.md)
+- Authored source: [`core/agents/aidlc-pipeline-deploy-agent.md`](../../../core/agents/aidlc-pipeline-deploy-agent.md)

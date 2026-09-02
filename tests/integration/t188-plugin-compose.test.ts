@@ -53,7 +53,7 @@ const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 const STAGE_TABLE_BEGIN =
-  "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
+  "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 
 function fileInventory(root: string, relative = ""): string[] {
@@ -112,7 +112,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     tmp = mkdtempSync(join(tmpdir(), "aidlc-t188-"));
 
     // 1. Build every manifest-discovered projection into tmp via the target-dir
-    //    seam. This exercises the real emitter without mutating committed dist.
+    //    seam. This exercises the real emitter without mutating local dist.
     for (const harness of HARNESS_MATRIX) {
       const built = join(tmp, "plugin", harness.name);
       buildPluginProjection(PLUGIN, harness.name, built);
@@ -435,18 +435,44 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const cursorProject = join(tmp, "cursor-compose-installed-aidlc");
     const binDir = join(tmp, "cursor-fake-bin");
     mkdirSync(binDir, { recursive: true });
-    const aidlc = join(binDir, "aidlc");
-    writeFileSync(
-      aidlc,
-      [
-        "#!/bin/sh",
-        `exec ${JSON.stringify(BUN)} ${JSON.stringify(
-          join(cursorProject, ".cursor", "tools", "aidlc.ts"),
-        )} "$@"`,
-        "",
-      ].join("\n"),
-    );
-    chmodSync(aidlc, 0o755);
+    const aidlc = join(binDir, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    const dispatcher = join(cursorProject, ".cursor", "tools", "aidlc.ts");
+    if (process.platform === "win32") {
+      const source = join(binDir, "aidlc-forwarder.ts");
+      writeFileSync(
+        source,
+        [
+          'import { spawnSync } from "node:child_process";',
+          `const result = spawnSync(${JSON.stringify(BUN)}, [${JSON.stringify(dispatcher)}, ...process.argv.slice(2)], {`,
+          '  stdio: "inherit",',
+          "  env: process.env,",
+          "});",
+          "process.exit(result.status ?? 1);",
+          "",
+        ].join("\n"),
+      );
+      const built = Bun.spawnSync([
+        BUN,
+        "build",
+        "--compile",
+        source,
+        "--outfile",
+        aidlc,
+      ]);
+      if (built.exitCode !== 0) {
+        throw new Error(`fake aidlc build failed: ${built.stderr.toString()}`);
+      }
+    } else {
+      writeFileSync(
+        aidlc,
+        [
+          "#!/bin/sh",
+          `exec ${JSON.stringify(BUN)} ${JSON.stringify(dispatcher)} "$@"`,
+          "",
+        ].join("\n"),
+      );
+      chmodSync(aidlc, 0o755);
+    }
     const composed = composePluginFixture({
       plugin: PLUGIN,
       harness: "cursor",
@@ -1801,7 +1827,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
     const mf = join(root, ".claude-plugin", "plugin.json");
     const manifest = JSON.parse(readFileSync(mf, "utf-8"));
-    manifest.name = name;
+    manifest.name = `aidlc-${name}`;
     writeFileSync(mf, JSON.stringify(manifest));
     for (const [rel, body] of Object.entries(files)) {
       const path = join(root, rel);
@@ -3129,7 +3155,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const drops = hookDrops(collideProj);
     expect(drops).toContain(`scopes "test-pro-validation.md" collides`);
     expect(drops).toContain(`agents "test-pro-metrics-agent.md" collides`);
-    expect(drops).toContain(`knowledge "test-pro-metrics-agent/methodology.md" collides`);
+    expect(drops).toContain(`knowledge "${join("test-pro-metrics-agent", "methodology.md")}" collides`);
   });
 
   test("agent frontmatter name collision is dropped before copy and install remains usable", () => {
@@ -3153,7 +3179,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(join(proj, ".claude", "agents", "x-unique-file.md"))).toBe(false);
     expect(drops).toContain("[degraded]");
     expect(drops).toContain('plugin "syn-agent-name"');
-    expect(drops).toContain("agents/x-unique-file.md");
+    expect(drops).toContain(join("agents", "x-unique-file.md"));
     expect(drops).toContain("aidlc-quality-agent");
     expect(drops).toContain("aidlc-quality-agent.md");
 
@@ -3268,7 +3294,11 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     require("node:fs").mkdirSync(hd, { recursive: true });
     writeFileSync(join(hd, "session-start.last"), "2026-07-08T00:00:00Z"); // heartbeat present
     writeFileSync(join(hd, "plugin-compose.drops"), `${dropLines.join("\n")}\n`);
-    const r = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "doctor"], {
+    const r = spawnSync(BUN, [
+      join(proj, ".claude", "tools", "aidlc-utility.ts"),
+      "doctor",
+      "--verbose",
+    ], {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
     });
@@ -3276,8 +3306,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const dropRowLines = out.split("\n").filter((l) => l.includes("Hook drops"));
     return {
       out,
-      failRow: dropRowLines.some((l) => l.includes("✗")),
-      passRow: dropRowLines.some((l) => l.includes("✓")),
+      failRow: dropRowLines.some((l) => l.trimStart().startsWith("fail")),
+      passRow: dropRowLines.some((l) => l.trimStart().startsWith("ok")),
     };
   }
 
@@ -3345,7 +3375,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // The bad stage never landed, the drop names the file + the schema error,
     // and the install's graph still compiles (self-heal probe unaffected).
     expect(existsSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "syn-stale-stage.md"))).toBe(false);
-    expect(drops).toContain('stage file "construction/syn-stale-stage.md" not composed');
+    expect(drops).toContain(`stage file "${join("construction", "syn-stale-stage.md")}" not composed`);
     expect(drops).toContain("bundle: was renamed");
     const compile = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-graph.ts"), "compile"], {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,

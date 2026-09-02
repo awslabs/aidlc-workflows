@@ -23,7 +23,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 import {
   activeIntent,
@@ -121,7 +121,7 @@ describe("t172 migration preserves the pre-migration audit trail (B2)", () => {
     const shards = auditShards(proj, intent ?? undefined);
     expect(shards.length).toBeGreaterThan(0);
     for (const s of shards) {
-      expect(s.startsWith(`${join(record, "audit")}/`)).toBe(true);
+      expect(dirname(s)).toBe(join(record, "audit"));
       expect(s.endsWith(".md")).toBe(true);
     }
     // The relocated shard actually holds the migrated content.

@@ -198,7 +198,7 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
   const executable = compiledExecutable();
   const noun = toolFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
   const command = executable
-    ? [executable, noun, ...args, "--project-dir", projectDir]
+    ? [executable, "engine", noun, ...args, "--project-dir", projectDir]
     : [process.execPath, join(TOOLS_DIR, toolFile), "--project-dir", projectDir, ...args];
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",

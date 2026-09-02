@@ -201,7 +201,7 @@ them exactly rather than renumbering or replacing them with prose references.
 ### Step 11: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage requirements-analysis --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 12: Present Completion & Request Approval
@@ -226,7 +226,7 @@ Render `[next stage]` verbatim from the run-stage directive's `next_stage`
 field (per the stage-protocol.md approval-gate binding), or `Complete workflow`
 when it is null. Never guess the next stage name.
 If "Add User Stories" is selected, run
-`bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add user-stories`
+`{{INVOKE}} engine recompose --add user-stories`
 before re-entering the approval flow.
 
 IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Request Changes).

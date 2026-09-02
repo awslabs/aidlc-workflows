@@ -7,8 +7,7 @@
       "Read",
       "Edit",
       "Write",
-      "Bash(bun \"$CLAUDE_PROJECT_DIR/.claude/tools/\"*)",
-      "Bash",
+      "Bash(bun .claude/tools/*)",
       "Glob",
       "Grep",
       "Task",
@@ -17,7 +16,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts\""
+    "command": "{{INVOKE}} engine statusline"
   },
   "env": {
     "AWS_AIDLC_DEFAULT_SCOPE": "classic",
@@ -28,8 +27,6 @@
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "global.anthropic.claude-sonnet-4-6[1m]",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "global.anthropic.claude-haiku-4-5-20251001-v1:0"
   },
-  "model": "opus[1m]",
-  "effortLevel": "xhigh",
   "hooks": {
     "PreToolUse": [
       {
@@ -37,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-fold-usage.ts\""
+            "command": "{{INVOKE}} engine hook fold-usage"
           }
         ]
       },
@@ -46,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-deliver-stage-rules.ts\""
+            "command": "{{INVOKE}} engine hook deliver-stage-rules"
           }
         ]
       },
@@ -55,15 +52,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-state-transition-guard.ts\""
+            "command": "{{INVOKE}} engine hook state-transition-guard"
           },
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-reviewer-scope.ts\""
+            "command": "{{INVOKE}} engine hook reviewer-scope"
           },
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-review-freeze.ts\""
+            "command": "{{INVOKE}} engine hook review-freeze"
           }
         ]
       },
@@ -72,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-plan-approval-guard.ts\""
+            "command": "{{INVOKE}} engine hook plan-approval-guard"
           }
         ]
       }
@@ -83,7 +80,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-record-human-turn.ts\""
+            "command": "{{INVOKE}} engine hook record-human-turn"
           }
         ]
       }
@@ -94,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-start.ts\""
+            "command": "{{INVOKE}} engine hook session-start"
           }
         ]
       }
@@ -105,7 +102,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-end.ts\""
+            "command": "{{INVOKE}} engine hook session-end"
           }
         ]
       }
@@ -116,11 +113,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-write-audit-log.ts\""
+            "command": "{{INVOKE}} engine hook write-audit-log"
           },
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-run-sensors.ts\""
+            "command": "{{INVOKE}} engine hook run-sensors"
           }
         ]
       },
@@ -129,7 +126,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-sync-workflow-state.ts\""
+            "command": "{{INVOKE}} engine hook sync-workflow-state"
           }
         ]
       },
@@ -138,7 +135,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-record-human-turn.ts\""
+            "command": "{{INVOKE}} engine hook record-human-turn"
           }
         ]
       },
@@ -147,7 +144,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-rebuild-stage-graph.ts\""
+            "command": "{{INVOKE}} engine hook rebuild-stage-graph"
           }
         ]
       },
@@ -156,7 +153,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-fold-usage.ts\""
+            "command": "{{INVOKE}} engine hook fold-usage"
           }
         ]
       }
@@ -167,7 +164,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-validate-state.ts\""
+            "command": "{{INVOKE}} engine hook validate-state"
           }
         ]
       }
@@ -178,7 +175,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-log-subagent.ts\""
+            "command": "{{INVOKE}} engine hook log-subagent"
           }
         ]
       }
@@ -189,7 +186,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-continue-workflow.ts\""
+            "command": "{{INVOKE}} engine hook continue-workflow"
           }
         ]
       }

@@ -20,8 +20,8 @@
 //   balanced  -> model: sonnet,  effort: medium (the reviewer tier; pinned
 //                in 2.5.40 after live A/B showed medium reviews at ~half the
 //                xhigh wall-clock with no finding-quality loss)
-//   templated -> model: sonnet,  effort: medium (the pattern-following tier;
-//                currently the same cost-saving projection as balanced)
+//   templated -> model: inherit, NO effort: line (the tier remains a
+//                models-dial group, but the shipped baseline inherits)
 //
 // Why this exists: t04 pins the authored tier split for the 11 domain-expert
 // agents. This companion pins the complete 14-agent roster's PROJECTED
@@ -65,12 +65,12 @@ const EXPECTED: Record<Agent, { model: "inherit" | "sonnet"; effort: "medium" | 
   "aws-platform": { model: "inherit", effort: null },
   compliance: { model: "inherit", effort: null },
   composer: { model: "inherit", effort: null },
-  delivery: { model: "sonnet", effort: "medium" },
+  delivery: { model: "inherit", effort: null },
   design: { model: "inherit", effort: null },
   developer: { model: "inherit", effort: null },
   devsecops: { model: "inherit", effort: null },
-  operations: { model: "sonnet", effort: "medium" },
-  "pipeline-deploy": { model: "sonnet", effort: "medium" },
+  operations: { model: "inherit", effort: null },
+  "pipeline-deploy": { model: "inherit", effort: null },
   product: { model: "inherit", effort: null },
   "product-lead": { model: "sonnet", effort: "medium" },
   quality: { model: "inherit", effort: null },
@@ -113,7 +113,7 @@ describe("t216 complete Claude agent tier-projection contract", () => {
     }
   });
 
-  test("effort: matches the per-agent projection policy", () => {
+  test("effort: is pinned for balanced reviewers and ABSENT everywhere else", () => {
     for (const agent of AGENTS) {
       const values = keyValues(frontmatter(agent), "effort");
       const want = EXPECTED[agent].effort;

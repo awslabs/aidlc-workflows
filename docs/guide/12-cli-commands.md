@@ -1,6 +1,9 @@
 # CLI Commands
 
-All AI-DLC commands start with the orchestrator invocation. This chapter is a complete reference for every invocation pattern and flag.
+AI-DLC has two user-facing command planes. Harness chat commands drive a
+workflow through `/aidlc` (or `$aidlc` on Codex); the installed native
+`aidlc` command initializes projects and provides machine lifecycle,
+diagnostic and lifecycle routes.
 
 > **Invocation prefix differs by harness.** On Claude Code, Kiro IDE, Kiro CLI,
 > Cursor, opencode, and GitHub Copilot you type `/aidlc`; on Codex CLI it is `$aidlc` (or
@@ -34,6 +37,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
 | `/aidlc --status` | Display a read-only status summary |
+| `/aidlc --config [section]` | Configure project policy conversationally, then land exact deterministic config flags |
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
@@ -44,7 +48,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc unit land <unit> ...` | Run the resumable git → state → audit landing transaction |
 | `/aidlc unit merge-status <unit>` | Read the local pinned-merge transaction journal |
 | `/aidlc unit status` | Read the current claimable, claimed, and dependency-blocked Unit sets |
-| `/aidlc --doctor` | Run a health check on your setup |
+| `/aidlc --doctor [--check-updates]` | Run a health check; the explicit flag refreshes update metadata |
 | `/aidlc --doctor --export` | Run a fresh health check, then write a small, redacted diagnostic report for sharing |
 | `/aidlc --stage <slug\|#>` | Jump to a specific stage |
 | `/aidlc --stage <slug> --single` | Run one stage in isolation, without advancing your workflow |
@@ -64,6 +68,26 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
+
+---
+
+## Terminal Color
+
+The six public terminal commands (`config`, `doctor`, `version`, `update`,
+`use`, and `uninstall`) use restrained color only on human output. JSON, quiet
+output, files, audit records, and non-TTY streams remain uncolored.
+
+Color selection uses this precedence:
+
+1. `--no-color` disables color.
+2. A set `NO_COLOR` environment variable disables color, regardless of value.
+3. A non-empty `FORCE_COLOR` value other than `0` enables color.
+4. Otherwise, color is enabled only for a TTY stream when `TERM` is not `dumb`.
+
+The decision is made independently for stdout and stderr. Use `--no-color` for
+one command, `NO_COLOR=1` for a shell or process environment, and
+`FORCE_COLOR=1` when a terminal wrapper supports ANSI color but does not expose
+TTY detection.
 
 ---
 
@@ -194,10 +218,11 @@ If no state file exists, the framework treats this as a new workflow and asks fo
 
 ---
 
-### Initialization — automatic, no command
+### Workflow Initialization — automatic
 
-There is no scaffold command. The shipped `dist/<harness>/` workspace shell
-arrives pre-built (the `.claude/` engine plus `aidlc/spaces/default/memory/`),
+For manual-copy installs, there is no scaffold command. The versioned
+`runtime/<harness>/` shell from `aidlc-runtime.tar.gz` arrives pre-built (the
+`.claude/` engine plus `aidlc/spaces/default/memory/`),
 and the engine **auto-creates** the first intent on your first `/aidlc` (or when
 you describe what to build). Creation runs the three Initialization stages
 (Workspace Scaffold, Workspace Detection, State Init) as a single deterministic
@@ -214,6 +239,15 @@ defaults to `classic`. To add team knowledge
 or guardrails before the first run, edit the shipped `aidlc/spaces/default/memory/`
 files; the space-level `aidlc/knowledge/` directory is created (empty) once the
 first intent exists, and you add free-form files to it from there.
+
+The native config command is the preferred project installation and refresh
+path. Framework developers may generate the ignored Bun-shaped `dist/`
+projection locally with `bun scripts/package.ts`; release users should not copy
+from a checkout.
+
+For native machine installs, run `aidlc config` once before opening the harness.
+That command lays down the same shell and records a refresh baseline; workflow
+intent birth remains automatic on the first chat invocation.
 
 The welcome message is rendered at session start via the `companyAnnouncements`
 entry in `settings.json`.
@@ -526,9 +560,35 @@ may contact the configured git remote.
 
 ---
 
+### `/aidlc --config [section]` - In-session project configuration
+
+Configure one of `models`, `runtime`, `providers`, `trust`, `flags`, or
+`project` without leaving the harness conversation. With no section, the
+conductor asks which sections you want to consider.
+
+The conductor reads current state with
+`aidlc config <section> --show --json`, asks for changes conversationally, and
+uses the native question picker for enumerable choices. Saying "leave it"
+skips that section. Every accepted change lands through one exact
+`aidlc config <section> <explicit value flags> --yes` command; the command and
+its output are shown. The alias never invents values and never runs bare
+`aidlc config --yes`.
+
+This is terminal configuration work. After the change lands, or after you
+decline, the conductor stops without running `next`, advancing, resuming, or
+running a workflow stage.
+
+---
+
 ### `/aidlc --doctor` — Health check
 
-Validate that all of this implementation's prerequisites, configuration, and stage-graph integrity are in place. Exits 0 on full pass, 1 on any failure; the full report writes to stdout in both cases so the orchestrator surfaces it either way. Core doctor checks are **read-only** — on a fresh shell with no intent yet (no `audit/` shards) they create no files, so the command is safe to run before the first intent is created; once an intent exists it records a `HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
+Validate that all of this implementation's prerequisites, configuration, and
+stage-graph integrity are in place. Clean and warnings-only reports exit 0; a
+failed check exits 1. The full report writes to stdout in all cases so the
+orchestrator surfaces it either way. Core doctor checks are **read-only** - on a fresh
+shell with no intent yet (no `audit/` shards) they create no files, so the command is safe
+to run before the first intent is created; once an intent exists it records a
+`HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
 
 When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing the structured findings (e.g. `gate-unresolved`, `runtime-graph-stale`) for unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
 
@@ -542,7 +602,9 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 
 | Check | What it validates |
 |-------|-------------------|
-| Prerequisites | `bun` is installed and on PATH |
+| Prerequisites | Self-contained binary, or `bun` on PATH for a copy install |
+| Installed runtime | Active machine version and installed harness distributions, when using the binary channel |
+| Project stamp | Project distribution/version compared with the selected engine |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 17 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
@@ -560,6 +622,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
 | Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph. Plugin-owned files name `plugin sync`; other authored stages name `aidlc-graph.ts compile` (advisory, never fails) |
 | Plugin selection | Enabled plugin list, per-plugin enabled-stage counts, full-graph `enabled:false` flag agreement, and torn-selection recovery hints |
+| Plugin composition | Offline installed-versus-composed version/hash state, including sync or repair remediation |
 | Composed plugin surface | Enabled plugin-owned stage files are compiled; every enabled-plugin contribution sidecar is readable and valid, every recorded target stage exists, and every recorded structural addition or prose fragment is still present and unchanged |
 | Plugin checks | Runs optional `tools/<plugin>-doctor.ts` scripts only for enabled plugins. Error findings fail doctor; advisory findings are visible and exported without changing the exit code |
 | Scope validation | All enabled scopes (from `.claude/scopes/*.md` after plugin selection) walk cleanly (advisories for scope-truncation gaps are expected) |
@@ -576,34 +639,30 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 **Example output:**
 
 ```
-✓ bun installed (required for CLI tools and hooks)
-✓ aidlc-write-audit-log.ts present
-✓ aidlc-sync-workflow-state.ts present
-✓ aidlc-validate-state.ts present
-✓ aidlc-log-subagent.ts present
-✓ aidlc-session-start.ts present
-✓ aidlc-session-end.ts present
-✓ aidlc-statusline.ts present
-✓ settings.json present
-✓ AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
-✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
-✓ Submodules: no .gitmodules at workspace root
-✓ Hook heartbeats: not yet fired (first workflow stage will populate)
-✓ Hook drops: none recorded
-✓ State matches last audit event (no drift)
-✓ Cycle detection: 0 cycles
-✓ Orphan stage files: 33 graph entries all have files
-✓ Uncompiled stage files: 0 stage files missing from the compiled graph
-✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=33
-✓ Composed plugin surface: all enabled plugin stages and recorded contributions are present
-✓ Scope validation: 11 scopes valid
-✓ Schema validation: 33/33 stages valid
-✓ Graph references: 122 artifacts + edges resolved
-✓ Duplicate producers: every consumed artifact has a single producer
-✓ Keyword overlap: no conflicts
-✓ Rule drift: no team/project rule overlaps org policy
-✓ Paired sensor coverage: no sensor-bound rules (0 feedforward-only)
+AI-DLC doctor
+
+Machine
+  warn  Runtime hook PATH: bun is interactive-only at /home/user/.bun/bin/bun
+        fix: Install Bun, then add ~/.bun/bin to the login-independent environment used by the harness, not only .zshrc or .bash_profile.
+  warn  Update: update check unavailable while offline
+        fix: run `bun .claude/tools/aidlc.ts update --check`
+  ok    4 checks passed
+
+Project (.claude, Claude Code)
+  warn  Instruction file: block or file missing (.claude/CLAUDE.md)
+        fix: run `bun .claude/tools/aidlc.ts config`
+  ok    43 checks passed
+
+Framework integrity
+  ok    all 12 checks passed
+
+0 problems, 3 warnings.
+Warnings are advisory - if everything works, ignore them.
+Run 'bun .claude/tools/aidlc.ts doctor --verbose' to see every check.
 ```
+
+Use `--verbose` to expand every Machine, Project, graph, schema, stage, scope,
+and sensor row. Every warning or failure carries a following `fix:` action.
 
 ---
 
@@ -887,28 +946,24 @@ Display a summary of available commands and flags.
 
 ## Deterministic CLI Tools
 
-Beyond the `/aidlc` flags above, this implementation ships several
-Bun/TypeScript tools that the hooks and stage protocol call as a workflow runs.
-You rarely invoke them by hand, but each is also a useful debug handle.
+The native dispatcher exposes stable public routes for user operations.
+Versioned release runtimes use those routes. A locally generated source
+projection implements the same operations with Bun/TypeScript tools under the
+harness directory, and direct tool calls remain useful for plumbing that has no
+public route. Prefer `aidlc` whenever a route is documented below.
 
-Use `bun <harness-dir>/tools/<tool>.ts <subcommand>`, where `<harness-dir>` is
-`.claude` on Claude Code, `.kiro` on Kiro CLI and Kiro IDE, and `.codex` on
-Codex CLI.
+### `aidlc engine workspace codekb` - resolve the code knowledge directory
 
-### `aidlc-utility codekb-path` - resolve the code knowledge directory
-
-This is a **direct utility invocation**, not an `/aidlc codekb-path` command:
+Use the public read-only query:
 
 ```bash
-bun .claude/tools/aidlc-utility.ts codekb-path --repo <repo>
-bun .kiro/tools/aidlc-utility.ts codekb-path --repo <repo>
-bun .codex/tools/aidlc-utility.ts codekb-path --repo <repo>
+aidlc engine workspace codekb --repo <repo>
 ```
 
 It prints the active space's deterministic
 `aidlc/spaces/<space>/codekb/<repo>/` path. Add `--json` for
 `{space, repo, dir}`. The query writes nothing, creates no directory, and emits
-no audit event; reverse-engineering stage prose invokes it directly so paths
+no audit event; reverse-engineering stage prose invokes the same route so paths
 are never derived by hand.
 
 ### `aidlc-utility codekb-snapshot` - bind a scan to source and store generations
@@ -1003,10 +1058,7 @@ the workspace root (see
 [Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set-optional-manifest)):
 
 ```bash
-bun .claude/tools/aidlc-workspace-sync.ts [--force]
-bun .kiro/tools/aidlc-workspace-sync.ts [--force]
-bun .codex/tools/aidlc-workspace-sync.ts [--force]
-bun .aidlc/tools/aidlc-workspace-sync.ts [--force]
+aidlc system workspace-sync [--force]
 ```
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
@@ -1051,7 +1103,7 @@ about it (uncommitted `aidlc/` records, `repos.json` vs on-disk drift, and a
 stale managed `.gitignore` block); like all advisory rows they never change the
 doctor exit code.
 
-### `aidlc-utility select-plugins` - install plugin selection
+### Plugin state
 
 `/aidlc plugin list` prints installed plugin names and whether each is enabled.
 `/aidlc plugin select [names]` is the public command. `select-plugins` is its
@@ -1087,7 +1139,7 @@ directory. Build also defaults its plugin root to the current directory; pass
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
-`bun .claude/tools/aidlc-utility.ts recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the walking-skeleton anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+`{{INVOKE}} engine recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the walking-skeleton anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
 
 ### `aidlc-graph ars` - deterministic ARS scoring
 

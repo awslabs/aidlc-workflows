@@ -223,7 +223,11 @@ function extractNextInvocation(
   // Match the FIRST `… aidlc-orchestrate.ts next <ARGS>` occurrence (the loop's
   // step-1 anchor) and take the tokens up to the closing backtick. The anchor is
   // inside a markdown code span, so the args end at the backtick.
-  const m = expandedPrompt.match(/aidlc-orchestrate\.ts next ([^`\n]*)`/);
+  // Accept the native dispatcher anchor and the legacy filename shape so the
+  // seam keeps working across both invocation channels.
+  const m = expandedPrompt.match(
+    /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ([^`\n]*)`/,
+  );
   const rawInvocation = m
     ? m[1]
     : expandedPrompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
@@ -233,6 +237,7 @@ function extractNextInvocation(
 }
 
 const PRE_DISPATCH_FLAGS = new Set([
+  "--config",
   "--stage",
   "--phase",
   "--resume",
@@ -311,7 +316,7 @@ if (target === "verb-intercept") {
       try {
         const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
         const command = executable
-          ? [executable, "next", ...args]
+          ? [executable, "engine", "orchestrate", "next", ...args]
           : [
               process.execPath,
               join(".kiro", "tools", "aidlc-orchestrate.ts"),
@@ -329,6 +334,20 @@ if (target === "verb-intercept") {
           rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
             force: true,
           });
+          if (args[0] === "--config") {
+            try {
+              writeFileSync(
+                join(cwd, "aidlc", ".aidlc-readonly-latch"),
+                JSON.stringify({
+                  turn,
+                  flag: args.join(" ").replace(/^--/, ""),
+                  source: "config-alias",
+                  ts: Date.now(),
+                }) + "\n",
+                "utf-8",
+              );
+            } catch { /* config-alias latch is best-effort */ }
+          }
           process.stdout.write(
             "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
               "run the exact first `aidlc-orchestrate.ts next` invocation with " +
@@ -362,7 +381,7 @@ if (target === "verb-intercept") {
       process.stdout.write(
         "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
           "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
-          `bun .kiro/tools/aidlc-orchestrate.ts next ${invocation.raw}\n`,
+          `{{INVOKE}} engine orchestrate next ${invocation.raw}\n`,
       );
     }
     return 0; // non-terminal command — conductor handles the directive
@@ -403,7 +422,9 @@ if (target === "verb-intercept") {
     // Reuse the exact bun binary running this adapter; the child must not depend on
     // PATH containing bun (the hook environment often lacks the bun install dir).
     const run = Bun.spawnSync(
-      executable ? [executable, ...compiledArgs] : [process.execPath, ...utilArgs],
+      executable
+        ? [executable, "engine", ...compiledArgs]
+        : [process.execPath, ...utilArgs],
       { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
     );
     out = (
@@ -460,14 +481,16 @@ if (target === "verb-intercept") {
 if (target === "guard-tool-call") {
   const cmdStr = String(kiro.tool_input?.command ?? "");
   const cwd = projectDir;
-  const m = cmdStr.match(/aidlc-orchestrate\.ts\s+next\b([^\n]*)/);
+  const m = cmdStr.match(
+    /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\b([^\n]*)/,
+  );
   const nextArgs = m ? splitKiroCommandArgs(m[1].trim()) : [];
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
   // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing
   // them here is a harmless superset).
   const ADVANCING_FLAGS = new Set([
-    "--stage", "--phase", "--scope", "--resume", "--depth",
+    "--config", "--stage", "--phase", "--scope", "--resume", "--depth",
     "--test-strategy", "--single", "--init", "--force",
     "--new-scope", "--report",
   ]);
@@ -516,7 +539,7 @@ if (target === "guard-tool-call") {
         if (!matches) {
           process.stderr.write(
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
-              `Run exactly: bun .kiro/tools/aidlc-orchestrate.ts next ${forwarding.raw ?? ""}\n`,
+              `Run exactly: {{INVOKE}} engine orchestrate next ${forwarding.raw ?? ""}\n`,
           );
           process.exit(2);
         }
@@ -570,8 +593,12 @@ if (target === "state-transition-guard") {
   if (tool !== "shell" && tool !== "execute_bash") process.exit(0);
   const command = String(kiro.tool_input?.command ?? "");
   const registeredAgent = extraArgs[0] ?? "";
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hookCommand = executable
+    ? [executable, "engine", "hook", "state-transition-guard"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")];
   const r = Bun.spawnSync(
-    [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")],
+    hookCommand,
     {
       stdin: Buffer.from(
         JSON.stringify({
@@ -582,9 +609,10 @@ if (target === "state-transition-guard") {
         }),
         "utf-8",
       ),
-      cwd: kiro.cwd ?? process.cwd(),
+      cwd: childCwd,
       stdout: "pipe",
       stderr: "pipe",
+      env: projectEnv,
     },
   );
   if (r.exitCode === 2) {
@@ -634,7 +662,7 @@ if (target === "plan-approval-guard") {
   }
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
-    ? [executable, "hook", "plan-approval-guard"]
+    ? [executable, "engine", "hook", "plan-approval-guard"]
     : [process.execPath, join(HOOKS_DIR, "aidlc-plan-approval-guard.ts")];
   const r = Bun.spawnSync(
     command,
@@ -695,7 +723,7 @@ if (target === "reviewer-scope") {
   const registeredAgent = extraArgs[0] ?? "";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
-    ? [executable, "hook", "reviewer-scope"]
+    ? [executable, "engine", "hook", "reviewer-scope"]
     : [process.execPath, join(HOOKS_DIR, "aidlc-reviewer-scope.ts")];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(
@@ -742,7 +770,7 @@ if (target === "review-freeze") {
     : { file_path: paths[0] ?? "", paths };
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
-    ? [executable, "hook", "review-freeze"]
+    ? [executable, "engine", "hook", "review-freeze"]
     : [process.execPath, join(HOOKS_DIR, "aidlc-review-freeze.ts")];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(
@@ -786,7 +814,7 @@ if (target === "deliver-stage-rules") {
   if (dispatch === null) return 0;
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
-    ? [executable, "hook", "deliver-stage-rules"]
+    ? [executable, "engine", "hook", "deliver-stage-rules"]
     : [process.execPath, join(HOOKS_DIR, "aidlc-deliver-stage-rules.ts")];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(
@@ -984,7 +1012,7 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
-    ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
     : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),

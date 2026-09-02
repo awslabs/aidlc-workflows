@@ -8,7 +8,7 @@
 // onboarding doc for free, provably" guarantee:
 //   (1) renderOnboarding() over a SYNTHETIC 4th harness's fills produces a doc
 //       with every shared section present, the invoke command substituted, and
-//       NO leftover {{SLOT:...}} / {{INVOKE}} marker — i.e. nothing was forgotten.
+//       NO leftover template marker — i.e. nothing was forgotten.
 //   (2) An incomplete fill set (a declared slot left unprovided that the renderer
 //       fails to blank) cannot pass — the renderer THROWS. We assert the
 //       completeness guard fires on a deliberately-broken skeleton.
@@ -46,7 +46,9 @@ const REQUIRED_SECTIONS = [
 ];
 
 function noLeftoverMarkers(rendered: string): RegExpMatchArray | null {
-  return rendered.match(/\{\{SLOT:[a-z_]+\}\}|\{\{INVOKE\}\}|\{\{HARNESS_DIR\}\}/);
+  return rendered.match(
+    /\{\{SLOT:[a-z_]+\}\}|\{\{SKILL_INVOKE\}\}|\{\{INVOKE\}\}|\{\{HARNESS_DIR\}\}/,
+  );
 }
 
 describe("t151 onboarding skeleton — a new harness gets a complete doc for free", () => {
@@ -68,9 +70,10 @@ describe("t151 onboarding skeleton — a new harness gets a complete doc for fre
       ),
     };
 
-    // Render, then substitute the harness-dir token the packager would apply.
+    // Render, then substitute the runtime tokens the packager would apply.
     let rendered = renderOnboarding(SKELETON, fooFills);
     rendered = rendered.split("{{HARNESS_DIR}}").join(".foo");
+    rendered = rendered.split("{{INVOKE}}").join("aidlc");
 
     // Every shared section is present — the doc is structurally complete.
     for (const section of REQUIRED_SECTIONS) {
@@ -86,17 +89,22 @@ describe("t151 onboarding skeleton — a new harness gets a complete doc for fre
     // A) Completeness by construction: a declared slot with NO fill renders to
     //    empty — the doc never ships a visible {{SLOT:...}} marker, whether the
     //    slot sits on its own line or mid-line.
-    const sk = "# T {{SLOT:inline}} x\n\n{{SLOT:lone}}\nbody {{INVOKE}}\n";
+    const sk =
+      "# T {{SLOT:inline}} x\n\n{{SLOT:lone}}\nbody {{SKILL_INVOKE}} runs {{INVOKE}}\n";
     const out = renderOnboarding(sk, { invoke: "/aidlc", slots: {} });
     expect(out).not.toContain("{{SLOT:");
     expect(out).toContain("body /aidlc"); // invoke substituted
+    expect(out).toContain("runs {{INVOKE}}"); // runtime token left for packager
     expect(out).toContain("# T  x"); // inline slot blanked in place
 
     // B) The defensive completeness guard: if the invoke value itself smuggles a
     //    surviving marker (a malformed/typo'd token the slot loop never matched),
     //    renderOnboarding THROWS rather than shipping it.
     expect(() =>
-      renderOnboarding("body {{INVOKE}}\n", { invoke: "{{INVOKE}}", slots: {} }),
+      renderOnboarding("body {{SKILL_INVOKE}}\n", {
+        invoke: "{{SKILL_INVOKE}}",
+        slots: {},
+      }),
     ).toThrow(/render incomplete/);
   });
 
@@ -109,6 +117,7 @@ describe("t151 onboarding skeleton — a new harness gets a complete doc for fre
       ).default;
       let rendered = renderOnboarding(SKELETON, fills);
       rendered = rendered.split("{{HARNESS_DIR}}").join(harness.manifest.harnessDir);
+      rendered = rendered.split("{{INVOKE}}").join("aidlc");
       expect({ harness: harness.name, leftover: noLeftoverMarkers(rendered) }).toEqual({
         harness: harness.name,
         leftover: null,
@@ -116,9 +125,24 @@ describe("t151 onboarding skeleton — a new harness gets a complete doc for fre
 
       const shipped = readFileSync(harness.onboardingDist, "utf-8");
       expect(noLeftoverMarkers(shipped), `${harness.name}: shipped onboarding markers`).toBeNull();
+      expect(shipped, `${harness.name}: copy-channel runtime command`).toContain(
+        `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine runtime summary --json`,
+      );
+      expect(shipped, `${harness.name}: skill command is not a shell delegate`).not.toContain(
+        `${fills.invoke} engine`,
+      );
+      const nativeOnboarding = harness.onboardingDist.replace(
+        join(REPO_ROOT, "dist"),
+        join(REPO_ROOT, "dist-release"),
+      );
+      const native = readFileSync(nativeOnboarding, "utf-8");
+      expect(native, `${harness.name}: native-release runtime command`).toContain(
+        "aidlc engine runtime summary --json",
+      );
       for (const section of REQUIRED_SECTIONS) {
         expect(rendered).toContain(section);
         expect(shipped, `${harness.name}: shipped ${section}`).toContain(section);
+        expect(native, `${harness.name}: native shipped ${section}`).toContain(section);
       }
     }
   });

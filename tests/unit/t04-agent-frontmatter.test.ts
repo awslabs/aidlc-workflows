@@ -34,6 +34,7 @@
 //                     judgment : architect, product, design, developer,
 //                                quality, devsecops, compliance, aws-platform
 //                     templated: delivery, pipeline-deploy, operations
+//                     (a policy group whose shipped projection now inherits)
 //
 // Test-design note (house style): assert the OBSERVABLE authored contract -
 // frontmatter field presence/absence and exact values - against the real

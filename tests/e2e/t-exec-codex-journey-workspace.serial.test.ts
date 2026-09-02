@@ -79,7 +79,7 @@ function intentCreationToolPrompt(scope: string, args: string): string {
   return (
     `Run this exact command with the shell and then stop — do NOT run \`next\`, ` +
     `do NOT advance or scope-change the currently active intent: ` +
-    `bun .codex/tools/aidlc-utility.ts intent-create --scope ${scope} --arguments ${JSON.stringify(args)}`
+    `bun .codex/tools/aidlc.ts engine intent create --scope ${scope} --arguments ${JSON.stringify(args)}`
   );
 }
 

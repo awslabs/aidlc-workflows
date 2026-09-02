@@ -1,1 +1,0 @@
-{"version":"1.0.0","enabled":true,"name":"aidlc-record-human-turn","description":"Records a real human prompt as the authority event required by approval checkpoints.","when":{"type":"promptSubmit"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-record-human-turn.ts"}}

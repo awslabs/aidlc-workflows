@@ -19,22 +19,27 @@
 // non-destructive keep/render cases, while every removal case uses real repos.
 // Mechanism: subprocess spawn of bun; zero LLM.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+  closeSync,
   chmodSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseWorkspaceManifest } from "../../core/tools/aidlc-workspace-manifest.ts";
 
@@ -42,6 +47,14 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = join(REPO_ROOT, "core", "tools", "aidlc-workspace-sync.ts");
 const BUN = process.execPath;
 const CODE_WORKSPACE_NAME = "aidlc.code-workspace";
+
+setDefaultTimeout(process.platform === "win32" ? 15_000 : 5_000);
+
+const tmpRoots: string[] = [];
+const gitConfigRoot = mkdtempSync(join(tmpdir(), "aidlc-t255-git-config-"));
+const emptyGitConfig = join(gitConfigRoot, "empty.gitconfig");
+tmpRoots.push(gitConfigRoot);
+writeFileSync(emptyGitConfig, "", "utf-8");
 
 // Hermetic git env for the throwaway fixtures. A developer's global/system git
 // config can carry a `core.hooksPath` pre-push hook (corp tooling), credential
@@ -52,13 +65,12 @@ const CODE_WORKSPACE_NAME = "aidlc.code-workspace";
 // equally hermetic.
 const GIT_ENV = {
   ...process.env,
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_CONFIG_GLOBAL: emptyGitConfig,
+  GIT_CONFIG_SYSTEM: emptyGitConfig,
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_TERMINAL_PROMPT: "0",
 };
 
-const tmpRoots: string[] = [];
 afterAll(() => {
   for (const dir of tmpRoots) rmSync(dir, { recursive: true, force: true });
 });
@@ -168,109 +180,377 @@ function makeRepo(
   return dir;
 }
 
-function slowGitEnv(signalPath: string): NodeJS.ProcessEnv {
-  const shimRoot = mkdtempSync(join(tmpdir(), "aidlc-t255-git-shim-"));
-  tmpRoots.push(shimRoot);
-  const shim = join(shimRoot, "git");
-  const realGit = spawnSync("which", ["git"], {
+type GitShimMode = "clone" | "quarantine" | "post-proof";
+
+const WINDOWS_GIT_SHIM_SOURCE = [
+  'import { spawnSync } from "node:child_process";',
+  'import { writeFileSync } from "node:fs";',
+  "",
+  "const args = process.argv.slice(2);",
+  "const realGit = process.env.AIDLC_TEST_REAL_GIT;",
+  "const mode = process.env.AIDLC_TEST_GIT_SHIM_MODE;",
+  'if (!realGit || !mode) throw new Error("missing Git shim environment");',
+  "",
+  "function signal(name: string): void {",
+  "  const path = process.env[name];",
+  '  if (!path) throw new Error("missing signal path: " + name);',
+  '  writeFileSync(path, "", "utf-8");',
+  "}",
+  "",
+  'const cwd = process.cwd().replaceAll("\\\\", "/");',
+  'const inQuarantine = cwd.includes(".aidlc-workspace-sync-txn-") && cwd.includes("/orphans/");',
+  'if (mode === "clone" && args[0] === "clone") {',
+  '  signal("AIDLC_TEST_CLONE_STARTED");',
+  "  await Bun.sleep(1000);",
+  "}",
+  'if (mode === "quarantine" && inQuarantine && args[0] === "-c" && args[2] === "status") {',
+  '  signal("AIDLC_TEST_QUARANTINE_STARTED");',
+  "  await Bun.sleep(1000);",
+  "}",
+  "",
+  'const result = spawnSync(realGit, args, { env: process.env, stdio: "inherit" });',
+  'if (mode === "post-proof" && inQuarantine && args[0] === "fsck") {',
+  '  signal("AIDLC_TEST_FINAL_PROOF_DONE");',
+  "  await Bun.sleep(1000);",
+  "}",
+  "if (result.error) throw result.error;",
+  "process.exit(result.status ?? 1);",
+  "",
+].join("\n");
+const WINDOWS_GIT_LAUNCHER_SOURCE = [
+  "using System;",
+  "using System.Diagnostics;",
+  "using System.Threading;",
+  "",
+  "internal static class GitShimLauncher",
+  "{",
+  "    private static string ForwardedArguments()",
+  "    {",
+  "        string commandLine = Environment.CommandLine;",
+  "        int index = 0;",
+  '        if (commandLine.Length > 0 && commandLine[0] == \'"\')',
+  "        {",
+  "            index = commandLine.IndexOf('\"', 1);",
+  "            index = index < 0 ? commandLine.Length : index + 1;",
+  "        }",
+  "        else",
+  "        {",
+  "            while (index < commandLine.Length && !char.IsWhiteSpace(commandLine[index])) index++;",
+  "        }",
+  "        while (index < commandLine.Length && char.IsWhiteSpace(commandLine[index])) index++;",
+  "        return commandLine.Substring(index);",
+  "    }",
+  "",
+  "    public static int Main()",
+  "    {",
+  '        string bun = Environment.GetEnvironmentVariable("AIDLC_TEST_BUN");',
+  '        string helper = Environment.GetEnvironmentVariable("AIDLC_TEST_GIT_SHIM");',
+  "        if (string.IsNullOrEmpty(bun) || string.IsNullOrEmpty(helper))",
+  "        {",
+  '            Console.Error.WriteLine("missing Git shim launcher environment");',
+  "            return 2;",
+  "        }",
+  "        string forwarded = ForwardedArguments();",
+  String.raw`        string arguments = "\"" + helper.Replace("\"", "\\\"") + "\"";`,
+  '        if (forwarded.Length > 0) arguments += " " + forwarded;',
+  "        try",
+  "        {",
+  "            using (Process child = new Process())",
+  "            {",
+  "                child.StartInfo = new ProcessStartInfo(bun, arguments)",
+  "            {",
+  "                UseShellExecute = false,",
+  "                CreateNoWindow = true,",
+  "                RedirectStandardOutput = true,",
+  "                RedirectStandardError = true",
+  "            };",
+  "                child.Start();",
+  "                Thread stdout = new Thread(() =>",
+  "                    child.StandardOutput.BaseStream.CopyTo(Console.OpenStandardOutput()));",
+  "                Thread stderr = new Thread(() =>",
+  "                    child.StandardError.BaseStream.CopyTo(Console.OpenStandardError()));",
+  "                stdout.Start();",
+  "                stderr.Start();",
+  "                child.WaitForExit();",
+  "                stdout.Join();",
+  "                stderr.Join();",
+  "                return child.ExitCode;",
+  "            }",
+  "        }",
+  "        catch (Exception error)",
+  "        {",
+  "            Console.Error.WriteLine(error.Message);",
+  "            return 1;",
+  "        }",
+  "    }",
+  "}",
+  "",
+].join("\n");
+let windowsGitLauncherCache: string | undefined;
+
+const RACE_HELPER_SOURCE = [
+  'import { existsSync, readdirSync, writeFileSync } from "node:fs";',
+  'import { spawnSync } from "node:child_process";',
+  'import { join } from "node:path";',
+  "",
+  "const [signal, action, workspace, checkoutName] = process.argv.slice(2);",
+  'if (!signal || !action || !workspace || !checkoutName) throw new Error("missing race helper argument");',
+  "",
+  "function runGit(cwd: string, args: string[]): void {",
+  '  const result = spawnSync("git", args, { cwd, env: process.env, stdio: "inherit" });',
+  "  if (result.error) throw result.error;",
+  "  if (result.status !== 0) process.exit(result.status ?? 1);",
+  "}",
+  "",
+  "while (!existsSync(signal)) await Bun.sleep(10);",
+  "// Windows-only: resolve the renamed transaction path after the signal (an",
+  "// open cwd would have blocked the rename, so the helper starts in the",
+  "// workspace root and finds the quarantined checkout by name).",
+  "const transaction = readdirSync(workspace).find((name) =>",
+  '  name.startsWith(".aidlc-workspace-sync-txn-"),',
+  ");",
+  'if (!transaction) throw new Error("quarantine transaction not found");',
+  'const checkout = join(workspace, transaction, "orphans", checkoutName);',
+  "function target(file: string): string {",
+  "  return join(checkout, file);",
+  "}",
+  'if (action === "write-local") {',
+  '  writeFileSync(target("late-local.txt"), "late local work\\n", "utf-8");',
+  '} else if (action === "commit") {',
+  '  writeFileSync(target("late-commit.txt"), "late commit\\n", "utf-8");',
+  '  runGit(checkout, ["add", "late-commit.txt"]);',
+  '  runGit(checkout, ["-c", "user.name=t255", "-c", "user.email=t255@example.com", "commit", "-q", "-m", "late commit"]);',
+  '} else if (action === "write-after-proof") {',
+  '  writeFileSync(target("after-proof.txt"), "after proof\\n", "utf-8");',
+  "} else {",
+  '  throw new Error("unknown race helper action: " + action);',
+  "}",
+  "",
+].join("\n");
+
+function sleepSync(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function cachedWindowsGitLauncher(): string {
+  if (windowsGitLauncherCache) return windowsGitLauncherCache;
+  const sourceHash = createHash("sha256").update(WINDOWS_GIT_LAUNCHER_SOURCE).digest("hex");
+  const key = createHash("sha256")
+    .update(`${process.platform}\0${process.arch}\0${sourceHash}`)
+    .digest("hex");
+  const cacheRoot = join(tmpdir(), "aidlc-t255-git-launcher-cache");
+  const binaryPath = join(cacheRoot, `${key}.exe`);
+  const sourcePath = join(cacheRoot, `${key}.cs`);
+  const lockPath = join(cacheRoot, `${key}.lock`);
+  const compiler = join(
+    process.env.WINDIR ?? "C:\\Windows",
+    "Microsoft.NET",
+    "Framework64",
+    "v4.0.30319",
+    "csc.exe",
+  );
+  mkdirSync(cacheRoot, { recursive: true });
+
+  if (!existsSync(binaryPath)) {
+    const deadline = Date.now() + 180_000;
+    let lock: number | undefined;
+    while (lock === undefined) {
+      try {
+        lock = openSync(lockPath, "wx");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (existsSync(binaryPath)) break;
+        if (Date.now() >= deadline) {
+          throw new Error(`timed out waiting for cached Windows Git launcher: ${lockPath}`);
+        }
+        sleepSync(100);
+      }
+    }
+    if (lock !== undefined) {
+      const temporaryBinary = join(cacheRoot, `${key}.${process.pid}.exe`);
+      try {
+        if (!existsSync(binaryPath)) {
+          if (!existsSync(compiler)) {
+            throw new Error(`Windows C# compiler not found: ${compiler}`);
+          }
+          writeFileSync(sourcePath, WINDOWS_GIT_LAUNCHER_SOURCE, "utf-8");
+          const built = spawnSync(
+            compiler,
+            ["/nologo", "/optimize+", "/target:exe", `/out:${temporaryBinary}`, sourcePath],
+            { encoding: "utf-8", timeout: 180_000 },
+          );
+          if (built.status !== 0) {
+            throw new Error(`Windows Git launcher build failed: ${built.stderr || built.stdout}`);
+          }
+          renameSync(temporaryBinary, binaryPath);
+        }
+      } finally {
+        closeSync(lock);
+        rmSync(lockPath, { force: true });
+        rmSync(temporaryBinary, { force: true });
+      }
+    }
+  }
+
+  windowsGitLauncherCache = binaryPath;
+  return binaryPath;
+}
+
+if (process.platform === "win32") cachedWindowsGitLauncher();
+
+function resolveCommand(command: string): string {
+  const lookup = spawnSync(process.platform === "win32" ? "where.exe" : "which", [command], {
     encoding: "utf-8",
     env: GIT_ENV,
-  }).stdout.trim();
-  writeFileSync(
-    shim,
-    [
-      "#!/bin/sh",
-      'if [ "$1" = "clone" ]; then',
-      '  : > "$AIDLC_TEST_CLONE_STARTED"',
-      "  sleep 1",
-      "fi",
-      'exec "$AIDLC_TEST_REAL_GIT" "$@"',
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
-  chmodSync(shim, 0o755);
-  return {
+  });
+  const resolved = lookup.stdout?.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim();
+  if (lookup.status !== 0 || !resolved) {
+    throw new Error(`could not resolve ${command}: ${lookup.stderr ?? ""}`);
+  }
+  return resolved;
+}
+
+function createGitShim(mode: GitShimMode, posixLines: string[]): NodeJS.ProcessEnv {
+  const shimRoot = mkdtempSync(join(tmpdir(), "aidlc-t255-git-shim-"));
+  tmpRoots.push(shimRoot);
+  const realGit = resolveCommand("git");
+  const platformEnv: NodeJS.ProcessEnv = {};
+
+  if (process.platform === "win32") {
+    const helper = join(shimRoot, "git-shim.ts");
+    writeFileSync(helper, WINDOWS_GIT_SHIM_SOURCE, "utf-8");
+    linkSync(cachedWindowsGitLauncher(), join(shimRoot, "git.exe"));
+    platformEnv.AIDLC_TEST_BUN = BUN;
+    platformEnv.AIDLC_TEST_GIT_SHIM = helper;
+    platformEnv.AIDLC_TEST_GIT_SHIM_MODE = mode;
+  } else {
+    const shim = join(shimRoot, "git");
+    writeFileSync(shim, posixLines.join("\n"), "utf-8");
+    chmodSync(shim, 0o755);
+  }
+
+  const env: NodeJS.ProcessEnv = {
     ...GIT_ENV,
-    PATH: `${shimRoot}:${process.env.PATH ?? ""}`,
-    AIDLC_TEST_CLONE_STARTED: signalPath,
+    ...platformEnv,
     AIDLC_TEST_REAL_GIT: realGit,
+  };
+  for (const name of Object.keys(env)) {
+    if (name.toLowerCase() === "path") delete env[name];
+  }
+  env.PATH = `${shimRoot}${delimiter}${process.env.PATH ?? ""}`;
+  return env;
+}
+
+function slowGitEnv(signalPath: string): NodeJS.ProcessEnv {
+  return {
+    ...createGitShim(
+      "clone",
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "clone" ]; then',
+        '  : > "$AIDLC_TEST_CLONE_STARTED"',
+        "  sleep 1",
+        "fi",
+        'exec "$AIDLC_TEST_REAL_GIT" "$@"',
+        "",
+      ],
+    ),
+    AIDLC_TEST_CLONE_STARTED: signalPath,
   };
 }
 
 function quarantineGitEnv(signalPath: string): NodeJS.ProcessEnv {
-  const shimRoot = mkdtempSync(join(tmpdir(), "aidlc-t255-git-shim-"));
-  tmpRoots.push(shimRoot);
-  const shim = join(shimRoot, "git");
-  const realGit = spawnSync("which", ["git"], {
-    encoding: "utf-8",
-    env: GIT_ENV,
-  }).stdout.trim();
-  writeFileSync(
-    shim,
-    [
-      "#!/bin/sh",
-      'case "$(pwd -P)" in',
-      '  *".aidlc-workspace-sync-txn-"*"/orphans/"*)',
-      '    if [ "$1" = "-c" ] && [ "$3" = "status" ]; then',
-      '      : > "$AIDLC_TEST_QUARANTINE_STARTED"',
-      "      sleep 1",
-      "    fi",
-      "    ;;",
-      "esac",
-      'exec "$AIDLC_TEST_REAL_GIT" "$@"',
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
-  chmodSync(shim, 0o755);
   return {
-    ...GIT_ENV,
-    PATH: `${shimRoot}:${process.env.PATH ?? ""}`,
+    ...createGitShim(
+      "quarantine",
+      [
+        "#!/bin/sh",
+        'case "$(pwd -P)" in',
+        '  *".aidlc-workspace-sync-txn-"*"/orphans/"*)',
+        '    if [ "$1" = "-c" ] && [ "$3" = "status" ]; then',
+        '      : > "$AIDLC_TEST_QUARANTINE_STARTED"',
+        "      sleep 1",
+        "    fi",
+        "    ;;",
+        "esac",
+        'exec "$AIDLC_TEST_REAL_GIT" "$@"',
+        "",
+      ],
+    ),
     AIDLC_TEST_QUARANTINE_STARTED: signalPath,
-    AIDLC_TEST_REAL_GIT: realGit,
   };
 }
 
 function postProofGitEnv(signalPath: string): NodeJS.ProcessEnv {
-  const shimRoot = mkdtempSync(join(tmpdir(), "aidlc-t255-git-shim-"));
-  tmpRoots.push(shimRoot);
-  const shim = join(shimRoot, "git");
-  const realGit = spawnSync("which", ["git"], {
-    encoding: "utf-8",
-    env: GIT_ENV,
-  }).stdout.trim();
-  writeFileSync(
-    shim,
-    [
-      "#!/bin/sh",
-      'case "$(pwd -P)" in',
-      '  *".aidlc-workspace-sync-txn-"*"/orphans/"*)',
-      '    if [ "$1" = "fsck" ]; then',
-      '      "$AIDLC_TEST_REAL_GIT" "$@"',
-      "      status=$?",
-      '      : > "$AIDLC_TEST_FINAL_PROOF_DONE"',
-      "      sleep 1",
-      '      exit "$status"',
-      "    fi",
-      "    ;;",
-      "esac",
-      'exec "$AIDLC_TEST_REAL_GIT" "$@"',
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
-  chmodSync(shim, 0o755);
   return {
-    ...GIT_ENV,
-    PATH: `${shimRoot}:${process.env.PATH ?? ""}`,
+    ...createGitShim(
+      "post-proof",
+      [
+        "#!/bin/sh",
+        'case "$(pwd -P)" in',
+        '  *".aidlc-workspace-sync-txn-"*"/orphans/"*)',
+        '    if [ "$1" = "fsck" ]; then',
+        '      "$AIDLC_TEST_REAL_GIT" "$@"',
+        "      status=$?",
+        '      : > "$AIDLC_TEST_FINAL_PROOF_DONE"',
+        "      sleep 1",
+        '      exit "$status"',
+        "    fi",
+        "    ;;",
+        "esac",
+        'exec "$AIDLC_TEST_REAL_GIT" "$@"',
+        "",
+      ],
+    ),
     AIDLC_TEST_FINAL_PROOF_DONE: signalPath,
-    AIDLC_TEST_REAL_GIT: realGit,
   };
 }
 
+const POSIX_RACE_WRITERS: Record<string, string> = {
+  // Each writer holds the checkout open as its cwd across the quarantine
+  // rename and mutates it through that live cwd (sh children inherit the cwd
+  // fd, so relative paths follow the renamed inode). A bun helper cannot do
+  // this: Bun caches process.cwd() and chdirs children to the stale path.
+  "write-local":
+    'while [ ! -e "$1" ]; do sleep 0.01; done; printf "late local work\\n" > late-local.txt',
+  commit: [
+    'while [ ! -e "$1" ]; do sleep 0.01; done',
+    'printf "late commit\\n" > late-commit.txt',
+    "git add late-commit.txt",
+    'git -c user.name=t255 -c user.email=t255@example.com commit -q -m "late commit"',
+  ].join("; "),
+  "write-after-proof":
+    'while [ ! -e "$1" ]; do sleep 0.01; done; printf "after proof\\n" > after-proof.txt',
+};
+
+function spawnRaceHelper(
+  workspace: string,
+  checkout: string,
+  signalPath: string,
+  action: "write-local" | "commit" | "write-after-proof",
+  env: NodeJS.ProcessEnv,
+) {
+  if (process.platform !== "win32") {
+    return Bun.spawn(["sh", "-c", POSIX_RACE_WRITERS[action], "sh", signalPath], {
+      cwd: checkout,
+      env,
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+  }
+  const helper = join(dirname(signalPath), "race-helper.ts");
+  writeFileSync(helper, RACE_HELPER_SOURCE, "utf-8");
+  return Bun.spawn([BUN, helper, signalPath, action, workspace, basename(checkout)], {
+    cwd: workspace,
+    env,
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+}
+
 async function waitForPath(path: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
+  const attempts = process.platform === "win32" ? 1_000 : 200;
+  for (let i = 0; i < attempts; i++) {
     if (existsSync(path)) return;
     await Bun.sleep(10);
   }
@@ -1039,7 +1319,12 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
       name.startsWith(".aidlc-workspace-sync-txn-"),
     );
     expect(transaction).toBeDefined();
-    chmodSync(join(ws, transaction!, "backups"), 0o500);
+    const backups = join(ws, transaction!, "backups");
+    if (process.platform === "win32") {
+      mkdirSync(join(backups, "gitignore"));
+    } else {
+      chmodSync(backups, 0o500);
+    }
 
     const result = await running;
     expect(result.status).toBe(1);
@@ -1113,21 +1398,9 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const signal = join(signalRoot, "quarantine-started");
     const env = quarantineGitEnv(signal);
 
-    // The helper holds cwd open across the checkout rename, then writes into
-    // that same inode while the quarantined-tree proof is paused.
-    const writer = Bun.spawn(
-      [
-        "sh",
-        "-c",
-        'while [ ! -e "$AIDLC_TEST_QUARANTINE_STARTED" ]; do sleep 0.01; done; printf "late local work\\n" > late-local.txt',
-      ],
-      {
-        cwd: orphan,
-        env,
-        stdout: "ignore",
-        stderr: "pipe",
-      },
-    );
+    // POSIX holds cwd open across the rename. Windows resolves the quarantined
+    // path after the signal because an open cwd would prevent the rename.
+    const writer = spawnRaceHelper(ws, orphan, signal, "write-local", env);
     const running = runSyncAsync(ws, ["--force"], env);
     const [result, writerStatus] = await Promise.all([running, writer.exited]);
 
@@ -1151,24 +1424,7 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     tmpRoots.push(signalRoot);
     const signal = join(signalRoot, "quarantine-started");
     const env = quarantineGitEnv(signal);
-    const writer = Bun.spawn(
-      [
-        "sh",
-        "-c",
-        [
-          'while [ ! -e "$AIDLC_TEST_QUARANTINE_STARTED" ]; do sleep 0.01; done',
-          'printf "late commit\\n" > late-commit.txt',
-          "git add late-commit.txt",
-          'git -c user.name=t255 -c user.email=t255@example.com commit -q -m "late commit"',
-        ].join("; "),
-      ],
-      {
-        cwd: orphan,
-        env,
-        stdout: "ignore",
-        stderr: "pipe",
-      },
-    );
+    const writer = spawnRaceHelper(ws, orphan, signal, "commit", env);
 
     const running = runSyncAsync(ws, ["--force"], env);
     const [result, writerStatus] = await Promise.all([running, writer.exited]);
@@ -1190,19 +1446,7 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     tmpRoots.push(signalRoot);
     const signal = join(signalRoot, "final-proof-done");
     const env = postProofGitEnv(signal);
-    const writer = Bun.spawn(
-      [
-        "sh",
-        "-c",
-        'while [ ! -e "$AIDLC_TEST_FINAL_PROOF_DONE" ]; do sleep 0.01; done; printf "after proof\\n" > after-proof.txt',
-      ],
-      {
-        cwd: orphan,
-        env,
-        stdout: "ignore",
-        stderr: "pipe",
-      },
-    );
+    const writer = spawnRaceHelper(ws, orphan, signal, "write-after-proof", env);
 
     const running = runSyncAsync(ws, ["--force"], env);
     const [result, writerStatus] = await Promise.all([running, writer.exited]);

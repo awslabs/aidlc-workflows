@@ -74,7 +74,7 @@ describe(`${PLUGIN_NAME} plugin — composed doctor check`, () => {
   test("doctor surfaces the plugin's reference checks after compose", () => {
     const doctor = spawnSync(
       process.execPath,
-      [join(project, ".claude", "tools", "aidlc-utility.ts"), "doctor", "--project-dir", project],
+      [join(project, ".claude", "tools", "aidlc-utility.ts"), "doctor", "--verbose", "--project-dir", project],
       {
         cwd: project,
         encoding: "utf-8",

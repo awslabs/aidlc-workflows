@@ -46,6 +46,7 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -55,6 +56,7 @@ import {
 import { join } from "node:path";
 import {
   AIDLC_SRC,
+  REPO_ROOT,
   cleanupTestProject,
   createTestProject,
   seededRecordDir,
@@ -79,6 +81,7 @@ import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-l
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const CORE_DOCTOR = join(REPO_ROOT, "core", "tools", "aidlc-doctor.ts");
 
 // Secret canaries — none of these may appear anywhere in the emitted report.
 const AWS_KEY = "AKIAIOSFODNN7EXAMPLE";
@@ -210,7 +213,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
   test("1: SECRET CANARY — no secret survives into any report file or the archive", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);
-    const { bundleDir, archivePath } = runExport(proj);
+    const { bundleDir, archivePath, out } = runExport(proj);
     expect(bundleDir).not.toBeNull();
 
     const canaries = [AWS_KEY, PASSWORD_SECRET, `password=${PASSWORD_SECRET}`, HOME_PATH, INTENT_SLUG];
@@ -224,11 +227,14 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     }
 
     // (b) The packaged .tar.gz is clean too (extract every member to stdout).
-    expect(archivePath).not.toBeNull();
-    const extracted = spawnSync("tar", ["-xzOf", archivePath!], { encoding: "utf-8" });
-    expect(extracted.status).toBe(0);
-    for (const c of canaries) {
-      expect(extracted.stdout, `${c} leaked into the archive`).not.toContain(c);
+    if (archivePath) {
+      const extracted = spawnSync("tar", ["-xzOf", archivePath], { encoding: "utf-8" });
+      expect(extracted.status).toBe(0);
+      for (const c of canaries) {
+        expect(extracted.stdout, `${c} leaked into the archive`).not.toContain(c);
+      }
+    } else {
+      expect(out).toContain("Archiving is unavailable on this system.");
     }
   }, 30000);
 
@@ -576,6 +582,15 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(dir.message).toContain("doctor --export --output");
     expect(dir.message).toContain(outDir);
 
+    const verbose = spawnSync(BUN, [ORCH, "next", "--doctor", "--verbose"], {
+      encoding: "utf-8",
+      env: { ...process.env },
+    });
+    expect(verbose.status).toBe(0);
+    const verboseDir = JSON.parse((verbose.stdout ?? "").trim());
+    expect(verboseDir.kind).toBe("print");
+    expect(verboseDir.message).toContain("doctor --verbose");
+
     // A plain `--doctor` (no export) names the doctor command WITHOUT --export.
     const plain = spawnSync(BUN, [ORCH, "next", "--doctor"], {
       encoding: "utf-8",
@@ -584,16 +599,21 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(plain.status).toBe(0);
     const plainDir = JSON.parse((plain.stdout ?? "").trim());
     expect(plainDir.kind).toBe("print");
-    expect(plainDir.message).toContain("aidlc-utility.ts doctor");
+    expect(plainDir.message).toContain("bun .claude/tools/aidlc.ts doctor");
     expect(plainDir.message).not.toContain("--export");
   });
 
-  test("9: KIRO PARITY — classifyTerminalCommand carries the same allowlisted export args", () => {
+  test("9: KIRO PARITY - classifyTerminalCommand carries the same allowlisted doctor args", () => {
     const withArgs = classifyTerminalCommand(["--doctor", "--export", "--output", "/tmp/x"]);
     expect(withArgs).toEqual({
       subcommand: "doctor",
       source: "read-only-flag",
       args: ["--export", "--output", "/tmp/x"],
+    });
+    expect(classifyTerminalCommand(["--doctor", "--verbose"])).toEqual({
+      subcommand: "doctor",
+      source: "read-only-flag",
+      args: ["--verbose"],
     });
 
     // A bare `--doctor` carries no args (undefined, not an empty array).
@@ -627,7 +647,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     );
     symlinkSync(secretTarget, rgLink);
 
-    const { bundleDir, archivePath } = runExport(proj);
+    const { bundleDir, archivePath, out } = runExport(proj);
     expect(bundleDir).not.toBeNull();
 
     // (a) No file on disk under the report dir carries the symlink target secret.
@@ -637,12 +657,15 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       );
     }
     // (b) The archive is clean too.
-    expect(archivePath).not.toBeNull();
-    const extracted = spawnSync("tar", ["-xzOf", archivePath!], { encoding: "utf-8" });
-    expect(extracted.status).toBe(0);
-    expect(extracted.stdout, `${SYMLINK_SECRET} leaked into the archive`).not.toContain(
-      SYMLINK_SECRET,
-    );
+    if (archivePath) {
+      const extracted = spawnSync("tar", ["-xzOf", archivePath], { encoding: "utf-8" });
+      expect(extracted.status).toBe(0);
+      expect(extracted.stdout, `${SYMLINK_SECRET} leaked into the archive`).not.toContain(
+        SYMLINK_SECRET,
+      );
+    } else {
+      expect(out).toContain("Archiving is unavailable on this system.");
+    }
   }, 30000);
 
   test("11: CUSTOM-IDENTIFIER CANARY — a non-core stage slug is hashed, never emitted raw (Arden #2)", () => {
@@ -774,6 +797,59 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const combined = `${res.stdout ?? ""}${res.stderr ?? ""}`;
     // The export path reports the error and does not silently create ./true.
     expect(combined).toMatch(/--output requires a directory path/);
+  }, 30000);
+
+  test("18b: structured modes reject export without appending human prose", () => {
+    const proj = freshProject();
+    const outDir = join(proj, "out");
+    const res = spawnSync(
+      BUN,
+      [
+        CORE_DOCTOR,
+        "doctor",
+        "--json",
+        "--export",
+        "--project-dir",
+        proj,
+        "--output",
+        outDir,
+      ],
+      { encoding: "utf-8", env: { ...process.env } },
+    );
+    expect(res.status).toBe(2);
+    expect(res.stderr).toBe("");
+    expect(JSON.parse(res.stdout ?? "")).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      ok: false,
+      code: 2,
+      status: "usage",
+      message: "--export cannot be combined with --json or --quiet",
+    }));
+    expect(existsSync(outDir)).toBe(false);
+  }, 30000);
+
+  test("18c: explicit export output must stay inside the selected project", () => {
+    const proj = freshProject();
+    const outside = freshProject();
+    const outDir = join(outside, "doctor-output");
+    const res = spawnSync(
+      BUN,
+      [
+        CORE_DOCTOR,
+        "doctor",
+        "--export",
+        "--project-dir",
+        proj,
+        "--output",
+        outDir,
+      ],
+      { encoding: "utf-8", env: { ...process.env } },
+    );
+    expect(res.status).toBe(2);
+    expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toContain(
+      "--output must stay inside the selected project directory",
+    );
+    expect(existsSync(outDir)).toBe(false);
   }, 30000);
 
   // ---- Arden round-3 regressions -------------------------------------------

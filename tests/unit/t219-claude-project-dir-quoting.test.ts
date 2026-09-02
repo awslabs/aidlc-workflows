@@ -1,18 +1,16 @@
 // covers: file:settings.json
 //
-// t219 - Claude settings must quote CLAUDE_PROJECT_DIR command paths.
+// t219 - Claude settings must use root-relative dispatcher command paths.
 //
 // Regression pin for issue 519: Claude Code expands the settings.json command
-// strings through a shell, so `bun $CLAUDE_PROJECT_DIR/...` splits when the
-// workspace path contains spaces. The authored harness settings and the
-// generated Claude dist copy must both keep every `$CLAUDE_PROJECT_DIR`
-// occurrence inside double quotes. The permissions glob deliberately leaves the
-// `*` outside the quotes so Claude's Bash matcher still globs:
-// `Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)`.
+// strings through a shell. The authored harness settings and generated Claude
+// dist now route hooks through the root-relative dispatcher, so command fields
+// contain no `$CLAUDE_PROJECT_DIR` references and paths with spaces never enter
+// these command strings. The executable permission uses the matching
+// root-relative `Bash(bun .claude/tools/*)` form.
 //
 // Mechanism: none. This reads and parses the two static JSON files on disk,
-// walks only command fields and permission entries (the executable surfaces),
-// and checks the exact bug shape cannot reappear.
+// walks command fields and permission entries, and checks both dispatcher forms.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -23,21 +21,20 @@ const SUBJECTS = [
   {
     label: "authored Claude harness settings",
     path: join(REPO_ROOT, "harness", "claude", "settings.json"),
+    commandPrefix: "{{INVOKE}}",
+    foldUsageCommand: "{{INVOKE}} engine hook fold-usage",
   },
   {
     label: "generated Claude dist settings",
     path: join(REPO_ROOT, "dist", "claude", ".claude", "settings.json"),
+    commandPrefix: "bun .claude/tools/aidlc.ts",
+    foldUsageCommand: "bun .claude/tools/aidlc.ts engine hook fold-usage",
   },
 ] as const;
 
-const PROJECT_DIR = "$CLAUDE_PROJECT_DIR";
 const PROJECT_DIR_RE = /\$CLAUDE_PROJECT_DIR/g;
-const BUG_SHAPE_RE = /(^|[\s(])\$CLAUDE_PROJECT_DIR\b/;
-// Nineteen command registrations (mint-presence and fold-usage are each wired
-// to two events; review-freeze and the plan-approval guard joined the shared
-// PreToolUse group) plus the executable permission glob.
-const EXPECTED_PROJECT_DIR_REFERENCES = 20;
-const EXPECTED_PERMISSION_GLOB = 'Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)';
+const EXPECTED_PROJECT_DIR_COMMAND_REFERENCES = 0;
+const EXPECTED_PERMISSION_GLOB = "Bash(bun .claude/tools/*)";
 
 interface Settings {
   permissions?: { allow?: unknown };
@@ -73,17 +70,17 @@ function permissionEntries(settings: unknown): string[] {
     : [];
 }
 
-function executableSettingsStrings(settings: unknown): string[] {
-  return [...collectCommandStrings(settings), ...permissionEntries(settings)];
-}
-
 function eventHookGroups(settings: unknown, event: string): unknown[] {
   if (!isRecord(settings) || !isRecord(settings.hooks)) return [];
   const groups = settings.hooks[event];
   return Array.isArray(groups) ? groups : [];
 }
 
-function hasUnfilteredFoldUsageHook(settings: unknown, event: string): boolean {
+function hasUnfilteredFoldUsageHook(
+  settings: unknown,
+  event: string,
+  expectedCommand: string,
+): boolean {
   return eventHookGroups(settings, event).some((group) => {
     if (!isRecord(group) || group.matcher !== "" || !Array.isArray(group.hooks)) {
       return false;
@@ -91,8 +88,7 @@ function hasUnfilteredFoldUsageHook(settings: unknown, event: string): boolean {
     return group.hooks.some(
       (hook) =>
         isRecord(hook) &&
-        hook.command ===
-          'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-fold-usage.ts"',
+        hook.command === expectedCommand,
     );
   });
 }
@@ -104,80 +100,39 @@ function projectDirReferenceCount(values: string[]): number {
   );
 }
 
-function isInsideDoubleQuotes(value: string, index: number): boolean {
-  let inDoubleQuotes = false;
-  let escaped = false;
-
-  for (let i = 0; i < index; i++) {
-    const ch = value[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') inDoubleQuotes = !inDoubleQuotes;
-  }
-
-  return inDoubleQuotes;
-}
-
-function hasClosingDoubleQuote(value: string, index: number): boolean {
-  let escaped = false;
-
-  for (let i = index; i < value.length; i++) {
-    const ch = value[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') return true;
-  }
-
-  return false;
-}
-
-function unquotedProjectDirReferences(value: string): string[] {
-  return [...value.matchAll(PROJECT_DIR_RE)]
-    .filter(
-      (match) =>
-        !isInsideDoubleQuotes(value, match.index) ||
-        !hasClosingDoubleQuote(value, match.index),
-    )
-    .map((match) => value.slice(Math.max(0, match.index - 8)));
-}
-
-describe("t219 Claude settings quote CLAUDE_PROJECT_DIR command paths", () => {
+describe("t219 Claude settings use root-relative dispatcher commands", () => {
   for (const subject of SUBJECTS) {
-    test(`${subject.label}: executable settings quote every CLAUDE_PROJECT_DIR reference`, () => {
+    test(`${subject.label}: command paths use the dispatcher without CLAUDE_PROJECT_DIR`, () => {
       const settings = readSettings(subject.path);
-      const values = executableSettingsStrings(settings).filter((value) =>
-        value.includes(PROJECT_DIR),
-      );
+      const commands = collectCommandStrings(settings);
 
-      expect(projectDirReferenceCount(values)).toBe(EXPECTED_PROJECT_DIR_REFERENCES);
+      expect(commands.length).toBeGreaterThan(0);
+      expect(projectDirReferenceCount(commands)).toBe(
+        EXPECTED_PROJECT_DIR_COMMAND_REFERENCES,
+      );
+      expect(
+        commands.every((command) => command.startsWith(subject.commandPrefix)),
+      ).toBe(true);
       expect(permissionEntries(settings)).toContain(EXPECTED_PERMISSION_GLOB);
-
-      const unquoted = values.filter((value) =>
-        unquotedProjectDirReferences(value).length > 0,
-      );
-      expect(unquoted).toEqual([]);
-
-      // Pin the original shell-splitting bug shape directly: reverting the fix
-      // to `bun $CLAUDE_PROJECT_DIR/...` trips this even if formatting moves.
-      expect(values.filter((value) => BUG_SHAPE_RE.test(value))).toEqual([]);
+      expect(projectDirReferenceCount(permissionEntries(settings))).toBe(0);
     });
 
     test(`${subject.label}: fold-usage is unfiltered on both tool events`, () => {
       const settings = readSettings(subject.path);
-      expect(hasUnfilteredFoldUsageHook(settings, "PreToolUse")).toBe(true);
-      expect(hasUnfilteredFoldUsageHook(settings, "PostToolUse")).toBe(true);
+      expect(
+        hasUnfilteredFoldUsageHook(
+          settings,
+          "PreToolUse",
+          subject.foldUsageCommand,
+        ),
+      ).toBe(true);
+      expect(
+        hasUnfilteredFoldUsageHook(
+          settings,
+          "PostToolUse",
+          subject.foldUsageCommand,
+        ),
+      ).toBe(true);
     });
   }
 });

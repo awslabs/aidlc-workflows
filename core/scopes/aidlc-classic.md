@@ -2,7 +2,7 @@
 name: classic
 depth: Standard
 keywords: []
-description: "V1-style lifecycle without ideation ceremony — the implicit default"
+description: "V1-style lifecycle without ideation ceremony - the implicit default"
 skeleton: on
 review_cap: advisory
 ---

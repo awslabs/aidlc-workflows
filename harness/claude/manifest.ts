@@ -17,9 +17,53 @@ import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "claude",
+  productName: "Claude Code",
+  configNextStep: "open Claude Code in this project and run `/aidlc --doctor`",
   harnessDir: ".claude",
   orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",
   tierFlavor: "claude",
+  rootIntegrations: [
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      legacySignatures: {
+        wholeFileHashes: [
+          "sha256:3da36b2d01551aeae2e366caa08be8cce0dbc9110e252445dcaa4e758e24a0b6",
+          "sha256:4f1cd2e930bd37d2f5d715a06ea3fa1e2d39479fc662f0f0562116376132114b",
+          "sha256:f2affb8b34499f057284852456cb8a24ae586b8e816595bf98346141f3516281",
+          // The pre-v2-sync shipped variant (the reshape branch's .gitignore
+          // before the 2.6.123 merge changed the shipped bytes).
+          "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
+        ],
+      },
+    },
+    {
+      path: ".mcp.json",
+      policy: "json-map",
+      jsonKey: "mcpServers",
+      optional: true,
+      legacySignatures: {
+        jsonEntryHashes: {
+          context7: [
+            "sha256:8a440d21705f35c8f5649f118d17f786e08d589fb2dd888f5de5aa503233afbf",
+          ],
+          "aws-mcp": [
+            "sha256:d6ff496cb02a8b61d81f8534b179f60e42173ee8510eebe3428bf0bfe30ff0aa",
+          ],
+          "aws-pricing": [
+            "sha256:43bc3467687da178f795ad41ad8767da8b255780f95b64d5c7464b2fbff9ef40",
+          ],
+          "aws-iac": [
+            "sha256:9fea0efb8aea62ec3446cc8201bc74cae477c75d36659b47e93d53981cb94686",
+          ],
+          "aws-serverless": [
+            "sha256:858610c8f5ccbbecc39595fdf866f68d0fb32d62750b3d50ee4bdef7ec1d104b",
+          ],
+        },
+      },
+    },
+  ],
 
   // core/<src> → <harnessDir>/<dst>. Claude keeps every core dir name as-is.
   // The method ("memory") is NO LONGER a core dir projected into the harness
@@ -55,14 +99,14 @@ const manifest: HarnessManifest = {
     { src: "rules-aidlc.md", dst: "rules/aidlc.md" },
     { src: "settings.json", dst: "settings.json" },
     { src: "settings.local.json.example", dst: "settings.local.json.example" },
-    // Project-root install files (beside .claude/, not inside it). A user copies
-    // `dist/claude/` wholesale, so these ship at the dist root. Authored here
+    // Project-root install files (beside .claude/, not inside it). The
+    // copy-channel projection includes them at its root. Authored here
     // (not core/) because they are Claude-Code-specific: .mcp.json is the
     // Claude MCP-server registry (Kiro/Codex configure MCP differently and ship
     // none), and the .gitignore names `.claude/settings.local.json`. projectRoot
-    // routes them to dist/claude/<dst> and brings them under the --check drift
-    // guard (checkHarness diffs every projectRoot file). dot-gitignore is the
-    // authored name so it does not act as a live ignore inside harness/claude/.
+    // routes them to dist/claude/<dst> and brings them under the whole-tree
+    // determinism comparison. dot-gitignore is the authored name so it does not
+    // act as a live ignore inside harness/claude/.
     { src: ".mcp.json", dst: ".mcp.json", projectRoot: true },
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],

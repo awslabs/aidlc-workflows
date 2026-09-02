@@ -1,12 +1,12 @@
 // covers: subcommand:aidlc-utility:config-get, subcommand:aidlc-utility:config-list, subcommand:aidlc-utility:config-change
-// covers: subcommand:aidlc-utility:plugin-list, subcommand:aidlc-utility:plugin-sync, subcommand:aidlc-utility:init, subcommand:aidlc-utility:upgrade
+// covers: subcommand:aidlc-utility:plugin-list, subcommand:aidlc-utility:plugin-sync, subcommand:aidlc-utility:upgrade
 // covers: tool:aidlc, file:scripts/package.ts
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   cleanupTestProject,
@@ -22,11 +22,16 @@ const CORE_TOOLS_DIR = join(REPO_ROOT, "core", "tools");
 const UTILITY = join(CORE_TOOLS_DIR, "aidlc-utility.ts");
 const DISPATCHER = join(CORE_TOOLS_DIR, "aidlc.ts");
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
+const POSIX_SH = process.platform === "win32"
+  ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "sh.exe")
+  : "/bin/sh";
+const PLUGIN_COMPOSE_TEMPLATE = join(
+  REPO_ROOT,
+  "scripts",
+  "plugin-hooks-template",
+  "compose.ts",
+);
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
-const INIT_MESSAGE =
-  "init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc \"build the auth service\".";
-const UPGRADE_MESSAGE =
-  "upgrade is not available in this install; it arrives with the packaged binary distribution.";
 const NO_STATE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
 
@@ -177,17 +182,20 @@ describe("t231 config get/list/set handlers", () => {
     expect(stderrError(missing)).toBe(NO_STATE_MESSAGE);
   });
 
-  test("dispatcher config set translates to config-change and legacy spelling still works", () => {
+  test("engine config set translates to config-change and legacy top-level spelling is rejected", () => {
     const project = stateProject();
 
-    const setDepth = dispatcher(["config", "set", "depth", "comprehensive"], project);
+    const setDepth = dispatcher(
+      ["engine", "config", "set", "depth", "comprehensive"],
+      project,
+    );
     expect(setDepth.status).toBe(0);
     expect(stateField(project, "Depth")).toBe("Comprehensive");
     expect(utility(["config-get", "depth"], project).stdout).toBe("Comprehensive\n");
 
     const legacy = dispatcher(["config-change", "--depth", "minimal"], project);
-    expect(legacy.status).toBe(0);
-    expect(stateField(project, "Depth")).toBe("Minimal");
+    expect(legacy.status).toBe(2);
+    expect(stateField(project, "Depth")).toBe("Comprehensive");
   });
 });
 
@@ -314,41 +322,83 @@ describe("t231 plugin list and sync handlers", () => {
   });
 });
 
-describe("t231 init and upgrade transition handlers", () => {
-  test("init errors loudly and does not create an intent record", () => {
+describe("t231 config and update lifecycle routing", () => {
+  test("config reaches the dedicated delegate and does not create an intent record on source failure", () => {
     const project = emptyProject();
-    const result = utility(["init"], project);
+    const result = run(
+      [BUN, join(CORE_TOOLS_DIR, "aidlc-init.ts"), "config", "--project-dir", project],
+      project,
+    );
 
-    expect(result.status).toBe(1);
-    expect(stderrError(result)).toBe(INIT_MESSAGE);
+    expect(result.status).toBe(4);
+    expect(result.stdout).toContain("no installed harness runtime");
     expect(existsSync(join(project, "aidlc", "spaces", "default", "intents"))).toBe(false);
   });
 
-  test("dispatcher init shows the same transition error", () => {
+  test("dispatcher config matches its dedicated delegate", () => {
     const project = emptyProject();
-    const direct = utility(["init"], project);
-    const routed = dispatcher(["init"], project);
+    const direct = run(
+      [BUN, join(CORE_TOOLS_DIR, "aidlc-init.ts"), "config", "--project-dir", project],
+      project,
+    );
+    const routed = dispatcher(["config"], project);
 
     expect(routed.status).toBe(direct.status);
     expect(routed.stdout).toBe(direct.stdout);
     expect(routed.stderr).toBe(direct.stderr);
   });
 
-  test("upgrade errors through utility, dispatcher, and slash alias", () => {
+  test("update reaches the lifecycle delegate and upgrade spellings are rejected", () => {
     const project = emptyProject();
-    const direct = utility(["upgrade"], project);
-    const routed = dispatcher(["upgrade"], project);
+    const machine = tempDir("aidlc-t231-update-machine-");
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+    };
+    const direct = run(
+      [BUN, join(CORE_TOOLS_DIR, "aidlc-lifecycle.ts"), "update"],
+      project,
+      env,
+    );
+    const routed = dispatcher(["update"], project, env);
     const alias = dispatcher(["--upgrade"], project);
 
-    for (const result of [direct, routed, alias]) {
-      expect(result.status).toBe(1);
-      expect(stderrError(result)).toBe(UPGRADE_MESSAGE);
-    }
+    expect(routed.status).toBe(direct.status);
+    expect(routed.stdout).toBe(direct.stdout);
+    expect(routed.stderr).toBe(direct.stderr);
+    expect(routed.status).toBe(3);
+    expect(dispatcher(["upgrade"], project).status).toBe(2);
+    expect(alias.status).toBe(2);
+  });
+
+  test("legacy direct utility upgrade remains an explicit unavailable error", () => {
+    const project = emptyProject();
+    const result = utility(["upgrade"], project);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("upgrade is not available in this install");
   });
 });
 
 describe("t231 emitted plugin hook command", () => {
-  test("packaged hook probes aidlc first, bun second, and keeps graceful skip", () => {
+  test("compiled runner-gen calls map only to the gen noun", () => {
+    const template = readFileSync(PLUGIN_COMPOSE_TEMPLATE, "utf-8");
+    expect(template).toContain(
+      'if (args[0] === "write") return [executable, "engine", "gen", "runners"',
+    );
+    expect(template).toContain(
+      'if (args[0] === "check") return [executable, "engine", "gen", "runners", "--check"',
+    );
+    expect(template).toContain(
+      'if (args[0] === "scopes") return [executable, "engine", "gen", "runner-scopes"',
+    );
+    expect(template).toContain(
+      'if (args[0] === "list") return [executable, "engine", "gen", "runner-list"',
+    );
+    expect(template).not.toContain('"engine", "runner-gen"');
+  });
+
+  test("packaged hook probes aidlc first, propagates sync failures, and keeps graceful skip", () => {
     const outDir = join(tempDir("aidlc-t231-package-"), "plugin");
     const build = run([BUN, PACKAGE_TS, "plugin", "build", "test-pro", "claude", outDir], REPO_ROOT);
     expect(build.status).toBe(0);
@@ -362,10 +412,28 @@ describe("t231 emitted plugin hook command", () => {
 
     expect(aidlcIdx).toBeGreaterThanOrEqual(0);
     expect(bunIdx).toBeGreaterThan(aidlcIdx);
-    expect(command).toContain("\"$AIDLC\" plugin sync && exit 0");
+    expect(command).toContain("\"$AIDLC\" engine plugin sync; exit $?");
     expect(command).toContain("AIDLC_HARNESS_NAME=claude");
-    expect(command).not.toContain("plugin sync; exit $?");
     expect(command).toContain(`"$BUN" "\${CLAUDE_PLUGIN_ROOT}/hooks/compose.ts"`);
     expect(command).toContain("aidlc and bun not found, skipping");
+
+    const binDir = tempDir("aidlc-t231-hook-bin-");
+    const fallbackMarker = join(binDir, "fallback-ran");
+    writeFileSync(join(binDir, "aidlc"), "#!/bin/sh\nexit 23\n");
+    writeFileSync(join(binDir, "bun"), `#!/bin/sh\ntouch "${fallbackMarker}"\nexit 0\n`);
+    chmodSync(join(binDir, "aidlc"), 0o755);
+    chmodSync(join(binDir, "bun"), 0o755);
+    const invoked = spawnSync(POSIX_SH, ["-c", command], {
+      cwd: outDir,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: [binDir, dirname(POSIX_SH), process.env.PATH ?? ""].join(delimiter),
+        CLAUDE_PLUGIN_ROOT: outDir,
+        CLAUDE_PROJECT_DIR: outDir,
+      },
+    });
+    expect(invoked.status).toBe(23);
+    expect(existsSync(fallbackMarker)).toBe(false);
   });
 });

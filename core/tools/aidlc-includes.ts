@@ -279,7 +279,7 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
   }
 
   if (harness === ".aidlc") {
-    // Two harnesses ship the .aidlc engine dir; both include surfaces are
+    // Two harnesses ship the .aidlc runtime dir; both include surfaces are
     // probed (each rewriter no-ops when its surface carries no method
     // pointer, so the branches compose without a flavor probe).
     // Copilot: the project-root AGENTS.md's @-import lines are the method

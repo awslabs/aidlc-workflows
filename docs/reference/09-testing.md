@@ -30,6 +30,55 @@ integration** (so the integration level rides along on every local
 shows where each level sits conceptually — the profile flags below are how you
 actually select them.
 
+Distribution coverage is split by contract:
+
+- `t145-packaging-parity.test.ts` proves that copy, native, and plugin
+  projections are deterministic across two independent clean packager runs.
+- `t238-build-binaries.test.ts` compiles and probes the standalone binary
+  closure, including native routes, hooks/adapters, project mutation, and the
+  final installed layout with no `bun` on `PATH`.
+- `t242-plugin-state.test.ts` proves host inventory normalization, composition
+  hashes, transactional sync rollback, and ownership-safe prune.
+- `t243-install-mechanism.test.ts` covers archive rejection, the shared
+  transaction engine and recovery paths, project init/refresh ownership,
+  checksums, lifecycle, pins, offline packages, and copy/native projection
+  separation.
+- `t244-install-management.test.ts` covers machine configuration, update
+  discovery, installer harness selection, Windows lifecycle surfaces,
+  completions, and release-workflow candidate continuity.
+
+The test runner regenerates all projections under a process lock before test
+discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.
+CI also runs an explicit package step before each job that consumes generated
+trees. Binary and release packagers perform their own regeneration and
+determinism checks before reading `dist-release/`.
+
+Release CI adds native smoke on Linux, macOS, and Windows, builds the seven
+target artifacts on their native runner architectures, and executes both musl
+probes in disposable Alpine containers after installing the documented
+`libgcc` and `libstdc++` runtime prerequisites shared by Bun and Node.js. The
+musl matrix uses
+`fail-fast: false` so both architectures report before CI stages one
+checksum-verified candidate. Unix and Windows lifecycle
+journeys consume those bytes without signing permissions. After the protected
+gate, the workflow attests them and uploads one immutable workflow artifact.
+The protected `promote` job authenticates `checksums.txt` before using it,
+validates the exact inventory, verifies every manifest asset through online
+and offline provenance paths, records the complete digest set, and exercises
+the real installer from a separate copy. Only after rechecking the original
+directory and revalidating the dedicated publication repository's zero-writer
+policy does it create the GitHub Release from those exact local bytes.
+Publishing never rebuilds or repackages the candidate.
+
+`tests/harness/release-fixture.ts` builds deterministic release directories
+from the generated projection manifests and can serve them locally with
+redirect, delay, truncation, captive-portal, oversized-metadata, and
+missing-asset faults. Run
+`bun tests/harness/release-fixture.ts --output <dir>` to author a fixture.
+The normal suite stays offline; set `AIDLC_RELEASE_CONTRACT_LIVE=1` when
+running t243 to opt into the public release metadata and checksum contract
+check.
+
 The deterministic e2e slice (`bash tests/run-tests.sh --debug -P 8 --e2e --filter "^t[0-9]"`) runs in CI with `--no-llm`, while local development loops default to smoke + unit + integration. Branches that touch merge, worktree, or swarm paths should also run this slice locally before review rounds, because mode-boundary regressions between ordinary-Bolt and swarm execution are invisible to the default tier.
 
 **Filename convention.** A test's filename is `t<NN>[-description].test.ts` —
@@ -50,7 +99,7 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 
 **What it tests:**
 - File existence, permissions, naming conventions (smoke)
-- Hook scripts (11 TypeScript via bun), stage frontmatter, knowledge inventory (unit)
+- All 17 hook sources through copy/native dispatch, stage frontmatter, knowledge inventory (unit)
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 
@@ -91,7 +140,7 @@ The test suite runs on macOS, Linux, and Windows through the native Bun runner:
 bun tests/run-tests.ts [--ci | --all --debug -P 8]
 ```
 
-`bash tests/run-tests.sh ...` remains as a POSIX compatibility wrapper and delegates to the same TypeScript runner. At runtime this implementation's hooks, CLI tools, and test runner require `bun`; Bash is no longer the primary runner substrate.
+`bash tests/run-tests.sh ...` remains as a POSIX compatibility wrapper and delegates to the same TypeScript runner. Repository tests and copy-channel hooks/tools require `bun`; native release projections invoke hooks/tools through the installed `aidlc` binary. Bash is not the primary runner substrate.
 
 **Portability constraints baked into the suite:**
 
@@ -210,7 +259,7 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | CI pipeline | L2 | `bun tests/run-tests.ts --ci` | CI/CD pipeline |
-| Release / merge to main | L3 | `bun tests/run-tests.ts --release` | CI/CD pipeline |
+| Release / merge to `main` | L3 | `bun tests/run-tests.ts --release` | CI/CD pipeline |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 

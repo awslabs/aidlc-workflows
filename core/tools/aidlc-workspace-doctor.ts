@@ -19,7 +19,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { discoverSiblingRepos, errorMessage, harnessDir } from "./aidlc-lib.ts";
+import { discoverSiblingRepos, errorMessage } from "./aidlc-lib.ts";
+import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import {
   parseWorkspaceManifest,
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
@@ -30,6 +31,7 @@ import {
 /** One --doctor report row. Structurally matches handleDoctor's results[]. */
 export interface DoctorCheck {
   pass: boolean;
+  severity?: "warn";
   label: string;
   fix?: string;
 }
@@ -44,7 +46,7 @@ export interface DoctorCheck {
  */
 export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const results: DoctorCheck[] = [];
-  const syncCmd = `bun ${harnessDir()}/tools/aidlc-workspace-sync.ts`;
+  const syncCmd = aidlcToolInvocation("workspace-sync");
 
   // W1 - Uncommitted records. Any git workspace: surface uncommitted changes
   // under aidlc/ so the shared records get committed and pushed to teammates.
@@ -80,7 +82,8 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         results.push({ pass: true, label: "Workspace records: no uncommitted changes under aidlc/" });
       } else {
         results.push({
-          pass: true,
+          pass: false,
+          severity: "warn",
           label:
             `Workspace records: ${dirty.length} uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; ` +
             "commit & push so teammates get them: `git add aidlc/ && git commit && git push`)",

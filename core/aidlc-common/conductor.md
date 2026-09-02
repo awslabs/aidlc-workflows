@@ -127,7 +127,7 @@ The `PRACTICES_OVERRIDE` judgement is preserved and is yours to make: if
 `bolt-plan.md` carries a walking-skeleton marker on a Bolt but the team
 practices say skeleton-off for the current scope, **practices wins** — classify
 the stance from practices (not the marker) and emit a `PRACTICES_OVERRIDE` row
-via `bun {{HARNESS_DIR}}/tools/aidlc-state.ts practices-event --type override` before
+via `{{INVOKE}} engine state practices-event --type override` before
 reporting the stance. Practices is the team's standing voice; the bolt-plan
 marker is one workflow's interpretation.
 

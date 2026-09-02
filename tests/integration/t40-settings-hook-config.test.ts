@@ -14,12 +14,10 @@
 // fires on which event, and which command renders the statusline.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/settings.json):
-//   :32-43  hooks.SessionStart -> one group, matcher "", one hook command
-//           "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-start.ts"
+//   hooks.SessionStart -> one group, matcher "", one native hook command
 //   :18-21  statusLine.type == "command",
-//           statusLine.command references aidlc-statusline.ts
-//   :5-17   permissions.allow — exactly 9 entries, including the
-//           "Bash(bun $CLAUDE_PROJECT_DIR/.claude/tools/*)" tools pattern
+//           statusLine.command routes through `aidlc statusline`
+//   :5-17   permissions.allow — exactly 8 entries, including `Bash(aidlc *)`
 // AND (dist/claude/.claude/settings.local.json.example):
 //   the personal-override stub must be valid JSON (it ships as a copy-to
 //   template; a malformed example would silently break the documented
@@ -35,10 +33,10 @@
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
 //   .sh test 1 (hooks.SessionStart array exists)            -> T1
-//   .sh test 2 (SessionStart references session-start.ts)   -> T2
+//   .sh test 2 (SessionStart routes to the session hook)    -> T2
 //   .sh test 3 (statusLine.type == "command")               -> T3
-//   .sh test 4 (statusLine references aidlc-statusline.ts)  -> T4
-//   .sh test 5 (permissions.allow has exactly 9 tools)      -> T5
+//   .sh test 4 (statusLine routes through native aidlc)     -> T4
+//   .sh test 5 (permissions.allow has exactly 8 tools)      -> T5
 //   .sh test 6 (settings.local.json.example is valid JSON)  -> T6
 
 import { describe, expect, test } from "bun:test";
@@ -48,6 +46,7 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SETTINGS = join(AIDLC_SRC, "settings.json");
 const SETTINGS_LOCAL_EXAMPLE = join(AIDLC_SRC, "settings.local.json.example");
+const SOURCE_INVOKE = "bun .claude/tools/aidlc.ts";
 
 interface HookEntry {
   type?: string;
@@ -78,16 +77,12 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect((groups ?? []).length).toBeGreaterThan(0);
   });
 
-  test("T2: SessionStart wires the session-start.ts hook command [.sh test 2]", () => {
-    // .sh: assert_grep SETTINGS 'session-start.ts'. STRONGER: the reference must
-    // live on a SessionStart group's hook command, not anywhere in the file.
+  test("T2: SessionStart wires the source-channel session-start hook command [.sh test 2]", () => {
     const s = readSettings();
     const commands = (s.hooks?.SessionStart ?? []).flatMap((g) =>
       (g.hooks ?? []).map((h) => h.command ?? ""),
     );
-    expect(commands.some((c) => c.includes("aidlc-session-start.ts"))).toBe(
-      true,
-    );
+    expect(commands).toContain(`${SOURCE_INVOKE} engine hook session-start`);
   });
 
   test("T3: statusLine.type is 'command' [.sh test 3]", () => {
@@ -95,25 +90,15 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect(readSettings().statusLine?.type).toBe("command");
   });
 
-  test("T4: statusLine.command references aidlc-statusline.ts [.sh test 4]", () => {
-    // .sh: assert_grep SETTINGS 'aidlc-statusline.ts'. STRONGER: pinned to
-    // statusLine.command, the field Claude Code actually executes.
-    expect(readSettings().statusLine?.command ?? "").toContain(
-      "aidlc-statusline.ts",
-    );
+  test("T4: statusLine.command uses the source-channel statusline route [.sh test 4]", () => {
+    expect(readSettings().statusLine?.command).toBe(`${SOURCE_INVOKE} engine statusline`);
   });
 
-  test("T5: permissions.allow has exactly 9 tools incl. the bun-tools pattern [.sh test 5]", () => {
-    // .sh: jq '.permissions.allow | length' == 9.
+  test("T5: permissions.allow has exactly 8 tools incl. the source tool pattern [.sh test 5]", () => {
     const allow = readSettings().permissions?.allow ?? [];
-    expect(allow.length).toBe(9);
-    // STRONGER than the .sh's bare length check: the pre-approved bun-tools glob
-    // the .sh's comment calls out ("including bun tools pattern") is present.
-    // Quoted form (issue 519): $CLAUDE_PROJECT_DIR stays inside double quotes with
-    // the * outside so the matcher still globs; t219 pins the quoting invariant.
-    expect(
-      allow.some((a) => a.includes('bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*')),
-    ).toBe(true);
+    expect(allow.length).toBe(8);
+    expect(allow).toContain("Bash(bun .claude/tools/*)");
+    expect(allow).not.toContain("Bash");
   });
 
   test("T6: settings.local.json.example is valid JSON [.sh test 6]", () => {

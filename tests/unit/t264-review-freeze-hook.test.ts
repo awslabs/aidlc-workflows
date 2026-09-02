@@ -373,6 +373,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
 
   test("writeTargets: file tools and mutation-capable Bash contribute paths", () => {
     const hostPath = (value: string): string => resolve(value);
+    const bashTargets = (command: string, cwd?: string): string[] =>
+      writeTargets("Bash", { command }, cwd)
+        .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
     expect(writeTargets("Write", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Edit", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Read", { file_path: "/a/b.md" })).toEqual([]);
@@ -472,9 +475,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
     ).toContain(hostPath("/p"));
     expect(writeTargets("Bash", { command: "sed -n '1p' /a/b.md" })).toEqual([]);
     expect(
-      writeTargets("Bash", { command: "sed --version; cat /a/b.md" }),
+      bashTargets("sed --version; cat /a/b.md"),
     ).toEqual([]);
-    expect(writeTargets("Bash", { command: "cat /a/b.md" })).toEqual([]);
+    expect(bashTargets("cat /a/b.md")).toEqual([]);
   });
 });
 
@@ -790,7 +793,7 @@ describe("t264 (c) harness registration", () => {
         hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
       };
       const group = (s.hooks?.PreToolUse ?? []).find((g) =>
-        (g.hooks ?? []).some((h) => (h.command ?? "").includes("aidlc-review-freeze.ts")),
+        (g.hooks ?? []).some((h) => (h.command ?? "").includes("hook review-freeze")),
       );
       expect(group, root).toBeDefined();
       // Shares the state-transition-guard/reviewer-scope matcher group, so the
@@ -803,7 +806,7 @@ describe("t264 (c) harness registration", () => {
 
   test("Codex hooks.json carries the adapter target; the adapter has the case", () => {
     const hooksJson = readFileSync(join(REPO_ROOT, "dist", "codex", ".codex", "hooks.json"), "utf-8");
-    expect(hooksJson).toContain("aidlc-codex-adapter.ts review-freeze");
+    expect(hooksJson).toContain("adapter codex review-freeze");
     const adapter = readFileSync(
       join(REPO_ROOT, "harness", "codex", "hooks", "aidlc-codex-adapter.ts"),
       "utf-8",

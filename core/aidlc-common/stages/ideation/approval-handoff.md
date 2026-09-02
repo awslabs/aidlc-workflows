@@ -1,5 +1,6 @@
 ---
 slug: approval-handoff
+name: Approval & Handoff
 phase: ideation
 execution: ALWAYS
 condition: Always executes — compiles all Ideation artifacts into initiative brief for approval
@@ -96,7 +97,7 @@ Run Ideation → Inception verification check:
 ### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage approval-handoff --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage approval-handoff --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 6: Present Completion & Request Approval

@@ -9,10 +9,9 @@ node_modules/
 # Bun transient compilation artifacts
 *.bun-build
 
-# Generated AI-DLC artifacts (recreated by workflow runs / doctor)
-dist/claude/aidlc-docs/
-dist/kiro/aidlc-docs/
-dist/codex/aidlc-docs/
+# Generated AI-DLC projections (materialized locally by scripts/package.ts)
+/dist/
+/dist-release/
 build/
 
 # Zensical documentation-site build output and env (`uv run zensical build`;
@@ -20,9 +19,6 @@ build/
 /site/
 /.cache/
 /.venv/
-
-# Sample/test projects
-dist/claude/todo-app/
 
 # Test verbose logs
 tests/logs/

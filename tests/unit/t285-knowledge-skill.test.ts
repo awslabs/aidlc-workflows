@@ -3,10 +3,9 @@
 // t285 - the aidlc-knowledge SKILL.md: shipped to every harness, and its prose
 // kept in lockstep with the tool's real flag surface (I33, I41).
 //
-// Mechanism: the real committed dist/ trees + the real shipped tool. The skill is
+// Mechanism: the real generated dist/ trees + the real shipped tool. The skill is
 // prose an LLM executes, so the only meaningful subject is the BYTES THAT SHIP,
-// not the authored source: core/ and dist/ can disagree, and it is dist/ the user
-// installs.
+// not only the authored source: projection transforms can change shipped bytes.
 //
 // WHY THE PARITY CHECK IS BIDIRECTIONAL AND DERIVED, not a list in this file.
 // The skill's prose tells an LLM which flags to pass, which makes it load-bearing

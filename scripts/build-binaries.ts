@@ -2,12 +2,13 @@
 // scripts/build-binaries.ts - release artifact builder for the single AIDLC CLI.
 //
 // This stays separate from scripts/package.ts. package.ts is the deterministic
-// source projection and drift guard for dist/<harness>/; this script is the
+// source projection and determinism guard for dist/<harness>/; this script is the
 // release-oriented executable build that compiles the generated Claude
-// dispatcher and then smoke-gates each artifact. The binary entry is
-// dist/claude/.claude/tools/aidlc.ts on purpose: release artifacts must embed
-// the shipped copy, not core/. Run `bun scripts/package.ts --check` first; this
-// script enforces that guard before compiling.
+// dispatcher and then smoke-gates each artifact. The binary entry is the
+// dist-release/ Claude dispatcher on purpose: release artifacts must embed the
+// native-invocation projection, not the Bun copy channel or core/. This script
+// regenerates both projection roots and then enforces
+// `bun scripts/package.ts --check` before compiling.
 //
 // Never enable Bun bytecode. BYTECODE-1: Bun can exit 0, emit an artifact, and still
 // produce a binary that crashes before the dispatcher runs on this codebase.
@@ -27,7 +28,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AIDLC_VERSION } from "../dist/claude/.claude/tools/aidlc-version.ts";
+import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
+import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 
 type TargetConfig = {
   name: string;
@@ -72,21 +74,30 @@ type TargetResult = {
   bytes: number;
   build: CommandResult;
   gates: GateResult[];
+  verification: {
+    status: "VERIFIED" | "UNVERIFIED";
+    mode: "full-runtime" | "inspection-only";
+    hostTarget: string;
+    detail: string;
+  };
 };
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const DEFAULT_ENTRY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
-const DEFAULT_OUT_DIR = join(REPO_ROOT, "build", "binaries");
-const RUNTIME_ASSET_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
-const RUNTIME_DISTRIBUTIONS = [
+const DEFAULT_ENTRY = join(
+  REPO_ROOT,
+  "dist-release",
   "claude",
-  "codex",
-  "cursor",
-  "kiro",
-  "kiro-ide",
-  "copilot",
-  "opencode",
-] as const;
+  ".claude",
+  "tools",
+  "aidlc.ts",
+);
+const DEFAULT_OUT_DIR = join(REPO_ROOT, "build", "binaries");
+const RUNTIME_ASSET_ROOT = join(REPO_ROOT, "dist-release", "claude", ".claude");
+function runtimeDistributions(): string[] {
+  return readdirSync(join(REPO_ROOT, "dist-release"), {
+    withFileTypes: true,
+  }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+}
 const MIN_CROSS_BYTES = 10 * 1024 * 1024;
 const DEV_SPAWN_MARKER = "/* dev-mode bun spawn */";
 
@@ -235,12 +246,23 @@ function formatSeconds(ms: number): number {
 
 function stampedVersion(stdout: string): string {
   const trimmed = stdout.trim();
-  const prefixed = /^aidlc\s+([0-9]+\.[0-9]+\.[0-9]+)$/.exec(trimmed);
+  const prefixed =
+    /^aidlc\s+([0-9]+\.[0-9]+\.[0-9]+)(?:\s+\(runtime\s+[0-9]+\.[0-9]+\.[0-9]+\))?$/
+      .exec(trimmed);
   return prefixed?.[1] ?? trimmed;
 }
 
+let standaloneGateProject: string | null = null;
+
+function standaloneGateCwd(): string {
+  if (standaloneGateProject) return standaloneGateProject;
+  standaloneGateProject = mkdtempSync(join(tmpdir(), "aidlc-binary-standalone-"));
+  writeFileSync(join(standaloneGateProject, "package.json"), "{}\n");
+  return standaloneGateProject;
+}
+
 function versionGate(artifact: string): GateResult {
-  const result = run(artifact, ["version"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const result = run(artifact, ["version"], { cwd: standaloneGateCwd(), timeoutMs: 30_000 });
   const actual = stampedVersion(result.stdout);
   return commandGate(
     "version",
@@ -249,13 +271,13 @@ function versionGate(artifact: string): GateResult {
     {
       expected: AIDLC_VERSION,
       actual,
-      detail: "runs from os.tmpdir() and checks the stamped AIDLC version",
+      detail: "runs from an isolated temporary project and checks the stamped AIDLC version",
     },
   );
 }
 
 function helpGate(artifact: string): GateResult {
-  const result = run(artifact, ["help"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const result = run(artifact, ["help"], { cwd: standaloneGateCwd(), timeoutMs: 30_000 });
   const firstLine = result.stdout.split(/\r?\n/)[0] ?? "";
   return commandGate(
     "help",
@@ -264,7 +286,7 @@ function helpGate(artifact: string): GateResult {
     {
       expected: "first stdout line contains aidlc",
       actual: firstLine,
-      detail: "runs from os.tmpdir() and checks that help reached the dispatcher",
+      detail: "runs from an isolated temporary project and checks that help reached the dispatcher",
     },
   );
 }
@@ -286,7 +308,7 @@ function pathlessEnv(projectDir?: string): NodeJS.ProcessEnv {
 
 function installedProject(prefix: string): string {
   const project = mkdtempSync(join(tmpdir(), prefix));
-  cpSync(join(REPO_ROOT, "dist", "claude"), project, { recursive: true });
+  cpSync(join(REPO_ROOT, "dist-release", "claude"), project, { recursive: true });
   return project;
 }
 
@@ -295,8 +317,8 @@ function runtimeCrash(output: string): boolean {
 }
 
 function sensorListGate(artifact: string): GateResult {
-  const result = run(artifact, ["sensor", "list"], {
-    cwd: tmpdir(),
+  const result = run(artifact, ["engine", "sensor", "list"], {
+    cwd: standaloneGateCwd(),
     env: pathlessEnv(),
     timeoutMs: 30_000,
   });
@@ -327,7 +349,7 @@ function graphCompileGate(artifact: string): GateResult {
   try {
     const result = run(
       artifact,
-      ["graph", "compile", "--check", "--project-dir", project],
+      ["engine", "graph", "compile", "--check", "--project-dir", project],
       { cwd: project, env: pathlessEnv(project), timeoutMs: 60_000 },
     );
     return commandGate(
@@ -360,12 +382,12 @@ function packagedRuntimeImmutableGate(artifact: string): GateResult {
   try {
     const plugin = run(
       artifact,
-      ["plugin", "select", "aidlc", "--project-dir", project],
+      ["engine", "plugin", "select", "aidlc", "--project-dir", project],
       { cwd: project, env: pathlessEnv(), timeoutMs: 30_000 },
     );
     const graph = run(
       artifact,
-      ["graph", "compile", "--project-dir", project],
+      ["engine", "graph", "compile", "--project-dir", project],
       { cwd: project, env: pathlessEnv(), timeoutMs: 60_000 },
     );
     const unchanged = paths.every(
@@ -394,8 +416,8 @@ function packagedRuntimeImmutableGate(artifact: string): GateResult {
 }
 
 function validateOutputsGate(artifact: string): GateResult {
-  const result = run(artifact, ["validate", "outputs", "inception"], {
-    cwd: tmpdir(),
+  const result = run(artifact, ["engine", "validate", "outputs", "inception"], {
+    cwd: standaloneGateCwd(),
     env: pathlessEnv(),
     timeoutMs: 30_000,
   });
@@ -423,7 +445,7 @@ function generatedSurfaceGate(
   expectedText?: string,
 ): GateResult {
   const result = run(artifact, args, {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env: pathlessEnv(),
     timeoutMs: 30_000,
   });
@@ -448,13 +470,13 @@ function harnessRuntimeGate(
     AIDLC_HARNESS_DIR: harnessDir,
     AIDLC_HARNESS_NAME: distribution,
   };
-  const sensors = run(artifact, ["sensor", "list"], {
-    cwd: tmpdir(),
+  const sensors = run(artifact, ["engine", "sensor", "list"], {
+    cwd: standaloneGateCwd(),
     env,
     timeoutMs: 30_000,
   });
-  const runners = run(artifact, ["gen", "runners", "--check"], {
-    cwd: tmpdir(),
+  const runners = run(artifact, ["engine", "gen", "runners", "--check"], {
+    cwd: standaloneGateCwd(),
     env,
     timeoutMs: 30_000,
   });
@@ -482,8 +504,8 @@ function harnessProbeGate(
 ): GateResult {
   const project = mkdtempSync(join(tmpdir(), `aidlc-binary-probe-${distribution}-`));
   try {
-    cpSync(join(REPO_ROOT, "dist", distribution), project, { recursive: true });
-    const env = pathlessEnv();
+    cpSync(join(REPO_ROOT, "dist-release", distribution), project, { recursive: true });
+    const env = pathlessEnv(project);
     delete env.AIDLC_HARNESS_DIR;
     delete env.AIDLC_HARNESS_NAME;
     delete env.AIDLC_PROJECT_DIR;
@@ -492,7 +514,7 @@ function harnessProbeGate(
     delete env.AIDLC_RUNTIME_ROOT;
     const result = run(
       artifact,
-      ["doctor", "--project-dir", project],
+      ["doctor", "--verbose", "--project-dir", project],
       { cwd: project, env, timeoutMs: 30_000 },
     );
     const output = `${result.stdout}\n${result.stderr}`;
@@ -528,6 +550,7 @@ function compiledKiroNewWorkRoutingGate(artifact: string): GateResult {
       run(
         artifact,
         [
+          "engine",
           "intent",
           "create",
           "--scope",
@@ -613,7 +636,7 @@ function pluginSelectGate(artifact: string): GateResult {
   try {
     const result = run(
       artifact,
-      ["plugin", "select", "aidlc", "--project-dir", project],
+      ["engine", "plugin", "select", "aidlc", "--project-dir", project],
       { cwd: project, env: pathlessEnv(project), timeoutMs: 60_000 },
     );
     let selected = "";
@@ -651,13 +674,13 @@ function conductorPersonaGate(artifact: string): GateResult {
     "memory",
   );
   const options = {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env: { ...pathlessEnv(), AIDLC_RULES_DIR: rulesDir },
     timeoutMs: 30_000,
   };
   let result = run(
     artifact,
-    ["next", "--single", "--stage", "requirements-analysis"],
+    ["engine", "orchestrate", "next", "--single", "--stage", "requirements-analysis"],
     options,
   );
   let kind = "";
@@ -673,7 +696,7 @@ function conductorPersonaGate(artifact: string): GateResult {
       };
       kind = parsed.kind ?? "";
       if (kind === "load-steering" && parsed.continue_token) {
-        result = run(artifact, ["continue", parsed.continue_token], options);
+        result = run(artifact, ["engine", "orchestrate", "continue", parsed.continue_token], options);
         continue;
       }
       personaBytes = parsed.conductor_persona?.length ?? 0;
@@ -704,9 +727,10 @@ function conductorPersonaGate(artifact: string): GateResult {
 function workspaceFlagsGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-workspace-"));
   try {
+    mkdirSync(join(project, ".git"));
     const interleaved = run(
       artifact,
-      ["space", "--project-dir", project, "create", "teamB"],
+      ["engine", "space", "--project-dir", project, "create", "teamB"],
       { cwd: project, env: pathlessEnv(), timeoutMs: 30_000 },
     );
     const legacy = run(
@@ -719,12 +743,12 @@ function workspaceFlagsGate(artifact: string): GateResult {
       "workspace-global-flags",
       interleaved,
       interleaved.status === 0 &&
-        legacy.status === 0 &&
+        legacy.status === 2 &&
         existsSync(join(project, "aidlc", "spaces", "teamb")) &&
-        existsSync(join(project, "aidlc", "spaces", "teamc")) &&
-        !runtimeCrash(output),
+        !existsSync(join(project, "aidlc", "spaces", "teamc")) &&
+        !runtimeCrash(`${interleaved.stdout}\n${interleaved.stderr}`),
       {
-        expected: "interleaved --project-dir and legacy space-create both create spaces",
+        expected: "engine space accepts interleaved --project-dir and legacy space-create is rejected",
         actual: output.trim(),
         detail: `legacyStatus=${legacy.status}`,
       },
@@ -756,7 +780,7 @@ function sensorFireGate(artifact: string): GateResult {
   try {
     const createResult = run(
       artifact,
-      ["intent", "create", "--scope", "poc", "--label", "sensor-gate", "--project-dir", project],
+      ["engine", "intent", "create", "--scope", "poc", "--label", "sensor-gate", "--project-dir", project],
       { cwd: project, env: pathlessEnv(project), timeoutMs: 30_000 },
     );
     const outputPath = join(
@@ -772,6 +796,7 @@ function sensorFireGate(artifact: string): GateResult {
     const result = run(
       artifact,
       [
+        "engine",
         "sensor",
         "fire",
         "required-sections",
@@ -829,17 +854,18 @@ function boltReentryGate(artifact: string): GateResult {
     const env = { ...pathlessEnv(), PATH: dirname(git) };
     const createResult = run(
       artifact,
-      ["intent", "create", "--scope", "poc", "--label", "bolt-gate", "--project-dir", projectArg],
+      ["engine", "intent", "create", "--scope", "poc", "--label", "bolt-gate", "--project-dir", projectArg],
       { cwd: invocationCwd, env, timeoutMs: 30_000 },
     );
     const worktree = run(
       artifact,
-      ["worktree", "create", "--slug", "binary-bolt", "--base", branch, "--project-dir", projectArg],
+      ["engine", "worktree", "create", "--slug", "binary-bolt", "--base", branch, "--project-dir", projectArg],
       { cwd: invocationCwd, env, timeoutMs: 30_000 },
     );
     const result = run(
       artifact,
       [
+        "engine",
         "bolt",
         "start",
         "--name",
@@ -887,7 +913,7 @@ function swarmReentryGate(artifact: string): GateResult {
     const env = { ...pathlessEnv(), PATH: dirname(git) };
     const createResult = run(
       artifact,
-      ["intent", "create", "--scope", "poc", "--label", "swarm-gate", "--project-dir", projectArg],
+      ["engine", "intent", "create", "--scope", "poc", "--label", "swarm-gate", "--project-dir", projectArg],
       { cwd: invocationCwd, env, timeoutMs: 30_000 },
     );
     // `swarm prepare` now accepts authority only for Units in the current DAG.
@@ -909,6 +935,7 @@ function swarmReentryGate(artifact: string): GateResult {
     const result = run(
       artifact,
       [
+        "engine",
         "swarm",
         "prepare",
         "--batch",
@@ -950,27 +977,41 @@ function swarmReentryGate(artifact: string): GateResult {
 }
 
 function delegatePluginSyncGate(artifact: string): GateResult {
-  const result = run(artifact, ["plugin", "sync"], {
-    cwd: tmpdir(),
-    env: pathlessEnv(),
-    timeoutMs: 30_000,
-  });
-  const output = `${result.stdout}\n${result.stderr}`;
-  const moduleError = /Cannot find module|\/\$bunfs\//.test(output);
-  const actual = result.stdout.trim();
-  return commandGate(
-    "delegate-plugin-sync",
-    result,
-    !result.error &&
-      result.status === 0 &&
-      actual === "no installed plugins; nothing to sync" &&
-      !moduleError,
-    {
-      expected: "no installed plugins; nothing to sync",
-      actual: actual || result.stderr.trim(),
-      detail: "runs a real utility delegate from the compiled artifact",
-    },
-  );
+  const fixture = mkdtempSync(join(tmpdir(), "aidlc-binary-plugin-empty-"));
+  try {
+    const registry = join(fixture, "installed_plugins.json");
+    const settings = join(fixture, "settings.json");
+    writeFileSync(registry, '{"version":2,"plugins":{}}\n');
+    writeFileSync(settings, '{"enabledPlugins":{}}\n');
+    const result = run(artifact, ["engine", "plugin", "sync"], {
+      cwd: standaloneGateCwd(),
+      env: {
+        ...process.env,
+        AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
+        AIDLC_CLAUDE_SETTINGS: settings,
+      },
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    const moduleError = /Cannot find module|\/\$bunfs\//.test(output);
+    const actual = result.stdout.trim();
+    return commandGate(
+      "delegate-plugin-sync",
+      result,
+      !result.error &&
+        result.status === 0 &&
+        actual === "plugin sync complete: 0 plugin(s)" &&
+        !moduleError,
+      {
+        expected: "plugin sync complete: 0 plugin(s)",
+        actual: actual || result.stderr.trim(),
+        detail: "runs a real plugin delegate from the compiled artifact",
+      },
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 }
 
 function realPluginSyncGate(artifact: string): GateResult {
@@ -978,10 +1019,10 @@ function realPluginSyncGate(artifact: string): GateResult {
   const pluginRoot = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
   try {
     cpSync(RUNTIME_ASSET_ROOT, join(project, ".claude"), { recursive: true });
-    cpSync(join(REPO_ROOT, "dist", "claude", "aidlc"), join(project, "aidlc"), {
+    cpSync(join(REPO_ROOT, "dist-release", "claude", "aidlc"), join(project, "aidlc"), {
       recursive: true,
     });
-    const result = run(artifact, ["plugin", "sync", "--project-dir", project], {
+    const result = run(artifact, ["engine", "plugin", "sync", "--project-dir", project], {
       cwd: project,
       env: {
         ...process.env,
@@ -1001,6 +1042,15 @@ function realPluginSyncGate(artifact: string): GateResult {
       "test-pro-integration.md",
     );
     const graphPath = join(project, ".claude", "tools", "data", "stage-graph.json");
+    const composeDrops = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "plugin-compose-test-pro.drops",
+    );
     let graphContainsPlugin = false;
     try {
       const graph = JSON.parse(readFileSync(graphPath, "utf-8")) as Array<{ slug?: string }>;
@@ -1016,12 +1066,14 @@ function realPluginSyncGate(artifact: string): GateResult {
         result.stdout.trim() === "plugin sync complete: 1 plugin(s)" &&
         existsSync(composedStage) &&
         graphContainsPlugin &&
+        !existsSync(composeDrops) &&
         !/unknown command|Cannot find module|\/\$bunfs\//.test(output),
       {
-        expected: "real plugin compose and graph compile succeed without PATH bun",
-        actual: existsSync(composedStage) && graphContainsPlugin
+        expected:
+          "real plugin compose and generated-region refresh succeed without PATH bun or drops",
+        actual: existsSync(composedStage) && graphContainsPlugin && !existsSync(composeDrops)
           ? result.stdout.trim()
-          : result.stderr.trim() || "composed graph entry missing",
+          : result.stderr.trim() || `graph=${graphContainsPlugin}; drops=${existsSync(composeDrops)}`,
       },
     );
   } finally {
@@ -1036,9 +1088,11 @@ function pathlessOrchestrateGate(
   env: NodeJS.ProcessEnv,
   expectedKind: string,
   expectedText: string,
+  forbiddenText = "",
 ): GateResult {
   const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
   try {
+    mkdirSync(join(project, ".git"));
     const result = run(artifact, [...args, "--project-dir", project], {
       cwd: project,
       env: {
@@ -1069,9 +1123,12 @@ function pathlessOrchestrateGate(
       result.status === 0 &&
         kind === expectedKind &&
         directiveText.includes(expectedText) &&
+        (forbiddenText === "" || !directiveText.includes(forbiddenText)) &&
         !/Executable not found|unknown command|Cannot find module|\/\$bunfs\//.test(output),
       {
-        expected: `${expectedKind} directive containing ${expectedText}`,
+        expected:
+          `${expectedKind} directive containing ${expectedText}` +
+          (forbiddenText ? ` and not ${forbiddenText}` : ""),
         actual: kind ? `${kind}: ${directiveText}` : result.stderr.trim() || result.stdout.trim(),
       },
     );
@@ -1080,6 +1137,10 @@ function pathlessOrchestrateGate(
   }
 }
 
+// v2's single-stage boundary gate, reshaped to the engine namespace: `report
+// --single` now REQUIRES the open STAGE_STARTED boundary that `next --single`
+// records, so the gate proves the START half (typed stage work plus the
+// synthetic-workflow audit boundary) instead of committing a report cold.
 function pathlessSingleAuditGate(artifact: string): GateResult {
   const project = installedProject("aidlc-binary-pathless-single-audit-");
   try {
@@ -1107,6 +1168,8 @@ function pathlessSingleAuditGate(artifact: string): GateResult {
     const result = run(
       artifact,
       [
+        "engine",
+        "orchestrate",
         "next",
         "--single",
         "--stage",
@@ -1173,7 +1236,8 @@ function pathlessSingleAuditGate(artifact: string): GateResult {
 function hookGate(artifact: string, hook: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-hook-"));
   try {
-    const result = run(artifact, ["hook", hook], {
+    mkdirSync(join(project, ".git"));
+    const result = run(artifact, ["engine", "hook", hook], {
       cwd: project,
       env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
       input: "{}",
@@ -1235,7 +1299,7 @@ function planApprovalHookGate(artifact: string): GateResult {
         prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
       },
     });
-    const result = run(artifact, ["hook", "plan-approval-guard"], {
+    const result = run(artifact, ["engine", "hook", "plan-approval-guard"], {
       cwd: project,
       env: pathlessEnv(project),
       input,
@@ -1296,7 +1360,7 @@ function planApprovalAdapterGate(
             ],
           },
         };
-    const result = run(artifact, ["adapter", harness, "plan-approval-guard"], {
+    const result = run(artifact, ["engine", "adapter", harness, "plan-approval-guard"], {
       cwd: project,
       env: pathlessEnv(project),
       input: JSON.stringify(input),
@@ -1323,12 +1387,13 @@ function planApprovalAdapterGate(
 function statuslineGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-statusline-"));
   try {
+    mkdirSync(join(project, ".git"));
     const input = JSON.stringify({
       workspace: { project_dir: project },
       model: { id: "claude-test" },
       context_window: { used_percentage: 5 },
     });
-    const result = run(artifact, ["statusline"], {
+    const result = run(artifact, ["engine", "statusline"], {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
@@ -1354,7 +1419,7 @@ function statuslineGate(artifact: string): GateResult {
 function codexAdapterGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-codex-"));
   try {
-    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(project, ".codex"), {
+    cpSync(join(REPO_ROOT, "dist-release", "codex", ".codex"), join(project, ".codex"), {
       recursive: true,
     });
     const input = JSON.stringify({
@@ -1362,7 +1427,7 @@ function codexAdapterGate(artifact: string): GateResult {
       cwd: project,
       session_id: `binary-gate-${Date.now()}`,
     });
-    const result = run(artifact, ["adapter", "codex", "validate-state"], {
+    const result = run(artifact, ["engine", "adapter", "codex", "validate-state"], {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
@@ -1406,7 +1471,7 @@ function cursorAdapterGate(artifact: string): GateResult {
       conversation_id: `binary-gate-${Date.now()}`,
       session_id: `binary-gate-${Date.now()}`,
     });
-    const result = run(artifact, ["adapter", "cursor", "validate-state"], {
+    const result = run(artifact, ["engine", "adapter", "cursor", "validate-state"], {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
@@ -1443,14 +1508,14 @@ function routedProjectDirGate(artifact: string): GateResult {
   const targetProject = installedProject("aidlc-binary-route-target-");
   try {
     cpSync(
-      join(REPO_ROOT, "dist", "codex", ".codex"),
+      join(REPO_ROOT, "dist-release", "codex", ".codex"),
       join(targetProject, ".codex"),
       { recursive: true },
     );
     const env = { ...pathlessEnv(), CLAUDE_PROJECT_DIR: cwdProject };
     const hook = run(
       artifact,
-      ["hook", "validate-state", "--project-dir", targetProject],
+      ["engine", "hook", "validate-state", "--project-dir", targetProject],
       { cwd: cwdProject, env, input: "{}", timeoutMs: 30_000 },
     );
     const targetGenericHeartbeat = join(
@@ -1475,6 +1540,7 @@ function routedProjectDirGate(artifact: string): GateResult {
     const createResult = run(
       artifact,
       [
+        "engine",
         "intent",
         "create",
         "--scope",
@@ -1488,7 +1554,7 @@ function routedProjectDirGate(artifact: string): GateResult {
     );
     const statusline = run(
       artifact,
-      ["statusline", "--project-dir", targetProject],
+      ["engine", "statusline", "--project-dir", targetProject],
       {
         cwd: cwdProject,
         env,
@@ -1524,7 +1590,7 @@ function routedProjectDirGate(artifact: string): GateResult {
     );
     const adapter = run(
       artifact,
-      ["adapter", "codex", "validate-state", "--project-dir", targetProject],
+      ["engine", "adapter", "codex", "validate-state", "--project-dir", targetProject],
       {
         cwd: cwdProject,
         env,
@@ -1579,16 +1645,164 @@ function routedProjectDirGate(artifact: string): GateResult {
   }
 }
 
+function dispatcherParityGate(artifact: string): GateResult {
+  const codexProject = mkdtempSync(join(tmpdir(), "aidlc-binary-parity-codex-"));
+  const kiroProject = mkdtempSync(join(tmpdir(), "aidlc-binary-parity-kiro-"));
+  const kiroIdeProject = mkdtempSync(join(tmpdir(), "aidlc-binary-parity-kiro-ide-"));
+  try {
+    mkdirSync(join(codexProject, ".git"));
+    mkdirSync(join(kiroProject, ".git"));
+    mkdirSync(join(kiroIdeProject, ".git"));
+    cpSync(join(REPO_ROOT, "dist-release", "codex", ".codex"), join(codexProject, ".codex"), {
+      recursive: true,
+    });
+    cpSync(join(REPO_ROOT, "dist-release", "kiro", ".kiro"), join(kiroProject, ".kiro"), {
+      recursive: true,
+    });
+    cpSync(join(REPO_ROOT, "dist-release", "kiro-ide", ".kiro"), join(kiroIdeProject, ".kiro"), {
+      recursive: true,
+    });
+    const baseEnv = {
+      ...process.env,
+      AIDLC_HARNESS_DIR: ".claude",
+      AIDLC_RUNTIME_HARNESS_ROOT: RUNTIME_ASSET_ROOT,
+    };
+    const cases: Array<{
+      name: string;
+      projectDir: string;
+      args: string[];
+      input?: string;
+      env?: NodeJS.ProcessEnv;
+    }> = [
+      {
+        name: "hook",
+        projectDir: codexProject,
+        args: ["engine", "hook", "validate-state"],
+        input: "{}",
+      },
+      {
+        name: "statusline",
+        projectDir: codexProject,
+        args: ["engine", "statusline"],
+        input: JSON.stringify({
+          workspace: { project_dir: codexProject },
+          model: { id: "claude-parity" },
+          context_window: { used_percentage: 5 },
+        }),
+      },
+      {
+        name: "adapter-codex",
+        projectDir: codexProject,
+        args: ["engine", "adapter", "codex", "validate-state"],
+        input: JSON.stringify({
+          hook_event_name: "PreCompact",
+          cwd: codexProject,
+          session_id: "binary-parity",
+        }),
+      },
+      {
+        name: "adapter-kiro",
+        projectDir: kiroProject,
+        args: ["engine", "adapter", "kiro", "session-start"],
+        input: JSON.stringify({
+          hook_event_name: "agentSpawn",
+          cwd: kiroProject,
+          session_id: "binary-parity-kiro",
+        }),
+      },
+      {
+        name: "adapter-kiro-ide",
+        projectDir: kiroIdeProject,
+        args: ["engine", "adapter", "kiro-ide", "mint"],
+        env: {
+          USER_PROMPT: "{}",
+          VSCODE_PID: "23801",
+          VSCODE_IPC_HOOK: join(kiroIdeProject, "vscode-ipc.sock"),
+        },
+      },
+      {
+        name: "generated-surface",
+        projectDir: codexProject,
+        args: ["engine", "gen", "stage-table", "--check"],
+        input: undefined,
+      },
+    ] as const;
+    const differences: string[] = [];
+    for (const item of cases) {
+      const args = [...item.args, "--project-dir", item.projectDir];
+      const env = {
+        ...baseEnv,
+        CLAUDE_PROJECT_DIR: item.projectDir,
+        ...item.env,
+      };
+      const dev = run(process.execPath, [ENTRY, ...args], {
+        cwd: item.projectDir,
+        env,
+        input: item.input,
+        timeoutMs: 30_000,
+      });
+      const compiled = run(artifact, args, {
+        cwd: item.projectDir,
+        env,
+        input: item.input,
+        timeoutMs: 30_000,
+      });
+      if (
+        dev.status !== compiled.status ||
+        dev.signal !== compiled.signal ||
+        dev.stdout !== compiled.stdout ||
+        dev.stderr !== compiled.stderr
+      ) {
+        differences.push(
+          `${item.name}: dev(status=${dev.status},signal=${dev.signal},stdout=${
+            JSON.stringify(dev.stdout)
+          },stderr=${JSON.stringify(dev.stderr)}) compiled(status=${compiled.status},signal=${
+            compiled.signal
+          },stdout=${JSON.stringify(compiled.stdout)},stderr=${JSON.stringify(compiled.stderr)})`,
+        );
+      }
+    }
+    return {
+      name: "bun-compiled-parity",
+      ok: differences.length === 0,
+      kind: "inspection",
+      expected: "identical argv behavior, stdout, stderr, signal, and exit status",
+      actual: differences.length,
+      detail: differences.length === 0
+        ? "hook, statusline, all host adapters, and generated-surface routes match"
+        : differences.join("\n"),
+    };
+  } finally {
+    rmSync(codexProject, { recursive: true, force: true });
+    rmSync(kiroProject, { recursive: true, force: true });
+    rmSync(kiroIdeProject, { recursive: true, force: true });
+  }
+}
+
 function delegateDoctorDataGate(artifact: string): GateResult {
-  const result = run(artifact, ["doctor"], {
-    cwd: tmpdir(),
+  const result = run(artifact, ["doctor", "--verbose"], {
+    cwd: standaloneGateCwd(),
     env: pathlessEnv(),
     timeoutMs: 30_000,
   });
   const output = `${result.stdout}\n${result.stderr}`;
+  // Doctor legitimately reports PATH-dependent external tools as advisory rows,
+  // and the pathless gate env phrases those on Windows as
+  // "ENOENT: no such file or directory, uv_spawn 'git'". Suppress only that
+  // complete suffix. A line that also carries a bundled-module or $bunfs
+  // signature is a compiled-runtime failure and must survive the scrub.
+  const externalSpawnAdvisory =
+    /ENOENT: no such file or directory, uv_spawn ['"](?!bun['"])[^'"]+['"]\s*$/;
+  const bundledRuntimeSignature = /Cannot find module|\/\$bunfs\//;
+  const scrubbed = output
+    .split("\n")
+    .filter((line) =>
+      bundledRuntimeSignature.test(line) || !externalSpawnAdvisory.test(line)
+    )
+    .join("\n");
   const crashSignature =
-    output.match(/Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/)?.[0] ?? "";
-  const reportEmitted = result.stdout.includes("AI-DLC Health Check");
+    scrubbed.match(/Cannot find module|\/\$bunfs\/|ENOENT|uv_spawn ['"]bun['"]/)?.[0] ?? "";
+  const reportEmitted = result.stdout.includes("AI-DLC doctor");
   const schemaCount = /Schema validation: (\d+)\/(\d+) stages validated/.exec(result.stdout);
   const meaningfulSchemaCount =
     schemaCount !== null &&
@@ -1601,14 +1815,14 @@ function delegateDoctorDataGate(artifact: string): GateResult {
     {
       expected: "doctor report with a non-zero complete schema count and no compiled-data crash signatures",
       actual: crashSignature || schemaCount?.[0] || "schema count missing",
-      detail: "runs doctor from os.tmpdir() against executable-relative runtime data",
+      detail: "runs doctor from an isolated temporary project against executable-relative runtime data",
     },
   );
 }
 
 function pathlessVersionGate(artifact: string): GateResult {
   const result = run(artifact, ["version"], {
-    cwd: tmpdir(),
+    cwd: standaloneGateCwd(),
     env: { ...process.env, PATH: "" },
     timeoutMs: 30_000,
   });
@@ -1665,8 +1879,9 @@ function devSpawnGrepGate(entry: string): GateResult {
 function runtimeAssetsGate(artifact: string): GateResult {
   const artifactDir = dirname(artifact);
   const runtimeDir = join(artifactDir, "runtime");
-  const assets = RUNTIME_DISTRIBUTIONS.map((distribution) => ({
-    source: join(REPO_ROOT, "dist", distribution),
+  const distributions = runtimeDistributions();
+  const assets = distributions.map((distribution) => ({
+    source: join(REPO_ROOT, "dist-release", distribution),
     destination: join(runtimeDir, distribution),
   }));
 
@@ -1695,7 +1910,7 @@ function runtimeAssetsGate(artifact: string): GateResult {
     expected: assets.length,
     actual: assets.length - missing.length,
     detail: missing.length === 0
-      ? `complete ${RUNTIME_DISTRIBUTIONS.join(", ")} distributions staged`
+      ? `complete ${distributions.join(", ")} distributions staged`
       : `missing destinations: ${missing.join(", ")}`,
   };
 }
@@ -1725,6 +1940,158 @@ function fileGate(artifact: string, needle: string): GateResult {
   );
 }
 
+function finalLayoutLifecycleGates(artifact: string): GateResult[] {
+  const root = mkdtempSync(join(tmpdir(), "aidlc-binary-final-layout-"));
+  const project = join(root, "project");
+  const registry = join(root, "installed_plugins.json");
+  const settings = join(root, "settings.json");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(join(project, ".git"));
+  writeFileSync(registry, '{"version":2,"plugins":{}}\n');
+  writeFileSync(settings, '{"enabledPlugins":{}}\n');
+  const env: NodeJS.ProcessEnv = {
+    ...pathlessEnv(project),
+    AIDLC_INSTALL_ROOT: join(root, "machine"),
+    AIDLC_BIN_DIR: join(root, "bin"),
+    AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
+    AIDLC_CLAUDE_SETTINGS: settings,
+  };
+
+  try {
+    const initArgs = [
+      "config",
+      "--project-dir",
+      project,
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+      "--quiet",
+    ];
+    const dryRun = run(artifact, [...initArgs, "--dry-run"], {
+      cwd: project,
+      env,
+      timeoutMs: 60_000,
+    });
+    const initDryRun = commandGate(
+      "final-layout-config-dry-run",
+      dryRun,
+      dryRun.status === 0 &&
+        dryRun.stdout.includes("config plan for") &&
+        !existsSync(join(project, ".claude")),
+      {
+        expected: "dry-run plans a fresh Claude projection without creating it",
+        actual: dryRun.stdout.trim() || dryRun.stderr.trim(),
+      },
+    );
+
+    const applied = run(artifact, initArgs, {
+      cwd: project,
+      env,
+      timeoutMs: 60_000,
+    });
+    const doctor = run(artifact, ["doctor", "--project-dir", project, "--json"], {
+      cwd: project,
+      env,
+      timeoutMs: 60_000,
+    });
+    let doctorJson = false;
+    try {
+      const parsed = JSON.parse(doctor.stdout) as {
+        schemaVersion?: number;
+        data?: { checks?: unknown[] };
+      };
+      doctorJson = parsed.schemaVersion === 1 && Array.isArray(parsed.data?.checks);
+    } catch {
+      doctorJson = false;
+    }
+    const doctorJsonGate = commandGate(
+      "final-layout-doctor-json",
+      doctor,
+      applied.status === 0 &&
+        (doctor.status === 0 || doctor.status === 1) &&
+        doctorJson &&
+        !runtimeCrash(`${applied.stdout}\n${applied.stderr}\n${doctor.stdout}\n${doctor.stderr}`),
+      {
+        expected: "config apply succeeds and doctor --json emits a complete health envelope",
+        actual: `config=${applied.status}; doctor=${doctor.status}; json=${doctorJson}`,
+      },
+    );
+
+    const versions = run(artifact, ["system", "versions", "list"], {
+      cwd: project,
+      env,
+      timeoutMs: 30_000,
+    });
+    const versionsGate = commandGate(
+      "final-layout-versions-list",
+      versions,
+      versions.status === 0 && versions.stdout.includes("no retained versions"),
+      {
+        expected: "no retained versions",
+        actual: versions.stdout.trim() || versions.stderr.trim(),
+      },
+    );
+
+    const plugins = run(
+      artifact,
+      ["engine", "plugin", "list", "--json", "--project-dir", project],
+      { cwd: project, env, timeoutMs: 30_000 },
+    );
+    let pluginJson = false;
+    try {
+      const parsed = JSON.parse(plugins.stdout) as { ok?: boolean; code?: number };
+      pluginJson = parsed.ok === true && parsed.code === 0;
+    } catch {
+      pluginJson = false;
+    }
+    const pluginListGate = commandGate(
+      "final-layout-plugin-list",
+      plugins,
+      plugins.status === 0 && pluginJson && !runtimeCrash(`${plugins.stdout}\n${plugins.stderr}`),
+      {
+        expected: "plugin list emits successful JSON",
+        actual: `status=${plugins.status}; json=${pluginJson}`,
+      },
+    );
+
+    const completionResults = ["bash", "zsh", "fish"].map((shell) =>
+      run(artifact, ["system", "completions", shell], {
+        cwd: project,
+        env,
+        timeoutMs: 30_000,
+      })
+    );
+    const completionsGate = commandGate(
+      "final-layout-unix-completions",
+      completionResults[0],
+      completionResults.every((result) =>
+        result.status === 0 &&
+        result.stdout.includes("aidlc") &&
+        !runtimeCrash(`${result.stdout}\n${result.stderr}`)
+      ),
+      {
+        expected: "bash, zsh, and fish completions all render",
+        actual: completionResults.map((result) => result.status).join(","),
+      },
+    );
+
+    return [
+      initDryRun,
+      doctorJsonGate,
+      versionsGate,
+      pluginListGate,
+      completionsGate,
+    ];
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function targetRunsOnHost(target: TargetConfig): boolean {
+  return target.name === "native" || target.name === targetTriple();
+}
+
 function buildTarget(target: TargetConfig): TargetResult {
   removeStaleArtifacts(target);
 
@@ -1743,6 +2110,12 @@ function buildTarget(target: TargetConfig): TargetResult {
     bytes: 0,
     build,
     gates: [],
+    verification: {
+      status: "UNVERIFIED",
+      mode: "inspection-only",
+      hostTarget: targetTriple(),
+      detail: "build did not complete",
+    },
   };
 
   if (build.status !== 0 || build.error) {
@@ -1768,7 +2141,8 @@ function buildTarget(target: TargetConfig): TargetResult {
   result.bytes = statSync(actual.artifact).size;
   result.gates.push(runtimeAssetsGate(actual.artifact));
 
-  if (target.name === "native") {
+  const runnable = targetRunsOnHost(target);
+  if (runnable) {
     result.gates.push(versionGate(actual.artifact));
     result.gates.push(helpGate(actual.artifact));
     result.gates.push(sensorListGate(actual.artifact));
@@ -1779,18 +2153,18 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(generatedSurfaceGate(
       actual.artifact,
       "runner-check",
-      ["gen", "runners", "--check"],
+      ["engine", "gen", "runners", "--check"],
       "stage-runner set is in sync",
     ));
     result.gates.push(generatedSurfaceGate(
       actual.artifact,
       "stage-table-check",
-      ["gen", "stage-table", "--check"],
+      ["engine", "gen", "stage-table", "--check"],
     ));
     result.gates.push(generatedSurfaceGate(
       actual.artifact,
       "scope-table-check",
-      ["gen", "scope-table", "--check"],
+      ["engine", "gen", "scope-table", "--check"],
     ));
     result.gates.push(harnessRuntimeGate(actual.artifact, "codex", ".codex"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "cursor", ".cursor"));
@@ -1827,15 +2201,24 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(pathlessOrchestrateGate(
       actual.artifact,
       "pathless-next-env-scope",
-      ["next"],
+      ["engine", "orchestrate", "next"],
       { AWS_AIDLC_DEFAULT_SCOPE: "feature" },
       "error",
       "No workflow state found",
     ));
     result.gates.push(pathlessOrchestrateGate(
       actual.artifact,
+      "native-directive-invocation",
+      ["engine", "orchestrate", "next", "--status"],
+      {},
+      "print",
+      "aidlc engine status",
+      "bun ",
+    ));
+    result.gates.push(pathlessOrchestrateGate(
+      actual.artifact,
       "pathless-park",
-      ["park"],
+      ["engine", "orchestrate", "park"],
       {},
       "error",
       "State file not found",
@@ -1850,9 +2233,29 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(planApprovalAdapterGate(actual.artifact, "kiro"));
     result.gates.push(cursorAdapterGate(actual.artifact));
     result.gates.push(routedProjectDirGate(actual.artifact));
+    result.gates.push(dispatcherParityGate(actual.artifact));
+    result.gates.push(...finalLayoutLifecycleGates(actual.artifact));
   } else {
     result.gates.push(sizeGate(result.bytes));
     result.gates.push(fileGate(actual.artifact, target.fileNeedle ?? ""));
+  }
+
+  if (runnable && resultFailures(result).length === 0) {
+    result.verification = {
+      status: "VERIFIED",
+      mode: "full-runtime",
+      hostTarget: targetTriple(),
+      detail: "artifact executed the complete native and final-layout gate set",
+    };
+  } else {
+    result.verification = {
+      status: "UNVERIFIED",
+      mode: runnable ? "full-runtime" : "inspection-only",
+      hostTarget: targetTriple(),
+      detail: runnable
+        ? "one or more full-runtime gates failed"
+        : `target ${target.name} cannot execute on host ${targetTriple()}`,
+    };
   }
 
   return result;
@@ -1874,20 +2277,24 @@ function writeResults(
   packageCheck: CommandResult,
   results: TargetResult[],
 ): void {
-  const totalSeconds = formatSeconds(results.reduce((sum, result) => sum + result.seconds * 1000, 0));
-  const output = {
-    generator: "scripts/build-binaries.ts",
-    entry: ENTRY,
-    outDir: OUT_DIR,
-    bunVersion,
-    expectedVersion: AIDLC_VERSION,
-    packageCheck,
-    nativeOnlySeconds: results.find((result) => result.name === "native")?.seconds ?? 0,
-    totalSeconds,
-    failures: results.flatMap(resultFailures),
-    results,
-  };
-  writeFileSync(join(OUT_DIR, "build-results.json"), `${JSON.stringify(output, null, 2)}\n`, "utf-8");
+  for (const result of results) {
+    const output = {
+      generator: "scripts/build-binaries.ts",
+      entry: ENTRY,
+      outDir: OUT_DIR,
+      bunVersion,
+      expectedVersion: AIDLC_VERSION,
+      packageCheck,
+      totalSeconds: result.seconds,
+      failures: resultFailures(result),
+      results: [result],
+    };
+    writeFileSync(
+      join(OUT_DIR, `build-results-${result.name}.json`),
+      `${JSON.stringify(output, null, 2)}\n`,
+      "utf-8",
+    );
+  }
 }
 
 function tail(text: string, lines = 20): string {
@@ -1895,40 +2302,63 @@ function tail(text: string, lines = 20): string {
 }
 
 function main(): void {
-  const targets = selectedTargets(process.argv.slice(2));
+  try {
+    const targets = selectedTargets(process.argv.slice(2));
 
-  const packageCheck = run(process.execPath, ["scripts/package.ts", "--check"], {
-    cwd: REPO_ROOT,
-    timeoutMs: 300_000,
-  });
-  if (packageCheck.status !== 0 || packageCheck.error) {
-    console.error("package drift guard failed; run bun scripts/package.ts before building binaries");
-    const output = tail(`${packageCheck.stdout}${packageCheck.stderr}`);
-    if (output) console.error(output);
-    process.exit(1);
+    const packageBuild = run(process.execPath, ["scripts/package.ts"], {
+      cwd: REPO_ROOT,
+      timeoutMs: 300_000,
+    });
+    if (packageBuild.status !== 0 || packageBuild.error) {
+      console.error("package regeneration failed before binary build");
+      const output = tail(`${packageBuild.stdout}${packageBuild.stderr}`);
+      if (output) console.error(output);
+      process.exitCode = 1;
+      return;
+    }
+    const packageCheck = run(process.execPath, ["scripts/package.ts", "--check"], {
+      cwd: REPO_ROOT,
+      timeoutMs: 300_000,
+    });
+    if (packageCheck.status !== 0 || packageCheck.error) {
+      console.error("package determinism guard failed");
+      const output = tail(`${packageCheck.stdout}${packageCheck.stderr}`);
+      if (output) console.error(output);
+      process.exitCode = 1;
+      return;
+    }
+
+    mkdirSync(OUT_DIR, { recursive: true });
+    const bunVersion = run(process.execPath, ["--version"], { cwd: REPO_ROOT, timeoutMs: 30_000 }).stdout.trim();
+    const results: TargetResult[] = [];
+
+    for (const target of targets) {
+      const result = buildTarget(target);
+      results.push(result);
+      const ok = resultFailures(result).length === 0 ? "ok" : "FAIL";
+      console.log(`${result.name}\t${ok}\t${result.seconds}s\t${result.bytes} bytes\t${result.artifact}`);
+    }
+
+    writeResults(bunVersion, packageCheck, results);
+
+    const failures = results.flatMap(resultFailures);
+    const resultPaths = results.map((result) =>
+      join(OUT_DIR, `build-results-${result.name}.json`)
+    ).join(", ");
+    if (failures.length > 0) {
+      for (const failure of failures) console.error(failure);
+      console.error(`wrote ${resultPaths}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log(`wrote ${resultPaths}`);
+  } finally {
+    if (standaloneGateProject) {
+      rmSync(standaloneGateProject, { recursive: true, force: true });
+      standaloneGateProject = null;
+    }
   }
-
-  mkdirSync(OUT_DIR, { recursive: true });
-  const bunVersion = run(process.execPath, ["--version"], { cwd: REPO_ROOT, timeoutMs: 30_000 }).stdout.trim();
-  const results: TargetResult[] = [];
-
-  for (const target of targets) {
-    const result = buildTarget(target);
-    results.push(result);
-    const ok = resultFailures(result).length === 0 ? "ok" : "FAIL";
-    console.log(`${result.name}\t${ok}\t${result.seconds}s\t${result.bytes} bytes\t${result.artifact}`);
-  }
-
-  writeResults(bunVersion, packageCheck, results);
-
-  const failures = results.flatMap(resultFailures);
-  if (failures.length > 0) {
-    for (const failure of failures) console.error(failure);
-    console.error(`wrote ${join(OUT_DIR, "build-results.json")}`);
-    process.exit(1);
-  }
-
-  console.log(`wrote ${join(OUT_DIR, "build-results.json")}`);
 }
 
 main();

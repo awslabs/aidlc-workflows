@@ -1,6 +1,6 @@
 # Running AI-DLC on Kiro IDE
 
-One of the framework's harnesses: `dist/kiro-ide/` runs the same AI-DLC
+One of the framework's harnesses: the Kiro IDE runtime runs the same AI-DLC
 methodology inside [Kiro IDE](https://kiro.dev/). One deterministic core —
 the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules —
 is byte-shared across every harness; only the shell (skills, agent surfaces,
@@ -19,25 +19,57 @@ hook wiring, activation) differs.
 
 - **Kiro IDE**, signed in
 - **Claude Opus 4.8** selected as the chat model (see the note above)
-- **bun** on your PATH (`curl -fsSL https://bun.sh/install | bash`)
+- **bun** only when generating or running the source/development `dist/`
+  projection. Native installs and versioned release runtimes are
+  self-contained.
 
 > [!TIP]
-> bun must be on the PATH that *non-interactive* shells see — that's what the
-> IDE uses to run a hook or tool. Those shells read `~/.zshenv` (zsh) or
-> `~/.bashrc` (bash), not `~/.zshrc`, but the bun installer writes to
-> `~/.zshrc`. If `which bun` works in your terminal yet hooks can't find bun,
-> copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (or `~/.bashrc`).
+> For a source-generated `dist/` install, bun must be on the PATH that
+> *non-interactive* shells see
+> — that's what the IDE uses to run a hook or tool. Those shells read
+> `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc`, but the bun
+> installer writes to `~/.zshrc`. If `which bun` works in your terminal yet
+> hooks can't find bun, copy the `BUN_INSTALL`/`PATH` export into
+> `~/.zshenv` (or `~/.bashrc`).
 
 ## Install
 
-The copies below come from a clone of the
-[aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`main` branch:
+### Native channel (recommended)
 
 ```bash
-git clone --branch main https://github.com/awslabs/aidlc-workflows.git
-cd aidlc-workflows
+tmp="$(mktemp -d)"
+gh release download --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
+  --pattern install.sh --pattern aidlc-release.intoto.jsonl
+gh attestation verify "$tmp/install.sh" \
+  --bundle "$tmp/aidlc-release.intoto.jsonl" \
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+cd your-project
+aidlc config
+aidlc doctor
 ```
+
+The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
+
+On Windows, download `install.ps1` and run
+`& $installer`. An interactive run may omit the flag;
+redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
+require it. For an air-gapped package, use
+`install.sh --from <release-directory> --offline` on Unix or
+`& $installer -From <release-directory> -Offline` on Windows.
+
+`aidlc config` projects the IDE shell before the project is opened. It merges the
+native `aidlc engine *` trust entry into `.vscode/settings.json` without replacing
+user-owned settings. Open `your-project/` in Kiro IDE and run
+`/aidlc --doctor` in chat before the first workflow.
+
+### Versioned manual-copy alternative
+
+Download and extract a specific release's `aidlc-runtime.tar.gz` as described in
+[Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
+then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 ```bash
 mkdir -p your-project/.kiro your-project/aidlc
@@ -53,9 +85,9 @@ rm -f \
   your-project/.kiro/agents/aidlc.json \
   your-project/.kiro/agents/aidlc-*-agent.json \
   your-project/.kiro/settings/cli.json
-cp -R dist/kiro-ide/.kiro/. your-project/.kiro/
-cp -R dist/kiro-ide/aidlc/. your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
-cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
+cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
+cp "$RUNTIME_ROOT/kiro-ide/AGENTS.md" your-project/AGENTS.md   # merge if you already have one
 # Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
 if [ ! -e your-project/.gitignore ]; then
   cp dist/kiro-ide/.gitignore your-project/.gitignore
@@ -68,13 +100,19 @@ distributions. An overlay copy cannot delete retired files. Both removals are
 no-ops on a fresh install. After that cleanup, the
 `cp -R <src>/. <dst>/` form copies the tree **contents** whether
 `your-project/.kiro` already exists or not. A plain
-`cp -r dist/kiro-ide/.kiro your-project/.kiro` nests a second `.kiro` inside an
+`cp -r "$RUNTIME_ROOT/kiro-ide/.kiro" your-project/.kiro` nests a second `.kiro` inside an
 existing `.kiro/` and the IDE never sees the new files.
 
 The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
-of `.kiro/`, so copy it separately (or copy the whole `dist/kiro-ide/` tree at
-once). `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
+of `.kiro/`, so copy it separately (or copy the whole
+`$RUNTIME_ROOT/kiro-ide/` tree at once). `/aidlc --doctor` fails its
+"workspace shell ready" check if it is missing.
+
+The versioned runtime uses the native `aidlc` command. Framework developers who
+need the Bun-shaped source projection can clone the repository, run
+`bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
+ignored local `dist/kiro-ide/` output instead.
 
 The shipped `.gitignore` carries the workspace's commit/ignore split: the
 per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`)
@@ -112,7 +150,7 @@ In the chat panel, run `/aidlc --doctor` to verify the setup, then
 
 Identical to the Claude Code harness: `/aidlc <description>` starts a
 workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
-`--phase`, `--depth`, `--test-strategy` all work, and the
+`--phase`, `--depth`, `--test-strategy`, and `--config [section]` all work, and the
 per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
 skills are installed. There is no init command; the shipped shell scaffolds
 the workspace, and AI-DLC automatically creates the first intent on your first `/aidlc`.
@@ -122,9 +160,10 @@ the workspace, and AI-DLC automatically creates the first intent on your first `
 Kiro IDE registers hooks through v2 hook JSON files
 (`{"version":"v1","hooks":[{name,trigger,matcher,action}]}`, PascalCase
 triggers) under `.kiro/hooks/` (a different mechanism from Kiro CLI, which
-reads a `hooks` block inside the agent JSON). Each hook runs a command that
-routes through the shared `aidlc-kiro-adapter.ts` shim, which normalizes the
-IDE's hook event into the shape the byte-shared core hooks expect.
+reads a `hooks` block inside the agent JSON). Native hook commands route through
+`aidlc engine adapter kiro-ide`; source/development copies route through the projected
+`aidlc-kiro-adapter.ts` shim. Both normalize the IDE event into the shape the
+shared core hooks expect.
 
 Kiro IDE 1.x delivers hook context as **JSON on stdin** (snake_case:
 `{ session_id, tool_name, tool_input, tool_response }`; the older 0.12 builds instead set
@@ -214,7 +253,8 @@ ways to enable it, either works:
 Everything else — state machine, audit trail, artifacts under the per-intent
 record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), the learnings
 ritual, sensors, scopes, depth/test-strategy — behaves identically, because it
-IS identical: the same tools run from `.kiro/tools/`.
+IS identical: native installs dispatch through `aidlc`, while source copies run
+the corresponding tools from `.kiro/tools/`.
 
 A project's `aidlc/` workspace is harness-neutral. Moving a project between
 harnesses (or running both side by side) is supported-but-untested; `/aidlc
@@ -225,13 +265,15 @@ workflow.
 
 `dist/kiro-ide` is **generated** from `core/` + `harness/kiro-ide/` by
 `bun scripts/package.ts kiro-ide` (core copy with the `{{HARNESS_DIR}}` token
-substituted to `.kiro` and the `rules/` → `steering/` rename). `bun
-scripts/package.ts --check` is the drift guard and runs in CI. The authored
+substituted to `.kiro` and the `rules/` → `steering/` rename). The output is
+ignored and local. `bun scripts/package.ts --check` builds twice in independent
+temporary roots and byte-compares the results as the CI determinism guard. The
+authored
 Kiro IDE surfaces live in `harness/kiro-ide/`: the orchestrator skill
 (`skills/aidlc/`), always-included active-memory steering (`steering/`),
 the conductor Markdown (`agents/aidlc.md`), the hook adapter and v2 hook JSON
 files (`hooks/`), and onboarding fills — edit those
-(or `core/`), never the generated `dist/kiro-ide`.
+(or `core/`), never hand-edit the generated `dist/kiro-ide`.
 
 The IDE harness differs from the CLI harness (`harness/kiro/`) in four ways:
 the `/aidlc` skill and `agents/aidlc.md` are its conductor surfaces rather than

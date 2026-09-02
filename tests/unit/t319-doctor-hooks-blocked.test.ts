@@ -131,9 +131,9 @@ function isoSecond(timestampMs: number): string {
 
 describe("t319 doctor detects hooks blocked before their first heartbeat", () => {
   test("zero heartbeats with no workflow progress keeps the fresh-install advisory", () => {
-    const run = runUtility(freshProject(), ["doctor"]);
+    const run = runUtility(freshProject(), ["doctor", "--verbose"]);
     expect(output(run)).toContain(
-      "✓  Hook heartbeats: not yet fired (first workflow stage will populate)",
+      "ok    Hook heartbeats: not yet fired (first workflow stage will populate)",
     );
   });
 
@@ -143,19 +143,19 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     mkdirSync(health, { recursive: true });
     writeFileSync(join(health, "hook-debug.log"), "debug only\n", "utf-8");
 
-    const run = runUtility(project, ["doctor"]);
+    const run = runUtility(project, ["doctor", "--verbose"]);
     expect(output(run)).toContain(
-      "✓  Hook heartbeats: not yet fired (first workflow stage will populate)",
+      "ok    Hook heartbeats: not yet fired (first workflow stage will populate)",
     );
   });
 
   test("zero heartbeats after workflow progress fails and warns about hook approval restart", () => {
     const project = projectWithWorkflowProgress();
 
-    const run = runUtility(project, ["doctor"]);
+    const run = runUtility(project, ["doctor", "--verbose"]);
     expect(run.status).toBe(1);
     expect(output(run)).toMatch(
-      /✗ {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
+      /fail {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
     );
     expect(output(run)).toContain("1. Run /hooks to check hook approval and policy state.");
     expect(output(run)).toContain("approval does not take effect until a full restart");
@@ -165,7 +165,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
     expect(output(run)).toContain("AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1");
     expect(output(run)).toMatch(
-      /✓ {2}Human-turn receipts: 0 HUMAN_TURN rows across \d+ stage\/gate event\(s\) \(advisory\)/,
+      /ok {4}Human-turn receipts: 0 HUMAN_TURN rows across \d+ stage\/gate event\(s\) \(advisory\)/,
     );
   }, 30_000);
 
@@ -173,10 +173,10 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     const project = freshProject();
     writeManagedSettings(project, { allowManagedHooksOnly: true });
 
-    const run = runUtility(project, ["doctor"]);
+    const run = runUtility(project, ["doctor", "--verbose"]);
     expect(run.status).toBe(1);
     expect(output(run)).toContain(
-      "✗  Claude managed hook policy: allowManagedHooksOnly=true",
+      "fail  Claude managed hook policy: allowManagedHooksOnly=true",
     );
     expect(output(run)).toContain(
       "only the Claude Code administrator can lift it in managed-settings.json",
@@ -198,7 +198,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       "managed-settings.d/20-release.json",
     );
 
-    const run = runUtility(project, ["doctor"]);
+    const run = runUtility(project, ["doctor", "--verbose"]);
     expect(output(run)).not.toContain("Claude managed hook policy");
   });
 
@@ -211,25 +211,25 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       "managed-settings.d/10-policy.json",
     );
 
-    const run = runUtility(project, ["doctor"]);
+    const run = runUtility(project, ["doctor", "--verbose"]);
     expect(run.status).toBe(1);
     expect(output(run)).toContain(
-      "✓  Hooks enabled (resolved disableAllHooks is not true)",
+      "ok    Hooks enabled (resolved disableAllHooks is not true)",
     );
     expect(output(run)).toContain(
-      "✗  Claude managed hook policy: allowManagedHooksOnly=true",
+      "fail  Claude managed hook policy: allowManagedHooksOnly=true",
     );
   });
 
   test("absent/false policy emits no finding, and a non-Claude harness never probes it", () => {
     const absentProject = freshProject();
-    expect(output(runUtility(absentProject, ["doctor"]))).not.toContain(
+    expect(output(runUtility(absentProject, ["doctor", "--verbose"]))).not.toContain(
       "Claude managed hook policy",
     );
 
     const falseProject = freshProject();
     writeManagedSettings(falseProject, { allowManagedHooksOnly: false });
-    expect(output(runUtility(falseProject, ["doctor"]))).not.toContain(
+    expect(output(runUtility(falseProject, ["doctor", "--verbose"]))).not.toContain(
       "Claude managed hook policy",
     );
 
@@ -239,23 +239,23 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       disableAllHooks: true,
     });
     const otherHarnessOutput = output(
-      runUtility(otherHarnessProject, ["doctor"], {
+      runUtility(otherHarnessProject, ["doctor", "--verbose"], {
         AIDLC_HARNESS_NAME: "codex",
       }),
     );
     expect(otherHarnessOutput).not.toContain("Claude managed hook policy");
     expect(otherHarnessOutput).not.toContain("Hooks DISABLED");
     expect(otherHarnessOutput).not.toContain("Hooks enabled");
-  });
+  }, 30_000);
 
   test("stale heartbeats fail when workflow progress is more than five minutes newer", () => {
     const project = projectWithWorkflowProgress();
     const heartbeat = "2000-01-01T00:00:00Z";
     writeHeartbeat(project, heartbeat);
 
-    const run = runUtility(project, ["doctor"]);
+    const run = runUtility(project, ["doctor", "--verbose"]);
     expect(run.status).toBe(1);
-    expect(output(run)).toContain(`✗  Hooks last fired ${heartbeat}, but the workflow last advanced `);
+    expect(output(run)).toContain(`fail  Hooks last fired ${heartbeat}, but the workflow last advanced `);
     expect(output(run)).toContain("1. Run /hooks to check hook approval and policy state.");
     expect(output(run)).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
     expect(output(run)).toContain("AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1");
@@ -267,10 +267,10 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     const heartbeat = isoSecond(latestAdvance - 4 * 60 * 1000);
     writeHeartbeat(project, heartbeat);
 
-    const run = runUtility(project, ["doctor"]);
+    const run = runUtility(project, ["doctor", "--verbose"]);
     expect(run.status, output(run)).toBe(0);
     expect(output(run)).toContain(
-      `✓  Hooks last fired: write-audit-log ${heartbeat}`,
+      `ok    Hooks last fired: write-audit-log ${heartbeat}`,
     );
   });
 
@@ -278,10 +278,10 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     const project = projectWithWorkflowProgress();
     writeHeartbeat(project, "not-a-timestamp");
 
-    const run = runUtility(project, ["doctor"]);
+    const run = runUtility(project, ["doctor", "--verbose"]);
     expect(run.status, output(run)).toBe(0);
     expect(output(run)).toContain(
-      "✓  Hooks last fired: write-audit-log not-a-timestamp",
+      "ok    Hooks last fired: write-audit-log not-a-timestamp",
     );
   });
 
@@ -291,10 +291,10 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     const heartbeat = isoSecond(latestAdvance + 1_000);
     writeHeartbeat(project, heartbeat);
 
-    const run = runUtility(project, ["doctor"]);
+    const run = runUtility(project, ["doctor", "--verbose"]);
     expect(run.status, output(run)).toBe(0);
     expect(output(run)).toContain(
-      `✓  Hooks last fired: write-audit-log ${heartbeat}`,
+      `ok    Hooks last fired: write-audit-log ${heartbeat}`,
     );
   });
 });

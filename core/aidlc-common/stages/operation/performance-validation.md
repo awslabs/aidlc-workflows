@@ -70,7 +70,7 @@ Create load test plan, performance test results (latency, throughput, error rate
 ### Step 5: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage performance-validation --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage performance-validation --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 6: Present Completion & Request Approval

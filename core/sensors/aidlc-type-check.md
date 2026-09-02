@@ -1,7 +1,7 @@
 ---
 id: type-check
 kind: deterministic
-command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-type-check.ts
+command: {{INVOKE}} engine sensor-type-check
 default_severity: advisory
 description: Wraps the project's configured type-checker (tsc by default for v0.5.0); fires on TS/TSX code outputs
 category: code-quality

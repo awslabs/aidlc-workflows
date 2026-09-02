@@ -8,8 +8,29 @@ from one harness-neutral `core/`, so it runs natively in the CLI harness you use
 The methodology is the *what*; each harness distribution is the *how* for one
 runtime, and every distribution is generated from the same source.
 
-New here? The [README](../README.md) has the install Quick Start and the
-"pick your harness" table. This page is the map of the documentation itself.
+New here? Start with the native installer and project initializer:
+
+```bash
+tmp="$(mktemp -d)"
+gh release download --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
+  --pattern install.sh --pattern aidlc-release.intoto.jsonl
+gh attestation verify "$tmp/install.sh" \
+  --bundle "$tmp/aidlc-release.intoto.jsonl" \
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+cd your-project
+aidlc config
+```
+
+The installer verifies published SHA-256 checksums; the resulting runtime needs
+no Bun, Node.js, or Git, and includes every harness runtime. Harness selection
+happens later in `aidlc config`. This runtime statement does not remove host prerequisites: Codex project hook
+discovery requires the target project to be a Git repository.
+[Getting Started](guide/01-getting-started.md) covers config, harness handoff,
+trust, refresh/version skew, Windows, and the source/development copy
+alternative. This page is the map of the documentation itself.
 
 ## Choose a workflow
 
@@ -36,13 +57,18 @@ versus **shaping**.
 
 ## Running on a specific harness
 
-The guides are harness-neutral; each harness's install steps and the handful of
-behaviours that differ live in [Running on other harnesses](guide/harnesses/README.md)
-(Claude Code is covered throughout the User Guide, whose examples run on it).
+The guides are harness-neutral; each harness's post-config step, trust behavior,
+and the handful of runtime differences live in
+[Running on other harnesses](guide/harnesses/README.md) (Claude Code is covered
+throughout the User Guide, whose examples run on it). After an upgrade,
+`aidlc doctor` reports project/runtime skew and `aidlc config` refreshes a project
+between workflows; refresh is refused while a workflow is active.
 
 ## Building and contributing
 
-Maintainers author in `core/` and regenerate the `dist/<harness>/` trees with
-`bun scripts/package.ts` — see the [Contributing Guide](reference/11-contributing.md)
-for the full build-and-test loop, and [Porting to a New Harness](harness-engineering/09-porting-to-a-new-harness.md)
+Maintainers author in `core/` and materialize the ignored local
+`dist/<harness>/` and `dist-release/<harness>/` trees with
+`bun scripts/package.ts` — see the
+[Contributing Guide](reference/11-contributing.md) for the full build-and-test
+loop, and [Porting to a New Harness](harness-engineering/09-porting-to-a-new-harness.md)
 to add one.

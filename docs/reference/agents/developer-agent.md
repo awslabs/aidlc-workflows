@@ -79,4 +79,4 @@ API patterns, or migration strategies.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-developer-agent](../../guide/agents/developer-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-developer-agent.md`](../../../dist/claude/.claude/agents/aidlc-developer-agent.md)
+- Authored source: [`core/agents/aidlc-developer-agent.md`](../../../core/agents/aidlc-developer-agent.md)

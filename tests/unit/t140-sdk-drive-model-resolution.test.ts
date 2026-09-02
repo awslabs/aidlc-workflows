@@ -1,8 +1,8 @@
 // covers: harness-instrument:sdk-drive-model-resolution
 //
-// Pins the SDK harness' model-source rule without driving a live Claude turn:
-// default to the shipped dist/claude/.claude/settings.json model/env so tests
-// exercise the model configuration users actually receive.
+// Pins the SDK harness' model-source rule without driving a live Claude turn.
+// Model precedence is explicit option > shipped settings > project settings >
+// test-only harness default. Shipped settings still own the environment.
 
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveDriveSdkSettings } from "../harness/sdk-drive.ts";
 
-const SHIPPED_MODEL = "opus[1m]";
+const HARNESS_DEFAULT_MODEL = "opus[1m]";
 const SHIPPED_OPUS = "global.anthropic.claude-opus-4-8[1m]";
 
 function withTempProject(assertions: (projectDir: string) => void): void {
@@ -32,17 +32,18 @@ function writeProjectSettings(
 }
 
 describe("sdk-drive model resolution", () => {
-  test("bare project defaults to the shipped dist model/env", () => {
+  test("bare project uses the harness default model and shipped env", () => {
     withTempProject((projectDir) => {
       const resolved = resolveDriveSdkSettings(projectDir);
 
-      expect(resolved.model).toBe(SHIPPED_MODEL);
+      expect(resolved.model).toBe(HARNESS_DEFAULT_MODEL);
+      expect(resolved.modelSource).toBe("harness-default");
       expect(resolved.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
       expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(SHIPPED_OPUS);
     });
   });
 
-  test("shipped dist settings win over project settings by default", () => {
+  test("project settings model beats the harness default while shipped env still wins", () => {
     withTempProject((projectDir) => {
       writeProjectSettings(projectDir, {
         model: "sonnet",
@@ -53,7 +54,8 @@ describe("sdk-drive model resolution", () => {
 
       const resolved = resolveDriveSdkSettings(projectDir);
 
-      expect(resolved.model).toBe(SHIPPED_MODEL);
+      expect(resolved.model).toBe("sonnet");
+      expect(resolved.modelSource).toBe(join(projectDir, ".claude", "settings.json"));
       expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(SHIPPED_OPUS);
     });
   });
@@ -68,6 +70,7 @@ describe("sdk-drive model resolution", () => {
       });
 
       expect(resolved.model).toBe("sonnet");
+      expect(resolved.modelSource).toBe("option");
       expect(resolved.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("explicit-opus");
     });
   });

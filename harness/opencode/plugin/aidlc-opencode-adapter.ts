@@ -43,36 +43,30 @@
 //     but never scopes the main session.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { homedir } from "node:os";
 
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
+const PROJECTED_INVOKE = "{{INVOKE}}";
+const TRUSTED_NAMESPACE = "{{TRUSTED_NAMESPACE}}";
+const PROJECTED_TRUSTED_NAMESPACE = TRUSTED_NAMESPACE.startsWith("{{")
+  ? "engine"
+  : TRUSTED_NAMESPACE;
+const DEFAULT_AIDLC_COMMAND = PROJECTED_INVOKE.startsWith("{{")
+  ? ["bun", ".aidlc/tools/aidlc.ts", PROJECTED_TRUSTED_NAMESPACE]
+  : [...PROJECTED_INVOKE.trim().split(/\s+/), PROJECTED_TRUSTED_NAMESPACE];
 
-// The core hook bodies ship in the ENGINE dir (<project>/.aidlc/hooks/), not
-// beside this plugin — .opencode/ carries only natively-consumed surfaces.
-// Resolved per-call from the project directory opencode hands the plugin.
-const HOOKS_SUBDIR = join(".aidlc", "hooks");
-
-// The opencode runtime is its own binary, so process.execPath is NOT bun.
-// Resolve bun from PATH, then the default install dir; absent → every hook is
-// a silent no-op (advisory hooks fail open, mirroring the plugin compose hook).
-function bunBin(): string | null {
-  const home = join(homedir(), ".bun", "bin", "bun");
-  if (existsSync(home)) return home;
-  return "bun"; // PATH resolution; spawn error is caught per-call below
-}
-
-function runCore(
+function runCoreHook(
   hookFile: string,
   input: Record<string, unknown>,
   cwd: string,
+  aidlcCommand: readonly string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const bin = bunBin();
-    if (bin === null) return resolve({ stdout: "", stderr: "", code: 0 });
+    const [bin, ...prefix] = aidlcCommand;
+    const hook = hookFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+    if (!bin) return resolve({ stdout: "", stderr: "", code: 0 });
     try {
-      const child = spawn(bin, [join(cwd, HOOKS_SUBDIR, hookFile)], {
+      const child = spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
         env: {
@@ -114,6 +108,8 @@ export type PluginInput = {
   directory: string;
   /** Unit-test seam. Production uses the build-time list embedded by emit.ts. */
   aidlcEntrypoints?: ReadonlySet<string>;
+  /** Unit-test seam. Production uses the projected framework dispatcher. */
+  aidlcCommand?: readonly string[];
 };
 
 const AIDLC_BUN_PREFIX = /^bun[ \t]+\.aidlc\/(?:tools|hooks)\//;
@@ -125,6 +121,10 @@ const AIDLC_ENTRYPOINT = /^\.aidlc\/(tools|hooks)\/([A-Za-z0-9][A-Za-z0-9._-]*\.
 const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
   /* @aidlc-shipped-entrypoints@ */ [],
 );
+
+const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
+  ? (DEFAULT_AIDLC_COMMAND[1] ?? "").replace(/aidlc\.ts$/, "")
+  : null;
 
 /** Parse one expansion-free shell command into argv, or reject shell syntax. */
 function directShellWords(command: string): string[] | null {
@@ -197,6 +197,17 @@ function aidlcBashBoundaryViolation(
   command: string,
   allowedEntrypoints: ReadonlySet<string> = shippedAidlcEntrypoints,
 ): string | null {
+  if (/^aidlc(?:[ \t]|$)/.test(command)) {
+    const words = directShellWords(command);
+    if (words?.[0] === "aidlc") return null;
+    return (
+      "AIDLC bash permission allows one direct invocation of a framework tool only. " +
+      "Do not use chaining, redirection, expansion, or command substitution."
+    );
+  }
+  if (PROJECTED_BUN_TOOLS === null) {
+    return null;
+  }
   if (!AIDLC_BUN_PREFIX.test(command)) return null;
   const words = directShellWords(command);
   const target = words?.[1]?.match(AIDLC_ENTRYPOINT);
@@ -304,7 +315,14 @@ export default async ({
   client,
   directory,
   aidlcEntrypoints = shippedAidlcEntrypoints,
+  aidlcCommand = DEFAULT_AIDLC_COMMAND,
 }: PluginInput) => {
+  const runCore = (
+    hookFile: string,
+    input: Record<string, unknown>,
+    _cwd = directory,
+  ) => runCoreHook(hookFile, input, directory, aidlcCommand);
+
   // Sessions whose session-start hook reached an active workflow.
   const started = new Set<string>();
   // Main sessions that delivered a real human turn. Stop enforcement keys on

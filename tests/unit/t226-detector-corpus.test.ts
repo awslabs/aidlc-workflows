@@ -58,7 +58,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-next",
-    cmd: "aidlc next $ARGUMENTS",
+    cmd: "aidlc engine orchestrate next $ARGUMENTS",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -75,7 +75,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-next-scope",
-    cmd: "aidlc next --scope feature",
+    cmd: "aidlc engine orchestrate next --scope feature",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -92,7 +92,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-report",
-    cmd: "aidlc report --stage application-design --result approved --user-input \"Approve\"",
+    cmd: "aidlc engine orchestrate report --stage application-design --result approved --user-input \"Approve\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -109,7 +109,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-report-approved",
-    cmd: "aidlc report --stage practices-discovery --result approved --user-input \"exact label\"",
+    cmd: "aidlc engine orchestrate report --stage practices-discovery --result approved --user-input \"exact label\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -126,7 +126,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-next-status",
-    cmd: "aidlc next --status",
+    cmd: "aidlc engine orchestrate next --status",
     d1: false,
     d2: "pass",
     kind: "readonly",
@@ -143,7 +143,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-orchestrate-park",
-    cmd: "aidlc park",
+    cmd: "aidlc engine orchestrate park",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -160,7 +160,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-approve",
-    cmd: "aidlc state approve application-design --user-input \"Approve\"",
+    cmd: "aidlc engine state approve application-design --user-input \"Approve\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -177,7 +177,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-get",
-    cmd: "aidlc state get --field \"Current Stage\"",
+    cmd: "aidlc engine state get --field \"Current Stage\"",
     d1: false,
     d2: "fire",
     kind: "new-twin",
@@ -194,7 +194,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-gate-start",
-    cmd: "aidlc state gate-start application-design",
+    cmd: "aidlc engine state gate-start application-design",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -211,7 +211,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-reject",
-    cmd: "aidlc state reject application-design --feedback \"text\"",
+    cmd: "aidlc engine state reject application-design --feedback \"text\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -228,7 +228,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-revise",
-    cmd: "aidlc state revise application-design",
+    cmd: "aidlc engine state revise application-design",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -245,7 +245,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-advance",
-    cmd: "aidlc state advance \"completed-slug\" \"next-slug\"",
+    cmd: "aidlc engine state advance \"completed-slug\" \"next-slug\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -262,7 +262,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-finalize",
-    cmd: "aidlc state finalize \"completed-slug\"",
+    cmd: "aidlc engine state finalize \"completed-slug\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -279,7 +279,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-checkbox",
-    cmd: "aidlc state checkbox \"application-design=completed\"",
+    cmd: "aidlc engine state checkbox \"application-design=completed\"",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -296,7 +296,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-jump-execute",
-    cmd: "aidlc jump execute --target code-generation --direction forward --scope feature",
+    cmd: "aidlc engine jump execute --target code-generation --direction forward --scope feature",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -313,7 +313,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-bolt-dispatch-event",
-    cmd: "aidlc bolt dispatch-event --event MERGE_DISPATCH_INVOKED --slug example",
+    cmd: "aidlc engine bolt dispatch-event --event MERGE_DISPATCH_INVOKED --slug example",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -363,7 +363,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-swarm-prepare",
-    cmd: "aidlc swarm prepare --batch 2 --units a,b,c",
+    cmd: "aidlc engine swarm prepare --batch 2 --units a,b,c",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -380,7 +380,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-swarm-finalize",
-    cmd: "aidlc swarm finalize --batch 2 --units a,b,c --claimed a,b --check-cmd \"bun test\"",
+    cmd: "aidlc engine swarm finalize --batch 2 --units a,b,c --claimed a,b --check-cmd \"bun test\"",
     d1: true,
     d2: "pass",
     kind: "new-twin",
@@ -397,12 +397,12 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-status",
-    cmd: "aidlc status",
+    cmd: "aidlc engine status",
     d1: false,
     d2: "fire",
     kind: "new-twin",
     twinOf: "old-utility-status",
-    note: "Bare status stays out of D1 but fires D2 by utility parity.",
+    note: "Semantic status stays out of D1 but preserves D2 parity with the backing tool.",
   },
   {
     id: "old-utility-doctor",
@@ -420,7 +420,7 @@ const corpus: CorpusCase[] = [
     kind: "negative",
     twinOf: "old-utility-doctor",
     documentedFalsePositive: "d2",
-    note: "D1 negative. D2 deliberately preserves old utility false-fire parity.",
+    note: "D1 negative. D2 deliberately preserves the backing tool's false-fire parity.",
   },
   {
     id: "old-utility-version",
@@ -438,7 +438,7 @@ const corpus: CorpusCase[] = [
     kind: "negative",
     twinOf: "old-utility-version",
     documentedFalsePositive: "d2",
-    note: "D1 negative. D2 deliberately preserves old utility false-fire parity.",
+    note: "D1 negative. D2 deliberately preserves the backing tool's false-fire parity.",
   },
   {
     id: "old-utility-help",
@@ -450,12 +450,12 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-help",
-    cmd: "aidlc help",
+    cmd: "aidlc engine orchestrate help",
     d1: false,
     d2: "fire",
     kind: "new-twin",
     twinOf: "old-utility-help",
-    note: "D2 utility parity for help.",
+    note: "D2 backing-tool parity for semantic workflow help.",
   },
   {
     id: "old-utility-set-status",
@@ -467,7 +467,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-state-set-status",
-    cmd: "aidlc state set-status --stage application-design",
+    cmd: "aidlc engine state set-status --stage application-design",
     d1: true,
     d2: "fire",
     kind: "new-twin",
@@ -518,7 +518,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-runtime-compile",
-    cmd: "aidlc runtime compile",
+    cmd: "aidlc engine runtime compile",
     d1: false,
     d2: "reject",
     kind: "guard",
@@ -527,7 +527,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "composite-cd-state",
-    cmd: "cd foo && aidlc state approve",
+    cmd: "cd foo && aidlc engine state approve",
     d1: true,
     d2: "fire",
     kind: "composite",
@@ -535,7 +535,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "composite-next-report",
-    cmd: "aidlc next && aidlc report --result approved",
+    cmd: "aidlc engine orchestrate next && aidlc engine orchestrate report --result approved",
     d1: true,
     d2: "fire",
     kind: "composite",
@@ -543,7 +543,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "composite-env-state",
-    cmd: "VAR=1 aidlc state approve",
+    cmd: "VAR=1 aidlc engine state approve",
     d1: true,
     d2: "fire",
     kind: "composite",
@@ -560,7 +560,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-quoted-echo",
-    cmd: "echo \"aidlc state approve\"",
+    cmd: "echo \"aidlc engine state approve\"",
     d1: true,
     d2: "fire",
     kind: "semantic-edge",
@@ -594,7 +594,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "negative-plugin-select",
-    cmd: "aidlc plugin select aidlc,test-pro",
+    cmd: "aidlc engine plugin select aidlc,test-pro",
     d1: false,
     d2: "pass",
     kind: "negative",
@@ -634,7 +634,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "negative-statusline",
-    cmd: "aidlc statusline",
+    cmd: "aidlc engine statusline",
     d1: false,
     d2: "pass",
     kind: "negative",
@@ -690,7 +690,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "english-new-mention",
-    cmd: "Run aidlc state approve",
+    cmd: "Run aidlc engine state approve",
     d1: true,
     d2: "fire",
     kind: "semantic-edge",
@@ -699,7 +699,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-report-result-only",
-    cmd: "aidlc report --result approved",
+    cmd: "aidlc engine orchestrate report --result approved",
     d1: true,
     d2: "fire",
     kind: "composite",
@@ -707,15 +707,87 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "new-leading-space-state",
-    cmd: " aidlc state approve",
+    cmd: " aidlc engine state approve",
     d1: true,
     d2: "fire",
     kind: "composite",
     note: "P4 leading-space case.",
   },
   {
+    id: "native-delegate-orchestrate-next",
+    cmd: "aidlc engine orchestrate next --scope feature",
+    d1: true,
+    d2: "pass",
+    kind: "composite",
+    note: "Authored native dispatcher form for an engine directive fetch.",
+  },
+  {
+    id: "native-delegate-orchestrate-report",
+    cmd: "aidlc engine orchestrate report --stage application-design --result approved",
+    d1: true,
+    d2: "fire",
+    kind: "composite",
+    note: "Authored native dispatcher form for a gate transition.",
+  },
+  {
+    id: "native-delegate-state",
+    cmd: "aidlc engine state approve application-design",
+    d1: true,
+    d2: "fire",
+    kind: "composite",
+    note: "Authored native dispatcher form for state mutation.",
+  },
+  {
+    id: "native-delegate-jump",
+    cmd: "aidlc engine jump execute --target code-generation",
+    d1: true,
+    d2: "fire",
+    kind: "composite",
+    note: "Authored native dispatcher form for a jump transition.",
+  },
+  {
+    id: "native-delegate-bolt",
+    cmd: "aidlc engine bolt dispatch-event --event MERGE_DISPATCH_INVOKED",
+    d1: true,
+    d2: "fire",
+    kind: "composite",
+    note: "Authored native dispatcher form for a bolt transition.",
+  },
+  {
+    id: "native-delegate-swarm",
+    cmd: "aidlc engine swarm prepare --batch 2 --units a,b",
+    d1: true,
+    d2: "pass",
+    kind: "composite",
+    note: "Authored native dispatcher form for swarm engagement.",
+  },
+  {
+    id: "native-delegate-status",
+    cmd: "aidlc engine status",
+    d1: false,
+    d2: "fire",
+    kind: "readonly",
+    note: "Authored semantic dispatcher form retains status parity.",
+  },
+  {
+    id: "native-delegate-runtime-summary",
+    cmd: "aidlc engine runtime summary --json",
+    d1: false,
+    d2: "pass",
+    kind: "readonly",
+    note: "Runtime summary is read-only and must not trip the recursion guard.",
+  },
+  {
+    id: "native-delegate-runtime-compile",
+    cmd: "aidlc engine runtime compile",
+    d1: false,
+    d2: "reject",
+    kind: "guard",
+    note: "Authored native dispatcher form for the recursion guard.",
+  },
+  {
     id: "new-scope-change",
-    cmd: "aidlc scope change feature",
+    cmd: "aidlc engine scope change feature",
     d1: false,
     d2: "fire",
     kind: "composite",
@@ -765,35 +837,35 @@ describe("detector corpus", () => {
   });
 
   test("explicit regression guards", () => {
-    expect(d1("cd x && aidlc state approve")).toBe(true);
-    expect(classifyRuntimeCompileCommand("cd x && aidlc state approve")).toBe("fire");
+    expect(d1("cd x && aidlc engine state approve")).toBe(true);
+    expect(classifyRuntimeCompileCommand("cd x && aidlc engine state approve")).toBe("fire");
 
-    expect(classifyRuntimeCompileCommand("aidlc report --result approved")).toBe("fire");
+    expect(classifyRuntimeCompileCommand("aidlc engine orchestrate report --result approved")).toBe("fire");
 
-    expect(d1(" aidlc state approve")).toBe(true);
-    expect(classifyRuntimeCompileCommand(" aidlc state approve")).toBe("fire");
+    expect(d1(" aidlc engine state approve")).toBe(true);
+    expect(classifyRuntimeCompileCommand(" aidlc engine state approve")).toBe("fire");
 
-    expect(classifyRuntimeCompileCommand("aidlc runtime compile")).toBe("reject");
-    expect(classifyRuntimeCompileCommand("cd x && aidlc runtime compile")).toBe("reject");
+    expect(classifyRuntimeCompileCommand("aidlc engine runtime compile")).toBe("reject");
+    expect(classifyRuntimeCompileCommand("cd x && aidlc engine runtime compile")).toBe("reject");
     expect(
       classifyRuntimeCompileCommand(
-        'aidlc state approve application-design --user-input "aidlc runtime notes"',
+        'aidlc engine state approve application-design --user-input "aidlc engine runtime notes"',
       ),
     ).toBe("fire");
     expect(
       classifyRuntimeCompileCommand(
-        'aidlc state approve application-design --user-input "notes; aidlc runtime compile"',
+        'aidlc engine state approve application-design --user-input "notes; aidlc engine runtime compile"',
       ),
     ).toBe("fire");
     expect(
       classifyRuntimeCompileCommand(
-        "aidlc state approve application-design --user-input 'notes && aidlc runtime compile'",
+        "aidlc engine state approve application-design --user-input 'notes && aidlc engine runtime compile'",
       ),
     ).toBe("fire");
   });
 
   test("new top-level park is intentional engagement", () => {
-    // Intended delta: new-shape `aidlc park` mutates workflow state.
-    expect(d1("aidlc park")).toBe(true);
+    // Intended delta: new-shape `aidlc engine orchestrate park` mutates workflow state.
+    expect(d1("aidlc engine orchestrate park")).toBe(true);
   });
 });

@@ -301,7 +301,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     removeWorkspaceRecord(proj);
     const d = directiveOf(runNext(proj, ["bugfix"]).out);
     expect(d.kind).toBe("print");
-    expect(String(d.message)).toContain("intent-create --scope bugfix");
+    expect(String(d.message)).toContain("intent create --scope bugfix");
   });
 });
 

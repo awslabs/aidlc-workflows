@@ -471,6 +471,9 @@ export async function run(
       if (!compiled) return { status: "unrelated" };
       args = words.slice(cursor);
     }
+    // The reshaped dispatcher routes the loop under `engine orchestrate`;
+    // classification works on the bare verb either way.
+    if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     const normalized: string[] = [];
     let attemptId = safeAttemptId(copilot.tool_use_id);

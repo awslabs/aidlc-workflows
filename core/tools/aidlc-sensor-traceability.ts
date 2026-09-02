@@ -541,8 +541,8 @@ function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort();
 }
 
-function main(): void {
-  const flags = parseFlags(process.argv.slice(2));
+export function main(argv: string[]): void {
+  const flags = parseFlags(argv);
   if (!flags.outputPath) fail("--output-path is required");
   const outputPath = normalizePath(flags.outputPath);
   if (!existsSync(outputPath)) fail(`--output-path not found: ${flags.outputPath}`);
@@ -628,8 +628,10 @@ function main(): void {
   emit(result);
 }
 
-try {
-  main();
-} catch (error) {
-  emit(failedResult(`traceability sensor failed safely: ${errorMessage(error)}`));
+if (import.meta.main) {
+  try {
+    main(process.argv.slice(2));
+  } catch (error) {
+    emit(failedResult(`traceability sensor failed safely: ${errorMessage(error)}`));
+  }
 }

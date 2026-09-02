@@ -186,6 +186,18 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     expect(existsSync(statePath(p))).toBe(false);
   }, 30000);
 
+  test("5b: an unknown stage fails open without changing state", () => {
+    const p = hookProject();
+    seedStateFile(p, MID_IDEATION);
+    const before = readFileSync(statePath(p), "utf-8");
+    const r = runHook(
+      p,
+      '{"tool_name":"TaskUpdate","tool_input":{"taskId":"t1","status":"in_progress","activeForm":"Running Unknown [unknown-stage]"}}',
+    );
+    expect(r.status).toBe(0);
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  }, 30000);
+
   // --- T6: Lifecycle Phase pulled from the stage graph (code-generation -> CONSTRUCTION) ---
   test("6: updates Lifecycle Phase from stage graph", () => {
     const p = hookProject();

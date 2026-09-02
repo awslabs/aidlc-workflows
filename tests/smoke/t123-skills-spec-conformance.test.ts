@@ -164,12 +164,15 @@ describe("t123 (smoke) skills-spec conformance — every shipped skill set", () 
       expect(discoveredSkills(harness.skillsRoot)).toEqual(expectedSkills(harness.name));
     });
 
-    test(`${harness.name}: generated runners invoke the manifest harness dir`, () => {
+    test(`${harness.name}: generated runners invoke the Bun source-channel engine`, () => {
       const runner = readFileSync(
         join(harness.skillsRoot, "aidlc-code-generation", "SKILL.md"),
         "utf-8",
       );
-      expect(runner).toContain(`bun ${harness.manifest.harnessDir}/tools/`);
+      expect(runner).toContain(
+        `bun ${harness.manifest.harnessDir}/tools/aidlc-orchestrate.ts next`,
+      );
+      expect(runner).not.toContain("\naidlc engine orchestrate next");
       expect(runner).not.toContain("{{HARNESS_DIR}}");
       if (harness.manifest.skipRunnerGen) {
         expect(existsSync(join(harness.engineRoot, "skills"))).toBe(false);

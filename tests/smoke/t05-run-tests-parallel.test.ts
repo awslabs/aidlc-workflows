@@ -545,10 +545,11 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     const fixtureDir = mkdtempSync(join(tmpdir(), "aidlc-t05-git-config-"));
     const inheritedGlobalConfig = join(fixtureDir, "global.gitconfig");
     const inheritedSystemConfig = join(fixtureDir, "system.gitconfig");
-    const globalSafeDirectory = "/aidlc/t05-global-safe-directory";
-    const systemSafeDirectory = "/aidlc/t05-system-safe-directory";
-    const countSafeDirectory = "/aidlc/t05-count-safe-directory";
-    const parametersSafeDirectory = "/aidlc/t05-parameters-safe-directory";
+    const fixtureRoot = fixtureDir.replace(/\\/g, "/");
+    const globalSafeDirectory = `${fixtureRoot}/global-safe-directory`;
+    const systemSafeDirectory = `${fixtureRoot}/system-safe-directory`;
+    const countSafeDirectory = `${fixtureRoot}/count-safe-directory`;
+    const parametersSafeDirectory = `${fixtureRoot}/parameters-safe-directory`;
     writeFileSync(
       inheritedGlobalConfig,
       [
@@ -616,7 +617,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
             "'commit.gpgsign'='true'",
         },
       );
-      expect(r.status).toBe(0);
+      expect(r.status, r.out).toBe(0);
       expect(r.out).toContain("=== START tZZ-git-config-t05.test.ts ===");
     } finally {
       rmSync(plant, { force: true });

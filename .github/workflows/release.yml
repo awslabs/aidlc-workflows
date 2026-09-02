@@ -1,58 +1,984 @@
-# GitHub requires this path on the default branch before tag-on-merge.yml can
-# dispatch the full v1 workflow with `gh workflow run release.yml --ref <tag>`.
-# The selected v1 release tag contains the implementation that creates the
-# draft GitHub Release.
-
-name: Dispatch v1 Release
-run-name: Dispatch-only v1 Release request for ${{ inputs.tag || 'missing tag' }}
+name: Release
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Optional v1 release tag to dispatch, for example v1.2.0'
-        required: false
+        description: Unused version tag to publish
         type: string
+        required: true
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
-  dispatch-v1-tag:
-    name: Dispatch request only
-    permissions:
-      actions: write
-      contents: read
+  authorize:
     runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
-      INPUT_TAG: ${{ inputs.tag }}
-      REPO: ${{ github.repository }}
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      tag: ${{ steps.authorize.outputs.tag }}
+      sha: ${{ steps.authorize.outputs.sha }}
+      publication_repository: ${{ steps.authorize.outputs.publication_repository }}
+      publication_owner: ${{ steps.authorize.outputs.publication_owner }}
+      publication_name: ${{ steps.authorize.outputs.publication_name }}
     steps:
-      - name: Run the tagged v1 workflow
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Authorize release source and publication target
+        id: authorize
+        shell: bash
+        env:
+          PUBLICATION_REPOSITORY: ${{ vars.AIDLC_PUBLICATION_REPOSITORY }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          if [ -z "$INPUT_TAG" ]; then
-            echo "::error::Provide the v1 release tag in the tag input, for example v1.2.0."
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_REF" = "refs/heads/main"
+          if [ -z "$PUBLICATION_REPOSITORY" ]; then
+            echo "::error title=Release repository policy failure::The protected release environment must provide AIDLC_PUBLICATION_REPOSITORY."
             exit 1
           fi
-          if [[ ! "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Release tag must match vMAJOR.MINOR.PATCH."
+          git fetch --no-tags origin main
+          main_sha="$(git rev-parse origin/main^{commit})"
+          test "$GITHUB_SHA" = "$main_sha"
+          test "$(git rev-parse HEAD^{commit})" = "$main_sha"
+          [[ "$PUBLICATION_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          test "$PUBLICATION_REPOSITORY" != "$GITHUB_REPOSITORY"
+          publication_owner="${PUBLICATION_REPOSITORY%%/*}"
+          publication_name="${PUBLICATION_REPOSITORY#*/}"
+          test "$publication_owner" = "$GITHUB_REPOSITORY_OWNER"
+          printf 'tag=%s\nsha=%s\npublication_repository=%s\npublication_owner=%s\npublication_name=%s\n' \
+            "$RELEASE_TAG" "$main_sha" "$PUBLICATION_REPOSITORY" \
+            "$publication_owner" "$publication_name" >> "$GITHUB_OUTPUT"
+      - name: Require protected release authorization identity
+        shell: bash
+        env:
+          RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          RELEASE_AUTH_APP_PRIVATE_KEY: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_AUTH_APP_ID" ] || [ -z "$RELEASE_AUTH_APP_PRIVATE_KEY" ]; then
+            echo "::error title=Release authorization identity failure::The protected release environment must provide AIDLC_RELEASE_AUTH_APP_ID and AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY."
             exit 1
           fi
-          if ! gh api \
-              --method GET \
-              "repos/$REPO/contents/.github/workflows/release.yml" \
-              -f "ref=$INPUT_TAG" \
-              >/dev/null; then
-            echo "::error::$INPUT_TAG does not contain the v1 release workflow."
+      - name: Mint release authorization token
+        id: release-authorization-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
+          owner: ${{ steps.authorize.outputs.publication_owner }}
+          repositories: |
+            ${{ github.event.repository.name }}
+            ${{ steps.authorize.outputs.publication_name }}
+          permission-actions: read
+          permission-administration: read
+          permission-members: read
+          permission-metadata: read
+          permission-organization-administration: read
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Verify release repository controls
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-authorization-token.outputs.token }}
+          PUBLICATION_REPOSITORY: ${{ steps.authorize.outputs.publication_repository }}
+          RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+        run: |
+          set -euo pipefail
+          authorization_failure() {
+            echo "::error title=Release authorization identity failure::$1"
+            exit 1
+          }
+          policy_failure() {
+            echo "::error title=Release repository policy failure::$1"
+            exit 1
+          }
+          if ! environment="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")"; then
+            authorization_failure \
+              "The protected GitHub App identity could not read the release environment."
+          fi
+          if ! jq -e '
+            .can_admins_bypass == false and
+            .deployment_branch_policy.protected_branches == false and
+            .deployment_branch_policy.custom_branch_policies == true and
+            (
+              [.protection_rules[] | select(.type == "required_reviewers")]
+              | length
+            ) == 1 and
+            (
+              [.protection_rules[] | select(.type == "required_reviewers")][0]
+              | .prevent_self_review == true and
+                (.reviewers | length) == 1 and
+                .reviewers[0].type == "Team" and
+                .reviewers[0].reviewer.slug == "aidlc-admins"
+            )
+          ' <<<"$environment" >/dev/null; then
+            policy_failure \
+              "The release environment must disable administrator bypass and self-review and require exactly the aidlc-admins team."
+          fi
+          if ! policies="$(
+            gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
+          )"; then
+            authorization_failure \
+              "The protected GitHub App identity could not read release deployment policies."
+          fi
+          if ! jq -e '
+            ([.[].branch_policies[]] | length) == 1 and
+            [.[].branch_policies[]][0].name == "main" and
+            [.[].branch_policies[]][0].type == "branch"
+          ' <<<"$policies" >/dev/null; then
+            policy_failure \
+              "The release environment must allow exactly the main branch deployment policy and no others."
+          fi
+          if ! immutable="$(
+            gh api "repos/$PUBLICATION_REPOSITORY/immutable-releases"
+          )"; then
+            authorization_failure \
+              "The protected GitHub App identity could not read publication-repository immutable-release settings."
+          fi
+          if ! jq -e '
+            .enabled == true and .enforced_by_owner == true
+          ' <<<"$immutable" >/dev/null; then
+            policy_failure \
+              "Immutable releases must be enabled and enforced by the repository owner."
+          fi
+          rulesets="$RUNNER_TEMP/aidlc-release-rulesets"
+          mkdir -p "$rulesets"
+          if ! ruleset_ids="$(
+            gh api --paginate "repos/$PUBLICATION_REPOSITORY/rulesets" --jq '.[].id'
+          )"; then
+            echo "::error title=Release authorization identity failure::The protected GitHub App identity could not list repository rulesets."
             exit 1
           fi
-          gh workflow run release.yml \
-            --ref "$INPUT_TAG" \
-            --repo "$REPO"
-          echo "::notice::Dispatch accepted. This run does not report the child Release result."
-          {
-            echo "## Dispatch accepted"
-            echo
-            echo "GitHub accepted the request for \`release.yml\` on \`$INPUT_TAG\`."
-            echo "This run does not report the outcome of the child Release workflow."
-          } >> "$GITHUB_STEP_SUMMARY"
+          while read -r ruleset_id; do
+            test -n "$ruleset_id" || continue
+            if ! gh api "repos/$PUBLICATION_REPOSITORY/rulesets/$ruleset_id" \
+              >"$rulesets/$ruleset_id.json"; then
+              echo "::error title=Release authorization identity failure::The protected GitHub App identity could not read ruleset $ruleset_id."
+              exit 1
+            fi
+          done <<<"$ruleset_ids"
+          collaborators="$RUNNER_TEMP/aidlc-release-collaborators.json"
+          organization_owners="$RUNNER_TEMP/aidlc-release-organization-owners.json"
+          repository="$RUNNER_TEMP/aidlc-release-repository.json"
+          owner="$RUNNER_TEMP/aidlc-release-owner.json"
+          if ! gh api "repos/$PUBLICATION_REPOSITORY" >"$repository"; then
+            authorization_failure \
+              "The protected GitHub App identity could not read the publication repository."
+          fi
+          if ! gh api "orgs/${PUBLICATION_REPOSITORY%%/*}" >"$owner"; then
+            authorization_failure \
+              "The protected GitHub App identity could not read publication-owner policy."
+          fi
+          if ! gh api --paginate --slurp \
+            "repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100" \
+            >"$collaborators"; then
+            authorization_failure \
+              "The protected GitHub App identity could not enumerate publication-repository collaborators."
+          fi
+          if ! gh api --paginate --slurp \
+            "orgs/${PUBLICATION_REPOSITORY%%/*}/members?role=admin&per_page=100" \
+            >"$organization_owners"; then
+            authorization_failure \
+              "The protected GitHub App identity could not enumerate publication-organization owners."
+          fi
+          bun scripts/verify-release.ts controls \
+            --rulesets "$rulesets" \
+            --repository "$repository" \
+            --owner "$owner" \
+            --collaborators "$collaborators" \
+            --organization-owners "$organization_owners" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --publication-repository "$PUBLICATION_REPOSITORY" \
+            --creation-actor-id "$RELEASE_AUTH_APP_ID" \
+            --creation-actor-type Integration
+
+  verify:
+    needs: authorize
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      # Regenerate the projections from core/ + harness/ so the release gate
+      # tests CI-built bytes; the --check inside `bun run check` then acts as a
+      # generator-determinism guard rather than a staleness check.
+      - run: bun scripts/package.ts
+      - run: bun run check
+      - run: bash tests/run-tests.sh --ci --parallel 8
+      - name: ShellCheck installer
+        run: shellcheck scripts/install.sh
+
+  native-smoke:
+    needs: [authorize, verify]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      # t238 builds the native binary from dist-release/; regenerate first so
+      # the smoke proves CI-built bytes on every OS in the matrix.
+      - run: bun scripts/package.ts
+      - run: bun test tests/unit/t238-build-binaries.test.ts
+      - if: runner.os == 'Windows'
+        run: bun test tests/unit/t244-install-management.test.ts -t "t244 Windows and completion release surfaces"
+      - name: PSScriptAnalyzer installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $findings = @(Invoke-ScriptAnalyzer -Path scripts/install.ps1)
+          if ($findings.Count -gt 0) {
+            $findings | Format-Table -AutoSize | Out-String | Write-Error
+            exit 1
+          }
+
+  build:
+    needs: [authorize, native-smoke]
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: bun-linux-x64
+            directory: linux-x64
+          - runner: ubuntu-latest
+            target: bun-linux-x64-musl
+            directory: linux-x64-musl
+          - runner: ubuntu-24.04-arm
+            target: bun-linux-arm64
+            directory: linux-arm64
+          - runner: ubuntu-24.04-arm
+            target: bun-linux-arm64-musl
+            directory: linux-arm64-musl
+          - runner: macos-15-intel
+            target: bun-darwin-x64
+            directory: darwin-x64
+          - runner: macos-15
+            target: bun-darwin-arm64
+            directory: darwin-arm64
+          - runner: windows-latest
+            target: bun-windows-x64
+            directory: windows-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      # Build from projections regenerated on this runner, never from the
+      # committed trees; the --check that follows is the generator-determinism
+      # guard (regen twice, byte-compare), not a staleness check.
+      - run: bun scripts/package.ts
+      - run: bun scripts/package.ts --check
+      - run: bun scripts/build-binaries.ts --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            build/binaries/${{ matrix.directory }}
+            build/binaries/build-results-${{ matrix.directory }}.json
+
+  musl-smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: bun-linux-x64-musl
+            directory: linux-x64-musl
+          - runner: ubuntu-24.04-arm
+            target: bun-linux-arm64-musl
+            directory: linux-arm64-musl
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: build/binaries
+      - run: chmod +x "build/binaries/${TARGET_DIR}/aidlc"
+        env:
+          TARGET_DIR: ${{ matrix.directory }}
+      - run: docker run --rm -v "$PWD:/work:ro" alpine:3.20 sh -c "apk add libgcc libstdc++ >/dev/null && /work/build/binaries/${TARGET_DIR}/aidlc version"
+        env:
+          TARGET_DIR: ${{ matrix.directory }}
+
+  stage-release:
+    needs: [authorize, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: binary-*
+          path: build/binaries
+          merge-multiple: true
+      - run: bun scripts/package.ts
+      - run: bun scripts/package-release.ts --require-release-matrix
+        env:
+          AIDLC_RELEASE_SOURCE_DIGEST: ${{ needs.authorize.outputs.sha }}
+      - name: Re-verify staged release checksums
+        working-directory: build/release
+        run: sha256sum -c checksums.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate
+          path: build/release
+
+  windows-lifecycle:
+    needs: stage-release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      - name: Install, route through stable shim, and uninstall
+        shell: pwsh
+        run: |
+          $env:AIDLC_INSTALL_ROOT = Join-Path $env:RUNNER_TEMP 'aidlc-machine'
+          $env:AIDLC_BIN_DIR = Join-Path $env:AIDLC_INSTALL_ROOT 'bin'
+          $env:AIDLC_ALLOW_ADMIN_INSTALL = '1'
+          $releaseRoot = (Resolve-Path ./build/release).Path
+          Set-Content -LiteralPath (Join-Path $releaseRoot 'aidlc-release.intoto.jsonl') `
+            -Value 'aidlc-lifecycle-provenance-fixture'
+          $ghFixture = Join-Path $env:RUNNER_TEMP 'aidlc-gh.ps1'
+          $env:AIDLC_TEST_GH_MARKER = Join-Path $env:RUNNER_TEMP 'aidlc-gh-verified'
+          $env:AIDLC_TEST_GH_REPOSITORY = 'awslabs/aidlc-workflows'
+          $env:AIDLC_TEST_GH_WORKFLOW = 'awslabs/aidlc-workflows/.github/workflows/release.yml'
+          $manifest = Get-Content -Raw -LiteralPath (Join-Path $releaseRoot 'version.json') |
+            ConvertFrom-Json
+          $env:AIDLC_TEST_GH_SOURCE_REF = $manifest.sourceRef
+          $env:AIDLC_TEST_GH_SOURCE_DIGEST = $manifest.sourceDigest
+          $env:AIDLC_TEST_GH_CHECKSUM_SHA = (
+            Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $releaseRoot 'checksums.txt')
+          ).Hash.ToLowerInvariant()
+          @'
+          param(
+            [Parameter(ValueFromRemainingArguments = $true)]
+            [string[]]$Remaining
+          )
+          $subject = if ($Remaining.Count -ge 3) {
+            [IO.Path]::GetFullPath($Remaining[2])
+          } else {
+            ''
+          }
+          $bundle = if ($Remaining.Count -ge 5) {
+            [IO.Path]::GetFullPath($Remaining[4])
+          } else {
+            ''
+          }
+          $expectedBundle = if ($subject) {
+            Join-Path ([IO.Path]::GetDirectoryName($subject)) 'aidlc-release.intoto.jsonl'
+          } else {
+            ''
+          }
+          if (
+            ($Remaining.Count -ne 11 -and $Remaining.Count -ne 13) -or
+            $Remaining[0] -ne 'attestation' -or
+            $Remaining[1] -ne 'verify' -or
+            [IO.Path]::GetFileName($subject) -ne 'checksums.txt' -or
+            -not (Test-Path -LiteralPath $subject -PathType Leaf) -or
+            $Remaining[3] -ne '--bundle' -or
+            $bundle -ne $expectedBundle -or
+            -not (Test-Path -LiteralPath $bundle -PathType Leaf) -or
+            $Remaining[5] -ne '--repo' -or
+            $Remaining[6] -ne $env:AIDLC_TEST_GH_REPOSITORY -or
+            $Remaining[7] -ne '--signer-workflow' -or
+            $Remaining[8] -ne $env:AIDLC_TEST_GH_WORKFLOW -or
+            $Remaining[9] -ne '--source-ref' -or
+            $Remaining[10] -ne $env:AIDLC_TEST_GH_SOURCE_REF -or
+            (
+              $Remaining.Count -eq 13 -and (
+                $Remaining[11] -ne '--source-digest' -or
+                $Remaining[12] -ne $env:AIDLC_TEST_GH_SOURCE_DIGEST
+              )
+            ) -or
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $subject).Hash.ToLowerInvariant() -ne
+              $env:AIDLC_TEST_GH_CHECKSUM_SHA
+          ) {
+            exit 2
+          }
+          Add-Content -LiteralPath $env:AIDLC_TEST_GH_MARKER `
+            -Value "verified-$($Remaining.Count)"
+          exit 0
+          '@ | Set-Content -LiteralPath $ghFixture -Encoding Ascii
+          $env:AIDLC_GH_BIN = $ghFixture
+          Get-Content (Join-Path $releaseRoot 'checksums.txt') | ForEach-Object {
+            if ($_ -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9][A-Za-z0-9._-]*)$') {
+              throw "malformed checksum row: $_"
+            }
+            $path = Join-Path $releaseRoot $Matches[2]
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "checksummed asset is missing: $($Matches[2])"
+            }
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+            if ($actual -ne $Matches[1]) {
+              throw "checksum mismatch: $($Matches[2])"
+            }
+          }
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath $env:AIDLC_TEST_GH_MARKER -PathType Leaf)) {
+            throw 'offline installer did not verify release provenance'
+          }
+          $verificationPasses = Get-Content -LiteralPath $env:AIDLC_TEST_GH_MARKER
+          if (
+            $verificationPasses -notcontains 'verified-11' -or
+            $verificationPasses -notcontains 'verified-13'
+          ) {
+            throw 'offline installer did not bind the trusted source digest'
+          }
+          $command = Join-Path $env:AIDLC_BIN_DIR 'aidlc.cmd'
+          & $command version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pointer = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'active-executable')
+          if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+\\aidlc\.exe$') {
+            throw "invalid active executable pointer: $pointer"
+          }
+          $env:COPILOT_HOME = Join-Path $env:RUNNER_TEMP 'aidlc-copilot-home'
+          [IO.Directory]::CreateDirectory($env:COPILOT_HOME) | Out-Null
+          $harnesses = @('claude', 'codex', 'copilot', 'cursor', 'kiro', 'kiro-ide', 'opencode')
+          foreach ($harness in $harnesses) {
+            $project = Join-Path $env:RUNNER_TEMP "aidlc-$harness-project-$([Guid]::NewGuid().ToString('N'))"
+            [IO.Directory]::CreateDirectory($project) | Out-Null
+            if ($harness -eq 'copilot') {
+              @{ trustedFolders = @($project) } |
+                ConvertTo-Json |
+                Set-Content -LiteralPath (Join-Path $env:COPILOT_HOME 'config.json')
+            }
+            & $command config --project-dir $project --harness $harness --mcp none --quiet
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $command doctor --project-dir $project --quiet
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $command uninstall --purge --yes --quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $deadline = [DateTime]::UtcNow.AddSeconds(60)
+          while ([DateTime]::UtcNow -lt $deadline) {
+            $commandExists = Test-Path -LiteralPath $command
+            $rootExists = Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT
+            if (-not $commandExists -and -not $rootExists) { break }
+            Start-Sleep -Milliseconds 100
+          }
+          if (Test-Path -LiteralPath $command) { throw 'aidlc.cmd survived uninstall' }
+          if (Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT) { throw 'install root survived purge uninstall' }
+
+  unix-lifecycle:
+    needs: stage-release
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      - name: Consume the checksummed release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="$PWD/build/release"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd "$release" && sha256sum -c checksums.txt)
+          else
+            (cd "$release" && shasum -a 256 -c checksums.txt)
+          fi
+          export AIDLC_INSTALL_ROOT="$RUNNER_TEMP/aidlc-machine"
+          export AIDLC_BIN_DIR="$RUNNER_TEMP/aidlc-bin"
+          printf 'aidlc-lifecycle-provenance-fixture\n' \
+            >"$release/aidlc-release.intoto.jsonl"
+          gh_bin="$RUNNER_TEMP/aidlc-gh"
+          gh_marker="$RUNNER_TEMP/aidlc-gh-verified"
+          manifest_version="$(
+            sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' \
+              "$release/version.json" | head -n 1
+          )"
+          test -n "$manifest_version"
+          if command -v sha256sum >/dev/null 2>&1; then
+            checksums_sha="$(sha256sum "$release/checksums.txt" | awk '{print $1}')"
+          else
+            checksums_sha="$(shasum -a 256 "$release/checksums.txt" | awk '{print $1}')"
+          fi
+          cat >"$gh_bin" <<'AIDLC_GH_FIXTURE'
+          #!/bin/sh
+          { [ "$#" -eq 11 ] || [ "$#" -eq 13 ]; } || exit 2
+          [ "$1" = attestation ] || exit 2
+          [ "$2" = verify ] || exit 2
+          case "$3" in /*/checksums.txt) ;; *) exit 2 ;; esac
+          [ -f "$3" ] || exit 2
+          [ "$4" = --bundle ] || exit 2
+          [ "$5" = "${3%/checksums.txt}/aidlc-release.intoto.jsonl" ] || exit 2
+          [ -f "$5" ] || exit 2
+          [ "$6" = --repo ] || exit 2
+          [ "$7" = "$AIDLC_TEST_GH_REPOSITORY" ] || exit 2
+          [ "$8" = --signer-workflow ] || exit 2
+          [ "$9" = "$AIDLC_TEST_GH_WORKFLOW" ] || exit 2
+          [ "${10}" = --source-ref ] || exit 2
+          [ "${11}" = "$AIDLC_TEST_GH_SOURCE_REF" ] || exit 2
+          if [ "$#" -eq 13 ]; then
+            [ "${12}" = --source-digest ] || exit 2
+            [ "${13}" = "$AIDLC_TEST_GH_SOURCE_DIGEST" ] || exit 2
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual="$(sha256sum "$3" | awk '{print $1}')"
+          else
+            actual="$(shasum -a 256 "$3" | awk '{print $1}')"
+          fi
+          [ "$actual" = "$AIDLC_TEST_GH_CHECKSUM_SHA" ] || exit 2
+          printf "verified-%s\n" "$#" >>"$AIDLC_TEST_GH_MARKER"
+          exit 0
+          AIDLC_GH_FIXTURE
+          chmod +x "$gh_bin"
+          env PATH="/usr/bin:/bin" \
+            AIDLC_INSTALL_ROOT="$AIDLC_INSTALL_ROOT" \
+            AIDLC_BIN_DIR="$AIDLC_BIN_DIR" \
+            AIDLC_GH_BIN="$gh_bin" \
+            AIDLC_TEST_GH_MARKER="$gh_marker" \
+            AIDLC_TEST_GH_REPOSITORY="awslabs/aidlc-workflows" \
+            AIDLC_TEST_GH_WORKFLOW="awslabs/aidlc-workflows/.github/workflows/release.yml" \
+            AIDLC_TEST_GH_SOURCE_REF="refs/heads/main" \
+            AIDLC_TEST_GH_SOURCE_DIGEST="$(
+              sed -n 's/.*"sourceDigest":[[:space:]]*"\([a-f0-9]*\)".*/\1/p' \
+                "$release/version.json" | head -n 1
+            )" \
+            AIDLC_TEST_GH_CHECKSUM_SHA="$checksums_sha" \
+            sh "$release/install.sh" --from "$release" --offline --quiet
+          test -s "$gh_marker"
+          grep -qx 'verified-11' "$gh_marker"
+          grep -qx 'verified-13' "$gh_marker"
+          command="$AIDLC_BIN_DIR/aidlc"
+          env PATH="/usr/bin:/bin" "$command" version
+          export COPILOT_HOME="$RUNNER_TEMP/aidlc-copilot-home"
+          mkdir -p "$COPILOT_HOME"
+          for harness in claude codex copilot cursor kiro kiro-ide opencode; do
+            project="$(mktemp -d "$RUNNER_TEMP/aidlc-$harness-project.XXXXXX")"
+            if [ "$harness" = copilot ]; then
+              printf '{"trustedFolders":["%s"]}\n' "$project" > "$COPILOT_HOME/config.json"
+            fi
+            env PATH="/usr/bin:/bin" "$command" config \
+              --project-dir "$project" --harness "$harness" --mcp none --quiet
+            env PATH="/usr/bin:/bin" "$command" doctor \
+              --project-dir "$project" --quiet
+          done
+
+  publish:
+    needs: [authorize, musl-smoke, windows-lifecycle, unix-lifecycle]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Recheck release source
+        env:
+          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
+        run: |
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      - run: test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
+        env:
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+      - name: Re-verify staged release checksums
+        working-directory: build/release
+        run: sha256sum -c checksums.txt
+      - name: Attest staged release assets
+        id: provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: build/release/*
+      - name: Stage offline provenance bundle
+        run: |
+          test -f "$ATTESTATION_BUNDLE"
+          cp "$ATTESTATION_BUNDLE" build/release/aidlc-release.intoto.jsonl
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+      - name: Validate complete attested release candidate
+        run: |
+          bun scripts/verify-release.ts candidate \
+            --directory build/release \
+            --tag "$RELEASE_TAG" \
+            --source-digest "$AUTHORIZED_SHA"
+        env:
+          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: attested-release
+          path: build/release
+          if-no-files-found: error
+
+  promote:
+    needs: [authorize, publish]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Recheck release source
+        env:
+          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
+        run: |
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: attested-release
+          path: build/release
+      - name: Authenticate and verify immutable release bytes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release="$PWD/build/release"
+          checksums="$release/checksums.txt"
+          bundle="$release/aidlc-release.intoto.jsonl"
+          signer_workflow="$GH_REPO/.github/workflows/release.yml"
+          source_ref="refs/heads/main"
+          test -f "$checksums"
+          test -f "$bundle"
+
+          # Authenticate checksums.txt before it can select or validate any
+          # other release byte.
+          gh attestation verify "$checksums" \
+            --repo "$GH_REPO" \
+            --signer-workflow "$signer_workflow" \
+            --source-ref "$source_ref" \
+            --source-digest "$AUTHORIZED_SHA"
+          gh attestation verify "$checksums" \
+            --bundle "$bundle" \
+            --repo "$GH_REPO" \
+            --signer-workflow "$signer_workflow" \
+            --source-ref "$source_ref" \
+            --source-digest "$AUTHORIZED_SHA"
+
+          mapfile -t attested_assets < <(
+            bun scripts/verify-release.ts candidate \
+              --directory "$release" \
+              --tag "$RELEASE_TAG" \
+              --source-digest "$AUTHORIZED_SHA" \
+              --list-assets
+          )
+          test "${#attested_assets[@]}" -eq 10
+          for asset_name in "${attested_assets[@]}"; do
+            asset="$release/$asset_name"
+            gh attestation verify "$asset" \
+              --repo "$GH_REPO" \
+              --signer-workflow "$signer_workflow" \
+              --source-ref "$source_ref" \
+              --source-digest "$AUTHORIZED_SHA"
+            gh attestation verify "$asset" \
+              --bundle "$bundle" \
+              --repo "$GH_REPO" \
+              --signer-workflow "$signer_workflow" \
+              --source-ref "$source_ref" \
+              --source-digest "$AUTHORIZED_SHA"
+          done
+          verified_digests="$RUNNER_TEMP/aidlc-verified-release.sha256"
+          (
+            cd "$release"
+            find . -mindepth 1 -maxdepth 1 -type f -printf '%P\0' |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum
+          ) >"$verified_digests"
+          test "$(wc -l <"$verified_digests")" -eq 13
+          chmod a-w "$verified_digests"
+          chmod -R a-w "$release"
+
+          server_root="$RUNNER_TEMP/aidlc-release-server"
+          port_file="$RUNNER_TEMP/aidlc-release-server.port"
+          journey_release="$server_root/latest/download"
+          mkdir -p "$journey_release"
+          cp -R "$release/." "$journey_release/"
+          # Bun 1.4 can replace this with a static { dir } route. On the pinned
+          # Bun 1.3.14 that shape selects the framework dev server and fails.
+          bun -e '
+            import { join } from "node:path";
+            const root = process.argv[1];
+            const portFile = process.argv[2];
+            const server = Bun.serve({
+              hostname: "127.0.0.1",
+              port: 0,
+              async fetch(request) {
+                const parts = new URL(request.url).pathname
+                  .split("/")
+                  .filter(Boolean)
+                  .map(decodeURIComponent);
+                if (parts.some((part) => part === "." || part === "..")) {
+                  return new Response("bad path", { status: 400 });
+                }
+                const file = Bun.file(join(root, ...parts));
+                return await file.exists()
+                  ? new Response(file)
+                  : new Response("not found", { status: 404 });
+              },
+            });
+            await Bun.write(portFile, `${server.port}\n`);
+          ' "$server_root" "$port_file" \
+            >"$RUNNER_TEMP/aidlc-release-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for _ in {1..50}; do
+            test -s "$port_file" && break
+            sleep 0.1
+          done
+          test -s "$port_file"
+          port="$(cat "$port_file")"
+          for _ in {1..50}; do
+            curl -fsS "http://127.0.0.1:$port/latest/download/version.json" >/dev/null && break
+            sleep 0.1
+          done
+
+          # Export the install locations: every subsequent command (version,
+          # config, doctor) must see the same machine root the installer
+          # used, exactly as unix-lifecycle does. Round 8 proved the
+          # alternative: with per-command env only, doctor ran against the
+          # default root and failed its two machine rows (active version
+          # marker, command pointer) while install/config survived on the
+          # executable-adjacent fallback.
+          export AIDLC_INSTALL_ROOT="$RUNNER_TEMP/aidlc-online"
+          export AIDLC_BIN_DIR="$RUNNER_TEMP/aidlc-online-bin"
+          gh_bin="$(command -v gh)"
+          # Repo-relative trust roots: on awslabs these equal the installer's
+          # built-in defaults byte-for-byte; on a fork shakedown they make the
+          # rehearsal verify the fork's own attestations instead of failing
+          # closed against upstream (proven necessary by shakedown round 6).
+          env PATH="/usr/bin:/bin" \
+            AIDLC_GH_BIN="$gh_bin" \
+            AIDLC_RELEASE_REPOSITORY="$GH_REPO" \
+            AIDLC_RELEASE_WORKFLOW="$GH_REPO/.github/workflows/release.yml" \
+            sh "$journey_release/install.sh" \
+            --release-base-url "http://127.0.0.1:$port" \
+            --quiet
+          command="$AIDLC_BIN_DIR/aidlc"
+          env PATH="/usr/bin:/bin" "$command" version
+          project="$RUNNER_TEMP/aidlc-online-project"
+          mkdir -p "$project"
+          # Coverage boundary: pre-gate lifecycle jobs scaffold and doctor all
+          # seven harnesses. This online post-attestation rehearsal stays
+          # Claude-only to prove transport, provenance, and one project journey.
+          env PATH="/usr/bin:/bin" "$command" config \
+            --project-dir "$project" --harness claude --mcp none --quiet
+          env PATH="/usr/bin:/bin" "$command" doctor \
+            --project-dir "$project" --quiet || {
+            # A failed gate must name its rows: re-run verbose for the log,
+            # then fail the job with the original verdict.
+            env PATH="/usr/bin:/bin" "$command" doctor \
+              --project-dir "$project" --verbose || true
+            exit 1
+          }
+
+      - name: Mint release-policy token
+        id: release-policy-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
+          owner: ${{ needs.authorize.outputs.publication_owner }}
+          repositories: |
+            ${{ github.event.repository.name }}
+            ${{ needs.authorize.outputs.publication_name }}
+          permission-administration: read
+          permission-members: read
+          permission-metadata: read
+          permission-organization-administration: read
+      - name: Re-verify release repository controls
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-policy-token.outputs.token }}
+          PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
+          RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+        run: |
+          set -euo pipefail
+          environment="$(
+            gh api "repos/$GITHUB_REPOSITORY/environments/release"
+          )"
+          jq -e '
+            .can_admins_bypass == false and
+            .deployment_branch_policy.protected_branches == false and
+            .deployment_branch_policy.custom_branch_policies == true and
+            (
+              [.protection_rules[] | select(.type == "required_reviewers")]
+              | length
+            ) == 1 and
+            (
+              [.protection_rules[] | select(.type == "required_reviewers")][0]
+              | .prevent_self_review == true and
+                (.reviewers | length) == 1 and
+                .reviewers[0].type == "Team" and
+                .reviewers[0].reviewer.slug == "aidlc-admins"
+            )
+          ' <<<"$environment" >/dev/null
+          policies="$(
+            gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
+          )"
+          jq -e '
+            ([.[].branch_policies[]] | length) == 1 and
+            [.[].branch_policies[]][0].name == "main" and
+            [.[].branch_policies[]][0].type == "branch"
+          ' <<<"$policies" >/dev/null
+          immutable="$(
+            gh api "repos/$PUBLICATION_REPOSITORY/immutable-releases"
+          )"
+          jq -e '
+            .enabled == true and .enforced_by_owner == true
+          ' <<<"$immutable" >/dev/null
+          rulesets="$RUNNER_TEMP/aidlc-release-rulesets-final"
+          mkdir -p "$rulesets"
+          ruleset_ids="$(
+            gh api --paginate "repos/$PUBLICATION_REPOSITORY/rulesets" --jq '.[].id'
+          )"
+          while read -r ruleset_id; do
+            test -n "$ruleset_id" || continue
+            gh api "repos/$PUBLICATION_REPOSITORY/rulesets/$ruleset_id" \
+              >"$rulesets/$ruleset_id.json"
+          done <<<"$ruleset_ids"
+          collaborators="$RUNNER_TEMP/aidlc-release-collaborators-final.json"
+          organization_owners="$RUNNER_TEMP/aidlc-release-organization-owners-final.json"
+          repository="$RUNNER_TEMP/aidlc-release-repository-final.json"
+          owner="$RUNNER_TEMP/aidlc-release-owner-final.json"
+          gh api "repos/$PUBLICATION_REPOSITORY" >"$repository"
+          gh api "orgs/${PUBLICATION_REPOSITORY%%/*}" >"$owner"
+          gh api --paginate --slurp \
+            "repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100" \
+            >"$collaborators"
+          gh api --paginate --slurp \
+            "orgs/${PUBLICATION_REPOSITORY%%/*}/members?role=admin&per_page=100" \
+            >"$organization_owners"
+          bun scripts/verify-release.ts controls \
+            --rulesets "$rulesets" \
+            --repository "$repository" \
+            --owner "$owner" \
+            --collaborators "$collaborators" \
+            --organization-owners "$organization_owners" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --publication-repository "$PUBLICATION_REPOSITORY" \
+            --creation-actor-id "$RELEASE_AUTH_APP_ID" \
+            --creation-actor-type Integration
+      - name: Mint release publication token
+        id: release-publication-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
+          owner: ${{ needs.authorize.outputs.publication_owner }}
+          repositories: ${{ needs.authorize.outputs.publication_name }}
+          permission-contents: write
+      - name: Create isolated publication target
+        id: publication-target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-publication-token.outputs.token }}
+          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
+          PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          STAGING_REF: aidlc-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/aidlc-publication-target"
+          mkdir -p "$root"
+          git -C "$root" init --initial-branch "$STAGING_REF"
+          git -C "$root" config user.name "AI-DLC Release"
+          git -C "$root" config user.email "2102737+apackeer@users.noreply.github.com"
+          git -C "$root" commit --allow-empty \
+            -m "Release $RELEASE_TAG from $GITHUB_REPOSITORY@$AUTHORIZED_SHA"
+          publication_sha="$(git -C "$root" rev-parse HEAD)"
+          basic="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -C "$root" \
+            -c "http.extraHeader=AUTHORIZATION: basic $basic" \
+            push "https://github.com/$PUBLICATION_REPOSITORY.git" \
+            "HEAD:refs/heads/$STAGING_REF"
+          printf 'sha=%s\nref=%s\n' "$publication_sha" "$STAGING_REF" >>"$GITHUB_OUTPUT"
+      - name: Publish and re-verify exact verified release bytes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-publication-token.outputs.token }}
+          PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
+          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          STAGING_TAG: aidlc-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          release="$PWD/build/release"
+          (
+            cd "$release"
+            sha256sum -c "$RUNNER_TEMP/aidlc-verified-release.sha256"
+          )
+          bun scripts/verify-release.ts candidate \
+            --directory "$release" \
+            --tag "$RELEASE_TAG" \
+            --source-digest "$AUTHORIZED_SHA"
+          bun scripts/publish-release.ts \
+            --directory "$release" \
+            --tag "$RELEASE_TAG" \
+            --staging-tag "$STAGING_TAG" \
+            --target "${{ steps.publication-target.outputs.sha }}" \
+            --repository "$PUBLICATION_REPOSITORY" \
+            --changelog "$PWD/CHANGELOG.md" \
+            --expected-assets 13
+          if ! gh api --method DELETE \
+            "repos/$PUBLICATION_REPOSITORY/git/refs/heads/${{ steps.publication-target.outputs.ref }}" \
+            >/dev/null; then
+            echo "::warning title=Publication staging cleanup::The immutable release is verified, but its temporary staging ref could not be removed."
+          fi

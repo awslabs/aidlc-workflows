@@ -1,15 +1,15 @@
 # AI-DLC on GitHub Copilot (CLI + VS Code)
 
-`dist/copilot/` is one of the framework's harness distributions, for **GitHub
+The Copilot runtime is one of the framework's harness distributions, for **GitHub
 Copilot** — and one install serves BOTH Copilot surfaces: the standalone
 Copilot CLI (`copilot`) and VS Code agent mode. GitHub converged the two on
 the same project discovery paths (`.github/skills/`, `.github/agents/`,
 `.github/hooks/`, the root `AGENTS.md`), so the framework ships one tree they
 both read. One deterministic core, many harnesses: the engine, state machine,
 audit log, graph, swarm referee, and learnings gate are byte-identical across
-every distribution — only the shell differs. The tree is **generated** from
-`core/` + `harness/copilot/` by `bun scripts/package.ts copilot`; never
-hand-edit it (the drift guard fails CI).
+every distribution — only the shell differs. The source/development tree is
+**generated** into ignored local `dist/copilot/` from `core/` +
+`harness/copilot/` by `bun scripts/package.ts copilot`; never hand-edit it.
 
 ## Layout: the engine dir and the .github shell
 
@@ -31,8 +31,8 @@ hand-edit it (the drift guard fails CI).
   Stop hook, and `.github` skills/agents discovery. Check with
   `copilot --version` / `code --version`. (VS Code agent hooks are a Preview
   feature — the doctor pins the floor.)
-- **bun** — same requirement as every harness; every tool and hook runs via
-  bun, which must be on the PATH of the shells Copilot spawns.
+- **bun** only when generating or running the source/development `dist/`
+  projection. Native installs and versioned release runtimes use `aidlc`.
 - **Folder trust** — repo hooks run ONLY when the project's absolute path is
   in `trustedFolders` in `~/.copilot/config.json` (the CLI prompts on first
   interactive use). Headless `copilot -p` runs additionally need
@@ -50,23 +50,37 @@ hand-edit it (the drift guard fails CI).
 
 ## Install
 
-The copies below come from a clone of the
-[aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`main` branch:
+### Native channel (recommended)
 
 ```bash
-git clone --branch main https://github.com/awslabs/aidlc-workflows.git
-cd aidlc-workflows
+tmp="$(mktemp -d)"
+gh release download --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
+  --pattern install.sh --pattern aidlc-release.intoto.jsonl
+gh attestation verify "$tmp/install.sh" \
+  --bundle "$tmp/aidlc-release.intoto.jsonl" \
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+cd your-project
+aidlc config --harness copilot
+aidlc doctor
 ```
+
+### Versioned manual-copy alternative
+
+Download and extract a specific release's `aidlc-runtime.tar.gz` as described in
+[Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
+then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 1. Copy the distribution into your project:
 
    ```bash
    mkdir -p your-project/.aidlc your-project/aidlc your-project/.github
-   cp -R dist/copilot/.aidlc/.  your-project/.aidlc/
-   cp -R dist/copilot/aidlc/.   your-project/aidlc/    # the workspace shell — a sibling of .aidlc/, not inside it
-   cp -R dist/copilot/.github/. your-project/.github/  # MERGE — everything is aidlc-prefixed, nothing of yours is overwritten
-   cp dist/copilot/AGENTS.md    your-project/AGENTS.md # or merge into yours — keep the @-import block (the method include)
+   cp -R "$RUNTIME_ROOT/copilot/.aidlc/."  your-project/.aidlc/
+   cp -R "$RUNTIME_ROOT/copilot/aidlc/."   your-project/aidlc/    # the workspace shell — a sibling of .aidlc/, not inside it
+   cp -R "$RUNTIME_ROOT/copilot/.github/." your-project/.github/  # MERGE — everything is aidlc-prefixed, nothing of yours is overwritten
+   cp "$RUNTIME_ROOT/copilot/AGENTS.md"    your-project/AGENTS.md # or merge into yours — keep the @-import block (the method include)
    ```
 
 2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
@@ -79,6 +93,10 @@ cd aidlc-workflows
 
 4. Run `/aidlc --doctor`, then `/aidlc` followed by what you want to build —
    in either surface.
+
+Framework developers who need the Bun-shaped projection can clone the
+repository, run `bun install --frozen-lockfile` and `bun scripts/package.ts`,
+then use the ignored local `dist/copilot/` output.
 
 ## What's different on this harness
 

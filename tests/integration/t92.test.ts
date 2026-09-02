@@ -71,6 +71,7 @@ import {
   toPortablePath,
 } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { resolveSensorScriptPath } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
 
 // P9: with no intent cursor seeded, the sensor dispatcher resolves the BARE
 // space record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/
@@ -1101,7 +1102,7 @@ describe("t92 Group J: audit-row required fields per event type", () => {
 });
 
 // ============================================================
-// Group K — Manifest `command:` resolves on disk (4).
+// Group K — Native manifest delegate resolves to its sibling script (4).
 // (t92-sensor-fire.sh:842-868)
 // ============================================================
 
@@ -1110,19 +1111,13 @@ function assertManifestCommandResolves(id: string): void {
   const text = readFileSync(manifest, "utf-8");
   const cmdLine = text.split("\n").find((l) => l.startsWith("command:")) ?? "";
   const cmd = cmdLine.replace(/^command:\s*/, "");
-  // Basename: last whitespace-delimited token ending in .ts. Manifest command
-  // strings always use forward slashes (manifest text, not an OS path), so
-  // split("/") is correct here — node:path.basename would not split on "/" on
-  // Windows. Local var name avoids shadowing the imported basename().
-  const tsTokens = cmd.split(/\s+/).filter((t) => t.endsWith(".ts"));
-  const last = tsTokens[tsTokens.length - 1] ?? "";
-  const parts = last.split("/");
-  const tsBasename = parts[parts.length - 1];
-  expect(tsBasename).not.toBe("");
-  expect(existsSync(join(TOOLS_DIR, tsBasename))).toBe(true);
+  expect(cmd).toBe(`bun .claude/tools/aidlc.ts engine sensor-${id}`);
+  const scriptPath = resolveSensorScriptPath(id);
+  expect(basename(scriptPath)).toBe(`aidlc-sensor-${id}.ts`);
+  expect(existsSync(scriptPath)).toBe(true);
 }
 
-describe("t92 Group K: manifest command resolves next to dispatcher", () => {
+describe("t92 Group K: source manifest delegate resolves next to dispatcher", () => {
   test("36: required-sections manifest command resolves", () => {
     assertManifestCommandResolves("required-sections");
   });

@@ -42,8 +42,8 @@
 //   - .sh T9  OUT  'Cannot use --stage and --phase together' -> t9
 //   - .sh T10 OUT  '"kind":"error"'                   -> t10 (env-scope)
 //             OUT  'Invalid AWS_AIDLC_DEFAULT_SCOPE'   -> t10 (verbatim)
-//   - .sh T11 OUT  'scope-change --scope mvp'         -> t11 (print names move)
-//   - .sh T12 OUT  'config-change --depth comprehensive' -> t12
+//   - .sh T11 OUT  'scope change --scope mvp'         -> t11 (print names move)
+//   - .sh T12 OUT  'config set depth comprehensive' -> t12
 //   - .sh T13 OUT  '"stage":"functional-design"'      -> t13 (phase jump)
 //   - .sh T14 OUT  '"kind":"ask"'                     -> t14 (freeform intent)
 //   - .sh T15 OUT  'Cannot jump to initialization stages' -> t15 (--stage init)
@@ -299,7 +299,7 @@ describe("t117 creation branch (P4: --init retired, engine names intent-create)"
     const p = proj("state-mid-ideation.md"); // feature scope state
     // Same scope as state → happy path (run the current stage), no creation.
     const r = next(["--scope", "feature"], p);
-    expect(r.out).not.toContain("intent-create");
+    expect(r.out).not.toContain("intent create");
     expect(r.out).not.toContain("Use --force to reinitialize");
   });
 
@@ -313,7 +313,7 @@ describe("t117 creation branch (P4: --init retired, engine names intent-create)"
     const d = directive(r.stdout);
     expect(d.kind).toBe("print");
     // The named move is the deterministic intent-create handler.
-    expect(d.message).toContain("intent-create");
+    expect(d.message).toContain("intent create");
     // File effect: `next` must NOT create state (mutation stays conductor-side).
     expect(existsSync(seededStateFile(p))).toBe(false);
   });
@@ -349,18 +349,18 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
   // --- Test 11: scope-change against existing state → print (names the move) ---
   // state-mid-ideation is feature scope; --scope mvp is a scope change → print
   // names the scope-change command rather than performing it.
-  test("11: scope-change against existing state → print naming scope-change --scope mvp", () => {
+  test("11: scope-change against existing state → print naming scope change --scope mvp", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--scope", "mvp"], p);
-    expect(r.out).toContain("scope-change --scope mvp");
+    expect(r.out).toContain("scope change --scope mvp");
     expect(directive(r.stdout).kind).toBe("print");
   });
 
   // --- Test 12: config-change (depth) against existing state → print ---
-  test("12: config-change (depth) against existing state → print naming config-change --depth", () => {
+  test("12: config-change (depth) against existing state → print naming config set depth", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--depth", "comprehensive"], p);
-    expect(r.out).toContain("config-change --depth comprehensive");
+    expect(r.out).toContain("config set depth comprehensive");
     expect(directive(r.stdout).kind).toBe("print");
   });
 

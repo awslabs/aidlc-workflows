@@ -1186,6 +1186,48 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   });
 
+  test("commit reconstruction survives a cat-file header on the 64 KiB refill boundary", () => {
+    // Regression: the batch reader kept subarray VIEWS of its refillable
+    // buffer while assembling a header line, so a header spanning the 64 KiB
+    // refill boundary was corrupted by the refill and the whole listing came
+    // back null. Size the first blob so the second record's header straddles
+    // the boundary exactly: header bytes = 40-hex oid + " blob " + digits +
+    // LF, then content + LF.
+    const digits = 5;
+    const headerBytes = 40 + 1 + 4 + 1 + digits + 1;
+    for (const headerStart of [65536 - 20, 65536 - 1]) {
+      const repo = mkdtempSync(join(tmpdir(), "t314-refill-boundary-"));
+      try {
+        const firstSize = headerStart - headerBytes - 1;
+        expect(String(firstSize)).toHaveLength(digits);
+        writeFileSync(join(repo, "a.ts"), "x".repeat(firstSize), "utf-8");
+        // The tail blob must overflow the next full 64 KiB refill so the
+        // refill rewrites the bytes the spanning header still references.
+        writeFileSync(
+          join(repo, "b.ts"),
+          `// tail\n${"y".repeat(128 * 1024)}\n`,
+          "utf-8",
+        );
+        git(repo, ["init", "-q"]);
+        git(repo, ["config", "user.email", "t@test"]);
+        git(repo, ["config", "user.name", "t"]);
+        git(repo, ["add", "-A"]);
+        git(repo, ["commit", "-qm", "boundary"]);
+        const head = spawnSync(
+          "git",
+          ["-C", repo, "rev-parse", "HEAD"],
+          { encoding: "utf-8" },
+        ).stdout.trim();
+        const listing = gitCommitSourceListing(repo, head, true);
+        expect(listing, `header at ${headerStart}`).not.toBeNull();
+        expect(listing?.has("\0a.ts")).toBe(true);
+        expect(listing?.has("\0b.ts")).toBe(true);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("commit reconstruction ignores mutable smudge output", () => {
     seedGitRepo(dir);
     const external = mkdtempSync(join(tmpdir(), "t314-smudge-listing-"));

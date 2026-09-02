@@ -88,7 +88,7 @@ function doc(p: string, name: string, body = "text\n"): string {
 function knowledge(p: string, args: string[]): SpawnSyncReturns<string> {
   return spawnSync(
     "bun",
-    [AIDLC, "knowledge", ...args, "--project-dir", p, "--json"],
+    [AIDLC, "engine", "knowledge", ...args, "--project-dir", p, "--json"],
     { encoding: "utf-8", env: CHILD_ENV },
   );
 }

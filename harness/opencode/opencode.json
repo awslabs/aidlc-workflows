@@ -10,8 +10,7 @@
     },
     "bash": {
       "*": "ask",
-      "bun .aidlc/tools/*": "allow",
-      "bun .aidlc/hooks/*": "allow"
+      "{{TOOL_PREFIX}}*": "allow"
     }
   }
 }

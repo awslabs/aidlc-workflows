@@ -56,7 +56,8 @@ Net: inception 8→9 stages, construction 7→6 stages, total stays **32**.
 5. `bun scripts/package.ts` and `bun scripts/package.ts --check` (per task)
 6. `bun test <file>` and `bash tests/run-tests.sh --smoke`/`--unit` (per task)
 7. Edit/create/delete files under `core/`, `harness/`, `tests/`, `docs/`,
-   and the generated `dist/` (regenerated, committed)
+   and the generated `dist/` (current builds materialize it locally and leave
+   it untracked)
 
 ---
 

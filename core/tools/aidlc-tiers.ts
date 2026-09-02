@@ -6,23 +6,21 @@
 // whose output cascades downstream (architect, developer, product, ...): it
 // inherits the session's own model and effort so the user's ceiling is never
 // silently capped. `balanced` marks reviewer-shaped work (novel input judged
-// against explicit criteria): a mid-size model at reduced effort. `templated`
-// marks dominantly pattern-following output whose methodology already lives in
-// knowledge (delivery plans, CI/CD config, runbooks). It currently shares the
-// same mid-size-model, reduced-effort projection as `balanced`. Both tiers step
-// down, never up; their distinct names describe the WORK and let either policy
-// be retuned independently without reclassifying agents.
+// against explicit criteria): the measured reviewer baseline pins a mid-size
+// model at medium effort. `templated` marks dominantly pattern-following output
+// whose methodology already lives in knowledge (delivery plans, CI/CD config,
+// runbooks). It remains a distinct models-dial group, but its shipped baseline
+// now inherits the session model and effort. The names describe the WORK, not
+// the dial, so a reader can classify a new agent without knowing today's model
+// lineup.
 //
 // Projection targets (see TIER_PROJECTIONS):
 //   - Claude Code   agent .md frontmatter: `model:` and optional `effort:`.
 //                   An OMITTED key inherits the session value, and a pinned
 //                   `effort:` overrides the session in both directions - a pin
-//                   is a cap, not a floor. So `judgment` writes `model:
-//                   inherit` and NO effort line; `balanced` and `templated`
-//                   both write `model: sonnet` and pin `effort: medium`.
-//                   Those two tiers project IDENTICALLY in every harness
-//                   today - see the note on TIER_PROJECTIONS.balanced - so do
-//                   not read two tier names as two distinct projections.
+//                   is a cap, not a floor. `judgment` and `templated` write
+//                   `model: inherit` and NO effort line; `balanced` writes
+//                   `model: sonnet` with `effort: medium`.
 //   - Codex CLI     agent role .toml: `model` and `model_reasoning_effort`.
 //                   Omitted keys fall back to the shipped .codex/config.toml
 //                   session defaults (live-verified on codex-cli 0.139.0 and
@@ -51,13 +49,14 @@
 // Kiro model, so kiroModelDefaults() contributes no entries and only the
 // authored cli.json entries ship.
 //
-// Cost-cap override, resolved at PACK time (runtime composition is out of
+// Tier-ceiling override, resolved at PACK time (runtime composition is out of
 // scope): the space-memory `tier_cap:` frontmatter key on the layered method
 // files (org.md -> team.md -> project.md, last writer wins) is the persistent
 // project knob, and the AIDLC_TIER_CAP env var is the per-invocation override
-// that beats it. Setting the cap to `balanced` collapses `judgment` to
-// `balanced` in every projection; `templated` collapses both higher tiers.
-// See resolveTierCap().
+// that beats it. Setting the cap to `balanced` selects the measured reviewer
+// baseline for judgment work; `templated` selects the inheriting Writing up
+// projection for both higher tiers. Use `aidlc config models` for an explicit
+// per-install cost policy. See resolveTierCap().
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -141,12 +140,13 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     copilot: { model: null },
   },
   templated: {
-    // The pattern-following tier. It currently shares balanced's smaller-model,
-    // reduced-effort projection, but remains distinct so either can be retuned.
-    claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    // The tier remains a models-dial group for pattern-following work, but the
+    // shipped baseline inherits. Users who want a lower writing-up baseline
+    // record that per install through `aidlc config models`.
+    claude: { model: "inherit", effort: null },
+    codex: { model: null, effort: null },
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
   },
@@ -261,7 +261,10 @@ export function projectTier<H extends Harness>(
  *  entry. NOTE: the orchestrator's own model entry (claude-opus-4.8 ->
  *  xhigh) is authored in the per-harness kiro settings cli.json, outside
  *  this table - the orchestrator agent is not a tier-carrying persona. */
-export function kiroModelDefaults(cap: Tier | null = null): Record<string, KiroEffort> {
+export function kiroModelDefaults(
+  cap: Tier | null = null,
+  additions: readonly { model: string; effort: KiroEffort }[] = [],
+): Record<string, KiroEffort> {
   const out: Record<string, KiroEffort> = {};
   // TIERS is ordered high to low, so the first tier to claim a model wins -
   // exactly the "higher tier's effort" collapse rule.
@@ -270,6 +273,13 @@ export function kiroModelDefaults(cap: Tier | null = null): Record<string, KiroE
     const effort = KIRO_TIER_EFFORT[capTier(tier, cap)];
     if (!model || !effort) continue;
     if (!(model in out)) out[model] = effort;
+  }
+  const effortOrder: readonly KiroEffort[] = ["low", "medium", "high", "xhigh", "max"];
+  for (const { model, effort } of additions) {
+    const current = out[model];
+    if (!current || effortOrder.indexOf(effort) > effortOrder.indexOf(current)) {
+      out[model] = effort;
+    }
   }
   return out;
 }

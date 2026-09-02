@@ -59,7 +59,7 @@ name: aidlc
 description: >
   AI-DLC workflow orchestrator. Start, resume, or manage an AI-driven
   development lifecycle.
-argument-hint: "[description | --status | --stage <slug|#> | --phase <name|#> | --help]"
+argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --help]"
 user-invocable: true
 ---
 ```
@@ -123,10 +123,10 @@ The authored dial on every agent is `tier:`; the packager projects it into the `
 | Tier | Agents | Claude Code projection | Rationale |
 |------|--------|------------------------|-----------|
 | `judgment` | architect, product, design, developer, quality, devsecops, compliance, aws-platform, composer (9) | `model: inherit`, no `effort:` line - the session's model and effort win | Multi-constraint reasoning whose decisions cascade downstream - architectural boundaries, intent interpretation, UX trade-offs, code synthesis, threat prioritisation, regulatory edge-cases, cloud architecture |
-| `balanced` | architecture-reviewer, product-lead (2) | `model: sonnet`, `effort: medium` | Review against an explicit checklist; the criteria encode the method, so a mid-size model at reduced effort suffices |
-| `templated` | delivery, pipeline-deploy, operations (3) | `model: sonnet`, `effort: medium` | Output is dominantly templated planning tables, CI/CD YAML, or observability/runbook scaffolding; methodology is encoded in the agent's knowledge files |
+| `balanced` | architecture-reviewer, product-lead (2) | `model: sonnet`, `effort: medium` | Review against an explicit checklist; the measured reviewer baseline is the one disclosed shipped step-down |
+| `templated` | delivery, pipeline-deploy, operations (3) | `model: inherit`, no `effort:` line | Output is dominantly templated planning tables, CI/CD YAML, or observability/runbook scaffolding; the tier remains a Writing up dial group, while the shipped baseline inherits |
 
-An omitted `effort:` key inherits the session effort, and a pinned one overrides the session in both directions (a pin is a cap, not a floor) - absence is deliberate for `judgment`, the only tier that omits the key. The full per-harness projection table (on Kiro, all tiers inherit the session model and effort) and the `tier_cap` override live in [Agent System](05-agent-system.md).
+An omitted `effort:` key inherits the session effort, and a pinned one overrides the session in both directions (a pin is a cap, not a floor). Judgment and templated inherit by default; balanced pins the measured reviewer baseline. Use `aidlc config models` to record a per-install Writing up downgrade. The full per-harness projection table and the `tier_cap` override live in [Agent System](05-agent-system.md).
 
 ---
 
@@ -157,10 +157,10 @@ Each file carries topical `##` headings (Way of Working, Testing Posture, Deploy
 The rule files are not static — the v0.5.0 learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM writes observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions), and the orchestrator later performs the admission comparison. Candidate extraction and persistence are deterministic tools; selections and conflict disposition are human decisions:
 
 1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
-2. **Surface (tool).** At the approval gate, `aidlc-learnings.ts surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
+2. **Surface (tool).** At the approval gate, `aidlc engine learnings surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
 4. **Admission check (orchestrator LLM).** The orchestrator compares each kept learning against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
-5. **Persist (tool).** `aidlc-learnings.ts persist` accepts the resulting selections without reading `org.md`, writes each confirmed learning as a practice to `aidlc/spaces/<active-space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
+5. **Persist (tool).** `{{INVOKE}} engine learnings persist` accepts the resulting selections without reading `org.md`, writes each confirmed learning as a practice to `aidlc/spaces/<active-space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
 The user-facing walk-through (with a worked example) is in [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md); the harness-engineer authoring angle is in [Rules and the Learning Loop](../harness-engineering/05-rules-and-the-loop.md).
 
@@ -176,7 +176,7 @@ The user-facing walk-through (with a worked example) is in [Rules and the Learni
 
 | Section | Contents |
 |---------|----------|
-| Prerequisites | `bun` (only runtime dependency); `mkdir`-based locking |
+| Prerequisites | Self-contained `aidlc`; atomic filesystem locking |
 | AI-DLC Structure | Skill, agent, rules, knowledge, and hook locations |
 | Conventions | Artifacts go to the intent's record dir under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`; application code goes to workspace root |
 | Session Resumption | Check for `aidlc-state.md` on startup, offer resume options |
@@ -222,7 +222,7 @@ Without this, Claude Code would prompt "Allow this tool?" on each first use, dis
 ```json
 "statusLine": {
   "type": "command",
-  "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts\""
+  "command": "aidlc engine statusline"
 }
 ```
 
@@ -236,14 +236,14 @@ Runs periodically (not just on tool use) to keep the terminal status current.
     "matcher": "",
     "hooks": [{
       "type": "command",
-      "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-start.ts\""
+      "command": "aidlc engine hook session-start"
     }]
   }],
   "SessionEnd": [{
     "matcher": "",
     "hooks": [{
       "type": "command",
-      "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-end.ts\""
+      "command": "aidlc engine hook session-end"
     }]
   }]
 }

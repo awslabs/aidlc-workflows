@@ -1,1 +1,1 @@
-{"version":"1.0.0","enabled":true,"name":"aidlc-session-end","description":"Notes in the audit log that the session ended.","when":{"type":"agentStop"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-session-end.ts"}}
+{"version":"1.0.0","enabled":true,"name":"aidlc-session-end","description":"Notes in the audit log that the session ended.","when":{"type":"agentStop"},"then":{"type":"runCommand","command":"{{INVOKE}} engine adapter kiro session-end"}}

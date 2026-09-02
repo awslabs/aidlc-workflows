@@ -415,6 +415,7 @@ function scratchProject(): string {
   );
   for (const t of [
     "aidlc-lib.ts",
+    "aidlc-settings.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-audit.ts",
@@ -1440,11 +1441,11 @@ describe("t265c registrations", () => {
       readFileSync(join(REPO_ROOT, "dist", "claude", ".claude", "settings.json"), "utf-8"),
     ) as { hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> } };
     const taskGroup = settings.hooks.PreToolUse.find((g) =>
-      g.hooks.some((h) => h.command.includes("aidlc-plan-approval-guard.ts"))
+      g.hooks.some((h) => h.command.includes("hook plan-approval-guard"))
     );
     expect(taskGroup).toBeDefined();
     expect(
-      taskGroup?.hooks.some((h) => h.command.includes("aidlc-plan-approval-guard.ts")),
+      taskGroup?.hooks.some((h) => h.command.includes("hook plan-approval-guard")),
     ).toBe(true);
     for (const mutationTool of ["Edit", "Write", "Bash"]) {
       expect(taskGroup?.matcher.split("|")).toContain(mutationTool);
@@ -1453,7 +1454,7 @@ describe("t265c registrations", () => {
 
   test("codex: hooks.json wires the plan-approval-guard adapter target", () => {
     const hooksJson = readFileSync(join(REPO_ROOT, "dist", "codex", ".codex", "hooks.json"), "utf-8");
-    expect(hooksJson).toContain("aidlc-codex-adapter.ts plan-approval-guard");
+    expect(hooksJson).toContain("adapter codex plan-approval-guard");
   });
 
   test("copilot: the shared tool guard invokes the plan-approval guard", () => {

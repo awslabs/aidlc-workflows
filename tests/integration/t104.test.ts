@@ -119,7 +119,7 @@ interface DoctorResult {
 function runDoctor(rd: string): DoctorResult {
   const proj = mkTemp("proj");
   mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -178,10 +178,10 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
 
   test("3: drift row prefixed ✓ (advisory pass — does NOT push failed)", () => {
     const r = runDoctor(rulesDir(DRIFT_RULES));
-    // The tool prefixes a pass row with `✓  ` (✓ + two spaces,
-    // aidlc-utility.ts:1361); a fail row would carry `✗  ` (:1364).
+    // The tool prefixes a pass row with the fixed-column `ok` verdict;
+    // a failed row would carry `fail`.
     // Mirrors the .sh `grep -q "^✓"` on the drift line.
-    expect(driftLine(r.out).startsWith("✓  ")).toBe(true);
+    expect(driftLine(r.out).startsWith("  ok")).toBe(true);
   }, 30000);
 
   // ===========================================================================
@@ -198,7 +198,7 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     );
     const line = driftLine(r.out);
     expect(line).toContain("Rule drift: no team/project rule overlaps org policy");
-    expect(line.startsWith("✓  ")).toBe(true);
+    expect(line.startsWith("  ok")).toBe(true);
   }, 30000);
 
   // ===========================================================================
@@ -216,7 +216,7 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     expect(line).toContain("Rule drift: org rules absent (informational)");
     // STRONGER than the .sh (which only grepped the label): the informational
     // row is also an advisory pass (aidlc-utility.ts:1239), so it carries ✓.
-    expect(line.startsWith("✓  ")).toBe(true);
+    expect(line.startsWith("  ok")).toBe(true);
   }, 30000);
 
   // ===========================================================================

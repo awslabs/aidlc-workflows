@@ -2,7 +2,7 @@
 
 > Audience: Tier 2/3 (team adopter, framework contributor).
 
-> **Path convention.** `<harness-dir>/` below = the harness's runtime dir (`.claude` / `.codex` / `.kiro` / `.aidlc`); `plugins/<name>/` = the authored plugin source; `dist/plugins/<name>/<harness>/` = the emitted, installable host plugin.
+> **Path convention.** `<harness-dir>/` below = the harness's runtime dir (`.claude` / `.codex` / `.kiro` / `.aidlc`); `plugins/<name>/` = the authored plugin source; `dist/plugins/<name>/<harness>/` = the ignored local host-plugin projection emitted by `bun scripts/package.ts`.
 
 This chapter is the canonical reference for the **AIDLC plugin** system: an optional, owned, versioned set of contributions — new stages, agents, scopes, method/rules, sensors, doctor checks, and *additive modifications to existing core stages* — authored once as a harness-neutral tree and **emitted as a real host plugin** for each harness. A plugin never edits `core/`; with every plugin disabled an install is byte-identical to bare core. The system generalizes the one proven edit-free seam (phase rules composed additively) to every surface, and delivers it through each host's own plugin machinery rather than a bespoke installer. Cross-link to [Stage Definition](15-stage-definition.md) (the stage frontmatter a plugin authors, including `plugin`/`number`/`when`), [Engine and Skill System](17-skill-system.md) (the graph the composer feeds and the orchestrator routes off), [Artifact Vocabulary](16-artifact-vocabulary.md) (the namespacing rule), and the authoring walkthrough [Authoring a Plugin](../harness-engineering/10-authoring-a-plugin.md).
 
@@ -76,7 +76,7 @@ frontmatter `name`. Plugin agent files follow the same rule:
   "version": "0.1.0",                 // semver; checked against dependents' constraints
   "description": "…",
   "author": { "name": "AWS AIDLC" },
-  "dependencies": ["core", "compliance@^1.2.0"],  // resolved vs git tags (<plugin>--v<version>)
+  "dependencies": ["core", "compliance@^1.2.0"],  // declared contract; resolution is deferred
   "aidlc": {
     "contributes": {                  // which subtrees this plugin ships
       "stages": "stages/", "agents": "agents/", "scopes": "scopes/",
@@ -147,11 +147,13 @@ The composer runs once over `bare core + {chosen plugins}` and writes the effect
 |------|---------|-------|
 | **Claude** | SessionStart hook (fires eagerly on session spawn) | managed allowlist (`strictKnownMarketplaces`) |
 | **Codex** | SessionStart hook (fires lazily on first interaction) | one-time trust prompt, content-hash-pinned |
-| **Kiro** (CLI/IDE) | `aidlc plugin sync` when the binary is on PATH, or manual `bun <plugin>/hooks/compose.ts` after the folder-drop | n/a - folder-drop distribution |
+| **Kiro** (CLI/IDE) | `aidlc engine plugin sync` when the binary is on PATH, or manual `bun <plugin>/hooks/compose.ts` after the folder-drop | n/a - folder-drop distribution |
 
 The steps (identical regardless of trigger):
 
-1. **Resolve** the chosen plugins plus their transitive `dependencies` closure against published versions.
+1. **Discover and validate** the host-provided installed roots, manifest
+   identities/versions, and project selection. Dependency closure is not
+   resolved yet; the manifest field remains deferred (§8).
 2. **Copy new primitives** — each plugin's `stages`/`agents`/`scopes`/`knowledge`/`sensors`/`tools` subtrees into the corresponding harness roots, substituting the `{{HARNESS_DIR}}` token to the harness's actual dir; `memory` remains deferred (§7).
 3. **Merge contributions** — every active contribution to a stage is folded into the target stage's source (§6): structural surfaces set-unioned, prose fragments spliced at their anchors.
 4. **Compile** — `aidlc-graph compile` regenerates `stage-graph.json` + `scope-grid.json`; the orchestrator routes entirely off those, so a plugin stage runs the moment it is composed — no prose or skill edit needed.
@@ -196,26 +198,83 @@ enabled scope.
 Use the deterministic utility command to inspect or change the selection:
 
 ```bash
-aidlc plugin list
-aidlc plugin select test-pro
-aidlc plugin select aidlc,test-pro
-bun <harness-dir>/tools/aidlc-utility.ts select-plugins
-bun <harness-dir>/tools/aidlc-utility.ts select-plugins test-pro
-bun <harness-dir>/tools/aidlc-utility.ts select-plugins aidlc,test-pro
+aidlc engine plugin select
+aidlc engine plugin select test-pro
+aidlc engine plugin select aidlc,test-pro
 ```
 
 `select-plugins` validates names against the known set (`aidlc` plus plugin
-names found on compiled nodes and scope files), writes `harness.json`, recompiles
-the graph, regenerates stage/scope runners, and refreshes the generated
-SKILL.md scope/stage tables in one transaction. It snapshots `harness.json`,
-`stage-graph.json`, and `scope-grid.json`; if a late regeneration step fails it
-restores all three and re-runs the regeneration chain against the restored
-selection so the install is not left torn. `/aidlc --doctor` reports the enabled
+names found on compiled nodes and scope files) while holding the workspace
+mutation lock. It copies the project surfaces to staging, strips disabled
+contributions there, writes `harness.json`, recompiles the graph/grid,
+regenerates stage/scope runners, and refreshes the generated SKILL.md tables.
+Only then does it diff staging against the live project and submit the complete
+set of changed files to `aidlc-transaction.ts`. The audit append is the
+transaction's committed validator: if it fails, the engine restores every
+selection, graph, runner, table, contribution, and sidecar byte. This replaces
+the older three-file snapshot convention. `/aidlc --doctor` reports the enabled
 plugins, per-plugin enabled-stage counts, and hard-fails if the graph's
 `enabled:false` flags disagree with `harness.json`.
 
-`aidlc plugin sync` is the command-line front for installed plugin composition.
-It runs discovered plugin roots' `hooks/compose.ts` files and exits cleanly with
+`aidlc engine plugin list` is a separate installed-versus-composed status command; it
+does not print or change the project selection.
+
+## 5a. Installed inventory, composition stamps, and sync
+
+The host owns published-versus-installed state. AIDLC compares that installed
+state with project-local composition state, entirely offline:
+
+- Claude reads schema-v2 `~/.claude/plugins/installed_plugins.json` and
+  `enabledPlugins` from `~/.claude/settings.json`.
+- Codex reads only plugin IDs declared in `~/.codex/config.toml`, then inspects
+  their exact cache paths under
+  `~/.codex/plugins/cache/<marketplace>/<plugin>/<version-or-local>/`.
+- Kiro has no proved host store. It accepts only the plugin root injected into
+  the current hook and reports aggregate inventory unavailable outside that
+  invocation. Claude and Codex use the same fallback if their registry source
+  disappears.
+- OpenCode has a generated compose projection, but `aidlc-plugin.ts` does not
+  yet model `.opencode-plugin` as an inventory kind. Its portable composer is
+  covered independently; do not interpret `plugin list` as a proved aggregate
+  OpenCode inventory.
+
+Each adapter reads one host-native manifest (`.claude-plugin/plugin.json`,
+`.codex-plugin/plugin.json`, or `.kiro-plugin/plugin.json`). Owned manifests
+must use `name: aidlc-<key>`, a safe key, and a semver version. Duplicate
+identities are rejected with every source path; no adapter recursively scans a
+home or cache directory.
+
+After composition, AIDLC writes
+`<harness-dir>/tools/data/plugin-compose-<key>.json` with the plugin name,
+version, and a deterministic source hash. The hash covers sorted compose input
+paths plus LF-normalized bytes before `{{HARNESS_DIR}}` substitution. Host
+wrappers and generated project output are excluded, so same-version vendored
+edits and path-only renames are visible.
+
+`aidlc engine plugin list [--verbose|--json]` compares the host inventory with those
+stamps. Default output deliberately has only three actions: `current`,
+`run: aidlc engine plugin sync`, or `needs attention: <remediation>`. Verbose and JSON
+output retain the internal reason: version differs, source changed, not
+composed, legacy unstamped, disabled, missing, invalid/ambiguous, or inventory
+unavailable.
+
+`aidlc engine plugin sync` composes every enabled installed plugin in a staged project,
+regenerates graph and runner surfaces, writes composition and ownership records,
+diffs the staged project, and submits one project transaction. Expected-state
+checks reject concurrent live edits; a commit failure rolls back all bytes,
+modes, stamps, and ownership records. A supported host hook with an injected
+current root uses the same implementation for only that plugin. Plain sync never
+deletes content for a missing installed source. Explicit
+`aidlc engine plugin sync --prune-missing` requires a proved full inventory,
+confirmation (`--yes` when non-interactive), and hash-proven ownership; it
+refuses locally modified or unowned paths.
+
+Neither list, doctor, nor sync checks a remote plugin registry. The host remains
+responsible for published-version discovery.
+
+For source-tree installs, the `plugin-sync` utility verb (the compose hooks'
+fallback front) runs discovered plugin roots' `hooks/compose.ts` files and
+exits cleanly with
 `no installed plugins; nothing to sync` when no plugin roots are configured. If
 roots are configured but none carries `hooks/compose.ts`, it exits 1 and names
 each root and reason; with a mixed set it warns for each skipped root, composes
@@ -287,11 +346,13 @@ stage source inside the same rollback transaction, so a disabled plugin's
 contributions stop steering enabled stages. Re-enabling restores them on the
 next session start: the plugin's compose hook re-merges, byte-identical.
 
-Compose hooks and `select-plugins` serialize these mutations on the same
-workspace lock. The lock spans installed stage edits, per-plugin sidecars,
-selection writes, graph/grid compilation, and selection rollback, so concurrent
-plugin hooks cannot lose one another's set-union updates and a disable cannot
-race with compose to leave an untracked contribution active.
+Compose hooks and `select-plugins` serialize planning on the same realpath-keyed
+workspace lock; live project changes then commit through the transaction
+engine's root lock and expected-state checks. The protected span covers
+installed stage edits, per-plugin sidecars, selection writes, graph/grid
+compilation, runner/table generation, audit validation, and rollback, so
+concurrent plugin hooks cannot lose one another's set-union updates and a
+disable cannot race with compose to leave an untracked contribution active.
 
 Selection is closure-checked at compile time: an enabled stage may not require
 an artifact whose only producer stages are disabled. The error names the
@@ -465,7 +526,9 @@ scope file must be installed before the merge.
 Independent authors who never coordinate are kept safe by:
 
 - **Namespacing.** Contributed artifact logical names are `<plugin>-`prefixed; `core-*` is reserved. A plugin's stages, agents, scopes, and sensors should be unique across the chosen set and against core. Primitive file collisions are no-clobber and drop-logged with attribution (no silent shadowing).
-- **Dependency resolution.** `dependencies` resolve by semver against git tags; cycles are rejected; an unsatisfiable dependency is a compose error naming the requiring plugin.
+- **Dependency resolution is deferred.** `dependencies` records the intended
+  semver contract, but the composer does not read it, resolve tags, or reject
+  cycles yet. Authors must not rely on it for activation or ordering.
 - **Deterministic ordering.** The one non-commutative surface (prose fragments) is ordered by explicit `(order, plugin)`, never by load order.
 - **Conflicts are visible.** A genuinely non-commutative collision — the same stage's same fragment anchor at the same order, an unsatisfiable cross-plugin edge, or a duplicate primitive path — is dropped or rejected with attribution, rather than resolving by overlay order.
 
@@ -498,6 +561,9 @@ the projection is folder-dropped into the workspace root.
 **Install, per host:**
 
 ```bash
+# First materialize the ignored local plugin projections:
+bun scripts/package.ts
+
 # Claude Code
 /plugin marketplace add <repo-or-path>/dist/plugins/<name>/claude
 /plugin install aidlc-<name>@aidlc-plugins        # SessionStart hook composes on next session
@@ -512,19 +578,22 @@ codex plugin add aidlc-<name>@aidlc-plugins       # approve the one-time hook tr
 PLUGIN_ROOT="$(pwd)/dist/plugins/<name>/kiro"
 cp -r "$PLUGIN_ROOT"/. <project>/
 AIDLC_PLUGIN_ROOT="$PLUGIN_ROOT" AIDLC_PROJECT_DIR="<project>" \
-  AIDLC_HARNESS_DIR=.kiro aidlc plugin sync
+  AIDLC_HARNESS_DIR=.kiro aidlc engine plugin sync
 # fallback when aidlc is not installed:
 AIDLC_PLUGIN_ROOT="$PLUGIN_ROOT" AIDLC_PROJECT_DIR="<project>" \
   AIDLC_HARNESS_DIR=.kiro bun "$PLUGIN_ROOT/hooks/compose.ts"
 ```
 
-Then `/aidlc plugin list` and `/aidlc --doctor` reflect the enabled set (e.g. a 34-stage graph for `core + test-pro`, or a filtered graph when `select-plugins` narrows it), and a scoped run (`/aidlc --scope enterprise`) routes the plugin's stages wherever their scopes put them on-path.
+Then `/aidlc engine plugin list` and `/aidlc --doctor` compare installed and composed
+plugin versions and source hashes. The selection diagnostics remain in doctor,
+and a scoped run (`/aidlc --scope enterprise`) routes enabled plugin stages
+wherever their scopes put them on-path.
 
 **Worked example — test-pro across a mixed fleet.** A platform team publishes `test-pro` once (validate its repository, build each supported harness projection with `aidlc-plugin-build.ts`, test each projection against a disposable install candidate with `aidlc-plugin-test.ts`, push a `<plugin>--v<version>` tag, publish the generated marketplace metadata). Claude teams `/plugin install`; Codex teams `codex plugin add` (approve trust once); Kiro teams `git pull` + run the composer explicitly (above). In every case the composer merges test-pro's two new stages **and** its contributions to `build-and-test`/`nfr-requirements`/`nfr-design`/`performance-validation` — the same enriched, 34-stage, doctor-clean install. Validated across all seven harness projections (Claude, Codex, Cursor, Kiro CLI, Kiro IDE, opencode, GitHub Copilot).
 
-**Status.** Implemented and validated: schema support for `number`/`name`/`plugin`/`when` (`aidlc-stage-schema.ts`); compile-side carry-through of authored `plugin` ownership into compiled stage nodes (core omits the field); install-time selection through `harness.json` + `select-plugins`, including full-graph persistence, filtered runtime loading, closure checks, runner pruning, doctor rows, and compose advisory drops; selection-aware `tools/<plugin>-doctor.ts` checks with bounded fail-loud execution; the standalone offline `aidlc-plugin-create.ts`, `aidlc-plugin-validate.ts`, `aidlc-plugin-build.ts`, and `aidlc-plugin-test.ts` authoring tools with deterministic scaffolds, bundled compose-hook templates, manifest-derived harness target data, canonical contribution-path validation, and plugin/harness-bound output markers; top-level `aidlc plugin validate|build` routes that delegate to those same tools; `aidlc plugin list` and `aidlc plugin sync`; plugin-namespaced stage/scope runner generation; the shared packager/standalone emitter (every discovered harness projection); projection and no-clobber compose for plugin `stages/`, `scopes/`, `agents/`, `knowledge/`, `sensors/`, and `tools/`; the harness-agnostic compose hook (`scripts/plugin-hooks-template/compose.ts`); the reusable `tests/harness/plugin-kit.ts` build, shared compose-subprocess/drop-reading, delegated content-validation, and live-invocation helpers; the contribution seam for `produces` / `consumes` / `sensors` / `scopes` (own-plugin, installed-file-guarded) / `required_sections` + prose fragments (content-hashed, idempotent, order-deterministic). Guarded by `tests/integration/t188-plugin-compose.test.ts` (the compose mechanism), `tests/integration/t224-plugin-selection.test.ts` (selection), `tests/integration/t300-plugin-kit.test.ts` (the reusable kit), `tests/integration/t327-plugin-author-routes.test.ts` (top-level authoring routes), `tests/unit/t314-plugin-validate.test.ts` (offline validator), `tests/unit/t315-plugin-build.test.ts` (isolated byte-parity builder), `tests/unit/t316-plugin-test.test.ts` (isolated candidate compose tier), `tests/unit/t317-plugin-create.test.ts` (isolated whole-toolchain scaffold), `tests/unit/t313-plugin-doctor-checks.test.ts` (doctor runner), and each plugin's own `tests/` (content; wired into the integration tier). Top-level `aidlc plugin create|test` routes remain deferred to RFC #723 §2e, and `aidlc-plugin-test --dist` remains reserved until RFC #722 milestone 2 provides a release channel. **Deferred / not yet wired:** projection/merge of a plugin's `memory/` subtree and configurable `aidlc.contributes` routing; `adds.requires_stage` merge (declared → logged); `when:` predicate evaluation (parsed, no engine consumer); machine-enforcement of merged `required_sections` (the field merges + validates but does not reach the compiled node, and the shipped required-sections sensor derives its expectations from templates — nothing fails a stage for a missing declared section yet); the `after-questions` fragment anchor (`locateAnchor` has no case — it drop-logs "unknown anchor"; use `after-step:<n>`); and reading any lockfile or `dependencies`. Number seeding for NEW slugs is edge-aware: a first compile orders each phase's batch of new stages by their own `requires_stage` edges (ties break by the authored `number:` hint, then slug) and assigns next-free contiguous indices in that order — the engine owns all number values (authors claim none, so uncoordinated plugins cannot collide), a multi-stage plugin's sub-DAG seeds in flow order regardless of filenames, and an already-pinned row keeps its JSON values. Authored `name:` seeds the display name for a new slug.
+**Status.** Implemented and validated: schema support for `number`/`name`/`plugin`/`when` (`aidlc-stage-schema.ts`); compile-side carry-through of authored `plugin` ownership into compiled stage nodes (core omits the field); install-time selection through `harness.json` + `select-plugins`, including staged regeneration, shared-transaction commit/rollback, audit validation, full-graph persistence, filtered runtime loading, closure checks, runner pruning, doctor rows, and compose advisory drops; selection-aware `tools/<plugin>-doctor.ts` checks with bounded fail-loud execution; the standalone offline `aidlc-plugin-create.ts`, `aidlc-plugin-validate.ts`, `aidlc-plugin-build.ts`, and `aidlc-plugin-test.ts` authoring tools with deterministic scaffolds, bundled compose-hook templates, manifest-derived harness target data, canonical contribution-path validation, and plugin/harness-bound output markers; top-level `aidlc plugin validate|build` routes that delegate to those same tools; evidence-backed Claude/Codex inventories with Kiro current-root fallback; deterministic composition stamps, the full installed-versus-composed comparator, transactional aggregate sync, and ownership-safe explicit prune; plugin-namespaced stage/scope runner generation; the shared packager/standalone emitter (every discovered harness projection); projection and no-clobber compose for plugin `stages/`, `scopes/`, `agents/`, `knowledge/`, `sensors/`, and `tools/`; the harness-agnostic compose hook (`scripts/plugin-hooks-template/compose.ts`); the reusable `tests/harness/plugin-kit.ts` build, shared compose-subprocess/drop-reading, delegated content-validation, and live-invocation helpers; the contribution seam for `produces` / `consumes` / `sensors` / `scopes` (own-plugin, installed-file-guarded) / `required_sections` + prose fragments (content-hashed, idempotent, order-deterministic). Guarded by `tests/unit/t242-plugin-state.test.ts` (inventory fixtures, hashes, comparator, rollback, and prune), `tests/integration/t188-plugin-compose.test.ts` (the compose mechanism), `tests/integration/t224-plugin-selection.test.ts` (selection), `tests/integration/t300-plugin-kit.test.ts` (the reusable kit), `tests/integration/t327-plugin-author-routes.test.ts` (top-level authoring routes), `tests/unit/t314-plugin-validate.test.ts` (offline validator), `tests/unit/t315-plugin-build.test.ts` (isolated byte-parity builder), `tests/unit/t316-plugin-test.test.ts` (isolated candidate compose tier), `tests/unit/t317-plugin-create.test.ts` (isolated whole-toolchain scaffold), `tests/unit/t313-plugin-doctor-checks.test.ts` (doctor runner), and each plugin's own `tests/` (content; wired into the integration tier). Top-level `aidlc plugin create|test` routes remain deferred to RFC #723 §2e, and `aidlc-plugin-test --dist` remains reserved until RFC #722 milestone 2 provides a release channel. **Deferred / not yet wired:** projection/merge of a plugin's `memory/` subtree and configurable `aidlc.contributes` routing; `adds.requires_stage` merge (declared → logged); `when:` predicate evaluation (parsed, no engine consumer); machine-enforcement of merged `required_sections` (the field merges + validates but does not reach the compiled node, and the shipped required-sections sensor derives its expectations from templates — nothing fails a stage for a missing declared section yet); the `after-questions` fragment anchor (`locateAnchor` has no case — it drop-logs "unknown anchor"; use `after-step:<n>`); and reading any lockfile or `dependencies`. Number seeding for NEW slugs is edge-aware: a first compile orders each phase's batch of new stages by their own `requires_stage` edges (ties break by the authored `number:` hint, then slug) and assigns next-free contiguous indices in that order — the engine owns all number values (authors claim none, so uncoordinated plugins cannot collide), a multi-stage plugin's sub-DAG seeds in flow order regardless of filenames, and an already-pinned row keeps its JSON values. Authored `name:` seeds the display name for a new slug.
 
-## 9. Invariants
+## 10. Invariants
 
 - **Core is immutable.** No plugin ever edits `core/`.
 - **Additive-only.** Contributions add; they never override or remove.

@@ -57,17 +57,31 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 ## Pick your harness
 
-| Harness | Install (copy into your project) | Invoke | Install & usage guide |
+| Harness | Configure project | Invoke | Install & usage guide |
 | --- | --- | --- | --- |
-| **Kiro IDE** | `dist/kiro-ide/.kiro/` + `dist/kiro-ide/aidlc/` → `<project>/` (+ `dist/kiro-ide/AGENTS.md`; copy or merge the AI-DLC `.gitignore` section) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro IDE](docs/guide/harnesses/kiro-ide.md). |
-| **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` + `dist/kiro/aidlc/` → `<project>/` (+ `dist/kiro/AGENTS.md`; copy or merge the AI-DLC `.gitignore` section) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
-| **Claude Code** | `dist/claude/.claude/` + `dist/claude/aidlc/` → `<project>/` (copy or merge the AI-DLC `.gitignore` section) | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
-| **Codex CLI** (≥ 0.145.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `aidlc/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
-| **Cursor** | `bun dist/cursor/install.ts <project>` | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on Cursor](docs/guide/harnesses/cursor.md). |
-| **opencode** (≥ 1.17) | `dist/opencode/` → `<project>/` (`.aidlc/` + `.opencode/` + `aidlc/` + `opencode.json` + `AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on opencode](docs/guide/harnesses/opencode.md). |
-| **GitHub Copilot** (CLI ≥ 1.0.74 / VS Code ≥ 1.130) | `dist/copilot/` → `<project>/` (`.aidlc/` + `aidlc/` + `AGENTS.md`; MERGE `.github/`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on GitHub Copilot](docs/guide/harnesses/copilot.md). |
+| **Kiro IDE** | `aidlc config --harness kiro-ide` | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro IDE](docs/guide/harnesses/kiro-ide.md). |
+| **Kiro CLI** (≥ 2.6) | `aidlc config --harness kiro` | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
+| **Claude Code** | `aidlc config --harness claude` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
+| **Codex CLI** (≥ 0.145.0) | `aidlc config --harness codex` | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
+| **Cursor** | `aidlc config --harness cursor` | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on Cursor](docs/guide/harnesses/cursor.md). |
+| **opencode** (≥ 1.17) | `aidlc config --harness opencode` | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on opencode](docs/guide/harnesses/opencode.md). |
+| **GitHub Copilot** (CLI ≥ 1.0.74 / VS Code ≥ 1.130) | `aidlc config --harness copilot` | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on GitHub Copilot](docs/guide/harnesses/copilot.md). |
 
 The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
+
+> [!NOTE]
+> Release assets support native macOS, Linux, and Windows installs.
+> The installer installs the native `aidlc` command and all harness runtimes;
+> `aidlc config --harness <name>` safely initializes or refreshes a project.
+> Alpine Linux requires the same C++ runtime packages as Bun's and Node.js's
+> own musl builds before using the AI-DLC musl asset:
+> `apk add libgcc libstdc++`. Fully static Bun musl compile targets remain an
+> upstream-tracked feature rather than an available target today. The installer
+> reports the prerequisite command when it detects the missing loader
+> dependencies; it never installs system packages.
+> Manual-copy users can take `runtime/<harness>/` from the versioned
+> `aidlc-runtime.tar.gz` release asset; those trees use the matching native
+> `aidlc` command. Only source-generated local `dist/` projections require Bun.
 
 > [!NOTE]
 > AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.
@@ -78,50 +92,54 @@ This release works better with `Claude Opus 4.8`. We are sharpening it for previ
 
 ## Quick Start
 
-### Prerequisites (every harness)
+### Install AI-DLC
 
-Every harness runs the same TypeScript hooks and CLI tools through **bun**, so install bun first — it's the one requirement they all share.
+The native installer is the recommended path. It installs one native
+`aidlc` command plus every harness runtime; Bun and Node.js are not required.
+The authenticated bootstrap requires GitHub CLI (`gh`).
 
-```bash
-# macOS / Linux
-curl -fsSL https://bun.sh/install | bash
-```
-
-```powershell
-# Windows PowerShell
-irm bun.sh/install.ps1 | iex
-```
-
-```batch
-:: Windows Command Prompt (CMD) — bun ships only a PowerShell installer, so invoke it from CMD
-powershell -c "irm bun.sh/install.ps1 | iex"
-```
-
-On Windows, use *either* PowerShell *or* CMD, not both — your prompt shows `PS C:\` in PowerShell and `C:\` (no `PS`) in CMD. Everything runs on native Windows; WSL is not required. [Git for Windows](https://git-scm.com/downloads/win) is recommended so harnesses that use a Bash tool can find one.
-
-> [!TIP]
-> bun has to be on the PATH that *non-interactive* shells see, since that's what a harness uses to run a hook or tool. Those shells read `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc` — but the bun installer writes to `~/.zshrc`. So if `which bun` works in your terminal yet the harness can't find bun, copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (or `~/.bashrc` for bash and Git Bash).
-
-Model-provider setup is harness-specific. The shipped Claude Code configuration
-uses **AWS Bedrock**; GitHub Copilot uses GitHub sign-in or BYOK; Kiro, Cursor,
-Codex, and opencode use the provider and credentials configured in their own
-runtime. Each harness section below has the specifics.
-
-### Get the code
-
-Every install below copies from this repository's `dist/<harness>/` trees. Clone
-the GA `main` branch:
+> [!IMPORTANT]
+> Native release assets (`install.sh`, `install.ps1`, `aidlc-runtime.tar.gz`)
+> ship with the first native release, which follows the release-prep change
+> that finalizes this line. Until a release carries those assets, install from
+> a source checkout instead: clone the repository, run
+> `bun install --frozen-lockfile && bun scripts/package.ts`, and copy the
+> generated `dist/<harness>/` tree into your project (Bun required for that
+> path only).
 
 ```bash
-git clone --branch main https://github.com/awslabs/aidlc-workflows.git
-cd aidlc-workflows
+tmp="$(mktemp -d)"
+tag="$(gh release view --repo awslabs/aidlc-workflows-releases --json tagName --jq .tagName)"
+gh release download "$tag" --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
+  --pattern install.sh --pattern aidlc-release.intoto.jsonl
+gh attestation verify "$tmp/install.sh" \
+  --bundle "$tmp/aidlc-release.intoto.jsonl" \
+  --repo awslabs/aidlc-workflows \
+  --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
+  --source-ref refs/heads/main
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Run the `cp` commands in the sections below from this repository's root.
+Windows PowerShell uses the matching `install.ps1` asset; see
+[Install and Lifecycle](docs/guide/18-install-and-lifecycle.md#windows-powershell).
+
+Then configure a project from its root:
+
+```bash
+aidlc config --harness <claude|kiro|kiro-ide|codex|cursor|opencode|copilot>
+aidlc doctor
+```
+
+Model-provider setup is harness-specific. Claude Code and the shipped Codex
+configuration use AWS Bedrock; GitHub Copilot uses GitHub sign-in or BYOK;
+Kiro, Cursor, and opencode use the provider configured in their own runtime.
 
 ### Install a harness
 
-With bun in place, pick your harness below and expand it — each section installs that CLI, sets up your project, and walks the first run end to end.
+Pick your harness below and expand it. Each section installs the host CLI,
+selects its project runtime with `aidlc config`, and walks the first run.
 
 <details>
 <summary><b>Kiro IDE</b></summary>
@@ -131,17 +149,8 @@ With bun in place, pick your harness below and expand it — each section instal
 **2. Set up your project**
 
 ```bash
-mkdir -p your-project/.kiro your-project/aidlc
-cp -R dist/kiro-ide/.kiro/. your-project/.kiro/
-cp -R dist/kiro-ide/aidlc/. your-project/aidlc/     # the workspace shell — a sibling of .kiro/, not inside it
-cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
-# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
-if [ ! -e your-project/.gitignore ]; then
-  cp dist/kiro-ide/.gitignore your-project/.gitignore
-fi
+aidlc config --project-dir /absolute/path/to/your-project --harness kiro-ide
 ```
-
-The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it. The `.gitignore` carries the workspace's commit/ignore split: the per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`) and machine-local runtime stay untracked, while the shared records — method memory, state, audit shards, artifacts — travel with git. The guarded command copies the complete starter file only when the project has no `.gitignore`. If one exists, preserve every project-owned rule and merge only the section from `# AI-DLC` through the end of the shipped file; do not copy its generic starter rules. The `## Git Integration` section of the installed onboarding file assumes the AI-DLC rules are in place.
 
 Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill, and `.kiro/agents/aidlc.md` exposes the conductor in the IDE agent selector. Agents are Markdown-only in this distribution; Kiro CLI's agent-v1 JSON files and `settings/cli.json` do not ship. The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
 
@@ -163,18 +172,9 @@ kiro-cli login
 **2. Set up your project**
 
 ```bash
-mkdir -p your-project/.kiro your-project/aidlc
-cp -R dist/kiro/.kiro/. your-project/.kiro/
-cp -R dist/kiro/aidlc/. your-project/aidlc/    # the workspace shell — a sibling of .kiro/, not inside it
-cp dist/kiro/AGENTS.md your-project/AGENTS.md   # merge if you already have one
-# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
-if [ ! -e your-project/.gitignore ]; then
-  cp dist/kiro/.gitignore your-project/.gitignore
-fi
+aidlc config --project-dir /absolute/path/to/your-project --harness kiro
 cd your-project && kiro-cli chat
 ```
-
-The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it. The `.gitignore` carries the workspace's commit/ignore split: the per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`) and machine-local runtime stay untracked, while the shared records — method memory, state, audit shards, artifacts — travel with git. The guarded command copies the complete starter file only when the project has no `.gitignore`. If one exists, preserve every project-owned rule and merge only the section from `# AI-DLC` through the end of the shipped file; do not copy its generic starter rules. The `## Git Integration` section of the installed onboarding file assumes the AI-DLC rules are in place.
 
 The install ships `.kiro/settings/cli.json` with `chat.defaultAgent` set to `aidlc`, so `/aidlc` is active by default. Inside the session, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start. The [Kiro CLI guide](docs/guide/harnesses/kiro-cli.md) has the full prerequisites and harness differences.
 
@@ -203,22 +203,15 @@ irm https://claude.ai/install.ps1 | iex
 curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del install.cmd
 ```
 
-(If `&&` reports `The token '&&' is not a valid statement separator`, you're in PowerShell — use the PowerShell block above.) Prefer Homebrew on macOS? `brew install --cask claude-code`. Verify with `claude --version`.
+(If `&&` reports `The token '&&' is not a valid statement separator`, you're in PowerShell - use the PowerShell block above.) Prefer Homebrew on macOS? `brew install --cask claude-code`. Verify with `claude --version`.
 
 **2. Set up your project**
 
 ```bash
-# Copy the implementation (engine + the workspace shell sibling), then launch
-cp -r dist/claude/.claude/ your-project/.claude/
-cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a sibling of .claude/, not inside it
-# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
-if [ ! -e your-project/.gitignore ]; then
-  cp dist/claude/.gitignore your-project/.gitignore
-fi
-cd your-project && claude
+aidlc config --project-dir /absolute/path/to/your-project --harness claude
+cd your-project
+claude
 ```
-
-The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it. The `.gitignore` carries the workspace's commit/ignore split: the per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`) and machine-local runtime stay untracked, while the shared records — method memory, state, audit shards, artifacts — travel with git. The guarded command copies the complete starter file only when the project has no `.gitignore`. If one exists, preserve every project-owned rule and merge only the section from `# AI-DLC` through the end of the shipped file; do not copy its generic starter rules. The `## Git Integration` section of the installed onboarding file assumes the AI-DLC rules are in place.
 
 Then, inside the Claude Code session:
 
@@ -245,18 +238,14 @@ The shipped `config.toml` runs on **Amazon Bedrock**; set your AWS profile and r
 **2. Set up your project** (which must be a **git repository** — Codex only discovers a project `.codex/hooks.json` inside one):
 
 ```bash
-cp -r dist/codex/.codex/  your-project/.codex/
-cp -r dist/codex/.agents/ your-project/.agents/
-cp -r dist/codex/aidlc/   your-project/aidlc/      # the workspace shell — a sibling of .codex/, not inside it
-cp dist/codex/AGENTS.md   your-project/AGENTS.md   # or merge into yours
+aidlc config --project-dir /absolute/path/to/your-project --harness codex
 ```
 
-The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `$aidlc --doctor` fails its "workspace shell ready" check without it.
-
-After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, pre-seed hook trust, then verify:
+Config merges the required root integrations and reports the Codex hook-trust
+action. Complete that trust step before your first workflow, then verify:
 
 ```bash
-cd your-project && bun .codex/tools/aidlc-utility.ts doctor
+cd your-project && aidlc doctor
 ```
 
 Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a scope or description. The [Codex guide](docs/guide/harnesses/codex-cli.md) covers the trust dialog, config merge, and sandbox/git notes in full.
@@ -278,12 +267,10 @@ One install serves both surfaces: the Cursor IDE and the CLI (`agent`) share the
 **2. Set up your project**
 
 ```bash
-bun dist/cursor/install.ts your-project
+aidlc config --project-dir /absolute/path/to/your-project --harness cursor
 ```
 
-The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
-
-The installer refuses project-owned file collisions, preserves
+Config refuses project-owned file collisions, preserves
 `.cursor/.gitignore` and existing method memory, merges `.cursor/hooks.json`
 hook arrays and `.cursor/cli.json` permission arrays, and adds marked AI-DLC
 sections to existing `AGENTS.md` and `.gitignore` files. Re-running it upgrades
@@ -291,7 +278,7 @@ framework-managed files while preserving the active-space pointer.
 Then verify:
 
 ```bash
-bun .cursor/tools/aidlc-utility.ts doctor
+cd your-project && aidlc doctor
 ```
 
 Open `your-project/` in the Cursor IDE (or start `agent` in it) and invoke the orchestrator with `/aidlc` followed by a scope or description. Cursor-native shortcuts expose `/aidlc-status`, `/aidlc-jump --stage <slug>` (or `--phase <name>`), and `/aidlc-scope <name>` through the same deterministic engine. The [Cursor guide](docs/guide/harnesses/cursor.md) covers the hooks.json adapter, native subagents and skills, and what differs on this harness in full.
@@ -312,19 +299,15 @@ The shipped project `opencode.json` pins no session model — your global openco
 **2. Set up your project**
 
 ```bash
-cp -r dist/opencode/.aidlc/    your-project/.aidlc/     # the AIDLC engine (opencode never scans it)
-cp -r dist/opencode/.opencode/ your-project/.opencode/  # native shell: subagents + /aidlc command + adapter plugin
-cp -r dist/opencode/aidlc/     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
-cp dist/opencode/opencode.json your-project/opencode.json  # or merge into yours (keep skills.paths + instructions + permissions)
-cp dist/opencode/AGENTS.md     your-project/AGENTS.md      # or merge into yours
+aidlc config --project-dir /absolute/path/to/your-project --harness opencode
 ```
 
 The engine deliberately lives in `.aidlc/`, NOT `.opencode/` — opencode auto-imports `.opencode/tools/*.ts` as custom tools, which would crash on the engine's CLI scripts. `opencode.json`'s `skills.paths` points opencode at `.aidlc/skills` for discovery.
 
-After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, then verify:
+Then verify:
 
 ```bash
-cd your-project && bun .aidlc/tools/aidlc-utility.ts doctor
+cd your-project && aidlc doctor
 ```
 
 Invoke the orchestrator with `/aidlc` followed by a scope or description. The [opencode guide](docs/guide/harnesses/opencode.md) covers the split layout, the adapter plugin, and what differs on this harness in full.
@@ -345,20 +328,38 @@ One install serves both surfaces: the standalone Copilot CLI and VS Code agent m
 **2. Set up your project**
 
 ```bash
-mkdir -p your-project/.aidlc your-project/aidlc your-project/.github
-cp -R dist/copilot/.aidlc/.  your-project/.aidlc/    # the AIDLC engine (neither surface scans it)
-cp -R dist/copilot/aidlc/.   your-project/aidlc/     # the workspace shell - a sibling of .aidlc/, not inside it
-cp -R dist/copilot/.github/. your-project/.github/   # MERGE - everything aidlc-prefixed
-cp dist/copilot/AGENTS.md    your-project/AGENTS.md  # or merge; keep the @-import block
+aidlc config --project-dir /absolute/path/to/your-project --harness copilot
 ```
 
 The engine lives in `.aidlc/`; everything either Copilot surface discovers natively rides `.github/` (hooks, agents, skills), all `aidlc`-prefixed so the merge never overwrites your own `.github/` content.
 
-After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, then trust the folder - add the project's absolute path to `trustedFolders` in `~/.copilot/config.json`, or accept the CLI's interactive trust prompt (untrusted folders silently skip every hook). Headless `copilot -p` runs additionally need `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`.
+After config, trust the folder - add the project's absolute path to
+`trustedFolders` in `~/.copilot/config.json`, or accept the CLI's interactive
+trust prompt (untrusted folders silently skip every hook). Headless
+`copilot -p` runs additionally need `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`.
 
 Run `/aidlc --doctor` to verify, then invoke the orchestrator with `/aidlc` followed by a scope or description - in either surface. The [GitHub Copilot guide](docs/guide/harnesses/copilot.md) covers the two surfaces, folder trust, BYOK setup, and what differs on this harness in full.
 
 </details>
+
+### Copy channel
+
+For a manual directory copy, use the versioned runtime release asset rather
+than repository-generated files:
+
+```bash
+tmp="$(mktemp -d)"
+tag=vX.Y.Z
+gh release download "$tag" --repo awslabs/aidlc-workflows-releases \
+  --pattern aidlc-runtime.tar.gz --dir "$tmp"
+tar -xzf "$tmp/aidlc-runtime.tar.gz" -C "$tmp"
+cp -R "$tmp/runtime/<harness>/." /absolute/path/to/your-project/
+```
+
+The archive carries `runtime/<harness>/` for all seven harnesses and uses the
+matching installed `aidlc` command. Framework developers working from a source
+checkout can instead materialize Bun-invoking ignored local trees with
+`bun scripts/package.ts`.
 
 ## Documentation
 
@@ -372,13 +373,15 @@ Three guides, one per reader — pick by what you're trying to change:
 
 ## Repository layout
 
-Three zones: what AI-DLC **is**, how each harness **speaks**, and what users **copy**. You only ever edit the first two — `bun scripts/package.ts` regenerates the third.
+Three zones: what AI-DLC **is**, how each harness **speaks**, and the ignored
+local projections used by tests and release assembly. You only edit the first
+two; `bun scripts/package.ts` materializes the third.
 
 ```text
 aidlc-claude/
 │  ─────────── HAND-AUTHORED SOURCE — edit here ───────────
 ├── core/                       # ONE harness-neutral source of truth
-│   ├── tools/                  #   48 aidlc-*.ts engine and authoring tools
+│   ├── tools/                  #   68 aidlc-*.ts engine and authoring tools
 │   ├── aidlc-common/           #   stage protocol + 33 stage files + conductor
 │   ├── agents/                 #   14 agents: 11 domain + 2 reviewers + composer
 │   ├── knowledge/ memory/ scopes/ sensors/ hooks/
@@ -400,50 +403,51 @@ aidlc-claude/
 │
 ├── scripts/
 │   ├── package.ts              # THE build entry: copy core+harness per manifest → graph compile →
-│   │                           #   runner-gen → emit() per tree.  --check = total drift guard (CI)
+│   │                           #   runner-gen → emit() per tree. --check = two-build determinism guard
 │   ├── build-binaries.ts       # release-only CLI bundles under ignored build/
+│   ├── package-release.ts      # flat release assets, data archives, checksums, version manifest
+│   ├── install.sh              # macOS/Linux online and offline bootstrap
+│   ├── install.ps1             # Windows online and offline bootstrap
 │   └── manifest-types.ts       # shared manifest contract
 │
-│  ─────────── GENERATED, COMMITTED, DRIFT-GUARDED — never hand-edit ───────────
+│  ─────────── GENERATED, IGNORED LOCAL OUTPUT — never hand-edit or commit ───────────
 ├── dist/
-│   ├── claude/.claude/                       # what Claude Code users copy
-│   ├── kiro-ide/{AGENTS.md, .kiro/}          # what Kiro IDE users copy
-│   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI users copy
-│   ├── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
-│   ├── cursor/{AGENTS.md, aidlc/, .cursor/}   # what Cursor IDE/CLI users install
-│   ├── opencode/{AGENTS.md, .aidlc/, .opencode/}  # what opencode users copy
-│   ├── copilot/{AGENTS.md, .aidlc/, .github/}     # what GitHub Copilot users copy
-│   └── plugins/<name>/{claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/  # one real host plugin per harness — install alongside dist/<harness>/
+│   ├── {claude,kiro,kiro-ide,codex,cursor,opencode,copilot}/  # Bun copy projections
+│   └── plugins/<name>/{claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/
+├── dist-release/               # native-invocation projections for release assembly
 │
 │  ─────────── SUPPORTING ───────────
 ├── tests/                      # all-TypeScript suite (t*.test.ts) — resolves dist via AIDLC_SRC
 └── docs/                       # guide/ · harness-engineering/ · reference/
 ```
 
-> `core/` is what AI-DLC **is**. `harness/` is how each harness **speaks**. `dist/` is what users **copy**. Only the first two are ever edited; `bun scripts/package.ts` regenerates the rest, and a hand-edit to `dist/` is a CI failure.
+> `core/` is what AI-DLC **is**. `harness/` is how each harness **speaks**.
+> `dist/` and `dist-release/` are disposable local build outputs. Release users
+> install the native assets or copy `runtime/<harness>/` from
+> `aidlc-runtime.tar.gz`.
 
 ## Build / regenerate the harnesses
 
 Maintainers edit the hand-authored source in `core/` (or a `harness/<name>/`
-surface), then regenerate the committed `dist/<harness>/` trees — **never
-hand-edit `dist/`**, the drift guard fails CI.
+surface), then regenerate the ignored local projections. Never hand-edit
+generated files.
 
 ```bash
 bun scripts/package.ts            # regenerate every dist/<harness>/ from core/ + harness/
 bun scripts/package.ts <name>     # regenerate one harness (e.g. claude, kiro-ide, codex)
-bun scripts/package.ts --check    # byte-parity drift guard (run in CI)
+bun scripts/package.ts --check    # build twice in temp roots and byte-compare
 ```
 
-Release binary artifacts are built separately after the drift guard is clean:
+Release binary artifacts are built separately after the determinism guard is clean:
 
 ```bash
 bun scripts/build-binaries.ts                 # native binary + mandatory smoke gates
 bun scripts/build-binaries.ts --all-targets   # release matrix
+bun scripts/package-release.ts                # flat archives + checksums + version.json + installer
 ```
 
-Each target is emitted under `build/binaries/<target>/` with the executable
-and a `runtime/<harness>/` copy of every generated harness distribution it may
-dispatch into.
+Each target is emitted under `build/binaries/<target>/`; binary and release
+entry points regenerate `dist/` and `dist-release/` before consuming them.
 
 Adding a whole new harness? See [Porting to a New Harness](docs/harness-engineering/09-porting-to-a-new-harness.md). The authoritative build reference is the [Contributing Guide](docs/reference/11-contributing.md#development-workflow).
 
@@ -467,9 +471,9 @@ Most first-run trouble is one of these; each harness guide covers the rest.
 | `which bun` works in your terminal, but the harness can't find bun | all | bun isn't on the non-interactive PATH. Copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (zsh) or `~/.bashrc` (bash/Git Bash) — see the tip under [Quick Start](#quick-start). |
 | `/aidlc --doctor` reports a Codex CLI version below 0.145.0 | Codex | Upgrade to Codex CLI 0.145.0 or later. Older releases either delay compact-session workflow-context restoration or break subagent attribution and hyphenated agent TOML resolution. |
 | Bedrock calls fail with `AccessDenied` or a model-not-found error | Claude, Codex | Enable model access for the harness's configured models in your AWS account and put working credentials on your SDK chain. Confirm `AWS_REGION` is a region where you enabled them. |
-| Hooks never fire (no audit rows, no gates) | Codex | Trust the hooks: from the AI-DLC source checkout run `bun install --frozen-lockfile`, then `bun scripts/package.ts codex trust --project <dir>` and replace any existing entries for that hook path; or start one TUI session and choose "Trust all." Untrusted hooks never run. |
-| Plugin stages or contributions disappeared after copying a new `dist/` | all | Re-run `/aidlc plugin sync`. Copying a fresh engine distribution restores the stock graph and core stage sources; compose-capable hosts also self-heal on the next session start. |
-| Skills or rules don't take effect after you copy a new `dist/` | all | Start a fresh session — harnesses load skills, agents, and rules at session start. |
+| Hooks never fire (no audit rows, no gates) | Codex | Run `aidlc config trust --project-dir <dir>` or start one TUI session and choose "Trust all." Untrusted hooks never run. |
+| Plugin stages or contributions disappeared after an engine refresh or reinstall | all | Re-run `/aidlc plugin sync`. Refreshing the engine restores the stock graph and core stage sources; compose-capable hosts also self-heal on the next session start. |
+| Skills or rules don't take effect after a refresh | all | Start a fresh session — harnesses load skills, agents, and rules at session start. |
 
 ## Contributing
 

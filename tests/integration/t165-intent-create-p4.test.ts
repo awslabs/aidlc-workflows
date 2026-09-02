@@ -140,7 +140,7 @@ function bindCreatedSession(sessionId: string, created: Run, p = proj): number {
       session_id: sessionId,
       tool_name: "Bash",
       tool_input: {
-        command: "bun .claude/tools/aidlc-utility.ts intent-create --scope poc",
+        command: "bun .claude/tools/aidlc.ts engine intent create --scope poc",
       },
       tool_response: created.stdout,
     },
@@ -169,7 +169,7 @@ function hookHeartbeat(p: string, record: string, name: string): string {
 // Auto-create on an empty workspace
 // ============================================================
 describe("t164 auto-create (intent-create) on an empty workspace", () => {
-  test("intent-create help flags and the init alias are read-only", () => {
+  test("intent-create help flags and the internal init alias are read-only", () => {
     for (const args of [
       ["intent-create", "--help"],
       ["intent-create", "-h"],
@@ -454,7 +454,7 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
     const r = next(["--scope", "poc"]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent-create --scope poc");
+    expect(d.message).toContain("intent create --scope poc");
     // next is read-only: it must NOT have created anything.
     expect(existsSync(intentsDir(proj))).toBe(false);
     expect(existsSync(seededStateFile(proj))).toBe(false);
@@ -568,7 +568,7 @@ describe("t164 --new-intent creation directive hands off to a fresh session", ()
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
     // Names the creation move for the CONFIRMED scope (not the active intent's scope).
-    expect(d.message).toContain("intent-create --scope bugfix");
+    expect(d.message).toContain("intent create --scope bugfix");
     // The shared engine names the handoff but leaves concrete entry/reset
     // commands to each harness SKILL.
     expect(d.message).toContain("STOP");
@@ -737,7 +737,7 @@ describe("t164 --new-intent creation directive hands off to a fresh session", ()
     const r = next(["--scope", "bugfix"]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent-create --scope bugfix");
+    expect(d.message).toContain("intent create --scope bugfix");
     // Fresh-start tail is unchanged (the creation-directive pins expect this too):
     // continue in-session, no fresh-session hand-off.
     expect(d.message).toContain("re-run `next` to continue");
@@ -867,7 +867,7 @@ describe("t164 new-work-while-active", () => {
     const r = next([]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).not.toBe("print"); // not a creation
-    expect(r.out).not.toContain("intent-create");
+    expect(r.out).not.toContain("intent create");
   });
 });
 
@@ -1085,7 +1085,7 @@ describe("t164 doctor readiness against the shipped shell", () => {
     // idempotent — memory/ already exists from the seed.)
     mkdirSync(join(proj, ".claude"), { recursive: true });
     mkdirSync(join(proj, "aidlc", "spaces", "default", "memory"), { recursive: true });
-    const r = util(["doctor"]);
+    const r = util(["doctor", "--verbose"]);
     expect(r.out).toContain("workspace shell ready");
     // The readiness row must NOT reference the retired --init.
     expect(r.out).not.toContain("run `/aidlc --init`");

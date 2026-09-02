@@ -21,8 +21,8 @@
 //
 // The known-answer label strings are READ from the shipped doctor handler
 // (dist/claude/.claude/tools/aidlc-utility.ts handleDoctor), NOT guessed:
-//   - header literal:     "AI-DLC Health Check"               (utility.ts:1355)
-//   - bun check label:    "bun installed (required ...)"      (utility.ts:336)
+//   - header literal:     "AI-DLC doctor"                     (doctor renderer)
+//   - runtime label:      "Runtime hook PATH: bun"                  (shared diagnostics)
 //   - hook check label:   "<hook>.ts present"                 (utility.ts:356)
 //   - settings label:     "settings.json present"            (utility.ts:365)
 //   - shell-ready label:  "workspace shell ready"            (utility.ts:597; P4: the
@@ -63,8 +63,8 @@ const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
 const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 
 // Known-answer doctor strings, read from the shipped handler (see header).
-const DOCTOR_HEADER = "AI-DLC Health Check";
-const DOCTOR_BUN_LABEL = "bun installed (required for CLI tools and hooks)";
+const DOCTOR_HEADER = "AI-DLC doctor";
+const DOCTOR_RUNTIME_LABEL = "Runtime hook PATH: bun";
 const DOCTOR_HOOK_LABEL = "aidlc-write-audit-log.ts present";
 // handleDoctor emits a separate `${h}.ts present` line per hook (utility.ts:356);
 // the .sh checked BOTH audit-logger (tests 1,4) AND session-start (tests 2,5),
@@ -88,7 +88,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
   // audit-logger (hook), session-start, settings, and "health" keywords with a
   // SUMMARY_PASS regex-OR fallback. Here we assert those exact labels against
   // the Bash tool_result — the deterministic doctor stdout the tool emitted.
-  //   - .sh test 7 ("bun")          -> DOCTOR_BUN_LABEL
+  //   - .sh test 7 ("bun")          -> DOCTOR_RUNTIME_LABEL
   //   - .sh tests 1,4 ("audit-logger") -> DOCTOR_HOOK_LABEL
   //   - .sh tests 2,5 ("session-start") -> DOCTOR_HOOK_LABEL_2 (a SEPARATE
   //                                        `${h}.ts present` line per hook)
@@ -111,7 +111,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
       try {
         const auditBefore = readAuditEvents(proj) ?? [];
 
-        const r = await driveAidlc("/aidlc --doctor", {
+        const r = await driveAidlc("/aidlc --doctor --verbose", {
           projectDir: proj,
           timeoutMs: DRIVE_TIMEOUT_MS,
           stopAfterToolResult: STOP_AFTER_DOCTOR,
@@ -124,7 +124,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
         // Header + footer (was .sh test 9's "health" grep):
         assertToolResultContains(r, "Bash", DOCTOR_HEADER);
         // bun runtime check (was .sh test 7):
-        assertToolResultContains(r, "Bash", DOCTOR_BUN_LABEL);
+        assertToolResultContains(r, "Bash", DOCTOR_RUNTIME_LABEL);
         // hook-presence checks — the .sh asserted BOTH hooks separately:
         // audit-logger (tests 1,4) AND session-start (tests 2,5). Each is its
         // own `${h}.ts present` line in the doctor stdout, so assert both.
@@ -133,7 +133,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
         // settings check (was .sh tests 3,6):
         assertToolResultContains(r, "Bash", DOCTOR_SETTINGS_LABEL);
 
-        // The footer shape "N passed, M failed" is verbatim tool stdout
+        // The footer shape "N problems, M warnings." is verbatim tool stdout
         // (utility.ts:1371) — a structure the LLM prose does not reliably
         // reproduce. Locate it in the SAME Bash tool_result that carried the
         // header (so an unrelated Bash call can't satisfy it).
@@ -142,7 +142,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
         );
         expect(doctorCall).toBeDefined();
         expect(doctorCall?.isError).toBe(false);
-        expect(doctorCall!.resultText).toMatch(/\d+ passed, \d+ failed/);
+        expect(doctorCall!.resultText).toMatch(/\d+ problems?, \d+ warnings?\./);
 
         // .sh test 8: audit file grew. Re-expressed on auditEvents: the doctor
         // appends exactly HEALTH_CHECKED, so the post-run log must contain it

@@ -26,6 +26,8 @@ import { buildMeta, renderMeta, type MetaCounts } from "./lib/bun-junit-to-meta.
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const BUN = process.execPath;
+const PACKAGE_READY_ENV = "AIDLC_TEST_PACKAGE_READY";
+const PACKAGE_LOCK = join(REPO_ROOT, ".aidlc", "test-package.lock");
 
 // Platform null device, used for the system config after the protected
 // safe.directory entries have been copied into the suite's isolated config.
@@ -213,6 +215,54 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 const args = parseArgs(process.argv.slice(2));
+
+function prepareGeneratedTrees(): void {
+  if (process.env[PACKAGE_READY_ENV] === "1") return;
+  mkdirSync(dirname(PACKAGE_LOCK), { recursive: true });
+  const deadline = Date.now() + 300_000;
+  let acquired = false;
+  while (!acquired) {
+    try {
+      mkdirSync(PACKAGE_LOCK);
+      acquired = true;
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        error.code !== "EEXIST"
+      ) {
+        throw error;
+      }
+      if (Date.now() >= deadline) {
+        process.stderr.write(
+          `ERROR: timed out waiting for projection regeneration lock ${PACKAGE_LOCK}\n`,
+        );
+        process.exit(2);
+      }
+      Bun.sleepSync(100);
+    }
+  }
+  try {
+    const generated = spawnSync(BUN, [join(REPO_ROOT, "scripts", "package.ts")], {
+      cwd: REPO_ROOT,
+      env: process.env,
+      encoding: "utf8",
+      timeout: 300_000,
+    });
+    if (generated.status !== 0) {
+      process.stderr.write("ERROR: failed to regenerate generated projections\n");
+      process.stderr.write(generated.stdout ?? "");
+      process.stderr.write(generated.stderr ?? "");
+      process.exit(2);
+    }
+    process.env[PACKAGE_READY_ENV] = "1";
+  } finally {
+    rmSync(PACKAGE_LOCK, { recursive: true, force: true });
+  }
+}
+
+prepareGeneratedTrees();
+
 let filterRegex: RegExp | null = null;
 if (args.filter) {
   try {

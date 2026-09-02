@@ -37,9 +37,16 @@ import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "cursor",
+  productName: "Cursor",
+  configNextStep: "open this project in Cursor, then run `/aidlc --doctor`",
   harnessDir: ".cursor",
   orchestratorSkillPath: ".cursor/skills/aidlc/SKILL.md",
   tierFlavor: "cursor",
+  rootIntegrations: [
+    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
+    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
+    { path: "install.ts", policy: "whole-file" },
+  ],
 
   // Same core projection as claude, into .cursor/.
   coreDirs: [

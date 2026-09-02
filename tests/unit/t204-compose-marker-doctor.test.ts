@@ -84,7 +84,7 @@ interface DoctorResult {
 }
 
 function runDoctor(proj: string): DoctorResult {
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
     encoding: "utf-8",
     env: { ...process.env },
   });
@@ -113,8 +113,8 @@ describe("t204 doctor transient-marker probes", () => {
     // Advisory pass: check-mark row, ", fresh" label, and NO fix text appended
     // (only fail rows carry the remediation) - a live gate in a second
     // terminal must not contribute to a non-zero doctor exit.
-    expect(out).toMatch(/\u2713\s+Compose marker present \(.*fresh\)/);
-    expect(out).not.toMatch(/\u2717\s+Compose marker present/);
+    expect(out).toMatch(/ok\s+Compose marker present \(.*fresh\)/);
+    expect(out).not.toMatch(/fail\s+Compose marker present/);
   });
 
   test("a STALE marker (past the TTL) renders as a FAIL row with the remediation", () => {
@@ -122,7 +122,7 @@ describe("t204 doctor transient-marker probes", () => {
     // One hour past the shared freshness window - the orphan case.
     seedMarker(proj, COMPOSE_MARKER_TTL_MS / 1000 + 60 * 60);
     const { out, status } = runDoctor(proj);
-    expect(out).toMatch(/\u2717\s+Compose marker present \(.*stale\)/);
+    expect(out).toMatch(/fail\s+Compose marker present \(.*stale\)/);
     // The remediation names the delete path (or resolving the gate).
     expect(out).toContain("rm aidlc/.aidlc-compose-pending");
     // A fail row implies the non-zero exit CI keys off.
@@ -135,7 +135,7 @@ describe("t204 doctor transient-marker probes", () => {
     const { out } = runDoctor(proj);
     expect(out).toContain("Compose marker present");
     expect(out).toContain("3h old");
-    expect(out).toMatch(/\u2713\s+Compose marker present \(.*3h old, fresh\)/);
+    expect(out).toMatch(/ok\s+Compose marker present \(.*3h old, fresh\)/);
   });
 
   test("a FRESH background-subagent ledger renders as an advisory PASS row and is not deleted", () => {
@@ -145,10 +145,10 @@ describe("t204 doctor transient-marker probes", () => {
     expect(out).toContain("Background-subagent ledger present");
     expect(out).toContain("aidlc/.aidlc-subagent-inflight");
     expect(out).toMatch(
-      /\u2713\s+Background-subagent ledger present \(.*1 fresh, 0 stale/,
+      /ok\s+Background-subagent ledger present \(.*1 fresh, 0 stale/,
     );
     expect(out).not.toMatch(
-      /\u2717\s+Background-subagent ledger present/,
+      /fail\s+Background-subagent ledger present/,
     );
     expect(existsSync(marker)).toBe(true);
   });
@@ -161,7 +161,7 @@ describe("t204 doctor transient-marker probes", () => {
     );
     const { out, status } = runDoctor(proj);
     expect(out).toMatch(
-      /\u2717\s+Background-subagent ledger present \(.*0 fresh, 1 stale/,
+      /fail\s+Background-subagent ledger present \(.*0 fresh, 1 stale/,
     );
     expect(out).toContain("rm aidlc/.aidlc-subagent-inflight");
     expect(status).toBe(1);
