@@ -3723,6 +3723,13 @@ function retainedTransportForCurrentState(
   if (marker.kind === "run-stage") return directive;
   if (marker.kind !== "load-steering") return null;
   const part = marker.part;
+  // Only part ONE of a multi-part delivery is ever retained. A marker published by a
+  // plain `next` is sessionless, so a repeat ask from the conductor that already
+  // holds parts 1..k-1 is indistinguishable from an ask by a compacted context or a
+  // brand-new process. Handing back part k would deliver the method layer with its
+  // earlier parts missing and nothing saying so, so a mid-delivery repeat restarts
+  // delivery from part one, which is always complete and costs one republication.
+  if (part !== 1) return null;
   const token = marker.continue_token;
   if (
     !Number.isInteger(part) ||

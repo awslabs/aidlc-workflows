@@ -870,7 +870,12 @@ describe("t328 Plan Approval runtime authority", () => {
     if (exitCode !== 0) {
       expect(stderr).toContain("source changed during receipt certification");
     } else {
-      expect(approval.reason).toContain("protected Plan Approval receipt");
+      // The answer won the race, so a receipt exists and the refusal comes from the
+      // source check instead. Which of the two fires is timing, so accept either, and
+      // pin what actually matters: the refusal names the source and the remedy.
+      expect(approval.reason).toMatch(
+        /protected Plan Approval receipt|workspace source changed after this plan was approved/,
+      );
     }
   }, 60000);
 });

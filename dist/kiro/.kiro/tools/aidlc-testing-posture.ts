@@ -855,9 +855,11 @@ export function parseTestingContract(plan: string): TestingPostureContract | nul
 //   2. List task markers are reset: `[x]`, `[X]` and `[-]` become `[ ]`, outside
 //      fenced blocks and HTML comments. A tick is a claim about execution, not a
 //      change to the plan.
-//   3. Line endings become LF, trailing whitespace per line is dropped, runs of
-//      blank lines outside fences and comments collapse to one, and trailing
-//      blank lines are dropped. These are editor artifacts, not content.
+//   3. Line endings become LF, trailing whitespace per line is dropped OUTSIDE
+//      fences, runs of blank lines outside fences and comments collapse to one, and
+//      trailing blank lines are dropped. These are editor artifacts, not content.
+//      Inside a fence every byte is kept, because there a whitespace-only line can
+//      be the difference between two patches.
 //
 // Everything else is byte-exact, INCLUDING the fenced `## Testing Contract` JSON
 // and any text inside code fences. Reordering, rewording, adding or deleting a
@@ -879,7 +881,10 @@ export function projectPlanApprovalContent(text: string): string {
   for (const rawLine of retained.replace(/\r\n?/g, "\n").split("\n")) {
     const line = rawLine.replace(/[ \t]+$/, "");
     if (fence) {
-      projected.push(line);
+      // Verbatim inside a fence: a whitespace-only line in a diff or a Python block
+      // is content, not an editor artifact, and two fences differing only there
+      // apply different patches.
+      projected.push(rawLine);
       previousBlank = false;
       if (closesFence(line, fence)) fence = null;
       continue;
@@ -1663,7 +1668,12 @@ export function recordPlanApprovalReceipt(
   clearPlanApprovalChallenge(projectDir, session);
   // Sweep this target's receipts from attempts that have ended. Nothing deletes a
   // receipt to invalidate it any more, so the store is tidied here instead.
-  collectStalePlanApprovalReceipts(projectDir, identity.targetId, identity.runFloor);
+  collectStalePlanApprovalReceipts(
+    projectDir,
+    identity.intentId,
+    identity.targetId,
+    identity.runFloor,
+  );
   return receipt;
   });
 }
@@ -1867,6 +1877,7 @@ export function evaluateCodeGenerationApproval(
       // and it has a different instruction.
       const stale = stalePlanApprovalReceiptsForTarget(
         projectDir,
+        authority.intentId,
         authority.targetId,
         authority.runFloor,
       );
@@ -1917,7 +1928,8 @@ export function beginCodeGeneration(
         // source this plan is bound to.
         throw new Error(
           "Workspace source changed after Plan Approval and before generation began. " +
-            "Approve again (that re-baselines the source floor).",
+            "Re-run the fingerprint command to refresh `[Planned Source]`, then approve " +
+            "again (that re-baselines the source this plan is bound to).",
         );
       }
       // Publication is the generation boundary. It sits between two source
@@ -1950,11 +1962,13 @@ export function beginCodeGeneration(
         writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
         throw new Error(
           "Workspace source changed while Code Generation authority was starting. " +
-            "Approve again (that re-baselines the source floor).",
+            "Re-run the fingerprint command to refresh `[Planned Source]`, then approve " +
+            "again (that re-baselines the source this plan is bound to).",
         );
       }
       collectStalePlanApprovalReceipts(
         projectDir,
+        authority.intentId,
         authority.targetId,
         authority.runFloor,
       );

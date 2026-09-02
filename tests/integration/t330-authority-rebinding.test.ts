@@ -24,6 +24,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -482,6 +483,34 @@ describe("t330 (1) the reported sequence: approve a plan and have it stick", () 
     expect(probe.kind).toBe("run-stage");
     expect(probe.stage).toBe("code-generation");
   }, 120000);
+
+  test("a repeat ask mid-delivery restarts at part one, never hands back a middle part", async () => {
+    const p = await project("feature", (dir) => {
+      // Inflate the rule bundle until steering has to be delivered in parts.
+      appendFileSync(
+        join(dir, "aidlc", "spaces", "default", "memory", "project.md"),
+        `\n\n## Bulk\n\n${"- filler rule line to inflate the bundle\n".repeat(6000)}`,
+        "utf-8",
+      );
+    });
+    const first = JSON.parse(p.next().stdout.trim()) as Record<string, unknown>;
+    expect(first.kind).toBe("load-steering");
+    expect(first.part).toBe(1);
+    expect(Number(first.parts)).toBeGreaterThan(1);
+    const second = JSON.parse(
+      p.continueWith(first.continue_token as string).stdout.trim(),
+    ) as Record<string, unknown>;
+    expect(second.part).toBe(2);
+    // A conductor whose context was compacted mid-delivery, and a brand-new process,
+    // ask in exactly the way the original one did: the marker a plain `next` publishes
+    // is sessionless, so the engine cannot tell the two apart. Handing back part 2
+    // would run the stage with part 1 of its method layer missing and nothing saying
+    // so, which is why only part one is ever retained.
+    const again = JSON.parse(p.next().stdout.trim()) as Record<string, unknown>;
+    expect(again.kind).toBe("load-steering");
+    expect(again.part).toBe(1);
+    expect(again.continue_token).not.toBe(second.continue_token);
+  }, 180000);
 });
 
 describe("t330 (2) every legitimate action preserves the recorded decision", () => {
@@ -874,11 +903,17 @@ describe("t330 (5) the per-Unit walk", () => {
     });
 
     const beforeRouteCheck = snapshot(p.dir);
+    const beforeAll = snapshot(p.dir);
     expect(p.next({ AIDLC_ROUTE_CHECK: "1" }).code).toBe(0);
     expect(bytesMoved(beforeRouteCheck, snapshot(p.dir))).toEqual({
       created: [],
       modified: [],
       deleted: [],
     });
+    // `bytesMoved` excludes the hook's own machine-local bookkeeping, which is right
+    // for the question it answers but would also hide an observer writing the
+    // turn-shape markers. Both observers are on one predicate, so assert the whole
+    // snapshot with no filter at all for the route check.
+    expect(snapshot(p.dir)).toEqual(beforeAll);
   }, 180000);
 });

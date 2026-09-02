@@ -179,7 +179,23 @@ describe("t330 (1) the Plan Approval content projection", () => {
       `${PLAN}${reviewAppendix(2)}`,
     ],
     ["CRLF line endings", PLAN.replace(/\n/g, "\r\n")],
-    ["trailing whitespace on every line", PLAN.replace(/\n/g, "  \n")],
+    // Outside a fence, trailing whitespace is an editor artifact. Inside one it is
+    // content, which the "whitespace-only line inside a fence" case below pins.
+    [
+      "trailing whitespace on every prose line",
+      (() => {
+        let inFence = false;
+        return PLAN.split("\n")
+          .map((line) => {
+            if (line.startsWith("```")) {
+              inFence = !inFence;
+              return line;
+            }
+            return inFence ? line : `${line}  `;
+          })
+          .join("\n");
+      })(),
+    ],
     ["extra trailing newlines", `${PLAN}\n\n\n`],
     ["a byte-order mark", `﻿${PLAN}`],
     [
@@ -219,6 +235,23 @@ describe("t330 (1) the Plan Approval content projection", () => {
     ["a changed contract hash", PLAN.replace("sha256:0f9e8d7c", "sha256:1f9e8d7c")],
     ["text inside a fence", PLAN.replace("stage compiled", "stage recompiled")],
     ["a task marker inside a fence", PLAN.replace("- [ ] pending", "- [x] pending")],
+    // Trailing whitespace is an editor artifact in prose and content in a fence: a
+    // unified diff whose context line for a blank source line is a single space
+    // applies a different patch from one whose line is empty.
+    [
+      "a whitespace-only line inside a fence",
+      PLAN.replace(
+        "- [ ] pending: stage compiled",
+        "- [ ] pending: stage compiled\n ",
+      ),
+    ],
+    [
+      "trailing whitespace on a fenced content line",
+      PLAN.replace(
+        "- [ ] pending: stage compiled",
+        "- [ ] pending: stage compiled  ",
+      ),
+    ],
     ["a new section", `${PLAN}\n## Rollback plan\n\n- [ ] revert\n`],
     ["changed instructions", PLAN, INSTRUCTIONS.replace("unit.test.ts", "other.test.ts")],
     [
@@ -415,6 +448,24 @@ describe("t330 (2) the state digest the active directive binds to", () => {
     // appended at the very end of the file, after the last cache section.
     ["an unrecognised field inside a cache section", STATE.replace("- **Languages**: TypeScript", "- **Languages**: TypeScript\n- **Deployment Target**: aws")],
     ["a line appended at the end of the file", `${STATE}\n<!-- something appended -->\n`],
+    // `getField` reads the state with the `m` flag, so a bare CR (and U+2028 /
+    // U+2029) opens a new line for the ENGINE. A routing field placed there is live,
+    // so it has to bind, even though it shares a physical LF-delimited line with an
+    // ignored field.
+    [
+      "a routing field after a bare CR on an ignored field's line",
+      STATE.replace(
+        "- **Languages**: TypeScript",
+        "- **Languages**: TypeScript\r- **Current Stage**: build-and-test",
+      ),
+    ],
+    [
+      "a routing field after U+2028 on an ignored field's line",
+      STATE.replace(
+        "- **Languages**: TypeScript",
+        "- **Languages**: TypeScript\u2028- **Status**: Completed",
+      ),
+    ],
     ["prose added inside the derived grid", STATE.replace("| alpha | - | [-] | [ ] |", "| alpha | - | [-] | [ ] |\nhand-written note")],
   ];
   for (const [name, mutated] of visible) {
@@ -553,6 +604,23 @@ describe("t330 (4) audit rows are ordered by where they landed", () => {
     expect(attemptEventDefinitelyBefore(inWorktree, inMain)).toBe(false);
   });
 
+  test("a cycle in the mixed order still yields a frontier, never an empty one", () => {
+    // Position-inside-a-shard and timestamp-across-shards are two different orders,
+    // so the relation is not transitive and three rows can chase each other. An empty
+    // frontier is the dangerous answer: every "after the frontier" test is an `every`
+    // call, so no floor would read as "every row belongs to this attempt".
+    const first = row("main.md", 10, "2026-09-01T10:00:05Z");
+    const appendedLater = row("main.md", 11, "2026-09-01T10:00:01Z");
+    const otherShard = row("worktree.md", 2, "2026-09-01T10:00:03Z");
+    expect(attemptEventDefinitelyBefore(first, appendedLater)).toBe(true);
+    expect(attemptEventDefinitelyBefore(appendedLater, otherShard)).toBe(true);
+    expect(attemptEventDefinitelyBefore(otherShard, first)).toBe(true);
+    const frontier = maximalAttemptEvents([first, appendedLater, otherShard]);
+    expect(frontier.length).toBeGreaterThan(0);
+    // The fallback is the coarser order: the timestamp-maximal rows.
+    expect(frontier).toEqual([first]);
+  });
+
   test("two rows tied across shards order neither way, so both stay on the frontier", () => {
     const tied = "2026-09-01T10:00:00Z";
     const inMain = row("main.md", 3, tied);
@@ -644,11 +712,18 @@ describe("t330 (5) the Plan Approval receipt path", () => {
       targetId: "unit:beta",
       runFloor: "STAGE_STARTED:2026-08-31T00:00:00Z#1",
     });
-    for (const value of [current, previousAttempt, otherUnit]) {
+    // Same target, same ended attempt, DIFFERENT intent. The store is per workspace,
+    // so a second intent's receipt sits beside this one and must survive the sweep.
+    const otherIntent = receipt({
+      intentId: "11111111-2222-3333-4444-555555555555",
+      runFloor: "STAGE_STARTED:2026-08-31T00:00:00Z#1",
+    });
+    for (const value of [current, previousAttempt, otherUnit, otherIntent]) {
       writePlanApprovalReceipt(dir, value);
     }
     const stale = stalePlanApprovalReceiptsForTarget(
       dir,
+      IDENTITY.intentId,
       IDENTITY.targetId,
       IDENTITY.runFloor,
     );
@@ -656,13 +731,21 @@ describe("t330 (5) the Plan Approval receipt path", () => {
       previousAttempt.runFloor,
     ]);
     expect(
-      collectStalePlanApprovalReceipts(dir, IDENTITY.targetId, IDENTITY.runFloor),
+      collectStalePlanApprovalReceipts(
+        dir,
+        IDENTITY.intentId,
+        IDENTITY.targetId,
+        IDENTITY.runFloor,
+      ),
     ).toBe(1);
     expect(readPlanApprovalReceipt(dir, IDENTITY)?.runFloor).toBe(
       IDENTITY.runFloor,
     );
     expect(readPlanApprovalReceipt(dir, previousAttempt)).toBeNull();
     expect(readPlanApprovalReceipt(dir, otherUnit)?.targetId).toBe("unit:beta");
+    expect(readPlanApprovalReceipt(dir, otherIntent)?.intentId).toBe(
+      otherIntent.intentId,
+    );
   });
 
   test("the receipt file name is a digest, not a readable identity", () => {

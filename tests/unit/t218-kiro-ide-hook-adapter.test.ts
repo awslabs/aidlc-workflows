@@ -43,6 +43,7 @@ import {
   writePlanApprovalLegacyOffer,
   writeActiveDirectiveMarker,
   stateDigest,
+  workspaceSourceFingerprint,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -180,6 +181,9 @@ function seedStageLevelPlanApproval(dir: string): string {
       "## Plan Approval",
       "",
       `[Approval Fingerprint]: ${fingerprint}`,
+      // The conductor records both tags the fingerprint command prints; the second
+      // is what binds the approval to the source the plan was written against.
+      `[Planned Source]: ${workspaceSourceFingerprint(dir) ?? "unbindable"}`,
       "- Approve Plan",
       "- Request Changes",
       "[Answer]:",

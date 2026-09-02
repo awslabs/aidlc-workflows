@@ -449,10 +449,12 @@ describe("t283 engine-owned continuation cursor", () => {
 
       expect(continueResult.directive.kind).not.toBe("error");
       expect(nextResult.directive.kind).toBe("load-steering");
-      // The `continue` advances the cursor (one revision). The `next` after it is
-      // a query whose answer is already on the marker, so it re-issues that
-      // directive and writes nothing: asking twice costs one revision, not two.
-      expect(marker(installed).revision).toBe(beforeRevision + 1);
+      // The `continue` advances the cursor to part two (one revision). The `next`
+      // after it cannot be told apart from an ask by a compacted context, so rather
+      // than hand back a middle part it restarts delivery at part one, which costs
+      // the second revision. Only a repeat ask AT part one is free.
+      expect((nextResult.directive as { part?: number }).part).toBe(1);
+      expect(marker(installed).revision).toBe(beforeRevision + 2);
       assertMarkerMatchesDirective(installed, nextResult.directive);
     }
 

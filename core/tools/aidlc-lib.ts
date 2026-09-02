@@ -2946,13 +2946,16 @@ function readPlanApprovalReceipts(
 // instruction.
 export function stalePlanApprovalReceiptsForTarget(
   projectDir: string,
+  intentId: string,
   targetId: string,
   runFloor: string,
 ): PlanApprovalRuntimeReceipt[] {
   return readPlanApprovalReceipts(projectDir)
     .filter(
       (entry) =>
-        entry.receipt.targetId === targetId && entry.receipt.runFloor !== runFloor,
+        entry.receipt.intentId === intentId &&
+        entry.receipt.targetId === targetId &&
+        entry.receipt.runFloor !== runFloor,
     )
     .map((entry) => entry.receipt);
 }
@@ -2964,11 +2967,16 @@ export function stalePlanApprovalReceiptsForTarget(
 // approval.
 export function collectStalePlanApprovalReceipts(
   projectDir: string,
+  intentId: string,
   targetId: string,
   runFloor: string,
 ): number {
   let removed = 0;
   for (const entry of readPlanApprovalReceipts(projectDir)) {
+    // The store is per workspace, not per intent, and two intents working the same
+    // stage have different run floors. Without the intent match, approving in one
+    // intent would sweep the other's live receipt.
+    if (entry.receipt.intentId !== intentId) continue;
     if (entry.receipt.targetId !== targetId) continue;
     if (entry.receipt.runFloor === runFloor) continue;
     try {
@@ -4436,6 +4444,32 @@ function planApprovalLegacyWindowMatches(
   });
 }
 
+// A legacy Kiro IDE write can destroy the active-directive marker outright. The
+// legacy poison records (the violation, the write windows, and the recovery
+// challenge) name the Code Generation authority they belong to by its revision, and
+// a marker republished after a destroyed one starts that revision over. A record
+// left behind by the destroyed authority therefore matches the fresh one, which
+// would hold the window in recovery with no way back. Publication drops any record
+// that names the authority it has just created, because no record written before
+// that authority existed can describe it. Recorded approvals are never touched
+// here: they belong to content and attempt, not to a marker.
+function dropLegacyPoisonNamingFreshAuthority(
+  projectDir: string,
+  session: string,
+  published: ActiveDirectiveMarker,
+): void {
+  const markerRevision = planApprovalAuthorityRevision(published);
+  if (markerRevision === null) return;
+  if (planApprovalLegacyViolationMatches(projectDir, published)) {
+    clearPlanApprovalViolation(projectDir);
+  }
+  clearPlanApprovalLegacyWindowsForMarker(projectDir, published);
+  const challenge = readPlanApprovalLegacyRecoveryChallenge(projectDir, session);
+  if (challenge?.markerRevision === markerRevision) {
+    clearPlanApprovalLegacyRecovery(projectDir, session);
+  }
+}
+
 function clearPlanApprovalLegacyWindowsForMarker(
   projectDir: string,
   marker: ActiveDirectiveMarker | null,
@@ -4785,8 +4819,12 @@ const STATE_DIGEST_IGNORED_FIELDS = new Set([
 
 // The one section whose BODY is engine-derived rather than authored: the Unit
 // Progress grid is rewritten on every routed `next` from the Unit DAG, artifact
-// coverage, and gate events, and the template says in as many words that hand
-// edits there are never routing or completion evidence. Only its table rows are
+// coverage, and gate events, and the template says in as many words that hand edits
+// there are not the evidence the engine routes on. The claim path does parse those
+// rows (`completedUnits` in aidlc-unit.ts), so this is a deliberate trade: a hand
+// edit there survives the digest until the next routed `next` rewrites the grid from
+// the DAG, and the claim gate re-reads live state rather than the digest. Only its
+// table rows are
 // dropped, so anything unexpected inside the section still binds.
 const STATE_DIGEST_DERIVED_TABLE_SECTION = "## Unit Progress";
 
@@ -4797,7 +4835,12 @@ const STATE_DIGEST_DERIVED_TABLE_SECTION = "## Unit Progress";
 export function projectStateForDigest(stateContent: string): string {
   const kept: string[] = [];
   let inDerivedTable = false;
-  for (const line of stateContent.split(/\r?\n/)) {
+  // Split on every terminator JavaScript itself treats as one. `getField` reads the
+  // state with the `m` flag, so a bare CR, U+2028 or U+2029 starts a new line for the
+  // ENGINE too; splitting on LF alone would fold a routing field onto an ignored
+  // field's physical line and drop both, leaving a live routing change invisible to
+  // the digest.
+  for (const line of stateContent.split(/\r\n|[\n\r\u2028\u2029]/)) {
     if (line.startsWith("## ")) {
       inDerivedTable = line.trim() === STATE_DIGEST_DERIVED_TABLE_SECTION;
       kept.push(line);
@@ -5161,12 +5204,21 @@ export function writeActiveDirectiveMarker(
   ) {
     throw new Error("Legacy Plan Approval offer/session mismatch");
   }
+  const freshAuthorityAfterDestroyedMarker: {
+    value: { session: string; marker: ActiveDirectiveMarker } | null;
+  } = { value: null };
   const result = transactActiveDirective(projectDir, (current, target) => {
     const stateContent = existsSync(target.statePath) ? readFileSync(target.statePath, "utf-8") : null;
     const context = activeDirectiveContext(target, stateContent);
     const legacyOffer = invocation?.legacyPlanApprovalOffer;
     const legacySession = invocation?.legacyPlanApprovalSession;
-    if (legacySession && context.intentUuid) {
+    // The legacy Kiro IDE handshake exists to stop one IDE window from taking over
+    // an approval capability another window is holding. It therefore protects a LIVE
+    // authority: with no readable marker there is nothing to hold, and preserving an
+    // unreadable one would leave the window blocked with no way back. Publishing is
+    // what re-establishes authority, and the poison markers this branch reads are
+    // cleared by the recovery path itself.
+    if (legacySession && context.intentUuid && current?.version === 2) {
       const owner = findPlanApprovalLegacyOwner(
         target.canonicalProjectDir,
         context.intentUuid,
@@ -5425,8 +5477,22 @@ export function writeActiveDirectiveMarker(
         next,
       );
     }
+    if (legacySession && current?.version !== 2) {
+      freshAuthorityAfterDestroyedMarker.value = { session: legacySession, marker: next };
+    }
     return { marker: next, result: copilotOwned ? "copilot-committed" as const : "generic-committed" as const };
   });
+  const freshAuthority = freshAuthorityAfterDestroyedMarker.value;
+  if (
+    (result === "generic-committed" || result === "copilot-committed") &&
+    freshAuthority !== null
+  ) {
+    dropLegacyPoisonNamingFreshAuthority(
+      projectDir,
+      freshAuthority.session,
+      freshAuthority.marker,
+    );
+  }
   // Publication no longer deletes Plan Approval state. A recorded approval is
   // valid for the content it approved and for the attempt it was taken in
   // (target, intent, run floor), never for the identity of the directive that
@@ -5613,7 +5679,9 @@ export function advanceContinuationCursor(
     if (context.stateSha256 !== snapshot.stateSha256 || context.statePresent !== snapshot.statePresent) {
       return { marker: current, result: "drift" as const, preserve: true };
     }
-    if (legacyPlanApprovalSession && context.intentUuid) {
+    // Same reasoning as in writeActiveDirectiveMarker: protect a live authority, not
+    // an unreadable one.
+    if (legacyPlanApprovalSession && context.intentUuid && current?.version === 2) {
       const owner = findPlanApprovalLegacyOwner(
         target.canonicalProjectDir,
         context.intentUuid,
@@ -9704,7 +9772,7 @@ export function attemptEventDefinitelyBefore(
 export function maximalAttemptEvents<T extends AuditShardEvent>(
   events: ReadonlyArray<T>,
 ): T[] {
-  return events.filter(
+  const maximal = events.filter(
     (candidate, index) =>
       !events.some(
         (other, otherIndex) =>
@@ -9712,6 +9780,17 @@ export function maximalAttemptEvents<T extends AuditShardEvent>(
           attemptEventDefinitelyBefore(candidate, other),
       ),
   );
+  if (maximal.length > 0 || events.length === 0) return maximal;
+  // "Definitely before" mixes two orders (append position inside a shard, timestamp
+  // across shards) and is therefore not transitive: three rows can form a cycle in
+  // which every row has something after it, and the filter above empties. An empty
+  // frontier is the most dangerous answer available, because every "after the
+  // frontier" test is an `every` call and passes vacuously, so no floor at all reads
+  // as "everything is in this attempt". Fall back to the timestamp-maximal rows,
+  // which is always non-empty and is the coarser of the two orders.
+  let latest = events[0].timestamp;
+  for (const event of events) if (event.timestamp > latest) latest = event.timestamp;
+  return events.filter((event) => event.timestamp === latest);
 }
 
 export interface AttemptFrontierView {
@@ -15540,7 +15619,7 @@ export function markHumanTurn(projectDir: string, intent?: string, space?: strin
 // docs/reference/06-hooks-and-tools.md rather than leaving a stale promise of
 // parity behind.
 export function markEngineTouch(projectDir: string, intent?: string, space?: string): void {
-  if (process.env[STOP_HOOK_PROBE_ENV] === "1") return;
+  if (isReadOnlyEngineProbe()) return;
   if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(engineTouchMarkerPath(projectDir, intent, space));
 }

@@ -112,7 +112,12 @@ marker already records this exact directive for this state (same stage, same
 Unit, same rule bundle, same directive body, and for a partial rule delivery a
 continuation token that still verifies), `next` returns the issued directive
 verbatim: no marker rewrite, no revision bump, no fresh token. Only the transport
-is short-circuited. Routing is always recomputed, so a paused Unit, a moved gate,
+is short-circuited, and only PART ONE of a multi-part rule delivery is retained: a
+marker published by a plain `next` is sessionless, so a repeat ask by the conductor
+that already holds parts 1..k-1 cannot be told apart from an ask by a compacted
+context or a brand-new process, and a stage must never run with an earlier part of
+its method layer missing. From part two onward a fresh `next` restarts delivery at
+part one, which costs one republication and is always complete. Routing is always recomputed, so a paused Unit, a moved gate,
 or a completed Unit produces its own directive and stale work can never be
 re-issued. Asking the engine what to do twice therefore answers the same thing
 twice and changes nothing, which is what makes it safe to ask from a hook.
