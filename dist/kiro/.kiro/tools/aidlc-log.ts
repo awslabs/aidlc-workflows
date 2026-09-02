@@ -16,7 +16,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
@@ -1974,8 +1974,21 @@ function handleReview(args: string[]): void {
       let body: Buffer | null = null;
       try {
         if (reviewFileFlag !== undefined) {
+          // An explicit review file must live inside the active intent record,
+          // where the reviewer's slot lives, reached through no symlink: a
+          // path outside it is not the reviewer's output.
+          const recordRoot = realpathSync(recordDir(pd) as string);
+          const relativeToRecord = toPosix(relative(recordRoot, resolve(pd, reviewFileFlag)));
+          if (
+            relativeToRecord === "" ||
+            relativeToRecord === ".." ||
+            relativeToRecord.startsWith("../") ||
+            isAbsolute(relativeToRecord)
+          ) {
+            throw new Error("the path is outside the active intent record");
+          }
           body = readRegularFileNoFollowOrThrow(
-            resolve(pd, reviewFileFlag),
+            assertNoSymlinkInChainOrThrow(recordRoot, relativeToRecord),
             "review file",
             REVIEW_RECORD_MAX_BYTES,
           );

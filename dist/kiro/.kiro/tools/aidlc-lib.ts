@@ -10158,7 +10158,10 @@ export function latestReviewRecordRefs(
     const iteration = auditBlockField(event.block, "Iteration");
     if (iteration === null || !/^[1-9][0-9]*$/.test(iteration)) continue;
     const unit = auditBlockField(event.block, "Unit") ?? "";
-    const key = [unit, workflow ?? "", iteration].join("\u0000");
+    // Keyed by scope and, for a record-era row, the request id it descends
+    // from: a later request for the same scope with its own id neither
+    // captures nor hides an earlier completion.
+    const key = [unit, workflow ?? "", iteration, auditBlockField(event.block, "Request Id") ?? ""].join("\u0000");
     if (event.event === "REVIEW_REQUESTED") {
       const binding = reviewRequestBindingFromBlock(event.block);
       if (binding !== null) pending.set(key, binding);
@@ -10213,7 +10216,10 @@ export function reviewRecordMatchesCompletion(record: ReviewRecord, completionBl
     record.reviewer === auditBlockField(completionBlock, "Reviewer") &&
     record.verdict === auditBlockField(completionBlock, "Verdict") &&
     record.request_id === auditBlockField(completionBlock, "Request Id") &&
-    record.artifact_fingerprint === auditBlockField(completionBlock, "Artifact Fingerprint")
+    record.artifact_fingerprint === auditBlockField(completionBlock, "Artifact Fingerprint") &&
+    record.source_fingerprint === auditBlockField(completionBlock, "Source Fingerprint") &&
+    record.unit_source_fingerprint === auditBlockField(completionBlock, "Unit Source Fingerprint") &&
+    record.request_challenge === auditBlockField(completionBlock, "Review Challenge")
   );
 }
 
@@ -10241,6 +10247,8 @@ export function mergeReviewRecordsFromDelta(
   const present: string[] = [];
   const pending = new Map<string, ReviewRequestBinding>();
   const blocks = delta.replace(/\r\n/g, "\n").split(/\n---\n/);
+  // A row is keyed by its scope and, for a record-era row, the request id it
+  // descends from: same stage, reviewer, Unit, workflow, iteration, and id.
   const scopeKey = (block: string): string | null => {
     const stage = auditBlockField(block, "Stage");
     const reviewer = auditBlockField(block, "Reviewer");
@@ -10253,6 +10261,7 @@ export function mergeReviewRecordsFromDelta(
       auditBlockField(block, "Unit") ?? "",
       auditBlockField(block, "Workflow") ?? "",
       iteration,
+      auditBlockField(block, "Request Id") ?? "",
     ].join("\u0000");
   };
   for (const block of blocks) {

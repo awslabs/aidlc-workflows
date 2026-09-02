@@ -42,7 +42,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   createTestProject,
   seedAuditFile,
@@ -69,6 +69,7 @@ import {
   reviewRecordRelativePath,
   resolveStage,
   serializeReviewRecord,
+  toPosix,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const LOG_TOOL = join(
@@ -1303,6 +1304,28 @@ describe("t271 review iteration ceiling", () => {
       { AIDLC_TEST_NO_REVIEW_FILE: "1" },
     );
     expect(viaFlagLink.status).not.toBe(0);
+    // An explicit review file outside the active intent record is not the
+    // reviewer's output: neither another project, nor the project root, nor a
+    // path that climbs out of the record.
+    const outside = join(createTestProject(), "outside-review.md");
+    writeFileSync(outside, readFileSync(elsewhere), "utf-8");
+    for (const [name, candidate] of [
+      ["another project", outside],
+      ["project root", "elsewhere-review.md"],
+      ["climbing out", toPosix(join(relative(proj, seededRecordDir(proj)), "..", "..", "escape.md"))],
+    ] as const) {
+      const refused = runReview(
+        proj,
+        [...request, "--verdict", "READY", "--review-file", candidate],
+        { AIDLC_TEST_NO_REVIEW_FILE: "1" },
+      );
+      expect(refused.status, name).not.toBe(0);
+      expect(refused.stderr, name).toContain("outside the active intent record");
+    }
+    // Inside the record, an explicit plain file records.
+    const inside = join(seededRecordDir(proj), "inside-review.md");
+    writeFileSync(inside, readFileSync(elsewhere), "utf-8");
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
     // A symlinked container for the slot is refused too.
     const attemptDir = dirname(draft);
     const detached = `${attemptDir}.real`;
@@ -1317,8 +1340,18 @@ describe("t271 review iteration ceiling", () => {
     unlinkSync(attemptDir);
     renameSync(detached, attemptDir);
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
-    // The plain file in the slot records normally.
-    const completed = runReview(proj, [...request, "--verdict", "READY"]);
+    // The plain file named explicitly, inside the project, records normally.
+    const completed = runReview(
+      proj,
+      [
+        ...request,
+        "--verdict",
+        "READY",
+        "--review-file",
+        toPosix(relative(proj, inside)),
+      ],
+      { AIDLC_TEST_NO_REVIEW_FILE: "1" },
+    );
     expect(completed.status, completed.stderr).toBe(0);
     expect(readFileSync(artifact, "utf-8")).toBe("reviewed requirements\n");
   });
@@ -2638,6 +2671,35 @@ describe("t271 review iteration ceiling", () => {
       ),
     ).toThrow(/is not the review its REVIEW_COMPLETED row describes/);
     expect(existsSync(join(mainRoot, ...otherPath.split("/")))).toBe(false);
+    // The same holds for every binding the record carries: a record whose
+    // source fingerprint or legacy challenge disagrees with its row is not it.
+    for (const [name, mutated] of [
+      ["source", { ...record, source_fingerprint: "a".repeat(64) }],
+      ["unit source", { ...record, unit_source_fingerprint: `sha256:${"e".repeat(64)}` }],
+      ["challenge", { ...record, request_challenge: `review:${"f".repeat(32)}` }],
+    ] as const) {
+      const mutatedBytes = serializeReviewRecord(mutated);
+      writeFileSync(source, mutatedBytes, "utf-8");
+      expect(() =>
+        mergeReviewRecordsFromDelta(
+          request() + completion({ "Review Record Digest": reviewRecordDigest(mutatedBytes) }),
+          worktreeRoot,
+          mainRoot,
+        ),
+        name,
+      ).toThrow(/is not the review its REVIEW_COMPLETED row describes/);
+    }
+    writeFileSync(source, bytes, "utf-8");
+
+    // Pairing is by request id: a later request for the same scope with its own
+    // id does not capture this completion, and the completion still pairs with
+    // the request it descends from.
+    const laterRequest = request({ "Request Id": `review:${"9".repeat(32)}` });
+    expect(mergeReviewRecordsFromDelta(request() + laterRequest + completion(), worktreeRoot, mainRoot)).toEqual({
+      copied: [path],
+      present: [],
+    });
+    unlinkSync(mainCopy);
 
     // The paired delta copies once; a retry finds the same bytes present.
     expect(mergeReviewRecordsFromDelta(paired, worktreeRoot, mainRoot)).toEqual({
