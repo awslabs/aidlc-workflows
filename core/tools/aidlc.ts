@@ -2433,7 +2433,7 @@ async function dispatchPinnedVersion(
     reserveDispatchedVersion,
     resolvePinnedDispatch,
   } = await import("./aidlc-lifecycle.ts");
-  const result = resolvePinnedDispatch(argv);
+  const result = resolvePinnedDispatch(argv, projectDir);
   if (result.kind === "none") return null;
   if (result.kind === "failure") {
     return renderDispatcherFailure(

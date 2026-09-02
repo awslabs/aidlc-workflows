@@ -559,9 +559,13 @@ export function targetTriple(): string {
   return `${os}-${arch}${os === "linux" && libc === "musl" ? "-musl" : ""}`;
 }
 
+// Only a `--project-dir` before the `--` delimiter selects the project; tokens
+// after it are literal text and must never reroute a lifecycle or pin decision.
 export function projectDirFrom(argv: readonly string[]): string {
-  const index = argv.indexOf("--project-dir");
-  const explicit = index >= 0 ? argv[index + 1] : undefined;
+  const delimiter = argv.indexOf("--");
+  const options = delimiter < 0 ? argv : argv.slice(0, delimiter);
+  const index = options.indexOf("--project-dir");
+  const explicit = index >= 0 ? options[index + 1] : undefined;
   const value = explicit || process.env.AIDLC_PROJECT_DIR ||
     process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
   return value ? (isAbsolute(value) ? value : resolve(process.cwd(), value)) : process.cwd();

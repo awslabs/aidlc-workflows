@@ -2912,6 +2912,63 @@ describe("t243 release lifecycle", () => {
     });
   }, 120_000);
 
+  test("literal --project-dir text cannot select another project's pinned binary", () => {
+    const release = fixtureRelease();
+    const pinnedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-pin-literal-machine-");
+    const pinnedProject = temp("aidlc-t243-pin-literal-a-");
+    const activeProject = temp("aidlc-t243-pin-literal-b-");
+    for (const dir of [pinnedProject, activeProject]) mkdirSync(join(dir, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], pinnedProject, env).status).toBe(0);
+    expect(run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--from", pinnedRelease, "--project-dir", pinnedProject,
+    ], pinnedProject, env).status).toBe(0);
+    expect(run(INIT, [
+      "config", "--pin", AIDLC_VERSION, "--offline", "--project-dir", activeProject,
+    ], activeProject, env).status).toBe(0);
+
+    const savedRoot = process.env.AIDLC_INSTALL_ROOT;
+    const savedBin = process.env.AIDLC_BIN_DIR;
+    Object.assign(process.env, env);
+    try {
+      // The dispatcher passes the directory it resolved; literal text after
+      // `--` naming the other project must not change the selected binary.
+      const literal = ["engine", "status", "--", "--project-dir", activeProject];
+      expect(resolvePinnedDispatch(literal, pinnedProject)).toEqual({
+        kind: "execute",
+        executable: join(machine, "versions", NEXT_VERSION, INSTALLED_EXECUTABLE),
+        version: NEXT_VERSION,
+      });
+      expect(resolvePinnedDispatch(
+        ["engine", "status", "--project-dir", pinnedProject, ...literal.slice(2)],
+      )).toEqual(expect.objectContaining({ kind: "execute", version: NEXT_VERSION }));
+      expect(resolvePinnedDispatch(
+        ["engine", "status", "--", "--project-dir", pinnedProject],
+        activeProject,
+      )).toEqual({ kind: "none" });
+    } finally {
+      if (savedRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = savedRoot;
+      if (savedBin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = savedBin;
+    }
+
+    // End to end: from the pinned project, the literal names the project pinned
+    // to the running version. Rerouting would run the real engine (which prints
+    // its status text); the correct dispatch runs the retained fixture binary.
+    const dispatched = run(
+      DISPATCHER,
+      ["engine", "status", "--", "--project-dir", activeProject],
+      pinnedProject,
+      env,
+    );
+    expect(dispatched.status, dispatched.stdout + dispatched.stderr).toBe(0);
+    expect(dispatched.stdout + dispatched.stderr).not.toContain("AI-DLC workflow");
+  }, 120_000);
+
   test("launcher ownership does not depend on the spelling of the machine roots", () => {
     const release = fixtureRelease();
     const machine = temp("aidlc-t243-launcher-alias-machine-");

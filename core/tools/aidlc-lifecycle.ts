@@ -640,10 +640,14 @@ function completePinnedVersion(
   }
 }
 
+// The dispatcher resolves the project once (explicit flag before `--`, then the
+// project environment, then cwd) and passes it here, so the pinned binary is
+// always selected for the directory the route policy inspected. The argv
+// overload only remains for direct callers and tests.
 export function resolvePinnedDispatch(
   argv: string[],
+  projectDir: string = projectDirFrom(argv),
 ): PinnedDispatchResult {
-  const projectDir = projectDirFrom(argv);
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return { kind: "none" };
   const version = readFileSync(pinPath, "utf-8").trim();
