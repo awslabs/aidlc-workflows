@@ -140,7 +140,131 @@ function readRulesets(directory: string): JsonRecord[] {
   });
 }
 
+function readJson(path: string, label: string): unknown {
+  try {
+    return JSON.parse(readFileSync(resolve(path), "utf-8"));
+  } catch (error) {
+    throw new Error(
+      `authorization identity failure: unreadable ${label}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function verifyExclusivePublicationAccess(path: string): void {
+  const document = readJson(path, "publication collaborator response");
+  if (!Array.isArray(document) || document.some((page) => !Array.isArray(page))) {
+    throw new Error(
+      "authorization identity failure: publication collaborator response must be paginated arrays",
+    );
+  }
+  const writers: string[] = [];
+  for (const [pageIndex, page] of document.entries()) {
+    for (const [entryIndex, value] of page.entries()) {
+      const collaborator = record(
+        value,
+        `publication collaborator ${pageIndex}:${entryIndex}`,
+      );
+      if (typeof collaborator.login !== "string") {
+        throw new Error(
+          "authorization identity failure: publication collaborator omitted login",
+        );
+      }
+      const permissions = record(
+        collaborator.permissions,
+        `publication collaborator permissions for ${collaborator.login}`,
+      );
+      for (const permission of ["admin", "maintain", "push"]) {
+        if (typeof permissions[permission] !== "boolean") {
+          throw new Error(
+            `authorization identity failure: publication collaborator ${
+              collaborator.login
+            } omitted ${permission} permission`,
+          );
+        }
+      }
+      if (permissions.admin || permissions.maintain || permissions.push) {
+        writers.push(collaborator.login);
+      }
+    }
+  }
+  if (writers.length > 0) {
+    throw new Error(
+      `repository policy failure: publication repository grants write authority to ${
+        [...new Set(writers)].sort().join(", ")
+      }`,
+    );
+  }
+}
+
+function verifyPublicationRepository(
+  repositoryPath: string,
+  ownerPath: string,
+  publicationRepository: string,
+): void {
+  const repository = record(
+    readJson(repositoryPath, "publication repository response"),
+    "publication repository response",
+  );
+  if (
+    repository.full_name !== publicationRepository ||
+    repository.private !== false ||
+    repository.archived !== false ||
+    repository.disabled !== false
+  ) {
+    throw new Error(
+      "repository policy failure: publication repository must be the named public, active repository",
+    );
+  }
+  const owner = record(
+    readJson(ownerPath, "publication owner response"),
+    "publication owner response",
+  );
+  if (
+    owner.login !== publicationRepository.split("/", 1)[0] ||
+    owner.type !== "Organization"
+  ) {
+    throw new Error(
+      "repository policy failure: publication repository owner must be the named organization",
+    );
+  }
+  if (
+    owner.default_repository_permission !== "none" &&
+    owner.default_repository_permission !== "read"
+  ) {
+    throw new Error(
+      "repository policy failure: publication organization default repository permission must be none or read",
+    );
+  }
+}
+
 function verifyControls(args: string[]): void {
+  const sourceRepository = requiredOption(args, "--source-repository");
+  const publicationRepository = requiredOption(args, "--publication-repository");
+  const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+  if (
+    !repositoryPattern.test(sourceRepository) ||
+    !repositoryPattern.test(publicationRepository)
+  ) {
+    throw new Error("repository policy failure: source and publication repositories must be owner/name");
+  }
+  if (sourceRepository === publicationRepository) {
+    throw new Error(
+      "repository policy failure: publication repository must be separate from the source repository",
+    );
+  }
+  if (sourceRepository.split("/", 1)[0] !== publicationRepository.split("/", 1)[0]) {
+    throw new Error(
+      "repository policy failure: source and publication repositories must have the same owner",
+    );
+  }
+  verifyPublicationRepository(
+    requiredOption(args, "--repository"),
+    requiredOption(args, "--owner"),
+    publicationRepository,
+  );
+  verifyExclusivePublicationAccess(requiredOption(args, "--collaborators"));
   const rulesets = readRulesets(requiredOption(args, "--rulesets"));
   const creationActorId = requiredOption(args, "--creation-actor-id");
   const creationActorType = requiredOption(args, "--creation-actor-type");

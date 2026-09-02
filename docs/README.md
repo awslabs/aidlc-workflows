@@ -12,7 +12,7 @@ New here? Start with the native installer and project initializer:
 
 ```bash
 tmp="$(mktemp -d)"
-gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
+gh release download --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \

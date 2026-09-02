@@ -1918,6 +1918,87 @@ describe("t243 release lifecycle", () => {
     }));
   });
 
+  test("Unix installer rejects an authenticated version mismatch before acquiring or invoking assets", async () => {
+    if (process.platform === "win32") return;
+    const release = fixtureReleaseBytes();
+    const binaryName = releaseBinaryName();
+    const binaryPath = join(release, binaryName);
+    const sentinel = join(temp("aidlc-t243-installer-version-sentinel-"), "invoked");
+    const binary = [
+      "#!/bin/sh",
+      'printf "invoked\\n" >"$AIDLC_BINARY_SENTINEL"',
+      "exit 99",
+      "",
+    ].join("\n");
+    writeFileSync(binaryPath, binary, { mode: 0o755 });
+    const manifestPath = join(release, "version.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      assets: Array<{ name: string; sha256: string; bytes: number }>;
+    };
+    const binaryAsset = manifest.assets.find((asset) => asset.name === binaryName);
+    expect(binaryAsset).toBeDefined();
+    if (!binaryAsset) return;
+    binaryAsset.sha256 = digest(binaryPath);
+    binaryAsset.bytes = statSync(binaryPath).size;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(
+      join(release, "checksums.txt"),
+      `${[
+        `version.json`,
+        ...manifest.assets.map((asset) => asset.name),
+      ].map((name) => `${digest(join(release, name))}  ${name}`).join("\n")}\n`,
+    );
+    const machine = join(temp("aidlc-t243-installer-version-parent-"), "machine");
+    const env = {
+      ...process.env,
+      AIDLC_BINARY_SENTINEL: sentinel,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const cases: Array<{
+      name: string;
+      args: string[];
+      requests?: string[];
+    }> = [{
+      name: "local",
+      args: ["--from", release, "--offline", "--version", NEXT_VERSION, "--quiet"],
+    }];
+    const server = serveReleaseFixture(release);
+    cases.push({
+      name: "remote",
+      args: ["--release-base-url", server.baseUrl, "--version", NEXT_VERSION, "--quiet"],
+      requests: server.requests,
+    });
+    try {
+      for (const fixture of cases) {
+        rmSync(sentinel, { force: true });
+        const child = Bun.spawn(["sh", INSTALLER, ...fixture.args], {
+          cwd: REPO_ROOT,
+          env,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [status, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ]);
+        expect(status, `${fixture.name}: ${stdout}${stderr}`).toBe(4);
+        expect(stdout).toContain(
+          `release endpoint returned ${AIDLC_VERSION}, not requested ${NEXT_VERSION}`,
+        );
+        expect(existsSync(sentinel)).toBe(false);
+        expect(existsSync(join(machine, "versions"))).toBe(false);
+        expect(existsSync(join(machine, "active-version"))).toBe(false);
+        expect(existsSync(join(machine, "bin", "aidlc"))).toBe(false);
+      }
+      expect(server.requests.some((path) => path.endsWith(`/${binaryName}`))).toBe(false);
+      expect(server.requests.some((path) => path.endsWith("/aidlc-runtime.tar.gz"))).toBe(false);
+    } finally {
+      server.stop();
+    }
+  });
+
   test("route network policy blocks acquisition before opening a socket", async () => {
     const priorPolicy = process.env.AIDLC_ROUTE_NETWORK_POLICY;
     const priorId = process.env.AIDLC_ROUTE_ID;
@@ -2883,17 +2964,71 @@ describe("t243 release lifecycle", () => {
       ...malformed,
     });
     const list = run(LIFECYCLE, ["versions", "list", "--json"], project, env);
-    expect((JSON.parse(list.stdout) as { data: { pinWarnings: string[] } }).data.pinWarnings)
-      .toEqual([
+    const pinWarnings =
+      (JSON.parse(list.stdout) as { data: { pinWarnings: string[] } }).data.pinWarnings;
+    expect(pinWarnings).toHaveLength(4);
+    expect(pinWarnings).toEqual(expect.arrayContaining([
         expect.stringContaining("conflicting equivalent pin entries"),
         expect.stringContaining("invalid pin entry for relative"),
         expect.stringContaining("invalid pin entry for"),
         expect.stringContaining("invalid pin entry for"),
-      ]);
+      ]));
     expect(run(LIFECYCLE, ["versions", "prune", "--yes"], project, env).status).toBe(4);
+
+    // Filesystem-equivalent aliases form one ownership group before values are
+    // validated. A valid alias must not overwrite a malformed canonical entry
+    // when an unrelated project is pinned, regardless of JSON key order.
+    const mixed = temp("aidlc-t243-pin-scope-mixed-");
+    const mixedAlias = join(temp("aidlc-t243-pin-scope-mixed-alias-"), "mixed");
+    mkdirSync(join(mixed, ".git"));
+    symlinkSync(mixed, mixedAlias, process.platform === "win32" ? "junction" : "dir");
+    const mixedCanonical = realpathSync(mixed);
+    const mixedOrders = [
+      {
+        [mixedCanonical]: 42,
+        [mixedAlias]: AIDLC_VERSION,
+      },
+      {
+        [mixedAlias]: AIDLC_VERSION,
+        [mixedCanonical]: 42,
+      },
+    ];
+    for (const [index, mixedEntries] of mixedOrders.entries()) {
+      const unrelated = temp(`aidlc-t243-pin-scope-unrelated-${index}-`);
+      mkdirSync(join(unrelated, ".git"));
+      const before = {
+        [project]: AIDLC_VERSION,
+        [fresh]: AIDLC_VERSION,
+        ...mixedEntries,
+      };
+      writeFileSync(registryPath, `${JSON.stringify(before, null, 2)}\n`);
+      const pinnedUnrelated = run(INIT, [
+        "config", "--pin", AIDLC_VERSION, "--offline", "--project-dir", unrelated,
+      ], unrelated, env);
+      expect(
+        pinnedUnrelated.status,
+        pinnedUnrelated.stdout + pinnedUnrelated.stderr,
+      ).toBe(0);
+      expect(JSON.parse(readFileSync(registryPath, "utf-8"))).toEqual({
+        ...before,
+        [unrelated]: AIDLC_VERSION,
+      });
+      const mixedList = run(LIFECYCLE, ["versions", "list", "--json"], project, env);
+      expect(
+        (JSON.parse(mixedList.stdout) as { data: { pinWarnings: string[] } }).data
+          .pinWarnings,
+      ).toContainEqual(expect.stringContaining(`invalid pin entry for ${mixedCanonical}`));
+      expect(run(LIFECYCLE, ["versions", "prune", "--yes"], project, env).status).toBe(4);
+    }
 
     // Re-pinning a project replaces every equivalent key it owns, including a
     // malformed entry recorded under one of its aliases.
+    writeFileSync(registryPath, `${JSON.stringify({
+      [project]: AIDLC_VERSION,
+      [fresh]: AIDLC_VERSION,
+      ...conflict,
+      ...malformed,
+    }, null, 2)}\n`);
     const freshAlias = join(temp("aidlc-t243-pin-scope-fresh-alias-"), "fresh");
     symlinkSync(fresh, freshAlias, process.platform === "win32" ? "junction" : "dir");
     writeFileSync(registryPath, `${JSON.stringify({

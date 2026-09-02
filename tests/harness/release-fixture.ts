@@ -411,7 +411,7 @@ function acceptedReleaseContentType(value: string | null): boolean {
 }
 
 export async function checkLiveReleaseContract(
-  baseUrl = "https://github.com/awslabs/aidlc-workflows/releases",
+  baseUrl = "https://github.com/awslabs/aidlc-workflows-releases/releases",
 ): Promise<{ version: string; assets: string[] }> {
   const clean = baseUrl.replace(/\/+$/, "");
   const fetchMetadata = async (name: string): Promise<string> => {

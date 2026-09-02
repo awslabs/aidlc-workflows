@@ -32,7 +32,7 @@ source/development tree is **generated** into ignored local `dist/codex/` from
 
 ```bash
 tmp="$(mktemp -d)"
-gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
+gh release download --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \

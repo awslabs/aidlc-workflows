@@ -456,51 +456,53 @@ function readPinRegistry(reconcileProject?: string): PinRegistry {
     preserved: {},
   };
   const { pins, warnings, conflicted, preserved } = registry;
-  const canonicalOf: Record<string, string> = {};
+  const groups = new Map<string, Array<[project: string, rawVersion: unknown]>>();
   for (const [project, rawVersion] of Object.entries(value as Record<string, unknown>)) {
-    // Canonicalize before validating the value: the project being re-pinned or
-    // unpinned replaces every equivalent key it owns, malformed ones included,
-    // so none of its existing entries are adopted or preserved.
-    let canonical: string | null = null;
-    if (isAbsolute(project)) {
-      try {
-        canonical = canonicalProjectPath(project);
-      } catch (error) {
-        warnings.push(
-          `${path} cannot resolve pin entry for ${project}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        preserved[project] = rawVersion;
-        continue;
-      }
-      if (canonical === reconcileProject) continue;
-    }
-    if (
-      canonical === null ||
-      typeof rawVersion !== "string" ||
-      !/^\d+\.\d+\.\d+$/.test(rawVersion)
-    ) {
+    if (!isAbsolute(project)) {
       warnings.push(`${path} contains an invalid pin entry for ${project}`);
       preserved[project] = rawVersion;
       continue;
     }
-    const version = rawVersion;
-    canonicalOf[project] = canonical;
-    if (conflicted.has(canonical)) {
-      preserved[project] = version;
+    let canonical: string;
+    try {
+      canonical = canonicalProjectPath(project);
+    } catch (error) {
+      warnings.push(
+        `${path} cannot resolve pin entry for ${project}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      preserved[project] = rawVersion;
       continue;
     }
-    const existing = pins[canonical];
-    if (existing === undefined || existing === version) {
-      pins[canonical] = version;
+    // The project being re-pinned or unpinned replaces every equivalent key
+    // it owns, malformed ones included.
+    if (canonical === reconcileProject) continue;
+    const group = groups.get(canonical) ?? [];
+    group.push([project, rawVersion]);
+    groups.set(canonical, group);
+  }
+  for (const [canonical, entries] of groups) {
+    const malformed = entries.filter(([, rawVersion]) =>
+      typeof rawVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(rawVersion)
+    );
+    if (malformed.length > 0) {
+      for (const [project] of malformed) {
+        warnings.push(`${path} contains an invalid pin entry for ${project}`);
+      }
+      // A filesystem-equivalent key group is one ownership record. If any
+      // member is unusable, preserve the complete raw group so an unrelated
+      // rewrite cannot hide the warning or silently choose another member.
+      for (const [project, rawVersion] of entries) preserved[project] = rawVersion;
       continue;
     }
-    delete pins[canonical];
+    const versions = new Set(entries.map(([, rawVersion]) => rawVersion as string));
+    if (versions.size === 1) {
+      pins[canonical] = entries[0][1] as string;
+      continue;
+    }
     conflicted.add(canonical);
-    for (const [raw, canonicalRaw] of Object.entries(canonicalOf)) {
-      if (canonicalRaw === canonical) preserved[raw] = (value as Record<string, unknown>)[raw];
-    }
+    for (const [project, rawVersion] of entries) preserved[project] = rawVersion;
     warnings.push(
       `${path} contains conflicting equivalent pin entries for ${canonical}`,
     );

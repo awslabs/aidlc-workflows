@@ -49,6 +49,7 @@ const MAX_METADATA_BYTES = 1024 * 1024;
 const PROGRESS_WIDTH = 72;
 const PROVENANCE_BUNDLE = "aidlc-release.intoto.jsonl";
 const DEFAULT_RELEASE_REPOSITORY = "awslabs/aidlc-workflows";
+const DEFAULT_PUBLICATION_REPOSITORY = "awslabs/aidlc-workflows-releases";
 
 function releaseTrust(): { repository: string; workflow: string } {
   const repository =
@@ -57,6 +58,15 @@ function releaseTrust(): { repository: string; workflow: string } {
     process.env.AIDLC_RELEASE_WORKFLOW ??
     `${repository}/.github/workflows/release.yml`;
   return { repository, workflow };
+}
+
+function defaultReleaseBaseUrl(): string {
+  const repository =
+    process.env.AIDLC_PUBLICATION_REPOSITORY ?? DEFAULT_PUBLICATION_REPOSITORY;
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("AIDLC_PUBLICATION_REPOSITORY must be owner/name");
+  }
+  return `https://github.com/${repository}/releases`;
 }
 
 function progress(url: string, complete: boolean): void {
@@ -488,8 +498,7 @@ export async function fetchReleaseMetadata(options: {
     throw new ReleaseUnavailableError("update metadata is unavailable while offline");
   }
   const version = options.version ? requireVersion(options.version) : undefined;
-  const baseUrl = settings.baseUrl ||
-    "https://github.com/awslabs/aidlc-workflows/releases";
+  const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
   const metadataTimeoutMs = options.metadataTimeoutMs ?? 15_000;
   const metadataDeadline = Date.now() + metadataTimeoutMs;
   const temporary = mkdtempSync(join(tmpdir(), "aidlc-release-metadata-"));
@@ -595,7 +604,7 @@ export async function acquireRelease(options: {
       await download(
         releaseUrl(
           settings.baseUrl ||
-            "https://github.com/awslabs/aidlc-workflows/releases",
+            defaultReleaseBaseUrl(),
           version || manifest.version,
           asset.name,
         ),

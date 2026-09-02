@@ -66,8 +66,9 @@ The protected `promote` job authenticates `checksums.txt` before using it,
 validates the exact inventory, verifies every manifest asset through online
 and offline provenance paths, records the complete digest set, and exercises
 the real installer from a separate copy. Only after rechecking the original
-directory does it create the GitHub Release from those exact local bytes. Publishing never
-downloads a mutable release object, rebuilds, or repackages the candidate.
+directory and revalidating the dedicated publication repository's zero-writer
+policy does it create the GitHub Release from those exact local bytes.
+Publishing never rebuilds or repackages the candidate.
 
 `tests/harness/release-fixture.ts` builds deterministic release directories
 from the generated projection manifests and can serve them locally with

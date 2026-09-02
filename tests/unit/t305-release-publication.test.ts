@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   publishRelease,
   type PublishedRelease,
+  releaseNotesFromChangelog,
 } from "../../scripts/publish-release.ts";
 
 type MockAsset = {
@@ -23,7 +24,6 @@ type MockOptions = {
   mutateNotesAfterVerification?: boolean;
   publishErrorBodyFails?: boolean;
   publishReturnsError?: boolean;
-  raceBeforePublish?: boolean;
 };
 
 type MockState = {
@@ -35,11 +35,9 @@ type MockState = {
   body: string;
   finalTagTarget: string | null;
   stagingTagTarget: string | null;
-  notesTag: string | null;
   draft: boolean;
   immutable: boolean;
   assets: MockAsset[];
-  raceInjected: boolean;
   assetReplaced: boolean;
   notesMutationInjected: boolean;
   verificationMutationInjected: boolean;
@@ -90,11 +88,9 @@ function serveMock(options: MockOptions = {}): {
     body: "generated notes\n",
     finalTagTarget: options.finalTagPreexists ? "2".repeat(40) : null,
     stagingTagTarget: null,
-    notesTag: null,
     draft: true,
     immutable: false,
     assets: [],
-    raceInjected: false,
     assetReplaced: false,
     notesMutationInjected: false,
     verificationMutationInjected: false,
@@ -156,27 +152,6 @@ function serveMock(options: MockOptions = {}): {
       }
       const rejected = conditionalRejection(request);
       if (rejected) return rejected;
-
-      if (
-        url.pathname === "/repos/owner/repo/releases/generate-notes" &&
-        method === "POST"
-      ) {
-        const body = await request.json() as {
-          tag_name?: string;
-          target_commitish?: string;
-        };
-        if (
-          body.tag_name !== "v1.2.3" ||
-          body.target_commitish !== "1".repeat(40)
-        ) {
-          return json({ message: "invalid notes target" }, 422);
-        }
-        state.notesTag = body.tag_name;
-        return json({
-          name: "Release v1.2.3",
-          body: "generated notes\n",
-        });
-      }
 
       if (url.pathname === "/repos/owner/repo/releases" && method === "GET") {
         state.listed = true;
@@ -369,17 +344,6 @@ function serveMock(options: MockOptions = {}): {
             body?: string;
             draft?: boolean;
           };
-          if (
-            body.draft === false &&
-            options.raceBeforePublish &&
-            !state.raceInjected
-          ) {
-            state.raceInjected = true;
-            if (state.assets[0]) {
-              state.assets[0].bytes = new TextEncoder().encode("tampered!\n");
-            }
-            revision++;
-          }
           if (body.draft === false) {
             if (
               body.tag_name !== "v1.2.3" ||
@@ -434,6 +398,10 @@ async function run(
     stagingTag: "aidlc-staging-run-1",
     targetCommitish: "1".repeat(40),
     repository: "owner/repo",
+    notes: {
+      name: "Release v1.2.3",
+      body: "generated notes\n",
+    },
     token: "test-token",
     apiBaseUrl: baseUrl,
     expectedAssetCount: 3,
@@ -442,6 +410,35 @@ async function run(
 }
 
 describe("t305 verified immutable release publication", () => {
+  test("derives release notes from the exact reviewed changelog section", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t305-notes-"));
+    roots.push(root);
+    const changelog = join(root, "CHANGELOG.md");
+    writeFileSync(
+      changelog,
+      [
+        "# Changelog",
+        "",
+        "## [1.2.3] - 2026-09-02",
+        "",
+        "Reviewed summary.",
+        "",
+        "* User-visible change.",
+        "",
+        "## [1.2.2] - 2026-09-01",
+        "",
+        "Older notes.",
+        "",
+      ].join("\n"),
+    );
+    expect(releaseNotesFromChangelog(changelog, "v1.2.3")).toEqual({
+      name: "Release v1.2.3",
+      body: "Reviewed summary.\n\n* User-visible change.\n",
+    });
+    expect(() => releaseNotesFromChangelog(changelog, "v9.9.9"))
+      .toThrow("CHANGELOG.md has no dated 9.9.9 release heading");
+  });
+
   test("publishes the exact verified draft without conditional request headers", async () => {
     const { baseUrl, state } = serveMock();
     const result = await run(baseUrl);
@@ -459,7 +456,6 @@ describe("t305 verified immutable release publication", () => {
     expect(state.body).toBe("generated notes\n");
     expect(state.finalTagTarget).toBe("1".repeat(40));
     expect(state.stagingTagTarget).toBe("1".repeat(40));
-    expect(state.notesTag).toBe("v1.2.3");
     expect(state.draft).toBe(false);
     expect(state.immutable).toBe(true);
     expect(state.assets.map((asset) => asset.name).sort()).toEqual(result.assets);
@@ -476,7 +472,6 @@ describe("t305 verified immutable release publication", () => {
 
     expect(state.assets).toEqual([]);
     expect(state.stagingTagTarget).toBeNull();
-    expect(state.notesTag).toBeNull();
   });
 
   test("deletes its own staging draft after an ordinary API failure", async () => {
@@ -525,24 +520,6 @@ describe("t305 verified immutable release publication", () => {
     expect(state.deleted).toBe(false);
     expect(state.draft).toBe(true);
     expect(state.finalTagTarget).toBeNull();
-  });
-
-  test("reports a publication whose assets were replaced in the final window as compromised", async () => {
-    // GitHub cannot make the publish update conditional, so a replacement
-    // between the last verification read and the update is detected after the
-    // fact: the immutable release exists and must be superseded.
-    const { baseUrl, state } = serveMock({ raceBeforePublish: true });
-    await expect(run(baseUrl)).rejects.toThrow(
-      "published release v1.2.3 differs from the verified candidate " +
-        "(downloaded release asset differs for checksums.txt); " +
-        "treat it as compromised and supersede it with a corrective release",
-    );
-
-    expect(state.raceInjected).toBe(true);
-    expect(state.deleted).toBe(false);
-    expect(state.draft).toBe(false);
-    expect(state.immutable).toBe(true);
-    expect(state.tag).toBe("v1.2.3");
   });
 
   test("refuses an occupied official tag before creating a staging release", async () => {

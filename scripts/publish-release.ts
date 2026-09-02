@@ -1,7 +1,13 @@
 #!/usr/bin/env bun
 
 import { createHash } from "node:crypto";
-import { createReadStream, lstatSync, readdirSync, statSync } from "node:fs";
+import {
+  createReadStream,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 
 type ReleaseAsset = {
@@ -37,6 +43,7 @@ export type PublishReleaseOptions = {
   stagingTag: string;
   targetCommitish: string;
   repository: string;
+  notes: ReleaseNotes;
   token: string;
   apiBaseUrl?: string;
   expectedAssetCount?: number;
@@ -193,6 +200,23 @@ function releaseNotes(value: unknown): ReleaseNotes {
     throw new Error("release notes API response is missing name or body");
   }
   return notes as ReleaseNotes;
+}
+
+export function releaseNotesFromChangelog(path: string, tag: string): ReleaseNotes {
+  const version = tag.slice(1);
+  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const changelog = readFileSync(path, "utf-8");
+  const heading = new RegExp(`^## \\[${escaped}\\] - \\d{4}-\\d{2}-\\d{2}\\s*$`, "m");
+  const match = heading.exec(changelog);
+  if (!match) throw new Error(`CHANGELOG.md has no dated ${version} release heading`);
+  const remainder = changelog.slice(match.index + match[0].length).replace(/^\r?\n/, "");
+  const nextHeading = remainder.search(/^## \[/m);
+  const body = (nextHeading === -1 ? remainder : remainder.slice(0, nextHeading)).trim();
+  if (!body) throw new Error(`CHANGELOG.md has no release notes for ${version}`);
+  return {
+    name: `Release ${tag}`,
+    body: `${body}\n`,
+  };
 }
 
 function responseEtag(response: Response): string {
@@ -545,21 +569,7 @@ export async function publishRelease(
       }; inspect each, then run: gh release delete <staging-tag> --repo ${options.repository} --yes`,
     );
   }
-  const notes = releaseNotes(
-    (await requestJson<unknown>(
-      `${releasesUrl}/generate-notes`,
-      options.token,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tag_name: options.tag,
-          target_commitish: options.targetCommitish,
-        }),
-      },
-      200,
-    )).value,
-  );
+  const notes = releaseNotes(options.notes);
   const created = await requestJson<unknown>(
     releasesUrl,
     options.token,
@@ -842,12 +852,14 @@ async function main(argv: string[]): Promise<void> {
   if (!Number.isInteger(expectedAssetCount) || expectedAssetCount < 1) {
     throw new Error("--expected-assets must be a positive integer");
   }
+  const tag = requiredOption(argv, "--tag");
   await publishRelease({
     directory: requiredOption(argv, "--directory"),
-    tag: requiredOption(argv, "--tag"),
+    tag,
     stagingTag: requiredOption(argv, "--staging-tag"),
     targetCommitish: requiredOption(argv, "--target"),
     repository: requiredOption(argv, "--repository"),
+    notes: releaseNotesFromChangelog(requiredOption(argv, "--changelog"), tag),
     token: process.env.GH_TOKEN ?? "",
     apiBaseUrl: process.env.GITHUB_API_URL,
     expectedAssetCount,

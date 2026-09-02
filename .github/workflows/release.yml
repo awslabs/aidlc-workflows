@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag to publish
+        description: Unused version tag to publish
         type: string
         required: true
 
@@ -21,32 +21,41 @@ jobs:
     outputs:
       tag: ${{ steps.authorize.outputs.tag }}
       sha: ${{ steps.authorize.outputs.sha }}
+      publication_repository: ${{ steps.authorize.outputs.publication_repository }}
+      publication_owner: ${{ steps.authorize.outputs.publication_owner }}
+      publication_name: ${{ steps.authorize.outputs.publication_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
-      - name: Authorize release source and unused tag
+      - name: Authorize release source and publication target
         id: authorize
         shell: bash
         env:
+          PUBLICATION_REPOSITORY: ${{ vars.AIDLC_PUBLICATION_REPOSITORY }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
           test "$GITHUB_REF" = "refs/heads/main"
+          if [ -z "$PUBLICATION_REPOSITORY" ]; then
+            echo "::error title=Release repository policy failure::The protected release environment must provide AIDLC_PUBLICATION_REPOSITORY."
+            exit 1
+          fi
           git fetch --no-tags origin main
           main_sha="$(git rev-parse origin/main^{commit})"
           test "$GITHUB_SHA" = "$main_sha"
           test "$(git rev-parse HEAD^{commit})" = "$main_sha"
-          tag_refs="$(
-            git ls-remote --tags origin \
-              "refs/tags/$RELEASE_TAG" \
-              "refs/tags/$RELEASE_TAG^{}"
-          )"
-          test -z "$tag_refs"
-          printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$main_sha" >> "$GITHUB_OUTPUT"
+          [[ "$PUBLICATION_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          test "$PUBLICATION_REPOSITORY" != "$GITHUB_REPOSITORY"
+          publication_owner="${PUBLICATION_REPOSITORY%%/*}"
+          publication_name="${PUBLICATION_REPOSITORY#*/}"
+          test "$publication_owner" = "$GITHUB_REPOSITORY_OWNER"
+          printf 'tag=%s\nsha=%s\npublication_repository=%s\npublication_owner=%s\npublication_name=%s\n' \
+            "$RELEASE_TAG" "$main_sha" "$PUBLICATION_REPOSITORY" \
+            "$publication_owner" "$publication_name" >> "$GITHUB_OUTPUT"
       - name: Require protected release authorization identity
         shell: bash
         env:
@@ -64,8 +73,14 @@ jobs:
         with:
           app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
           private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
+          owner: ${{ steps.authorize.outputs.publication_owner }}
+          repositories: |
+            ${{ github.event.repository.name }}
+            ${{ steps.authorize.outputs.publication_name }}
           permission-actions: read
-          permission-administration: write
+          permission-administration: read
+          permission-metadata: read
+          permission-organization-administration: read
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
@@ -73,6 +88,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ steps.release-authorization-token.outputs.token }}
+          PUBLICATION_REPOSITORY: ${{ steps.authorize.outputs.publication_repository }}
           RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
         run: |
           set -euo pipefail
@@ -123,10 +139,10 @@ jobs:
               "The release environment must allow exactly the main branch deployment policy and no others."
           fi
           if ! immutable="$(
-            gh api "repos/$GITHUB_REPOSITORY/immutable-releases"
+            gh api "repos/$PUBLICATION_REPOSITORY/immutable-releases"
           )"; then
             authorization_failure \
-              "The protected GitHub App identity could not read immutable-release settings."
+              "The protected GitHub App identity could not read publication-repository immutable-release settings."
           fi
           if ! jq -e '
             .enabled == true and .enforced_by_owner == true
@@ -137,21 +153,43 @@ jobs:
           rulesets="$RUNNER_TEMP/aidlc-release-rulesets"
           mkdir -p "$rulesets"
           if ! ruleset_ids="$(
-            gh api --paginate "repos/$GITHUB_REPOSITORY/rulesets" --jq '.[].id'
+            gh api --paginate "repos/$PUBLICATION_REPOSITORY/rulesets" --jq '.[].id'
           )"; then
             echo "::error title=Release authorization identity failure::The protected GitHub App identity could not list repository rulesets."
             exit 1
           fi
           while read -r ruleset_id; do
             test -n "$ruleset_id" || continue
-            if ! gh api "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id" \
+            if ! gh api "repos/$PUBLICATION_REPOSITORY/rulesets/$ruleset_id" \
               >"$rulesets/$ruleset_id.json"; then
               echo "::error title=Release authorization identity failure::The protected GitHub App identity could not read ruleset $ruleset_id."
               exit 1
             fi
           done <<<"$ruleset_ids"
+          collaborators="$RUNNER_TEMP/aidlc-release-collaborators.json"
+          repository="$RUNNER_TEMP/aidlc-release-repository.json"
+          owner="$RUNNER_TEMP/aidlc-release-owner.json"
+          if ! gh api "repos/$PUBLICATION_REPOSITORY" >"$repository"; then
+            authorization_failure \
+              "The protected GitHub App identity could not read the publication repository."
+          fi
+          if ! gh api "orgs/${PUBLICATION_REPOSITORY%%/*}" >"$owner"; then
+            authorization_failure \
+              "The protected GitHub App identity could not read publication-owner policy."
+          fi
+          if ! gh api --paginate --slurp \
+            "repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100" \
+            >"$collaborators"; then
+            authorization_failure \
+              "The protected GitHub App identity could not enumerate publication-repository collaborators."
+          fi
           bun scripts/verify-release.ts controls \
             --rulesets "$rulesets" \
+            --repository "$repository" \
+            --owner "$owner" \
+            --collaborators "$collaborators" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --publication-repository "$PUBLICATION_REPOSITORY" \
             --creation-actor-id "$RELEASE_AUTH_APP_ID" \
             --creation-actor-type Integration
 
@@ -566,20 +604,13 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
-      - name: Recheck release source and unused tag
+      - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
-          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
         run: |
           git fetch --no-tags origin main
           test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
-          tag_refs="$(
-            git ls-remote --tags origin \
-              "refs/tags/$RELEASE_TAG" \
-              "refs/tags/$RELEASE_TAG^{}"
-          )"
-          test -z "$tag_refs"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-candidate
@@ -630,20 +661,13 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
-      - name: Recheck release source and unused tag
+      - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
-          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
         run: |
           git fetch --no-tags origin main
           test "$(git rev-parse origin/main^{commit})" = "$AUTHORIZED_SHA"
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
-          tag_refs="$(
-            git ls-remote --tags origin \
-              "refs/tags/$RELEASE_TAG" \
-              "refs/tags/$RELEASE_TAG^{}"
-          )"
-          test -z "$tag_refs"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: attested-release
@@ -795,18 +819,24 @@ jobs:
             exit 1
           }
 
-      - name: Mint release publication token
-        id: release-publication-token
+      - name: Mint release-policy token
+        id: release-policy-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
           private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
-          permission-administration: write
-          permission-contents: write
+          owner: ${{ needs.authorize.outputs.publication_owner }}
+          repositories: |
+            ${{ github.event.repository.name }}
+            ${{ needs.authorize.outputs.publication_name }}
+          permission-administration: read
+          permission-metadata: read
+          permission-organization-administration: read
       - name: Re-verify release repository controls
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.release-publication-token.outputs.token }}
+          GH_TOKEN: ${{ steps.release-policy-token.outputs.token }}
+          PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
           RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
         run: |
           set -euo pipefail
@@ -839,7 +869,7 @@ jobs:
             [.[].branch_policies[]][0].type == "branch"
           ' <<<"$policies" >/dev/null
           immutable="$(
-            gh api "repos/$GITHUB_REPOSITORY/immutable-releases"
+            gh api "repos/$PUBLICATION_REPOSITORY/immutable-releases"
           )"
           jq -e '
             .enabled == true and .enforced_by_owner == true
@@ -847,22 +877,69 @@ jobs:
           rulesets="$RUNNER_TEMP/aidlc-release-rulesets-final"
           mkdir -p "$rulesets"
           ruleset_ids="$(
-            gh api --paginate "repos/$GITHUB_REPOSITORY/rulesets" --jq '.[].id'
+            gh api --paginate "repos/$PUBLICATION_REPOSITORY/rulesets" --jq '.[].id'
           )"
           while read -r ruleset_id; do
             test -n "$ruleset_id" || continue
-            gh api "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id" \
+            gh api "repos/$PUBLICATION_REPOSITORY/rulesets/$ruleset_id" \
               >"$rulesets/$ruleset_id.json"
           done <<<"$ruleset_ids"
+          collaborators="$RUNNER_TEMP/aidlc-release-collaborators-final.json"
+          repository="$RUNNER_TEMP/aidlc-release-repository-final.json"
+          owner="$RUNNER_TEMP/aidlc-release-owner-final.json"
+          gh api "repos/$PUBLICATION_REPOSITORY" >"$repository"
+          gh api "orgs/${PUBLICATION_REPOSITORY%%/*}" >"$owner"
+          gh api --paginate --slurp \
+            "repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100" \
+            >"$collaborators"
           bun scripts/verify-release.ts controls \
             --rulesets "$rulesets" \
+            --repository "$repository" \
+            --owner "$owner" \
+            --collaborators "$collaborators" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --publication-repository "$PUBLICATION_REPOSITORY" \
             --creation-actor-id "$RELEASE_AUTH_APP_ID" \
             --creation-actor-type Integration
+      - name: Mint release publication token
+        id: release-publication-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
+          owner: ${{ needs.authorize.outputs.publication_owner }}
+          repositories: ${{ needs.authorize.outputs.publication_name }}
+          permission-contents: write
+      - name: Create isolated publication target
+        id: publication-target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-publication-token.outputs.token }}
+          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
+          PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
+          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          STAGING_REF: aidlc-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/aidlc-publication-target"
+          mkdir -p "$root"
+          git -C "$root" init --initial-branch "$STAGING_REF"
+          git -C "$root" config user.name "AI-DLC Release"
+          git -C "$root" config user.email "2102737+apackeer@users.noreply.github.com"
+          git -C "$root" commit --allow-empty \
+            -m "Release $RELEASE_TAG from $GITHUB_REPOSITORY@$AUTHORIZED_SHA"
+          publication_sha="$(git -C "$root" rev-parse HEAD)"
+          basic="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -C "$root" \
+            -c "http.extraHeader=AUTHORIZATION: basic $basic" \
+            push "https://github.com/$PUBLICATION_REPOSITORY.git" \
+            "HEAD:refs/heads/$STAGING_REF"
+          printf 'sha=%s\nref=%s\n' "$publication_sha" "$STAGING_REF" >>"$GITHUB_OUTPUT"
       - name: Publish and re-verify exact verified release bytes
         shell: bash
         env:
           GH_TOKEN: ${{ steps.release-publication-token.outputs.token }}
-          GH_REPO: ${{ github.repository }}
+          PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
           AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
           RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
           STAGING_TAG: aidlc-staging-${{ github.run_id }}-${{ github.run_attempt }}
@@ -881,6 +958,12 @@ jobs:
             --directory "$release" \
             --tag "$RELEASE_TAG" \
             --staging-tag "$STAGING_TAG" \
-            --target "$AUTHORIZED_SHA" \
-            --repository "$GH_REPO" \
+            --target "${{ steps.publication-target.outputs.sha }}" \
+            --repository "$PUBLICATION_REPOSITORY" \
+            --changelog "$PWD/CHANGELOG.md" \
             --expected-assets 13
+          if ! gh api --method DELETE \
+            "repos/$PUBLICATION_REPOSITORY/git/refs/heads/${{ steps.publication-target.outputs.ref }}" \
+            >/dev/null; then
+            echo "::warning title=Publication staging cleanup::The immutable release is verified, but its temporary staging ref could not be removed."
+          fi

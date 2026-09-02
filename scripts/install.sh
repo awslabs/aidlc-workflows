@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-BASE_URL=${AIDLC_RELEASE_BASE_URL:-https://github.com/awslabs/aidlc-workflows/releases}
+PUBLICATION_REPOSITORY=${AIDLC_PUBLICATION_REPOSITORY:-awslabs/aidlc-workflows-releases}
+BASE_URL=${AIDLC_RELEASE_BASE_URL:-https://github.com/$PUBLICATION_REPOSITORY/releases}
 RELEASE_REPOSITORY=${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}
 RELEASE_WORKFLOW=${AIDLC_RELEASE_WORKFLOW:-$RELEASE_REPOSITORY/.github/workflows/release.yml}
 GH_BIN=${AIDLC_GH_BIN:-}
@@ -336,10 +337,7 @@ for metadata in version.json checksums.txt aidlc-release.intoto.jsonl; do
     fail 4 failed "$metadata exceeds the 1 MiB metadata limit"
 done
 
-candidate_version=$VERSION
-[ -n "$candidate_version" ] ||
-  candidate_version=$(sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
-[ -n "$candidate_version" ] || fail 4 failed "version.json has no valid version."
+requested_version=$VERSION
 if [ -z "$GH_BIN" ]; then
   GH_BIN=$(command -v gh 2>/dev/null || true)
 fi
@@ -362,6 +360,10 @@ actual_manifest=$(sha256_file "$TMP/version.json")
 [ "$actual_manifest" = "$expected_manifest" ] || {
   fail 4 failed "Checksum mismatch for version.json."
 }
+candidate_version=$(sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
+printf '%s\n' "$candidate_version" |
+  grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
+  fail 4 failed "version.json has no valid version."
 source_ref=$(sed -n 's/.*"sourceRef":[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
 source_digest=$(sed -n 's/.*"sourceDigest":[[:space:]]*"\([a-f0-9]*\)".*/\1/p' "$TMP/version.json" | head -n 1)
 [ "$source_ref" = "refs/heads/main" ] ||
@@ -378,8 +380,8 @@ printf '%s\n' "$source_digest" | grep -Eq '^[a-f0-9]{40}$' ||
   fail 4 failed "release provenance source verification failed" \
     "obtain the release from $RELEASE_REPOSITORY"
 
-if [ -n "$VERSION" ] && [ "$VERSION" != "$candidate_version" ]; then
-  fail 4 failed "release endpoint returned $candidate_version, not requested $VERSION"
+if [ -n "$requested_version" ] && [ "$requested_version" != "$candidate_version" ]; then
+  fail 4 failed "release endpoint returned $candidate_version, not requested $requested_version"
 fi
 VERSION=$candidate_version
 BINARY="aidlc-$TARGET"

@@ -109,16 +109,14 @@ The authenticated bootstrap requires GitHub CLI (`gh`).
 
 ```bash
 tmp="$(mktemp -d)"
-tag="$(gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName)"
-source_digest="$(gh api "repos/awslabs/aidlc-workflows/commits/$tag" --jq .sha)"
-gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
+tag="$(gh release view --repo awslabs/aidlc-workflows-releases --json tagName --jq .tagName)"
+gh release download "$tag" --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
   --repo awslabs/aidlc-workflows \
   --signer-workflow awslabs/aidlc-workflows/.github/workflows/release.yml \
-  --source-ref refs/heads/main \
-  --source-digest "$source_digest"
+  --source-ref refs/heads/main
 sh "$tmp/install.sh"
 rm -rf "$tmp"
 export PATH="$HOME/.local/bin:$PATH"
@@ -352,7 +350,7 @@ than repository-generated files:
 ```bash
 tmp="$(mktemp -d)"
 tag=vX.Y.Z
-gh release download "$tag" --repo awslabs/aidlc-workflows \
+gh release download "$tag" --repo awslabs/aidlc-workflows-releases \
   --pattern aidlc-runtime.tar.gz --dir "$tmp"
 tar -xzf "$tmp/aidlc-runtime.tar.gz" -C "$tmp"
 cp -R "$tmp/runtime/<harness>/." /absolute/path/to/your-project/

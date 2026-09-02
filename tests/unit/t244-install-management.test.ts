@@ -1403,6 +1403,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(script).toContain("attestation verify");
     expect(script).toContain("aidlc-release.intoto.jsonl");
     expect(script).toContain("--signer-workflow");
+    expect(script).toContain("$env:AIDLC_PUBLICATION_REPOSITORY");
     expect(script).toContain("$env:AIDLC_RELEASE_REPOSITORY");
     expect(script).toContain("$env:AIDLC_RELEASE_WORKFLOW");
     expect(script).toContain("$env:AIDLC_GH_BIN");
@@ -1470,6 +1471,7 @@ describe("t244 Windows and completion release surfaces", () => {
 
   test("Unix installer supports explicit provenance trust roots under a stripped PATH", () => {
     const script = readFileSync(INSTALL_SH, "utf-8");
+    expect(script).toContain("AIDLC_PUBLICATION_REPOSITORY");
     expect(script).toContain("AIDLC_RELEASE_REPOSITORY");
     expect(script).toContain("AIDLC_RELEASE_WORKFLOW");
     expect(script).toContain("AIDLC_GH_BIN");
@@ -1597,18 +1599,49 @@ describe("t244 Windows and completion release surfaces", () => {
       rules: [{ type: "update" }, { type: "deletion" }],
       bypass_actors: [],
     };
-    const verify = (rulesets: unknown[]) => {
-      const directory = temp("aidlc-t244-release-rulesets-");
+    const verify = (
+      rulesets: unknown[],
+      collaborators: unknown = [[]],
+      publicationRepository = "awslabs/aidlc-workflows-releases",
+    ) => {
+      const root = temp("aidlc-t244-release-rulesets-");
+      const directory = join(root, "rulesets");
+      const collaboratorPath = join(root, "collaborators.json");
+      const repositoryPath = join(root, "repository.json");
+      const ownerPath = join(root, "owner.json");
+      mkdirSync(directory);
       rulesets.forEach((ruleset, index) => {
         writeFileSync(
           join(directory, `${index}.json`),
           `${JSON.stringify(ruleset, null, 2)}\n`,
         );
       });
+      writeFileSync(collaboratorPath, `${JSON.stringify(collaborators, null, 2)}\n`);
+      writeFileSync(repositoryPath, `${JSON.stringify({
+        full_name: publicationRepository,
+        private: false,
+        archived: false,
+        disabled: false,
+      }, null, 2)}\n`);
+      writeFileSync(ownerPath, `${JSON.stringify({
+        login: publicationRepository.split("/", 1)[0],
+        type: "Organization",
+        default_repository_permission: "read",
+      }, null, 2)}\n`);
       return run(RELEASE_VERIFIER, [
         "controls",
         "--rulesets",
         directory,
+        "--repository",
+        repositoryPath,
+        "--owner",
+        ownerPath,
+        "--collaborators",
+        collaboratorPath,
+        "--source-repository",
+        "awslabs/aidlc-workflows",
+        "--publication-repository",
+        publicationRepository,
         "--creation-actor-id",
         "4242",
         "--creation-actor-type",
@@ -1665,6 +1698,69 @@ describe("t244 Windows and completion release surfaces", () => {
     const identityFailure = verify([hiddenActors, immutability]);
     expect(identityFailure.status).toBe(1);
     expect(identityFailure.stderr).toContain("authorization identity failure");
+    const writer = verify([creation, immutability], [[{
+      login: "ordinary-writer",
+      permissions: {
+        admin: false,
+        maintain: false,
+        push: true,
+      },
+    }]]);
+    expect(writer.status).toBe(1);
+    expect(writer.stderr).toContain(
+      "publication repository grants write authority to ordinary-writer",
+    );
+    const sameRepository = verify(
+      [creation, immutability],
+      [[]],
+      "awslabs/aidlc-workflows",
+    );
+    expect(sameRepository.status).toBe(1);
+    expect(sameRepository.stderr).toContain(
+      "publication repository must be separate from the source repository",
+    );
+    const unreadableAccess = verify([creation, immutability], [{}]);
+    expect(unreadableAccess.status).toBe(1);
+    expect(unreadableAccess.stderr).toContain("publication collaborator response");
+    const broadOwner = temp("aidlc-t244-release-owner-policy-");
+    const broadRulesets = join(broadOwner, "rulesets");
+    mkdirSync(broadRulesets);
+    for (const [index, ruleset] of [creation, immutability].entries()) {
+      writeFileSync(
+        join(broadRulesets, `${index}.json`),
+        `${JSON.stringify(ruleset, null, 2)}\n`,
+      );
+    }
+    const repositoryPath = join(broadOwner, "repository.json");
+    const ownerPath = join(broadOwner, "owner.json");
+    const collaboratorsPath = join(broadOwner, "collaborators.json");
+    writeFileSync(repositoryPath, `${JSON.stringify({
+      full_name: "awslabs/aidlc-workflows-releases",
+      private: false,
+      archived: false,
+      disabled: false,
+    })}\n`);
+    writeFileSync(ownerPath, `${JSON.stringify({
+      login: "awslabs",
+      type: "Organization",
+      default_repository_permission: "write",
+    })}\n`);
+    writeFileSync(collaboratorsPath, "[[]]\n");
+    const broadOwnerResult = run(RELEASE_VERIFIER, [
+      "controls",
+      "--rulesets", broadRulesets,
+      "--repository", repositoryPath,
+      "--owner", ownerPath,
+      "--collaborators", collaboratorsPath,
+      "--source-repository", "awslabs/aidlc-workflows",
+      "--publication-repository", "awslabs/aidlc-workflows-releases",
+      "--creation-actor-id", "4242",
+      "--creation-actor-type", "Integration",
+    ], REPO_ROOT);
+    expect(broadOwnerResult.status).toBe(1);
+    expect(broadOwnerResult.stderr).toContain(
+      "default repository permission must be none or read",
+    );
   });
 
   test("release candidate verification rejects mutable metadata and inventory", () => {
@@ -1795,14 +1891,15 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(parsed.permissions).toEqual({ contents: "read" });
     expect(parsed.jobs["native-smoke"].strategy?.["fail-fast"]).toBe(false);
     expect(parsed.jobs["musl-smoke"].strategy?.["fail-fast"]).toBe(false);
-    expect(workflow).toContain("name: Authorize release source and unused tag");
+    expect(workflow).toContain("name: Authorize release source and publication target");
     expect(workflow).toContain("name: Verify release repository controls");
     expect(workflow).toContain("name: Require protected release authorization identity");
     expect(workflow).toContain(
       "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
     );
-    expect(workflow).toContain("permission-administration: write");
+    expect(workflow).toContain("permission-administration: read");
     expect(workflow).toContain("permission-contents: write");
+    expect(workflow).toContain("AIDLC_PUBLICATION_REPOSITORY");
     expect(workflow).toContain("AIDLC_RELEASE_AUTH_APP_ID");
     expect(workflow).toContain("AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY");
     expect(workflow).toContain("authorization identity failure");
@@ -1810,21 +1907,24 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).toContain(".prevent_self_review == true");
     expect(workflow).toContain('.reviewer.slug == "aidlc-admins"');
     expect(workflow).toContain("(.reviewers | length) == 1");
-    expect(workflow).toContain('gh api "repos/$GITHUB_REPOSITORY/immutable-releases"');
+    expect(workflow).toContain('gh api "repos/$PUBLICATION_REPOSITORY/immutable-releases"');
+    expect(workflow).toContain(
+      '"repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100"',
+    );
     expect(workflow).toContain(".enabled == true and .enforced_by_owner == true");
     expect(workflow).toContain('[.[].branch_policies[]][0].name == "main"');
     expect(workflow).toContain("bun scripts/verify-release.ts controls");
     expect(workflow).toContain('--creation-actor-type Integration');
     expect(workflow).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(workflow).toContain("git fetch --no-tags origin main");
-    expect(workflow).toContain('test -z "$tag_refs"');
+    expect(workflow).not.toContain('git ls-remote --tags origin');
     expect(workflow).not.toContain("tag_sha=");
     expect(workflow).toContain('test "$GITHUB_REF" = "refs/heads/main"');
     expect(workflow).not.toContain("\n  push:");
     expect(workflow).not.toContain("origin/v2");
-    expect(workflow.indexOf("name: Authorize release source and unused tag"))
+    expect(workflow.indexOf("name: Authorize release source and publication target"))
       .toBeLessThan(workflow.indexOf("name: Mint release authorization token"));
-    expect(workflow.indexOf("name: Authorize release source and unused tag"))
+    expect(workflow.indexOf("name: Authorize release source and publication target"))
       .toBeLessThan(workflow.indexOf("bun scripts/verify-release.ts controls"));
     expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     expect(workflow).toContain("AIDLC_RELEASE_SOURCE_DIGEST:");
@@ -2029,6 +2129,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const unixInstaller = readFileSync(INSTALL_SH, "utf-8");
     const windowsInstaller = readFileSync(INSTALL_PS1, "utf-8");
     for (const variable of [
+      "AIDLC_PUBLICATION_REPOSITORY",
       "AIDLC_RELEASE_REPOSITORY",
       "AIDLC_RELEASE_WORKFLOW",
     ]) {
@@ -2143,7 +2244,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const publish = workflowJob(workflow, "publish");
     expect(publish).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(publish).toContain("git fetch --no-tags origin main");
-    expect(publish).toContain('test -z "$tag_refs"');
+    expect(publish).not.toContain("git ls-remote --tags origin");
     expect(publish).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     expect(publish).toContain("sha256sum -c checksums.txt");
     expect(publish).toContain("name: Attest staged release assets");
@@ -2191,9 +2292,14 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(promote).toContain("name: Mint release publication token");
     expect(promote).toContain("name: Re-verify release repository controls");
     expect(promote).toContain("permission-contents: write");
-    expect(promote).toContain("permission-administration: write");
+    expect(promote).toContain("permission-administration: read");
     expect(promote).toContain(
       `GH_TOKEN: \${{ steps.release-publication-token.outputs.token }}`,
+    );
+    expect(promote).toContain("name: Mint release-policy token");
+    expect(promote).toContain("name: Create isolated publication target");
+    expect(promote).toContain(
+      '"repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100"',
     );
     expect(promote.match(/bun scripts\/verify-release\.ts controls/g)).toHaveLength(1);
     expect(promote).toContain(
@@ -2298,31 +2404,37 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(promotionStep?.if).toBeUndefined();
     const promote = workflowJob(workflow, "promote");
     expect(promote).toContain("bun scripts/publish-release.ts");
-    expect(promote).toContain('--repository "$GH_REPO"');
+    expect(promote).toContain('--repository "$PUBLICATION_REPOSITORY"');
     expect(promote).toContain('--staging-tag "$STAGING_TAG"');
-    expect(promote).toContain('--target "$AUTHORIZED_SHA"');
+    expect(promote).toContain(`--target "\${{ steps.publication-target.outputs.sha }}"`);
+    expect(promote).toContain('--changelog "$PWD/CHANGELOG.md"');
     expect(promote).toContain("--expected-assets 13");
     expect(promote).not.toContain("gh release create");
     expect(promote).not.toContain("gh release edit");
     expect(promote).not.toContain("gh release view");
     expect(promote).not.toContain("gh release download");
-    expect(promote.indexOf("name: Mint release publication token"))
-      .toBeLessThan(promote.indexOf("name: Re-verify release repository controls"));
     expect(promote.indexOf("name: Re-verify release repository controls"))
+      .toBeLessThan(promote.indexOf("name: Mint release publication token"));
+    expect(promote.indexOf("name: Mint release publication token"))
+      .toBeLessThan(promote.indexOf("name: Create isolated publication target"));
+    expect(promote.indexOf("name: Create isolated publication target"))
       .toBeLessThan(promote.indexOf("name: Publish and re-verify exact verified release bytes"));
     expect(promote).toContain(
       'sha256sum -c "$RUNNER_TEMP/aidlc-verified-release.sha256"',
     );
     expect(publisher).toContain("draft: true");
-    expect(publisher).toContain("releasesUrl}/generate-notes");
+    expect(publisher).not.toContain("releasesUrl}/generate-notes");
+    expect(publisher).toContain("const notes = releaseNotes(options.notes)");
+    expect(publisher).toContain("releaseNotesFromChangelog");
     expect(publisher.match(/name: notes\.name/g)).toHaveLength(2);
     expect(publisher.match(/body: notes\.body/g)).toHaveLength(2);
     expect(publisher).toContain("release.name !== notes.name");
     expect(publisher).toContain("release.body !== notes.body");
     expect(publisher).toContain("tag_name: options.stagingTag");
     expect(publisher).toContain("target_commitish: options.targetCommitish");
-    // GitHub rejects conditional headers on release updates with 400, so the
-    // publisher must never send one; safety comes from re-verification.
+    // GitHub rejects conditional headers on release updates with 400. The
+    // isolated publication repository prevents ordinary writers from entering
+    // the final window; re-verification remains defense in depth.
     expect(publisher).not.toContain('"If-Match"');
     expect(publisher).not.toContain("412");
     expect(publisher).toContain("tag_name: options.tag");
@@ -2337,8 +2449,8 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(publisher).toContain(
       "draft release changed while remote bytes were verified",
     );
-    expect(publisher).toContain(
-      "treat it as compromised and supersede it with a corrective release",
+    expect(readFileSync(RELEASE_VERIFIER, "utf-8")).toContain(
+      "publication repository grants write authority to",
     );
     expect(promote.indexOf("name: Authenticate and verify immutable release bytes"))
       .toBeLessThan(
