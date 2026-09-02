@@ -7582,17 +7582,11 @@ export function checkSummaryConfirmationEvidence(
     );
   }
   const declared = stageDeclaresSummaryQuestions(stage);
-  if (questions.length === 0) {
-    if (!declared) return { ok: true, required: false };
-    const unitText = options.unit ? ` for unit "${options.unit}"` : "";
-    return failure(
-      "SUMMARY_QUESTIONS_MISSING",
-      `Refusing to complete "${stage.slug}"${unitText}: its question flow has no ` +
-        `${stage.slug}-questions.md file. Create and answer the stage questions, ` +
-        "then record the consolidated summary checkpoint before generating artifacts.",
-      "missing",
-    );
-  }
+  // A stage-level check on a per-unit stage is owed by exactly the Units that
+  // owe outputs. Resolve them first: a Unit set that owes nothing (every Unit
+  // pruned by kind) owes no summary either, the same vacuous rule coverage
+  // uses, so an empty questions set is not evidence missing there.
+  let requiredUnits: string[] | null = null;
   if (
     declared &&
     isPerUnitStage(stage) &&
@@ -7617,33 +7611,47 @@ export function checkSummaryConfirmationEvidence(
       );
     }
     if (resolution.state === "ok") {
-      const requiredUnits = resolution.units.filter((unit) =>
+      requiredUnits = resolution.units.filter((unit) =>
         filterProducesByKind(
           stage.produces_kinds,
           stage.produces ?? [],
           resolution.unitKinds?.get(unit) ?? null,
         ).length > 0
       );
-      const presentUnits = new Set(
-        questions
-          .map((question) => question.unit)
-          .filter((unit): unit is string => unit !== null),
-      );
-      const missing = requiredUnits.filter((unit) => !presentUnits.has(unit));
-      if (missing.length > 0) {
-        return failure(
-          "SUMMARY_UNIT_EVIDENCE_MISSING",
-          `Refusing to complete "${stage.slug}": ${missing.length} applicable ` +
-            `units have no questions file or summary confirmation (${missing.join(", ")}).`,
-          "missing",
-        );
-      }
-      const requiredUnitSet = new Set(requiredUnits);
-      questions = questions.filter(
-        (question) =>
-          question.unit !== null && requiredUnitSet.has(question.unit),
+      if (requiredUnits.length === 0) return { ok: true, required: false };
+    }
+  }
+  if (questions.length === 0) {
+    if (!declared) return { ok: true, required: false };
+    const unitText = options.unit ? ` for unit "${options.unit}"` : "";
+    return failure(
+      "SUMMARY_QUESTIONS_MISSING",
+      `Refusing to complete "${stage.slug}"${unitText}: its question flow has no ` +
+        `${stage.slug}-questions.md file. Create and answer the stage questions, ` +
+        "then record the consolidated summary checkpoint before generating artifacts.",
+      "missing",
+    );
+  }
+  if (requiredUnits !== null) {
+    const presentUnits = new Set(
+      questions
+        .map((question) => question.unit)
+        .filter((unit): unit is string => unit !== null),
+    );
+    const missing = requiredUnits.filter((unit) => !presentUnits.has(unit));
+    if (missing.length > 0) {
+      return failure(
+        "SUMMARY_UNIT_EVIDENCE_MISSING",
+        `Refusing to complete "${stage.slug}": ${missing.length} applicable ` +
+          `units have no questions file or summary confirmation (${missing.join(", ")}).`,
+        "missing",
       );
     }
+    const requiredUnitSet = new Set(requiredUnits);
+    questions = questions.filter(
+      (question) =>
+        question.unit !== null && requiredUnitSet.has(question.unit),
+    );
   }
 
   const relevant = new Set([
@@ -8553,8 +8561,6 @@ export interface PendingReviewProgress {
   state: "outstanding" | "retry-required" | "repair-required";
   iteration: number;
   recovery: boolean;
-  suspensionActive: boolean;
-  recoveryCause?: ReviewRecoveryCause | null;
 }
 
 export interface StaleReviewProgress {
@@ -9060,55 +9066,29 @@ function reviewArtifactContentsFingerprint(
 }
 
 export interface ReviewArtifactSnapshot {
+  /** Fingerprint of every declared artifact as it is on disk. */
   fingerprint: string;
-  requestFingerprint: string;
-  appendixArtifact: string;
-  appendixOffset: number;
+  /** Record-relative path of `review_artifact`, the artifact the review is about. */
+  reviewArtifact: string;
+  /**
+   * Fingerprints with a terminal `## Review` appendix on `review_artifact`
+   * projected out, at both boundaries an appender may have used: the heading
+   * line itself, and that line with the separator whitespace before it reduced
+   * to one line end. Just `[fingerprint]` when the artifact carries none. Read
+   * only for migration: an appended review is evidence when one of these is the
+   * fingerprint the request recorded.
+   */
+  bodyFingerprints: readonly string[];
+  /** The terminal appendix bytes from its heading line (empty when the artifact carries none). */
   appendix: Buffer;
 }
 
-/**
- * Exclude permitted blank separator lines from the reviewer-owned evidence.
- * This keeps the stale-appendix binding anchored at the canonical
- * `## Review` heading instead of letting an extra blank line shift old
- * authority past the request-time prefix check.
- */
-export function reviewAppendixEvidenceBytes(appendix: Buffer): Buffer {
-  let offset = 0;
-  while (offset < appendix.length) {
-    const lineStart = offset;
-    while (appendix[offset] === 0x20 || appendix[offset] === 0x09) offset++;
-    if (appendix[offset] === 0x0d) {
-      offset++;
-      if (appendix[offset] === 0x0a) offset++;
-      continue;
-    }
-    if (appendix[offset] === 0x0a) {
-      offset++;
-      continue;
-    }
-    return appendix.subarray(lineStart);
-  }
-  return appendix.subarray(offset);
-}
-
-/**
- * Canonical audit binding for the reviewer evidence after an appendix offset.
- * `none` pins the verified absence of any pre-request appendix; a sha256
- * digest pins the exact section that already existed when REVIEW_REQUESTED
- * was recorded. Its recorded byte length lets completion reject both an
- * unchanged section and one that merely extends those same pre-request bytes,
- * so a `## Review` section that predates the request (for example one
- * surviving an attempt reset) cannot be replayed as fresh reviewer evidence.
- */
-export function reviewAppendixDigest(appendix: Buffer): string {
-  const evidence = reviewAppendixEvidenceBytes(appendix);
-  return evidence.length === 0
-    ? "none"
-    : `sha256:${createHash("sha256").update(evidence).digest("hex")}`;
-}
-
-function existingReviewAppendixOffset(body: Buffer): number | null {
+// The terminal `## Review` appendix of an artifact, when it has one: the byte
+// offset of its heading line (`rawOffset`) and the same boundary with the
+// separator whitespace before it reduced to one line end (`trimmedOffset`).
+function terminalReviewAppendixBoundary(
+  body: Buffer,
+): { rawOffset: number; trimmedOffset: number } | null {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(body);
@@ -9184,15 +9164,23 @@ function existingReviewAppendixOffset(body: Buffer): number | null {
   if (headingStart === undefined) return null;
 
   const prefix = text.slice(0, headingStart);
+  const rawOffset = Buffer.byteLength(prefix, "utf-8");
   const trailing = /\s+$/.exec(prefix);
-  if (!trailing) return Buffer.byteLength(prefix, "utf-8");
+  if (!trailing) return { rawOffset, trimmedOffset: rawOffset };
   const contentEnd = prefix.length - trailing[0].length;
   const retainedLineEnd = /^[ \t]*(?:\r\n|\n|\r)/.exec(
     prefix.slice(contentEnd),
   );
   const offset =
     contentEnd + (retainedLineEnd?.[0].length ?? 0);
-  return Buffer.byteLength(text.slice(0, offset), "utf-8");
+  return {
+    rawOffset,
+    trimmedOffset: Buffer.byteLength(text.slice(0, offset), "utf-8"),
+  };
+}
+
+function existingReviewAppendixOffset(body: Buffer): number | null {
+  return terminalReviewAppendixBoundary(body)?.trimmedOffset ?? null;
 }
 
 // The artifact body with a TERMINAL `## Review` appendix removed, using the same
@@ -9210,8 +9198,11 @@ export function contentBeforeTerminalReviewAppendix(body: string): string {
 }
 
 /**
- * Snapshot the exact review input and the explicit review_artifact byte
- * boundary after which the reviewer may append `## Review`.
+ * Snapshot the exact review input: every declared artifact read through one
+ * stable file identity, fingerprinted as it is on disk. The reviewer no longer
+ * writes to these files, so the requested bytes and the reviewed bytes are the
+ * same fingerprint; the legacy appendix view exists only so a review recorded
+ * under the retired appendix protocol stays readable.
  */
 export function reviewArtifactSnapshot(
   projectDir: string,
@@ -9221,10 +9212,6 @@ export function reviewArtifactSnapshot(
     requireRequiredArtifacts?: boolean;
     boltDag?: BoltDagResolution;
     mergedBoltUnits?: ReadonlySet<string>;
-    appendixBinding?: {
-      artifact: string;
-      offset: number;
-    };
     snapshotObserver?: (event: {
       phase: "after-read";
       logicalPath: string;
@@ -9252,30 +9239,30 @@ export function reviewArtifactSnapshot(
     .sort((a, b) => a.logicalPath.localeCompare(b.logicalPath))[0];
   if (target?.state !== "file") return null;
 
-  const binding = options.appendixBinding ?? {
-    artifact: target.logicalPath,
-    offset: existingReviewAppendixOffset(target.body) ?? target.body.length,
-  };
-  if (
-    binding.artifact !== target.logicalPath ||
-    !Number.isSafeInteger(binding.offset) ||
-    binding.offset < 0 ||
-    binding.offset > target.body.length
-  ) {
-    return null;
+  const boundary = terminalReviewAppendixBoundary(target.body);
+  if (boundary === null) {
+    return {
+      fingerprint,
+      reviewArtifact: target.logicalPath,
+      bodyFingerprints: [fingerprint],
+      appendix: Buffer.alloc(0),
+    };
   }
-  const requestFingerprint = reviewArtifactContentsFingerprint(contents, {
-    ...options,
-    appendixArtifact: binding.artifact,
-    appendixOffset: binding.offset,
-  });
-  if (requestFingerprint === null) return null;
+  const bodyFingerprints: string[] = [];
+  for (const offset of new Set([boundary.trimmedOffset, boundary.rawOffset])) {
+    const bodyFingerprint = reviewArtifactContentsFingerprint(contents, {
+      ...options,
+      appendixArtifact: target.logicalPath,
+      appendixOffset: offset,
+    });
+    if (bodyFingerprint === null) return null;
+    bodyFingerprints.push(bodyFingerprint);
+  }
   return {
     fingerprint,
-    requestFingerprint,
-    appendixArtifact: binding.artifact,
-    appendixOffset: binding.offset,
-    appendix: target.body.subarray(binding.offset),
+    reviewArtifact: target.logicalPath,
+    bodyFingerprints,
+    appendix: target.body.subarray(boundary.rawOffset),
   };
 }
 
@@ -9312,6 +9299,14 @@ export function reviewArtifactFingerprint(
   return reviewArtifactContentsFingerprint(contents, options);
 }
 
+/**
+ * Validate one review section: exactly one canonical Verdict, Reviewer, and
+ * Iteration line (and the legacy Request Challenge line only when the request
+ * issued one), with no later rendered H1 or H2. `appendix` is the terminal
+ * `## Review` section of a legacy embedded review and must open with that
+ * heading; a review record body (`standalone`) is the same section with the
+ * heading optional, because it is the whole document.
+ */
 export function validateReviewAppendix(
   appendix: Buffer,
   expected: {
@@ -9319,24 +9314,25 @@ export function validateReviewAppendix(
     reviewer: string;
     iteration: number;
     reviewChallenge: string | null;
+    standalone?: boolean;
   },
 ): { valid: true } | { valid: false; reason: string } {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(appendix);
   } catch {
-    return { valid: false, reason: "the reviewer appendix is not valid UTF-8" };
+    return { valid: false, reason: "the review is not valid UTF-8" };
   }
   const normalized = text.replace(/\r\n?/g, "\n");
   const opening = /^(?:[ \t]*\n)*## Review[ \t]*\n/.exec(normalized);
-  if (!opening) {
+  if (!opening && expected.standalone !== true) {
     return {
       valid: false,
       reason:
         "the appended bytes must begin with only blank lines followed by an exact `## Review` heading",
     };
   }
-  const section = normalized.slice(opening[0].length);
+  const section = opening ? normalized.slice(opening[0].length) : normalized;
   const authority = renderReviewMarkdownAuthority(section);
   if (authority === null) {
     return {
@@ -9501,20 +9497,54 @@ function renderReviewMarkdownAuthority(
 
 const REVIEW_FINGERPRINT_RE = /^sha256:[0-9a-f]{64}$/;
 const REVIEW_APPENDIX_DIGEST_RE = /^(?:none|sha256:[0-9a-f]{64})$/;
-const REVIEW_CHALLENGE_RE = /^review:[0-9a-f]{32}$/;
+const REVIEW_REQUEST_ID_RE = /^review:[0-9a-f]{32}$/;
 const SOURCE_FINGERPRINT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/;
 const UNIT_SOURCE_FINGERPRINT_RE = /^(?:sha256:[0-9a-f]{64}|unbindable)$/;
 
+/**
+ * The fields a REVIEW_REQUESTED row written under the retired appendix protocol
+ * carried. Kept readable so a review requested before the upgrade can still be
+ * completed and its completion row still pairs; never written for a new request.
+ */
+export interface LegacyReviewAppendixBinding {
+  artifact: string;
+  offset: number;
+  priorDigest: string | null;
+  priorLength: number | null;
+  challenge: string | null;
+  /** Whether the artifact already carried a `## Review` section at request time. */
+  priorAppendix: boolean;
+}
+
 export interface ReviewRequestBinding {
+  /** Fingerprint of the declared artifacts the reviewer was dispatched on. */
   artifactFingerprint: string;
-  appendixArtifact: string | null;
-  appendixOffset: number | null;
-  priorAppendixDigest: string | null;
-  priorAppendixLength: number | null;
-  reviewChallenge: string | null;
+  /** Minted per request; the completion row and the review record echo it. */
+  requestId: string | null;
+  /** Present only on rows the appendix protocol wrote. */
+  legacyAppendix: LegacyReviewAppendixBinding | null;
   sourceFingerprint: string | null;
   unitSourceFingerprint: string | null;
   recoveryCause: ReviewRecoveryCause | null;
+}
+
+/**
+ * A request whose completion the engine can bind: a record-era request carries
+ * its id; a legacy appendix request is complete when it pinned the appendix
+ * boundary and, when an appendix already existed, a challenge. Either way a
+ * workspace-writing stage needs the source fingerprint.
+ */
+export function reviewRequestBindingIsModern(
+  binding: ReviewRequestBinding,
+  stage: Pick<ReviewFingerprintStage, "workspace_requires">,
+): boolean {
+  if (stage.workspace_requires && binding.sourceFingerprint === null) return false;
+  if (binding.requestId !== null) return true;
+  const legacy = binding.legacyAppendix;
+  return (
+    legacy !== null &&
+    (legacy.priorLength === null || legacy.priorLength === 0 || legacy.challenge !== null)
+  );
 }
 
 export function reviewRequestBindingFromBlock(
@@ -9527,53 +9557,54 @@ export function reviewRequestBindingFromBlock(
   ) {
     return null;
   }
-  const appendixArtifact = auditBlockField(
-    block,
-    "Review Appendix Artifact",
-  );
+  const requestId = auditBlockField(block, "Request Id");
+  if (requestId !== null && !REVIEW_REQUEST_ID_RE.test(requestId)) return null;
+
+  const appendixArtifact = auditBlockField(block, "Review Appendix Artifact");
   const rawOffset = auditBlockField(block, "Review Appendix Offset");
   if ((appendixArtifact === null) !== (rawOffset === null)) return null;
-  let appendixOffset: number | null = null;
-  if (rawOffset !== null) {
+  let legacyAppendix: LegacyReviewAppendixBinding | null = null;
+  const priorDigest = auditBlockField(block, "Review Appendix Prior Digest");
+  const rawPriorLength = auditBlockField(block, "Review Appendix Prior Length");
+  const challenge = auditBlockField(block, "Review Challenge");
+  if (appendixArtifact !== null && rawOffset !== null) {
     if (!/^[0-9]+$/.test(rawOffset)) return null;
-    appendixOffset = Number(rawOffset);
-    if (!Number.isSafeInteger(appendixOffset)) return null;
-  }
-  const priorAppendixDigest = auditBlockField(
-    block,
-    "Review Appendix Prior Digest",
-  );
-  if (
-    priorAppendixDigest !== null &&
-    (appendixArtifact === null ||
-      !REVIEW_APPENDIX_DIGEST_RE.test(priorAppendixDigest))
-  ) {
-    return null;
-  }
-  const rawPriorAppendixLength = auditBlockField(
-    block,
-    "Review Appendix Prior Length",
-  );
-  let priorAppendixLength: number | null = null;
-  if (rawPriorAppendixLength !== null) {
-    if (!/^[0-9]+$/.test(rawPriorAppendixLength)) return null;
-    priorAppendixLength = Number(rawPriorAppendixLength);
-    if (!Number.isSafeInteger(priorAppendixLength)) return null;
+    const offset = Number(rawOffset);
+    if (!Number.isSafeInteger(offset)) return null;
+    if (priorDigest !== null && !REVIEW_APPENDIX_DIGEST_RE.test(priorDigest)) {
+      return null;
+    }
+    let priorLength: number | null = null;
+    if (rawPriorLength !== null) {
+      if (!/^[0-9]+$/.test(rawPriorLength)) return null;
+      priorLength = Number(rawPriorLength);
+      if (!Number.isSafeInteger(priorLength)) return null;
+      if (
+        priorDigest === null ||
+        (priorDigest === "none") !== (priorLength === 0)
+      ) {
+        return null;
+      }
+    }
     if (
-      appendixArtifact === null ||
-      priorAppendixDigest === null ||
-      (priorAppendixDigest === "none") !== (priorAppendixLength === 0)
+      challenge !== null &&
+      (!REVIEW_REQUEST_ID_RE.test(challenge) ||
+        priorLength === null ||
+        priorLength === 0)
     ) {
       return null;
     }
-  }
-  const reviewChallenge = auditBlockField(block, "Review Challenge");
-  if (
-    reviewChallenge !== null &&
-    (!REVIEW_CHALLENGE_RE.test(reviewChallenge) ||
-      priorAppendixLength === null ||
-      priorAppendixLength === 0)
-  ) {
+    legacyAppendix = {
+      artifact: appendixArtifact,
+      offset,
+      priorDigest,
+      priorLength,
+      challenge,
+      priorAppendix:
+        priorLength !== null ? priorLength > 0 : priorDigest !== null && priorDigest !== "none",
+    };
+  } else if (priorDigest !== null || rawPriorLength !== null || challenge !== null) {
+    // Appendix evidence fields without the appendix boundary they qualify.
     return null;
   }
   const sourceFingerprint = auditBlockField(block, "Source Fingerprint");
@@ -9603,15 +9634,59 @@ export function reviewRequestBindingFromBlock(
   if (rawRecoveryCause !== null && recoveryCause === null) return null;
   return {
     artifactFingerprint,
-    appendixArtifact,
-    appendixOffset,
-    priorAppendixDigest,
-    priorAppendixLength,
-    reviewChallenge,
+    requestId,
+    legacyAppendix,
     sourceFingerprint,
     unitSourceFingerprint,
     recoveryCause,
   };
+}
+
+/**
+ * The legacy appendix fields a completion of a legacy request echoes so the
+ * row still pairs with its request under the legacy matcher. Pure echo: the
+ * engine computes nothing from them any more.
+ */
+export function legacyReviewAppendixEchoFields(
+  legacy: LegacyReviewAppendixBinding,
+): Record<string, string> {
+  const fields: Record<string, string> = {
+    "Review Appendix Artifact": legacy.artifact,
+    "Review Appendix Offset": String(legacy.offset),
+  };
+  if (legacy.priorDigest !== null) {
+    fields["Review Appendix Prior Digest"] = legacy.priorDigest;
+  }
+  if (legacy.priorLength !== null) {
+    fields["Review Appendix Prior Length"] = String(legacy.priorLength);
+  }
+  if (legacy.challenge !== null) fields["Review Challenge"] = legacy.challenge;
+  return fields;
+}
+
+export const REVIEW_RECORD_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * The review record a completion row names: `Review Record` is the
+ * record-relative path and `Review Record Digest` pins its bytes. Null when
+ * the row predates review records (a legacy embedded review) or names them
+ * inconsistently.
+ */
+export function reviewRecordRefFromBlock(
+  block: string,
+): { path: string; digest: string } | null {
+  const path = auditBlockField(block, "Review Record");
+  const digest = auditBlockField(block, "Review Record Digest");
+  if (path === null && digest === null) return null;
+  if (
+    path === null ||
+    digest === null ||
+    !REVIEW_RECORD_DIGEST_RE.test(digest) ||
+    !isReviewRecordRelativePath(path)
+  ) {
+    return null;
+  }
+  return { path, digest };
 }
 
 export function reviewCompletionMatchesRequest(
@@ -9635,6 +9710,24 @@ export function reviewCompletionMatchesRequest(
     recordedFingerprint;
   if (completedRequestFingerprint !== request.artifactFingerprint) return false;
 
+  // A completion that names a record must name it consistently; a malformed
+  // reference is no evidence at all.
+  const recordPath = auditBlockField(completionBlock, "Review Record");
+  const recordDigest = auditBlockField(completionBlock, "Review Record Digest");
+  if (
+    (recordPath !== null || recordDigest !== null) &&
+    reviewRecordRefFromBlock(completionBlock) === null
+  ) {
+    return false;
+  }
+
+  if (
+    auditBlockField(completionBlock, "Request Id") !== request.requestId
+  ) {
+    return false;
+  }
+
+  const legacy = request.legacyAppendix;
   const completionAppendixArtifact = auditBlockField(
     completionBlock,
     "Review Appendix Artifact",
@@ -9644,44 +9737,40 @@ export function reviewCompletionMatchesRequest(
     "Review Appendix Offset",
   );
   if (
-    completionAppendixArtifact !== request.appendixArtifact ||
+    completionAppendixArtifact !== (legacy?.artifact ?? null) ||
     (completionAppendixOffset === null
-      ? request.appendixOffset !== null
+      ? legacy !== null
       : !/^[0-9]+$/.test(completionAppendixOffset) ||
-        Number(completionAppendixOffset) !== request.appendixOffset)
+        Number(completionAppendixOffset) !== legacy?.offset)
   ) {
     return false;
   }
-
-  if (
-    request.priorAppendixDigest !== null &&
-    auditBlockField(completionBlock, "Review Appendix Prior Digest") !==
-      request.priorAppendixDigest
-  ) {
-    return false;
-  }
-  if (
-    request.priorAppendixDigest !== null &&
-    request.priorAppendixLength === null
-  ) {
-    return false;
-  }
-  if (request.priorAppendixLength !== null) {
-    const completionPriorLength = auditBlockField(
-      completionBlock,
-      "Review Appendix Prior Length",
-    );
+  if (legacy !== null) {
     if (
-      completionPriorLength === null ||
-      !/^[0-9]+$/.test(completionPriorLength) ||
-      Number(completionPriorLength) !== request.priorAppendixLength
+      legacy.priorDigest !== null &&
+      auditBlockField(completionBlock, "Review Appendix Prior Digest") !==
+        legacy.priorDigest
     ) {
       return false;
+    }
+    if (legacy.priorDigest !== null && legacy.priorLength === null) return false;
+    if (legacy.priorLength !== null) {
+      const completionPriorLength = auditBlockField(
+        completionBlock,
+        "Review Appendix Prior Length",
+      );
+      if (
+        completionPriorLength === null ||
+        !/^[0-9]+$/.test(completionPriorLength) ||
+        Number(completionPriorLength) !== legacy.priorLength
+      ) {
+        return false;
+      }
     }
   }
   if (
     auditBlockField(completionBlock, "Review Challenge") !==
-    request.reviewChallenge
+    (legacy?.challenge ?? null)
   ) {
     return false;
   }
@@ -9710,6 +9799,577 @@ export function reviewCompletionMatchesRequest(
     return false;
   }
   return true;
+}
+
+// --- Review records --------------------------------------------------------
+//
+// The review result lives in a framework-owned record under the intent record,
+// never inside the artifact it certifies. Only `aidlc-log.ts review --verdict`
+// writes one, in the same locked transaction that appends REVIEW_COMPLETED;
+// that row names the record and pins its bytes, so a record edited afterwards
+// stops being the review. Every field the reviewer protocol used to demand in
+// an appendix (verdict, reviewer, iteration, findings) is here, plus what binds
+// it: the request id, the artifact fingerprint the reviewer was dispatched on,
+// and the source fingerprints for workspace-writing stages.
+
+export const REVIEW_RECORDS_DIR = ".aidlc-reviews";
+const REVIEW_RECORD_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export type ReviewFindingStatus =
+  | "New"
+  | "Unresolved"
+  | "Resolved"
+  | "Accepted risk"
+  | `Rejected: ${string}`;
+
+export interface ReviewFinding {
+  artifact: string;
+  unit?: string;
+  id: string;
+  severity: string;
+  location: string;
+  finding: string;
+  requiredAction: string;
+  status: ReviewFindingStatus;
+  fingerprint: string;
+}
+
+/** One finding as stored in a review record (artifact and unit live on the record). */
+export interface ReviewRecordFinding {
+  id: string;
+  severity: string;
+  location: string;
+  finding: string;
+  required_action: string;
+  status: ReviewFindingStatus;
+}
+
+export interface ReviewRecord {
+  version: 1;
+  stage: string;
+  unit: string | null;
+  workflow: string | null;
+  attempt: string;
+  iteration: number;
+  reviewer: string;
+  verdict: ReviewVerdict;
+  request_id: string | null;
+  request_challenge: string | null;
+  artifact_fingerprint: string;
+  source_fingerprint: string | null;
+  unit_source_fingerprint: string | null;
+  findings: ReviewRecordFinding[];
+  body: string;
+  recorded_at: string;
+}
+
+function splitMarkdownRow(line: string): string[] {
+  const trimmed = line.trim();
+  const inner = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
+  const body = inner.endsWith("|") ? inner.slice(0, -1) : inner;
+  const cells: string[] = [];
+  let cell = "";
+  let escaped = false;
+  for (const char of body) {
+    if (escaped) {
+      cell += char;
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+    } else if (char === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  if (escaped) cell += "\\";
+  cells.push(cell.trim());
+  return cells;
+}
+
+export function validReviewFindingStatus(value: string): value is ReviewFindingStatus {
+  return (
+    value === "New" ||
+    value === "Unresolved" ||
+    value === "Resolved" ||
+    value === "Accepted risk" ||
+    /^Rejected: \S[\s\S]*$/.test(value)
+  );
+}
+
+export function reviewFindingFingerprint(
+  finding: Pick<ReviewFinding, "id" | "location" | "finding" | "requiredAction">,
+): string {
+  return `sha256:${
+    createHash("sha256")
+      .update(
+        JSON.stringify([
+          finding.id,
+          finding.location,
+          finding.finding,
+          finding.requiredAction,
+        ]),
+      )
+      .digest("hex")
+  }`;
+}
+
+/**
+ * Parse one review section (a record body, or the text under a legacy `## Review`
+ * heading): the canonical verdict line and the `### Findings` table. Throws on a
+ * malformed finding row so a bad review is refused rather than half-rendered.
+ */
+export function parseReviewSection(
+  review: string,
+  artifact: string,
+  unit?: string,
+): { verdict: ReviewVerdict | null; findings: ReviewFinding[] } {
+  const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
+  const verdict = (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
+  const lines = review.replace(/\r\n/g, "\n").split("\n");
+  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
+  if (heading === -1) return { verdict, findings: [] };
+  let end = lines.length;
+  for (let i = heading + 1; i < lines.length; i++) {
+    if (/^### /.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  const table = lines
+    .slice(heading + 1, end)
+    .filter((line) => line.trim().startsWith("|"));
+  if (table.length < 2) return { verdict, findings: [] };
+  const headers = splitMarkdownRow(table[0]);
+  for (const name of ["ID", "Severity", "Location", "Finding", "Required action", "Status"]) {
+    if (!headers.includes(name)) return { verdict, findings: [] };
+  }
+  const index = new Map(headers.map((name, position) => [name, position]));
+  const findings: ReviewFinding[] = [];
+  for (const line of table.slice(2)) {
+    const cells = splitMarkdownRow(line);
+    const value = (name: string): string =>
+      cells[index.get(name) ?? -1]?.trim() ?? "";
+    const id = value("ID");
+    if (!/^R-[0-9]+$/.test(id)) {
+      throw new Error(`${artifact}: invalid finding ID ${JSON.stringify(id)}`);
+    }
+    const status = value("Status");
+    if (!validReviewFindingStatus(status)) {
+      throw new Error(
+        `${artifact}#${id}: invalid finding status ${JSON.stringify(status)}`,
+      );
+    }
+    const finding: ReviewFinding = {
+      artifact,
+      ...(unit ? { unit } : {}),
+      id,
+      severity: value("Severity"),
+      location: value("Location"),
+      finding: value("Finding"),
+      requiredAction: value("Required action"),
+      status,
+      fingerprint: "",
+    };
+    finding.fingerprint = reviewFindingFingerprint(finding);
+    findings.push(finding);
+  }
+  return { verdict, findings };
+}
+
+/** A stable, path-safe name for a review attempt, derived from its floor identity. */
+export function reviewAttemptId(floor: string): string {
+  return createHash("sha256").update(floor.length === 0 ? "unstarted" : floor).digest("hex").slice(0, 16);
+}
+
+export function reviewRecordRelativePath(
+  stage: string,
+  unit: string | undefined,
+  attemptId: string,
+  iteration: number,
+): string {
+  return `${REVIEW_RECORDS_DIR}/${stage}/${unit ?? "stage-level"}/${attemptId}/${iteration}.json`;
+}
+
+/**
+ * Where the reviewer writes its review for one request: the scratch slot the
+ * request opens (deleting any earlier draft) and the verdict consumes. The
+ * record beside it is the review; the draft is the reviewer's input to it.
+ */
+export function reviewDraftRelativePath(
+  stage: string,
+  unit: string | undefined,
+  attemptId: string,
+  iteration: number,
+): string {
+  return `${REVIEW_RECORDS_DIR}/${stage}/${unit ?? "stage-level"}/${attemptId}/${iteration}.review.md`;
+}
+
+/** Whether `path` has the exact shape a review record path takes: no escapes, no surprises. */
+export function isReviewRecordRelativePath(path: string): boolean {
+  const parts = path.split("/");
+  return (
+    parts.length === 5 &&
+    parts[0] === REVIEW_RECORDS_DIR &&
+    REVIEW_RECORD_SEGMENT_RE.test(parts[1]) &&
+    REVIEW_RECORD_SEGMENT_RE.test(parts[2]) &&
+    /^[0-9a-f]{16}$/.test(parts[3]) &&
+    /^[1-9][0-9]*\.json$/.test(parts[4])
+  );
+}
+
+/** Canonical bytes: fixed key order, two-space indent, one trailing newline. */
+export function serializeReviewRecord(record: ReviewRecord): string {
+  const ordered: ReviewRecord = {
+    version: 1,
+    stage: record.stage,
+    unit: record.unit,
+    workflow: record.workflow,
+    attempt: record.attempt,
+    iteration: record.iteration,
+    reviewer: record.reviewer,
+    verdict: record.verdict,
+    request_id: record.request_id,
+    request_challenge: record.request_challenge,
+    artifact_fingerprint: record.artifact_fingerprint,
+    source_fingerprint: record.source_fingerprint,
+    unit_source_fingerprint: record.unit_source_fingerprint,
+    findings: record.findings.map((finding) => ({
+      id: finding.id,
+      severity: finding.severity,
+      location: finding.location,
+      finding: finding.finding,
+      required_action: finding.required_action,
+      status: finding.status,
+    })),
+    body: record.body,
+    recorded_at: record.recorded_at,
+  };
+  return `${JSON.stringify(ordered, null, 2)}\n`;
+}
+
+export function reviewRecordDigest(bytes: string | Buffer): string {
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+function isReviewRecord(value: unknown): value is ReviewRecord {
+  if (!isPlainObject(value)) return false;
+  const r = value as Record<string, unknown>;
+  const nullableString = (v: unknown): boolean => v === null || typeof v === "string";
+  return (
+    r.version === 1 &&
+    typeof r.stage === "string" &&
+    nullableString(r.unit) &&
+    nullableString(r.workflow) &&
+    typeof r.attempt === "string" &&
+    typeof r.iteration === "number" &&
+    Number.isInteger(r.iteration) &&
+    (r.iteration as number) > 0 &&
+    typeof r.reviewer === "string" &&
+    (r.verdict === "READY" || r.verdict === "NOT-READY") &&
+    nullableString(r.request_id) &&
+    nullableString(r.request_challenge) &&
+    typeof r.artifact_fingerprint === "string" &&
+    nullableString(r.source_fingerprint) &&
+    nullableString(r.unit_source_fingerprint) &&
+    Array.isArray(r.findings) &&
+    r.findings.every(
+      (f) =>
+        isPlainObject(f) &&
+        /^R-[0-9]+$/.test(String((f as Record<string, unknown>).id)) &&
+        typeof (f as Record<string, unknown>).severity === "string" &&
+        typeof (f as Record<string, unknown>).location === "string" &&
+        typeof (f as Record<string, unknown>).finding === "string" &&
+        typeof (f as Record<string, unknown>).required_action === "string" &&
+        typeof (f as Record<string, unknown>).status === "string" &&
+        validReviewFindingStatus((f as Record<string, unknown>).status as string),
+    ) &&
+    typeof r.body === "string" &&
+    typeof r.recorded_at === "string"
+  );
+}
+
+/**
+ * Read the record a REVIEW_COMPLETED row names. Returns null when the file is
+ * missing, malformed, or its bytes no longer hash to the digest the row pinned:
+ * a record that was edited after it was recorded is not the review.
+ */
+export function readReviewRecord(
+  projectDir: string,
+  ref: { path: string; digest: string },
+): ReviewRecord | null {
+  if (!isReviewRecordRelativePath(ref.path)) return null;
+  const record = recordDir(projectDir);
+  if (record === null) return null;
+  let bytes: Buffer;
+  try {
+    // Read like the merge writes: no symlinked container or leaf, no hardlink,
+    // no oversize file, so a redirected path cannot stand in for the record.
+    const target = assertNoSymlinkInChainOrThrow(realpathSync(record), ref.path);
+    bytes = readRegularFileNoFollowOrThrow(target, "review record", REVIEW_RECORD_MAX_BYTES);
+  } catch {
+    return null;
+  }
+  if (reviewRecordDigest(bytes) !== ref.digest) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString("utf-8"));
+  } catch {
+    return null;
+  }
+  return isReviewRecord(parsed) ? parsed : null;
+}
+
+/**
+ * The review each scope of a stage most recently recorded, in the stage's
+ * whole history: the record the newest PAIRED REVIEW_COMPLETED row names (null
+ * when that row is a legacy embedded review, so readers fall back to the
+ * artifact). A completion counts only when it descends from a request: same
+ * stage, reviewer, Unit, and iteration, bound through the request id (or the
+ * legacy appendix echo) by the same matcher the engine's receipts use, so an
+ * unmatched or malformed row can neither replace the review the human sees nor
+ * point at some other record. Keyed by Unit, "" for stage-level. Deliberately
+ * not floored by the attempt: the human's dispositions and the next reviewer's
+ * context read the previous review across a rejection or a jump, exactly as
+ * the embedded section used to stay in the artifact until the next review
+ * replaced it.
+ */
+export function latestReviewRecordRefs(
+  projectDir: string,
+  stage: { slug: string; reviewer?: string },
+): Map<string, ReviewRecordRef | null> {
+  const refs = new Map<string, ReviewRecordRef | null>();
+  if (!stage.reviewer) return refs;
+  const pending = new Map<string, ReviewRequestBinding>();
+  for (const event of sortAttemptEvents(readAuditShardEvents(projectDir))) {
+    if (
+      (event.event !== "REVIEW_REQUESTED" && event.event !== "REVIEW_COMPLETED") ||
+      auditBlockField(event.block, "Stage") !== stage.slug ||
+      auditBlockField(event.block, "Reviewer") !== stage.reviewer
+    ) {
+      continue;
+    }
+    // A row with a repeated field has no single reading and is ignored.
+    if (!auditBlockFieldNamesOnce(event.block)) continue;
+    // An isolated `--single` run reviews for its own gate, not the stage's.
+    const workflow = auditBlockField(event.block, "Workflow");
+    if (workflow !== null) continue;
+    const iteration = auditBlockField(event.block, "Iteration");
+    if (iteration === null || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    const unit = auditBlockField(event.block, "Unit") ?? "";
+    const key = [unit, workflow ?? "", iteration].join("\u0000");
+    if (event.event === "REVIEW_REQUESTED") {
+      const binding = reviewRequestBindingFromBlock(event.block);
+      if (binding !== null) pending.set(key, binding);
+      continue;
+    }
+    const request = pending.get(key);
+    if (request === undefined) continue;
+    if (!reviewCompletionMatchesRequest(request, event.block)) continue;
+    // The request is answered exactly once: a later row cannot reuse it.
+    pending.delete(key);
+    const ref = reviewRecordRefFromBlock(event.block);
+    refs.set(unit, ref === null ? null : { ...ref, completion: event.block });
+  }
+  return refs;
+}
+
+/** A record named by a paired completion row, with the row that names it. */
+export interface ReviewRecordRef {
+  path: string;
+  digest: string;
+  completion: string;
+}
+
+/** A review record is a small JSON document; anything larger is not one. */
+export const REVIEW_RECORD_MAX_BYTES = 4 * 1024 * 1024;
+
+/** Every field name in an audit block, once; null when any name repeats. */
+function auditBlockFieldNamesOnce(block: string): boolean {
+  const seen = new Set<string>();
+  for (const match of block.matchAll(/^(?:-\s*)?\*\*([^*]+)\*\*:/gm)) {
+    const name = match[1].trim();
+    if (seen.has(name)) return false;
+    seen.add(name);
+  }
+  return true;
+}
+
+/**
+ * Whether a loaded record is the review the completion row says it is: same
+ * stage, Unit, workflow, iteration, reviewer, verdict, request id, and artifact
+ * fingerprint. The digest already binds the bytes to the row; this binds the
+ * content to the scope, so a genuine record from another scope cannot be named.
+ */
+export function reviewRecordMatchesCompletion(record: ReviewRecord, completionBlock: string): boolean {
+  const rawIteration = auditBlockField(completionBlock, "Iteration");
+  return (
+    record.stage === auditBlockField(completionBlock, "Stage") &&
+    (record.unit ?? "") === (auditBlockField(completionBlock, "Unit") ?? "") &&
+    (record.workflow ?? "") === (auditBlockField(completionBlock, "Workflow") ?? "") &&
+    rawIteration !== null &&
+    record.iteration === Number(rawIteration) &&
+    record.reviewer === auditBlockField(completionBlock, "Reviewer") &&
+    record.verdict === auditBlockField(completionBlock, "Verdict") &&
+    record.request_id === auditBlockField(completionBlock, "Request Id") &&
+    record.artifact_fingerprint === auditBlockField(completionBlock, "Artifact Fingerprint")
+  );
+}
+
+/**
+ * Carry a Bolt worktree's review records to the main intent record as part of
+ * the audit merge. A record travels only with a REVIEW_COMPLETED row that
+ * descends from a REVIEW_REQUESTED row in the same delta (same stage, reviewer,
+ * Unit, workflow, iteration; bound by the same matcher the engine's receipts
+ * use), so an unmatched completion cannot smuggle bytes into main: one that
+ * names a record refuses the merge outright, since a tool never writes such a
+ * row, and so does a review row with a repeated field. Each record is read
+ * without following symlinks, refused when hardlinked or oversize, must hash to
+ * the digest its row pinned, and must be the review of that row's scope; on the
+ * main side the copy is exclusive and idempotent (same bytes already present is
+ * fine, different bytes is a conflict that refuses the merge). Throws before
+ * the caller lands any audit row, so main never holds a completion pointing at
+ * a record it does not have.
+ */
+export function mergeReviewRecordsFromDelta(
+  delta: string,
+  worktreeRecordRoot: string,
+  mainRecordRoot: string,
+): { copied: string[]; present: string[] } {
+  const copied: string[] = [];
+  const present: string[] = [];
+  const pending = new Map<string, ReviewRequestBinding>();
+  const blocks = delta.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const scopeKey = (block: string): string | null => {
+    const stage = auditBlockField(block, "Stage");
+    const reviewer = auditBlockField(block, "Reviewer");
+    const iteration = auditBlockField(block, "Iteration");
+    if (stage === null || reviewer === null || iteration === null) return null;
+    if (!/^[1-9][0-9]*$/.test(iteration)) return null;
+    return [
+      stage,
+      reviewer,
+      auditBlockField(block, "Unit") ?? "",
+      auditBlockField(block, "Workflow") ?? "",
+      iteration,
+    ].join("\u0000");
+  };
+  for (const block of blocks) {
+    const event = auditBlockField(block, "Event");
+    if (event !== "REVIEW_REQUESTED" && event !== "REVIEW_COMPLETED") continue;
+    if (!auditBlockFieldNamesOnce(block)) {
+      throw new Error(
+        `worktree audit delta carries a ${event} row with a repeated field; refusing to merge`,
+      );
+    }
+    if (event === "REVIEW_REQUESTED") {
+      const key = scopeKey(block);
+      const binding = reviewRequestBindingFromBlock(block);
+      if (key !== null && binding !== null) pending.set(key, binding);
+      continue;
+    }
+    const ref = reviewRecordRefFromBlock(block);
+    const namesRecord =
+      auditBlockField(block, "Review Record") !== null ||
+      auditBlockField(block, "Review Record Digest") !== null;
+    const key = scopeKey(block);
+    const request = key === null ? undefined : pending.get(key);
+    const paired =
+      request !== undefined && reviewCompletionMatchesRequest(request, block);
+    // A paired completion answers its request exactly once, whether or not it
+    // names a record, so a later row cannot ride the same request.
+    if (paired) pending.delete(key as string);
+    if (!namesRecord) continue;
+    if (ref === null || !paired) {
+      throw new Error(
+        "worktree audit delta carries a REVIEW_COMPLETED row that names a review record " +
+          "but does not descend from a REVIEW_REQUESTED row in the same delta; refusing to merge",
+      );
+    }
+    const rel = ref.path;
+    const sourceRoot = realpathSync(worktreeRecordRoot);
+    const source = assertNoSymlinkInChainOrThrow(sourceRoot, rel);
+    let bytes: Buffer;
+    try {
+      bytes = readRegularFileNoFollowOrThrow(source, "review record", REVIEW_RECORD_MAX_BYTES);
+    } catch (error) {
+      throw new Error(
+        `review record ${ref.path} named by the worktree audit is unreadable in the worktree (${errorMessage(error)})`,
+      );
+    }
+    if (reviewRecordDigest(bytes) !== ref.digest) {
+      throw new Error(
+        `review record ${ref.path} in the worktree does not match the digest its REVIEW_COMPLETED row pinned`,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(bytes.toString("utf-8"));
+    } catch {
+      parsed = null;
+    }
+    if (!isReviewRecord(parsed) || !reviewRecordMatchesCompletion(parsed, block)) {
+      throw new Error(
+        `review record ${ref.path} is not the review its REVIEW_COMPLETED row describes; refusing to merge`,
+      );
+    }
+    mkdirSync(mainRecordRoot, { recursive: true });
+    const mainRoot = realpathSync(mainRecordRoot);
+    const destination = assertNoSymlinkInChainOrThrow(mainRoot, rel);
+    if (existsSync(destination)) {
+      const existing = readRegularFileNoFollowOrThrow(destination, "review record", REVIEW_RECORD_MAX_BYTES);
+      if (!existing.equals(bytes)) {
+        throw new Error(
+          `review record ${ref.path} already exists in the main intent record with different bytes; refusing to overwrite a recorded review`,
+        );
+      }
+      present.push(ref.path);
+      continue;
+    }
+    mkdirSync(dirname(destination), { recursive: true });
+    // The chain is re-walked after the directories exist: a container that
+    // became a symlink between the check and the write is refused, not written
+    // through.
+    assertNoSymlinkInChainOrThrow(mainRoot, rel);
+    try {
+      writeFileSync(destination, bytes, { flag: "wx" });
+    } catch (error) {
+      // A concurrent merger may have landed the same record first.
+      if (
+        (error as NodeJS.ErrnoException).code === "EEXIST" &&
+        readRegularFileNoFollowOrThrow(destination, "review record", REVIEW_RECORD_MAX_BYTES).equals(bytes)
+      ) {
+        present.push(ref.path);
+        continue;
+      }
+      throw error;
+    }
+    copied.push(ref.path);
+  }
+  return { copied, present };
+}
+
+/** The findings of a record in the shape the gate and dispositions use. */
+export function reviewRecordFindings(
+  record: ReviewRecord,
+  artifact: string,
+): ReviewFinding[] {
+  return record.findings.map((finding) => {
+    const shaped: ReviewFinding = {
+      artifact,
+      ...(record.unit ? { unit: record.unit } : {}),
+      id: finding.id,
+      severity: finding.severity,
+      location: finding.location,
+      finding: finding.finding,
+      requiredAction: finding.required_action,
+      status: finding.status,
+      fingerprint: "",
+    };
+    shaped.fingerprint = reviewFindingFingerprint(shaped);
+    return shaped;
+  });
 }
 
 /**
@@ -10652,13 +11312,7 @@ export function reviewAttemptAccounting(
       }
       pendingIterations.add(iteration);
       const previous = pendingRequests.get(iteration);
-      const modernBinding =
-        binding.appendixArtifact !== null &&
-        binding.appendixOffset !== null &&
-        (binding.priorAppendixLength === null ||
-          binding.priorAppendixLength === 0 ||
-          binding.reviewChallenge !== null) &&
-        (!stage.workspace_requires || binding.sourceFingerprint !== null);
+      const modernBinding = reviewRequestBindingIsModern(binding, stage);
       pendingRequests.set(iteration, {
         binding,
         retried:
@@ -10701,9 +11355,40 @@ export interface PendingReviewRequestStatus {
   verdictRecordable: boolean;
 }
 
+// Whether the request's artifact fingerprint still describes the bytes on disk.
+// A legacy appendix request fingerprinted the bytes before the appendix it
+// allowed, so it is compared against the body view; a record-era request
+// fingerprinted the whole set, so it is compared against the whole set.
+export function reviewRequestArtifactsCurrent(
+  binding: ReviewRequestBinding,
+  snapshot: ReviewArtifactSnapshot,
+): boolean {
+  return binding.legacyAppendix !== null
+    ? snapshot.bodyFingerprints.includes(binding.artifactFingerprint)
+    : snapshot.fingerprint === binding.artifactFingerprint;
+}
+
+// Deprecated migration tolerance: a reviewer that still appends `## Review` to
+// the artifact. The section is evidence only when it provably postdates the
+// request: the bytes before it are exactly the requested bytes, and the request
+// saw no section (a record-era request fingerprinted the whole artifact, so a
+// current fingerprint with a section present means the section pre-existed; a
+// legacy request pinned that fact explicitly). Read, never written to.
+export function reviewAppendedAfterRequest(
+  binding: ReviewRequestBinding,
+  snapshot: ReviewArtifactSnapshot,
+): boolean {
+  if (snapshot.appendix.length === 0) return false;
+  if (!snapshot.bodyFingerprints.includes(binding.artifactFingerprint)) return false;
+  return binding.legacyAppendix === null
+    ? snapshot.fingerprint !== binding.artifactFingerprint
+    : !binding.legacyAppendix.priorAppendix;
+}
+
 // What can still be done with the oldest pending review request: retried once
 // against its original binding, or completed with a verdict. Both require the
-// request's artifact and source identities to still describe the current bytes.
+// request's artifact and source identities to still describe the current bytes;
+// the verdict itself arrives as a review record, so nothing else is needed.
 export function pendingReviewRequestStatus(
   projectDir: string,
   stage: ReviewFingerprintStage,
@@ -10733,14 +11418,6 @@ export function pendingReviewRequestStatus(
     requireRequiredArtifacts: options.requireRequiredArtifacts,
     boltDag: options.boltDag,
     mergedBoltUnits: options.mergedBoltUnits,
-    ...(binding.appendixArtifact !== null && binding.appendixOffset !== null
-      ? {
-          appendixBinding: {
-            artifact: binding.appendixArtifact,
-            offset: binding.appendixOffset,
-          },
-        }
-      : {}),
   });
   if (snapshot === null) {
     return {
@@ -10751,21 +11428,10 @@ export function pendingReviewRequestStatus(
     };
   }
 
-  const currentRequestFingerprint =
-    binding.appendixArtifact === null || binding.appendixOffset === null
-      ? snapshot.fingerprint
-      : snapshot.requestFingerprint;
   let requestCurrent =
-    currentRequestFingerprint === binding.artifactFingerprint;
-  let modernVerdictBinding =
-    binding.appendixArtifact !== null &&
-    binding.appendixOffset !== null &&
-    binding.priorAppendixDigest !== null &&
-    binding.priorAppendixLength !== null &&
-    (
-      binding.priorAppendixLength === 0 ||
-      binding.reviewChallenge !== null
-    );
+    reviewRequestArtifactsCurrent(binding, snapshot) ||
+    reviewAppendedAfterRequest(binding, snapshot);
+  let modernVerdictBinding = reviewRequestBindingIsModern(binding, stage);
 
   const sourceState = stage.workspace_requires
     ? workspaceSourceState(projectDir)
@@ -10779,7 +11445,6 @@ export function pendingReviewRequestStatus(
     ) {
       requestCurrent = false;
     }
-    if (binding.sourceFingerprint === null) modernVerdictBinding = false;
   }
 
   const bindsUnitSource =
@@ -10811,54 +11476,11 @@ export function pendingReviewRequestStatus(
     }
   }
 
-  let retryBindingCurrent = requestCurrent;
-  if (
-    binding.priorAppendixLength === null &&
-    binding.priorAppendixDigest !== null &&
-    reviewAppendixDigest(snapshot.appendix) !== binding.priorAppendixDigest
-  ) {
-    retryBindingCurrent = false;
-  }
-
-  const appendixEvidence = reviewAppendixEvidenceBytes(snapshot.appendix);
-  const stalePriorAppendix =
-    binding.priorAppendixLength !== null &&
-    binding.priorAppendixLength > 0 &&
-    appendixEvidence.length >= binding.priorAppendixLength &&
-    reviewAppendixDigest(
-      appendixEvidence.subarray(0, binding.priorAppendixLength),
-    ) === binding.priorAppendixDigest;
-  const reviewer = stage.reviewer ?? "";
-  const canonicalAppendix =
-    reviewer.length > 0 &&
-    (
-      validateReviewAppendix(snapshot.appendix, {
-        verdict: "READY",
-        reviewer,
-        iteration,
-        reviewChallenge: binding.reviewChallenge,
-      }).valid ||
-      validateReviewAppendix(snapshot.appendix, {
-        verdict: "NOT-READY",
-        reviewer,
-        iteration,
-        reviewChallenge: binding.reviewChallenge,
-      }).valid
-    );
-  const incompleteFallback =
-    snapshot.appendix.length === 0 && pending.retried;
-
   return {
     iteration,
     requestCurrent,
-    retryable:
-      retryBindingCurrent &&
-      !pending.retried,
-    verdictRecordable:
-      requestCurrent &&
-      modernVerdictBinding &&
-      !stalePriorAppendix &&
-      (canonicalAppendix || incompleteFallback),
+    retryable: requestCurrent && !pending.retried,
+    verdictRecordable: requestCurrent && modernVerdictBinding,
   };
 }
 
@@ -11265,7 +11887,6 @@ export function freshReviewReceipts(
       binding: ReviewRequestBinding | null;
       timestamp: string;
       shard: string;
-      suspensionActive: boolean;
     }
   >();
   const modernUnitReceipts = new Map<
@@ -11308,16 +11929,9 @@ export function freshReviewReceipts(
     }
   };
   let groupTimestamp: string | null = null;
-  let deferredSessionBoundary = false;
   const deferredBoltUnits = new Set<string>();
   const applyDeferredBoundaries = (): void => {
-    if (deferredSessionBoundary) {
-      for (const request of pendingRequests.values()) {
-        request.suspensionActive = false;
-      }
-    }
     for (const unit of deferredBoltUnits) resetUnitReviewState(unit);
-    deferredSessionBoundary = false;
     deferredBoltUnits.clear();
   };
   for (let i = floorIdx + 1; i < events.length; i++) {
@@ -11365,16 +11979,6 @@ export function freshReviewReceipts(
       unitPending.delete(rejectedUnit);
       for (const [key, request] of pendingRequests) {
         if (request.unit === rejectedUnit) pendingRequests.delete(key);
-      }
-      continue;
-    }
-    if (e.event === "SESSION_STARTED" || e.event === "SESSION_RESUMED") {
-      if (eventIsCrossShardTied(i)) {
-        deferredSessionBoundary = true;
-        continue;
-      }
-      for (const request of pendingRequests.values()) {
-        request.suspensionActive = false;
       }
       continue;
     }
@@ -11483,10 +12087,6 @@ export function freshReviewReceipts(
         binding,
         timestamp: e.timestamp,
         shard: e.shard,
-        suspensionActive:
-          recovery &&
-          !sessionBoundaryOnlyTie &&
-          /^sha256:[0-9a-f]{64}$/.test(binding.artifactFingerprint),
       });
       continue;
     }
@@ -11552,15 +12152,11 @@ export function freshReviewReceipts(
             state: "repair-required",
             iteration,
             recovery: request.recovery,
-            suspensionActive: false,
-            recoveryCause: request.binding?.recoveryCause ?? null,
           }
         : {
             state: "outstanding",
             iteration: iteration + 1,
             recovery: request.recovery,
-            suspensionActive: false,
-            recoveryCause: request.binding?.recoveryCause ?? null,
           };
       if (unit) {
         unitVerdicts.delete(unit);
@@ -11623,8 +12219,6 @@ export function freshReviewReceipts(
       state: "retry-required",
       iteration: request.iteration,
       recovery: request.recovery,
-      suspensionActive: request.suspensionActive,
-      recoveryCause: request.binding?.recoveryCause ?? null,
     };
     if (request.unit) {
       if (!request.recovery) unitVerdicts.delete(request.unit);

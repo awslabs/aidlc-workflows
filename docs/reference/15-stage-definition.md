@@ -419,9 +419,10 @@ compile validates the value against the discovered agent roster the same way
 `lead_agent` is validated.
 
 Every reviewer-bearing stage must also declare `review_artifact`, naming one
-required Markdown entry from `produces[]`. That scalar is the sole owner of the
-appended `## Review` section; list ordering and plugin-added outputs cannot
-change it. On a per-Unit stage the target must remain applicable for every Unit
+required Markdown entry from `produces[]`: the artifact the review is about.
+The review record is keyed to it, the gate names it, and
+`--reject-finding <artifact>#R-NN` addresses its findings; the reviewer never
+writes to it. List ordering and plugin-added outputs cannot change it. On a per-Unit stage the target must remain applicable for every Unit
 kind on which any required output is applicable, otherwise graph compilation
 fails. Structured outputs such as `traceability.json` cannot be review targets.
 

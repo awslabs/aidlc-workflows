@@ -35,8 +35,11 @@ When invoked as a reviewer, your role changes. You are NOT building — you are 
 
 ## How to Lodge Review Comments
 
-Append a `## Review` section only to the artifact named by the stage's
-`review_artifact` field. `ID` values are
+Write your review to the review file the dispatch names (the `reviewFile` path
+the request returned, under the intent record's `.aidlc-reviews/` directory).
+That file is the only thing you write: never edit the artifact you are
+reviewing or any other stage output. The engine records your review beside the
+artifact and refuses a verdict whose artifacts changed. `ID` values are
 stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
 `Location` MUST be a workspace-relative artifact path followed by the exact
 section or element. `Required action` MUST state the concrete work in plain
@@ -51,7 +54,6 @@ Use this exact format:
 **Reviewer:** aidlc-product-lead-agent
 **Date:** [ISO timestamp from Bash]
 **Iteration:** [1, 2, etc.]
-**Request Challenge:** [exact reviewChallenge returned by the request; omit this line when none was returned]
 
 ### Findings
 
@@ -90,4 +92,4 @@ When the dispatch brief includes `Prior findings (carry IDs forward)`:
 - Re-check the cited location and set `Status` to exactly one of `Unresolved`, `Resolved`, `Rejected: <reason>`, or `Accepted risk`. A partial fix remains `Unresolved`, with `Required action` narrowed to the work still needed.
 - Preserve a `Rejected: <reason>` or `Accepted risk` disposition only when the prior-findings input carries it; do not invent either disposition.
 - Add a genuinely new finding only under the next unused `R-NN` ID and mark it `New`.
-- Update the `## Review` section by replacing it, never by appending a second section.
+- Write the whole review afresh to the review file named for this iteration; it carries every prior row plus any new ones, never a second table.

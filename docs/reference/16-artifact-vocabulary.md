@@ -193,6 +193,17 @@ directives, per-Unit coverage, completion guards, and review fingerprints.
 Every artifact except `traceability` resolves to `<canonical-name>.md`;
 `traceability` resolves to `traceability.json`.
 
+**Review records are not artifacts.** A reviewer-bearing stage's review result
+(verdict, findings, reviewer, request id, the fingerprints it binds, and the
+review text) lives in a framework-owned record at
+`<record>/.aidlc-reviews/<stage>/<unit or stage-level>/<attempt>/<iteration>.json`,
+written only by `aidlc-log.ts review --verdict` and named, with its digest, by
+the `REVIEW_COMPLETED` row. The stage's `review_artifact` names which declared
+artifact the review is about (the gate's `**Review:**` path and the
+`--reject-finding <artifact>#R-NN` selector key); the reviewer never writes to
+it. A terminal `## Review` section inside an artifact is a review recorded
+before review records existed: readable for migration, never written anew.
+
 **Codekb is the space-level exception.** Reverse-engineering's 9 artifacts
 (`business-overview`, `architecture`, `code-structure`, `api-documentation`,
 `component-inventory`, `technology-stack`, `dependencies`,

@@ -838,20 +838,22 @@ export function parseTestingContract(plan: string): TestingPostureContract | nul
 
 // --- The Plan Approval content projection -------------------------------------
 //
-// The approval must survive the edits the stage itself ORDERS after approval, and
+// The approval must survive the edit the stage itself ORDERS after approval, and
 // must not survive an edit to the plan. Byte-exact hashing cannot do both: Step 4
-// tells the developer agent to tick the plan's checkboxes as it works, and the
-// reviewer appends `## Review` to that same file because the plan IS the stage's
-// review artifact. Hashing raw bytes therefore invalidated every approval as soon
-// as the approved work started.
+// tells the developer agent to tick the plan's checkboxes as it works, so hashing
+// raw bytes invalidated every approval as soon as the approved work started.
 //
-// So the fingerprint is taken over a projection that erases exactly those two
-// mandated mutations and nothing else:
+// So the fingerprint is taken over a projection that erases exactly these
+// mutations and nothing else:
 //
 //   1. A TERMINAL `## Review` appendix is removed, using the engine's own
 //      appendix locator (a `## Review` inside a fence or an HTML comment, a
 //      lower-case or unspaced variant, and a mid-plan section are all NOT an
-//      appendix and stay material).
+//      appendix and stay material). This is a legacy-compatibility step: the
+//      reviewer used to append its verdict to the plan because the plan is the
+//      stage's review artifact. Reviews live in review records now and nothing
+//      appends to the plan, but a plan reviewed under the earlier protocol may
+//      still carry that section, and its approval must not depend on it.
 //   2. List task markers are reset: `[x]`, `[X]` and `[-]` become `[ ]`, outside
 //      fenced blocks and HTML comments. A tick is a claim about execution, not a
 //      change to the plan.

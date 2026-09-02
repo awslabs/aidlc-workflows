@@ -7,8 +7,16 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
@@ -30,11 +38,14 @@ import {
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   isAutonomousConstructionDecision,
+  legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
   loadStageGraphAll,
   isNonAnswer,
+  isoTimestamp,
   latestPipelineLinkArtifactMtime,
   parseCheckboxes,
+  parseReviewSection,
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
@@ -48,13 +59,19 @@ import {
   relativeRecordDir,
   recoveryGuidance,
   requestChangesResetIsExecutable,
+  reviewAppendedAfterRequest,
   reviewArtifactSnapshot,
-  reviewAppendixDigest,
-  reviewAppendixEvidenceBytes,
+  reviewAttemptId,
+  reviewDraftRelativePath,
+  reviewRecordDigest,
+  reviewRecordRelativePath,
+  reviewRequestArtifactsCurrent,
+  REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
   reviewAttemptAccounting,
   reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
+  serializeReviewRecord,
   resolveProjectDir,
   resolveWorkflowSelection,
   resolveReviewClass,
@@ -80,6 +97,7 @@ import type {
   GuardRefusal,
   TeamUnitGateResolution,
   ReviewClass,
+  ReviewRecord,
   ReviewVerdict,
 } from "./aidlc-lib.js";
 import {
@@ -1347,6 +1365,40 @@ function handleReview(args: string[]): void {
           );
   };
 
+  const mintReviewRequestId = (): string =>
+    `review:${randomBytes(16).toString("hex")}`;
+  // The reviewer writes its review into this slot; the verdict consumes it into
+  // the record. Project-relative so the conductor can hand it to the reviewer.
+  const reviewSlot = (
+    floor: string,
+    iteration: number,
+  ): {
+    draftAbsolute: string;
+    draftRelative: string;
+    draftRelativeToRecord: string;
+    recordRelative: string;
+  } => {
+    const record = recordDir(pd);
+    if (record === null) refuseReview("Cannot resolve the active intent record.");
+    const attemptId = reviewAttemptId(floor);
+    const draft = reviewDraftRelativePath(flags.stage as string, flags.unit, attemptId, iteration);
+    return {
+      draftAbsolute: join(record, ...draft.split("/")),
+      draftRelative: toPosix(relative(pd, join(record, ...draft.split("/")))),
+      draftRelativeToRecord: draft,
+      recordRelative: reviewRecordRelativePath(flags.stage as string, flags.unit, attemptId, iteration),
+    };
+  };
+  // Whether anything sits at the path, symlink included, without following it.
+  const lstatExists = (path: string): boolean => {
+    try {
+      lstatSync(path);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   // REVIEW_REQUESTED owns its ordinal: require a positive integer, count prior
   // requests in the current attempt, and append under the same lock. This closes
   // duplicate/missing-label bypasses and makes concurrent requests serialize.
@@ -1359,7 +1411,15 @@ function handleReview(args: string[]): void {
     let retried = false;
     let upgraded = false;
     let recovery: "stale-receipt" | undefined;
-    let reviewChallenge: string | null = null;
+    let requestId: string | null = null;
+    let reviewFile: string | null = null;
+    // Open the reviewer's slot for this request: any draft an earlier dispatch of
+    // the same iteration left behind is not this dispatch's review.
+    const openReviewDraftSlot = (floor: string): void => {
+      const slot = reviewSlot(floor, iteration);
+      rmSync(slot.draftAbsolute, { force: true });
+      reviewFile = slot.draftRelative;
+    };
     try {
       withAuditLock(pd, () => {
         const {
@@ -1584,15 +1644,6 @@ function handleReview(args: string[]): void {
             requireRequiredArtifacts,
             boltDag: unitResolution ?? undefined,
             mergedBoltUnits,
-            ...(requestBinding.appendixArtifact !== null &&
-            requestBinding.appendixOffset !== null
-              ? {
-                  appendixBinding: {
-                    artifact: requestBinding.appendixArtifact,
-                    offset: requestBinding.appendixOffset,
-                  },
-                }
-              : {}),
           });
           if (snapshot === null) {
             refuseReview(
@@ -1601,25 +1652,23 @@ function handleReview(args: string[]): void {
                 "artifact files and retry.",
             );
           }
-          const currentRequestFingerprint =
-            requestBinding.appendixArtifact === null ||
-              requestBinding.appendixOffset === null
-              ? snapshot.fingerprint
-              : snapshot.requestFingerprint;
-          if (currentRequestFingerprint !== requestBinding.artifactFingerprint) {
+          if (
+            !reviewRequestArtifactsCurrent(requestBinding, snapshot) &&
+            !reviewAppendedAfterRequest(requestBinding, snapshot)
+          ) {
             refuseReview(
               `Refusing review retry for "${flags.stage}": declared artifacts no ` +
                 `longer match the bytes from REVIEW_REQUESTED iteration ${iteration}. ` +
                 "A retry re-dispatches that exact request and cannot rebaseline changed " +
-                "content. Remove any partial reviewer appendix and restore the requested " +
-                "artifact bytes before retrying.",
+                "content. Restore the requested artifact bytes before retrying.",
             );
           }
+          // A request written before review records, or before source binding on
+          // a workspace-writing stage, is modernized by this one retry: it gains a
+          // request id and the source fingerprints, keeps its artifact fingerprint,
+          // and is marked so the ledger shows the upgrade.
           let legacyUpgrade =
-            requestBinding.appendixArtifact === null ||
-            requestBinding.appendixOffset === null ||
-            requestBinding.priorAppendixDigest === null ||
-            requestBinding.priorAppendixLength === null ||
+            requestBinding.requestId === null ||
             (node.workspace_requires &&
               requestBinding.sourceFingerprint === null) ||
             (node.workspace_requires &&
@@ -1652,50 +1701,23 @@ function handleReview(args: string[]): void {
               );
             }
           }
-          let priorAppendixLength = requestBinding.priorAppendixLength;
-          if (priorAppendixLength === null) {
-            if (
-              requestBinding.priorAppendixDigest !== null &&
-              reviewAppendixDigest(snapshot.appendix) !==
-                requestBinding.priorAppendixDigest
-            ) {
-              refuseReview(
-                `Refusing review retry for "${flags.stage}": REVIEW_REQUESTED ` +
-                  `iteration ${iteration} pins a pre-request appendix digest but not ` +
-                  "its byte length, and the current appendix no longer matches those " +
-                  "pinned bytes. Restore the pre-request appendix, then use " +
-                  "--retry-pending to modernize the exact request.",
-              );
-            }
-            priorAppendixLength =
-              reviewAppendixEvidenceBytes(snapshot.appendix).length;
-          }
           if (
-            priorAppendixLength > 0 &&
-            requestBinding.reviewChallenge === null
+            requestBinding.legacyAppendix?.priorAppendix === true &&
+            requestBinding.legacyAppendix.challenge === null
           ) {
             legacyUpgrade = true;
           }
-          reviewChallenge =
-            priorAppendixLength > 0
-              ? requestBinding.reviewChallenge ??
-                `review:${randomBytes(16).toString("hex")}`
-              : null;
+          requestId = requestBinding.requestId ?? mintReviewRequestId();
           fields.Retry = "pending-request";
           fields["Artifact Fingerprint"] = requestBinding.artifactFingerprint;
-          fields["Review Appendix Artifact"] =
-            requestBinding.appendixArtifact ?? snapshot.appendixArtifact;
-          fields["Review Appendix Offset"] = String(
-            requestBinding.appendixOffset ?? snapshot.appendixOffset,
-          );
-          fields["Review Appendix Prior Digest"] =
-            requestBinding.priorAppendixDigest ??
-            reviewAppendixDigest(snapshot.appendix);
-          fields["Review Appendix Prior Length"] = String(
-            priorAppendixLength,
-          );
-          if (reviewChallenge !== null) {
-            fields["Review Challenge"] = reviewChallenge;
+          fields["Request Id"] = requestId;
+          if (requestBinding.legacyAppendix !== null) {
+            // The retry pairs with the original request under the legacy matcher;
+            // echo its appendix binding unchanged.
+            Object.assign(
+              fields,
+              legacyReviewAppendixEchoFields(requestBinding.legacyAppendix),
+            );
           }
           if (requestBinding.sourceFingerprint !== null) {
             fields["Source Fingerprint"] = requestBinding.sourceFingerprint;
@@ -1711,6 +1733,7 @@ function handleReview(args: string[]): void {
             fields.Upgrade = "legacy-request";
             upgraded = true;
           }
+          openReviewDraftSlot(attempt.floor);
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           retried = true;
           return;
@@ -1826,20 +1849,11 @@ function handleReview(args: string[]): void {
               "for this stage, then retry the review.",
           );
         }
-        fields["Artifact Fingerprint"] = snapshot.requestFingerprint;
-        fields["Review Appendix Artifact"] = snapshot.appendixArtifact;
-        fields["Review Appendix Offset"] = String(snapshot.appendixOffset);
-        fields["Review Appendix Prior Digest"] = reviewAppendixDigest(
-          snapshot.appendix,
-        );
-        const priorAppendixLength =
-          reviewAppendixEvidenceBytes(snapshot.appendix).length;
-        fields["Review Appendix Prior Length"] = String(priorAppendixLength);
-        if (priorAppendixLength > 0) {
-          reviewChallenge = `review:${randomBytes(16).toString("hex")}`;
-          fields["Review Challenge"] = reviewChallenge;
-        }
+        fields["Artifact Fingerprint"] = snapshot.fingerprint;
+        requestId = mintReviewRequestId();
+        fields["Request Id"] = requestId;
         stampRequestedSourceBinding(node);
+        openReviewDraftSlot(attempt.floor);
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
     } catch (e) {
@@ -1852,9 +1866,8 @@ function handleReview(args: string[]): void {
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),
       ...(recovery ? { recovery } : {}),
-      ...(reviewChallenge !== null
-        ? { reviewChallenge }
-        : {}),
+      requestId,
+      reviewFile,
     }));
     return;
   }
@@ -1874,6 +1887,8 @@ function handleReview(args: string[]): void {
     );
   }
   fields.Verdict = verdict;
+  const reviewFileFlag = flags["review-file"];
+  let recordPath: string | null = null;
 
   try {
     withAuditLock(pd, () => {
@@ -1899,48 +1914,15 @@ function handleReview(args: string[]): void {
           "cannot be recovered by retrying or rebaselining; start a fresh review attempt.",
         );
       }
-      if (
-        requestBinding.appendixArtifact === null ||
-        requestBinding.appendixOffset === null
-      ) {
-        refuseReview(
-          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching request ` +
-            "does not carry a modern review appendix binding.",
-        );
-      }
-      if (
-        requestBinding.priorAppendixDigest === null ||
-        requestBinding.priorAppendixLength === null
-      ) {
-        refuseReview(
-          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
-            `iteration ${iteration} does not pin the pre-request appendix state. ` +
-            "Modernize that exact request with --retry-pending before recording the verdict.",
-        );
-      }
-      if (
-        requestBinding.priorAppendixLength > 0 &&
-        requestBinding.reviewChallenge === null
-      ) {
-        refuseReview(
-          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
-            `iteration ${iteration} predates request challenges for an existing review appendix. ` +
-            "Modernize that exact request with --retry-pending before recording the verdict.",
-        );
-      }
       const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
         requireRequiredArtifacts,
         boltDag: unitResolution ?? undefined,
         mergedBoltUnits,
-        appendixBinding: {
-          artifact: requestBinding.appendixArtifact,
-          offset: requestBinding.appendixOffset,
-        },
       });
       if (snapshot === null) {
         refuseReview(
           `Cannot record review for "${flags.stage}": the declared artifact set ` +
-            "changed during the snapshot or its append target is no longer valid.",
+            "changed during the snapshot or is no longer a set of regular files.",
         );
       }
       const bindsUnitSource =
@@ -1956,80 +1938,118 @@ function handleReview(args: string[]): void {
         refuseReview(
           `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
             `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
-            "this unit created or modified — including shell- or generator-written files — then request and " +
+            "this unit created or modified, including shell- or generator-written files, then request and " +
             "record the review again.",
         );
       }
 
-      if (snapshot.requestFingerprint !== requestBinding.artifactFingerprint) {
-        refuseReview(
-          `Cannot record the verdict for "${flags.stage}" because ` +
-            `its output documents changed outside the reviewer-authored appendix ` +
-            `after review iteration ${iteration} started. Restore the bytes the ` +
-            "reviewer was dispatched on and re-run that exact iteration; " +
-            "--retry-pending cannot rebaseline changed content.",
-        );
-      }
-      const appendixEvidence = reviewAppendixEvidenceBytes(snapshot.appendix);
+      const slot = reviewSlot(attempt.floor, iteration);
+      const legacy = requestBinding.legacyAppendix;
+
+      // Deprecated migration path: a reviewer that still appends `## Review` to
+      // the artifact (see reviewAppendedAfterRequest). Read, never written to,
+      // and it leaves no record.
+      const appendedAfterRequest = reviewAppendedAfterRequest(requestBinding, snapshot);
+
+      // The reviewer writes a review, never the artifact: the bytes the reviewer
+      // was dispatched on must be the bytes on disk now. A legacy request is
+      // compared against the body before any embedded appendix, which is what
+      // it fingerprinted.
       if (
-        requestBinding.priorAppendixLength > 0 &&
-        appendixEvidence.length >= requestBinding.priorAppendixLength &&
-        reviewAppendixDigest(
-          appendixEvidence.subarray(
-            0,
-            requestBinding.priorAppendixLength,
-          ),
-        ) ===
-          requestBinding.priorAppendixDigest
+        !reviewRequestArtifactsCurrent(requestBinding, snapshot) &&
+        !appendedAfterRequest
       ) {
         refuseReview(
-          `Refusing REVIEW_COMPLETED for "${flags.stage}": the review appendix still ` +
-            "starts with the exact section that existed before REVIEW_REQUESTED " +
-            `iteration ${iteration}, so it is not fresh reviewer evidence. Appending ` +
-            "prose does not make stale reviewer authority fresh. Have the reviewer remove " +
-            "the old section and write a new `## Review` section for this iteration, then " +
-            "record the verdict.",
+          `Cannot record the verdict for "${flags.stage}" because its output ` +
+            `documents changed after review iteration ${iteration} started. ` +
+            "Restore the bytes the reviewer was dispatched on and re-run that exact " +
+            "iteration; --retry-pending cannot rebaseline changed content.",
+        );
+      }
+
+      // The review file is read the way the record will be read back: no
+      // symlinked container or leaf, no hardlink, no oversize file. A slot
+      // draft that is absent is an incomplete review; one that is anything but
+      // a plain file is refused, never silently treated as missing.
+      let body: Buffer | null = null;
+      try {
+        if (reviewFileFlag !== undefined) {
+          body = readRegularFileNoFollowOrThrow(
+            resolve(pd, reviewFileFlag),
+            "review file",
+            REVIEW_RECORD_MAX_BYTES,
+          );
+        } else {
+          const target = assertNoSymlinkInChainOrThrow(
+            realpathSync(recordDir(pd) as string),
+            slot.draftRelativeToRecord,
+          );
+          if (lstatExists(target)) {
+            body = readRegularFileNoFollowOrThrow(target, "review file", REVIEW_RECORD_MAX_BYTES);
+          }
+        }
+      } catch (readError) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}": the review file ` +
+            `${reviewFileFlag ?? slot.draftRelative} is not a plain readable file ` +
+            `(${errorMessage(readError)}).`,
+        );
+      }
+      if (body !== null && snapshot.appendix.length > 0 && appendedAfterRequest) {
+        refuseReview(
+          `Cannot record the verdict for "${flags.stage}": a \`## Review\` section was ` +
+            `appended to the reviewed artifact after review iteration ${iteration} started ` +
+            "and a review file was also written. The review file is the review; remove the " +
+            "appended section so the artifact carries the bytes the reviewer was dispatched on.",
         );
       }
       const incompleteFallback =
-        snapshot.appendix.length === 0 &&
+        body === null &&
+        !appendedAfterRequest &&
         pendingRequest.retried &&
         verdict === "NOT-READY";
+      const embeddedLegacy = body === null && !incompleteFallback && appendedAfterRequest;
+      if (body === null && !incompleteFallback && !embeddedLegacy) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}": no review was written for ` +
+            `iteration ${iteration}. The reviewer writes its review to ` +
+            `${slot.draftRelative} (or pass --review-file <path>); a retried ` +
+            "incomplete attempt records --verdict NOT-READY without a review.",
+        );
+      }
+      const reviewBytes = body ?? snapshot.appendix;
       if (!incompleteFallback) {
-        const appendix = validateReviewAppendix(snapshot.appendix, {
+        const validity = validateReviewAppendix(reviewBytes, {
           verdict: verdict as ReviewVerdict,
           reviewer: flags.reviewer,
           iteration,
-          reviewChallenge: requestBinding.reviewChallenge,
+          reviewChallenge: embeddedLegacy ? legacy?.challenge ?? null : null,
+          standalone: body !== null,
         });
-        if (!appendix.valid) {
+        if (!validity.valid) {
           refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${appendix.reason}.`,
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,
           );
         }
       }
+
       fields["Request Fingerprint"] = requestBinding.artifactFingerprint;
       fields["Artifact Fingerprint"] = snapshot.fingerprint;
-      fields["Review Appendix Artifact"] = requestBinding.appendixArtifact;
-      fields["Review Appendix Offset"] = String(
-        requestBinding.appendixOffset,
-      );
-      fields["Review Appendix Prior Digest"] =
-        requestBinding.priorAppendixDigest;
-      fields["Review Appendix Prior Length"] = String(
-        requestBinding.priorAppendixLength,
-      );
-      if (requestBinding.reviewChallenge !== null) {
-        fields["Review Challenge"] = requestBinding.reviewChallenge;
+      if (requestBinding.requestId !== null) {
+        fields["Request Id"] = requestBinding.requestId;
+      }
+      if (legacy !== null) {
+        Object.assign(fields, legacyReviewAppendixEchoFields(legacy));
       }
       // Bind the terminal receipt to the workspace source state the reviewer
       // inspected. Only workspace-writing stages carry this binding. A newly
       // unbindable receipt records that explicitly so completion fails closed;
       // only genuinely legacy fieldless receipts keep migration behavior.
+      let sourceFingerprint: string | null = null;
+      let unitFingerprint: string | null = null;
       if (node.workspace_requires) {
         const sourceState = workspaceSourceState(pd, intent, space);
-        const sourceFingerprint =
-          sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+        sourceFingerprint = sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
         if (requestBinding.sourceFingerprint === null) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
@@ -2047,7 +2067,7 @@ function handleReview(args: string[]): void {
         fields["Request Source Fingerprint"] = sourceFingerprint;
         fields["Source Fingerprint"] = sourceFingerprint;
         if (bindsUnitSource) {
-          const unitFingerprint =
+          unitFingerprint =
             sourceState === null || manifest?.ok !== true
               ? UNBINDABLE_FINGERPRINT
               : unitSourceFingerprint(
@@ -2082,14 +2102,73 @@ function handleReview(args: string[]): void {
           }
         }
       }
+
+      // The record is the review. Written here and only here, in the same
+      // transaction as the row that names it, so the row's digest is the only
+      // authority over its bytes. A legacy embedded review leaves no record; its
+      // section stays readable where the reviewer left it.
+      if (body !== null) {
+        const artifactKey = snapshot.reviewArtifact;
+        let findings: ReturnType<typeof parseReviewSection>["findings"];
+        try {
+          findings = parseReviewSection(body.toString("utf-8"), artifactKey, flags.unit).findings;
+        } catch (parseError) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${errorMessage(parseError)}.`,
+          );
+        }
+        const record: ReviewRecord = {
+          version: 1,
+          stage: flags.stage,
+          unit: flags.unit ?? null,
+          workflow: fields.Workflow ?? null,
+          attempt: reviewAttemptId(attempt.floor),
+          iteration,
+          reviewer: flags.reviewer,
+          verdict: verdict as ReviewVerdict,
+          request_id: requestBinding.requestId,
+          request_challenge: legacy?.challenge ?? null,
+          artifact_fingerprint: snapshot.fingerprint,
+          source_fingerprint: sourceFingerprint,
+          unit_source_fingerprint: unitFingerprint,
+          findings: findings.map((finding) => ({
+            id: finding.id,
+            severity: finding.severity,
+            location: finding.location,
+            finding: finding.finding,
+            required_action: finding.requiredAction,
+            status: finding.status,
+          })),
+          body: body.toString("utf-8"),
+          recorded_at: isoTimestamp(),
+        };
+        const serialized = serializeReviewRecord(record);
+        const recordAbsolute = join(
+          recordDir(pd) as string,
+          ...slot.recordRelative.split("/"),
+        );
+        mkdirSync(dirname(recordAbsolute), { recursive: true });
+        writeFileSync(recordAbsolute, serialized, "utf-8");
+        fields["Review Record"] = slot.recordRelative;
+        fields["Review Record Digest"] = reviewRecordDigest(serialized);
+        recordPath = slot.recordRelative;
+      }
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
+      // The draft was the reviewer's input; the record now holds it.
+      if (body !== null && reviewFileFlag === undefined) {
+        rmSync(slot.draftAbsolute, { force: true });
+      }
     }, intent, space);
   } catch (e) {
     if (e instanceof ReviewRefusal) error(e.message);
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
-  console.log(JSON.stringify({ emitted: "REVIEW_COMPLETED", stage: flags.stage }));
+  console.log(JSON.stringify({
+    emitted: "REVIEW_COMPLETED",
+    stage: flags.stage,
+    ...(recordPath !== null ? { reviewRecord: recordPath } : {}),
+  }));
 }
 
 // --- CLI entry point ---

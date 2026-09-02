@@ -67,14 +67,13 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -93,12 +92,15 @@ import {
 } from "../harness/fixtures.ts";
 import {
   artifactFilename,
+  findStageBySlug,
+  reviewRecordDigest,
   toPosix,
   writeActiveDirectiveMarker,
   writePlanApprovalReceipt,
   stateDigest,
   workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readReviewArtifactContexts } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 import {
   approvalFingerprint,
   evaluateCodeGenerationApproval,
@@ -456,9 +458,15 @@ function logWorktreeReview(
       `worktree review request failed: ${requested.stdout}${requested.stderr}`,
     );
   }
-  appendFileSync(
-    reviewArtifact,
-    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
+  // The reviewer writes its review to the slot the request named, inside the
+  // worktree's intent record; the verdict records it there. The merge carries
+  // the record to main beside the receipt.
+  const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+  const draft = join(wt, reviewFile);
+  mkdirSync(dirname(draft), { recursive: true });
+  writeFileSync(
+    draft,
+    `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\n| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n| R-01 | Minor | construction/${unit}/code-generation/code-generation-plan.md > Step 2 | Fixture finding for ${unit} | Fixture action | New |\n`,
   );
   const completed = spawnSync(
     BUN,
@@ -783,6 +791,26 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     setupReferee();
     expect(finalizeOut).not.toContain("cannot create the immutable reviewed-source commit");
     expect(finalizeOut).toContain('"converged": 1');
+  }, 60000);
+
+  test("6e: the review record travels with its receipt into the main intent record and renders the Unit's findings", () => {
+    setupReferee();
+    if (wtproj === undefined) throw new Error("referee fixture was not created");
+    const review = auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED"));
+    const recordPath = /\*\*Review Record\*\*: (\S+)/.exec(review)?.[1];
+    const recordDigest = /\*\*Review Record Digest\*\*: (\S+)/.exec(review)?.[1];
+    expect(recordPath).toMatch(/^\.aidlc-reviews\/code-generation\/win\/[0-9a-f]{16}\/1\.json$/);
+    expect(recordDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const mainRecord = join(seededRecordDir(wtproj), recordPath as string);
+    expect(existsSync(mainRecord)).toBe(true);
+    expect(reviewRecordDigest(readFileSync(mainRecord))).toBe(recordDigest as string);
+    const stage = findStageBySlug("code-generation");
+    if (!stage) throw new Error("code-generation missing from graph");
+    const contexts = readReviewArtifactContexts(wtproj, stage);
+    const win = contexts.find((context) => context.unit === "win");
+    expect(win?.verdict).toBe("READY");
+    expect(win?.findings.map((finding) => finding.id)).toEqual(["R-01"]);
+    expect(win?.findings[0]?.finding).toBe("Fixture finding for win");
   }, 60000);
 
   test("6d: finalize lands reviewed record artifacts and the bound source manifest", () => {

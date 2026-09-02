@@ -2484,6 +2484,11 @@ function settledSwarmForArtifactGuardOrError(
   try {
     return isSettledSwarmForArtifactGuard(pd, stage, stateContent, action);
   } catch (e) {
+    // A refusal the probe itself raised (a structural problem it named, or a
+    // guard it hit) is the answer, not an unexpected failure to wrap.
+    if (e instanceof StateCommandError || e instanceof StateGuardRefusalError) {
+      throw e;
+    }
     error(
       `${reviewerPreconditionPrefix(stage.slug, action)}: the settled-swarm probe failed unexpectedly ` +
         `(${errorMessage(e)}). Restore readable state, audit, and Unit DAG evidence before retrying.`,
@@ -3418,9 +3423,10 @@ function verifySummaryConfirmationPrecondition(
   });
   if (!evidence.ok) {
     refuseStateGuard(pd, content, stage, {
-      code: "SUMMARY_EVIDENCE_INVALID",
+      code: evidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
       blockedAction: "summary-confirmation",
       invariant:
+        evidence.refusal?.invariant ??
         "Generated outputs descend from a current human-backed summary confirmation.",
       userMessage: evidence.message,
       summaryCoverage: evidence.summaryCoverage,

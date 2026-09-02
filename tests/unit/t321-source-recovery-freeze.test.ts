@@ -9,13 +9,8 @@ import {
   test,
 } from "bun:test";
 import { spawnSync } from "node:child_process";
-import {
-  appendFileSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   freshReviewReceipts,
@@ -66,56 +61,27 @@ function runLog(proj: string, args: string[]) {
   };
 }
 
-function reviewArtifactPath(
+// The reviewer writes its review to the slot the request names; the verdict
+// records it as the review record. The artifact is never touched.
+function writeReviewFile(
   proj: string,
-  stage: string,
-  unit?: string,
-): string {
-  const definition = loadStageGraphAll().find((entry) => entry.slug === stage);
-  if (!definition?.review_artifact) {
-    throw new Error(`${stage} has no review_artifact`);
-  }
-  const dir =
-    definition.for_each === "unit-of-work"
-      ? join(
-          seededRecordDir(proj),
-          definition.phase,
-          unit ?? "unit-alpha",
-          stage,
-        )
-      : join(seededRecordDir(proj), definition.phase, stage);
-  return join(dir, `${definition.review_artifact}.md`);
-}
-
-function stripReviewAppendix(artifact: string): void {
-  const current = readFileSync(artifact, "utf-8");
-  const reviewStart = current.search(/^## Review[ \t]*$/m);
-  if (reviewStart === -1) return;
-  writeFileSync(
-    artifact,
-    `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
-    "utf-8",
-  );
-}
-
-function appendReviewAppendix(
-  artifact: string,
+  reviewFile: string,
   reviewer: string,
   iteration: number,
-  reviewChallenge?: string,
-): void {
-  appendFileSync(
-    artifact,
-    "\n## Review\n\n" +
-      "**Verdict:** READY\n" +
+  verdict: "READY" | "NOT-READY" = "READY",
+): string {
+  const absolute = join(proj, reviewFile);
+  mkdirSync(dirname(absolute), { recursive: true });
+  writeFileSync(
+    absolute,
+    "## Review\n\n" +
+      `**Verdict:** ${verdict}\n` +
       `**Reviewer:** ${reviewer}\n` +
-      `**Iteration:** ${iteration}\n` +
-      (reviewChallenge === undefined
-        ? "\n"
-        : `**Request Challenge:** ${reviewChallenge}\n\n`) +
+      `**Iteration:** ${iteration}\n\n` +
       "### Findings\n\nNo blocking findings.\n",
     "utf-8",
   );
+  return absolute;
 }
 
 function recordReview(
@@ -133,16 +99,12 @@ function recordReview(
     "--iteration",
     "1",
   ];
-  const artifact = reviewArtifactPath(proj, stage, unit);
-  stripReviewAppendix(artifact);
   const request = runLog(proj, base);
   if (request.status !== 0) {
     throw new Error(`review request failed: ${request.out}`);
   }
-  const { reviewChallenge } = JSON.parse(request.stdout) as {
-    reviewChallenge?: string;
-  };
-  appendReviewAppendix(artifact, reviewer, 1, reviewChallenge);
+  const { reviewFile } = JSON.parse(request.stdout) as { reviewFile: string };
+  writeReviewFile(proj, reviewFile, reviewer, 1);
   const verdict = runLog(proj, [...base, "--verdict", "READY"]);
   if (verdict.status !== 0) {
     throw new Error(`review verdict failed: ${verdict.out}`);
@@ -232,8 +194,8 @@ function auditBlock(
   ].join("\n");
 }
 
-describe("t321 request-bound source-recovery freeze suspension", () => {
-  test("cross-shard session ties keep recovery retryable but never leave its write suspension active", () => {
+describe("t321 the freeze stays on through a source-recovery review", () => {
+  test("a pending recovery request is retryable and carries no write window, however its session ties fall", () => {
     const timestamp = "2026-08-24T22:00:00Z";
     for (const sessionEvent of ["SESSION_STARTED", "SESSION_RESUMED"]) {
       for (const requestSortsFirst of [true, false]) {
@@ -259,6 +221,7 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
             Iteration: "2",
             Recovery: "stale-receipt",
             "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+            "Request Id": `review:${"b".repeat(32)}`,
           }),
         );
         writeFileSync(
@@ -275,18 +238,18 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
           stage!,
           { reviewClass: "adversarial" },
         );
+        // The pending progress names the request and nothing about sessions:
+        // there is no suspension to arm or disarm.
         expect(receipts.unitPending.get("alpha")).toEqual({
           state: "retry-required",
           iteration: 2,
           recovery: true,
-          suspensionActive: false,
-          recoveryCause: null,
         });
       }
     }
   });
 
-  test("only the requested Unit thaws until the matching recovery verdict", () => {
+  test("the requested Unit stays frozen while its recovery review runs; only the review file is writable", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
     seedAidlcMemory(proj);
@@ -322,24 +285,12 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
       "# Questions\n",
     );
 
-    recordReview(
-      proj,
-      "requirements-analysis",
-      "aidlc-product-lead-agent",
-    );
-    recordReview(
-      proj,
-      "code-generation",
-      "aidlc-architecture-reviewer-agent",
-      "alpha",
-    );
-    recordReview(
-      proj,
-      "code-generation",
-      "aidlc-architecture-reviewer-agent",
-      "beta",
-    );
+    recordReview(proj, "requirements-analysis", "aidlc-product-lead-agent");
+    recordReview(proj, "code-generation", "aidlc-architecture-reviewer-agent", "alpha");
+    recordReview(proj, "code-generation", "aidlc-architecture-reviewer-agent", "beta");
+    const betaPlanBytes = readFileSync(betaPlan);
 
+    // Source drift voids beta's receipt; its plan is still frozen.
     writeFileSync(source, "export const value = 2;\n");
     expect(runHook(proj, betaPlan).status).toBe(2);
 
@@ -354,43 +305,40 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
       "2",
     ];
     const recovery = runLog(proj, recoveryArgs);
-    expect(recovery.status).toBe(0);
+    expect(recovery.status, recovery.out).toBe(0);
     expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
-    const { reviewChallenge } = JSON.parse(recovery.stdout) as {
-      reviewChallenge?: string;
+    const { requestId, reviewFile } = JSON.parse(recovery.stdout) as {
+      requestId: string;
+      reviewFile: string;
     };
-    expect(reviewChallenge).toMatch(/^review:[0-9a-f]{32}$/);
-    stripReviewAppendix(betaPlan);
+    expect(requestId).toMatch(/^review:[0-9a-f]{32}$/);
+    expect(reviewFile).toContain("/.aidlc-reviews/code-generation/beta/");
     const recoveryReceipts = freshReviewReceipts(
       proj,
       readFileSync(seededStateFile(proj), "utf-8"),
       loadStageGraphAll().find((entry) => entry.slug === "code-generation")!,
       { reviewClass: "adversarial" },
     );
-    expect(recoveryReceipts.unitPending.get("beta")?.recoveryCause).toBe(
-      "source",
-    );
+    expect(recoveryReceipts.unitPending.get("beta")).toEqual({
+      state: "retry-required",
+      iteration: 2,
+      recovery: true,
+    });
 
-    expect(runHook(proj, betaPlan).status).toBe(0);
+    // The recovery opens no write window: every reviewed artifact stays frozen,
+    // in this session and after a resume alike. The reviewer's own review file
+    // is not a declared output and is never frozen.
+    expect(runHook(proj, betaPlan).status).toBe(2);
     expect(runHook(proj, alphaPlan).status).toBe(2);
     expect(runHook(proj, requirements).status).toBe(2);
-
-    writeFileSync(source, "export const value = 1;\n");
-    expect(runHook(proj, betaPlan).status).toBe(2);
-
-    writeFileSync(source, "export const value = 2;\n");
-    expect(runHook(proj, betaPlan).status).toBe(0);
-
+    expect(runHook(proj, join(proj, reviewFile)).status).toBe(0);
     Bun.sleepSync(1100);
     appendAuditEntry("SESSION_RESUMED", { Source: "resume" }, proj);
     expect(runHook(proj, betaPlan).status).toBe(2);
     const retry = runLog(proj, [...recoveryArgs, "--retry-pending"]);
-    expect(retry.status, retry.stderr).toBe(0);
-    expect(
-      (JSON.parse(retry.stdout) as { reviewChallenge?: string })
-        .reviewChallenge,
-    ).toBe(reviewChallenge);
-    expect(runHook(proj, betaPlan).status).toBe(0);
+    expect(retry.status, retry.out).toBe(0);
+    expect((JSON.parse(retry.stdout) as { requestId: string }).requestId).toBe(requestId);
+    expect(runHook(proj, betaPlan).status).toBe(2);
 
     const gate = spawnSync(
       BUN,
@@ -409,34 +357,21 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
       "recovery review for Unit beta is still in progress",
     );
 
-    writeFileSync(betaPlan, "# code-generation-plan.md for beta\n\n## Review\n");
-    appendAuditEntry(
-      "ARTIFACT_UPDATED",
-      { File: betaPlan, Tool: "Edit" },
-      proj,
-    );
-    expect(runHook(proj, betaPlan).status).toBe(0);
-
-    const staleVerdict = runLog(proj, [
-      ...recoveryArgs,
-      "--verdict",
-      "READY",
-    ]);
-    expect(staleVerdict.status).not.toBe(0);
-    expect(staleVerdict.stderr).toContain(
+    // A review file whose verdict line does not match --verdict is refused.
+    writeReviewFile(proj, reviewFile, "aidlc-architecture-reviewer-agent", 2, "NOT-READY");
+    const mismatched = runLog(proj, [...recoveryArgs, "--verdict", "READY"]);
+    expect(mismatched.status).not.toBe(0);
+    expect(mismatched.out).toContain(
       "exactly one canonical verdict line matching --verdict",
     );
 
-    stripReviewAppendix(betaPlan);
-    appendReviewAppendix(
-      betaPlan,
-      "aidlc-architecture-reviewer-agent",
-      2,
-      reviewChallenge,
-    );
-    expect(
-      runLog(proj, [...recoveryArgs, "--verdict", "READY"]).status,
-    ).toBe(0);
+    // The matching verdict records the review as a record and re-freezes beta;
+    // the plan bytes were never touched.
+    writeReviewFile(proj, reviewFile, "aidlc-architecture-reviewer-agent", 2);
+    const verdict = runLog(proj, [...recoveryArgs, "--verdict", "READY"]);
+    expect(verdict.status, verdict.out).toBe(0);
+    expect(verdict.stdout).toContain('"reviewRecord":".aidlc-reviews/code-generation/beta/');
+    expect(readFileSync(betaPlan).equals(betaPlanBytes)).toBe(true);
     expect(runHook(proj, betaPlan).status).toBe(2);
   });
 });

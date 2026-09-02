@@ -13,7 +13,7 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
@@ -23,6 +23,7 @@ import {
   errorMessage,
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
+  mergeReviewRecordsFromDelta,
   parseFieldArgs,
   redactProjectDirPrefix,
   relativeRecordDir,
@@ -35,6 +36,7 @@ import {
   validateLiveUnitScope,
   worktreeClaimBoundaryMatches,
   worktreeAuditFilePath,
+  worktreeDocsDir,
   worktreePath,
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
@@ -1573,6 +1575,9 @@ function handleAuditMerge(args: string[], projectDir: string): void {
       mainFork.end,
     );
     if (existingMerge || deltaAlreadyPresent) {
+      // The earlier merge carried the delta's review records with its rows; a
+      // retry after that has nothing left to carry and must stay idempotent
+      // even once the worktree is gone.
       alreadyMerged = true;
       result = {
         timestamp: existingMerge
@@ -1580,6 +1585,17 @@ function handleAuditMerge(args: string[], projectDir: string): void {
           : forkTs,
       };
     } else {
+      // The review records the delta's REVIEW_COMPLETED rows name travel with
+      // the rows, under the same lock and before any row lands: main must never
+      // hold a completion pointing at a record it does not have. Paired to
+      // their requests, digest-verified from the worktree, exclusive on main.
+      if (recordPrefix !== null) {
+        mergeReviewRecordsFromDelta(
+          delta,
+          worktreeDocsDir(wtPath, recordPrefix),
+          join(projectDir, ...recordPrefix.split("/")),
+        );
+      }
       const mergedEntry = {
         eventType: "AUDIT_MERGED",
         fields: {

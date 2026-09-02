@@ -287,73 +287,49 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
   });
 
-  test("only a validated pending recovery request suspends its exact scope", () => {
+  test("a pending stale-receipt recovery freezes its exact scope like a receipt does", () => {
+    // The reviewer records its review beside the artifact, never inside it, so
+    // a recovery request opens no write window: the frozen bytes stay frozen
+    // until the recovery verdict or a human decision.
     const raFile =
       "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.md";
     expect(
       judgeFreeze(RA, raFile, NONE, {
+        stageVerdict: null,
+        unitVerdicts: new Map(),
+        stagePending: { recovery: true },
+      }).block,
+    ).toBe(true);
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
         ...ready,
-        stageStale: true,
-        stagePending: { recovery: true, suspensionActive: true },
+        stagePending: { recovery: true },
+      }).block,
+    ).toBe(true);
+    // A pending request that is not a recovery neither freezes nor thaws by itself.
+    expect(
+      judgeFreeze(RA, raFile, NONE, {
+        stageVerdict: null,
+        unitVerdicts: new Map(),
+        stagePending: { recovery: false },
       }).block,
     ).toBe(false);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stagePending: { recovery: true, suspensionActive: true },
-      }).block,
-    ).toBe(true);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stageStale: true,
-        sourceStale: false,
-        newestSourceUnit: null,
-        stagePending: {
-          recovery: true,
-          suspensionActive: true,
-          recoveryCause: "source",
-        },
-      }).block,
-    ).toBe(true);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stageStale: true,
-        sourceStale: true,
-        newestSourceUnit: null,
-        stagePending: {
-          recovery: true,
-          suspensionActive: true,
-          recoveryCause: "source",
-        },
-      }).block,
-    ).toBe(false);
-    expect(
-      judgeFreeze(RA, raFile, NONE, {
-        ...ready,
-        stageStale: true,
-        stagePending: { recovery: false, suspensionActive: false },
-      }).block,
-    ).toBe(true);
 
     const u3 =
       "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
     const u4 =
       "/p/aidlc/spaces/default/intents/i1/construction/U04/nfr-requirements/nfr-requirements.md";
+    const u5 =
+      "/p/aidlc/spaces/default/intents/i1/construction/U05/nfr-requirements/nfr-requirements.md";
     const receipts = {
       stageVerdict: null,
-      unitVerdicts: new Map([
-        ["U03", "READY"],
-        ["U04", "READY"],
-      ]),
-      unitStale: new Set(["U03"]),
-      unitPending: new Map([
-        ["U03", { recovery: true, suspensionActive: true }],
-      ]),
+      unitVerdicts: new Map([["U04", "READY"]]),
+      unitPending: new Map([["U03", { recovery: true }]]),
     };
-    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(false);
+    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
+    expect(judgeFreeze(NFR, u3, NONE, receipts).unit).toBe("U03");
     expect(judgeFreeze(NFR, u4, NONE, receipts).block).toBe(true);
+    expect(judgeFreeze(NFR, u5, NONE, receipts).block).toBe(false);
   });
 
   test("guidance failures fall back without changing the freeze decision", () => {

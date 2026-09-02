@@ -20,18 +20,20 @@
 //     artifact of a reviewer-bearing stage (same suffix matcher the engine
 //     uses), AND
 //   - that stage is not yet completed in the state file (an [x] stage's
-//     artifacts are its permanent record; later stages may legitimately
-//     append - e.g. a reviewer's `## Review` on a redo is a fresh attempt
-//     whose floor already reset), AND
+//     artifacts are its permanent record; a redo is a fresh attempt whose
+//     floor already reset), AND
 //   - a FRESH TERMINAL receipt covers the write target (stage receipt for
-//     stage-level artifacts; that unit's receipt for a per-unit write).
+//     stage-level artifacts; that unit's receipt for a per-unit write), or a
+//     stale-receipt recovery request is pending for it.
 // Everything the freeze must release on releases it automatically because
 // the scan is shared with the engine: GATE_REJECTED, STAGE_JUMPED, and
 // WORKFLOW_STARTED reset the floor (so post-rejection revisions are never
 // frozen), a below-cap adversarial NOT-READY remains nonterminal so its repair
-// loop can edit, and non-produces writes (diary, questions, contributions)
-// never match. Terminal NOT-READY under the effective class freezes just like
-// READY because no further review pass follows it.
+// loop can edit, and non-produces writes (diary, questions, contributions,
+// the reviewer's own review file under `.aidlc-reviews/`) never match.
+// Terminal NOT-READY under the effective class freezes just like READY because
+// no further review pass follows it. The reviewer never writes the artifact it
+// certifies, so the freeze has no carve-out to make for it.
 //
 // The block contract is the harness-native PreToolUse refuse: print a reason
 // to stderr and exit 2; exit 0 allows. Fail-open everywhere: malformed stdin,
@@ -105,7 +107,10 @@ export interface FreezeVerdict {
 }
 
 /** The freeze decision for one write target against one stage. Pure over the
- *  supplied receipts; exported so the decision table is unit-testable. */
+ *  supplied receipts; exported so the decision table is unit-testable. A pending
+ *  stale-receipt recovery freezes the artifact like a terminal receipt does: the
+ *  reviewer records its review beside the artifact, never inside it, so nothing
+ *  needs to write these bytes until a human decision reopens them. */
 export function judgeFreeze(
   stage: Pick<
     StageEntry,
@@ -116,54 +121,15 @@ export function judgeFreeze(
   receipts: {
     stageVerdict: string | null;
     unitVerdicts: Map<string, string>;
-    stageStale?: boolean;
-    unitStale?: ReadonlySet<string>;
-    sourceStale?: boolean;
-    newestSourceUnit?: string | null;
-    stagePending?: {
-      recovery: boolean;
-      suspensionActive?: boolean;
-      recoveryCause?: "artifact" | "source" | "artifact+source" | null;
-    } | null;
-    unitPending?: ReadonlyMap<
-      string,
-      {
-        recovery: boolean;
-        suspensionActive?: boolean;
-        recoveryCause?: "artifact" | "source" | "artifact+source" | null;
-      }
-    >;
+    stagePending?: { recovery: boolean } | null;
+    unitPending?: ReadonlyMap<string, { recovery: boolean }>;
   },
 ): FreezeVerdict {
-  const recoveryStillStale = (
-    pending: {
-      recoveryCause?: "artifact" | "source" | "artifact+source" | null;
-    },
-    artifactStale: boolean,
-    sourceStale: boolean,
-  ): boolean => {
-    if (pending.recoveryCause === "artifact") return artifactStale;
-    if (pending.recoveryCause === "source") return sourceStale;
-    if (pending.recoveryCause === "artifact+source") {
-      return artifactStale || sourceStale;
-    }
-    return artifactStale || sourceStale;
-  };
   const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
   if (targetUnit === undefined) return { block: false }; // not this stage's artifact
   if (stage.for_each === "unit-of-work") {
     if (targetUnit !== null) {
-      const pending = receipts.unitPending?.get(targetUnit);
-      if (pending?.recovery === true) {
-        const stillStale = recoveryStillStale(
-          pending,
-          receipts.unitStale?.has(targetUnit) === true,
-          receipts.sourceStale === true &&
-            receipts.newestSourceUnit === targetUnit,
-        );
-        if (pending.suspensionActive === true && stillStale) {
-          return { block: false };
-        }
+      if (receipts.unitPending?.get(targetUnit)?.recovery === true) {
         return { block: true, target: file, stage: stage.slug, unit: targetUnit };
       }
       // A unit-scoped write voids that unit's receipt only.
@@ -173,18 +139,6 @@ export function judgeFreeze(
       return { block: false };
     }
     if (receipts.stagePending?.recovery === true) {
-      const stillStale = recoveryStillStale(
-        receipts.stagePending,
-        receipts.stageStale === true,
-        receipts.sourceStale === true &&
-          receipts.newestSourceUnit === null,
-      );
-      if (
-        receipts.stagePending.suspensionActive === true &&
-        stillStale
-      ) {
-        return { block: false };
-      }
       return { block: true, target: file, stage: stage.slug };
     }
     for (const [unit, pending] of receipts.unitPending ?? []) {
@@ -202,18 +156,6 @@ export function judgeFreeze(
     return { block: false };
   }
   if (receipts.stagePending?.recovery === true) {
-    const stillStale = recoveryStillStale(
-      receipts.stagePending,
-      receipts.stageStale === true,
-      receipts.sourceStale === true &&
-        receipts.newestSourceUnit === null,
-    );
-    if (
-      receipts.stagePending.suspensionActive === true &&
-      stillStale
-    ) {
-      return { block: false };
-    }
     return { block: true, target: file, stage: stage.slug };
   }
   if (receipts.stageVerdict !== null) {

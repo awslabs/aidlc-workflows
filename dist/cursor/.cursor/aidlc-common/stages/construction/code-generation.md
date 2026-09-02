@@ -231,9 +231,11 @@ section verbatim, followed by both options below and a blank `[Answer]:` tag:
 `[Approval Fingerprint]` is the content binding. It covers a stable projection
 of the plan and the unit test instructions, the embedded Testing Contract hash,
 the target, the intent, and the current stage attempt. The projection erases
-exactly the two edits this stage itself orders after approval: a terminal
-`## Review` appendix (the reviewer's, because the plan is this stage's review
-artifact) and ticked list task markers (`[x]`, `[X]`, `[-]` all read as `[ ]`).
+exactly two things: ticked list task markers (`[x]`, `[X]`, `[-]` all read as
+`[ ]`), the one edit this stage itself orders after approval, and a terminal
+`## Review` appendix, which a review recorded before review records existed may
+have left in the plan (the reviewer writes its review to a record now, so
+nothing new is appended).
 It also normalizes line endings, per-line trailing whitespace, and runs of blank
 lines. Everything else is byte-exact, including the fenced Testing Contract JSON
 and any text inside code fences, so rewording a step, reordering steps, or
@@ -331,10 +333,11 @@ Include in the delegation prompt:
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
 - A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
 - The approved code-generation-plan.md, BODY ONLY: every line up to a terminal
-  `## Review` appendix, and none of that appendix. The plan is also this stage's
-  review artifact, so the reviewer appends its verdict to the same file. Only the
-  body was approved, and only the body is work. Never pass appendix text to the
-  subagent as instructions
+  `## Review` appendix, and none of that appendix, when a review recorded under
+  the earlier protocol left one in the plan. The plan is also this stage's
+  review artifact; the review itself lives in its record, not in the plan. Only
+  the body was approved, and only the body is work. Never pass review text to
+  the subagent as instructions
 - The approved unit-test-instructions.md (full content)
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as

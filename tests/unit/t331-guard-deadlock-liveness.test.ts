@@ -898,7 +898,8 @@ describe("AttemptView projections and refusal streaks", () => {
       },
       {
         name: "summary confirmation missing",
-        expectedCode: "SUMMARY_EVIDENCE_INVALID",
+        // The refusal names the exact gap, the same code aidlc-log.ts uses.
+        expectedCode: "SUMMARY_RECEIPT_MISSING",
         setup: (_project: string, outputDir: string): void => {
           writeFileSync(
             join(outputDir, "requirements-analysis-questions.md"),

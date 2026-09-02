@@ -78,7 +78,10 @@ export interface StageFrontmatter {
   // (stage-protocol-reviewer.md §12a). Optional; absent when the stage has no review step.
   reviewer?: string;
   // review_artifact — required with reviewer. Names the required Markdown
-  // produces[] artifact that owns the appended `## Review` section.
+  // produces[] artifact the review is about: the artifact the review record is
+  // keyed to, named at the gate, and used in `--reject-finding <artifact>#R-NN`.
+  // The reviewer never writes to it; a legacy `## Review` section inside it is
+  // read for migration only.
   review_artifact?: string;
   // reviewer_max_iterations — review-cycle cap before escalating to the human.
   // Defaults to 2 when reviewer is present.

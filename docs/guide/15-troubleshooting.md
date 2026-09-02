@@ -168,13 +168,14 @@ you already approved.
 Plan Approval binds to the plan, unit test instructions, and Testing Contract
 content, to the target, and to the current stage attempt. It is NOT reopened by
 re-running `/aidlc`, by a session restart or a context compaction, by a Stop-hook
-probe, or by `/aidlc --status`. Ticking a plan checkbox and recording a reviewer
-verdict on the plan do not reopen it either.
+probe, or by `/aidlc --status`. Ticking a plan checkbox does not reopen it
+either, and recording a review never touches the plan.
 
 If you are asked again, one of these moved:
 
-- the plan or instructions content (anything beyond a ticked task marker or a
-  terminal `## Review` section)
+- the plan or instructions content (anything beyond a ticked task marker, or a
+  terminal `## Review` section left by a review recorded before review records
+  existed)
 - the Testing Posture, scope, test strategy, or project type
 - the active Unit or stage target
 - the stage attempt: a backward jump, a Request Changes, a gate rejection, or a

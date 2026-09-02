@@ -4,7 +4,6 @@
 // live on the tool-owned GATE_APPROVED / GATE_REJECTED audit rows and are folded
 // into rendered briefs and future reviewer dispatch context at read time.
 
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import {
@@ -14,40 +13,31 @@ import {
   auditBlockField,
   extractMarkdownSection,
   findStageBySlug,
+  latestReviewRecordRefs,
+  parseReviewSection,
   readAuditShardEvents,
+  readReviewRecord,
   readUnitSourceSnapshot,
+  reviewRecordMatchesCompletion,
   recordDir,
   resolveAuditProjectPath,
   resolveProjectDir,
   type ReviewArtifactEntry,
   reviewArtifactEntries,
+  type ReviewFinding,
+  reviewFindingFingerprint,
+  type ReviewFindingStatus,
   reviewInvalidationAttemptView,
   type ReviewFingerprintStage,
+  reviewRecordFindings,
   maximalAttemptEvents,
   toPosix,
 } from "./aidlc-lib.js";
 
+export { reviewFindingFingerprint, type ReviewFinding, type ReviewFindingStatus };
+
 export const REVIEW_FINDING_DISPOSITIONS_FIELD =
   "Review Finding Dispositions";
-
-export type ReviewFindingStatus =
-  | "New"
-  | "Unresolved"
-  | "Resolved"
-  | "Accepted risk"
-  | `Rejected: ${string}`;
-
-export interface ReviewFinding {
-  artifact: string;
-  unit?: string;
-  id: string;
-  severity: string;
-  location: string;
-  finding: string;
-  requiredAction: string;
-  status: ReviewFindingStatus;
-  fingerprint: string;
-}
 
 export interface ReviewArtifactContext {
   artifact: string;
@@ -70,61 +60,11 @@ interface ReviewFindingDispositionEnvelope {
 
 export type ReviewBriefReason = "first" | "revision" | "stale";
 
-function splitMarkdownRow(line: string): string[] {
-  const trimmed = line.trim();
-  const inner = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
-  const body = inner.endsWith("|") ? inner.slice(0, -1) : inner;
-  const cells: string[] = [];
-  let cell = "";
-  let escaped = false;
-  for (const char of body) {
-    if (escaped) {
-      cell += char;
-      escaped = false;
-    } else if (char === "\\") {
-      escaped = true;
-    } else if (char === "|") {
-      cells.push(cell.trim());
-      cell = "";
-    } else {
-      cell += char;
-    }
-  }
-  if (escaped) cell += "\\";
-  cells.push(cell.trim());
-  return cells;
-}
-
-function validFindingStatus(value: string): value is ReviewFindingStatus {
-  return (
-    value === "New" ||
-    value === "Unresolved" ||
-    value === "Resolved" ||
-    value === "Accepted risk" ||
-    /^Rejected: \S[\s\S]*$/.test(value)
-  );
-}
-
-export function reviewFindingFingerprint(
-  finding: Pick<
-    ReviewFinding,
-    "id" | "location" | "finding" | "requiredAction"
-  >,
-): string {
-  return `sha256:${
-    createHash("sha256")
-      .update(
-        JSON.stringify([
-          finding.id,
-          finding.location,
-          finding.finding,
-          finding.requiredAction,
-        ]),
-      )
-      .digest("hex")
-  }`;
-}
-
+/**
+ * Parse a legacy embedded review: the `## Review` section a reviewer wrote into
+ * the artifact under the retired appendix protocol. Read for migration only;
+ * new reviews live in review records.
+ */
 export function parseReviewArtifact(
   content: string,
   artifact: string,
@@ -132,92 +72,12 @@ export function parseReviewArtifact(
 ): ReviewArtifactContext | null {
   const review = extractMarkdownSection(content, "## Review");
   if (!review) return null;
-
-  const verdictMatch = review.match(
-    /^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m,
-  );
-  const lines = review.replace(/\r\n/g, "\n").split("\n");
-  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
-  if (heading === -1) {
-    return {
-      artifact,
-      ...(unit ? { unit } : {}),
-      verdict: verdictMatch?.[1] as "READY" | "NOT-READY" | undefined ?? null,
-      findings: [],
-    };
-  }
-  let end = lines.length;
-  for (let i = heading + 1; i < lines.length; i++) {
-    if (/^### /.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  const table = lines
-    .slice(heading + 1, end)
-    .filter((line) => line.trim().startsWith("|"));
-  if (table.length < 2) {
-    return {
-      artifact,
-      ...(unit ? { unit } : {}),
-      verdict: verdictMatch?.[1] as "READY" | "NOT-READY" | undefined ?? null,
-      findings: [],
-    };
-  }
-  const headers = splitMarkdownRow(table[0]);
-  const required = [
-    "ID",
-    "Severity",
-    "Location",
-    "Finding",
-    "Required action",
-    "Status",
-  ];
-  for (const name of required) {
-    if (!headers.includes(name)) {
-      return {
-        artifact,
-        ...(unit ? { unit } : {}),
-        verdict: verdictMatch?.[1] as "READY" | "NOT-READY" | undefined ?? null,
-        findings: [],
-      };
-    }
-  }
-  const index = new Map(headers.map((name, position) => [name, position]));
-  const findings: ReviewFinding[] = [];
-  for (const line of table.slice(2)) {
-    const cells = splitMarkdownRow(line);
-    const value = (name: string): string =>
-      cells[index.get(name) ?? -1]?.trim() ?? "";
-    const id = value("ID");
-    if (!/^R-[0-9]+$/.test(id)) {
-      throw new Error(`${artifact}: invalid finding ID ${JSON.stringify(id)}`);
-    }
-    const status = value("Status");
-    if (!validFindingStatus(status)) {
-      throw new Error(
-        `${artifact}#${id}: invalid finding status ${JSON.stringify(status)}`,
-      );
-    }
-    const finding: ReviewFinding = {
-      artifact,
-      ...(unit ? { unit } : {}),
-      id,
-      severity: value("Severity"),
-      location: value("Location"),
-      finding: value("Finding"),
-      requiredAction: value("Required action"),
-      status,
-      fingerprint: "",
-    };
-    finding.fingerprint = reviewFindingFingerprint(finding);
-    findings.push(finding);
-  }
+  const parsed = parseReviewSection(review, artifact, unit);
   return {
     artifact,
     ...(unit ? { unit } : {}),
-    verdict: verdictMatch?.[1] as "READY" | "NOT-READY" | undefined ?? null,
-    findings,
+    verdict: parsed.verdict,
+    findings: parsed.findings,
   };
 }
 
@@ -235,6 +95,13 @@ function entryUnit(logicalPath: string, stageSlug: string): string | undefined {
   return match?.[2] === stageSlug ? match[1] : undefined;
 }
 
+/**
+ * The current review per scope. A scope whose newest completion names a
+ * review record renders that record (keyed to `review_artifact`, the artifact
+ * the review is about); a scope without one falls back to the legacy embedded
+ * `## Review` sections in its artifacts, so an intent reviewed before review
+ * records keeps working until its next review.
+ */
 export function readReviewArtifactContexts(
   projectDir: string,
   stage: ReviewFingerprintStage,
@@ -243,13 +110,43 @@ export function readReviewArtifactContexts(
   const contexts: ReviewArtifactContext[] = [];
   const entries = reviewArtifactEntries(projectDir, stage, unit);
   if (entries === null) return contexts;
+  const records = latestReviewRecordRefs(projectDir, stage);
+  const recordScopes = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.reviewAppendixTarget) continue;
+    const scopeUnit = unit ?? entryUnit(entry.logicalPath, stage.slug);
+    const ref = records.get(scopeUnit ?? "");
+    if (!ref) continue;
+    const record = readReviewRecord(projectDir, ref);
+    // The record must be the review its paired row describes, for this scope:
+    // a genuine record from another stage, Unit, or iteration that a row
+    // happened to name is not this review.
+    if (
+      record === null ||
+      record.stage !== stage.slug ||
+      (record.unit ?? "") !== (scopeUnit ?? "") ||
+      !reviewRecordMatchesCompletion(record, ref.completion)
+    ) {
+      continue;
+    }
+    const artifact = workspaceArtifactPath(projectDir, entry);
+    recordScopes.add(scopeUnit ?? "");
+    contexts.push({
+      artifact,
+      ...(scopeUnit ? { unit: scopeUnit } : {}),
+      verdict: record.verdict,
+      findings: reviewRecordFindings(record, artifact),
+    });
+  }
   for (const entry of entries) {
     if (entry.path === null || !existsSync(entry.path)) continue;
+    const scopeUnit = unit ?? entryUnit(entry.logicalPath, stage.slug);
+    if (recordScopes.has(scopeUnit ?? "")) continue;
     const artifact = workspaceArtifactPath(projectDir, entry);
     const parsed = parseReviewArtifact(
       readFileSync(entry.path, "utf-8"),
       artifact,
-      unit ?? entryUnit(entry.logicalPath, stage.slug),
+      scopeUnit,
     );
     if (parsed) contexts.push(parsed);
   }
