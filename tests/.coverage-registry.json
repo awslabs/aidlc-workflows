@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 359,
+      "function": 361,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -4944,8 +4944,13 @@
       "unitClass": "function",
       "unitId": "function:removeRecordFileNoFollow",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-authority-rebinding.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7209,8 +7214,13 @@
       "unitClass": "function",
       "unitId": "function:writeRecordFileNoFollow",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-authority-rebinding.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

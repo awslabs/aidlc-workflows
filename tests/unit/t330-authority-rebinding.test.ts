@@ -1,4 +1,4 @@
-// covers: function:attemptEventDefinitelyBefore, function:maximalAttemptEvents, function:projectPlanApprovalContent, function:projectStateForDigest, function:stateDigest, function:refuseEngineObserverWrite, function:approvalFingerprintIsCurrentFormat, function:collectStalePlanApprovalReceipts, function:stalePlanApprovalReceiptsForTarget
+// covers: function:writeRecordFileNoFollow, function:removeRecordFileNoFollow, function:attemptEventDefinitelyBefore, function:maximalAttemptEvents, function:projectPlanApprovalContent, function:projectStateForDigest, function:stateDigest, function:refuseEngineObserverWrite, function:approvalFingerprintIsCurrentFormat, function:collectStalePlanApprovalReceipts, function:stalePlanApprovalReceiptsForTarget
 //
 // WHAT A PLAN APPROVAL IS BOUND TO, at the unit level.
 //
@@ -33,6 +33,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  writeFileSync,
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -47,6 +48,8 @@ import {
   stateDigest,
   writeFileAtomic,
   writeBufferAtomic,
+  writeRecordFileNoFollow,
+  removeRecordFileNoFollow,
   writePlanApprovalReceipt,
   writeStateFile,
   collectStalePlanApprovalReceipts,
@@ -527,7 +530,16 @@ describe("t330 (3) engine observers cannot reach a durable write", () => {
               dir,
             ),
         ],
+        [
+          "writeRecordFileNoFollow",
+          () => writeRecordFileNoFollow(dir, ".aidlc-reviews/barred.json", "{}"),
+        ],
+        [
+          "removeRecordFileNoFollow",
+          () => removeRecordFileNoFollow(dir, "kept.txt"),
+        ],
       ];
+      writeFileSync(join(dir, "kept.txt"), "kept", "utf-8");
       for (const [name, call] of primitives) {
         let thrown: unknown;
         underMode(mode, () => {
@@ -540,14 +552,20 @@ describe("t330 (3) engine observers cannot reach a durable write", () => {
         expect(thrown, `${name} under ${mode}`).toBeInstanceOf(
           EngineModeViolationError,
         );
-        expect((thrown as Error).message).toContain(name === "appendAuditEntry"
-          ? "appendAuditBlockAtPath"
-          : name);
+        expect((thrown as Error).message).toContain(
+          name === "appendAuditEntry"
+            ? "appendAuditBlockAtPath"
+            : name === "writeRecordFileNoFollow"
+              ? "writeBufferAtomic"
+              : name,
+        );
       }
       // And the refusal leaves nothing behind: a barrier that half-wrote would be
       // worse than no barrier.
       expect(existsSync(join(dir, "barred.txt"))).toBe(false);
       expect(existsSync(join(dir, "barred.bin"))).toBe(false);
+      expect(existsSync(join(dir, ".aidlc-reviews", "barred.json"))).toBe(false);
+      expect(readFileSync(join(dir, "kept.txt"), "utf-8")).toBe("kept");
     });
   }
 
