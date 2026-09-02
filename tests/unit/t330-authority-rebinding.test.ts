@@ -24,7 +24,7 @@
 // re-issued directive finds the approval that already exists.
 //
 // The end-to-end sequences these properties exist to protect live in
-// tests/integration/t330-authority-rebinding.test.ts.
+// tests/integration/t328-authority-rebinding.test.ts.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -391,7 +391,7 @@ const STATE = [
   "## Stage Progress",
   "",
   "### CONSTRUCTION PHASE",
-  "- [-] code-generation — EXECUTE",
+  "- [-] code-generation \u2014 EXECUTE",
   "",
   "## Unit Progress",
   "",
@@ -477,7 +477,7 @@ describe("t330 (2) the state digest the active directive binds to", () => {
   test("the projection keeps every routing line byte-exact", () => {
     const projected = projectStateForDigest(STATE);
     expect(projected).toContain("- **Current Stage**: code-generation");
-    expect(projected).toContain("- [-] code-generation — EXECUTE");
+    expect(projected).toContain("- [-] code-generation \u2014 EXECUTE");
     expect(projected).toContain("- **Unit Ownership**: team");
     expect(projected).not.toContain("Last Updated");
     expect(projected).not.toContain("| alpha |");

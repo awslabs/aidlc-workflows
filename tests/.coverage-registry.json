@@ -3059,7 +3059,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t330-authority-rebinding.test.ts",
+          "file": "tests/integration/t328-authority-rebinding.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3083,7 +3083,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t330-authority-rebinding.test.ts",
+          "file": "tests/integration/t328-authority-rebinding.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3095,7 +3095,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t330-authority-rebinding.test.ts",
+          "file": "tests/integration/t328-authority-rebinding.test.ts",
           "mechanism": "cli"
         }
       ],

@@ -189,6 +189,13 @@ export interface UnitEvidence {
   receiptValid: boolean;
   /** The current approved Testing Contract hash, used to bind the worker brief. */
   contractHash: string | null;
+  /**
+   * The evaluator's own sentence when the receipt is not valid. It names what
+   * retired the approval (a moved workspace source, an ended stage attempt, a
+   * changed plan) so the block text can carry the remedy instead of the generic
+   * "present Plan Approval" steps alone.
+   */
+  reason?: string;
 }
 
 /** The decision's verdict. `mentioned` carries the explicit marker value(s). */
@@ -296,7 +303,7 @@ export function evaluatePlanApprovalDispatch(
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // missing evidence and the exact stage steps that produce it, so the
 // conductor self-corrects instead of retrying the same call.
-export function blockReason(mentioned: string[]): string {
+export function blockReason(mentioned: string[], detail: string | null = null): string {
   const scope =
     mentioned.length === 1
       ? mentioned[0] === `stage:${GUARDED_STAGE}`
@@ -307,7 +314,7 @@ export function blockReason(mentioned: string[]): string {
         : "one target, but the brief does not name it";
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
-    `not currently approved. Finish Steps 2-3 in code-generation: update ` +
+    `not currently approved.${detail ? ` Reason: ${detail}.` : ""} Finish Steps 2-3 in code-generation: update ` +
     `code-generation-plan.md and unit-test-instructions.md, refresh the Testing Contract and ` +
     `approval fingerprint, present Plan Approval, end the turn, and wait for the human's ` +
     `"Approve Plan" answer. Then retry the developer handoff with ` +
@@ -316,10 +323,27 @@ export function blockReason(mentioned: string[]): string {
   );
 }
 
+/**
+ * The evaluator's reason for the first mentioned target whose receipt is not
+ * valid, or null when every mentioned target is approved or unknown.
+ */
+export function receiptDetail(
+  evidence: UnitEvidence[],
+  mentioned: string[],
+): string | null {
+  for (const name of mentioned) {
+    const unit = name === `stage:${GUARDED_STAGE}` ? null : name;
+    const match = evidence.find((entry) => entry.unit === unit);
+    if (match && !match.receiptValid && match.reason) return match.reason;
+  }
+  return null;
+}
+
 export function mutationBlockReason(
   target: string,
   unit: string | null,
   opaqueShell = false,
+  detail: string | null = null,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const action = opaqueShell
@@ -328,7 +352,7 @@ export function mutationBlockReason(
   return (
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract are fingerprinted and ` +
-    `approved. Writes inside the selected code-generation record directory remain ` +
+    `approved.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
     `available for Steps 2-3. Record the human's explicit "Approve Plan" answer before beginning ` +
     `Step 4 generation.`
   );
@@ -381,6 +405,7 @@ export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvi
       fingerprintValid: approval.fingerprintValid,
       receiptValid: approval.receiptValid,
       contractHash: approval.contractHash,
+      ...(approval.ok ? {} : { reason: approval.reason }),
     };
   });
 }
@@ -397,6 +422,7 @@ export function gatherApprovalEvidence(projectDir: string, units: string[]): Uni
       fingerprintValid: stageApproval.fingerprintValid,
       receiptValid: stageApproval.receiptValid,
       contractHash: stageApproval.contractHash,
+      ...(stageApproval.ok ? {} : { reason: stageApproval.reason }),
     },
     ...gatherUnitEvidence(projectDir, units),
   ];
@@ -671,6 +697,7 @@ export async function run(input: string): Promise<number> {
     target: string;
     unit: string | null;
     opaqueShell: boolean;
+    detail: string | null;
   } | null = null;
   try {
     const statePath = stateFilePath(projectDir);
@@ -745,6 +772,7 @@ export async function run(input: string): Promise<number> {
           fingerprintValid: approval.fingerprintValid,
           receiptValid: approval.receiptValid,
           contractHash: approval.contractHash,
+          ...(approval.ok ? {} : { reason: approval.reason }),
         };
         verdict = {
           block: !approvalEvidenceIsCurrent(evidence),
@@ -757,6 +785,7 @@ export async function run(input: string): Promise<number> {
               `shell command: ${(mutation.shellCommand ?? "").trim().slice(0, 160)}`,
             unit,
             opaqueShell: outsideRecord === undefined,
+            detail: receiptDetail([evidence], verdict.mentioned),
           };
         }
       }
@@ -839,8 +868,9 @@ export async function run(input: string): Promise<number> {
           blockedMutation.target,
           blockedMutation.unit,
           blockedMutation.opaqueShell,
+          blockedMutation.detail,
         )
-      : blockReason(verdict.mentioned)}\n`,
+      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}\n`,
   );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }

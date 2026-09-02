@@ -436,7 +436,7 @@ async function approvedProject(scope: "express" | "feature" = "express"): Promis
   return { p, target, presentation };
 }
 
-describe("t330 (1) the reported sequence: approve a plan and have it stick", () => {
+describe("t328 (1) the reported sequence: approve a plan and have it stick", () => {
   test("the Stop-hook consultation between the question and the answer changes nothing", async () => {
     const p = await project("express");
     const { directive, trail } = deliver(p);
@@ -513,7 +513,7 @@ describe("t330 (1) the reported sequence: approve a plan and have it stick", () 
   }, 180000);
 });
 
-describe("t330 (2) every legitimate action preserves the recorded decision", () => {
+describe("t328 (2) every legitimate action preserves the recorded decision", () => {
   const cases: Array<
     [string, (p: Project) => void]
   > = [
@@ -608,9 +608,50 @@ describe("t330 (2) every legitimate action preserves the recorded decision", () 
       deleted: [],
     });
   }, 120000);
+
+  test("the raw questions digest is provenance: normalizing the answer line keeps the receipt, changing the prompt retires it", async () => {
+    const { p, target, presentation } = await approvedProject();
+    expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
+
+    // The raw questions-file digest is no longer compared. The one edit it
+    // caught that the prompt hash does not is a rewrite of the answer line
+    // itself, which the Kiro IDE adapter performs when it canonicalizes the
+    // human's reply. That edit changes nothing the human decided.
+    writeFileSync(
+      presentation.questions,
+      readFileSync(presentation.questions, "utf-8").replace(
+        /^\[Answer\]:[ \t]*Approve Plan[ \t]*$/m,
+        "[Answer]: A. Approve Plan",
+      ),
+    );
+    expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
+    expect(p.receipts().length).toBe(1);
+
+    // The prompt hash still covers the whole questions file with answers
+    // blanked, so a note appended after the answer is a change to the prompt the
+    // receipt was minted for and retires it. The refusal names the prompt, and
+    // the recovery is the usual one: re-present and approve again.
+    appendFileSync(
+      presentation.questions,
+      "\n<!-- conductor note: approved in the afternoon session -->\n",
+    );
+    const afterNote = approval(p, target);
+    expect(afterNote.ok).toBe(false);
+    expect(afterNote.reason).toContain("prompt");
+
+    // Changing the options the human chose between is material too.
+    writeFileSync(
+      presentation.questions,
+      readFileSync(presentation.questions, "utf-8").replace(
+        "B. Request Changes",
+        "B. Request Changes to the plan and its rollout",
+      ),
+    );
+    expect(approval(p, target).ok).toBe(false);
+  }, 120000);
 });
 
-describe("t330 (3) the approval does not carry where it should not", () => {
+describe("t328 (3) the approval does not carry where it should not", () => {
   test("a redo jump requires a fresh approval and says which attempt the old one was for", async () => {
     const { p, target } = await approvedProject();
     const jump = spawn(
@@ -707,7 +748,7 @@ describe("t330 (3) the approval does not carry where it should not", () => {
   }, 180000);
 });
 
-describe("t330 (4) workspace source, bound with a remedy that always works", () => {
+describe("t328 (4) workspace source, bound with a remedy that always works", () => {
   test("source drift before the answer is refused, and re-fingerprinting completes it", async () => {
     const p = await project("express");
     const { directive } = deliver(p);
@@ -751,7 +792,7 @@ describe("t330 (4) workspace source, bound with a remedy that always works", () 
   }, 180000);
 });
 
-describe("t330 (5) the per-Unit walk", () => {
+describe("t328 (5) the per-Unit walk", () => {
   const DESIGN_ARTIFACTS: Record<string, string[]> = {
     "functional-design": ["entities", "rules", "functional-spec"],
     "nfr-requirements": ["nfr-requirements"],
@@ -862,7 +903,9 @@ describe("t330 (5) the per-Unit walk", () => {
     expect(routed.kind).not.toBe("run-stage");
     const stopped = p.stopHook();
     expect(stopped.code).toBe(0);
-    expect(stopped.stdout).not.toContain("exact delivered AIDLC run-stage");
+    // An allow is an empty stdout: no block decision, no nudge of any kind. The
+    // paused Unit routes to an ask, and the hook releases the turn on it.
+    expect(stopped.stdout.trim()).toBe("");
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
 
     expect(unitVerb("resume").code).toBe(0);

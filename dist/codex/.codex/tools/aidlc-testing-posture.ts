@@ -1247,8 +1247,12 @@ export interface LegacyPlanApprovalGuardState {
  * The adapter therefore cannot distinguish a planning-record write from a
  * workspace mutation. This state lets it preserve the usable workflow:
  * planning remains available before the exact Plan Approval prompt, every tool
- * hard-stops while that prompt awaits a human, and the decision/answer commands
- * separately require workspace source to match the directive-issued floor.
+ * hard-stops while that prompt awaits a human, and workspace source is checked
+ * against the `[Planned Source]` the questions file records, exactly as the
+ * answer path checks it. Before a planned source is recorded there is nothing
+ * to compare; the adapter records the live source when it mediates the
+ * decision. After one is recorded, drift is refused with a remedy the conductor
+ * can always execute (re-present the plan), never with "revert the workspace".
  */
 export function legacyPlanApprovalGuardState(
   projectDir: string,
@@ -1293,11 +1297,12 @@ export function legacyPlanApprovalGuardState(
       violation?.version === 1 &&
       violation.markerRevision === authority.markerRevision;
     const approval = evaluateCodeGenerationApproval(projectDir, target);
-    const currentSource = workspaceSourceFingerprint(projectDir);
+    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority);
+    const plannedSource = questionsFilePlannedSource(artifacts.questions);
     const sourceFloorValid =
-      authority.sourceFloor !== UNBINDABLE_FINGERPRINT &&
-      currentSource !== null &&
-      currentSource === authority.sourceFloor;
+      plannedSource === null ||
+      plannedSource === UNBINDABLE_FINGERPRINT ||
+      workspaceSourceFingerprint(projectDir) === plannedSource;
     if (approval.ok) {
       return {
         active: true,
@@ -1310,7 +1315,6 @@ export function legacyPlanApprovalGuardState(
       };
     }
 
-    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority);
     if (artifacts.expectedFingerprint === null) {
       return {
         active: true,
@@ -1636,6 +1640,11 @@ export function recordPlanApprovalReceipt(
     clearPlanApprovalReceipt(projectDir, identity);
     return null;
   }
+  // Certify the source twice, then write. The answer path never unlinks a
+  // receipt it just wrote: a mutation that lands between the two reads is
+  // refused before anything exists on disk, and one that lands after the
+  // second read is caught by generation start, which keeps the receipt and
+  // asks for re-approval.
   const sourceBefore = workspaceSourceFingerprint(projectDir);
   if (
     sourceBefore === null ||
@@ -1643,6 +1652,13 @@ export function recordPlanApprovalReceipt(
   ) {
     throw new Error(
       "Plan Approval requires workspace source to match the source recorded when this plan was fingerprinted. " +
+        "Re-run the fingerprint command and re-present the plan.",
+    );
+  }
+  const sourceAfter = workspaceSourceFingerprint(projectDir);
+  if (sourceAfter === null || sourceAfter !== sourceBefore) {
+    throw new Error(
+      "Plan Approval source changed during receipt certification. " +
         "Re-run the fingerprint command and re-present the plan.",
     );
   }
@@ -1658,13 +1674,6 @@ export function recordPlanApprovalReceipt(
     status: "approved",
   };
   writePlanApprovalReceipt(projectDir, receipt);
-  const sourceAfter = workspaceSourceFingerprint(projectDir);
-  if (sourceAfter === null || sourceAfter !== sourceBefore) {
-    clearPlanApprovalReceipt(projectDir, identity);
-    throw new Error(
-      "Plan Approval source changed during receipt certification; present the current plan again",
-    );
-  }
   clearPlanApprovalChallenge(projectDir, session);
   // Sweep this target's receipts from attempts that have ended. Nothing deletes a
   // receipt to invalidate it any more, so the store is tidied here instead.
@@ -1825,9 +1834,9 @@ export function evaluateCodeGenerationApproval(
           : "the Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, test instructions, and Testing Contract";
       return empty;
     }
-    const questionsSha256 = createHash("sha256")
-      .update(artifacts.questions, "utf-8")
-      .digest("hex");
+    // The raw questions-file digest is provenance on the audit row, not part of
+    // validity: the prompt hash below binds what the human saw, and a note
+    // appended to the file after approval must not retire the decision.
     const promptSha256 = createHash("sha256")
       .update(
         `${artifacts.questions
@@ -1864,7 +1873,6 @@ export function evaluateCodeGenerationApproval(
       receipt !== null &&
       runtimeIdentityMatches(receipt, identity) &&
       receipt.choice === "Approve Plan" &&
-      receipt.questionsSha256 === questionsSha256 &&
       sourceCurrent;
     if (!empty.receiptValid) {
       if (receipt !== null && !sourceCurrent) {

@@ -945,7 +945,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t327-team-dispatcher.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
     "integration/t33-hook-concurrency.test.ts",
-    "integration/t330-authority-rebinding.test.ts",
+    "integration/t328-authority-rebinding.test.ts",
     "integration/t39.test.ts",
     "integration/t45.test.ts",
     "integration/t49.test.ts",

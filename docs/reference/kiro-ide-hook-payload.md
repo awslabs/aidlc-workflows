@@ -134,13 +134,23 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
 - **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
   shared target-aware guard. Kiro IDE 0.12 identifies the tool but supplies an
-  empty argument object, so the adapter uses a mediated source-floor protocol:
+  empty argument object, so the adapter uses a mediated planned-source protocol:
   only the measured `fs_write` and `str_replace` tools remain available while
   planning; shell, append, delete, patch, aliases, and custom mutation tools stop
   before approval. After a canonical plan write the adapter injects the current
   Testing Contract. After a canonical questions write it replaces the
-  target-bound fingerprint and invokes the reserved decision or answer tool
-  itself. Kiro discards PostToolUse stdout, so that write hook remains silent.
+  target-bound `[Approval Fingerprint]`, records the live workspace source as
+  `[Planned Source]` (the legacy channel cannot run the fingerprint command, so
+  the adapter owns both tags; `unbindable` when the workspace has no source
+  fingerprint), and invokes the reserved decision or answer tool itself. Kiro
+  discards PostToolUse stdout, so a successful write hook remains silent; when
+  the decision or answer step is refused, the hook exits 2 with the refusal on
+  stderr instead of dropping it, because the write window stays latched until
+  the human recovers. Workspace source is checked against the recorded
+  `[Planned Source]` exactly as the answer path checks it: before a planned
+  source is recorded there is nothing to compare, and once one is recorded a
+  drift blocks opaque tools with the remedy "re-present the plan" while the
+  canonical planning writes stay open so that remedy can be executed.
   The invoking `next` or final steering `continue` carries one
   `legacy_plan_approval_choices` capability in its Code Generation directive.
   Runtime stores only its hashes, while the plaintext labels remain in that

@@ -2642,6 +2642,12 @@ export interface PlanApprovalRuntimeResponse {
   responseSha256: string;
 }
 
+// `questionsSha256` is the raw questions-file digest at answer time. It is
+// provenance, not validity: `promptSha256` already binds what the human saw
+// (the prompt with answers blanked) and `choice` binds what they answered, so
+// a note appended to the questions file after approval changes nothing a human
+// would call the decision. It is carried onto the PLAN_APPROVAL_RECORDED audit
+// row for diagnosis and is never compared when deciding validity.
 export interface PlanApprovalRuntimeReceipt
   extends PlanApprovalRuntimeIdentity, PlanApprovalRuntimeProvenance {
   version: 1;
