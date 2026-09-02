@@ -8,10 +8,9 @@
 // t332 - a summary confirmation authorizes the outputs generated from it, and
 // completion asks whether each output DESCENDS from the current authorization
 // (the write's stamp equals the receipt's id), not whether the write landed
-// AFTER the receipt. The order predicate produced the #863/#864/#903/#934
-// family: a same-answers re-confirmation demanded a fresh write that the
-// review freeze forbade, a receipt and a write in the same second could not be
-// ordered, and a workspace move or a revision backstop re-raised the question.
+// AFTER the receipt. The order predicate produced a family of deadlocks: a
+// same-answers re-confirmation demanded a fresh write that the review freeze
+// forbade, and a receipt and a write in the same second could not be ordered.
 // Every shape below is exercised through the shipped tools and the shipped
 // write-audit hook, never by hand-writing the rows the model reads.
 
@@ -312,7 +311,7 @@ describe("t332 summary authorization id", () => {
     expect(evidence(proj).ok).toBe(true);
   });
 
-  test("#863/#903 shape: a same-answers re-confirmation mints the same id and demands no new write", () => {
+  test("a same-answers re-confirmation mints the same id and demands no new write", () => {
     const proj = project();
     const { artifact, questions } = paths(proj);
     const first = confirm(proj, questions);
@@ -330,7 +329,7 @@ describe("t332 summary authorization id", () => {
     expect(evidence(proj).ok).toBe(true);
   });
 
-  test("#934 shape: the receipt and the write in the same second are decided by descent, not order", () => {
+  test("the receipt and the write in the same second are decided by descent, not order", () => {
     const proj = project();
     const { artifact, questions } = paths(proj);
     const id = confirm(proj, questions);
@@ -344,7 +343,7 @@ describe("t332 summary authorization id", () => {
     expect(evidence(proj).ok).toBe(true);
   });
 
-  test("#864 shape: changed answers mint a new id, the old outputs no longer descend, and re-saving repairs it", () => {
+  test("changed answers mint a new id, the old outputs no longer descend, and re-saving repairs it", () => {
     const proj = project();
     const { artifact, questions } = paths(proj);
     const first = confirm(proj, questions);
@@ -359,6 +358,33 @@ describe("t332 summary authorization id", () => {
     expect(stale.message).toContain("was last saved under a different summary confirmation");
     writeArtifact(proj, artifact, "# regenerated\n");
     expect(auditBlockField(artifactWrites(proj)[1].block, SUMMARY_AUTHORIZATION_FIELD)).toBe(second as string);
+    expect(evidence(proj).ok).toBe(true);
+  });
+
+  test("a gate rejection, recovered or human, retires neither the confirmation nor the outputs' descent", () => {
+    const proj = project();
+    const { artifact, questions } = paths(proj);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+    appendAuditEntry("STAGE_STARTED", { Stage: STAGE, Agent: "orchestrator" }, proj);
+    const id = confirm(proj, questions);
+    writeArtifact(proj, artifact);
+    expect(evidence(proj).ok).toBe(true);
+    // The approve-time backstop records a synthetic rejection pair for a
+    // revision nobody recorded. For the summary confirmation that is
+    // bookkeeping, not a new attempt of this stage: the floor does not move,
+    // the receipt still stands, and the outputs still descend from it. (The
+    // review receipts' own boundary rules are pinned elsewhere and unchanged.)
+    appendAuditEntry("GATE_REJECTED", { Stage: STAGE, Feedback: "revision backfilled", Recovered: "true" }, proj);
+    appendAuditEntry("STAGE_REVISING", { Stage: STAGE, Recovered: "true" }, proj);
+    expect(evidence(proj).ok).toBe(true);
+    expect(readSummaryAuthorization(proj, STAGE, null)?.id).toBe(id as string);
+    // A human rejection is the same for the summary: the confirmation binds to
+    // the attempt, and only a jump or a restart opens one.
+    appendAuditEntry("GATE_REJECTED", { Stage: STAGE, Feedback: "tighten the scope" }, proj);
+    appendAuditEntry("STAGE_REVISING", { Stage: STAGE }, proj);
+    expect(evidence(proj).ok).toBe(true);
+    writeArtifact(proj, artifact, "# revised after feedback\n");
+    expect(auditBlockField(artifactWrites(proj)[1].block, SUMMARY_AUTHORIZATION_FIELD)).toBe(id as string);
     expect(evidence(proj).ok).toBe(true);
   });
 
