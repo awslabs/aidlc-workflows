@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-09-03
+
+Make Codex apply PreToolUse input rewrites again. Codex only honors a `hookSpecificOutput.updatedInput` rewrite when the same envelope carries an explicit `permissionDecision: "allow"`; without it the rewrite is silently dropped and the original tool input runs. The Codex adapter now emits that decision on both of its rewrite paths — the Bash session-binding prefix and the `deliver-stage-rules` core output it forwards — so subagent dispatches receive the active-stage rule bundle and Bash commands inherit the validated session again. The harness-neutral core hook is unchanged: it still emits no permission decision, and every other harness keeps its native approval flow. **Upgrade:** replace `dist/codex/.codex/hooks/aidlc-codex-adapter.ts` (or the whole `dist/codex/` tree); no workflow state migration is required.
+
+* `spawn_agent` dispatches on Codex carry the exact active-stage rule bundle instead of the unmodified prompt.
+* Bash commands on Codex inherit the validated payload session via the `AIDLC_SESSION_OVERRIDE` prefix again.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.
