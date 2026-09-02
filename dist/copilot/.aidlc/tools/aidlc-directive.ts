@@ -17,7 +17,7 @@
 // unknown-key rejection per kind. The shape guard reuses isPlainObject from
 // aidlc-lib.ts.
 
-import { isPlainObject } from "./aidlc-lib.ts";
+import { GUARD_REMEDY_OPS, type GuardRemedy, isPlainObject } from "./aidlc-lib.ts";
 
 // --- Public types ---
 
@@ -414,11 +414,32 @@ export interface LegacyPlanApprovalRecoveryAskDirective
   waiting_units?: undefined;
 }
 
+export interface GuardRecoveryAskDirective extends AskDirectiveBase {
+  ask_type: "guard-recovery";
+  response_route: "execute-remedy";
+  stage: string;
+  unit?: string;
+  reason_codes: string[];
+  remedies: GuardRemedy[];
+  // Present only on the terminal ask (empty remedies): the signature of the
+  // guard state that has no authority-preserving exit, for escalation.
+  state_signature?: string;
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
+}
+
 export type AskDirective =
   | ReportAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
-  | LegacyPlanApprovalRecoveryAskDirective;
+  | LegacyPlanApprovalRecoveryAskDirective
+  | GuardRecoveryAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
@@ -610,6 +631,11 @@ const ASK_FIELDS = [
   "claimed_units",
   "waiting_units",
   "recovery_choice",
+  "stage",
+  "unit",
+  "reason_codes",
+  "remedies",
+  "state_signature",
 ] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
@@ -769,10 +795,11 @@ export function validateDirective(obj: unknown): ValidationResult {
         "ask_type" in o &&
         o.ask_type !== "new-work-routing" &&
         o.ask_type !== "unit-claim" &&
-        o.ask_type !== "legacy-plan-approval-recovery"
+        o.ask_type !== "legacy-plan-approval-recovery" &&
+        o.ask_type !== "guard-recovery"
       ) {
         errors.push(
-          `${kind}: ask_type must be one of new-work-routing | unit-claim | legacy-plan-approval-recovery, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery, got ${String(o.ask_type)}`,
         );
       }
       if (o.ask_type === "new-work-routing") {
@@ -787,6 +814,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "claimed_units",
           "waiting_units",
           "recovery_choice",
+          "stage",
+          "unit",
+          "reason_codes",
+          "remedies",
+          "state_signature",
         ] as const) {
           if (field in o) {
             errors.push(
@@ -807,6 +839,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "available_intents",
           "numbered_prose_question",
           "recovery_choice",
+          "stage",
+          "unit",
+          "reason_codes",
+          "remedies",
+          "state_signature",
         ] as const) {
           if (field in o) {
             errors.push(`${kind}: ${field} is not valid for unit-claim`);
@@ -831,11 +868,40 @@ export function validateDirective(obj: unknown): ValidationResult {
           "claimable_units",
           "claimed_units",
           "waiting_units",
+          "stage",
+          "unit",
+          "reason_codes",
+          "remedies",
+          "state_signature",
         ] as const) {
           if (field in o) {
             errors.push(
               `${kind}: ${field} is not valid for legacy-plan-approval-recovery`,
             );
+          }
+        }
+      } else if (o.ask_type === "guard-recovery") {
+        if (o.response_route !== "execute-remedy") {
+          errors.push(
+            `${kind}: guard-recovery response_route must be "execute-remedy"`,
+          );
+        }
+        checkString(o, "stage", kind, errors);
+        checkOptionalString(o, "unit", kind, errors);
+        checkStringArray(o, "reason_codes", kind, errors);
+        checkGuardRemedies(o, kind, errors);
+        for (const field of [
+          "new_work_description",
+          "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+          "recovery_choice",
+        ] as const) {
+          if (field in o) {
+            errors.push(`${kind}: ${field} is not valid for guard-recovery`);
           }
         }
       } else {
@@ -849,6 +915,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "claimed_units",
           "waiting_units",
           "recovery_choice",
+          "stage",
+          "unit",
+          "reason_codes",
+          "remedies",
+          "state_signature",
         ] as const) {
           if (field in o) {
             errors.push(
@@ -1028,6 +1099,97 @@ function checkOptionalStageValidity(
   }
   if (typeof raw.warning !== "string") {
     errors.push(`${kind}: ${STAGE_VALIDITY_FIELD}.warning must be string`);
+  }
+}
+
+// The remedies of a guard-recovery ask. Every remedy names a closed `op`, which
+// is what routing compares; the sentence beside it is presentation. An EMPTY
+// remedies array is the terminal ask and must carry `state_signature`: the
+// engine found no authority-preserving exit, and the human is told so with the
+// exact situation to escalate instead of being shown an error.
+function checkGuardRemedies(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("remedies" in o)) {
+    errors.push(`${kind}: missing required field: remedies`);
+    return;
+  }
+  if (!Array.isArray(o.remedies)) {
+    errors.push(`${kind}: remedies must be an array`);
+    return;
+  }
+  const terminal = "state_signature" in o;
+  if (terminal) {
+    if (
+      typeof o.state_signature !== "string" ||
+      !/^[0-9a-f]{64}$/.test(o.state_signature)
+    ) {
+      errors.push(`${kind}: state_signature must be a sha256 hex digest`);
+    }
+    if (o.remedies.length !== 0) {
+      errors.push(
+        `${kind}: a terminal guard-recovery ask (state_signature present) carries no remedies`,
+      );
+    }
+    return;
+  }
+  if (o.remedies.length === 0) {
+    errors.push(
+      `${kind}: remedies must be a non-empty array unless state_signature marks the ask terminal`,
+    );
+    return;
+  }
+  const allowed = new Set([
+    "op",
+    "action",
+    "command",
+    "requiresHuman",
+    "executableNow",
+  ]);
+  const ops: ReadonlySet<string> = new Set(GUARD_REMEDY_OPS);
+  for (let index = 0; index < o.remedies.length; index++) {
+    const remedy = o.remedies[index];
+    if (!isPlainObject(remedy)) {
+      errors.push(`${kind}: remedies[${index}] must be object`);
+      continue;
+    }
+    for (const key of Object.keys(remedy)) {
+      if (!allowed.has(key)) {
+        errors.push(`${kind}: remedies[${index}] unknown key: ${key}`);
+      }
+    }
+    if (typeof remedy.op !== "string" || !ops.has(remedy.op)) {
+      errors.push(
+        `${kind}: remedies[${index}].op must be one of ${GUARD_REMEDY_OPS.join(" | ")}`,
+      );
+    }
+    if (typeof remedy.action !== "string" || remedy.action.length === 0) {
+      errors.push(`${kind}: remedies[${index}].action must be non-empty string`);
+    }
+    if ("command" in remedy) {
+      if (typeof remedy.command !== "string" || remedy.command.trim().length === 0) {
+        errors.push(`${kind}: remedies[${index}].command must be non-empty string`);
+      } else {
+        if (/<[A-Za-z][^<>]*>/.test(remedy.command)) {
+          errors.push(
+            `${kind}: remedies[${index}].command must not contain unresolved placeholders`,
+          );
+        }
+        if (!/^bun \.[A-Za-z0-9_.-]+\/tools\/aidlc-[A-Za-z0-9-]+\.ts(?:\s|$)/.test(remedy.command)) {
+          errors.push(
+            `${kind}: remedies[${index}].command must be a bun-qualified packaged AIDLC tool invocation`,
+          );
+        }
+      }
+    }
+    if (typeof remedy.requiresHuman !== "boolean") {
+      errors.push(`${kind}: remedies[${index}].requiresHuman must be boolean`);
+    }
+    if (remedy.executableNow !== true) {
+      errors.push(`${kind}: remedies[${index}].executableNow must be true`);
+    }
   }
 }
 

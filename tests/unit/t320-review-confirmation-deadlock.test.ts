@@ -252,8 +252,9 @@ describe("t320 review/summary deadlock prevention", () => {
     const blocked = runHook(proj, artifact);
     expect(blocked.status).toBe(2);
     expect(blocked.stderr).toContain(
-      "tell me what should change and I'll record your Request Changes decision",
+      'Ask "What should change?" for stage "requirements-analysis"',
     );
+    expect(blocked.stderr).toContain("their exact text unchanged");
     expect(
       runHook(proj, artifact, {
         AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1",
@@ -515,7 +516,7 @@ describe("t320 recovery guidance", () => {
         "- [-] requirements-analysis — EXECUTE",
         "requirements-analysis",
       ),
-    ).toContain("Request Changes decision");
+    ).toContain('Ask "What should change?"');
     expect(
       recoveryGuidance(
         "/p",

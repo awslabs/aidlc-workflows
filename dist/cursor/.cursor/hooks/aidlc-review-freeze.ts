@@ -55,9 +55,15 @@ import {
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
+  type FreshReviewReceipts,
+  checkSummaryConfirmationEvidence,
   errorMessage,
+  evaluateGuardRefusal,
   freshReviewReceipts,
   getField,
+  guardAttemptState,
+  guardRefusalOutput,
+  humanAuthorityState,
   hooksHealthDir,
   intentRepos,
   isClaudeCodeHookInput,
@@ -72,6 +78,7 @@ import {
   releaseAuditLock,
   resolveReviewClass,
   resolveProjectDirFromHook,
+  teamUnitGateStatus,
   type StageEntry,
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
@@ -291,6 +298,8 @@ export async function run(input: string): Promise<number> {
 
   let verdict: FreezeVerdict = { block: false };
   let stateContent = "";
+  let blockedReceipts: FreshReviewReceipts | null = null;
+  let blockedStage: StageEntry | null = null;
   try {
     const content = readStateFile(projectDir);
     stateContent = content;
@@ -309,7 +318,7 @@ export async function run(input: string): Promise<number> {
       // Cheap suffix pre-check via producesArtifactUnit happens inside
       // judgeFreeze; the receipt scan only runs for a stage that actually
       // matched a target (freshReviewReceipts walks the whole ledger).
-      let receipts: ReturnType<typeof freshReviewReceipts> | null = null;
+      let receipts: FreshReviewReceipts | null = null;
       for (const file of targets) {
         const probe = producesArtifactUnit(stage, file, recordedRepos);
         if (probe === undefined) continue;
@@ -322,7 +331,11 @@ export async function run(input: string): Promise<number> {
           reviewClass,
         });
         verdict = judgeFreeze(stage, file, recordedRepos, receipts);
-        if (verdict.block) break;
+        if (verdict.block) {
+          blockedReceipts = receipts;
+          blockedStage = stage;
+          break;
+        }
       }
       if (verdict.block) break;
     }
@@ -363,12 +376,56 @@ export async function run(input: string): Promise<number> {
     // Advisory emission only.
   }
 
-  const guidance = reviewFreezeRecoveryGuidance(
+  const stage = blockedStage;
+  const receipts = blockedReceipts;
+  if (stage === null || receipts === null) {
+    process.stderr.write(`${blockReason(verdict)}\n`);
+    return 2;
+  }
+  const summaryEvidence = checkSummaryConfirmationEvidence(
+    projectDir,
+    stage,
+    {
+      stateContent,
+      ...(verdict.unit ? { unit: verdict.unit } : {}),
+    },
+  );
+  // The attempt as the evaluator sees it, built by the one shared constructor
+  // from the receipts the freeze verdict already read. Summary coverage comes
+  // from the evidence object's own field, never from its message text.
+  const snapshot = guardAttemptState(projectDir, stateContent, stage, {
+    ...(verdict.unit ? { unit: verdict.unit } : {}),
+    receipts,
+    summaryCoverage: summaryEvidence.ok ? "current" : summaryEvidence.summaryCoverage,
+  });
+  const teamGate = teamUnitGateStatus(
     projectDir,
     stateContent,
-    verdict.stage ?? "",
+    stage.slug,
+    verdict.unit,
   );
-  process.stderr.write(`${blockReason(verdict, guidance)}\n`);
+  const evaluated = evaluateGuardRefusal({
+    code: "REVIEW_FREEZE_ACTIVE",
+    blockedAction: `artifact-write:${verdict.target ?? ""}`,
+    stage: stage.slug,
+    ...(verdict.unit ? { unit: verdict.unit } : {}),
+    stateContent,
+    invariant: "A terminal review continues to cover the bytes it certified.",
+    userMessage: "",
+    attempt: snapshot.attempt,
+    humanAuthority: humanAuthorityState(projectDir),
+    ...(teamGate ? { teamGate } : {}),
+  });
+  const guidance =
+    evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??
+    reviewFreezeRecoveryGuidance(projectDir, stateContent, stage.slug);
+  const refusal = {
+    ...evaluated,
+    userMessage: blockReason(verdict, guidance),
+  };
+  process.stderr.write(
+    `${guardRefusalOutput(projectDir, refusal, snapshot.attempt, snapshot.resources)}\n`,
+  );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 

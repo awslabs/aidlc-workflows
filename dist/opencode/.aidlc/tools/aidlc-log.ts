@@ -17,11 +17,15 @@ import {
   claimAttemptFields,
   emitError,
   errorMessage,
+  evaluateGuardRefusal,
   eventMatchesClaimAttempt,
   formatReceivedReply,
   freshReviewReceipts,
   filterProducesByKind,
   getField,
+  guardAttemptState,
+  guardRefusalOutput,
+  humanAuthorityState,
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
@@ -34,6 +38,7 @@ import {
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
+  pendingReviewRequestStatus,
   readAllAuditShards,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
@@ -42,6 +47,7 @@ import {
   recordDir,
   relativeRecordDir,
   recoveryGuidance,
+  requestChangesResetIsExecutable,
   reviewArtifactSnapshot,
   reviewAppendixDigest,
   reviewAppendixEvidenceBytes,
@@ -58,6 +64,7 @@ import {
   summaryConfirmationAnswer,
   summaryConfirmationContentHash,
   stateFilePath,
+  teamUnitGateStatus,
   toPosix,
   unattendedHumanPresenceHint,
   unitSourceFingerprint,
@@ -69,6 +76,9 @@ import {
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
 import type {
+  GuardAttemptState,
+  GuardRefusal,
+  TeamUnitGateResolution,
   ReviewClass,
   ReviewVerdict,
 } from "./aidlc-lib.js";
@@ -1023,7 +1033,7 @@ function reviewBudgetMessage(stage: string, ordinal: number, budget: number): st
   );
 }
 
-function reviewRecoverySpentMessage(
+export function reviewRecoverySpentMessage(
   stage: string,
   guidance: string | null,
   autonomousBolt?: {
@@ -1031,6 +1041,7 @@ function reviewRecoverySpentMessage(
     slug: string | null;
     batch: string | null;
   },
+  requestChangesResetValid = true,
 ): string {
   const prefix =
     `Cannot start another review for "${stage}": the one recovery review was ` +
@@ -1056,8 +1067,10 @@ function reviewRecoverySpentMessage(
   return (
     prefix +
     (guidance ?? "") +
-    " Only a human Request Changes decision resets the review attempt; do not " +
-    "record that rejection on the human's behalf."
+    (requestChangesResetValid
+      ? " Only a human Request Changes decision resets the review attempt; do not " +
+        "record that rejection on the human's behalf."
+      : "")
   );
 }
 
@@ -1065,9 +1078,14 @@ function reviewRecoveryGuidance(
   projectDir: string,
   stateContent: string,
   stage: string,
+  unit?: string,
+  teamGate?: TeamUnitGateResolution,
 ): string {
   try {
-    return recoveryGuidance(projectDir, stateContent, stage);
+    return recoveryGuidance(projectDir, stateContent, stage, {
+      ...(unit ? { unit } : {}),
+      ...(teamGate ? { teamGate } : {}),
+    });
   } catch {
     return (
       `Restart this stage cleanly with /aidlc --stage ${stage}, then confirm ` +
@@ -1088,13 +1106,16 @@ function reviewRecoveryAlreadyRequestedMessage(
   stage: string,
   iteration: number,
   guidance: string,
+  requestChangesResetValid: boolean,
 ): string {
   return (
     `Cannot request another recovery review for "${stage}" because one already exists ` +
     `in this review attempt. If the reviewer has not returned, retry iteration ${iteration} ` +
-    `with --retry-pending. If its verdict was recorded, ${guidance} Only a human Request ` +
-    "Changes decision resets the review attempt; do not record that rejection on the " +
-    "human's behalf."
+    `with --retry-pending. If its verdict was recorded, ${guidance}` +
+    (requestChangesResetValid
+      ? " Only a human Request Changes decision resets the review attempt; do not record " +
+        "that rejection on the human's behalf."
+      : "")
   );
 }
 
@@ -1102,6 +1123,15 @@ class ReviewRefusal extends Error {}
 
 function refuseReview(message: string): never {
   throw new ReviewRefusal(message);
+}
+
+function refuseReviewGuard(
+  projectDir: string,
+  refusal: GuardRefusal,
+  attempt: GuardAttemptState,
+  resources: string[] = [],
+): never {
+  refuseReview(guardRefusalOutput(projectDir, refusal, attempt, resources));
 }
 
 function handleReview(args: string[]): void {
@@ -1343,18 +1373,66 @@ function handleReview(args: string[]): void {
           unitResolution,
           mergedBoltUnits,
         } = loadContext(true, !retryPending);
+        const pendingStatus = pendingReviewRequestStatus(
+          pd,
+          node,
+          flags.unit,
+          attempt,
+          {
+            requireRequiredArtifacts,
+            boltDag: unitResolution ?? undefined,
+            mergedBoltUnits,
+            single: flags.single === "true",
+          },
+        );
+        const teamGate = teamUnitGateStatus(
+          pd,
+          state,
+          node.slug,
+          flags.unit,
+        );
         const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
           stateContent: state,
           unit: flags.unit,
           workflow: fields.Workflow,
         });
         if (!summaryEvidence.ok) {
-          refuseReview(
-            reviewSummaryEvidenceMessage(
-              flags.stage,
-              summaryEvidence.message,
-            ),
+          const message = reviewSummaryEvidenceMessage(
+            flags.stage,
+            summaryEvidence.message,
           );
+          const guardAttempt = guardAttemptState(pd, state, node, {
+            ...(flags.unit ? { unit: flags.unit } : {}),
+            ...(receipts ? { receipts } : {}),
+            summaryCoverage: summaryEvidence.summaryCoverage,
+            reviewBudget: budget,
+            pendingStatus,
+            accounting: attempt,
+          }).attempt;
+          const evaluated = evaluateGuardRefusal({
+            code: summaryEvidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
+            blockedAction: "review-request",
+            stage: flags.stage,
+            ...(flags.unit ? { unit: flags.unit } : {}),
+            stateContent: state,
+            invariant:
+              summaryEvidence.refusal?.invariant ??
+              "A review starts only after current human-backed summary authorization.",
+            userMessage: message,
+            attempt: guardAttempt,
+            humanAuthority: humanAuthorityState(pd),
+            ...(teamGate ? { teamGate } : {}),
+          });
+          const refusal = summaryEvidence.refusal === undefined
+            ? evaluated
+            : {
+                ...summaryEvidence.refusal,
+                blockedAction: "review-request",
+                state: evaluated.state,
+                userMessage: message,
+                remedies: evaluated.remedies,
+              };
+          refuseReviewGuard(pd, refusal, guardAttempt);
         }
         const expected = attempt.requestCount + 1;
         const sameSourceRecoveryScope =
@@ -1377,17 +1455,60 @@ function handleReview(args: string[]): void {
             receipts?.sourceStaleProgress?.recoverySpent === true);
         const recoverySpent =
           attempt.recoverySpent || sourceRecoverySpent;
+        const refuseAttemptGuard = (
+          code: string,
+          invariant: string,
+          message: string,
+        ): never => {
+          const guardAttempt = guardAttemptState(pd, state, node, {
+            ...(flags.unit ? { unit: flags.unit } : {}),
+            ...(receipts ? { receipts } : {}),
+            reviewBudget: budget,
+            pendingStatus,
+            accounting: attempt,
+          }).attempt;
+          const autonomousBolt =
+            autonomousCandidate && attempt.boltStarted && flags.unit
+              ? {
+                  unit: flags.unit,
+                  slug: attempt.boltSlug,
+                  batch: attempt.boltBatch,
+                }
+              : undefined;
+          const refusal = evaluateGuardRefusal({
+            code,
+            blockedAction: "review-request",
+            stage: flags.stage,
+            ...(flags.unit ? { unit: flags.unit } : {}),
+            stateContent: state,
+            invariant,
+            userMessage: message,
+            attempt: guardAttempt,
+            humanAuthority: humanAuthorityState(pd),
+            ...(teamGate ? { teamGate } : {}),
+            ...(autonomousBolt ? { autonomousBolt } : {}),
+          });
+          refuseReviewGuard(pd, refusal, guardAttempt, [
+            `source:${receipts?.newestSourceFingerprint ?? "none"}`,
+            `artifact-stale:${artifactScopeStale}`,
+          ]);
+        };
         if (retryPending) {
           const pendingRequest = attempt.pendingRequests.get(iteration);
           if (!pendingRequest) {
             if (scopeStale) {
               if (recoverySpent) {
-                refuseReview(
-                  reviewRecoverySpentMessage(
+                const message = reviewRecoverySpentMessage(
                     flags.stage,
                     autonomousCandidate && attempt.boltStarted
                       ? null
-                      : reviewRecoveryGuidance(pd, state, flags.stage),
+                      : reviewRecoveryGuidance(
+                          pd,
+                          state,
+                          flags.stage,
+                          flags.unit,
+                          teamGate,
+                        ),
                     autonomousCandidate && attempt.boltStarted && flags.unit
                       ? {
                           unit: flags.unit,
@@ -1395,7 +1516,16 @@ function handleReview(args: string[]): void {
                           batch: attempt.boltBatch,
                         }
                       : undefined,
-                  ),
+                    requestChangesResetIsExecutable(
+                      state,
+                      flags.stage,
+                      teamGate,
+                    ),
+                  );
+                refuseAttemptGuard(
+                  "REVIEW_RECOVERY_SPENT",
+                  "The stale-receipt recovery slot is single-use within an attempt.",
+                  message,
                 );
               }
               const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
@@ -1407,12 +1537,26 @@ function handleReview(args: string[]): void {
               );
             }
             if (recoverySpent) {
-              refuseReview(
-                reviewRecoveryAlreadyRequestedMessage(
+              const message = reviewRecoveryAlreadyRequestedMessage(
                   flags.stage,
                   attempt.recoveryIteration ?? iteration,
-                  reviewRecoveryGuidance(pd, state, flags.stage),
-                ),
+                  reviewRecoveryGuidance(
+                    pd,
+                    state,
+                    flags.stage,
+                    flags.unit,
+                    teamGate,
+                  ),
+                  requestChangesResetIsExecutable(
+                    state,
+                    flags.stage,
+                    teamGate,
+                  ),
+                );
+              refuseAttemptGuard(
+                "REVIEW_RECOVERY_ALREADY_REQUESTED",
+                "Only one stale-receipt recovery request exists in an attempt.",
+                message,
               );
             }
             refuseReview(
@@ -1577,12 +1721,17 @@ function handleReview(args: string[]): void {
           attempt.pendingIterations.size === 0 &&
           !recoverySpent;
         if (scopeStale && recoverySpent) {
-          refuseReview(
-            reviewRecoverySpentMessage(
+          const message = reviewRecoverySpentMessage(
               flags.stage,
               autonomousCandidate && attempt.boltStarted
                 ? null
-                : reviewRecoveryGuidance(pd, state, flags.stage),
+                : reviewRecoveryGuidance(
+                    pd,
+                    state,
+                    flags.stage,
+                    flags.unit,
+                    teamGate,
+                  ),
               autonomousCandidate && attempt.boltStarted && flags.unit
                 ? {
                     unit: flags.unit,
@@ -1590,27 +1739,60 @@ function handleReview(args: string[]): void {
                     batch: attempt.boltBatch,
                   }
                 : undefined,
-            ),
+              requestChangesResetIsExecutable(
+                state,
+                flags.stage,
+                teamGate,
+              ),
+            );
+          refuseAttemptGuard(
+            "REVIEW_RECOVERY_SPENT",
+            "The stale-receipt recovery slot is single-use within an attempt.",
+            message,
           );
         }
         if (recoverySpent) {
-          refuseReview(
-            reviewRecoveryAlreadyRequestedMessage(
+          const message = reviewRecoveryAlreadyRequestedMessage(
               flags.stage,
               attempt.recoveryIteration ?? iteration,
-              reviewRecoveryGuidance(pd, state, flags.stage),
-            ),
+              reviewRecoveryGuidance(
+                pd,
+                state,
+                flags.stage,
+                flags.unit,
+                teamGate,
+              ),
+              requestChangesResetIsExecutable(
+                state,
+                flags.stage,
+                teamGate,
+              ),
+            );
+          refuseAttemptGuard(
+            "REVIEW_RECOVERY_ALREADY_REQUESTED",
+            "Only one stale-receipt recovery request exists in an attempt.",
+            message,
           );
         }
         if (!recoveryEligible && budget !== null && iteration > budget) {
-          refuseReview(reviewBudgetMessage(flags.stage, iteration, budget));
+          refuseAttemptGuard(
+            "REVIEW_BUDGET_EXHAUSTED",
+            "Review requests do not exceed the configured attempt budget.",
+            reviewBudgetMessage(flags.stage, iteration, budget),
+          );
         }
         if (!recoveryEligible && budget !== null && expected > budget) {
-          refuseReview(reviewBudgetMessage(flags.stage, expected, budget));
+          refuseAttemptGuard(
+            "REVIEW_BUDGET_EXHAUSTED",
+            "Review requests do not exceed the configured attempt budget.",
+            reviewBudgetMessage(flags.stage, expected, budget),
+          );
         }
         if (attempt.pendingIterations.size > 0) {
           const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
-          refuseReview(
+          refuseAttemptGuard(
+            "REVIEW_VERDICT_PENDING",
+            "A review request receives its verdict before another request starts.",
             `Cannot start another review for "${flags.stage}" because iteration ` +
               `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
               "repeat the same iteration with --retry-pending if the reviewer did not run.",

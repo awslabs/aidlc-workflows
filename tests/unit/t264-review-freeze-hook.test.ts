@@ -622,8 +622,9 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       "If this is a reviewer suggestion, quote it at the gate",
     );
     expect(blocked.stderr).toContain(
-      "tell me what should change and I'll record your Request Changes decision",
+      'Ask "What should change?" for stage "requirements-analysis"',
     );
+    expect(blocked.stderr).toContain("their exact text unchanged");
     expect(readAllAuditShards(p)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");
 
     // A recorded gate rejection resets the receipt floor: the freeze lifts

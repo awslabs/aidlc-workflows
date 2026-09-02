@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 837,
+    "total": 857,
     "enumeratedByClass": {
-      "function": 539,
+      "function": 559,
       "audit": 91,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 309,
+      "function": 333,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -1282,8 +1282,13 @@
       "unitClass": "function",
       "unitId": "function:attemptEventAfterFrontier",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1293,6 +1298,10 @@
         {
           "file": "tests/unit/t330-authority-rebinding.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1301,8 +1310,13 @@
       "unitClass": "function",
       "unitId": "function:attemptEventIsCrossShardTied",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1491,8 +1505,13 @@
       "unitClass": "function",
       "unitId": "function:candidateReviewCoverageProjection",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2018,6 +2037,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:consumeSharedDirectiveAsk",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t329-guard-recovery-loop.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:contentBeforeTerminalReviewAppendix",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2071,6 +2106,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentGuardRecoveryAskMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t329-guard-recovery-loop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2399,6 +2446,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:evaluateGuardRefusal",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:eventMatchesClaimAttempt",
       "minMechanism": "none",
       "coveredBy": [
@@ -2625,6 +2684,115 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:GUARD_RECOVERY_ASK_TYPE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GUARD_REFUSAL_STREAK_CAP",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GUARD_REMEDY_OPS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardAttemptState",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRecoveryAskForRefusal",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRecoveryAskFromRefusalText",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRecoveryFeedbackStatus",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t329-guard-recovery-loop.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRefusalOutput",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardRefusalStreakView",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:guardTerminalAskForRefusal",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:harnessDataPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2785,6 +2953,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:humanAuthorityState",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3072,6 +3252,22 @@
       "coveredBy": [
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isRequestChangesChoice",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t329-guard-recovery-loop.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3543,6 +3739,10 @@
         {
           "file": "tests/unit/t330-authority-rebinding.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3684,6 +3884,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:normalizeGuardRecoveryText",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3878,6 +4090,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:pendingReviewRequestStatus",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4429,6 +4653,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recordGuardRefusal",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t329-guard-recovery-loop.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordHookDrop",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4620,6 +4860,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:requestChangesResetIsExecutable",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4927,8 +5179,13 @@
       "unitClass": "function",
       "unitId": "function:reviewAttemptAccounting",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5000,8 +5257,13 @@
       "unitClass": "function",
       "unitId": "function:reviewInvalidationAttemptView",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5358,8 +5620,13 @@
       "unitClass": "function",
       "unitId": "function:sortAttemptEvents",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5669,6 +5936,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:teamUnitGateStatus",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t278-per-unit-wave.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6373,8 +6652,13 @@
       "unitClass": "function",
       "unitId": "function:worktreeReviewAttemptProjection",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

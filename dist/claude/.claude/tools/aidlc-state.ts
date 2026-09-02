@@ -51,6 +51,7 @@ import {
   effectiveUnitGateRhythm,
   emitError,
   errorMessage,
+  evaluateGuardRefusal,
   eventMatchesClaimAttempt,
   extractMarkdownSection,
   filterProducesByKind,
@@ -60,6 +61,13 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  guardRecoveryFeedbackStatus,
+  type GuardAttemptState,
+  type StageEntry,
+  type GuardRefusal,
+  guardRefusalOutput,
+  guardAttemptState,
+  humanAuthorityState,
   harnessDir,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
@@ -72,6 +80,7 @@ import {
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
   isNonAnswer,
+  isRequestChangesChoice,
   isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
@@ -96,6 +105,7 @@ import {
   readUnitScopeStamp,
   recordDir,
   recoveryGuidance,
+  requestChangesResetIsExecutable,
   relativeCodekbDir,
   relativeMemoryPath,
   relativeRecordDir,
@@ -122,6 +132,7 @@ import {
   singleStageAttemptIsOpen,
   stagesInScope,
   swarmConvergedUnits,
+  teamUnitGateStatus,
   unitCompletedReceipts,
   unitGateStatus,
   unitMajorConstructionStageSlugs,
@@ -617,6 +628,25 @@ let lockIntent: string | undefined;
 let lockSpace: string | undefined;
 let stateSessionOverride: string | undefined;
 
+// A guard refused. Carries the typed refusal so main() can render it as the
+// guard-recovery ask, and so the router, calling the same admission function
+// in-process, gets the same refusal without a rendering step in between.
+class StateGuardRefusalError extends Error {
+  constructor(
+    readonly refusal: GuardRefusal,
+    readonly attempt: GuardAttemptState,
+    readonly resourceFingerprints: string[],
+  ) {
+    super(refusal.userMessage);
+  }
+}
+
+// Every other refusal this tool makes. error() throws it instead of exiting on
+// the spot, so the admission functions the router shares with the handlers are
+// ordinary functions: a structural refusal unwinds to main() for the CLI, and
+// the router treats it as "cannot decide" and fails open to the real command.
+class StateCommandError extends Error {}
+
 export function main(argv: string[]): void {
   const args = [...argv];
 
@@ -661,7 +691,7 @@ export function main(argv: string[]): void {
     ) &&
     process.env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS !== "1"
   ) {
-    error(
+    exitWithError(
       `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
         "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
         "--stage <slug> --result " +
@@ -768,7 +798,18 @@ export function main(argv: string[]): void {
         );
     }
   } catch (e) {
-    error(errorMessage(e));
+    if (e instanceof StateGuardRefusalError) {
+      const pd = resolveProjectDir(projectDir);
+      exitWithError(
+        guardRefusalOutput(
+          pd,
+          e.refusal,
+          e.attempt,
+          e.resourceFingerprints,
+        ),
+      );
+    }
+    exitWithError(errorMessage(e));
   }
 }
 
@@ -3328,22 +3369,32 @@ function verifyStageArtifacts(
   if (settledSwarm) return;
 
   if (!producesArtifactsExist(pd, stage)) {
-    error(
+    const message =
       `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
         `to produce output before the gate. Produce the artifacts before completing. ` +
-        `(declared: ${(stage.produces ?? []).join(", ") || "none"})`
-    );
+        `(declared: ${(stage.produces ?? []).join(", ") || "none"})`;
+    refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
+      code: "REQUIRED_ARTIFACTS_MISSING",
+      blockedAction: action,
+      invariant: "Every applicable required output exists before certification.",
+      userMessage: message,
+    });
   }
 
   if (stage.workspace_requires && !workspaceHasWork(pd)) {
-    error(
+    const message =
       `${reviewerPreconditionPrefix(stage.slug, action)}: it is a code-producing stage ` +
         `(workspace_requires) but no source work is evident outside the aidlc/ ` +
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
-        `do not satisfy ${stage.name} - write the code to the workspace.`
-    );
+        `do not satisfy ${stage.name} - write the code to the workspace.`;
+    refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
+      code: "REQUIRED_SOURCE_WORK_MISSING",
+      blockedAction: action,
+      invariant: "A workspace-producing stage contains application source work.",
+      userMessage: message,
+    });
   }
 }
 
@@ -3365,7 +3416,16 @@ function verifySummaryConfirmationPrecondition(
   const evidence = checkSummaryConfirmationEvidence(pd, stage, {
     stateContent: content,
   });
-  if (!evidence.ok) error(evidence.message);
+  if (!evidence.ok) {
+    refuseStateGuard(pd, content, stage, {
+      code: "SUMMARY_EVIDENCE_INVALID",
+      blockedAction: "summary-confirmation",
+      invariant:
+        "Generated outputs descend from a current human-backed summary confirmation.",
+      userMessage: evidence.message,
+      summaryCoverage: evidence.summaryCoverage,
+    });
+  }
 }
 
 // --- Reviewer precondition (§12a / RFC Track 1) -----------------------------
@@ -3401,6 +3461,59 @@ function reviewerPreconditionPrefix(
   return action === "present-approval-gate"
     ? `Cannot present "${slug}" for approval`
     : `Cannot complete "${slug}"`;
+}
+
+function refuseStateGuard(
+  pd: string,
+  content: string,
+  stage: {
+    slug: string;
+    phase?: string;
+    for_each?: string;
+    reviewer?: string;
+    review_artifact?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
+  input: {
+    code: string;
+    blockedAction: string;
+    invariant: string;
+    userMessage: string;
+    unit?: string;
+    receipts?: ReturnType<typeof freshReviewReceipts>;
+    summaryCoverage?: "current" | "stale" | "missing";
+    autonomousBolt?: {
+      unit: string;
+      slug: string | null;
+      batch: string | null;
+    };
+  },
+): never {
+  const snapshot = guardAttemptState(pd, content, stage, {
+    ...(input.unit ? { unit: input.unit } : {}),
+    ...(input.receipts ? { receipts: input.receipts } : {}),
+    ...(input.summaryCoverage ? { summaryCoverage: input.summaryCoverage } : {}),
+  });
+  const teamGate = teamUnitGateStatus(pd, content, stage.slug, input.unit);
+  const refusal = evaluateGuardRefusal({
+    code: input.code,
+    blockedAction: input.blockedAction,
+    stage: stage.slug,
+    ...(input.unit ? { unit: input.unit } : {}),
+    stateContent: content,
+    invariant: input.invariant,
+    userMessage: input.userMessage,
+    attempt: snapshot.attempt,
+    humanAuthority: humanAuthorityState(pd),
+    ...(teamGate ? { teamGate } : {}),
+    ...(input.autonomousBolt ? { autonomousBolt: input.autonomousBolt } : {}),
+  });
+  throw new StateGuardRefusalError(refusal, snapshot.attempt, snapshot.resources);
 }
 
 function verifyReviewerPrecondition(
@@ -3462,11 +3575,21 @@ function verifyReviewerPrecondition(
       pendingRecoveryUnits.length > 0
         ? ` for Unit${pendingRecoveryUnits.length === 1 ? "" : "s"} ${pendingRecoveryUnits.join(", ")}`
         : "";
-    error(
+    const message =
       `${reviewerPreconditionPrefix(stage.slug, action)}: the recovery review${scope} ` +
         "is still in progress. Finish that review and record its result before " +
-        "presenting the gate or completing the stage.",
-    );
+        "presenting the gate or completing the stage.";
+    refuseStateGuard(pd, content, stage, {
+      code: "REVIEW_RECOVERY_PENDING",
+      blockedAction: action,
+      invariant: "A pending recovery request receives its matching verdict.",
+      userMessage: message,
+      receipts,
+      unit:
+        pendingRecoveryUnits.length === 1
+          ? pendingRecoveryUnits[0]
+          : undefined,
+    });
   }
 
   // Source-state equality composes with v2's bounded stale-receipt recovery.
@@ -3549,9 +3672,10 @@ function verifyReviewerPrecondition(
     staleSourcePreconditionError(
       pd,
       content,
-      stage.slug,
+      stage,
       reviewer,
-      receipts.sourceStaleProgress?.recoverySpent === true,
+      receipts,
+      action,
     );
   }
 
@@ -3574,13 +3698,13 @@ function verifyReviewerPrecondition(
         staleReviewPreconditionError(
           pd,
           content,
-          stage.slug,
+          stage,
           reviewer,
-          receipts.stageStaleProgress?.recoverySpent === true,
+          receipts,
           action,
         );
       }
-      reviewerPreconditionError(stage.slug, reviewer, action);
+      reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
     }
     return;
   }
@@ -3599,7 +3723,7 @@ function verifyReviewerPrecondition(
   if (noDagObserved) {
     if (receipts.mergedBoltUnits.size === 0) {
       if (!sawStageReview) {
-        reviewerPreconditionError(stage.slug, reviewer, action);
+        reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
       }
       return;
     }
@@ -3607,7 +3731,7 @@ function verifyReviewerPrecondition(
     reviewUnits = [...receipts.mergedBoltUnits].sort();
   } else if (resolution.units.length === 0) {
     if (!sawStageReview) {
-      reviewerPreconditionError(stage.slug, reviewer, action);
+      reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
     }
     return;
   } else {
@@ -3661,7 +3785,9 @@ function verifyReviewerPrecondition(
         recoverySpent.length > 0
           ? ` Recovery was already spent for ${recoverySpent.join(", ")}. ` +
             recoveryGuidance(pd, content, stage.slug) +
-            " Only a human Request Changes decision resets that review attempt."
+            (requestChangesResetIsExecutable(content, stage.slug)
+              ? " Only a human Request Changes decision resets that review attempt."
+              : "")
           : "";
       error(
         `${reviewerPreconditionPrefix(stage.slug, action)}: merged Bolt ` +
@@ -3700,9 +3826,11 @@ function verifyReviewerPrecondition(
             `attempt restores one review allowance.`
           : `For units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
             `the one recovery review was already used and their output changed ` +
-            `again. ${recoveryGuidance(pd, content, stage.slug)} Only a human ` +
-            `Request Changes decision resets the review attempt; do not record ` +
-            `that rejection on the human's behalf.`,
+            `again. ${recoveryGuidance(pd, content, stage.slug)}` +
+            (requestChangesResetIsExecutable(content, stage.slug)
+              ? " Only a human Request Changes decision resets the review attempt; " +
+                "do not record that rejection on the human's behalf."
+              : ""),
       );
     }
     if (neverReviewed.length > 0) {
@@ -3765,24 +3893,73 @@ function verifyReviewerPrecondition(
 function staleSourcePreconditionError(
   pd: string,
   content: string,
-  slug: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    reviewer?: string;
+    review_artifact?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
   reviewer: string,
-  recoverySpent: boolean,
+  receipts: ReturnType<typeof freshReviewReceipts>,
+  action: ReviewerPreconditionAction,
 ): never {
+  const slug = stage.slug;
+  const recoverySpent =
+    receipts.sourceStaleProgress?.recoverySpent === true;
+  const reason = receipts.sourceStaleReason;
+  if (reason === "boundary-unbindable") {
+    const message =
+      `Refusing to complete "${slug}": the reviewed source boundary could not be ` +
+        "fingerprinted, so this is not evidence that application source changed. " +
+        "Repair .aidlc-source-paths.json or the workspace source boundary, then " +
+        `record a fresh review by ${reviewer}. ${recoveryGuidance(pd, content, slug)}` +
+        (recoverySpent && requestChangesResetIsExecutable(content, slug)
+          ? " Only a human Request Changes decision resets the review attempt; do not " +
+            "record that rejection on the human's behalf."
+          : "");
+    refuseStateGuard(pd, content, stage, {
+      code: "SOURCE_BOUNDARY_UNBINDABLE",
+      blockedAction: action,
+      invariant: "Reviewed source is bound to a reproducible workspace boundary.",
+      userMessage: message,
+      receipts,
+    });
+  }
   if (recoverySpent) {
-    error(
+    const message =
       `Refusing to complete "${slug}": the workspace source changed again after ` +
         `the one recovery review by ${reviewer} (source-fingerprint mismatch). ` +
         `${recoveryGuidance(pd, content, slug)} ` +
-        "Only a human Request Changes decision resets the review attempt; do not " +
-        "record that rejection on the human's behalf.",
-    );
+        (requestChangesResetIsExecutable(content, slug)
+          ? "Only a human Request Changes decision resets the review attempt; do not " +
+            "record that rejection on the human's behalf."
+          : "");
+    refuseStateGuard(pd, content, stage, {
+      code: "SOURCE_RECOVERY_SPENT",
+      blockedAction: action,
+      invariant: "The current source remains covered by the bounded review attempt.",
+      userMessage: message,
+      receipts,
+    });
   }
-  error(
+  const message =
     `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
       `reviewed it. Ask ${reviewer} to review the current source once more and record ` +
-      `the verdict, or revert the source change, then try again.`,
-  );
+      `the verdict, or revert the source change, then try again.`;
+  refuseStateGuard(pd, content, stage, {
+    code: "SOURCE_REVIEW_STALE",
+    blockedAction: action,
+    invariant: "The current source remains covered by reviewer evidence.",
+    userMessage: message,
+    receipts,
+  });
 }
 
 function verifyPipelineLinkPrecondition(
@@ -3806,33 +3983,62 @@ function verifyPipelineLinkPrecondition(
   const missing = evidence.missing.map(({ link, repo }) =>
     repo ? `${repo}:${link}` : link
   );
-  error(
+  const message =
     `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
       `recorded for the current run: ${missing.join(", ")}. Run aidlc-log.ts link after ` +
       `each agent returns` +
       `${evidence.repos.length > 0 ? " with --repo <repo>" : ""}, or set ` +
-      `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
-  );
+      `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`;
+  const content = readStateFile(pd);
+  refuseStateGuard(pd, content, stage, {
+    code: "PIPELINE_EVIDENCE_MISSING",
+    blockedAction: "complete",
+    invariant: "Every required pipeline handoff is recorded in the current attempt.",
+    userMessage: message,
+  });
 }
 
 function staleReviewPreconditionError(
   pd: string,
   content: string,
-  slug: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    reviewer?: string;
+    review_artifact?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
   reviewer: string,
-  recoverySpent: boolean,
+  receipts: ReturnType<typeof freshReviewReceipts>,
   action: ReviewerPreconditionAction = "complete",
 ): never {
+  const slug = stage.slug;
+  const recoverySpent =
+    receipts.stageStaleProgress?.recoverySpent === true;
   if (recoverySpent) {
-    error(
+    const message =
       `${reviewerPreconditionPrefix(slug, action)}: this stage's output document ` +
         `changed again after the one recovery review by ${reviewer}. ` +
         recoveryGuidance(pd, content, slug) +
-        " Only a human Request Changes decision resets the review attempt; do not " +
-        "record that rejection on the human's behalf."
-    );
+        (requestChangesResetIsExecutable(content, slug)
+          ? " Only a human Request Changes decision resets the review attempt; do not " +
+            "record that rejection on the human's behalf."
+          : "");
+    refuseStateGuard(pd, content, stage, {
+      code: "ARTIFACT_RECOVERY_SPENT",
+      blockedAction: action,
+      invariant: "The current output remains covered by the bounded review attempt.",
+      userMessage: message,
+      receipts,
+    });
   }
-  error(
+  const message =
     `${reviewerPreconditionPrefix(slug, action)} because an output document changed after ` +
       `${reviewer} reviewed it. Run ` +
       `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
@@ -3841,34 +4047,68 @@ function staleReviewPreconditionError(
       `review, stop editing this stage's output documents. If the recovery pass was already ` +
       `spent, present the situation to the human at the approval gate; a human ` +
       `Request Changes decision resets the review attempt. Do not record a rejection ` +
-      `on the human's behalf.`
-  );
+      `on the human's behalf.`;
+  refuseStateGuard(pd, content, stage, {
+    code: "ARTIFACT_REVIEW_STALE",
+    blockedAction: action,
+    invariant: "The current output remains covered by reviewer evidence.",
+    userMessage: message,
+    receipts,
+  });
 }
 
 function reviewerPreconditionError(
-  slug: string,
+  pd: string,
+  content: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    reviewer?: string;
+    review_artifact?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
   reviewer: string,
+  receipts: ReturnType<typeof freshReviewReceipts>,
   action: ReviewerPreconditionAction = "complete",
 ): never {
+  const slug = stage.slug;
   if (action === "present-approval-gate") {
-    error(
+    const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
         `current output. Apply any fixes first, then request the review with ` +
         `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
         `<next ordinal>\` and record its verdict with the same command plus ` +
         `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
         `this stage's output documents; include suggestions from a READY review in the ` +
-        `approval summary instead.`,
-    );
+        `approval summary instead.`;
+    refuseStateGuard(pd, content, stage, {
+      code: "REVIEW_EVIDENCE_MISSING",
+      blockedAction: action,
+      invariant: "Reviewer-bearing stages have current terminal review evidence.",
+      userMessage: message,
+      receipts,
+    });
   }
-  error(
+  const message =
     `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
       `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
       `${slug} --reviewer ${reviewer} --iteration <next ordinal>\` and record its verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
       `verdict, do not edit this stage's output documents; include suggestions from a ` +
-      `READY review in the approval summary instead.`
-  );
+      `READY review in the approval summary instead.`;
+  refuseStateGuard(pd, content, stage, {
+    code: "REVIEW_EVIDENCE_MISSING",
+    blockedAction: action,
+    invariant: "Reviewer-bearing stages have current terminal review evidence.",
+    userMessage: message,
+    receipts,
+  });
 }
 
 function reviewRecoverySpentInCurrentAttempt(
@@ -4035,22 +4275,12 @@ function handleAdvance(
 
   // A true replay above is already fully applied and remains idempotent. A
   // crash-window partial approval does not satisfy all replay predicates, so it
-  // still reaches the source comparison. Already-[x] recovery may lack review
-  // receipts, but any modern source binding still has to match.
-  verifyReviewerPrecondition(
-    pd,
-    content,
-    completedStage,
-    "complete",
-    !alreadyMarkedCompleted,
-  );
-
-  // Artifact guard (issue #366). Only enforce when THIS advance is the
-  if (!alreadyMarkedCompleted) {
-    verifyStageArtifacts(pd, completedStage);
-    verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyPipelineLinkPrecondition(pd, completedStage);
-  }
+  // still reaches the shared admission chain (reviewer evidence always; the
+  // artifact, summary, and pipeline guards when THIS advance is the completion).
+  admitStageAction(pd, content, completedStage, {
+    action: "complete",
+    entrypoint: "advance",
+  });
 
   // Detect phase boundary (for PHASE_COMPLETED/VERIFIED/STARTED emissions)
   const crossesPhaseBoundary = completedStage.phase !== nextStage.phase;
@@ -4167,25 +4397,14 @@ function handleFinalize(args: string[]): void {
   const completedStage = findStageBySlug(completedSlug);
   if (!completedStage) error(`Unknown stage: ${completedSlug}`);
 
-  // Artifact guard (issue #366). finalize also marks a stage [x], so it is a
-  // completing transition that must not rubber-stamp. Guard only when the slug
-  // is not already [x] (an idempotent re-finalize already passed the guard),
-  // and before any mutation so a refusal leaves state untouched.
-  const alreadyMarkedCompleted =
-    parseCheckboxes(content).find((c) => c.slug === completedSlug)?.state ===
-    "completed";
-  verifyReviewerPrecondition(
-    pd,
-    content,
-    completedStage,
-    "complete",
-    !alreadyMarkedCompleted,
-  );
-  if (!alreadyMarkedCompleted) {
-    verifyStageArtifacts(pd, completedStage);
-    verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyPipelineLinkPrecondition(pd, completedStage);
-  }
+  // Artifact guard. finalize also marks a stage [x], so it is a completing
+  // transition that must not rubber-stamp. The shared admission chain guards only
+  // when the slug is not already [x] (an idempotent re-finalize already passed
+  // it), and runs before any mutation so a refusal leaves state untouched.
+  admitStageAction(pd, content, completedStage, {
+    action: "complete",
+    entrypoint: "finalize",
+  });
 
   // 1. Mark completed
   content = setCheckbox(content, completedSlug, "completed");
@@ -4304,18 +4523,10 @@ function handleCompleteWorkflow(
   // itself, so this skips the double-check on that path while still refusing a
   // direct `complete-workflow <active-slug>` that never produced artifacts. Runs
   // before any mutation so a refusal leaves state untouched.
-  verifyReviewerPrecondition(
-    pd,
-    content,
-    completedStage,
-    "complete",
-    !alreadyMarkedCompleted,
-  );
-  if (!alreadyMarkedCompleted) {
-    verifyStageArtifacts(pd, completedStage);
-    verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyPipelineLinkPrecondition(pd, completedStage);
-  }
+  admitStageAction(pd, content, completedStage, {
+    action: "complete",
+    entrypoint: "complete-workflow",
+  });
 
   // 1. Mark completed
   content = setCheckbox(content, completedSlug, "completed");
@@ -4448,6 +4659,7 @@ function teamGateContext(
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   args: string[],
+  explicitProjectDir?: string,
 ): TeamGateContext | null {
   const unit = getFlagValue(args, "--unit")?.trim();
   if (!isTeamUnitOwnership(content)) {
@@ -4471,7 +4683,7 @@ function teamGateContext(
   }
   const unitError = validateUnitName(unit);
   if (unitError) error(unitError);
-  const pd = resolveProjectDir(projectDir);
+  const pd = explicitProjectDir ?? resolveProjectDir(projectDir);
   validateLiveUnitScope(pd, unit);
   const resolution = resolveBoltDag(pd);
   if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
@@ -4526,6 +4738,7 @@ function verifyReviewerPreconditionForUnit(
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   unit: string,
+  action: ReviewerPreconditionAction,
 ): void {
   if (!stage.reviewer) return;
   const reviewClass = resolveReviewClass(
@@ -4536,10 +4749,17 @@ function verifyReviewerPreconditionForUnit(
   if (reviewClass === "none") return;
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   if (!receipts.unitVerdicts.has(unit)) {
-    error(
+    const message =
       `Refusing gate for unit "${unit}" of "${stage.slug}": no fresh ` +
-        `REVIEW_COMPLETED receipt from ${stage.reviewer} is recorded for this unit.`,
-    );
+      `REVIEW_COMPLETED receipt from ${stage.reviewer} is recorded for this unit.`;
+    refuseStateGuard(pd, content, stage, {
+      code: "REVIEW_EVIDENCE_MISSING",
+      blockedAction: action,
+      invariant: "Reviewer-bearing Units have current terminal review evidence.",
+      userMessage: message,
+      unit,
+      receipts,
+    });
   }
 }
 
@@ -4547,29 +4767,192 @@ function verifyTeamUnitGateEvidence(
   pd: string,
   content: string,
   context: TeamGateContext,
+  action: ReviewerPreconditionAction = "present-approval-gate",
 ): void {
   for (const stage of context.stages) {
     if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
     const missing = missingUnitArtifacts(pd, stage, context.unit);
     if (missing.length > 0) {
-      error(
+      const message =
         `Refusing gate for unit "${context.unit}" of "${stage.slug}": required ` +
-          `artifacts are missing (${missing.join(", ")}).`,
-      );
+        `artifacts are missing (${missing.join(", ")}).`;
+      refuseStateGuard(pd, content, stage, {
+        code: "REQUIRED_ARTIFACTS_MISSING",
+        blockedAction: action,
+        invariant: "Every applicable Unit output exists before certification.",
+        userMessage: message,
+        unit: context.unit,
+      });
     }
     if (!unitCompletedReceipts(pd, stage.slug).has(context.unit)) {
-      error(
+      const message =
         `Refusing gate for unit "${context.unit}" of "${stage.slug}": no current ` +
-          "UNIT_COMPLETED receipt is recorded.",
-      );
+        "UNIT_COMPLETED receipt is recorded.";
+      refuseStateGuard(pd, content, stage, {
+        code: "UNIT_COMPLETION_MISSING",
+        blockedAction: action,
+        invariant: "The Unit lifecycle is complete in the current attempt.",
+        userMessage: message,
+        unit: context.unit,
+      });
     }
     const summary = checkSummaryConfirmationEvidence(pd, stage, {
       stateContent: content,
       unit: context.unit,
     });
-    if (!summary.ok) error(summary.message);
-    verifyReviewerPreconditionForUnit(pd, content, stage, context.unit);
-    if (stage.workspace_requires) verifyStageArtifacts(pd, stage);
+    if (!summary.ok) {
+      refuseStateGuard(pd, content, stage, {
+        code: "SUMMARY_EVIDENCE_INVALID",
+        blockedAction: action,
+        invariant:
+          "Generated Unit outputs descend from current human-backed summary confirmation.",
+        userMessage: summary.message,
+        unit: context.unit,
+        summaryCoverage: summary.summaryCoverage,
+      });
+    }
+    verifyReviewerPreconditionForUnit(
+      pd,
+      content,
+      stage,
+      context.unit,
+      action,
+    );
+    if (stage.workspace_requires) verifyStageArtifacts(pd, stage, action);
+  }
+}
+
+function verifyTeamUnitGatePipelinePrecondition(
+  pd: string,
+  context: TeamGateContext,
+): void {
+  for (const stage of context.stages) {
+    verifyPipelineLinkPrecondition(pd, stage);
+  }
+}
+
+export type GuardPreflightAction =
+  | "present-approval-gate"
+  | "revise"
+  | "complete"
+  | "review-request";
+
+export type GuardPreflightResult =
+  | { executable: true }
+  | {
+      executable: false;
+      refusal: GuardRefusal;
+      attempt: GuardAttemptState;
+      resources: string[];
+    };
+
+export type StageAdmissionOptions = {
+  action: Exclude<GuardPreflightAction, "review-request">;
+  unit?: string;
+  entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
+};
+
+// THE guard chain for a lifecycle action, listed once. The enforcing handlers
+// call it before they change state; the router calls it (through
+// guardPreflight) before it spawns the handler. Both see the same immutable
+// snapshot and the same refusal, so a guard added here is a guard at both
+// sites. Refusals throw StateGuardRefusalError; structural refusals throw
+// StateCommandError; either unwinds to the caller unchanged.
+function admitStageAction(
+  pd: string,
+  stateContent: string,
+  stage: StageEntry,
+  options: StageAdmissionOptions,
+): void {
+  if (options.unit !== undefined) {
+    const team = teamGateContext(
+      stateContent,
+      stage,
+      ["--unit", options.unit],
+      pd,
+    );
+    if (team !== null) {
+      verifyTeamUnitGateEvidence(
+        pd,
+        stateContent,
+        team,
+        options.action === "complete" ? "complete" : "present-approval-gate",
+      );
+      if (options.action !== "complete") {
+        verifyTeamUnitGatePipelinePrecondition(pd, team);
+      }
+      return;
+    }
+  }
+
+  if (options.action !== "complete") {
+    verifyGateOpeningGuards(pd, stateContent, stage);
+    return;
+  }
+
+  const alreadyCompleted =
+    parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)
+      ?.state === "completed";
+  if (options.entrypoint === "approve") {
+    verifyStageArtifacts(pd, stage);
+    verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+    verifyPipelineLinkPrecondition(pd, stage);
+    verifyReviewerPrecondition(pd, stateContent, stage);
+    return;
+  }
+  // A true replay is already fully applied and stays idempotent. A crash-window
+  // partial approval still reaches the source comparison: already-[x] recovery
+  // may lack review receipts, but any modern source binding still has to match.
+  verifyReviewerPrecondition(
+    pd,
+    stateContent,
+    stage,
+    "complete",
+    !alreadyCompleted,
+  );
+  if (!alreadyCompleted) {
+    verifyStageArtifacts(pd, stage);
+    verifySummaryConfirmationPrecondition(pd, stateContent, stage);
+    verifyPipelineLinkPrecondition(pd, stage);
+  }
+}
+
+// The router's view of admitStageAction: the same call, with the two throw
+// kinds turned into a verdict. A structural refusal is "cannot decide here" and
+// fails open to the real command, which will refuse with the full message.
+export function guardPreflight(
+  pd: string,
+  stateContent: string,
+  stage: StageEntry,
+  options: {
+    action: GuardPreflightAction;
+    unit?: string;
+    entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
+  },
+): GuardPreflightResult {
+  if (options.action === "review-request") {
+    // Review request authority is owned by aidlc-log, whose admission is
+    // evaluated at routing time from the same reducer (summaryRefusalForRouting
+    // and the recovery-spent branch in the per-unit wave); nothing to add here.
+    return { executable: true };
+  }
+  try {
+    admitStageAction(pd, stateContent, stage, {
+      action: options.action,
+      ...(options.unit !== undefined ? { unit: options.unit } : {}),
+      ...(options.entrypoint ? { entrypoint: options.entrypoint } : {}),
+    });
+    return { executable: true };
+  } catch (error) {
+    if (error instanceof StateGuardRefusalError) {
+      return {
+        executable: false,
+        refusal: error.refusal,
+        attempt: error.attempt,
+        resources: error.resourceFingerprints,
+      };
+    }
+    return { executable: true };
   }
 }
 
@@ -4622,23 +5005,17 @@ function handleGateStart(args: string[]): void {
     preflightStage,
     args.slice(1),
   );
-  if (preflightTeamGate) {
-    verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate);
-    for (const gateStage of preflightTeamGate.stages) {
-      verifyPipelineLinkPrecondition(pd, gateStage);
-    }
-  } else {
+  if (!preflightTeamGate) {
     validateSlugInState(
       preflightContent,
       slug,
       ["in-progress", "awaiting-approval"],
     );
-    verifyGateOpeningGuards(
-      pd,
-      preflightContent,
-      preflightStage,
-    );
   }
+  admitStageAction(pd, preflightContent, preflightStage, {
+    action: "present-approval-gate",
+    ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
+  });
   const gateSensorEvaluation = fireGateSensors(
     pd,
     preflightStage,
@@ -4663,10 +5040,10 @@ function handleGateStart(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   const teamGate = teamGateContext(content, stage, args.slice(1));
   if (teamGate) {
-    verifyTeamUnitGateEvidence(pd, content, teamGate);
-    for (const gateStage of teamGate.stages) {
-      verifyPipelineLinkPrecondition(pd, gateStage);
-    }
+    admitStageAction(pd, content, stage, {
+      action: "present-approval-gate",
+      unit: teamGate.unit,
+    });
     verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
     const status = unitGateStatus(
       pd,
@@ -4715,7 +5092,7 @@ function handleGateStart(args: string[]): void {
   }
   validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
   const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
-  verifyGateOpeningGuards(pd, content, stage);
+  admitStageAction(pd, content, stage, { action: "present-approval-gate" });
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
   if (alreadyAwaiting) {
     if (
@@ -4865,7 +5242,11 @@ function handleApprove(args: string[]): void {
     preflightTeamGate !== null,
   );
   if (preflightTeamGate) {
-    verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate);
+    admitStageAction(pd, preflightContent, preflightStage, {
+      action: "complete",
+      entrypoint: "approve",
+      unit: preflightTeamGate.unit,
+    });
   } else {
     verifyStageArtifacts(pd, preflightStage);
     verifySummaryConfirmationPrecondition(
@@ -4914,7 +5295,11 @@ function handleApprove(args: string[]): void {
   );
 
   if (teamGate) {
-    verifyTeamUnitGateEvidence(pd, content, teamGate);
+    admitStageAction(pd, content, stage, {
+      action: "complete",
+      entrypoint: "approve",
+      unit: teamGate.unit,
+    });
     const reviewFindingDispositions = acceptedRiskDispositionField(
       pd,
       teamGate.stages,
@@ -5054,9 +5439,13 @@ function handleApprove(args: string[]): void {
     writeStateFile(pd, content);
   }
 
-  verifySummaryConfirmationPrecondition(pd, content, stage);
-  verifyPipelineLinkPrecondition(pd, stage);
-  verifyReviewerPrecondition(pd, content, stage);
+  // The shared admission chain for approve: artifacts and summary again (they
+  // ran before the backstop above and are re-read here), then pipeline and
+  // reviewer evidence. The router preflights `approve` through the same call.
+  admitStageAction(pd, content, stage, {
+    action: "complete",
+    entrypoint: "approve",
+  });
   const reviewFindingDispositions = acceptedRiskDispositionField(pd, stage);
 
   // Scope is required for next-stage derivation. Validate it before persisting
@@ -5224,7 +5613,7 @@ function handleReject(args: string[]): void {
   if (
     !autonomousDecision &&
     !humanPresenceGuardDisabled() &&
-    decision !== "Request Changes"
+    !isRequestChangesChoice(decision)
   ) {
     const cancellation = isNonAnswer(decision)
       ? " The reply is cancellation boilerplate, not a decision."
@@ -5247,6 +5636,26 @@ function handleReject(args: string[]): void {
       `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
         "cancellation boilerplate. Re-present the original held gate with every offered choice " +
         "and wait for the human to choose one.",
+    );
+  }
+  const feedbackStatus = guardRecoveryFeedbackStatus(
+    pd,
+    content,
+    slug,
+    teamGate?.unit,
+    feedback,
+  );
+  if (feedbackStatus === "awaiting-feedback") {
+    error(
+      `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
+        `feedback. Ask "What should change?", end the turn, and wait for the ` +
+        "human's separate response before retrying.",
+    );
+  }
+  if (feedbackStatus === "mismatch") {
+    error(
+      `Refusing to reject "${slug}": --feedback does not exactly match the ` +
+        "human's separate guard-recovery response. Pass their text unchanged.",
     );
   }
 
@@ -5410,12 +5819,31 @@ function handleRevise(args: string[]): void {
   const preflightContent = readStateFile(pd);
   const preflightStage = findStageBySlug(slug);
   if (!preflightStage) error(`Unknown stage: ${slug}`);
-  validateSlugInState(preflightContent, slug, "revising");
-  verifyGateOpeningGuards(
-    pd,
+  const preflightTeamGate = teamGateContext(
     preflightContent,
     preflightStage,
+    args.slice(1),
   );
+  if (preflightTeamGate) {
+    const status = unitGateStatus(
+      pd,
+      preflightStage.slug,
+      preflightTeamGate.unit,
+      preflightTeamGate.scope,
+    );
+    if (status !== "revising") {
+      error(
+        `Gate for unit "${preflightTeamGate.unit}" of "${preflightStage.slug}" is ${status}; ` +
+          "only a revising gate can re-enter approval.",
+      );
+    }
+  } else {
+    validateSlugInState(preflightContent, slug, "revising");
+  }
+  admitStageAction(pd, preflightContent, preflightStage, {
+    action: "revise",
+    ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
+  });
   const gateSensorEvaluation = fireGateSensors(pd, preflightStage);
   enforceBlockingGateSensors(
     pd,
@@ -5447,7 +5875,10 @@ function handleRevise(args: string[]): void {
           "only a revising gate can re-enter approval.",
       );
     }
-    verifyTeamUnitGateEvidence(pd, content, teamGate);
+    admitStageAction(pd, content, stage, {
+      action: "revise",
+      unit: teamGate.unit,
+    });
     const timestamp = isoTimestamp();
     content = setField(content, "Last Updated", timestamp);
     try {
@@ -5469,7 +5900,7 @@ function handleRevise(args: string[]): void {
     return;
   }
   validateSlugInState(content, slug, "revising");
-  verifyGateOpeningGuards(pd, content, stage);
+  admitStageAction(pd, content, stage, { action: "revise" });
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
 
   content = setCheckbox(content, slug, "awaiting-approval");
@@ -6795,8 +7226,10 @@ function handleMerge(args: string[]): void {
     return { postMergeSha, conflictResolutionField };
     }, resolvedIntent, space);
   } catch (e) {
-    // Slug-tag any error from the locked block (most commonly: lock-acquire
-    // timeout when a peer tool holds the lock across the retry budget).
+    // An already slug-tagged refusal from inside the locked block passes through;
+    // anything else (most commonly a lock-acquire timeout when a peer tool holds
+    // the lock across the retry budget) is slug-tagged here.
+    if (e instanceof StateCommandError) throw e;
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable
   }
@@ -6818,15 +7251,22 @@ function handleMerge(args: string[]): void {
 
 // --- Utility ---
 
+// Refuse the current command. Throws rather than exits so the guard admission
+// functions below stay callable in-process by the router; main() catches the
+// throw and exits through exitWithError, which is the one place that writes the
+// ERROR_LOGGED row and ends the process.
 function error(msg: string): never {
+  throw new StateCommandError(msg);
+}
+
+function exitWithError(msg: string): never {
   // Honor module-level projectDir (set from --project-dir in main) so test
   // fixtures and explicit overrides propagate to ERROR_LOGGED.
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-state ${process.argv.slice(2).join(" ")}`.trim();
-  // Thread the active per-intent lock context (set by fork/merge before their
-  // per-intent withAuditLock) so emitError's holdsAuditLock probe keys the SAME
-  // bucket the caller holds — lock==write on the in-transaction error path.
-  // Unset (undefined) for every sentinel-locked handler -> emitError keys the
-  // sentinel, matching their lock.
+  // Thread the per-intent lock context fork/merge set before their per-intent
+  // withAuditLock. The throw released the lock on its way here, so emitError
+  // keys and briefly re-acquires the SAME bucket the transaction used; every
+  // sentinel-locked handler leaves these unset and keys the sentinel.
   emitError(pd, "aidlc-state", command, msg, lockIntent, lockSpace);
 }

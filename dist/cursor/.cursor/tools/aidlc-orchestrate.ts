@@ -93,6 +93,7 @@ import {
   type AskDirective,
   type Directive,
   type ErrorDirective,
+  type GuardRecoveryAskDirective,
   GATE_UNRESOLVED,
   type GateValue,
   type LegacyPlanApprovalChoices,
@@ -122,19 +123,35 @@ import {
   currentUnitLifecycleMode,
   effectivePlanAction,
   errorMessage,
+  evaluateGuardRefusal,
   filterProducesByKind,
   firstInScopeStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  GUARD_RECOVERY_ASK_TYPE,
+  type GuardRefusal,
+  guardAttemptState,
+  type GuardAttemptState,
+  guardRecoveryAskFromRefusalText,
+  guardRefusalStreakView,
+  type GuardRemedy,
+  humanAuthorityState,
+  recordGuardRefusal,
+  currentGuardRecoveryAskMarker,
+  type SummaryConfirmationEvidence,
   gridCostSummary,
   hasAnyUnitClaimRefs,
   installedHarnessName,
+  isRequestChangesChoice,
   intentRepos,
   inspectContinuationCursor,
   isPluginEnabled,
   isPerUnitStage,
+  isReadOnlyEngineProbe,
   isRegularFile,
+  isRouteCheckProbe,
+  isStopHookProbe,
   isTeamUnitOwnership,
   KNOWN_CODEKB_STAGES,
   listIntents,
@@ -161,6 +178,7 @@ import {
   readApplicableTeamUnitScopeStamp,
   readStateFile,
   recordHookDrop,
+  recoveryGuidance,
   markEngineTouch,
   kiroIdeLegacyPlanApprovalSessionId,
   relativeCodekbDir,
@@ -178,14 +196,12 @@ import {
   type StageEntry,
   type AuditShardEvent,
   stateFilePath,
-  isReadOnlyEngineProbe,
   stateDigest,
   readActiveDirectiveMarker,
   type ActiveDirectiveMarker,
-  isRouteCheckProbe,
-  isStopHookProbe,
   EngineModeViolationError,
   stateFilePathForSelection,
+  teamUnitGateStatus,
   unitDependencyPath,
   unitParkedPath,
   unitParticipantPath,
@@ -212,7 +228,9 @@ import {
   classifyStateVersion,
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
+  requestChangesResetIsExecutable,
 } from "./aidlc-lib.ts";
+import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
   cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
@@ -280,10 +298,11 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 interface PreparedEmission {
   transported: Directive; serialized: string; resultSha256: string; projectDir?: string;
   marker?: {
-    kind: "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
+    kind: "ask" | "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
     units?: string[];
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
     rules_bundle?: string; directive_sha256?: string;
+    ask_type?: string;
   };
 }
 
@@ -295,6 +314,7 @@ interface PreparedLegacyPlanApproval {
 
 let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
+let engineProjectDir: string | undefined;
 
 function projectStageValidityAdvisory(
   projectDir: string,
@@ -383,6 +403,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
   // minting the machine-local steering key on a checkout that has none.
+  const askState =
+    directive.kind === "ask" && engineProjectDir
+      ? loadStateFileIfPresent(engineProjectDir)
+      : null;
   let transported =
     directive.kind === "run-stage" && route && !isRouteCheckProbe()
       ? transportRunStage(directive, route)
@@ -425,6 +449,23 @@ function prepareEmission(directive: Directive): PreparedEmission {
     process.exit(1);
   }
   let marker: PreparedEmission["marker"];
+  // A guard-recovery ask is published as a marker so the human's selection has
+  // somewhere to live across turns. Other asks keep their own machinery (the
+  // resume choice) or none; publishing every ask would supersede a live
+  // run-stage marker for a question the engine re-derives on every call.
+  if (
+    transported.kind === "ask" &&
+    transported.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+    askState !== null
+  ) {
+    marker = {
+      kind: "ask",
+      stage: transported.stage,
+      ask_type: GUARD_RECOVERY_ASK_TYPE,
+      ...(typeof transported.unit === "string" ? { unit: transported.unit } : {}),
+      state_sha256: stateDigest(askState),
+    };
+  }
   if ((transported.kind === "load-steering" || transported.kind === "run-stage") && route) {
     const markerStateHash =
       route.stateHash ??
@@ -470,6 +511,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ? { projectDir: route.codekbCtx.projectDir }
       : publication
         ? { projectDir: publication.projectDir }
+        : marker?.kind === "ask" && engineProjectDir
+          ? { projectDir: engineProjectDir }
         : {}),
     ...(marker ? { marker } : {}),
   };
@@ -552,6 +595,23 @@ function legacyPlanApprovalRecoveryDirective(): AskDirective {
   };
 }
 
+// Whether the issued marker already IS this guard-recovery ask for this state.
+function guardRecoveryAskMarkerIsCurrent(
+  projectDir: string,
+  marker: NonNullable<PreparedEmission["marker"]>,
+): boolean {
+  const state = loadStateFileIfPresent(projectDir);
+  if (state === null) return false;
+  const current = currentGuardRecoveryAskMarker(
+    projectDir,
+    state,
+    marker.stage,
+    marker.unit,
+  );
+  return current !== null && current.state_sha256 === marker.state_sha256;
+}
+
+
 function emit(directive: Directive): void {
   const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
     prepareEmission(directive),
@@ -562,10 +622,20 @@ function emit(directive: Directive): void {
   // challenge minted in turn N was destroyed by turn N's own Stop probe and an
   // approval could never be recorded. The suppression is not team-specific: the
   // hook parses the directive off stdout for every Unit Ownership.
+  // The same guard-recovery ask for the same state is the same question: the
+  // issued marker is kept as it is, so a selection the human already made on it
+  // (recorded by the human-turn hook as consumed) survives the re-ask. Routing
+  // is recomputed every time; only the marker rewrite is skipped.
+  const sameGuardRecoveryAsk =
+    prepared.marker?.kind === "ask" &&
+    prepared.marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+    prepared.projectDir !== undefined &&
+    guardRecoveryAskMarkerIsCurrent(prepared.projectDir, prepared.marker);
   if (
     prepared.marker &&
     !isReadOnlyEngineProbe() &&
-    !retainedIssuedDirective
+    !retainedIssuedDirective &&
+    !sameGuardRecoveryAsk
   ) {
     const projectDir = prepared.projectDir;
     try {
@@ -3875,10 +3945,13 @@ function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
 }
 
-// The `next` handler reads workflow state and emits exactly one directive. Rule
-// transport may lazily mint its machine-local MAC key. Ordinary routing never
-// mutates shared workflow state; `--single` adds only its synthetic audit start
-// and cannot move the main workflow pointer.
+// The `next` handler reads workflow state and emits exactly one directive. A
+// normal rule-transport request may lazily mint its machine-local MAC key.
+// Internal observer modes are strictly read-only: route checks bypass transport,
+// while Stop probes use a deterministic first-hop token and never publish the
+// prepared directive. Ordinary routing never mutates shared workflow state;
+// `--single` adds only its synthetic audit start and cannot move the main
+// workflow pointer.
 function handleNext(args: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
   const flags = parseNextFlags(args);
@@ -4763,6 +4836,21 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   }
 
   if (currentIsInFlight) {
+    if (currentState === "awaiting-approval") {
+      const currentNode = nodeForSlug(currentSlug);
+      if (currentNode !== undefined) {
+        const preflight = preflightDirective(
+          pd,
+          stateContent,
+          currentNode,
+          { action: "present-approval-gate" },
+        );
+        if (preflight !== null) {
+          emit(preflight);
+          return;
+        }
+      }
+    }
     // Under an autonomy grant, an eligible per-unit build stage fans out as a
     // swarm batch instead of a single run-stage. tryEmitSwarm advances the swarm
     // one batch per `next` (the first batch with an unconverged unit, then the
@@ -4992,6 +5080,18 @@ function tryEmitSwarm(
     // Gate-only resume surface: every Unit body and reviewer already converged
     // inside the swarm. Keep that fact explicit across fresh sessions and remove
     // the ordinary body/reviewer modules so settlement cannot repeat work.
+    const preflight = stateContent === null
+      ? null
+      : preflightDirective(
+          projectDir,
+          stateContent,
+          node,
+          { action: "present-approval-gate" },
+        );
+    if (preflight !== null) {
+      emit(preflight);
+      return true;
+    }
     emit(applySettledSwarmShape(directive));
     return true;
   }
@@ -5283,7 +5383,54 @@ function waveEligible(node: GraphStage): boolean {
 type ActiveWave =
   | { state: "active"; unit: string; wave: RunStageWave }
   | { state: "settled" }
+  | { state: "refusal"; refusal: RoutedGuardRefusal }
   | { state: "error"; message: string };
+
+// A refusal the router derived itself, with the attempt snapshot the streak and
+// the ask need. Built from the same shared constructor the enforcing tools use.
+interface RoutedGuardRefusal {
+  refusal: GuardRefusal;
+  attempt: GuardAttemptState;
+  resources: string[];
+}
+
+function summaryRefusalForRouting(
+  projectDir: string,
+  stateContent: string,
+  stage: StageEntry,
+  unit: string,
+  confirmation: Extract<SummaryConfirmationEvidence, { ok: false }>,
+): RoutedGuardRefusal | undefined {
+  const attached = confirmation.refusal;
+  if (attached === undefined) return undefined;
+  const snapshot = guardAttemptState(projectDir, stateContent, stage, {
+    unit,
+    summaryCoverage: confirmation.summaryCoverage,
+  });
+  const teamGate = teamUnitGateStatus(projectDir, stateContent, stage.slug, unit);
+  const evaluated = evaluateGuardRefusal({
+    code: attached.code,
+    blockedAction: "review-request",
+    stage: stage.slug,
+    unit,
+    stateContent,
+    invariant: attached.invariant,
+    userMessage: attached.userMessage,
+    attempt: snapshot.attempt,
+    humanAuthority: humanAuthorityState(projectDir),
+    ...(teamGate ? { teamGate } : {}),
+  });
+  return {
+    refusal: {
+      ...attached,
+      blockedAction: "review-request",
+      state: evaluated.state,
+      remedies: evaluated.remedies,
+    },
+    attempt: snapshot.attempt,
+    resources: snapshot.resources,
+  };
+}
 
 function waveEntry(
   node: GraphStage,
@@ -5432,7 +5579,22 @@ function activePerUnitWave(
           stateContent,
           unit,
         });
-        if (!confirmation.ok) return { state: "error", message: confirmation.message };
+        if (!confirmation.ok) {
+          const refusal = summaryRefusalForRouting(
+            projectDir,
+            stateContent ?? "",
+            node,
+            unit,
+            confirmation,
+          );
+          if (refusal !== undefined) {
+            return {
+              state: "refusal",
+              refusal,
+            };
+          }
+          return { state: "error", message: confirmation.message };
+        }
       }
       const terminalVerdict = reviewProgress?.unitVerdicts.get(unit);
       const pendingReview = reviewProgress?.unitPending.get(unit);
@@ -5451,6 +5613,61 @@ function activePerUnitWave(
         : terminalVerdict
           ? (reviewProgress?.unitIterations.get(unit) ?? null)
           : (pendingReview?.iteration ?? staleReview?.nextIteration ?? 1);
+      if (staleReview?.recoverySpent === true) {
+        const teamGate = teamUnitGateStatus(
+          projectDir,
+          stateContent ?? "",
+          node.slug,
+          unit,
+        );
+        let guidance: string;
+        try {
+          guidance = recoveryGuidance(
+            projectDir,
+            stateContent ?? "",
+            node.slug,
+            {
+              unit,
+              ...(teamGate ? { teamGate } : {}),
+            },
+          );
+        } catch {
+          guidance = `Restart this stage with /aidlc --stage ${node.slug}.`;
+        }
+        const snapshot = guardAttemptState(projectDir, stateContent ?? "", node, {
+          unit,
+          ...(reviewProgress ? { receipts: reviewProgress } : {}),
+        });
+        return {
+          state: "refusal",
+          refusal: {
+            refusal: evaluateGuardRefusal({
+              code: "REVIEW_RECOVERY_SPENT",
+              blockedAction: "review-request",
+              stage: node.slug,
+              unit,
+              stateContent: stateContent ?? "",
+              invariant:
+                "The stale-receipt recovery slot is single-use within an attempt.",
+              userMessage: reviewRecoverySpentMessage(
+                node.slug,
+                guidance,
+                undefined,
+                requestChangesResetIsExecutable(
+                  stateContent ?? "",
+                  node.slug,
+                  teamGate,
+                ),
+              ),
+              attempt: snapshot.attempt,
+              humanAuthority: humanAuthorityState(projectDir),
+              ...(teamGate ? { teamGate } : {}),
+            }),
+            attempt: snapshot.attempt,
+            resources: snapshot.resources,
+          },
+        };
+      }
       const buildRequired = !covered;
       // Wave entries always settle through an explicit `unit complete --wave`
       // receipt. This is the parallel counterpart to the serial start/complete
@@ -5616,6 +5833,10 @@ function emitPerUnitRunStage(
       emit(errorDirective(wave.message));
       return;
     }
+    if (wave.state === "refusal") {
+      emit(routedRefusalDirective(projectDir, wave.refusal));
+      return;
+    }
     if (wave.state === "active") {
       const unitKind = r.unitKinds?.get(wave.unit) ?? null;
       const directive = buildRunStageDirective(
@@ -5672,6 +5893,18 @@ function emitPerUnitRunStage(
       kinds?.get(lastUnit) ?? null,
     );
     directive.unit = lastUnit;
+    if (stateContent !== null) {
+      const preflight = preflightDirective(
+        projectDir,
+        stateContent,
+        node,
+        { action: "present-approval-gate" },
+      );
+      if (preflight !== null) {
+        emit(preflight);
+        return;
+      }
+    }
     emit(directive);
     return;
   }
@@ -6247,7 +6480,18 @@ function emitTeamUnitMajorRunStage(
         unit,
       });
       if (!confirmation.ok) {
-        emit(errorDirective(confirmation.message));
+        const refusal = summaryRefusalForRouting(
+          projectDir,
+          refreshedState,
+          stage,
+          unit,
+          confirmation,
+        );
+        emit(
+          refusal === undefined
+            ? errorDirective(confirmation.message)
+            : routedRefusalDirective(projectDir, refusal),
+        );
         return;
       }
       if (
@@ -6274,6 +6518,16 @@ function emitTeamUnitMajorRunStage(
         directive.gate = true;
         directive.unit = unit;
         directive.unit_gate = "per-stage";
+        const preflight = preflightDirective(
+          projectDir,
+          refreshedState,
+          stage,
+          { action: "present-approval-gate", unit },
+        );
+        if (preflight !== null) {
+          emit(preflight);
+          return;
+        }
         emit(directive);
         return;
       }
@@ -6303,6 +6557,16 @@ function emitTeamUnitMajorRunStage(
       directive.gate = true;
       directive.unit = unit;
       directive.unit_gate = "unit-end";
+      const preflight = preflightDirective(
+        projectDir,
+        refreshedState,
+        finalStage,
+        { action: "present-approval-gate", unit },
+      );
+      if (preflight !== null) {
+        emit(preflight);
+        return;
+      }
       emit(directive);
       return;
     }
@@ -6518,7 +6782,18 @@ function emitUnitMajorRunStage(
         unit: u,
       });
       if (!confirmation.ok) {
-        emit(errorDirective(confirmation.message));
+        const refusal = summaryRefusalForRouting(
+          projectDir,
+          stateContent ?? "",
+          k,
+          u,
+          confirmation,
+        );
+        emit(
+          refusal === undefined
+            ? errorDirective(confirmation.message)
+            : routedRefusalDirective(projectDir, refusal),
+        );
         return;
       }
     }
@@ -7083,6 +7358,184 @@ function spawnState(
     stdout: new TextDecoder().decode(result.stdout),
     stderr: new TextDecoder().decode(result.stderr),
   };
+}
+
+// The guard-recovery ask an enforcing tool carried on the last line of its
+// refusal, validated as a directive so the router emits exactly what the tool
+// would have shown. Null when the refusal is prose only.
+function guardRecoveryAskFromToolOutput(
+  output: string,
+): GuardRecoveryAskDirective | null {
+  const ask = guardRecoveryAskFromRefusalText(output);
+  if (ask === null) return null;
+  const result = validateDirective(ask);
+  if (
+    !result.valid ||
+    result.data.kind !== "ask" ||
+    result.data.ask_type !== GUARD_RECOVERY_ASK_TYPE
+  ) {
+    return null;
+  }
+  return result.data;
+}
+
+type GuardPreflightOptions = {
+  action:
+    | "present-approval-gate"
+    | "revise"
+    | "complete"
+    | "review-request";
+  unit?: string;
+  entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
+};
+
+type GuardPreflightOutcome =
+  | { executable: true }
+  | {
+      executable: false;
+      refusal: GuardRefusal;
+      attempt: GuardAttemptState;
+      resources: string[];
+    };
+
+// The same admission call the state tool makes before it changes state, run
+// here on the same snapshot. Loaded in-process: the admission functions are
+// ordinary functions with no module flag, and a structural refusal inside them
+// is a thrown error that reads as "cannot decide here", so the router fails open
+// to the real command rather than guessing.
+function guardPreflightResult(
+  projectDir: string,
+  stateContent: string,
+  stage: StageEntry,
+  options: GuardPreflightOptions,
+): GuardPreflightOutcome {
+  try {
+    const state = require("./aidlc-state.ts") as {
+      guardPreflight: (
+        projectDir: string,
+        stateContent: string,
+        stage: StageEntry,
+        options: GuardPreflightOptions,
+      ) => GuardPreflightOutcome;
+    };
+    return state.guardPreflight(projectDir, stateContent, stage, options);
+  } catch {
+    return { executable: true };
+  }
+}
+
+// A remedy that IS the action being preflighted is not a way out of the
+// refusal; a refusal whose every executable remedy repeats the action is
+// self-contradictory and the action proceeds to the tool, which refuses or not
+// with the full message. Compared by op, never by wording.
+function remedyRepeatsPreflightedAction(
+  action: GuardPreflightOptions["action"],
+  remedy: GuardRemedy,
+): boolean {
+  return action === "present-approval-gate" && remedy.op === "present-approval-gate";
+}
+
+// The ask for a refusal the router derived itself (a review request the wave
+// cannot make, a summary confirmation the Unit lacks). Always an ask, never an
+// error directive. The streak is the same one the enforcing tool keeps; an
+// observer reads it without writing.
+function routedRefusalDirective(
+  projectDir: string,
+  routed: RoutedGuardRefusal,
+): GuardRecoveryAskDirective {
+  const streak = isReadOnlyEngineProbe()
+    ? guardRefusalStreakView(
+        projectDir,
+        routed.refusal,
+        routed.attempt,
+        routed.resources,
+      )
+    : recordGuardRefusal(
+        projectDir,
+        routed.refusal,
+        routed.attempt,
+        routed.resources,
+      );
+  return streak.ask;
+}
+
+// The directive for a refusal the router found before spawning the state tool
+// for a gate action. Null means "proceed": every executable remedy is the very
+// gate presentation being preflighted, so the refusal has nothing to add and the
+// tool decides. Otherwise the same ask the tool would print.
+function directiveForPreflightRefusal(
+  projectDir: string,
+  outcome: Extract<GuardPreflightOutcome, { executable: false }>,
+  action: GuardPreflightOptions["action"],
+): GuardRecoveryAskDirective | null {
+  const ask = routedRefusalDirective(projectDir, outcome);
+  if (
+    ask.remedies.length > 0 &&
+    ask.remedies.every((remedy) => remedyRepeatsPreflightedAction(action, remedy))
+  ) {
+    return null;
+  }
+  return ask;
+}
+
+function preflightDirective(
+  projectDir: string,
+  stateContent: string,
+  stage: StageEntry,
+  options: GuardPreflightOptions,
+): GuardRecoveryAskDirective | null {
+  const result = guardPreflightResult(
+    projectDir,
+    stateContent,
+    stage,
+    options,
+  );
+  return result.executable
+    ? null
+    : directiveForPreflightRefusal(projectDir, result, options.action);
+}
+
+function preflightSequenceDirective(
+  projectDir: string,
+  stateContent: string,
+  stage: StageEntry,
+  sequence: ReadonlyArray<ReadonlyArray<string>>,
+  unit?: string,
+): GuardRecoveryAskDirective | null {
+  for (const subArgs of sequence) {
+    const verb = subArgs[0];
+    let options: GuardPreflightOptions | null = null;
+    if (verb === "gate-start") {
+      options = { action: "present-approval-gate", ...(unit ? { unit } : {}) };
+    } else if (verb === "revise") {
+      options = { action: "revise", ...(unit ? { unit } : {}) };
+    } else if (verb === "approve") {
+      options = {
+        action: "complete",
+        entrypoint: "approve",
+        ...(unit ? { unit } : {}),
+      };
+    } else if (
+      verb === "advance" ||
+      verb === "finalize" ||
+      verb === "complete-workflow"
+    ) {
+      options = {
+        action: "complete",
+        entrypoint: verb,
+        ...(unit ? { unit } : {}),
+      };
+    }
+    if (options === null) continue;
+    const directive = preflightDirective(
+      projectDir,
+      stateContent,
+      stage,
+      options,
+    );
+    if (directive !== null) return directive;
+  }
+  return null;
 }
 
 // The synthetic single-stage owner uses the internal append route because
@@ -7933,7 +8386,18 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(["gate-start", slug, "--unit", unit]);
       } else if (flags.result === "rejected") {
-        const feedback = (flags.userInput ?? flags.reason)?.trim();
+        if (
+          process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1" &&
+          !isRequestChangesChoice(flags.userInput)
+        ) {
+          emit(errorDirective(
+            `report --result rejected for unit "${unit}" of "${slug}" received reply ` +
+              `${formatReceivedReply(flags.userInput)} which did not match the offered ` +
+              'choice "Request Changes".',
+          ));
+          return;
+        }
+        const feedback = (flags.reason ?? flags.userInput)?.trim();
         if (!feedback) {
           emit(errorDirective(
             `report --result rejected for unit "${unit}" of "${slug}" requires nonblank --user-input or --reason feedback.`,
@@ -7941,6 +8405,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           return;
         }
         const rejectArgs = ["reject", slug, "--feedback", feedback, "--unit", unit];
+        if (flags.userInput) {
+          rejectArgs.push("--user-input", flags.userInput);
+        }
         for (const finding of flags.rejectFindings ?? []) {
           rejectArgs.push("--reject-finding", finding);
         }
@@ -7968,11 +8435,27 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(approveArgs(slug, flags));
       }
+      const preflight = preflightSequenceDirective(
+        pd,
+        stateContent,
+        node,
+        sequence,
+        unit,
+      );
+      if (preflight !== null) {
+        emit(preflight);
+        return;
+      }
       const committed: string[] = [];
       for (const subArgs of sequence) {
         const res = spawnState(pd, subArgs);
         if (res.exitCode !== 0) {
           const detail = (res.stderr || res.stdout).trim();
+          const guardAsk = guardRecoveryAskFromToolOutput(detail);
+          if (guardAsk !== null) {
+            emit(guardAsk);
+            return;
+          }
           emit(errorDirective(
             `Transition rejected by aidlc-state.ts ${subArgs[0]} for unit "${unit}" of "${slug}"` +
               (detail ? `: ${detail}` : "."),
@@ -8040,7 +8523,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   if (protectedHumanGate && flags.result === "rejected") {
-    if (flags.userInput?.trim() !== "Request Changes") {
+    if (!isRequestChangesChoice(flags.userInput)) {
       emit(errorDirective(
         `report --result rejected for "${slug}" received reply ` +
           `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
@@ -8169,9 +8652,24 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
     }
 
+    const preflight = preflightSequenceDirective(
+      pd,
+      stateContent,
+      node,
+      [subArgs],
+    );
+    if (preflight !== null) {
+      emit(preflight);
+      return;
+    }
     const res = spawnState(pd, subArgs);
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout).trim();
+      const guardAsk = guardRecoveryAskFromToolOutput(detail);
+      if (guardAsk !== null) {
+        emit(guardAsk);
+        return;
+      }
       emit(errorDirective(
         `Could not update the approval status for "${slug}"` +
           (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
@@ -8312,6 +8810,16 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     sequence.push(["advance", slug]);
   }
 
+  const preflight = preflightSequenceDirective(
+    pd,
+    stateContent,
+    node,
+    sequence,
+  );
+  if (preflight !== null) {
+    emit(preflight);
+    return;
+  }
   const committed: string[] = [];
   for (const subArgs of sequence) {
     const res = spawnState(pd, subArgs);
@@ -8319,6 +8827,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       // aidlc-state.ts rejected the transition (error() exits non-zero). Surface
       // its message verbatim so the rejection is a clear signal, not a silent miss.
       const detail = (res.stderr || res.stdout).trim();
+      const guardAsk = guardRecoveryAskFromToolOutput(detail);
+      if (guardAsk !== null) {
+        emit(guardAsk);
+        return;
+      }
       emit({
         kind: "error",
         message:
@@ -8649,6 +9162,7 @@ export function main(argv: string[]): void {
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
   const resolvedSelection = resolveWorkflowSelection(resolvedProjectDir);
+  engineProjectDir = resolvedProjectDir;
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
@@ -8690,6 +9204,7 @@ export function main(argv: string[]): void {
     }
   } finally {
     engineInvocation = null;
+    engineProjectDir = undefined;
     engineSessionId = undefined;
     engineSelections.clear();
     requestedSteeringContinuation = null;

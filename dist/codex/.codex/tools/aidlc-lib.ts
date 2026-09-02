@@ -4255,6 +4255,16 @@ interface ActiveDirectiveResume {
   issuing_session: string; issuing_intent_uuid: string | null; action?: ResumeAction;
 }
 
+// The human's answer to a guard-recovery ask, kept on the ask marker so the
+// selection survives the engine re-issuing the same ask and so the later Request
+// Changes feedback can be bound to the human's own words. Both hashes are over
+// whitespace-normalized text: a re-wrapped paragraph is the same feedback.
+export interface ActiveDirectiveGuardRecoveryResponse {
+  status: "awaiting-feedback" | "ready";
+  selection_sha256: string;
+  feedback_sha256?: string;
+}
+
 export interface ActiveDirectiveMarker {
   version: 1 | 2; stage: string; unit?: string; state_sha256: string;
   units?: string[];
@@ -4268,6 +4278,8 @@ export interface ActiveDirectiveMarker {
   directive_sha256?: string;
   cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
+  ask_type?: string;
+  guard_recovery_response?: ActiveDirectiveGuardRecoveryResponse;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
   active_attempt?: ActiveDirectiveAttempt; resume?: ActiveDirectiveResume;
@@ -4888,6 +4900,9 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   const integer = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
   const attempt = isPlainObject(parsed.active_attempt) ? parsed.active_attempt : null;
   const resume = isPlainObject(parsed.resume) ? parsed.resume : null;
+  const guardRecovery = isPlainObject(parsed.guard_recovery_response)
+    ? parsed.guard_recovery_response
+    : null;
   const kinds: ActiveDirectiveKind[] = ["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"];
   if (
     parsed.version !== 2 || !/^[0-9a-f]{64}$/.test(String(parsed.project_sha256 ?? "")) ||
@@ -4914,6 +4929,21 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
       )) ||
     ("cursor_harness" in parsed &&
       (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
+    ("ask_type" in parsed &&
+      (typeof parsed.ask_type !== "string" || !/^[a-z][a-z0-9-]*$/.test(parsed.ask_type))) ||
+    ("guard_recovery_response" in parsed &&
+      (
+        parsed.kind !== "ask" ||
+        parsed.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+        !guardRecovery ||
+        !["awaiting-feedback", "ready"].includes(String(guardRecovery.status)) ||
+        !/^[0-9a-f]{64}$/.test(String(guardRecovery.selection_sha256 ?? "")) ||
+        (
+          guardRecovery.status === "ready"
+            ? !/^[0-9a-f]{64}$/.test(String(guardRecovery.feedback_sha256 ?? ""))
+            : "feedback_sha256" in guardRecovery
+        )
+      )) ||
     typeof parsed.owner_session !== "string" || parsed.owner_session.length === 0 ||
     !integer(parsed.revision) || !integer(parsed.owner_epoch) || !integer(parsed.context_epoch) ||
     !integer(parsed.event_sequence) || !integer(parsed.human_sequence) || !integer(parsed.engine_sequence) ||
@@ -5172,6 +5202,7 @@ export function writeActiveDirectiveMarker(
     units?: string[];
     rules_bundle?: string;
     directive_sha256?: string;
+    ask_type?: string;
   },
   invocation?: {
     attemptId?: string;
@@ -5471,6 +5502,13 @@ export function writeActiveDirectiveMarker(
       ...(marker.directive_sha256
         ? { directive_sha256: marker.directive_sha256 }
         : { directive_sha256: undefined }),
+      ...(marker.kind === "ask" && marker.ask_type
+        ? { ask_type: marker.ask_type }
+        : { ask_type: undefined }),
+      // A fresh publication is a fresh question. The guard-recovery ask that is
+      // re-issued for an unchanged state never reaches this write (the caller
+      // retains the issued marker), so clearing here cannot discard a selection.
+      guard_recovery_response: undefined,
       ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
       delivery: "issued",
       needs_rehydrate: copilotOwned,
@@ -5578,6 +5616,152 @@ export function hasCurrentSharedResumeWait(projectDir: string): boolean {
       getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous";
     return { marker, result: waiting, preserve: true };
   });
+}
+
+// Whitespace-normalized text for the guard-recovery selection and feedback
+// hashes: runs of whitespace collapse to one space and the ends are trimmed, so
+// a re-wrapped or re-indented paragraph is the same answer. Case and every other
+// byte are kept: the human's words are the binding.
+export function normalizeGuardRecoveryText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function guardRecoveryTextSha256(text: string): string | null {
+  const normalized = normalizeGuardRecoveryText(text);
+  return normalized.length === 0 ? null : contentSha256(normalized);
+}
+
+// The human answered a guard-recovery ask. The first answer is the remedy
+// selection: the marker becomes consumed and awaits the separate feedback the
+// selected remedy asks for. The second answer is that feedback. Both survive a
+// later `next` that re-issues the same ask, because the router retains a
+// consumed ask marker for an unchanged state instead of rewriting it.
+export function consumeSharedDirectiveAsk(
+  projectDir: string,
+  humanResponseText = "",
+): boolean {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: false, preserve: true };
+    }
+    const responseSha256 = guardRecoveryTextSha256(humanResponseText);
+    const currentGuardRecovery =
+      marker?.version === 2 &&
+      marker.state_sha256 === stateDigest(stateContent) &&
+      marker.kind === "ask" &&
+      marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+      marker.needs_rehydrate === false &&
+      responseSha256 !== null;
+    if (!currentGuardRecovery) {
+      return { marker, result: false, preserve: true };
+    }
+    if (
+      marker.delivery === "consumed" &&
+      marker.guard_recovery_response?.status === "awaiting-feedback"
+    ) {
+      return {
+        marker: {
+          ...marker,
+          revision: (marker.revision ?? 0) + 1,
+          guard_recovery_response: {
+            ...marker.guard_recovery_response,
+            status: "ready",
+            feedback_sha256: responseSha256,
+          },
+        },
+        result: true,
+      };
+    }
+    if (marker.delivery !== "issued" && marker.delivery !== "delivered") {
+      return { marker, result: false, preserve: true };
+    }
+    return {
+      marker: {
+        ...marker,
+        revision: (marker.revision ?? 0) + 1,
+        delivery: "consumed",
+        guard_recovery_response: {
+          status: "awaiting-feedback",
+          selection_sha256: responseSha256,
+        },
+      },
+      result: true,
+    };
+  });
+}
+
+export type GuardRecoveryFeedbackStatus =
+  | "not-applicable"
+  | "awaiting-feedback"
+  | "mismatch"
+  | "match";
+
+// Whether the Request Changes feedback the conductor submits is the human's own
+// answer to the guard-recovery ask. Compared whitespace-normalized, so a
+// re-wrapped paragraph matches and a paraphrase does not.
+//
+// The ask names the blocked target (stage, and the Unit when routing refused a
+// Unit). The reject names the gate the report path allows: under Unit
+// Ownership: team on a per-unit stage that is `--unit <name>`, and under solo
+// ownership it is the stage alone because `--unit` is refused there
+// (aidlc-state.ts teamGateContext). So the binding is exact per ownership:
+// team compares stage and Unit; solo compares the stage, where the one active
+// ask for that stage is the only ask a stage-level reject can be answering.
+export function guardRecoveryFeedbackStatus(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string | undefined,
+  feedback: string,
+): GuardRecoveryFeedbackStatus {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  const sameGate = isTeamUnitOwnership(stateContent)
+    ? (marker?.unit ?? undefined) === unit
+    : unit === undefined;
+  if (
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.stage !== stage ||
+    !sameGate ||
+    marker.guard_recovery_response === undefined
+  ) {
+    return "not-applicable";
+  }
+  if (marker.guard_recovery_response.status !== "ready") {
+    return "awaiting-feedback";
+  }
+  return marker.guard_recovery_response.feedback_sha256 ===
+      guardRecoveryTextSha256(feedback)
+    ? "match"
+    : "mismatch";
+}
+
+// The issued guard-recovery ask marker for exactly this ask and state, if one
+// exists. The router uses it to answer a repeated `next` with the same ask and
+// no marker rewrite, which is what keeps a consumed selection alive.
+export function currentGuardRecoveryAskMarker(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string | undefined,
+): ActiveDirectiveMarker | null {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  if (
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.stage !== stage ||
+    (marker.unit ?? undefined) !== unit ||
+    marker.needs_rehydrate === true ||
+    marker.owner_session?.startsWith("sessionless:") !== true
+  ) {
+    return null;
+  }
+  return marker;
 }
 
 export interface ContinuationCursorSnapshot {
@@ -6620,6 +6804,23 @@ export function isNonAnswer(text: string | undefined | null): boolean {
   return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
+// The gate's "Request Changes" choice, matched the way a person types it: any
+// case, an optional option prefix ("B." or "2)"), surrounding quotes, and
+// trailing punctuation are all the same choice. The words themselves must be
+// present; a paraphrase ("please change it") is not a choice. Plan Approval
+// keeps its exact-label rule because those labels are the anti-forgery binding.
+export function isRequestChangesChoice(text: string | undefined | null): boolean {
+  const normalized = (text ?? "")
+    .trim()
+    .replace(/^(?:[A-Za-z]|\d+)[.)]\s*/, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/[.!]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  return normalized === "request changes";
+}
+
 const RECEIVED_REPLY_DISPLAY_LIMIT = 120;
 export function formatReceivedReply(text: string | undefined | null): string {
   const normalized = (text ?? "").trim().replace(/\s+/g, " ") || "(empty)";
@@ -7231,7 +7432,12 @@ type SummaryConfirmationStage = Pick<
 
 export type SummaryConfirmationEvidence =
   | { ok: true; required: boolean }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      message: string;
+      summaryCoverage: "stale" | "missing";
+      refusal?: GuardRefusal;
+    };
 
 interface SummaryQuestionFile {
   path: string;
@@ -7321,6 +7527,37 @@ export function checkSummaryConfirmationEvidence(
     unit?: string;
   } = {},
 ): SummaryConfirmationEvidence {
+  const failure = (
+    code: string,
+    message: string,
+    summaryCoverage: "stale" | "missing",
+  ): SummaryConfirmationEvidence => {
+    if (options.stateContent === undefined || options.stateContent === null) {
+      return { ok: false, message, summaryCoverage };
+    }
+    return {
+      ok: false,
+      message,
+      summaryCoverage,
+      refusal: evaluateGuardRefusal({
+        code,
+        blockedAction: "summary-confirmation",
+        stage: stage.slug,
+        ...(options.unit ? { unit: options.unit } : {}),
+        stateContent: options.stateContent,
+        invariant:
+          "Generated outputs descend from a current human-backed summary confirmation.",
+        userMessage: message,
+        attempt: {
+          recovery: "available",
+          summaryCoverage,
+          reviewCoverage: "missing",
+          sourceCoverage: "missing",
+        },
+        humanAuthority: humanAuthorityState(projectDir),
+      }),
+    };
+  };
   if (summaryConfirmationGuardDisabled()) {
     return { ok: true, required: false };
   }
@@ -7348,13 +7585,13 @@ export function checkSummaryConfirmationEvidence(
   if (questions.length === 0) {
     if (!declared) return { ok: true, required: false };
     const unitText = options.unit ? ` for unit "${options.unit}"` : "";
-    return {
-      ok: false,
-      message:
-        `Refusing to complete "${stage.slug}"${unitText}: its question flow has no ` +
+    return failure(
+      "SUMMARY_QUESTIONS_MISSING",
+      `Refusing to complete "${stage.slug}"${unitText}: its question flow has no ` +
         `${stage.slug}-questions.md file. Create and answer the stage questions, ` +
-        `then record the consolidated summary checkpoint before generating artifacts.`,
-    };
+        "then record the consolidated summary checkpoint before generating artifacts.",
+      "missing",
+    );
   }
   if (
     declared &&
@@ -7371,13 +7608,13 @@ export function checkSummaryConfirmationEvidence(
   ) {
     const resolution = resolveBoltDag(projectDir);
     if (resolution.state === "malformed") {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": its summary-confirmation unit ` +
+      return failure(
+        "SUMMARY_UNIT_SET_UNRESOLVED",
+        `Refusing to complete "${stage.slug}": its summary-confirmation unit ` +
           `set cannot be resolved because unit-of-work-dependency.md is ${resolution.reason} ` +
           `(${resolution.detail}).`,
-      };
+        "missing",
+      );
     }
     if (resolution.state === "ok") {
       const requiredUnits = resolution.units.filter((unit) =>
@@ -7394,12 +7631,12 @@ export function checkSummaryConfirmationEvidence(
       );
       const missing = requiredUnits.filter((unit) => !presentUnits.has(unit));
       if (missing.length > 0) {
-        return {
-          ok: false,
-          message:
-            `Refusing to complete "${stage.slug}": ${missing.length} applicable ` +
-          `units have no questions file or summary confirmation (${missing.join(", ")}).`,
-        };
+        return failure(
+          "SUMMARY_UNIT_EVIDENCE_MISSING",
+          `Refusing to complete "${stage.slug}": ${missing.length} applicable ` +
+            `units have no questions file or summary confirmation (${missing.join(", ")}).`,
+          "missing",
+        );
       }
       const requiredUnitSet = new Set(requiredUnits);
       questions = questions.filter(
@@ -7421,12 +7658,12 @@ export function checkSummaryConfirmationEvidence(
   const events = readAuditShardEvents(projectDir)
     .filter((entry) => relevant.has(entry.event));
   if (events.length === 0) {
-    return {
-      ok: false,
-      message:
-        `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
+    return failure(
+      "SUMMARY_RECEIPT_MISSING",
+      `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
         "summary confirmation receipt is recorded.",
-    };
+      "missing",
+    );
   }
 
   const latestFrontier = (candidates: AuditShardEvent[]): AuditShardEvent[] => {
@@ -7457,19 +7694,20 @@ export function checkSummaryConfirmationEvidence(
     evidence: string,
     timestamp: string,
     reconfirm = true,
-  ): SummaryConfirmationEvidence => ({
-    ok: false,
-    message:
+  ): SummaryConfirmationEvidence =>
+    failure(
+      "SUMMARY_ORDER_AMBIGUOUS",
       `Refusing to complete "${stage.slug}": ${evidence} share audit Timestamp ` +
-      `"${timestamp}" across different shards, so their causal order cannot be ` +
-      "proven. " +
-      (reconfirm
-        ? `Repeat the ${options.workflow === undefined ? "summary" : "isolated summary"} ` +
-          "confirmation after that second, then regenerate or re-save each artifact " +
-          "so the audit records a strictly later write."
-        : "Regenerate or re-save the artifact after that second so the audit " +
-          "records a strictly later write."),
-  });
+        `"${timestamp}" across different shards, so their causal order cannot be ` +
+        "proven. " +
+        (reconfirm
+          ? `Repeat the ${options.workflow === undefined ? "summary" : "isolated summary"} ` +
+            "confirmation after that second, then regenerate or re-save each artifact " +
+            "so the audit records a strictly later write."
+          : "Regenerate or re-save the artifact after that second so the audit " +
+            "records a strictly later write."),
+      "stale",
+    );
 
   const workflow = options.workflow;
   const unitMajor =
@@ -7556,13 +7794,13 @@ export function checkSummaryConfirmationEvidence(
   for (const question of questions) {
     const fileAnswer = summaryAnswerFromFile(question.path);
     if (fileAnswer !== "Looks correct") {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": ${question.path} must contain ` +
+      return failure(
+        "SUMMARY_ANSWER_INVALID",
+        `Refusing to complete "${stage.slug}": ${question.path} must contain ` +
           "exactly one `[Answer]: Looks correct` in its Consolidated Summary " +
           "Confirmation section.",
-      };
+        "stale",
+      );
     }
 
     const questionRelative = toPosix(relative(projectDir, question.path));
@@ -7621,16 +7859,16 @@ export function checkSummaryConfirmationEvidence(
       auditBlockField(receipt.block, "Details") !== "Looks correct"
     ) {
       const unitText = question.unit ? ` for unit "${question.unit}"` : "";
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}"${unitText}: no fresh human-backed ` +
+      return failure(
+        "SUMMARY_RECEIPT_MISSING",
+        `Refusing to complete "${stage.slug}"${unitText}: no fresh human-backed ` +
           "consolidated summary confirmation is recorded. Present the summary, " +
           "then run `aidlc-log.ts answer --checkpoint summary-confirmation " +
           `--stage ${stage.slug}${question.unit ? ` --unit "${question.unit}"` : ""}` +
           `${workflow ? " --single" : ""} --details "Looks correct"` +
           " after the human responds.",
-      };
+        "missing",
+      );
     }
 
     const hashScope = auditBlockField(receipt.block, "Hash Scope");
@@ -7673,12 +7911,12 @@ export function checkSummaryConfirmationEvidence(
       hashScope !== null &&
       hashScope !== SUMMARY_CONFIRMATION_HASH_SCOPE
     ) {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
+      return failure(
+        "SUMMARY_HASH_SCOPE_INVALID",
+        `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
           `Hash Scope "${hashScope}". ${recovery}`,
-      };
+        "stale",
+      );
     }
     const legacyRecovery =
       hashScope === null
@@ -7723,22 +7961,22 @@ export function checkSummaryConfirmationEvidence(
           readFileSync(question.path, "utf-8"),
         );
     } catch (e) {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": ${question.path} cannot be ` +
+      return failure(
+        "SUMMARY_FILE_UNREADABLE",
+        `Refusing to complete "${stage.slug}": ${question.path} cannot be ` +
           `validated against its summary confirmation: ${errorMessage(e)}. ${recoveryMessage}`,
-      };
+        "stale",
+      );
     }
     if (
       auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
     ) {
-      return {
-        ok: false,
-        message:
-          `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
+      return failure(
+        "SUMMARY_CONTENT_STALE",
+        `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
           `the human confirmed its summary. ${recoveryMessage}`,
-      };
+        "stale",
+      );
     }
 
     for (const artifact of summaryArtifactPaths(stage, question)) {
@@ -7812,13 +8050,13 @@ export function checkSummaryConfirmationEvidence(
             false,
           );
         }
-        return {
-          ok: false,
-          message:
-            `Refusing to continue "${stage.slug}": this stage's output document ` +
+        return failure(
+          "SUMMARY_ARTIFACT_ORDER_INVALID",
+          `Refusing to continue "${stage.slug}": this stage's output document ` +
             `${artifact} was not saved after the confirmed answers. Save the ` +
             "document after confirmation, then continue.",
-        };
+          "stale",
+        );
       }
     }
   }
@@ -8350,6 +8588,9 @@ export interface FreshReviewReceipts {
   newestSourceUnit: string | null;
   /** The newest modern source binding no longer proves the current workspace. */
   sourceStale: boolean;
+  /** Why the newest source binding is stale. An unbindable boundary is repaired
+   *  through source-boundary configuration, not by reverting application bytes. */
+  sourceStaleReason: "boundary-unbindable" | "fingerprint-mismatch" | null;
   /** Recovery ordinal/budget state associated with the newest source binding. */
   sourceStaleProgress: StaleReviewProgress | null;
   /** A workspace-global source-staleness recovery request has been emitted in
@@ -10453,6 +10694,175 @@ export function reviewAttemptAccounting(
   };
 }
 
+export interface PendingReviewRequestStatus {
+  iteration: number;
+  requestCurrent: boolean;
+  retryable: boolean;
+  verdictRecordable: boolean;
+}
+
+// What can still be done with the oldest pending review request: retried once
+// against its original binding, or completed with a verdict. Both require the
+// request's artifact and source identities to still describe the current bytes.
+export function pendingReviewRequestStatus(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit: string | undefined,
+  attempt: ReviewAttemptAccounting,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+    mergedBoltUnits?: ReadonlySet<string>;
+    single?: boolean;
+  } = {},
+): PendingReviewRequestStatus | null {
+  const iteration = [...attempt.pendingIterations].sort((a, b) => a - b)[0];
+  if (iteration === undefined) return null;
+  const pending = attempt.pendingRequests.get(iteration);
+  const binding = pending?.binding;
+  if (!pending || !binding) {
+    return {
+      iteration,
+      requestCurrent: false,
+      retryable: false,
+      verdictRecordable: false,
+    };
+  }
+
+  const snapshot = reviewArtifactSnapshot(projectDir, stage, unit, {
+    requireRequiredArtifacts: options.requireRequiredArtifacts,
+    boltDag: options.boltDag,
+    mergedBoltUnits: options.mergedBoltUnits,
+    ...(binding.appendixArtifact !== null && binding.appendixOffset !== null
+      ? {
+          appendixBinding: {
+            artifact: binding.appendixArtifact,
+            offset: binding.appendixOffset,
+          },
+        }
+      : {}),
+  });
+  if (snapshot === null) {
+    return {
+      iteration,
+      requestCurrent: false,
+      retryable: false,
+      verdictRecordable: false,
+    };
+  }
+
+  const currentRequestFingerprint =
+    binding.appendixArtifact === null || binding.appendixOffset === null
+      ? snapshot.fingerprint
+      : snapshot.requestFingerprint;
+  let requestCurrent =
+    currentRequestFingerprint === binding.artifactFingerprint;
+  let modernVerdictBinding =
+    binding.appendixArtifact !== null &&
+    binding.appendixOffset !== null &&
+    binding.priorAppendixDigest !== null &&
+    binding.priorAppendixLength !== null &&
+    (
+      binding.priorAppendixLength === 0 ||
+      binding.reviewChallenge !== null
+    );
+
+  const sourceState = stage.workspace_requires
+    ? workspaceSourceState(projectDir)
+    : null;
+  if (stage.workspace_requires) {
+    const currentSource =
+      sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    if (
+      binding.sourceFingerprint !== null &&
+      currentSource !== binding.sourceFingerprint
+    ) {
+      requestCurrent = false;
+    }
+    if (binding.sourceFingerprint === null) modernVerdictBinding = false;
+  }
+
+  const bindsUnitSource =
+    stage.workspace_requires === true &&
+    unit !== undefined &&
+    stage.for_each === "unit-of-work" &&
+    options.single !== true;
+  if (bindsUnitSource) {
+    const manifest = readUnitSourceManifest(projectDir, stage.slug, unit);
+    if (manifest.ok !== true) {
+      requestCurrent = false;
+      modernVerdictBinding = false;
+    } else {
+      const currentUnitSource =
+        sourceState === null
+          ? UNBINDABLE_FINGERPRINT
+          : unitSourceFingerprint(
+              sourceState.listing,
+              manifest,
+              manifest.rawBytesSha256,
+            );
+      if (
+        binding.unitSourceFingerprint !== null &&
+        currentUnitSource !== binding.unitSourceFingerprint
+      ) {
+        requestCurrent = false;
+      }
+      if (binding.unitSourceFingerprint === null) modernVerdictBinding = false;
+    }
+  }
+
+  let retryBindingCurrent = requestCurrent;
+  if (
+    binding.priorAppendixLength === null &&
+    binding.priorAppendixDigest !== null &&
+    reviewAppendixDigest(snapshot.appendix) !== binding.priorAppendixDigest
+  ) {
+    retryBindingCurrent = false;
+  }
+
+  const appendixEvidence = reviewAppendixEvidenceBytes(snapshot.appendix);
+  const stalePriorAppendix =
+    binding.priorAppendixLength !== null &&
+    binding.priorAppendixLength > 0 &&
+    appendixEvidence.length >= binding.priorAppendixLength &&
+    reviewAppendixDigest(
+      appendixEvidence.subarray(0, binding.priorAppendixLength),
+    ) === binding.priorAppendixDigest;
+  const reviewer = stage.reviewer ?? "";
+  const canonicalAppendix =
+    reviewer.length > 0 &&
+    (
+      validateReviewAppendix(snapshot.appendix, {
+        verdict: "READY",
+        reviewer,
+        iteration,
+        reviewChallenge: binding.reviewChallenge,
+      }).valid ||
+      validateReviewAppendix(snapshot.appendix, {
+        verdict: "NOT-READY",
+        reviewer,
+        iteration,
+        reviewChallenge: binding.reviewChallenge,
+      }).valid
+    );
+  const incompleteFallback =
+    snapshot.appendix.length === 0 && pending.retried;
+
+  return {
+    iteration,
+    requestCurrent,
+    retryable:
+      retryBindingCurrent &&
+      !pending.retried,
+    verdictRecordable:
+      requestCurrent &&
+      modernVerdictBinding &&
+      !stalePriorAppendix &&
+      (canonicalAppendix || incompleteFallback),
+  };
+}
+
+
 export interface WorktreeReviewAttemptProjection {
   events: AuditShardEvent[];
   boltStart: AuditShardEvent | null;
@@ -10730,6 +11140,7 @@ export function freshReviewReceipts(
     newestSourceFingerprint: null,
     newestSourceUnit: null,
     sourceStale: false,
+    sourceStaleReason: null,
     sourceStaleProgress: null,
     sourceRecoverySpent: false,
     unitStale: new Set(),
@@ -11431,6 +11842,11 @@ export function freshReviewReceipts(
     newestSourceFingerprint,
     newestSourceUnit,
     sourceStale,
+    sourceStaleReason: !sourceStale
+      ? null
+      : newestSourceFingerprint === UNBINDABLE_FINGERPRINT
+        ? "boundary-unbindable"
+        : "fingerprint-mismatch",
     sourceStaleProgress: sourceStale
       ? newestSourceProgress === null
         ? null
@@ -11928,7 +12344,11 @@ function readSyncBufferedLine(
         ? Buffer.from(chunks[0])
         : Buffer.concat(chunks, total);
     }
-    const chunk = reader.buffer.subarray(reader.offset, reader.end);
+    // The buffer is refilled in place on the next loop, so a partial line must
+    // be copied out, not kept as a view; a header straddling a refill boundary
+    // otherwise reads the next chunk's bytes and the materialization fails for
+    // reasons that depend on where blob sizes happen to land.
+    const chunk = Buffer.from(reader.buffer.subarray(reader.offset, reader.end));
     chunks.push(chunk);
     total += chunk.length;
     reader.offset = reader.end;
@@ -17772,59 +18192,1039 @@ export function parseCheckboxes(content: string): CheckboxLine[] {
   return results;
 }
 
+// --- Guard admission: typed refusals, typed remedies, the recovery ask --------
+//
+// A guard that refuses returns a GuardRefusal: what was blocked, the invariant
+// it protects, a sentence for the human, and the remedies that are executable
+// from the current lifecycle state. Every remedy carries a closed `op`; routing
+// compares ops and never prose, so rewording a remedy cannot change where the
+// engine sends the conductor.
+//
+// The same refusal has one shape at both sites that can produce it: the
+// enforcing tool (aidlc-state, aidlc-log, the review freeze) and the router
+// (`next` and `report` before they spawn the tool). ONE RULE covers both: a
+// refusal renders as a guard-recovery ask on its first occurrence. The router
+// emits it as the directive; the tool prints the human sentence and then the
+// same ask as the last line of its refusal, which the router parses back into a
+// directive. Nothing waits for a repetition count before it becomes a question.
+//
+// The streak record exists for the state the evaluator cannot reach: a refusal
+// with ZERO executable remedies. Such a refusal is still an ask on first
+// occurrence, naming the situation, and once the same guard state has refused
+// the same action past the cap it becomes a TERMINAL ask that carries the state
+// signature, so an unknown-unknown is a question the human can escalate, never
+// an error directive and never a silent counter.
+
+export type GuardLifecycleState =
+  | "pending"
+  | "in-progress"
+  | "awaiting-approval"
+  | "revising"
+  | "completed"
+  | "skipped";
+
+// The closed set of things a remedy can ask for. Routing decisions compare these
+// values; the `action` sentence beside each is presentation.
+export const GUARD_REMEDY_OPS = [
+  "present-approval-gate",
+  "request-review",
+  "start-recovery-review",
+  "apply-repairs-then-request",
+  "record-verdict",
+  "retry-pending",
+  "request-changes",
+  "redo-jump",
+  "restore-or-jump",
+  "restart-stage",
+  "change-scope",
+  "restore-scope",
+  "abort-bolt",
+  "repair-source-boundary",
+  "reconfirm-summary",
+  "unset-unattended",
+] as const;
+export type GuardRemedyOp = (typeof GUARD_REMEDY_OPS)[number];
+
+export interface GuardRemedy {
+  op: GuardRemedyOp;
+  action: string;
+  command?: string;
+  requiresHuman: boolean;
+  executableNow: boolean;
+}
+
+export interface GuardRefusal {
+  code: string;
+  blockedAction: string;
+  stage: string;
+  unit?: string;
+  state: GuardLifecycleState;
+  invariant: string;
+  userMessage: string;
+  remedies: GuardRemedy[];
+}
+
+// What the current attempt looks like to a guard: budget, the single recovery
+// slot, the pending or outstanding review, and whether summary, review, and
+// source evidence still cover the current bytes. Built in ONE place
+// (`guardAttemptState`) from the shared attempt reducer and passed around.
+export interface GuardAttemptState {
+  floor?: string;
+  reviewBudget?: {
+    used: number;
+    limit: number;
+  };
+  recovery: "available" | "pending" | "spent";
+  pendingReview?: {
+    iteration: number;
+    retryable: boolean;
+    verdictRecordable?: boolean;
+  };
+  repairReview?: {
+    iteration: number;
+  };
+  nextReview?: {
+    iteration: number;
+  };
+  summaryCoverage: "current" | "stale" | "missing";
+  reviewCoverage: "current" | "stale" | "missing";
+  sourceCoverage: "current" | "stale" | "missing" | "unbindable";
+}
+
+export interface GuardHumanAuthorityState {
+  freshTurn: boolean;
+  unattended: boolean;
+}
+
+// The one place the human-authority inputs are read. `freshTurn` is the
+// human-presence evidence for the stage's gate; `unattended` is the operator's
+// declaration that no human is watching.
+export function humanAuthorityState(
+  projectDir: string | null,
+  options: { freshTurn?: boolean } = {},
+): GuardHumanAuthorityState {
+  return {
+    freshTurn:
+      options.freshTurn ??
+      (projectDir === null ? false : humanActedSinceGate(projectDir)),
+    unattended: process.env.AIDLC_UNATTENDED === "1",
+  };
+}
+
+export interface GuardRefusalInput {
+  code: string;
+  blockedAction: string;
+  stage: string;
+  unit?: string;
+  stateContent: string;
+  invariant: string;
+  userMessage: string;
+  attempt: GuardAttemptState;
+  humanAuthority: GuardHumanAuthorityState;
+  teamGate?: TeamUnitGateResolution;
+  autonomousBolt?: {
+    unit: string;
+    slug: string | null;
+    batch: string | null;
+  };
+}
+
+function guardLifecycleState(
+  stateContent: string,
+  stageSlug: string,
+  teamGate: GuardRefusalInput["teamGate"],
+): GuardLifecycleState {
+  const teamGateStatus = teamGate?.resolved ? teamGate.status : undefined;
+  if (teamGateStatus === "pending") return "in-progress";
+  if (teamGateStatus === "awaiting-approval") return "awaiting-approval";
+  if (teamGateStatus === "revising") return "revising";
+  if (teamGateStatus === "approved") return "completed";
+  return (
+    parseCheckboxes(stateContent).find((entry) => entry.slug === stageSlug)
+      ?.state ?? "pending"
+  );
+}
+
+function guardToolCommand(tool: string, args: string[]): string {
+  return [
+    "bun",
+    `${harnessDir()}/tools/${tool}`,
+    ...args.map((value) =>
+      /^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
+        ? value
+        : `'${value.replaceAll("'", "'\"'\"'")}'`
+    ),
+  ].join(" ");
+}
+
+function restartStageRemedy(stage: string): GuardRemedy {
+  return {
+    op: "restart-stage",
+    action:
+      `Restart this stage with /aidlc --stage ${stage}; the recorded answers ` +
+      "survive, and the stage will ask for confirmation again.",
+    command: guardToolCommand("aidlc-orchestrate.ts", [
+      "next",
+      "--stage",
+      stage,
+    ]),
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+function unresolvedTeamGateRemedy(
+  resolution: Extract<TeamUnitGateResolution, { resolved: false }>,
+): GuardRemedy {
+  return {
+    op: "restore-scope",
+    action:
+      "This Unit's gate cannot be resolved: no active per-Unit Construction " +
+      `gate stage exists in the current plan (${resolution.reason}). Restore a ` +
+      "valid Scope that includes at least one active per-Unit Construction " +
+      "stage, then retry.",
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+function lifecycleResetRemedies(
+  input: GuardRefusalInput,
+  state: GuardLifecycleState,
+): GuardRemedy[] {
+  const stageEntry = parseCheckboxes(input.stateContent).find(
+    (entry) => entry.slug === input.stage,
+  );
+  if (stageEntry?.suffix.startsWith("SKIP")) {
+    const scopeRemedy: GuardRemedy = {
+      op: "change-scope",
+      action:
+        "This stage is excluded from the current plan; change to a scope that " +
+        `includes it with /aidlc --scope <scope>, then restart ${input.stage}.`,
+      requiresHuman: true,
+      executableNow: true,
+    };
+    return input.teamGate?.resolved === false
+      ? [unresolvedTeamGateRemedy(input.teamGate), scopeRemedy]
+      : [scopeRemedy];
+  }
+  if (input.teamGate?.resolved === false) {
+    return [unresolvedTeamGateRemedy(input.teamGate)];
+  }
+  if (state === "pending" || state === "skipped") {
+    return [restartStageRemedy(input.stage)];
+  }
+  if (state === "in-progress" || state === "awaiting-approval") {
+    const reportStage =
+      input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
+    const unitContext =
+      input.teamGate?.resolved === true && input.unit
+        ? ` for Unit "${input.unit}"`
+        : "";
+    if (input.humanAuthority.unattended) {
+      return [
+        {
+          op: "unset-unattended",
+          action:
+            "Halt unattended execution and ask a human what should change. " +
+            `Unset AIDLC_UNATTENDED, ask "What should change?" for stage ` +
+            `"${reportStage}"${unitContext}, and end the turn. Only after the human ` +
+            "answers may their exact text be submitted as the Request Changes reason.",
+          requiresHuman: true,
+          executableNow: true,
+        },
+      ];
+    }
+    return [
+      {
+        op: "request-changes",
+        action:
+          `Ask "What should change?" for stage "${reportStage}"${unitContext} ` +
+          "and end the turn. After the human answers, submit Request Changes with " +
+          "their exact text unchanged as the report reason" +
+          (input.humanAuthority.freshTurn
+            ? "."
+            : "; that unlocks revision and a fresh review."),
+        requiresHuman: true,
+        executableNow: true,
+      },
+    ];
+  }
+  if (state === "revising") {
+    return [
+      {
+        op: "redo-jump",
+        action:
+          "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
+          `/aidlc --stage ${input.stage} (your recorded answers survive; you will ` +
+          "re-confirm the summary once).",
+        command: guardToolCommand("aidlc-orchestrate.ts", [
+          "next",
+          "--stage",
+          input.stage,
+        ]),
+        requiresHuman: true,
+        executableNow: true,
+      },
+    ];
+  }
+  return [
+    {
+      op: "restore-or-jump",
+      action:
+        input.attempt.sourceCoverage === "unbindable"
+          ? "This stage is already approved; repair .aidlc-source-paths.json or the " +
+            "workspace source boundary so it can be fingerprinted, or jump back with " +
+            `/aidlc --stage ${input.stage} to redo it.`
+          : "This stage is already approved; restore the reviewed source state, or " +
+            `jump back with /aidlc --stage ${input.stage} to redo it.`,
+      command: guardToolCommand("aidlc-orchestrate.ts", [
+        "next",
+        "--stage",
+        input.stage,
+      ]),
+      requiresHuman: true,
+      executableNow: true,
+    },
+  ];
+}
+
+// Pure: reads nothing from disk. The same input always yields the same refusal,
+// which is what lets the enforcing tool and the router agree.
+export function evaluateGuardRefusal(
+  input: GuardRefusalInput,
+): GuardRefusal {
+  const state = guardLifecycleState(
+    input.stateContent,
+    input.stage,
+    input.teamGate,
+  );
+  const remedies: GuardRemedy[] = [];
+  const openForWork = state === "in-progress" || state === "awaiting-approval";
+
+  if (input.autonomousBolt) {
+    const slug = input.autonomousBolt.slug ?? input.autonomousBolt.unit;
+    const batch = input.autonomousBolt.batch
+      ? ` batch ${input.autonomousBolt.batch}`
+      : " the current batch";
+    remedies.push({
+      op: "abort-bolt",
+      action:
+        `Halt and ask the human whether to restart autonomous Unit ` +
+        `"${input.autonomousBolt.unit}". On approval, abort and discard the old ` +
+        `attempt, then rerun the current prepare step in${batch} so a fresh ` +
+        "BOLT_STARTED boundary creates a new review allowance.",
+      command: guardToolCommand("aidlc-bolt.ts", [
+        "abort",
+        "--name",
+        input.autonomousBolt.unit,
+        "--slug",
+        slug,
+        "--reason",
+        "stale review recovery exhausted",
+        "--discard",
+      ]),
+      requiresHuman: true,
+      executableNow: true,
+    });
+  } else {
+    if (input.attempt.pendingReview) {
+      if (input.attempt.pendingReview.verdictRecordable !== false) {
+        remedies.push({
+          op: "record-verdict",
+          action:
+            `Record the verdict for pending review iteration ` +
+            `${input.attempt.pendingReview.iteration} if the reviewer returned.`,
+          requiresHuman: false,
+          executableNow: true,
+        });
+      }
+      if (input.attempt.pendingReview.retryable) {
+        remedies.push({
+          op: "retry-pending",
+          action:
+            `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
+            "with --retry-pending.",
+          requiresHuman: false,
+          executableNow: input.attempt.summaryCoverage === "current",
+        });
+      }
+    }
+    if (input.attempt.repairReview) {
+      remedies.push({
+        op: "apply-repairs-then-request",
+        action:
+          "Apply the reviewer's requested repairs, then request review iteration " +
+          `${input.attempt.repairReview.iteration + 1}.`,
+        requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current" && openForWork,
+      });
+    }
+    if (input.attempt.nextReview) {
+      remedies.push({
+        op: "request-review",
+        action:
+          `Request review iteration ${input.attempt.nextReview.iteration} ` +
+          "against the current artifact and source bytes.",
+        requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current" && openForWork,
+      });
+    }
+    if (
+      input.attempt.sourceCoverage === "unbindable" &&
+      state !== "revising"
+    ) {
+      remedies.push({
+        op: "repair-source-boundary",
+        action:
+          "Repair .aidlc-source-paths.json or the workspace source boundary so " +
+          "the application source can be fingerprinted, then request a fresh review.",
+        requiresHuman: false,
+        executableNow: state !== "completed",
+      });
+    }
+    const reviewBudgetAvailable =
+      input.attempt.reviewBudget === undefined ||
+      input.attempt.reviewBudget.used < input.attempt.reviewBudget.limit;
+    if (
+      !reviewBudgetAvailable &&
+      input.attempt.reviewCoverage === "current" &&
+      openForWork
+    ) {
+      remedies.push({
+        op: "present-approval-gate",
+        action:
+          "Present the unresolved review findings at the approval gate for the " +
+          "human instead of starting another review pass.",
+        requiresHuman: true,
+        executableNow: true,
+      });
+    }
+    const noReviewInFlight =
+      !input.attempt.pendingReview &&
+      !input.attempt.repairReview &&
+      !input.attempt.nextReview;
+    if (
+      input.attempt.recovery === "available" &&
+      input.attempt.reviewCoverage === "stale" &&
+      noReviewInFlight
+    ) {
+      remedies.push({
+        op: "start-recovery-review",
+        action:
+          "Start the one stale-receipt recovery review against the current " +
+          "artifact and source state.",
+        requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current" && openForWork,
+      });
+    } else if (
+      reviewBudgetAvailable &&
+      input.attempt.reviewCoverage === "missing" &&
+      noReviewInFlight
+    ) {
+      remedies.push({
+        op: "request-review",
+        action: "Request the next permitted review for the current attempt.",
+        requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current" && openForWork,
+      });
+    }
+    if (
+      input.attempt.summaryCoverage !== "current" &&
+      input.attempt.reviewCoverage !== "current"
+    ) {
+      remedies.push({
+        op: "reconfirm-summary",
+        action:
+          "Present the current consolidated summary, record the human's " +
+          "confirmation, then regenerate or re-save the produced artifacts.",
+        requiresHuman: true,
+        executableNow: openForWork,
+      });
+    }
+    remedies.push(...lifecycleResetRemedies(input, state));
+  }
+
+  return {
+    code: input.code,
+    blockedAction: input.blockedAction,
+    stage: input.stage,
+    ...(input.unit ? { unit: input.unit } : {}),
+    state,
+    invariant: input.invariant,
+    userMessage: input.userMessage,
+    remedies,
+  };
+}
+
+export function requestChangesResetIsExecutable(
+  stateContent: string,
+  stageSlug: string,
+  teamGate?: TeamUnitGateResolution,
+): boolean {
+  if (teamGate?.resolved === false) return false;
+  const state = guardLifecycleState(stateContent, stageSlug, teamGate);
+  return state === "in-progress" || state === "awaiting-approval";
+}
+
+// --- The one attempt-state constructor -----------------------------------------
+//
+// Every guard site used to describe the attempt in its own words. This reads the
+// shared attempt reducer once and answers in the evaluator's vocabulary, so a
+// new attempt field is added here and nowhere else.
+export interface GuardAttemptSnapshot {
+  attempt: GuardAttemptState;
+  receipts: FreshReviewReceipts | null;
+  // Fingerprints of the resources whose change means real progress; the streak
+  // signature includes them so a repeat after a change is a new situation.
+  resources: string[];
+}
+
+export function guardAttemptState(
+  projectDir: string,
+  stateContent: string,
+  stage: {
+    slug: string;
+    phase?: string;
+    for_each?: string;
+    reviewer?: string;
+    review_artifact?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
+  options: {
+    unit?: string;
+    receipts?: FreshReviewReceipts;
+    attemptView?: AttemptView;
+    summaryCoverage?: GuardAttemptState["summaryCoverage"];
+    reviewBudget?: number | null;
+    pendingStatus?: PendingReviewRequestStatus | null;
+    accounting?: ReviewAttemptAccounting | null;
+    requireRequiredArtifacts?: boolean;
+  } = {},
+): GuardAttemptSnapshot {
+  const unit = options.unit;
+  const attemptView =
+    options.attemptView ?? reviewAttemptWindow(projectDir, stateContent, stage);
+  const floorEvent = attemptView.events[attemptView.floorIdx];
+  const reviewable = stage.reviewer !== undefined && stage.phase !== undefined;
+  let receipts = options.receipts ?? null;
+  if (receipts === null && reviewable) {
+    receipts = freshReviewReceipts(
+      projectDir,
+      stateContent,
+      { ...stage, phase: stage.phase as string },
+      {
+        reviewClass: resolveReviewClass(
+          stage.review_class ?? "adversarial",
+          getField(stateContent, "Scope") ?? "",
+          stateContent,
+        ),
+        attemptWindow: attemptView,
+      },
+    );
+  }
+  const accounting =
+    options.accounting ??
+    (reviewable
+      ? reviewAttemptAccounting(
+          attemptView,
+          stateContent,
+          stage,
+          stage.reviewer as string,
+          unit,
+          undefined,
+          {
+            eventFilter: (row) =>
+              reviewAttemptEventMatchesCurrentClaim(
+                projectDir,
+                stateContent,
+                unit,
+                row,
+              ),
+          },
+        )
+      : null);
+  const pendingStatus =
+    options.pendingStatus !== undefined
+      ? options.pendingStatus
+      : accounting === null || stage.phase === undefined
+        ? null
+        : pendingReviewRequestStatus(
+            projectDir,
+            { ...stage, phase: stage.phase },
+            unit,
+            accounting,
+            {
+              requireRequiredArtifacts:
+                options.requireRequiredArtifacts ??
+                  process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1",
+              mergedBoltUnits: attemptView.mergedBoltUnits,
+            },
+          );
+  const unitVerdict =
+    unit === undefined
+      ? receipts?.stageVerdict ?? null
+      : receipts?.unitVerdicts.get(unit) ?? null;
+  const unitStale =
+    unit === undefined
+      ? receipts?.stageStale === true
+      : receipts?.unitStale.has(unit) === true;
+  const pending =
+    unit === undefined
+      ? receipts?.stagePending ?? null
+      : receipts?.unitPending.get(unit) ?? null;
+  const staleProgress =
+    unit === undefined
+      ? receipts?.stageStaleProgress ?? null
+      : receipts?.unitStaleProgress.get(unit) ?? null;
+  const recoverySpent =
+    accounting?.recoverySpent === true ||
+    staleProgress?.recoverySpent === true ||
+    receipts?.sourceStaleProgress?.recoverySpent === true ||
+    receipts?.sourceRecoverySpent === true;
+  const pendingIterations = [...(accounting?.pendingIterations ?? [])].sort(
+    (a, b) => a - b,
+  );
+  const pendingReviewFor = (iteration: number) => ({
+    pendingReview: {
+      iteration,
+      retryable:
+        pendingStatus?.iteration === iteration ? pendingStatus.retryable : true,
+      verdictRecordable:
+        pendingStatus?.iteration === iteration
+          ? pendingStatus.verdictRecordable
+          : true,
+    },
+  });
+  const budget = options.reviewBudget ?? null;
+  const attempt: GuardAttemptState = {
+    floor:
+      accounting?.floor ??
+      (floorEvent === undefined
+        ? ""
+        : `${floorEvent.event}:${floorEvent.timestamp}:${floorEvent.shard}:${floorEvent.pos}`),
+    ...(budget === null || accounting === null
+      ? {}
+      : { reviewBudget: { used: accounting.requestCount, limit: budget } }),
+    recovery: pending?.recovery === true
+      ? "pending"
+      : recoverySpent
+        ? "spent"
+        : "available",
+    ...(pending?.state === "repair-required"
+      ? { repairReview: { iteration: pending.iteration } }
+      : pending?.state === "outstanding"
+        ? { nextReview: { iteration: pending.iteration } }
+        : pending
+          ? pendingReviewFor(pending.iteration)
+          : pendingIterations.length > 0
+            ? pendingReviewFor(pendingIterations[0])
+            : {}),
+    summaryCoverage: options.summaryCoverage ?? "current",
+    reviewCoverage:
+      unitVerdict !== null
+        ? "current"
+        : unitStale || receipts?.sourceStale
+          ? "stale"
+          : "missing",
+    sourceCoverage:
+      receipts?.sourceStaleReason === "boundary-unbindable"
+        ? "unbindable"
+        : receipts?.sourceStale
+          ? "stale"
+          : receipts?.newestSourceFingerprint
+            ? "current"
+            : "missing",
+  };
+  return {
+    attempt,
+    receipts,
+    resources: [
+      `source:${receipts?.newestSourceFingerprint ?? "none"}`,
+      `stage-review:${receipts?.stageIteration ?? "none"}`,
+      `unit-review:${
+        unit === undefined ? "none" : receipts?.unitIterations.get(unit) ?? "none"
+      }`,
+    ],
+  };
+}
+
+// --- The recovery ask and the streak ---------------------------------------------
+
+export const GUARD_REFUSAL_STREAK_CAP = 2;
+export const GUARD_RECOVERY_ASK_TYPE = "guard-recovery";
+
+export interface GuardRefusalRecord {
+  version: 1;
+  stateSignature: string;
+  signature: string;
+  count: number;
+  codes: string[];
+  resetToken: string;
+  refusal: GuardRefusal;
+  updatedAt: string;
+}
+
+export interface GuardRecoveryAskData {
+  kind: "ask";
+  ask_type: typeof GUARD_RECOVERY_ASK_TYPE;
+  response_route: "execute-remedy";
+  question: string;
+  stage: string;
+  unit?: string;
+  reason_codes: string[];
+  remedies: GuardRemedy[];
+  // Present only on the terminal ask: the same guard state has refused past the
+  // cap with no executable remedy. Names the situation for escalation.
+  state_signature?: string;
+}
+
+function guardRefusalPath(
+  projectDir: string,
+  stage: string,
+  unit?: string,
+): string {
+  const key = createHash("sha256")
+    .update(`${stage}\0${unit ?? ""}`, "utf-8")
+    .digest("hex");
+  return join(docsRoot(projectDir), ".aidlc-guard-refusals", `${key}.json`);
+}
+
+// The latest boundary after which a repetition is a new situation: a session
+// start or resume, a workflow start, a jump, this stage's gate rejection, or a
+// fresh Bolt attempt for this Unit.
+function guardRefusalResetToken(
+  projectDir: string,
+  stage: string,
+  unit?: string,
+): string {
+  const resetEvents = sortAttemptEvents(
+    readAuditShardEvents(projectDir).filter((event) => {
+      if (
+        event.event === "SESSION_STARTED" ||
+        event.event === "SESSION_RESUMED" ||
+        event.event === "WORKFLOW_STARTED" ||
+        event.event === "STAGE_JUMPED"
+      ) {
+        return true;
+      }
+      if (event.event === "GATE_REJECTED") {
+        const stages = (
+          auditBlockField(event.block, "Gate Stages") ??
+            auditBlockField(event.block, "Stage") ??
+            ""
+        )
+          .split(",")
+          .map((value) => value.trim());
+        if (!stages.includes(stage)) return false;
+        const eventUnit = auditBlockField(event.block, "Unit") ?? undefined;
+        return eventUnit === undefined || eventUnit === unit;
+      }
+      if (event.event === "BOLT_STARTED" && unit !== undefined) {
+        return (auditBlockField(event.block, "Bolt names") ?? "")
+          .split(",")
+          .map((value) => value.trim())
+          .includes(unit);
+      }
+      return false;
+    }),
+  );
+  const latest = resetEvents.at(-1);
+  return latest === undefined
+    ? ""
+    : `${latest.event}\0${latest.timestamp}\0${latest.shard}\0${latest.pos}`;
+}
+
+function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (!isPlainObject(value) || value.version !== 1) return null;
+    if (
+      typeof value.stateSignature !== "string" ||
+      typeof value.signature !== "string" ||
+      typeof value.count !== "number" ||
+      !Number.isInteger(value.count) ||
+      value.count < 1 ||
+      !Array.isArray(value.codes) ||
+      !value.codes.every((code) => typeof code === "string") ||
+      typeof value.resetToken !== "string" ||
+      typeof value.updatedAt !== "string" ||
+      !isPlainObject(value.refusal)
+    ) {
+      return null;
+    }
+    return value as unknown as GuardRefusalRecord;
+  } catch {
+    return null;
+  }
+}
+
+export interface GuardRefusalStreak {
+  count: number;
+  signature: string;
+  // The ask to render. Never null: a refusal is a question on first occurrence,
+  // and at the cap with no executable remedy it is the terminal question.
+  ask: GuardRecoveryAskData;
+}
+
+// What the streak would say if this refusal were recorded now: the signature
+// of the guard state, how many times it has repeated, and the ask that renders
+// it. Pure with respect to the project: it reads the prior record and writes
+// nothing, which is what an observer (the Stop-hook probe) is allowed to do.
+export function guardRefusalStreakView(
+  projectDir: string,
+  refusal: GuardRefusal,
+  attempt: GuardAttemptState,
+  resourceFingerprints: ReadonlyArray<string> = [],
+): GuardRefusalStreak & { record: GuardRefusalRecord } {
+  const path = guardRefusalPath(projectDir, refusal.stage, refusal.unit);
+  const prior = readGuardRefusalRecord(path);
+  const resetToken = guardRefusalResetToken(
+    projectDir,
+    refusal.stage,
+    refusal.unit,
+  );
+  const stateSignature = createHash("sha256")
+    .update(
+      JSON.stringify({
+        stage: refusal.stage,
+        unit: refusal.unit ?? null,
+        state: refusal.state,
+        floor: attempt.floor ?? null,
+        reviewBudget: attempt.reviewBudget ?? null,
+        recovery: attempt.recovery,
+        pendingReview: attempt.pendingReview ?? null,
+        repairReview: attempt.repairReview ?? null,
+        nextReview: attempt.nextReview ?? null,
+        summaryCoverage: attempt.summaryCoverage,
+        reviewCoverage: attempt.reviewCoverage,
+        sourceCoverage: attempt.sourceCoverage,
+        resetToken,
+        resources: [...resourceFingerprints].sort(),
+      }),
+      "utf-8",
+    )
+    .digest("hex");
+  const codes =
+    prior?.stateSignature === stateSignature &&
+    prior.resetToken === resetToken
+      ? [...new Set([...prior.codes, refusal.code])].sort()
+      : [refusal.code];
+  const signature = createHash("sha256")
+    .update(JSON.stringify({ stateSignature, codes }), "utf-8")
+    .digest("hex");
+  const count = prior?.signature === signature ? prior.count + 1 : 1;
+  const record: GuardRefusalRecord = {
+    version: 1,
+    stateSignature,
+    signature,
+    count,
+    codes,
+    resetToken,
+    refusal,
+    updatedAt: isoTimestamp(),
+  };
+  const ask = guardRecoveryAskForRefusal(refusal);
+  if (ask !== null) {
+    return {
+      count,
+      signature,
+      record,
+      ask: count > 1
+        ? {
+            ...ask,
+            reason_codes: codes,
+            question:
+              `The same guard state for "${refusal.stage}" has refused ` +
+              `${refusal.blockedAction} ${count} times. Choose one ` +
+              "authority-preserving recovery action.",
+          }
+        : ask,
+    };
+  }
+  return {
+    count,
+    signature,
+    record,
+    ask: guardTerminalAskForRefusal(refusal, {
+      count,
+      codes,
+      signature,
+      atCap: count > GUARD_REFUSAL_STREAK_CAP,
+    }),
+  };
+}
+
+// Record one refusal against the streak for its stage and Unit, and return the
+// ask that renders it. The record is the only write; it lives beside the other
+// gitignored runtime files and carries no authority, so a persistence failure
+// can only under-count, never relax a guard.
+export function recordGuardRefusal(
+  projectDir: string,
+  refusal: GuardRefusal,
+  attempt: GuardAttemptState,
+  resourceFingerprints: ReadonlyArray<string> = [],
+): GuardRefusalStreak {
+  const { record, ...streak } = guardRefusalStreakView(
+    projectDir,
+    refusal,
+    attempt,
+    resourceFingerprints,
+  );
+  const path = guardRefusalPath(projectDir, refusal.stage, refusal.unit);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, "utf-8");
+  } catch {
+    // Persistence failure under-counts repetitions; it never relaxes a guard.
+  }
+  return streak;
+}
+
+// The ask for a refusal that has at least one executable remedy: the remedies
+// the conductor may offer now, and nothing else.
+export function guardRecoveryAskForRefusal(
+  refusal: GuardRefusal,
+  question =
+    `The next action for "${refusal.stage}" would be refused. Choose one ` +
+    "authority-preserving recovery action.",
+): GuardRecoveryAskData | null {
+  const remedies = refusal.remedies.filter((remedy) => remedy.executableNow);
+  if (remedies.length === 0) return null;
+  return {
+    kind: "ask",
+    ask_type: GUARD_RECOVERY_ASK_TYPE,
+    response_route: "execute-remedy",
+    question,
+    stage: refusal.stage,
+    ...(refusal.unit ? { unit: refusal.unit } : {}),
+    reason_codes: [refusal.code],
+    remedies,
+  };
+}
+
+// The ask for a refusal with NO executable remedy. It exists so the fourth
+// situation ("the tool is stuck") is still a question: the human learns why the
+// engine cannot offer a way out, and at the cap the state signature names the
+// exact situation for escalation. It carries no remedies, so nothing can be
+// auto-executed from it; `state_signature` is what marks it terminal.
+export function guardTerminalAskForRefusal(
+  refusal: GuardRefusal,
+  streak: {
+    count: number;
+    codes: string[];
+    signature: string;
+    atCap: boolean;
+  },
+): GuardRecoveryAskData {
+  const target = refusal.unit
+    ? `Unit "${refusal.unit}" of "${refusal.stage}"`
+    : `"${refusal.stage}"`;
+  const situation =
+    `${refusal.blockedAction} for ${target} is refused (${refusal.code}) and ` +
+    `the engine has no authority-preserving recovery action it can offer from ` +
+    `the ${refusal.state} state. ${refusal.userMessage}`;
+  return {
+    kind: "ask",
+    ask_type: GUARD_RECOVERY_ASK_TYPE,
+    response_route: "execute-remedy",
+    question: streak.atCap
+      ? `${situation} The same guard state has refused ${streak.count} times ` +
+        `(state signature ${streak.signature}). Nothing here can be executed ` +
+        "without a human decision: tell me how you want to proceed, or report " +
+        "this signature."
+      : `${situation} Tell me how you want to proceed.`,
+    stage: refusal.stage,
+    ...(refusal.unit ? { unit: refusal.unit } : {}),
+    reason_codes: streak.codes,
+    remedies: [],
+    state_signature: streak.signature,
+  };
+}
+
+// The refusal as an enforcing tool prints it: the human sentence, then the ask
+// as the LAST line so the router can parse it back into the same directive it
+// would have emitted itself.
+export function guardRefusalOutput(
+  projectDir: string,
+  refusal: GuardRefusal,
+  attempt: GuardAttemptState,
+  resourceFingerprints: ReadonlyArray<string> = [],
+): string {
+  const streak = recordGuardRefusal(
+    projectDir,
+    refusal,
+    attempt,
+    resourceFingerprints,
+  );
+  return `${refusal.userMessage}\n${JSON.stringify(streak.ask)}`;
+}
+
+// The guard-recovery ask carried on the last line of a tool refusal, if any.
+export function guardRecoveryAskFromRefusalText(
+  text: string,
+): GuardRecoveryAskData | null {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const last = lines.at(-1);
+  if (last === undefined || !last.startsWith("{")) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(last);
+  } catch {
+    return null;
+  }
+  if (
+    !isPlainObject(parsed) ||
+    parsed.kind !== "ask" ||
+    parsed.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    parsed.response_route !== "execute-remedy" ||
+    typeof parsed.question !== "string" ||
+    typeof parsed.stage !== "string" ||
+    !Array.isArray(parsed.reason_codes) ||
+    !Array.isArray(parsed.remedies)
+  ) {
+    return null;
+  }
+  return parsed as unknown as GuardRecoveryAskData;
+}
+
+// A sentence for the prose refusals that still describe the way out: the first
+// executable remedy the evaluator would offer for a spent recovery.
 export function recoveryGuidance(
   _projectDir: string,
   stateContent: string,
   stageSlug: string,
+  options: {
+    unit?: string;
+    teamGate?: TeamUnitGateResolution;
+  } = {},
 ): string {
-  const stage = parseCheckboxes(stateContent).find(
-    (entry) => entry.slug === stageSlug,
-  );
-  if (stage?.suffix.startsWith("SKIP")) {
-    return (
-      "This stage is excluded from the current plan; change to a scope that " +
-      `includes it with /aidlc --scope <scope>, then restart ${stageSlug}.`
-    );
-  }
-  if (!stage || stage.state === "pending") {
-    return (
-      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
-      "answers survive, and the stage will ask for confirmation again."
-    );
-  }
-  if (stage.state === "skipped") {
-    return (
-      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
-      "answers survive, and the stage will ask for confirmation again."
-    );
-  }
-  if (
-    stage.state === "in-progress" ||
-    stage.state === "awaiting-approval"
-  ) {
-    return (
-      "To change this document, tell me what should change and I'll record your " +
-      "Request Changes decision (this works before the gate opens); that unlocks " +
-      "the file for revision and a fresh review."
-    );
-  }
-  if (stage.state === "revising") {
-    return (
-      "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
-      `/aidlc --stage ${stageSlug} (your recorded answers survive; you will ` +
-      "re-confirm the summary once)."
-    );
-  }
-  if (stage.state === "completed") {
-    return (
-      "This stage is already approved; restore the reviewed source state, or " +
-      `jump back with /aidlc --stage ${stageSlug} to redo it.`
-    );
-  }
-  return (
-    `Restart this stage with /aidlc --stage ${stageSlug}; the recorded answers ` +
-    "survive, and the stage will ask for confirmation again."
-  );
+  const refusal = evaluateGuardRefusal({
+    code: "REVIEW_RECOVERY_EXHAUSTED",
+    blockedAction: "review",
+    stage: stageSlug,
+    ...(options.unit ? { unit: options.unit } : {}),
+    stateContent,
+    invariant: "A review attempt can be reset only through a sanctioned boundary.",
+    userMessage: "",
+    attempt: {
+      recovery: "spent",
+      summaryCoverage: "current",
+      reviewCoverage: "stale",
+      sourceCoverage: "stale",
+    },
+    humanAuthority: humanAuthorityState(null),
+    ...(options.teamGate ? { teamGate: options.teamGate } : {}),
+  });
+  return refusal.remedies.find((remedy) => remedy.executableNow)?.action ??
+    (options.teamGate?.resolved === false
+      ? unresolvedTeamGateRemedy(options.teamGate).action
+      : restartStageRemedy(stageSlug).action);
 }
 
 export function setCheckbox(
@@ -20607,6 +22007,67 @@ export function unitGateStatus(
   }
   return status;
 }
+
+export type TeamUnitGateResolution =
+  | {
+      resolved: true;
+      scope: UnitGateScope;
+      status: UnitGateStatus;
+      gateStage: string;
+    }
+  | {
+      resolved: false;
+      scope: "unit-end";
+      reason: "no-active-gate-stage";
+    };
+
+// The team gate that governs one Unit at one per-Unit Construction stage: the
+// stage's own gate under a per-stage rhythm, or the last active per-Unit stage
+// under a unit-end rhythm. Undefined when no team gate applies.
+export function teamUnitGateStatus(
+  projectDir: string,
+  stateContent: string,
+  stageSlug: string,
+  unit: string | undefined,
+): TeamUnitGateResolution | undefined {
+  const stage = findStageBySlug(stageSlug);
+  if (
+    !unit ||
+    !isTeamUnitOwnership(stateContent) ||
+    stage?.phase !== "construction" ||
+    stage.for_each !== "unit-of-work"
+  ) {
+    return undefined;
+  }
+  const scope = effectiveUnitGateRhythm(projectDir, stateContent);
+  if (scope === "per-stage") {
+    return {
+      resolved: true,
+      scope,
+      status: unitGateStatus(projectDir, stageSlug, unit, scope),
+      gateStage: stageSlug,
+    };
+  }
+  const gateStage = unitMajorConstructionStageSlugs(
+    getField(stateContent, "Scope") ?? "",
+    stateContent,
+    true,
+  ).at(-1);
+  if (!gateStage) {
+    return {
+      resolved: false,
+      scope,
+      reason: "no-active-gate-stage",
+    };
+  }
+  return {
+    resolved: true,
+    scope,
+    status: unitGateStatus(projectDir, gateStage, unit, scope),
+    gateStage,
+  };
+}
+
 
 // Exact identity for the current main-workflow attempt of one stage. The token
 // names the latest relevant boundary plus its matching-event ordinal, so two

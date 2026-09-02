@@ -1,4 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:next, function:validateDirective,
+// function:reviewRecoverySpentMessage,
+// function:teamUnitGateStatus,
 // file:aidlc-common/protocols/stage-protocol-construction.md,
 // file:skills/aidlc/SKILL.md per-unit wave paragraph
 //
@@ -15,12 +17,15 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   artifactFilename,
+  findStageBySlug,
+  freshReviewReceipts,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -42,6 +47,7 @@ import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const FREEZE = join(AIDLC_SRC, "hooks", "aidlc-review-freeze.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
@@ -102,6 +108,7 @@ function constructionState(
   iteration: "stage-major" | "unit-major" = "stage-major",
   reviewOverride?: "advisory" | "none",
   autonomy?: "autonomous" | "gated",
+  ownership?: "team",
 ): string {
   return `# AI-DLC State Tracking
 
@@ -114,6 +121,7 @@ function constructionState(
 - **Construction Iteration**: ${iteration}
 ${reviewOverride ? `- **Review Override**: ${reviewOverride}\n` : ""}
 ${autonomy ? `- **Construction Autonomy Mode**: ${autonomy}\n` : ""}
+${ownership ? `- **Unit Ownership**: ${ownership}\n` : ""}
 
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -147,13 +155,20 @@ function project(
   iteration: "stage-major" | "unit-major" = "stage-major",
   reviewOverride?: "advisory" | "none",
   autonomy?: "autonomous" | "gated",
+  ownership?: "team",
 ): string {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
   writeFileSync(
     seededStateFile(proj),
-    constructionState(current, iteration, reviewOverride, autonomy),
+    constructionState(
+      current,
+      iteration,
+      reviewOverride,
+      autonomy,
+      ownership,
+    ),
   );
   return proj;
 }
@@ -296,6 +311,132 @@ function reviewRequestResult(proj: string, unit: string, iteration = 1) {
     status: result.status ?? -1,
     out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
   };
+}
+
+function freezeWrite(
+  proj: string,
+  file: string,
+  enforceSummary = false,
+) {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CLAUDE_PROJECT_DIR: proj,
+  };
+  if (enforceSummary) {
+    delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+  }
+  const result = spawnSync(BUN, [FREEZE], {
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: file },
+    }),
+    encoding: "utf-8",
+    env,
+  });
+  return {
+    status: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
+function confirmUnitSummary(proj: string, unit: string): void {
+  const dir = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "functional-design",
+  );
+  const questions = join(dir, "functional-design-questions.md");
+  const writeQuestions = (answer = ""): void => {
+    writeFileSync(
+      questions,
+      [
+        "# Functional Design Questions",
+        "",
+        "## Consolidated Summary Confirmation",
+        "",
+        "- Looks correct",
+        "- Request changes",
+        "",
+        `[Answer]: ${answer}`,
+        "",
+      ].join("\n"),
+    );
+  };
+  writeQuestions();
+  const env = { ...process.env };
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+  const decision = spawnSync(
+    BUN,
+    [
+      LOG,
+      "decision",
+      "--stage",
+      "functional-design",
+      "--decision",
+      "Does this all look correct?",
+      "--checkpoint",
+      "summary-confirmation",
+      "--questions-file",
+      questions,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8", env },
+  );
+  if ((decision.status ?? -1) !== 0) {
+    throw new Error(`summary decision failed: ${decision.stdout}${decision.stderr}`);
+  }
+  appendAuditEntry("HUMAN_TURN", {}, proj);
+  writeQuestions("Looks correct");
+  const answer = spawnSync(
+    BUN,
+    [
+      LOG,
+      "answer",
+      "--stage",
+      "functional-design",
+      "--checkpoint",
+      "summary-confirmation",
+      "--questions-file",
+      questions,
+      "--unit",
+      unit,
+      "--details",
+      "Looks correct",
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8", env },
+  );
+  if ((answer.status ?? -1) !== 0) {
+    throw new Error(`summary answer failed: ${answer.stdout}${answer.stderr}`);
+  }
+  for (const name of REQUIRED_FD) {
+    const artifact = join(dir, artifactFilename(name));
+    writeFileSync(
+      artifact,
+      `${readFileSync(artifact, "utf-8")}\nconfirmed\n`,
+    );
+    appendAuditEntry(
+      "ARTIFACT_UPDATED",
+      { File: artifact, Tool: "Write" },
+      proj,
+    );
+  }
+}
+
+function guardRefusalCount(proj: string): number {
+  const dir = join(seededRecordDir(proj), ".aidlc-guard-refusals");
+  const file = readdirSync(dir).find((name) => name.endsWith(".json"));
+  if (!file) throw new Error("guard refusal record missing");
+  return (
+    JSON.parse(readFileSync(join(dir, file), "utf-8")) as { count: number }
+  ).count;
 }
 
 function completeWave(proj: string, unit: string): void {
@@ -673,11 +814,107 @@ describe("t278 engine-emitted wave contract", () => {
       ),
       "# changed after recovery\n",
     );
-    expect(next(proj).directive.wave?.entries[0]).toMatchObject({
-      unit: "alpha",
-      review_state: "escalation-required",
-      review_iteration: 3,
+    const receipts = freshReviewReceipts(
+      proj,
+      readFileSync(seededStateFile(proj), "utf-8"),
+      findStageBySlug("functional-design")!,
+    );
+    expect(receipts.unitStaleProgress.get("alpha")).toEqual({
+      nextIteration: 3,
+      recoverySpent: true,
     });
+    expect(next(proj).directive).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      reason_codes: ["REVIEW_RECOVERY_SPENT"],
+      unit: "alpha",
+    });
+  }, 30000);
+
+  test("team revising Units route freeze and spent-review refusals to redo", () => {
+    const proj = project(
+      "functional-design",
+      "stage-major",
+      undefined,
+      undefined,
+      "team",
+    );
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    appendAuditEntry(
+      "GATE_REJECTED",
+      {
+        Stage: "functional-design",
+        Unit: "alpha",
+        "Gate Scope": "per-stage",
+        "Gate Stages": "functional-design",
+        Feedback: "revise alpha",
+      },
+      proj,
+    );
+    appendAuditEntry(
+      "STAGE_REVISING",
+      {
+        Stage: "functional-design",
+        Unit: "alpha",
+        "Gate Scope": "per-stage",
+        "Gate Stages": "functional-design",
+      },
+      proj,
+    );
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+      "- [-] functional-design",
+    );
+
+    review(proj, "alpha");
+    const artifact = join(
+      seededRecordDir(proj),
+      "construction",
+      "alpha",
+      "functional-design",
+      "functional-spec.md",
+    );
+    const frozen = freezeWrite(proj, artifact);
+    expect(frozen.status, frozen.out).toBe(2);
+    expect(frozen.out).toContain("mid-revision");
+    expect(frozen.out).toContain("/aidlc --stage functional-design");
+    expect(frozen.out).not.toContain("Request Changes");
+    expect(frozen.out).not.toContain("--result rejected");
+
+    writeFileSync(artifact, "# changed before recovery\n");
+    review(proj, "alpha", "READY", 2);
+    writeFileSync(artifact, "# changed after recovery\n");
+    const spent = reviewRequestResult(proj, "alpha", 3);
+    expect(spent.status).not.toBe(0);
+    expect(spent.out).toContain("mid-revision");
+    expect(spent.out).toContain("/aidlc --stage functional-design");
+    expect(spent.out).not.toContain("Request Changes");
+    expect(spent.out).not.toContain("--result rejected");
+  }, 30000);
+
+  test("a Unit freeze streak ignores sibling summary progress", () => {
+    const proj = project();
+    seedBoltDag(proj, ["alpha", "beta"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    cover(proj, "beta", "functional-design", REQUIRED_FD);
+    confirmUnitSummary(proj, "alpha");
+    review(proj, "alpha");
+    const alphaArtifact = join(
+      seededRecordDir(proj),
+      "construction",
+      "alpha",
+      "functional-design",
+      "functional-spec.md",
+    );
+
+    const first = freezeWrite(proj, alphaArtifact, true);
+    expect(first.status, first.out).toBe(2);
+    expect(guardRefusalCount(proj)).toBe(1);
+
+    confirmUnitSummary(proj, "beta");
+    const second = freezeWrite(proj, alphaArtifact, true);
+    expect(second.status, second.out).toBe(2);
+    expect(guardRefusalCount(proj)).toBe(2);
   }, 30000);
 
   test("an autonomous inline wave cannot reset spent recovery without a human turn", () => {
@@ -702,10 +939,11 @@ describe("t278 engine-emitted wave contract", () => {
     review(proj, "alpha", "READY", 2);
     writeFileSync(artifact, "# changed after recovery\n");
 
-    expect(next(proj).directive.wave?.entries[0]).toMatchObject({
+    expect(next(proj).directive).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      reason_codes: ["REVIEW_RECOVERY_SPENT"],
       unit: "alpha",
-      review_state: "escalation-required",
-      review_iteration: 3,
     });
 
     const rejected = reportRejected(
@@ -719,10 +957,11 @@ describe("t278 engine-emitted wave contract", () => {
       "recovery review has already been used",
     );
     expect(rejected.out).toContain("only a new human choice");
-    expect(next(proj).directive.wave?.entries[0]).toMatchObject({
+    expect(next(proj).directive).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      reason_codes: ["REVIEW_RECOVERY_SPENT"],
       unit: "alpha",
-      review_state: "escalation-required",
-      review_iteration: 3,
     });
 
     const stillSpent = reviewRequestResult(proj, "alpha", 1);

@@ -663,6 +663,61 @@ not an oversight: see the cache-layer projection the active directive binds to,
 and the contributor question in
 [`11-contributing.md`](11-contributing.md#authority-policy).
 
+### Guard admission and recovery asks
+
+A guard that refuses returns a typed refusal, not a sentence the conductor has to
+interpret: the code, the blocked action, the invariant it protects, one sentence
+for the human, and the remedies that are executable from the current lifecycle
+state (`in-progress`, `awaiting-approval`, `revising`, `completed`, `pending`,
+`skipped`; for a team Unit, the Unit's own gate status). Every remedy carries a
+closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
+`request-review`, `start-recovery-review`, `apply-repairs-then-request`,
+`record-verdict`, `retry-pending`, `request-changes`, `redo-jump`,
+`restore-or-jump`, `restart-stage`, `change-scope`, `restore-scope`,
+`abort-bolt`, `repair-source-boundary`, `reconfirm-summary`,
+`unset-unattended`). Routing decisions compare `op` and never the remedy
+sentence; the directive contract refuses an unknown `op`.
+
+**One predicate per guard, shared.** The chain of guards for a lifecycle action
+is listed once (`admitStageAction` in `aidlc-state.ts`) and called by both the
+enforcing handler and the router: `report` and `next` run it on the same state
+snapshot before spawning the state tool, so the router and the tool cannot
+disagree about a refusal. The attempt as a guard sees it (budget, the single
+recovery slot, the pending review, and whether summary, review, and source
+evidence still cover the current bytes) is built in one place,
+`guardAttemptState`, from the shared attempt reducer.
+
+**One rule for first occurrence, at both sites.** A refusal renders as a
+guard-recovery `ask` the first time it happens. The router emits it as the
+directive; an enforcing tool prints the human sentence and then the same ask as
+the last line of its refusal, which the router parses back into the directive it
+would have emitted itself. The `.aidlc-guard-refusals/` record beside the other
+gitignored runtime files counts repetitions of one guard state (stage, Unit,
+lifecycle state, attempt fields, the latest session/workflow/jump/rejection
+boundary, and the resource fingerprints); it carries no authority, and an
+observer reads it without writing. A refusal with no executable remedy is still a
+question: a terminal ask with an empty remedy list that names the situation, and
+past the repetition cap the guard-state signature for escalation. Nothing here
+ever emits an `error` directive or counts silently.
+
+**The human's selection survives the re-ask.** A guard-recovery ask is published
+as an active-directive marker (`kind: "ask"`, `ask_type: "guard-recovery"`). The
+human-turn hook records the human's remedy selection on it (`delivery: consumed`,
+`guard_recovery_response.status: awaiting-feedback`) and their later feedback
+(`status: ready`). A repeated `next` that derives the same ask for an unchanged
+state returns the ask without rewriting the marker, and the Stop hook releases
+the turn on the ask, so the conductor is never told to re-present a question the
+human already answered. `reject` then requires `--feedback` to be that human's
+own words, compared whitespace-normalized; a paraphrase is refused, and a
+selection alone is refused with "ask what should change". The ask names the
+blocked target, so it may carry a Unit; the reject names the gate the report
+path allows, which is `--unit <name>` under Unit Ownership: team and the stage
+alone under solo ownership (where `--unit` is refused). The binding follows
+that same rule: team compares stage and Unit, solo compares the stage. The
+gate's "Request Changes" choice is matched tolerant of case, an option prefix,
+quotes, and trailing punctuation; Plan Approval keeps its exact labels because
+those are the anti-forgery binding.
+
 
 ### Forbidden patterns
 
