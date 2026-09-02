@@ -49,6 +49,18 @@ because Devin stopped deduplicating same-named skills in CLI v3000.2.17).
   re-verified on **3000.6.7** unless a different version is named. Devin
   auto-updates, so `/aidlc --doctor` checks a floor of 3000.3.22 — below that no
   hook can refuse a tool call.
+
+  Desktop needs no separately installed CLI: it **bundles** one. Measured on
+  `Devin.app` 3.7.25 (bundle id `com.exafunction.windsurf`), a 148 MB Mach-O arm64
+  `devin` reporting **3000.4.25** at
+  `/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin`
+  — it is simply not on PATH. The doctor checks PATH first, then that bundle path,
+  so a Desktop-only install still gets a real version read; if neither is found
+  (Desktop outside `/Applications`, or Windows/Linux where the layout is
+  unverified) the check degrades to advisory instead of failing a healthy install.
+  Note the bundled CLI can **lag** the standalone one (3000.4.25 bundled vs
+  3000.6.12 standalone, measured the same day), which is why the floor is worth
+  checking on Desktop rather than assuming.
 - **bun** - same requirement as every harness; every tool and hook runs via
   bun. `bun` must be on the PATH the shells Devin spawns can see.
 - **An Opus-class model for the orchestrator.** The conductor skill is a ~25 KB

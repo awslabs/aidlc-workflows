@@ -2736,34 +2736,48 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     // anything — enforcement that looks installed and silently does nothing, with
     // no diagnostic. codex and copilot both carry a floor for the same reason.
     //
-    // ADVISORY when the binary is absent, unlike codex's hard fail: Devin Desktop
-    // ("Devin Local") runs a server-pinned agent build and a Desktop-only install
-    // legitimately has no `devin` on PATH. A missing binary must not fail the
-    // doctor for those users; an OLD binary must.
+    // Devin Desktop ("Devin Local") DOES bundle a real devin CLI — measured on
+    // Devin.app 3.7.25 (bundle id com.exafunction.windsurf): a 148 MB Mach-O arm64
+    // binary reporting 3000.4.25 — it just is not on PATH. So PATH alone reports
+    // "no devin" on a perfectly healthy Desktop-only machine, AND the bundled CLI
+    // can LAG the standalone one (3000.4.25 bundled vs 3000.6.12 standalone,
+    // measured the same day), which is exactly the case this floor exists to catch.
+    // Probing the bundle turns a blind advisory into a real version read.
+    //
+    // Best-effort and macOS-only: this is the default install location and the only
+    // one measured. Desktop installed elsewhere, or on Windows/Linux where the
+    // bundle layout is unverified, falls through to the advisory arm rather than
+    // guessing at a path.
     const MIN_DEVIN = [3000, 3, 22] as const;
-    // MUST be wrapped: Bun.spawnSync THROWS ("Executable not found in $PATH")
-    // rather than returning a failed result when the binary is absent, which on a
-    // Desktop-only install would crash the whole doctor rather than degrade to the
-    // advisory arm below. (codex's equivalent check is unguarded, but codex is a
-    // hard prerequisite there, so it never hits this.)
+    const DESKTOP_BUNDLE_BINS = [
+      "/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin",
+    ];
+    // Bun.which returns null rather than throwing, unlike Bun.spawnSync, which
+    // THROWS ("Executable not found in $PATH") when the binary is absent and would
+    // crash the whole doctor on a Desktop-only install instead of degrading to the
+    // advisory arm. Resolve the path FIRST, then only spawn something that exists.
+    const devinBin =
+      Bun.which("devin") ?? DESKTOP_BUNDLE_BINS.find((p) => existsSync(p)) ?? null;
     let devinVerText = "";
-    try {
-      const devinVer = Bun.spawnSync(["devin", "--version"], {
-        stdout: "pipe",
-        stderr: "ignore",
-      });
-      devinVerText = (devinVer.stdout?.toString() ?? "").trim();
-    } catch {
-      devinVerText = ""; // not installed -> advisory arm
+    if (devinBin) {
+      try {
+        const devinVer = Bun.spawnSync([devinBin, "--version"], {
+          stdout: "pipe",
+          stderr: "ignore",
+        });
+        devinVerText = (devinVer.stdout?.toString() ?? "").trim();
+      } catch {
+        devinVerText = ""; // unreadable -> advisory arm
+      }
     }
     const devinMatch = devinVerText.match(/(\d+)\.(\d+)\.(\d+)/);
     if (!devinMatch) {
       results.push({
         pass: true,
         label:
-          "devin CLI version: not probeable (no `devin` on PATH) — expected on a " +
-          "Devin Desktop-only install, whose agent build is server-pinned and cannot " +
-          "be read from a session. On the CLI, >= 3000.3.22 is required for hooks to block",
+          "devin CLI version: not probeable (no `devin` on PATH and none at the known " +
+          "Devin Desktop bundle path) — a Desktop-only install can be healthy without " +
+          "one. On the CLI, >= 3000.3.22 is required for hooks to block",
       });
     } else {
       const v = [Number(devinMatch[1]), Number(devinMatch[2]), Number(devinMatch[3])];
