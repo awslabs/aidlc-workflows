@@ -524,11 +524,11 @@ uploads one immutable `attested-release` workflow artifact. The protected
 `promote` job authenticates `checksums.txt` through online and bundled
 provenance before reading it, verifies every manifest asset, runs the online
 journey from a separate copy, rechecks the original digest set, verifies that
-the dedicated publication repository has no human writer, then creates the
-GitHub Release there from the untouched publication directory. The bundle is a
-separate trust channel and is intentionally absent
-from `version.json` and `checksums.txt`. This pipeline does not implement the
-deferred npm channel. See
+the dedicated publication repository has no ordinary writer beyond trusted
+organization owners, then creates the GitHub Release there from the untouched
+publication directory. The bundle is a separate trust channel and is
+intentionally absent from `version.json` and `checksums.txt`. This pipeline does
+not implement the deferred npm channel. See
 [Supply-Chain Security](19-supply-chain-security.md).
 
 ## Directory Structure

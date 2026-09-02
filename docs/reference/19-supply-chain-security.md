@@ -35,8 +35,10 @@ digest check does not prove the file on disk is the attested subject.
 The publication boundary is one GitHub Release for an unused `v*` tag in a
 dedicated publication repository. The source repository contains reviewed code
 and the signing workflow; the publication repository contains release records
-and grants no human write, maintain, or administrator authority. The workflow
-has no tag-push trigger. A maintainer manually dispatches it from
+and grants no direct human or team write, maintain, or administrator authority.
+Organization owners retain unavoidable administrator authority and are trusted
+publication actors. The workflow has no tag-push trigger. A maintainer manually
+dispatches it from
 `refs/heads/main` and names the new tag. `authorize` fetches current source
 `main`, requires `github.sha`, checked-out `HEAD`, and `origin/main` to be the
 same commit, and requires protected-environment
@@ -48,9 +50,9 @@ branch because GitHub evaluates environment policies against the dispatch ref,
 not the tag supplied as workflow input. `authorize` proves the exact equality
 above using only the normal read token. Only then does it mint a short-lived App
 token scoped to the source and publication repositories, use it to read the
-otherwise-hidden ruleset bypass actors and publication collaborator
-permissions, and emit a distinct authorization identity error when either API
-surface is missing or unreadable.
+otherwise-hidden ruleset bypass actors, publication collaborator permissions,
+and organization-owner list, and emit a distinct authorization identity error
+when any authority surface is missing or unreadable.
 
 After the authorization and test gates, `publish` rechecks the authorized main
 SHA, requires the tag to equal `v<version.json.version>`, re-verifies checksums,
@@ -64,8 +66,8 @@ version section in `CHANGELOG.md`; a short-lived policy token re-reads controls,
 and only the final token receives Contents write for the publication
 repository. The policy pass repeats the source environment,
 publication-repository immutable-release and complete ruleset validation, and
-collaborator enumeration so authorization cannot go stale during the build. It
-authenticates `checksums.txt` through
+collaborator plus organization-owner enumeration so authorization cannot go
+stale during the build. It authenticates `checksums.txt` through
 both GitHub's online attestation path and the exported bundle before reading
 any checksum or manifest data. It then validates `version.json`, verifies every
 manifest asset through both provenance paths, records the complete local digest
@@ -83,10 +85,12 @@ set, and re-reads the release to confirm its ETag, identity, and asset ids did
 not move while the bytes were read. GitHub does not support conditional
 requests on release updates, so the update remains unconditional. The
 enforceable isolation boundary is repository authority: collaborator
-enumeration must show no human write, maintain, or administrator principal, the
-workflow token has no publication access, and the final App token is scoped
-only to this repository. No ordinary source-repository writer can replace a
-draft asset in the final window. The publisher changes `tag_name` to the unused
+enumeration must show no write, maintain, or administrator principal except an
+independently enumerated organization owner, the workflow token has no
+publication access, and the final App token is scoped only to this repository.
+Organization owners are trusted at this boundary; no ordinary
+source-repository writer can replace a draft asset in the final window. The
+publisher changes `tag_name` to the unused
 guarded `v*` tag, sets `draft: false`, and immediately re-verifies identity,
 asset ids, tag commit, and every asset byte. It then removes the temporary
 staging ref; the immutable official tag retains the publication commit.
@@ -161,8 +165,9 @@ bypass actors. Any additional active ruleset whose creation, update, or deletion
 controls can apply to `v*` also fails closed, including broader `~ALL` tag
 rulesets. Combined controls, extra actors, wrong modes, hidden actor data, or
 partial namespaces fail closed. It also fails if the publication repository is
-the source repository, collaborator enumeration is unreadable, or any listed
-principal has push, maintain, or administrator authority. Every
+the source repository, collaborator or organization-owner enumeration is
+unreadable, or any listed non-owner principal has push, maintain, or
+administrator authority. Every
 source-consuming job checks out the authorized main SHA; the publisher checks
 that the final publication tag remains absent before staging and promotion.
 
@@ -327,11 +332,11 @@ schema.
   ruleset request.
 - `authorize` mints a GitHub App installation token scoped to the source and
   publication repositories with Actions read, repository Administration read,
-  Metadata read, and organization Administration read. That identity can
-  observe `bypass_actors`, enumerate publication collaborators, and verify the
-  organization's default repository permission; omitted or unreadable
-  authority data is reported as an authorization identity failure rather than
-  a policy mismatch.
+  Metadata read, Members read, and organization Administration read. That
+  identity can observe `bypass_actors`, enumerate publication collaborators and
+  organization owners, and verify the organization's default repository
+  permission; omitted or unreadable authority data is reported as an
+  authorization identity failure rather than a policy mismatch.
 - No job before `publish` receives `id-token: write` or
   `attestations: write`.
 - `publish` is the only signing job. It receives `contents: read`,
@@ -373,6 +378,12 @@ assigns `CHANGELOG.md` and `.github/` to that team alone. Naming the team
 rather than individuals keeps this table valid across membership rotation.
 The focused review confirms the assignment and the qualifiers below.
 
+Organization owners are also trusted publication actors because GitHub grants
+them administrator authority to every organization-owned repository. They are
+enumerated separately during both policy checks so their unavoidable access is
+explicit rather than mistaken for removable collaborator access. This is a
+platform-level trust boundary, not a release duty assignment.
+
 | Duty | Owner |
 |------|-------|
 | Approve the release-prep PR | `@awslabs/aidlc-admins` |
@@ -393,12 +404,13 @@ would otherwise have encoded:
   that member's credentials.
 
 The environment reviewer names the team, while the publication repository has
-no human writer and the creation ruleset's sole bypass actor is the protected
-release App. A team approval authorizes one App-mediated publication without
-granting source-repository credentials authority over the draft or official
-tag. The separate update-plus-deletion ruleset has no bypass actor, including
-for the App or team. The GitHub Release is published by a main-branch manual
-dispatch.
+no ordinary human or team writer and the creation ruleset's sole bypass actor is
+the protected release App. Organization owners retain their separately
+documented trusted authority. A team approval authorizes one App-mediated
+publication without granting ordinary source-repository credentials authority
+over the draft or official tag. The separate update-plus-deletion ruleset has no
+bypass actor, including for the App or team. The GitHub Release is published by
+a main-branch manual dispatch.
 
 ## 8. No OS code-signing
 
@@ -462,14 +474,15 @@ and explicit metadata refresh, but does not block a user-requested
   self-review and administrator bypass disabled, exactly the `aidlc-admins`
   reviewer team, and exactly the `main` branch deployment policy.
 - Create `awslabs/aidlc-workflows-releases` (or configure another dedicated
-  `AIDLC_PUBLICATION_REPOSITORY`) under the same owner. Grant no human, team, or
-  ordinary source-writer push, maintain, or administrator access, and keep the
-  organization default repository permission at `none` or `read`.
+  `AIDLC_PUBLICATION_REPOSITORY`) under the same owner. Grant no direct human,
+  team, or ordinary source-writer push, maintain, or administrator access beyond
+  the organization's unavoidable owners, and keep the organization default
+  repository permission at `none` or `read`.
 - Enable immutable releases on that publication repository and require owner
   enforcement.
 - Install the protected GitHub App on both repositories with Actions read,
-  repository Administration read, organization Administration read, Metadata
-  read, and Contents write, then store its App ID as the
+  repository Administration read, organization Administration read, Members
+  read, Metadata read, and Contents write, then store its App ID as the
   protected-environment variable
   `AIDLC_RELEASE_AUTH_APP_ID` and its private key as the protected-environment
   secret `AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY`. Do not store the private key as

@@ -1603,10 +1603,15 @@ describe("t244 Windows and completion release surfaces", () => {
       rulesets: unknown[],
       collaborators: unknown = [[]],
       publicationRepository = "awslabs/aidlc-workflows-releases",
+      organizationOwners: unknown = [[{
+        login: "organization-owner",
+        type: "User",
+      }]],
     ) => {
       const root = temp("aidlc-t244-release-rulesets-");
       const directory = join(root, "rulesets");
       const collaboratorPath = join(root, "collaborators.json");
+      const organizationOwnersPath = join(root, "organization-owners.json");
       const repositoryPath = join(root, "repository.json");
       const ownerPath = join(root, "owner.json");
       mkdirSync(directory);
@@ -1617,6 +1622,10 @@ describe("t244 Windows and completion release surfaces", () => {
         );
       });
       writeFileSync(collaboratorPath, `${JSON.stringify(collaborators, null, 2)}\n`);
+      writeFileSync(
+        organizationOwnersPath,
+        `${JSON.stringify(organizationOwners, null, 2)}\n`,
+      );
       writeFileSync(repositoryPath, `${JSON.stringify({
         full_name: publicationRepository,
         private: false,
@@ -1638,6 +1647,8 @@ describe("t244 Windows and completion release surfaces", () => {
         ownerPath,
         "--collaborators",
         collaboratorPath,
+        "--organization-owners",
+        organizationOwnersPath,
         "--source-repository",
         "awslabs/aidlc-workflows",
         "--publication-repository",
@@ -1698,6 +1709,15 @@ describe("t244 Windows and completion release surfaces", () => {
     const identityFailure = verify([hiddenActors, immutability]);
     expect(identityFailure.status).toBe(1);
     expect(identityFailure.stderr).toContain("authorization identity failure");
+    const organizationOwner = {
+      login: "organization-owner",
+      permissions: {
+        admin: true,
+        maintain: true,
+        push: true,
+      },
+    };
+    expect(verify([creation, immutability], [[organizationOwner]]).status).toBe(0);
     const writer = verify([creation, immutability], [[{
       login: "ordinary-writer",
       permissions: {
@@ -1708,7 +1728,22 @@ describe("t244 Windows and completion release surfaces", () => {
     }]]);
     expect(writer.status).toBe(1);
     expect(writer.stderr).toContain(
-      "publication repository grants write authority to ordinary-writer",
+      "publication repository grants non-owner write authority to ordinary-writer",
+    );
+    const mixedWriters = verify([creation, immutability], [[
+      organizationOwner,
+      {
+        login: "direct-admin",
+        permissions: {
+          admin: true,
+          maintain: true,
+          push: true,
+        },
+      },
+    ]]);
+    expect(mixedWriters.status).toBe(1);
+    expect(mixedWriters.stderr).toContain(
+      "publication repository grants non-owner write authority to direct-admin",
     );
     const sameRepository = verify(
       [creation, immutability],
@@ -1722,6 +1757,12 @@ describe("t244 Windows and completion release surfaces", () => {
     const unreadableAccess = verify([creation, immutability], [{}]);
     expect(unreadableAccess.status).toBe(1);
     expect(unreadableAccess.stderr).toContain("publication collaborator response");
+    const unreadableOwners = verify([creation, immutability], [[]], undefined, [{}]);
+    expect(unreadableOwners.status).toBe(1);
+    expect(unreadableOwners.stderr).toContain("organization owner response");
+    const missingOwners = verify([creation, immutability], [[]], undefined, [[]]);
+    expect(missingOwners.status).toBe(1);
+    expect(missingOwners.stderr).toContain("returned no owners");
     const broadOwner = temp("aidlc-t244-release-owner-policy-");
     const broadRulesets = join(broadOwner, "rulesets");
     mkdirSync(broadRulesets);
@@ -1734,6 +1775,7 @@ describe("t244 Windows and completion release surfaces", () => {
     const repositoryPath = join(broadOwner, "repository.json");
     const ownerPath = join(broadOwner, "owner.json");
     const collaboratorsPath = join(broadOwner, "collaborators.json");
+    const organizationOwnersPath = join(broadOwner, "organization-owners.json");
     writeFileSync(repositoryPath, `${JSON.stringify({
       full_name: "awslabs/aidlc-workflows-releases",
       private: false,
@@ -1746,12 +1788,17 @@ describe("t244 Windows and completion release surfaces", () => {
       default_repository_permission: "write",
     })}\n`);
     writeFileSync(collaboratorsPath, "[[]]\n");
+    writeFileSync(
+      organizationOwnersPath,
+      '[[{"login":"organization-owner","type":"User"}]]\n',
+    );
     const broadOwnerResult = run(RELEASE_VERIFIER, [
       "controls",
       "--rulesets", broadRulesets,
       "--repository", repositoryPath,
       "--owner", ownerPath,
       "--collaborators", collaboratorsPath,
+      "--organization-owners", organizationOwnersPath,
       "--source-repository", "awslabs/aidlc-workflows",
       "--publication-repository", "awslabs/aidlc-workflows-releases",
       "--creation-actor-id", "4242",
@@ -1898,6 +1945,7 @@ describe("t244 Windows and completion release surfaces", () => {
       "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
     );
     expect(workflow).toContain("permission-administration: read");
+    expect(workflow).toContain("permission-members: read");
     expect(workflow).toContain("permission-contents: write");
     expect(workflow).toContain("AIDLC_PUBLICATION_REPOSITORY");
     expect(workflow).toContain("AIDLC_RELEASE_AUTH_APP_ID");
@@ -1911,6 +1959,10 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).toContain(
       '"repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100"',
     );
+    expect(workflow).toMatch(
+      /"orgs\/\$\{PUBLICATION_REPOSITORY%%\/\*\}\/members\?role=admin&per_page=100"/,
+    );
+    expect(workflow).toContain('--organization-owners "$organization_owners"');
     expect(workflow).toContain(".enabled == true and .enforced_by_owner == true");
     expect(workflow).toContain('[.[].branch_policies[]][0].name == "main"');
     expect(workflow).toContain("bun scripts/verify-release.ts controls");
@@ -2293,6 +2345,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(promote).toContain("name: Re-verify release repository controls");
     expect(promote).toContain("permission-contents: write");
     expect(promote).toContain("permission-administration: read");
+    expect(promote).toContain("permission-members: read");
     expect(promote).toContain(
       `GH_TOKEN: \${{ steps.release-publication-token.outputs.token }}`,
     );
@@ -2301,6 +2354,10 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(promote).toContain(
       '"repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100"',
     );
+    expect(promote).toMatch(
+      /"orgs\/\$\{PUBLICATION_REPOSITORY%%\/\*\}\/members\?role=admin&per_page=100"/,
+    );
+    expect(promote).toContain('--organization-owners "$organization_owners"');
     expect(promote.match(/bun scripts\/verify-release\.ts controls/g)).toHaveLength(1);
     expect(promote).toContain(
       "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
@@ -2432,9 +2489,9 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(publisher).toContain("release.body !== notes.body");
     expect(publisher).toContain("tag_name: options.stagingTag");
     expect(publisher).toContain("target_commitish: options.targetCommitish");
-    // GitHub rejects conditional headers on release updates with 400. The
-    // isolated publication repository prevents ordinary writers from entering
-    // the final window; re-verification remains defense in depth.
+    // GitHub rejects conditional headers on release updates with 400. Isolated
+    // publication authority excludes ordinary writers from the final window;
+    // trusted organization owners remain explicit threat-model actors.
     expect(publisher).not.toContain('"If-Match"');
     expect(publisher).not.toContain("412");
     expect(publisher).toContain("tag_name: options.tag");
@@ -2450,7 +2507,7 @@ describe("t244 Windows and completion release surfaces", () => {
       "draft release changed while remote bytes were verified",
     );
     expect(readFileSync(RELEASE_VERIFIER, "utf-8")).toContain(
-      "publication repository grants write authority to",
+      "publication repository grants non-owner write authority to",
     );
     expect(promote.indexOf("name: Authenticate and verify immutable release bytes"))
       .toBeLessThan(

@@ -79,6 +79,7 @@ jobs:
             ${{ steps.authorize.outputs.publication_name }}
           permission-actions: read
           permission-administration: read
+          permission-members: read
           permission-metadata: read
           permission-organization-administration: read
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -167,6 +168,7 @@ jobs:
             fi
           done <<<"$ruleset_ids"
           collaborators="$RUNNER_TEMP/aidlc-release-collaborators.json"
+          organization_owners="$RUNNER_TEMP/aidlc-release-organization-owners.json"
           repository="$RUNNER_TEMP/aidlc-release-repository.json"
           owner="$RUNNER_TEMP/aidlc-release-owner.json"
           if ! gh api "repos/$PUBLICATION_REPOSITORY" >"$repository"; then
@@ -183,11 +185,18 @@ jobs:
             authorization_failure \
               "The protected GitHub App identity could not enumerate publication-repository collaborators."
           fi
+          if ! gh api --paginate --slurp \
+            "orgs/${PUBLICATION_REPOSITORY%%/*}/members?role=admin&per_page=100" \
+            >"$organization_owners"; then
+            authorization_failure \
+              "The protected GitHub App identity could not enumerate publication-organization owners."
+          fi
           bun scripts/verify-release.ts controls \
             --rulesets "$rulesets" \
             --repository "$repository" \
             --owner "$owner" \
             --collaborators "$collaborators" \
+            --organization-owners "$organization_owners" \
             --source-repository "$GITHUB_REPOSITORY" \
             --publication-repository "$PUBLICATION_REPOSITORY" \
             --creation-actor-id "$RELEASE_AUTH_APP_ID" \
@@ -830,6 +839,7 @@ jobs:
             ${{ github.event.repository.name }}
             ${{ needs.authorize.outputs.publication_name }}
           permission-administration: read
+          permission-members: read
           permission-metadata: read
           permission-organization-administration: read
       - name: Re-verify release repository controls
@@ -885,6 +895,7 @@ jobs:
               >"$rulesets/$ruleset_id.json"
           done <<<"$ruleset_ids"
           collaborators="$RUNNER_TEMP/aidlc-release-collaborators-final.json"
+          organization_owners="$RUNNER_TEMP/aidlc-release-organization-owners-final.json"
           repository="$RUNNER_TEMP/aidlc-release-repository-final.json"
           owner="$RUNNER_TEMP/aidlc-release-owner-final.json"
           gh api "repos/$PUBLICATION_REPOSITORY" >"$repository"
@@ -892,11 +903,15 @@ jobs:
           gh api --paginate --slurp \
             "repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100" \
             >"$collaborators"
+          gh api --paginate --slurp \
+            "orgs/${PUBLICATION_REPOSITORY%%/*}/members?role=admin&per_page=100" \
+            >"$organization_owners"
           bun scripts/verify-release.ts controls \
             --rulesets "$rulesets" \
             --repository "$repository" \
             --owner "$owner" \
             --collaborators "$collaborators" \
+            --organization-owners "$organization_owners" \
             --source-repository "$GITHUB_REPOSITORY" \
             --publication-repository "$PUBLICATION_REPOSITORY" \
             --creation-actor-id "$RELEASE_AUTH_APP_ID" \

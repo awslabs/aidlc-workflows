@@ -148,7 +148,8 @@ explicit GitHub CLI executable for both installers.
 Fork release rehearsals also need a protected `release` environment restricted
 to exactly the source `main` branch and a separate publication repository under
 the same owner. That repository must grant no human push, maintain, or
-administrator authority, and the organization default repository permission
+administrator authority beyond the organization's unavoidable owners, who are
+trusted publication actors, and the organization default repository permission
 must be `none` or `read`. The protected App is installed on both repositories;
 its final Contents write token is scoped only to publication. The publication
 repository has two tag rulesets over exactly `refs/tags/v*`: creation names only
@@ -195,8 +196,9 @@ records the complete digest set, and runs the real installer journey from a
 separate copy. It then rechecks the untouched publication directory, derives
 notes from the reviewed version section in `CHANGELOG.md`, and revalidates the source environment plus
 the publication repository's immutable-release setting, exact rulesets, and
-complete collaborator list. Any human write, maintain, or administrator
-principal fails the run. A publication-only App token creates an isolated
+complete collaborator list plus the independently enumerated organization-owner
+list. Any write, maintain, or administrator principal who is not an organization
+owner fails the run. A publication-only App token creates an isolated
 publication commit and private draft. It refuses to run while a staging draft
 from an earlier run remains,
 verifies the new draft's complete inventory and redownloaded bytes, and re-reads
@@ -205,9 +207,9 @@ conditional headers on release updates, so the publish update that retargets
 the verified staging draft to the unused guarded `v*` tag is unconditional and
 is followed by a full re-verification of the published release (identity, asset
 ids, tag commit, and bytes). The publication repository has no ordinary writer,
-the workflow token has no access to it, and the final App token is scoped only
-there, so no source-repository writer can replace candidate bytes in the final
-window.
+organization owners are explicit trusted publication actors, the workflow token
+has no access to it, and the final App token is scoped only there, so no ordinary
+source-repository writer can replace candidate bytes in the final window.
 Ordinary failures delete the staging draft this run created; a draft whose
 content changed under the publisher is retained as evidence, the log names the
 `gh release delete` command that removes it, and the next run refuses to stage

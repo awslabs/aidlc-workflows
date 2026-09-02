@@ -152,46 +152,69 @@ function readJson(path: string, label: string): unknown {
   }
 }
 
-function verifyExclusivePublicationAccess(path: string): void {
-  const document = readJson(path, "publication collaborator response");
+function paginatedRecords(path: string, label: string): JsonRecord[] {
+  const document = readJson(path, label);
   if (!Array.isArray(document) || document.some((page) => !Array.isArray(page))) {
     throw new Error(
-      "authorization identity failure: publication collaborator response must be paginated arrays",
+      `authorization identity failure: ${label} must be paginated arrays`,
     );
   }
-  const writers: string[] = [];
-  for (const [pageIndex, page] of document.entries()) {
-    for (const [entryIndex, value] of page.entries()) {
-      const collaborator = record(
-        value,
-        `publication collaborator ${pageIndex}:${entryIndex}`,
+  return (document as unknown[][]).flatMap((page, pageIndex) =>
+    page.map((value, entryIndex) => record(value, `${label} ${pageIndex}:${entryIndex}`))
+  );
+}
+
+function verifyPublicationAccess(collaboratorsPath: string, ownersPath: string): void {
+  const owners = new Set<string>();
+  for (const owner of paginatedRecords(ownersPath, "organization owner response")) {
+    if (typeof owner.login !== "string" || owner.type !== "User") {
+      throw new Error(
+        "authorization identity failure: organization owner omitted login or User type",
       );
-      if (typeof collaborator.login !== "string") {
+    }
+    owners.add(owner.login);
+  }
+  if (owners.size === 0) {
+    throw new Error(
+      "authorization identity failure: organization owner response returned no owners",
+    );
+  }
+
+  const writers: string[] = [];
+  for (
+    const collaborator of paginatedRecords(
+      collaboratorsPath,
+      "publication collaborator response",
+    )
+  ) {
+    if (typeof collaborator.login !== "string") {
+      throw new Error(
+        "authorization identity failure: publication collaborator omitted login",
+      );
+    }
+    const permissions = record(
+      collaborator.permissions,
+      `publication collaborator permissions for ${collaborator.login}`,
+    );
+    for (const permission of ["admin", "maintain", "push"]) {
+      if (typeof permissions[permission] !== "boolean") {
         throw new Error(
-          "authorization identity failure: publication collaborator omitted login",
+          `authorization identity failure: publication collaborator ${
+            collaborator.login
+          } omitted ${permission} permission`,
         );
       }
-      const permissions = record(
-        collaborator.permissions,
-        `publication collaborator permissions for ${collaborator.login}`,
-      );
-      for (const permission of ["admin", "maintain", "push"]) {
-        if (typeof permissions[permission] !== "boolean") {
-          throw new Error(
-            `authorization identity failure: publication collaborator ${
-              collaborator.login
-            } omitted ${permission} permission`,
-          );
-        }
-      }
-      if (permissions.admin || permissions.maintain || permissions.push) {
-        writers.push(collaborator.login);
-      }
+    }
+    if (
+      (permissions.admin || permissions.maintain || permissions.push) &&
+      !owners.has(collaborator.login)
+    ) {
+      writers.push(collaborator.login);
     }
   }
   if (writers.length > 0) {
     throw new Error(
-      `repository policy failure: publication repository grants write authority to ${
+      `repository policy failure: publication repository grants non-owner write authority to ${
         [...new Set(writers)].sort().join(", ")
       }`,
     );
@@ -264,7 +287,10 @@ function verifyControls(args: string[]): void {
     requiredOption(args, "--owner"),
     publicationRepository,
   );
-  verifyExclusivePublicationAccess(requiredOption(args, "--collaborators"));
+  verifyPublicationAccess(
+    requiredOption(args, "--collaborators"),
+    requiredOption(args, "--organization-owners"),
+  );
   const rulesets = readRulesets(requiredOption(args, "--rulesets"));
   const creationActorId = requiredOption(args, "--creation-actor-id");
   const creationActorType = requiredOption(args, "--creation-actor-type");
@@ -487,7 +513,8 @@ function main(): void {
     return;
   }
   throw new Error(
-    "usage: verify-release.ts controls --rulesets <dir> --creation-actor-id <id> " +
+    "usage: verify-release.ts controls --rulesets <dir> --organization-owners <file> " +
+      "--creation-actor-id <id> " +
       "--creation-actor-type <Integration> | candidate --directory <dir> --tag <vX.Y.Z> " +
       "[--source-digest <sha>] [--list-assets]",
   );
