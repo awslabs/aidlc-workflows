@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.8.2] - 2026-09-09
+
+Make Codex apply PreToolUse input rewrites again. Codex only honors a `hookSpecificOutput.updatedInput` rewrite when the same envelope carries an explicit `permissionDecision: "allow"`; without it the rewrite is silently dropped and the original tool input runs. The Codex adapter now emits that decision on both of its rewrite paths — the Bash session-binding prefix and the `deliver-stage-rules` core output it forwards — so subagent dispatches receive the active-stage rule bundle and Bash commands inherit the validated session again. The harness-neutral core hook is unchanged: it still emits no permission decision, and every other harness keeps its native approval flow. **Upgrade:** `aidlc update` (or `install.sh --version 2.8.2` / `install.ps1 -Version 2.8.2`), then `aidlc config` to refresh the project's Codex hook tree; no workflow state migration is required.
+
+* `spawn_agent` dispatches on Codex carry the exact active-stage rule bundle instead of the unmodified prompt.
+* Bash commands on Codex inherit the validated payload session via the `AIDLC_SESSION_OVERRIDE` prefix again.
+
 ## [2.8.1] - 2026-09-08
 
 Fix two defects found while exercising the 2.8.0 native install on Linux and Windows: the guided `aidlc config` setup cancelled itself when Enter was pressed to accept a default, and `aidlc update` on an already-current install failed its integrity check under a normal shell umask. **Upgrade:** `aidlc update`, or `install.sh --version 2.8.1` / `install.ps1 -Version 2.8.1`; no project changes are required, and `aidlc config` refreshes projects when convenient.

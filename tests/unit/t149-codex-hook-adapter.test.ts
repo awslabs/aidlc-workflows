@@ -444,10 +444,14 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const output = JSON.parse(r.stdout) as {
         hookSpecificOutput?: {
           hookEventName?: string;
+          permissionDecision?: string;
           updatedInput?: { command?: string };
         };
       };
       expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      // Codex drops an updatedInput rewrite that does not carry an explicit
+      // "allow", so the session prefix would silently never bind.
+      expect(output.hookSpecificOutput?.permissionDecision).toBe("allow");
       expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
         "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
           "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
@@ -542,9 +546,13 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r.code, r.stderr).toBe(0);
       const out = JSON.parse(r.stdout) as {
         hookSpecificOutput?: {
+          permissionDecision?: string;
           updatedInput?: { message?: string };
         };
       };
+      // The adapter re-wraps the core rewrite with the explicit "allow" Codex
+      // needs to apply it; the harness-neutral core hook never emits one.
+      expect(out.hookSpecificOutput?.permissionDecision).toBe("allow");
       const message = out.hookSpecificOutput?.updatedInput?.message ?? "";
       expect(message).toContain("first-class");
       expect(message).toContain("Given/When/Then");
