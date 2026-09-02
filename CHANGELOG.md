@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.7.2] - 2026-09-02
+## [2.7.4] - 2026-09-02
 
 Devin joins the harness roster as the eighth distribution: `bun scripts/package.ts` now emits `dist/devin/` alongside the other seven, and one tree serves both Devin CLI and Devin Desktop's "Devin Local" agent. **Upgrade:** nothing changes for existing harnesses. To run AI-DLC on Devin, copy `dist/devin/.devin/` and `dist/devin/aidlc/` into your project, MERGE `dist/devin/AGENTS.md`, `dist/devin/.devin/config.json` and the AI-DLC `.gitignore` section rather than overwriting yours, then run `/aidlc --doctor`. Do **not** install it into a project that already carries the AI-DLC Claude Code distribution — Devin imports `.claude/` hooks by default, so both hook sets would load and every audit event would be written twice.
 
