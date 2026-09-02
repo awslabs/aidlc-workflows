@@ -119,8 +119,10 @@ afterAll(() => {
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
 });
 
+// Production emits canonical project and machine paths, so fixtures live under
+// the canonical temp root (macOS aliases /var to /private/var).
 function temp(prefix: string): string {
-  const path = mkdtempSync(join(tmpdir(), prefix));
+  const path = mkdtempSync(join(realpathSync(tmpdir()), prefix));
   temporary.push(path);
   return path;
 }
@@ -698,10 +700,13 @@ describe("t243 project initialization", () => {
     const runtime = join(machine, "versions", AIDLC_VERSION, "runtime");
     mkdirSync(join(runtime, "claude"), { recursive: true });
     writeFileSync(join(machine, "active-version"), `${AIDLC_VERSION}\n`);
+    // The executable lives in a different tree that also carries a runtime;
+    // the install root's active-version runtime must win and the adjacent one
+    // must not be offered at all.
+    const adjacent = temp("aidlc-t243-runtime-adjacent-");
+    mkdirSync(join(adjacent, "runtime", "claude"), { recursive: true });
     const executable = join(
-      machine,
-      "versions",
-      AIDLC_VERSION,
+      adjacent,
       process.platform === "win32" ? "aidlc.exe" : "aidlc",
     );
     writeFileSync(executable, "fixture\n");
@@ -711,8 +716,10 @@ describe("t243 project initialization", () => {
     process.env.AIDLC_INSTALL_ROOT = alias;
     delete process.env.AIDLC_RUNTIME_ROOT;
     try {
+      // Install roots are canonical, so the aliased spelling resolves to the
+      // real machine directory.
       expect(_installedSourcesForTests(undefined, executable)).toEqual([
-        join(alias, "versions", AIDLC_VERSION, "runtime", "claude"),
+        join(realpathSync(machine), "versions", AIDLC_VERSION, "runtime", "claude"),
       ]);
     } finally {
       if (savedInstallRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
@@ -2740,6 +2747,168 @@ describe("t243 release lifecycle", () => {
       else process.env.AIDLC_BIN_DIR = saved.bin;
     }
   }, 60_000);
+
+  test("a declared pin keeps protecting its retained version when the local target marker is lost", () => {
+    const release = fixtureRelease();
+    const pinnedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-pin-protect-machine-");
+    const aliasParent = temp("aidlc-t243-pin-protect-alias-");
+    const alias = join(aliasParent, "machine");
+    symlinkSync(machine, alias, process.platform === "win32" ? "junction" : "dir");
+    const project = temp("aidlc-t243-pin-protect-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    const aliasEnv = { AIDLC_INSTALL_ROOT: alias, AIDLC_BIN_DIR: join(alias, "bin") };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    const pinned = run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--from", pinnedRelease, "--project-dir", project,
+    ], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+
+    const pinPaths = (result: { stdout: string }) =>
+      (JSON.parse(result.stdout) as {
+        data: { versions: Array<{ version: string; pinPaths: string[] }> };
+      }).data.versions.find((item) => item.version === NEXT_VERSION)?.pinPaths;
+
+    // An equivalent spelling of the install root sees the same pin.
+    expect(pinPaths(run(LIFECYCLE, ["versions", "list", "--json"], project, aliasEnv)))
+      .toEqual([project]);
+
+    // `git clean -fdx` removes the gitignored runtime marker but keeps the
+    // committed .aidlc-version: the pin still protects, dispatch still refuses.
+    rmSync(dirname(projectPinTargetPath(project)), { recursive: true, force: true });
+    expect(pinPaths(run(LIFECYCLE, ["versions", "list", "--json"], project, env)))
+      .toEqual([project]);
+    const prune = run(LIFECYCLE, ["versions", "prune", "--yes", "--json"], project, env);
+    expect(prune.status, prune.stdout + prune.stderr).toBe(0);
+    expect((JSON.parse(prune.stdout) as { data: { removed: string[] } }).data.removed)
+      .toEqual([]);
+    expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(true);
+    const savedRoot = process.env.AIDLC_INSTALL_ROOT;
+    const savedBin = process.env.AIDLC_BIN_DIR;
+    Object.assign(process.env, env);
+    try {
+      expect(resolvePinnedDispatch(["engine", "status", "--project-dir", project]))
+        .toEqual(expect.objectContaining({
+          kind: "failure",
+          message: expect.stringContaining("resolved target marker is missing"),
+        }));
+    } finally {
+      if (savedRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = savedRoot;
+      if (savedBin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = savedBin;
+    }
+    // Re-pinning restores the marker offline from the retained version.
+    const repinned = run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--offline", "--project-dir", project,
+    ], project, env);
+    expect(repinned.status, repinned.stdout + repinned.stderr).toBe(0);
+    expect(existsSync(projectPinTargetPath(project))).toBe(true);
+
+    // Only a project that no longer declares the pin releases the version.
+    rmSync(join(project, ".aidlc-version"));
+    expect(pinPaths(run(LIFECYCLE, ["versions", "list", "--json"], project, env)))
+      .toEqual([]);
+  }, 120_000);
+
+  test("another project's conflicting alias entries never block this project", () => {
+    const release = fixtureRelease();
+    const machine = temp("aidlc-t243-pin-scope-machine-");
+    const project = temp("aidlc-t243-pin-scope-project-");
+    const other = temp("aidlc-t243-pin-scope-other-");
+    const otherAlias = join(temp("aidlc-t243-pin-scope-other-alias-"), "other");
+    const fresh = temp("aidlc-t243-pin-scope-fresh-");
+    for (const dir of [project, other, fresh]) mkdirSync(join(dir, ".git"));
+    symlinkSync(other, otherAlias, process.platform === "win32" ? "junction" : "dir");
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    expect(run(INIT, [
+      "config", "--pin", AIDLC_VERSION, "--project-dir", project,
+    ], project, env).status).toBe(0);
+    const registryPath = join(machine, "pins.json");
+    const conflict = {
+      [realpathSync(other)]: AIDLC_VERSION,
+      [otherAlias]: NEXT_VERSION,
+    };
+    writeFileSync(registryPath, `${JSON.stringify({
+      ...JSON.parse(readFileSync(registryPath, "utf-8")),
+      ...conflict,
+    }, null, 2)}\n`);
+
+    const savedRoot = process.env.AIDLC_INSTALL_ROOT;
+    const savedBin = process.env.AIDLC_BIN_DIR;
+    Object.assign(process.env, env);
+    try {
+      expect(resolvePinnedDispatch(["engine", "status", "--project-dir", project]))
+        .toEqual({ kind: "none" });
+      writeFileSync(join(other, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+      expect(resolvePinnedDispatch(["engine", "status", "--project-dir", other]))
+        .toEqual(expect.objectContaining({
+          kind: "failure",
+          code: 4,
+          message: expect.stringContaining("conflicting equivalent pin entries"),
+        }));
+    } finally {
+      if (savedRoot === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = savedRoot;
+      if (savedBin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = savedBin;
+    }
+
+    // Pinning an unrelated project succeeds and carries the conflicting
+    // entries forward verbatim instead of erasing the evidence.
+    const pinnedFresh = run(INIT, [
+      "config", "--pin", AIDLC_VERSION, "--offline", "--project-dir", fresh,
+    ], fresh, env);
+    expect(pinnedFresh.status, pinnedFresh.stdout + pinnedFresh.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(registryPath, "utf-8"))).toEqual({
+      [project]: AIDLC_VERSION,
+      [fresh]: AIDLC_VERSION,
+      ...conflict,
+    });
+    const list = run(LIFECYCLE, ["versions", "list", "--json"], project, env);
+    expect((JSON.parse(list.stdout) as { data: { pinWarnings: string[] } }).data.pinWarnings)
+      .toEqual([expect.stringContaining("conflicting equivalent pin entries")]);
+    expect(run(LIFECYCLE, ["versions", "prune", "--yes"], project, env).status).toBe(4);
+  }, 120_000);
+
+  test("launcher ownership does not depend on the spelling of the machine roots", () => {
+    const release = fixtureRelease();
+    const machine = temp("aidlc-t243-launcher-alias-machine-");
+    const alias = join(temp("aidlc-t243-launcher-alias-parent-"), "machine");
+    symlinkSync(machine, alias, process.platform === "win32" ? "junction" : "dir");
+    const project = temp("aidlc-t243-launcher-alias-project-");
+    mkdirSync(join(project, ".git"));
+    const real = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    const aliased = { AIDLC_INSTALL_ROOT: alias, AIDLC_BIN_DIR: join(alias, "bin") };
+
+    // Install through the alias, manage through the real spelling.
+    const installed = run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, aliased);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const launcher = join(machine, "bin", COMMAND_NAME);
+    expect(readFileSync(launcher, "utf-8")).not.toContain(alias);
+    const used = run(LIFECYCLE, ["use", AIDLC_VERSION, "--json"], project, real);
+    expect(used.status, used.stdout + used.stderr).toBe(0);
+    const doctor = JSON.parse(run(DISPATCHER, ["doctor", "--json"], project, real).stdout) as {
+      data: { checks: Array<{ pass: boolean; label: string }> };
+    };
+    expect(doctor.data.checks.filter((check) => check.label.startsWith("Command pointer")))
+      .toEqual([expect.objectContaining({ pass: true })]);
+
+    // And the other direction: manage the same install through the alias.
+    const reused = run(LIFECYCLE, ["use", AIDLC_VERSION, "--json"], project, aliased);
+    expect(reused.status, reused.stdout + reused.stderr).toBe(0);
+    const purge = run(LIFECYCLE, ["uninstall", "--purge", "--yes"], project, aliased);
+    expect(purge.status, purge.stdout + purge.stderr).toBe(0);
+    expect(existsSync(launcher)).toBe(false);
+  }, 120_000);
 
   test("use refuses to create a native ownership domain beside Homebrew or Nix", () => {
     const release = fixtureReleaseBytes();

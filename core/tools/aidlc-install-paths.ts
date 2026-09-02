@@ -22,13 +22,22 @@ export function requireVersion(value: string): string {
   return value;
 }
 
-export function installRoot(): string {
+// Machine roots are canonical paths. Every derived path (launcher body, the
+// active-executable pointer, pin targets, registry keys) is rendered from them,
+// so equivalent spellings of the same directories (macOS /tmp and /private/tmp,
+// a symlinked XDG_DATA_HOME, a re-spelled AIDLC_INSTALL_ROOT) describe one
+// install instead of rejecting each other's launcher as tampered.
+function lexicalInstallRoot(): string {
   const explicit = process.env.AIDLC_INSTALL_ROOT?.trim();
   if (explicit) return isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit);
   if (platform() === "win32") {
     return join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "aidlc");
   }
   return join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "aidlc");
+}
+
+export function installRoot(): string {
+  return canonicalPolicyPath(lexicalInstallRoot());
 }
 
 export function versionsRoot(): string {
@@ -39,12 +48,16 @@ export function versionRoot(version: string): string {
   return join(versionsRoot(), requireVersion(version));
 }
 
-export function binRoot(): string {
+function lexicalBinRoot(): string {
   const explicit = process.env.AIDLC_BIN_DIR?.trim();
   if (explicit) return isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit);
   return platform() === "win32"
-    ? join(installRoot(), "bin")
+    ? join(lexicalInstallRoot(), "bin")
     : join(homedir(), ".local", "bin");
+}
+
+export function binRoot(): string {
+  return canonicalPolicyPath(lexicalBinRoot());
 }
 
 export function canonicalPolicyPath(path: string): string {
@@ -77,12 +90,20 @@ export function isMachineOwnedPath(path: string): boolean {
   return [installRoot(), binRoot()].some((root) => policyPathWithin(path, root));
 }
 
+// A project overlaps the machine roots when either contains the other. The
+// configured (lexical) spellings are checked alongside the canonical ones: a
+// root configured as `<project>/aidlc` that is itself a symlink elsewhere still
+// makes the engine's writes under `<project>/aidlc` land in the machine tree.
 export function projectPathOverlapsMachineRoots(projectDir: string): boolean {
-  return [installRoot(), binRoot()].some((root) =>
+  const lexical = [lexicalInstallRoot(), lexicalBinRoot()];
+  const roots = new Set([...lexical, ...lexical.map(canonicalPolicyPath)]);
+  const workspace = join(projectDir, "aidlc");
+  return [...roots].some((root) =>
     policyPathWithin(projectDir, root) ||
     policyPathWithin(root, projectDir) ||
     resolvedPathWithin(projectDir, root) ||
-    resolvedPathWithin(root, projectDir)
+    resolvedPathWithin(root, projectDir) ||
+    policyPathWithin(workspace, root)
   );
 }
 
@@ -201,7 +222,7 @@ export function readActiveExecutable(): string | null {
   if (!isAbsolute(executable)) {
     throw new Error(`${path} must contain an absolute executable path`);
   }
-  const normalized = resolve(executable);
+  const normalized = canonicalPolicyPath(executable);
   const parent = dirname(normalized);
   const version = basename(parent);
   const expectedName = platform() === "win32" ? "aidlc.exe" : "aidlc";
@@ -241,8 +262,8 @@ export function inspectProjectPinTarget(
   if (!/^[^\r\n]+\r?\n?$/.test(raw)) {
     return { valid: false, target: path, reason: "resolved target marker must contain one path" };
   }
-  const target = resolve(raw.replace(/\r?\n$/, ""));
-  const expected = resolve(installedExecutablePath(version));
+  const target = canonicalPolicyPath(raw.replace(/\r?\n$/, ""));
+  const expected = canonicalPolicyPath(installedExecutablePath(version));
   if (target !== expected) {
     return {
       valid: false,

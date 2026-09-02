@@ -199,6 +199,12 @@ and host-specific steps that differ.
 
 ### Step 1: Install the native runtime
 
+> **Availability.** The native assets ship with the first native release, which
+> follows the release-prep change that finalizes this line. Until a release
+> carries `install.sh`, use the source checkout path described at the end of
+> this chapter (`bun scripts/package.ts`, then copy the generated
+> `dist/<harness>/` tree).
+
 On macOS, Linux, or WSL:
 
 ```bash

@@ -22374,6 +22374,9 @@ export function escapeRegex(str: string): string {
 
 // --- CLI argument parsing ---
 
+// `--` ends option parsing: every later token is literal and lands in
+// `positional`, so text such as "--project-dir <path>" after the delimiter can
+// never be read as a flag by any tool built on this parser.
 export function parseArgs(args: string[]): {
   positional: string[];
   flags: Record<string, string>;
@@ -22386,6 +22389,10 @@ export function parseArgs(args: string[]): {
   const blankFlags = new Set<string>();
   let i = 0;
   while (i < args.length) {
+    if (args[i] === "--") {
+      positional.push(...args.slice(i + 1));
+      break;
+    }
     if (args[i].startsWith("--")) {
       const token = args[i].slice(2);
       const equals = token.indexOf("=");

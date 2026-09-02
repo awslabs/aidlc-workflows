@@ -791,6 +791,84 @@ describe("t230 dispatcher route parity", () => {
     }
   });
 
+  test("literal or equals-form --project-dir cannot route engine writes into a machine root", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t230-machine-spelling-"));
+    tempProjects.add(root);
+    const install = join(root, "install");
+    const runtime = join(install, "versions", "2.7.0", "runtime", "claude");
+    mkdirSync(join(runtime, ".git"), { recursive: true });
+    mkdirSync(join(root, "bin"), { recursive: true });
+    const projectDir = makeProject();
+    const env = {
+      AIDLC_INSTALL_ROOT: install,
+      AIDLC_BIN_DIR: join(root, "bin"),
+      AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR,
+    };
+
+    const equals = viaDispatcher(
+      ["engine", "intent", "create", "--scope", "poc", `--project-dir=${runtime}`],
+      projectDir,
+      env,
+    );
+    expect(equals.exitCode).toBe(2);
+    expect(equals.stderr.toString()).toContain(
+      "--project-dir takes a separate path value; use --project-dir <path>",
+    );
+
+    for (const literal of [
+      ["--", "--project-dir", runtime],
+      ["--", `--project-dir=${runtime}`],
+    ]) {
+      const result = viaDispatcher(
+        ["engine", "intent", "create", "--scope", "poc", ...literal],
+        projectDir,
+        env,
+      );
+      expect(result.exitCode, literal.join(" ")).toBe(0);
+    }
+    expect(existsSync(join(runtime, "aidlc", "spaces"))).toBe(false);
+    expect(existsSync(join(projectDir, "aidlc", "spaces", "default", "intents"))).toBe(true);
+  });
+
+  test("optional-project public commands run from a home directory that contains the machine roots", () => {
+    const home = mkdtempSync(join(tmpdir(), "aidlc-t230-home-project-"));
+    tempProjects.add(home);
+    const env = {
+      HOME: home,
+      AIDLC_INSTALL_ROOT: join(home, ".local", "share", "aidlc"),
+      AIDLC_BIN_DIR: join(home, ".local", "bin"),
+      AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR,
+    };
+    // Doctor's verdict depends on the host; the contract here is that the
+    // diagnostics run at all instead of being refused as a machine directory.
+    const doctor = viaDispatcher(["doctor", "--json"], home, env);
+    const report = JSON.parse(doctor.stdout.toString()) as {
+      message: string;
+      data?: { checks?: unknown[] };
+    };
+    expect(report.message).not.toContain(
+      "cannot use an AI-DLC machine install or command directory",
+    );
+    expect(report.data?.checks?.length ?? 0).toBeGreaterThan(0);
+
+    const models = viaDispatcher(["config", "models", "--show"], home, env);
+    const output = `${models.stdout}${models.stderr}`;
+    expect(output).not.toContain(
+      "cannot use an AI-DLC machine install or command directory",
+    );
+    expect(models.exitCode, output).toBe(0);
+    // The project itself may still never live inside a machine root.
+    const inside = viaDispatcher(
+      ["doctor", "--json", "--project-dir", join(home, ".local", "share", "aidlc")],
+      home,
+      env,
+    );
+    expect(inside.exitCode).toBe(1);
+    expect(`${inside.stdout}${inside.stderr}`).toContain(
+      "cannot use an AI-DLC machine install or command directory",
+    );
+  });
+
   test("--project-dir is global and may be interleaved with workspace tokens", () => {
     const projectDir = makeProject();
     const routed = viaDispatcher(
@@ -1083,10 +1161,31 @@ describe("t230 dispatcher global flag translation", () => {
         "migration",
       ],
     });
+    // Without an explicit flag the dispatcher pins its own resolved directory
+    // ahead of the delimiter, so a delegate scanning argv for --project-dir
+    // finds that first; the literal text after `--` is untouched.
     expect(resolveAction(["compose", "--", "--project-dir", "/tmp/literal"])).toEqual({
       type: "delegate",
       tool: "aidlc-orchestrate.ts",
-      args: ["next", "compose", "--", "--project-dir", "/tmp/literal"],
+      args: [
+        "next",
+        "compose",
+        "--project-dir",
+        process.cwd(),
+        "--",
+        "--project-dir",
+        "/tmp/literal",
+      ],
+    });
+    expect(resolveAction(["compose", "--", "--scope", "migration"])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: ["next", "compose", "--project-dir", process.cwd(), "--", "--scope", "migration"],
+    });
+    expect(resolveAction(["compose", "--project-dir=/tmp/equals"])).toEqual({
+      type: "error",
+      code: 2,
+      message: "aidlc: --project-dir takes a separate path value; use --project-dir <path>\n",
     });
     expect(resolveAction([
       "--project-dir",

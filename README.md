@@ -98,6 +98,15 @@ The native installer is the recommended path. It installs one native
 `aidlc` command plus every harness runtime; Bun and Node.js are not required.
 The authenticated bootstrap requires GitHub CLI (`gh`).
 
+> [!IMPORTANT]
+> Native release assets (`install.sh`, `install.ps1`, `aidlc-runtime.tar.gz`)
+> ship with the first native release, which follows the release-prep change
+> that finalizes this line. Until a release carries those assets, install from
+> a source checkout instead: clone the repository, run
+> `bun install --frozen-lockfile && bun scripts/package.ts`, and copy the
+> generated `dist/<harness>/` tree into your project (Bun required for that
+> path only).
+
 ```bash
 tmp="$(mktemp -d)"
 tag="$(gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName)"

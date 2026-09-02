@@ -1808,6 +1808,13 @@ export function resolveAction(argv: string[]): Action {
       globalFlags.push(argv[i]);
       continue;
     }
+    if (!literalArgs && argv[i].startsWith("--project-dir=")) {
+      return {
+        type: "error",
+        code: 2,
+        message: "aidlc: --project-dir takes a separate path value; use --project-dir <path>\n",
+      };
+    }
     if (literalArgs || argv[i] !== "--project-dir") {
       clean.push(argv[i]);
       continue;
@@ -1858,7 +1865,14 @@ export function resolveAction(argv: string[]): Action {
   }
   if (action.type === "delegate") {
     const delimiter = action.args.indexOf("--");
-    if (delimiter >= 0) action.args.splice(delimiter, 0, ...globalFlags);
+    // Literal text after `--` may itself contain `--project-dir`. Delegates
+    // that scan argv for that flag must find the dispatcher's directory first,
+    // so when the caller gave none the resolved directory is pinned ahead of
+    // the delimiter. The literal text stays byte-for-byte intact.
+    if (delimiter >= 0 && !projectDir) {
+      action.args.splice(delimiter, 0, "--project-dir", dispatcherProjectDirFrom(argv));
+    }
+    if (delimiter >= 0) action.args.splice(action.args.indexOf("--"), 0, ...globalFlags);
     else action.args.push(...globalFlags);
   }
   return action;
@@ -2377,14 +2391,24 @@ function dispatcherProjectDirFrom(argv: readonly string[]): string {
     : process.cwd();
 }
 
+// The dispatcher owns the --project-dir grammar before the `--` delimiter:
+// only the two-token form is accepted, because delegates that also parse
+// `--project-dir=<path>` would otherwise mutate a directory the dispatcher's
+// policy never inspected. Tokens after `--` are literal task text and are never
+// interpreted here; resolveAction() pins the dispatcher's own project
+// directory ahead of that delimiter so no delegate can route on the literal.
 function projectDirFlag(argv: readonly string[]): {
   value?: string;
   error?: string;
 } {
   let value: string | undefined;
   for (let index = 0; index < argv.length; index++) {
-    if (argv[index] === "--") break;
-    if (argv[index] !== "--project-dir") continue;
+    const token = argv[index];
+    if (token === "--") break;
+    if (token.startsWith("--project-dir=")) {
+      return { error: "--project-dir takes a separate path value; use --project-dir <path>" };
+    }
+    if (token !== "--project-dir") continue;
     const candidate = argv[++index];
     if (!candidate || candidate.startsWith("--")) {
       return { error: "--project-dir requires a path value" };
@@ -2679,23 +2703,31 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     : `${route.id} requires an installed project harness or recognized project directory; run aidlc config`;
 }
 
+// A project inside a machine root is never acceptable. The reverse (a machine
+// root inside the project) matters only for the project-required engine and
+// unit routes, whose tools write `<project>/aidlc` and the harness directory
+// directly. Optional-project public commands (doctor, config) are commonly
+// run from `$HOME`, which contains the default install and command roots;
+// their writes go through the transaction engine, which refuses machine-owned
+// targets in a project-rooted plan, so the reverse check would only refuse
+// read-only diagnostics there.
 async function projectMachineOverlapError(
   route: Route,
   argv: readonly string[],
 ): Promise<string | null> {
   const scope = effectiveMutationScope(route, argv);
-  if (
-    route.projectRequirement !== "required" &&
-    scope !== "project" &&
-    scope !== "project-and-machine"
-  ) {
+  const required = route.projectRequirement === "required";
+  if (!required && scope !== "project" && scope !== "project-and-machine") {
     return null;
   }
   const projectDir = dispatcherProjectDirFrom(argv);
-  const { projectPathOverlapsMachineRoots } = await import(
+  const { isMachineOwnedPath, projectPathOverlapsMachineRoots } = await import(
     "./aidlc-install-paths.ts"
   );
-  return projectPathOverlapsMachineRoots(projectDir)
+  const overlaps = required
+    ? projectPathOverlapsMachineRoots(projectDir)
+    : isMachineOwnedPath(projectDir);
+  return overlaps
     ? `${route.id} cannot use an AI-DLC machine install or command directory as its project directory`
     : null;
 }

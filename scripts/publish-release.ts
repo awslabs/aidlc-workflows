@@ -76,17 +76,19 @@ function apiUrl(base: string, path: string): string {
   return new URL(path.replace(/^\/+/, ""), `${base.replace(/\/+$/, "")}/`).toString();
 }
 
-function requestHeaders(
-  token: string,
-  extra: Record<string, string> = {},
-): Headers {
-  return new Headers({
+// Per-request headers replace the defaults by name. Header names are
+// case-insensitive, so merging them as object keys would keep both `Accept`
+// and `accept` and the Headers constructor would append the values; GitHub
+// then answers an asset download with JSON metadata instead of bytes.
+function requestHeaders(token: string, extra?: HeadersInit): Headers {
+  const headers = new Headers({
     Accept: "application/vnd.github+json",
     Authorization: `Bearer ${token}`,
     "User-Agent": "aidlc-release-publisher",
     "X-GitHub-Api-Version": API_VERSION,
-    ...extra,
   });
+  for (const [name, value] of new Headers(extra)) headers.set(name, value);
+  return headers;
 }
 
 async function responseFailure(response: Response): Promise<Error> {
@@ -112,10 +114,7 @@ async function request(
 ): Promise<Response> {
   return await fetch(url, {
     ...init,
-    headers: requestHeaders(
-      token,
-      Object.fromEntries(new Headers(init.headers).entries()),
-    ),
+    headers: requestHeaders(token, init.headers),
     redirect: init.redirect ?? "follow",
     signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });

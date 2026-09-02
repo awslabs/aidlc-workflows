@@ -101,6 +101,11 @@ function withinRoot(path: string, root: string): boolean {
   return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 }
 
+// A project-and-machine route commits its project and machine changes as
+// separate plans, each rooted in the tree it owns. A plan rooted in the project
+// therefore never gets machine authority: when an install or command root sits
+// inside the project (for example AIDLC_INSTALL_ROOT=<project>/aidlc), the
+// project plan cannot reach it.
 function enforceRouteMutationPlan(
   root: string,
   operations: readonly TransactionOperation[],
@@ -115,6 +120,18 @@ function enforceRouteMutationPlan(
   const projectValue = process.env.AIDLC_ROUTE_PROJECT_DIR;
   const projectRoot = projectValue ? canonicalRoot(projectValue) : null;
   const homeRoot = process.env.HOME ? canonicalRoot(process.env.HOME) : null;
+  let machineRooted = false;
+  if (scope === "project-and-machine") {
+    const canonical = canonicalRoot(root);
+    machineRooted = isMachineOwnedPath(canonical);
+    if (!machineRooted) {
+      try {
+        machineRooted = canonical === canonicalRoot(machineTransactionRoot());
+      } catch {
+        machineRooted = false;
+      }
+    }
+  }
   for (const operation of operations) {
     const rel = normalizedRelative(operation.path);
     const target = canonicalRoot(targetPath(root, rel));
@@ -127,7 +144,7 @@ function enforceRouteMutationPlan(
     const permitted =
       (scope === "project" && isProject) ||
       (scope === "machine" && isMachine) ||
-      (scope === "project-and-machine" && (isProject || isMachine)) ||
+      (scope === "project-and-machine" && (machineRooted ? isMachine : isProject)) ||
       (scope === "user-home" && isUserHome);
     if (!permitted) {
       const rootClass = isMachine
@@ -137,8 +154,11 @@ function enforceRouteMutationPlan(
         : isUserHome
         ? "user-home"
         : "outside";
+      const plan = scope === "project-and-machine"
+        ? ` from a ${machineRooted ? "machine" : "project"}-rooted plan`
+        : "";
       throw new Error(
-        `route ${route} with ${scope} mutation scope cannot mutate ${rootClass} path ${target}`,
+        `route ${route} with ${scope} mutation scope cannot mutate ${rootClass} path ${target}${plan}`,
       );
     }
   }

@@ -2,15 +2,14 @@
 
 Status as of 2026-09-01.
 
-- The current v2 source version is **2.7.0** on `main`. Version numbers
-  describe the committed framework tree, not GitHub Releases.
+- The current v2 version is **2.6.124** (`origin/main` tip `82d2e304`).
+  Version numbers describe the committed framework tree, not GitHub Releases.
 - AI-DLC Workflows 2.0 is **GA** on the default `main` branch. Use `main` for
   new installations and upgrades. The earlier implementation is maintained
   separately on `v1`.
-- GitHub marks `v2.7.0` as Latest, but that roll-up release has no native
-  assets. The native distribution implementation remains under review in #756;
-  publication remains gated on a separate release-prep change plus the
-  protected release environment and tag controls tracked by #635.
+- Release publication is not yet aligned with `main`: GitHub still marks
+  `v1.0.1` as Latest, tracked by #635. The native distribution implementation
+  for #722 remains under review in #756; no public v2 native release exists yet.
 - PR validation now includes the deterministic integration and end-to-end tiers
   in addition to smoke, unit, packaging, typecheck and lint (#791).
 
@@ -111,7 +110,6 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 | 2.6.107 | Team-owned Units and parallel Construction across teams | 1, 3 | #879 |
 | 2.6.114 | No-DAG per-Unit review continuity | 1, 4 | #947 |
 | 2.6.121 - 2.6.124 | Immutable reviewer evidence, Git-independent source binding and portable workflow state paths | 4, 6 | #888, #904, #962 |
-| 2.7.0 | Consolidated 2.6.x GA baseline on `main` | 1-7 | #992 |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -217,10 +215,9 @@ but do not yet have committed release versions.
 - The GA implementation and its active development line now live on `main`.
   The earlier implementation remains on `v1`.
 - [#722](https://github.com/awslabs/aidlc-workflows/issues/722) covers binary
-  packaging, installers, release automation, rollback and post-install setup.
-  Its milestones 1-3 implementation remains under review in
-  [#756](https://github.com/awslabs/aidlc-workflows/pull/756), with release
-  metadata and final evidence owned by a separate release-prep change. The earlier Bun
+  packaging, installers, release automation, rollback and post-install setup;
+  its milestones 1-3 implementation is under review in
+  [#756](https://github.com/awslabs/aidlc-workflows/pull/756). The earlier Bun
   dependency tracker [#399](https://github.com/awslabs/aidlc-workflows/issues/399)
   is closed as superseded by #722.
 - [#636](https://github.com/awslabs/aidlc-workflows/issues/636) tracks a
@@ -228,8 +225,8 @@ but do not yet have committed release versions.
   [#535](https://github.com/awslabs/aidlc-workflows/pull/535) closed without
   merging.
 - [#635](https://github.com/awslabs/aidlc-workflows/issues/635) tracks the
-  completion of the public native release after GitHub Latest moved from
-  `v1.0.1` to the assetless `v2.7.0` roll-up.
+  mismatch between the v2 GA `main` branch and GitHub's Latest release still
+  pointing at `v1.0.1`.
 
 ### Harness expansion and parity
 

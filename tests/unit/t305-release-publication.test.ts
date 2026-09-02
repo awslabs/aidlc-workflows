@@ -237,6 +237,17 @@ function serveMock(options: MockOptions = {}): {
         if (index < 0) return json({ message: "not found" }, 404);
         const asset = state.assets[index];
         if (method === "GET") {
+          // GitHub serves asset bytes only for an exact
+          // `Accept: application/octet-stream`; any other value (including a
+          // list that merely contains it) returns the asset's JSON metadata.
+          if (request.headers.get("accept") !== "application/octet-stream") {
+            return json({
+              id: asset.id,
+              name: asset.name,
+              size: asset.bytes.byteLength,
+              state: "uploaded",
+            });
+          }
           if (state.draft && options.mutateDuringVerification) {
             draftDownloadCount++;
             if (draftDownloadCount === 3) mutateOnNextReleaseRead = true;

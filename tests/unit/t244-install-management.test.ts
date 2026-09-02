@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -94,8 +95,10 @@ afterAll(() => {
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
 });
 
+// Production emits canonical project and machine paths, so fixtures live under
+// the canonical temp root (macOS aliases /var to /private/var).
 function temp(prefix: string): string {
-  const path = mkdtempSync(join(tmpdir(), prefix));
+  const path = mkdtempSync(join(realpathSync(tmpdir()), prefix));
   temporary.push(path);
   return path;
 }
