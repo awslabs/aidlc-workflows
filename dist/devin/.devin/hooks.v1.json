@@ -126,7 +126,7 @@
       ]
     },
     {
-      "matcher": "^(run_subagent|read_subagent)$",
+      "matcher": "^run_subagent$",
       "hooks": [
         {
           "type": "command",

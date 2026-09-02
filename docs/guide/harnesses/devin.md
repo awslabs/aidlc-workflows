@@ -119,11 +119,16 @@ because Devin stopped deduplicating same-named skills in CLI v3000.2.17).
 - **Two events do not exist on Devin. Neither weakens enforcement**, and it is
   worth being precise about what each actually costs:
   - **No `SubagentStop`.** `SUBAGENT_COMPLETED` is instead emitted from
-    `PostToolUse` on `run_subagent`/`read_subagent` (live-verified: the event lands
+    `PostToolUse` on `run_subagent` (live-verified: the event lands
     in the audit shard, attributed to the profile that ran). That covers
     **foreground** delegates, where the parent waits and the tool result *is* the
     completion; a **backgrounded** delegate is not individually audited, because
-    its tool call has already returned. It does **not** weaken reviewer read-scope,
+    its tool call has already returned. `read_subagent` is deliberately *not*
+    wired: it is a poll an agent may repeat on the same delegate, and the audit
+    ledger is append-only with no per-delegate key, so each read would append a
+    duplicate completion attributed to `unknown` (a poll payload carries no agent
+    type). Auditing a backgrounded delegate needs a real completion signal, which
+    Devin does not currently provide. It does **not** weaken reviewer read-scope,
     which identifies a reviewer from the on-disk dispatch record
     (`<record>/.aidlc-reviewer-dispatch.json`), not from a subagent event - so the
     guard behaves identically here. Cursor also ships without a working subagent

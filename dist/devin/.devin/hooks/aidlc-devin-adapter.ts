@@ -183,6 +183,21 @@ if (!target) {
   process.exit(0);
 }
 
+// --- log-subagent fires for a DELEGATION, never for a read -------------------
+// aidlc-log-subagent.ts appends SUBAGENT_COMPLETED unconditionally: no dedupe, no
+// per-delegate key. So the number of times this arm runs IS the number of events in
+// an append-only ledger. `read_subagent` is a poll -- an agent may read one
+// backgrounded delegate repeatedly, and its payload carries no agent_type, so each
+// read would log a duplicate completion attributed to "unknown".
+//
+// The matcher in emit.ts is already `^run_subagent$`; this is the second line of
+// defence, because a widened matcher would corrupt audit history silently rather
+// than fail a test. Note mapToolName has already rewritten payload.tool_name to
+// "Task", so the ORIGINAL Devin name is the only thing that can be checked here.
+if (subcommand === "log-subagent" && devinTool !== "run_subagent") {
+  process.exit(0);
+}
+
 // --- deny the native picker while a workflow is running ----------------------
 // A picker answer arrives as a TOOL RESULT, not a submitted message, so it never
 // fires UserPromptSubmit and never mints HUMAN_TURN. Left available, the model

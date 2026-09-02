@@ -110,6 +110,73 @@
     "cwd": "/tmp/project"
   },
 
+  "preToolUseEdit": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "edit",
+    "tool_input": { "path": "src/app.ts", "old_str": "a", "new_str": "b" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "postToolUseEdit": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "edit",
+    "tool_input": { "path": "src/app.ts", "old_str": "a", "new_str": "b" },
+    "tool_response": { "success": true, "output": "edited" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseNotebookRead": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "notebook_read",
+    "tool_input": { "path": "analysis.ipynb" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseNotebookEdit": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "notebook_edit",
+    "tool_input": { "path": "analysis.ipynb", "new_source": "print(1)" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "postToolUseNotebookEdit": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "notebook_edit",
+    "tool_input": { "path": "analysis.ipynb", "new_source": "print(1)" },
+    "tool_response": { "success": true, "output": "cell replaced" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseGlob": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "glob",
+    "tool_input": { "pattern": "**/*.ts", "path": "src/" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "preToolUseExitPlanMode": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exit_plan_mode",
+    "tool_input": { "plan": "Implement the unit, then run the sensors." },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
+  "postToolUseReadSubagent": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "read_subagent",
+    "tool_input": { "subagent_id": "sa-0001" },
+    "tool_response": { "summary": "unit implemented" },
+    "session_id": "probe-session-0001",
+    "cwd": "/tmp/project"
+  },
+
   "postCompaction": {
     "hook_event_name": "PostCompaction",
     "session_id": "probe-session-0001",

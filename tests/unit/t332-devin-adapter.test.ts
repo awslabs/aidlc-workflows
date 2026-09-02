@@ -113,6 +113,31 @@ describe("t332 devin adapter — on-the-wire contracts", () => {
     for (const event of Object.keys(wiring)) {
       expect(covered.has(event), `corpus covers wired event ${event}`).toBe(true);
     }
+
+    // ...and every TOOL NAME the matchers select. Event coverage alone is too weak:
+    // it passed while `read_subagent` sat in the log-subagent matcher with no payload
+    // in the corpus, so nothing ever exercised that arm -- and because
+    // aidlc-log-subagent.ts appends SUBAGENT_COMPLETED with no dedupe, the untested
+    // arm was writing duplicate "unknown" events into an append-only ledger. A wired
+    // tool with no payload is an arm no test can see.
+    const coveredTools = new Set(
+      Object.values(PAYLOADS)
+        .filter((p): p is Record<string, unknown> => typeof p === "object" && p !== null)
+        .map((p) => p.tool_name)
+        .filter((n): n is string => typeof n === "string"),
+    );
+    for (const [event, groups] of Object.entries(wiring)) {
+      for (const group of groups as Array<{ matcher?: string }>) {
+        const matcher = group.matcher ?? "";
+        if (matcher === "") continue; // matcher-free arms fire for every tool
+        for (const tool of matcher.replace(/[\^$()]/g, "").split("|").filter(Boolean)) {
+          expect(
+            coveredTools.has(tool),
+            `corpus has a payload for ${tool}, wired on ${event}`,
+          ).toBe(true);
+        }
+      }
+    }
   });
 
   test("2: TOOL_MAP translates every Devin name the core hooks compare internally", () => {
@@ -243,6 +268,50 @@ describe("t332 devin adapter — on-the-wire contracts", () => {
       );
       expect(shards).toContain("SUBAGENT_COMPLETED");
       expect(shards).toContain("aidlc-developer-agent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("11: a read_subagent poll does NOT log a second completion", () => {
+    // aidlc-log-subagent.ts has no dedupe: it appends SUBAGENT_COMPLETED on every
+    // invocation where Status is Running. read_subagent is a POLL on a backgrounded
+    // delegate -- an agent may issue it repeatedly, and the payload has no agent_type
+    // -- so letting it through logged one extra "unknown" completion per read. This
+    // pins BOTH lines of defence: emit.ts matches only ^run_subagent$, and the
+    // adapter re-checks the original Devin tool name before dispatching.
+    const dir = seedProject();
+    try {
+      seedWorkflow(dir, "Running");
+      const auditDir = join(
+        dir, "aidlc", "spaces", "default", "intents", "t332-probe", "audit",
+      );
+      const countEvents = (): number => {
+        const fs = require("node:fs") as typeof import("node:fs");
+        if (!fs.existsSync(auditDir)) return 0;
+        return fs
+          .readdirSync(auditDir)
+          .map((f: string) => readFileSync(join(auditDir, f), "utf-8"))
+          .join("")
+          .split("SUBAGENT_COMPLETED").length - 1;
+      };
+
+      // One real delegation, then two polls of the same delegate.
+      expect(fire(dir, "log-subagent", PAYLOADS.postToolUseRunSubagent).status).toBe(0);
+      const afterDelegation = countEvents();
+      expect(afterDelegation).toBe(1);
+
+      expect(fire(dir, "log-subagent", PAYLOADS.postToolUseReadSubagent).status).toBe(0);
+      expect(fire(dir, "log-subagent", PAYLOADS.postToolUseReadSubagent).status).toBe(0);
+
+      // Still exactly one, and no "unknown" attribution anywhere in the ledger.
+      expect(countEvents()).toBe(1);
+      const fs = require("node:fs") as typeof import("node:fs");
+      const ledger = fs
+        .readdirSync(auditDir)
+        .map((f: string) => readFileSync(join(auditDir, f), "utf-8"))
+        .join("");
+      expect(ledger).not.toContain("**Agent Type**: unknown");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

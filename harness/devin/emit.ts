@@ -126,9 +126,19 @@ function hooksConfig(): Record<string, HookGroup[]> {
       // harness/codex/emit.ts.
       { matcher: "^todo_write$", hooks: [cmd("sync-workflow-state")] },
       { matcher: "^exec$", hooks: [cmd("rebuild-stage-graph")] },
-      // No SubagentStop on Devin; PostToolUse on the delegation tools is the
-      // nearest seam. Foreground delegates are covered, backgrounded ones are not.
-      { matcher: "^(run_subagent|read_subagent)$", hooks: [cmd("log-subagent")] },
+      // No SubagentStop on Devin; PostToolUse on run_subagent is the nearest seam.
+      // Foreground delegates are covered, backgrounded ones are not.
+      //
+      // read_subagent MUST NOT be in this matcher. aidlc-log-subagent.ts appends
+      // SUBAGENT_COMPLETED unconditionally -- there is no dedupe and no per-delegate
+      // key -- so every additional invocation is another event in an append-only
+      // ledger. read_subagent is also a POLL: an agent may read one backgrounded
+      // delegate any number of times, and the payload carries no agent_type, so each
+      // read logged a second completion attributed to "unknown". Measured before this
+      // was narrowed: one delegate produced THREE SUBAGENT_COMPLETED events (one
+      // correct, two "unknown"). Auditing a backgrounded delegate needs a real
+      // completion signal, not a read.
+      { matcher: "^run_subagent$", hooks: [cmd("log-subagent")] },
     ],
     // PreCompact has no Devin equivalent; PostCompaction is the nearest seam and
     // fires after the fact.
