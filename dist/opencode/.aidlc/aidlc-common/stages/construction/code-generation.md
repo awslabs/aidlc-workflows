@@ -35,6 +35,14 @@ consumes:
     required: true
   - artifact: requirements
     required: true
+  - artifact: frontend-components
+    required: false
+  - artifact: mockups
+    required: false
+  - artifact: interaction-spec
+    required: false
+  - artifact: wireframes
+    required: false
 requires_stage:
   - units-generation
   - functional-design
@@ -70,6 +78,7 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 - Application code goes to workspace root, NEVER to the record dir
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
+- UI code must follow the approved layout. When `frontend-components.md`, the refined mockups (`mockups.md`/`interaction-spec.md`), or the rough `wireframes.md` exist, preserve the screen composition they specify — including the top-to-bottom order of sections — rather than the order that happens to be convenient in code. A departure from the approved layout is allowed only when an upstream design artifact records it as a deliberate change.
 - Before review, write `source-manifest.json` listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
@@ -88,6 +97,7 @@ Read all design artifacts for the current unit:
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md` (if exists)
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
+- For a UI unit, the approved layout: `frontend-components.md` in this unit's functional-design dir, the refined mockups from `<record>/inception/refined-mockups/` (`mockups.md`, `interaction-spec.md`), and the rough `wireframes.md` from `<record>/ideation/rough-mockups/` (whichever exist). These are optional and absent for non-UI units or scopes that skip the mockup stages.
 
 Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
 `express` scope skip Units Generation by design. When those inputs are absent,

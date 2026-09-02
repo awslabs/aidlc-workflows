@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-09-02
+
+Close the design-intent contract so an approved layout reaches code generation by declaration rather than by an agent happening to read an undeclared file. Rough/refined mockups previously had no downstream consumer: `functional-design` re-authored the layout without citing the wireframes, and `code-generation` had no declared UI-design input — so a section order that lived only in an ASCII diagram could silently invert with nothing flagging it. `requirements-analysis`, `functional-design`, and `code-generation` now declare the mockup artifacts (`wireframes`, `user-flow`, `mockups`, `interaction-spec`) and `frontend-components` as optional inputs, read them when present, and are instructed to preserve the approved screen composition — including top-to-bottom section order — or record a deviation. All additions are `required: false`, so non-UI initiatives and scopes that skip the mockup stages are unaffected. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #999.
+
+* `functional-design`'s `frontend-components.md` must now cite the mockup it derives a UI layout from; on UI units the `upstream-coverage` sensor (advisory) will flag a mockup artifact that exists on disk but is never referenced.
+* `code-generation` now lists `frontend-components`, `mockups`, `interaction-spec`, and `wireframes` as consumed inputs and carries a Critical Rule to follow the approved layout order.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.
