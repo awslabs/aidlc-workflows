@@ -767,27 +767,32 @@ describe("t230 dispatcher route parity", () => {
       mkdirSync(join(symlinkProject, ".git"));
       const linkedInstall = join(symlinkProject, "aidlc");
       symlinkSync(externalMachine, linkedInstall, "dir");
-      const symlinkResult = viaDispatcher(
-        [
-          "engine",
-          "intent",
-          "create",
-          "--scope",
-          "poc",
-          "--project-dir",
-          symlinkProject,
-        ],
-        REPO_ROOT,
-        {
-          AIDLC_INSTALL_ROOT: linkedInstall,
-          AIDLC_BIN_DIR: join(root, "symlink-project-bin"),
-        },
-      );
-      expect(symlinkResult.exitCode).toBe(1);
-      expect(`${symlinkResult.stdout}${symlinkResult.stderr}`).toContain(
-        "cannot use an AI-DLC machine install or command directory as its project directory",
-      );
-      expect(existsSync(join(externalMachine, "spaces"))).toBe(false);
+      // The root may be configured through the project's symlink or by its
+      // real path; either way the engine's writes under <project>/aidlc would
+      // land in the machine tree, so both spellings must be refused.
+      for (const installRoot of [linkedInstall, externalMachine]) {
+        const symlinkResult = viaDispatcher(
+          [
+            "engine",
+            "intent",
+            "create",
+            "--scope",
+            "poc",
+            "--project-dir",
+            symlinkProject,
+          ],
+          REPO_ROOT,
+          {
+            AIDLC_INSTALL_ROOT: installRoot,
+            AIDLC_BIN_DIR: join(root, "symlink-project-bin"),
+          },
+        );
+        expect(symlinkResult.exitCode, installRoot).toBe(1);
+        expect(`${symlinkResult.stdout}${symlinkResult.stderr}`).toContain(
+          "cannot use an AI-DLC machine install or command directory as its project directory",
+        );
+        expect(existsSync(join(externalMachine, "spaces"))).toBe(false);
+      }
     }
   });
 

@@ -584,6 +584,7 @@ export async function publishRelease(
   );
   const assetUploadUrl = uploadEndpoint(apiBaseUrl, release.upload_url);
   let verified: ReleaseRecord | null = null;
+  const uploaded: ReleaseAsset[] = [];
   let publishAttempted = false;
 
   const completePublished = async (
@@ -657,9 +658,12 @@ export async function publishRelease(
 
   // Deletes the staging draft after a failure this run caused (API errors,
   // network faults, malformed responses). Anything that indicates another
-  // principal touched the release is retained instead: a draft whose content
-  // no longer matches what was uploaded, a release that is no longer our
-  // draft, or any state reached after publication was attempted.
+  // principal touched the release is retained instead: a draft whose identity
+  // or asset set no longer matches what this run created and uploaded, a
+  // release that is no longer our draft, or any state reached after
+  // publication was attempted. The comparison uses the last snapshot this run
+  // owns: the verified release once verification passed, otherwise the assets
+  // it uploaded so far (every asset replacement on GitHub changes the id).
   const cleanupOrRetain = async (error: unknown): Promise<void> => {
     const reason = error instanceof Error ? error.message : String(error);
     const retained = (why: string) =>
@@ -688,8 +692,26 @@ export async function publishRelease(
       );
       return;
     }
-    if (!observed.draft || observed.immutable || observed.tag_name !== options.stagingTag) {
-      retained("it is no longer this run's staging draft");
+    try {
+      assertReleaseIdentity(
+        observed,
+        options.stagingTag,
+        options.targetCommitish,
+        notes,
+        true,
+        false,
+      );
+      assertSameAssets(
+        verified ?? { ...release, assets: uploaded },
+        observed,
+        "before the failed run could clean up",
+      );
+    } catch (mismatch) {
+      retained(
+        `it no longer matches what this run created (${
+          mismatch instanceof Error ? mismatch.message : String(mismatch)
+        })`,
+      );
       return;
     }
     const deleted = await request(releaseUrl, options.token, { method: "DELETE" });
@@ -711,12 +733,12 @@ export async function publishRelease(
       false,
     );
     for (const asset of local) {
-      await uploadAsset(
+      uploaded.push(await uploadAsset(
         assetUploadUrl,
         options.token,
         asset.name,
         Bun.file(asset.path),
-      );
+      ));
     }
 
     // Verify the exact remote state: identity, inventory, and every byte.

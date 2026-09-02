@@ -422,9 +422,9 @@ type PinRegistry = {
   // Canonical projects whose equivalent keys disagree on the version.
   conflicted: Set<string>;
   // Raw entries that were not folded into `pins` (invalid, unresolvable, or
-  // conflicting for another project). A rewrite carries them forward verbatim
-  // so one project's pin cannot silently erase another project's record.
-  preserved: Record<string, string>;
+  // conflicting for another project), kept as parsed so a rewrite serializes
+  // them unchanged and one project's pin cannot erase another project's record.
+  preserved: Record<string, unknown>;
 };
 
 function readPinRegistry(reconcileProject?: string): PinRegistry {
@@ -457,38 +457,49 @@ function readPinRegistry(reconcileProject?: string): PinRegistry {
   };
   const { pins, warnings, conflicted, preserved } = registry;
   const canonicalOf: Record<string, string> = {};
-  for (const [project, version] of Object.entries(value as Record<string, unknown>)) {
-    if (!isAbsolute(project) || typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
+  for (const [project, rawVersion] of Object.entries(value as Record<string, unknown>)) {
+    // Canonicalize before validating the value: the project being re-pinned or
+    // unpinned replaces every equivalent key it owns, malformed ones included,
+    // so none of its existing entries are adopted or preserved.
+    let canonical: string | null = null;
+    if (isAbsolute(project)) {
+      try {
+        canonical = canonicalProjectPath(project);
+      } catch (error) {
+        warnings.push(
+          `${path} cannot resolve pin entry for ${project}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        preserved[project] = rawVersion;
+        continue;
+      }
+      if (canonical === reconcileProject) continue;
+    }
+    if (
+      canonical === null ||
+      typeof rawVersion !== "string" ||
+      !/^\d+\.\d+\.\d+$/.test(rawVersion)
+    ) {
       warnings.push(`${path} contains an invalid pin entry for ${project}`);
-      if (typeof version === "string") preserved[project] = version;
+      preserved[project] = rawVersion;
       continue;
     }
-    let canonical: string;
-    try {
-      canonical = canonicalProjectPath(project);
-    } catch (error) {
-      warnings.push(
-        `${path} cannot resolve pin entry for ${project}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      preserved[project] = version;
-      continue;
-    }
+    const version = rawVersion;
     canonicalOf[project] = canonical;
     if (conflicted.has(canonical)) {
       preserved[project] = version;
       continue;
     }
     const existing = pins[canonical];
-    if (existing === undefined || existing === version || canonical === reconcileProject) {
+    if (existing === undefined || existing === version) {
       pins[canonical] = version;
       continue;
     }
     delete pins[canonical];
     conflicted.add(canonical);
     for (const [raw, canonicalRaw] of Object.entries(canonicalOf)) {
-      if (canonicalRaw === canonical) preserved[raw] = (value as Record<string, string>)[raw];
+      if (canonicalRaw === canonical) preserved[raw] = (value as Record<string, unknown>)[raw];
     }
     warnings.push(
       `${path} contains conflicting equivalent pin entries for ${canonical}`,
@@ -537,16 +548,10 @@ function commitProjectPin(projectDir: string, version: string | null): void {
   const registryPath = join(installRoot(), "pins.json");
   const registry = readPinRegistry(project);
   if (registry.unreadable) commandError(registry.warnings.join("; "), EXIT.integrity);
-  // Other projects' unusable entries ride along verbatim; only this project's
-  // equivalent keys collapse to the canonical one.
-  const pins: Record<string, string> = { ...registry.preserved, ...registry.pins };
-  for (const raw of Object.keys(pins)) {
-    try {
-      if (canonicalProjectPath(raw) === project) delete pins[raw];
-    } catch {
-      // Unresolvable keys belong to other projects and stay preserved.
-    }
-  }
+  // Other projects' entries ride along unchanged (usable ones canonicalized,
+  // unusable ones verbatim); this project's equivalent keys were skipped on
+  // read and collapse to the single canonical registration below.
+  const pins: Record<string, unknown> = { ...registry.preserved, ...registry.pins };
   if (version !== null) pins[project] = version;
 
   const projectOperations = version === null

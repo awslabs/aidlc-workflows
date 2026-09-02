@@ -91,9 +91,10 @@ export function isMachineOwnedPath(path: string): boolean {
 }
 
 // A project overlaps the machine roots when either contains the other. The
-// configured (lexical) spellings are checked alongside the canonical ones: a
-// root configured as `<project>/aidlc` that is itself a symlink elsewhere still
-// makes the engine's writes under `<project>/aidlc` land in the machine tree.
+// configured (lexical) spellings are checked alongside the canonical ones, and
+// the engine's workspace `<project>/aidlc` is resolved as well: whether the
+// root is configured as that symlink or as the real tree it points to, writes
+// under `<project>/aidlc` would land in the machine tree (t230 covers both).
 export function projectPathOverlapsMachineRoots(projectDir: string): boolean {
   const lexical = [lexicalInstallRoot(), lexicalBinRoot()];
   const roots = new Set([...lexical, ...lexical.map(canonicalPolicyPath)]);

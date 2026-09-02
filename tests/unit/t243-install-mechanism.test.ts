@@ -2860,8 +2860,18 @@ describe("t243 release lifecycle", () => {
       else process.env.AIDLC_BIN_DIR = savedBin;
     }
 
-    // Pinning an unrelated project succeeds and carries the conflicting
-    // entries forward verbatim instead of erasing the evidence.
+    // Pinning an unrelated project succeeds and carries the conflicting and
+    // malformed entries forward verbatim (whatever their JSON type) instead of
+    // erasing the evidence.
+    const malformed = {
+      relative: "not-semver",
+      [join(temp("aidlc-t243-pin-scope-numeric-"), "project")]: 42,
+      [join(temp("aidlc-t243-pin-scope-object-"), "project")]: { pinned: true },
+    };
+    writeFileSync(registryPath, `${JSON.stringify({
+      ...JSON.parse(readFileSync(registryPath, "utf-8")),
+      ...malformed,
+    }, null, 2)}\n`);
     const pinnedFresh = run(INIT, [
       "config", "--pin", AIDLC_VERSION, "--offline", "--project-dir", fresh,
     ], fresh, env);
@@ -2870,11 +2880,36 @@ describe("t243 release lifecycle", () => {
       [project]: AIDLC_VERSION,
       [fresh]: AIDLC_VERSION,
       ...conflict,
+      ...malformed,
     });
     const list = run(LIFECYCLE, ["versions", "list", "--json"], project, env);
     expect((JSON.parse(list.stdout) as { data: { pinWarnings: string[] } }).data.pinWarnings)
-      .toEqual([expect.stringContaining("conflicting equivalent pin entries")]);
+      .toEqual([
+        expect.stringContaining("conflicting equivalent pin entries"),
+        expect.stringContaining("invalid pin entry for relative"),
+        expect.stringContaining("invalid pin entry for"),
+        expect.stringContaining("invalid pin entry for"),
+      ]);
     expect(run(LIFECYCLE, ["versions", "prune", "--yes"], project, env).status).toBe(4);
+
+    // Re-pinning a project replaces every equivalent key it owns, including a
+    // malformed entry recorded under one of its aliases.
+    const freshAlias = join(temp("aidlc-t243-pin-scope-fresh-alias-"), "fresh");
+    symlinkSync(fresh, freshAlias, process.platform === "win32" ? "junction" : "dir");
+    writeFileSync(registryPath, `${JSON.stringify({
+      ...JSON.parse(readFileSync(registryPath, "utf-8")),
+      [freshAlias]: "garbage",
+    }, null, 2)}\n`);
+    const repinned = run(INIT, [
+      "config", "--pin", AIDLC_VERSION, "--offline", "--project-dir", freshAlias,
+    ], fresh, env);
+    expect(repinned.status, repinned.stdout + repinned.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(registryPath, "utf-8"))).toEqual({
+      [project]: AIDLC_VERSION,
+      [fresh]: AIDLC_VERSION,
+      ...conflict,
+      ...malformed,
+    });
   }, 120_000);
 
   test("launcher ownership does not depend on the spelling of the machine roots", () => {

@@ -17,6 +17,7 @@ type MockOptions = {
   finalTagPreexists?: boolean;
   leftoverStagingDrafts?: string[];
   failFinalTagLookupAfterUpload?: boolean;
+  replaceAssetThenFailTagLookup?: boolean;
   malformedPublishResponse?: boolean;
   mutateDuringVerification?: boolean;
   mutateNotesAfterVerification?: boolean;
@@ -39,6 +40,7 @@ type MockState = {
   immutable: boolean;
   assets: MockAsset[];
   raceInjected: boolean;
+  assetReplaced: boolean;
   notesMutationInjected: boolean;
   verificationMutationInjected: boolean;
 };
@@ -93,6 +95,7 @@ function serveMock(options: MockOptions = {}): {
     immutable: false,
     assets: [],
     raceInjected: false,
+    assetReplaced: false,
     notesMutationInjected: false,
     verificationMutationInjected: false,
   };
@@ -232,6 +235,17 @@ function serveMock(options: MockOptions = {}): {
           finalTagLookups++;
           // The first lookup runs before the draft exists; the second is the
           // pre-publication recheck after every asset was uploaded.
+          if (finalTagLookups === 2 && options.replaceAssetThenFailTagLookup) {
+            // A writer deletes and re-uploads one asset (same name and size,
+            // new id) right before the API fails on this run.
+            const [first] = state.assets;
+            if (first) {
+              state.assets[0] = { ...first, id: nextAssetId++ };
+              state.assetReplaced = true;
+              revision++;
+            }
+            return json({ message: "upstream unavailable" }, 502);
+          }
           if (options.failFinalTagLookupAfterUpload && finalTagLookups === 2) {
             return json({ message: "upstream unavailable" }, 502);
           }
@@ -471,6 +485,17 @@ describe("t305 verified immutable release publication", () => {
 
     expect(state.assets.length).toBe(3);
     expect(state.deleted).toBe(true);
+    expect(state.draft).toBe(true);
+    expect(state.immutable).toBe(false);
+    expect(state.finalTagTarget).toBeNull();
+  });
+
+  test("retains the draft when an asset was replaced before an ordinary API failure", async () => {
+    const { baseUrl, state } = serveMock({ replaceAssetThenFailTagLookup: true });
+    await expect(run(baseUrl)).rejects.toThrow("GitHub API 502");
+
+    expect(state.assetReplaced).toBe(true);
+    expect(state.deleted).toBe(false);
     expect(state.draft).toBe(true);
     expect(state.immutable).toBe(false);
     expect(state.finalTagTarget).toBeNull();
