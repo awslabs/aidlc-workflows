@@ -145,11 +145,11 @@ export interface PlanApprovalQuestionEvidence {
   promptSha256: string;
   plannedSourceSha256: string;
   /**
-   * Source drift this evidence accepted under Change Control `relaxed`, for
-   * the caller that records the checkpoint to write as CHANGE_ACCEPTED rows.
-   * Empty under `strict` (drift throws) and when nothing moved.
+   * The human lines for source drift this evidence accepted and recorded under
+   * Change Control `relaxed` (the CHANGE_ACCEPTED row is written before any
+   * re-baseline). Empty under `strict` (drift throws) and when nothing moved.
    */
-  acceptedChanges: AcceptedChange[];
+  changeNotices: string[];
 }
 
 // --- Source drift at the Plan Approval checkpoint --------------------------
@@ -1975,14 +1975,16 @@ export function codeGenerationPlanApprovalQuestionEvidence(
   const currentSource = currentState?.fingerprint ?? null;
   let questions = artifacts.questions;
   let boundSource = plannedSource;
-  const acceptedChanges: AcceptedChange[] = [];
+  const changeNotices: string[] = [];
   if (
     plannedSource !== UNBINDABLE_FINGERPRINT &&
     (currentSource === null || currentSource !== plannedSource)
   ) {
     const judged = judgePlanSourceDrift(projectDir, authority.unit, plannedSource, currentState);
     if ("refusal" in judged) throw judged.refusal;
-    acceptedChanges.push(judged.accepted);
+    // The row is written BEFORE anything is re-baselined: a ledger that cannot
+    // take it refuses here, with the drift still visible to the next attempt.
+    changeNotices.push(...recordAcceptedChanges(projectDir, [judged.accepted]));
     // Before the challenge is minted (the decision record) the questions file
     // is still the conductor's draft, so the tag itself is re-baselined and the
     // human sees the plan against the source it will be approved on. At the
@@ -2013,7 +2015,7 @@ export function codeGenerationPlanApprovalQuestionEvidence(
       )
       .digest("hex"),
     plannedSourceSha256: boundSource,
-    acceptedChanges,
+    changeNotices,
   };
 }
 

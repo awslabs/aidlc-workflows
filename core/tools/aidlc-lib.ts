@@ -8411,7 +8411,11 @@ export function checkSummaryConfirmationEvidence(
     }
   }
 
-  return { ok: true, required: true, acceptedChanges };
+  return {
+    ok: true,
+    required: true,
+    ...(acceptedChanges.length > 0 ? { acceptedChanges } : {}),
+  };
 }
 
 // Read the FIRST `**Field**: value` line from one audit block (tolerates an
@@ -26207,7 +26211,13 @@ function changeControlLedgerAppend(
   };
   // Every caller below holds the audit lock (withAuditLock is reentrant for a
   // caller that already holds it), so the unlocked variant is the right one.
-  audit.appendAuditEntryUnlocked(event, fields, projectDir);
+  // Each event is named literally at its own emission call so the emitter
+  // registry drift guard (t48) can see both call sites.
+  if (event === "CHANGE_ACCEPTED") {
+    audit.appendAuditEntryUnlocked("CHANGE_ACCEPTED", fields, projectDir);
+  } else {
+    audit.appendAuditEntryUnlocked("CHANGE_CONTROL_SET", fields, projectDir);
+  }
 }
 
 function appendChangeControlSetRow(
@@ -26246,15 +26256,21 @@ export function acceptedChangeFields(change: AcceptedChange): Record<string, str
   };
 }
 
+// A change's identity is its Recorded/Current pair for the checkpoint, stage,
+// and unit: the plan and review pairs are content digests, so the same pair is
+// the same change however many later rows list its paths. The summary pair is
+// a receipt id and a write stamp, shared by every output of one confirmation,
+// so the output path is part of that identity.
 function acceptedChangeMatchesRow(change: AcceptedChange, block: string): boolean {
   const fields = acceptedChangeFields(change);
   return (
     auditBlockField(block, "Stage") === fields.Stage &&
     (auditBlockField(block, "Unit") ?? null) === (change.unit ?? null) &&
     auditBlockField(block, "Checkpoint") === fields.Checkpoint &&
-    auditBlockField(block, "Changed") === fields.Changed &&
     auditBlockField(block, "Recorded") === fields.Recorded &&
-    auditBlockField(block, "Current") === fields.Current
+    auditBlockField(block, "Current") === fields.Current &&
+    (change.checkpoint !== "summary-confirmation" ||
+      auditBlockField(block, "Changed") === fields.Changed)
   );
 }
 

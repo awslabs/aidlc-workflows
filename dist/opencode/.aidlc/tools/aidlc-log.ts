@@ -314,12 +314,9 @@ function handleDecision(args: string[]): void {
           "",
         )
       : null;
-  // Record the acceptance before the decision row and the challenge: the
-  // re-baseline already happened in the questions file, so the ledger must
-  // carry the change even if a later step in this command refuses.
-  const changeNotices = planEvidence
-    ? recordAcceptedChanges(pd, planEvidence.acceptedChanges)
-    : [];
+  // The evidence recorded any accepted drift (row first, re-baseline second);
+  // its human lines ride on this command's JSON.
+  const changeNotices = planEvidence ? [...planEvidence.changeNotices] : [];
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Decision: flags.decision,
@@ -855,9 +852,9 @@ function handleAnswer(args: string[]): void {
     }
 
     if (planCheckpoint) {
-      // Drift the evidence accepted is recorded before the receipt so the
-      // ledger carries it even if certification refuses a later race.
-      const changeNotices = recordAcceptedChanges(pd, planEvidence!.acceptedChanges);
+      // The evidence recorded any accepted drift before the receipt is
+      // certified; certification may accept and record a later move of its own.
+      const changeNotices = [...planEvidence!.changeNotices];
       try {
         const recorded = recordPlanApprovalReceipt(
           pd,

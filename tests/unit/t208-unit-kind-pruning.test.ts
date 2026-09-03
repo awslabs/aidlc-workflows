@@ -102,6 +102,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - **Stages to Skip**: none
 - **Depth**: Standard
 - **Test Strategy**: Standard
+- **Change Control**: strict (from scope feature)
 
 ## Stage Progress
 
