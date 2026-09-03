@@ -131,51 +131,55 @@ function hasQuestionOutput(f: string): boolean {
 
 describe("t44 stage-instruction completeness — parseStageFrontmatter (migrated from t44-stage-instruction-completeness.sh, plan 41)", () => {
   // ============================================================
-  // Tests 1-10: key output filenames appear in stage steps
+  // Tests 1-10: key declared outputs appear in stage steps. HTML-capable
+  // artifacts are named format-neutrally in prose (the backticked artifact
+  // name; t358 forbids the `.md` literal because the file may resolve to
+  // `.html`), so those pins match the name; machine artifacts such as
+  // unit-of-work.md keep their filename.
   // ============================================================
 
-  test("1: intent-capture steps mention intent-statement.md", () => {
-    expect(fileMatches(findStageFile("intent-capture"), /intent-statement\.md/)).toBe(true);
+  test("1: intent-capture steps mention the `intent-statement` artifact", () => {
+    expect(fileMatches(findStageFile("intent-capture"), /`intent-statement`/)).toBe(true);
   });
 
-  test("2: intent-capture steps mention stakeholder-map.md", () => {
-    expect(fileMatches(findStageFile("intent-capture"), /stakeholder-map\.md/)).toBe(true);
+  test("2: intent-capture steps mention the `stakeholder-map` artifact", () => {
+    expect(fileMatches(findStageFile("intent-capture"), /`stakeholder-map`/)).toBe(true);
   });
 
-  test("3: requirements-analysis steps mention requirements.md", () => {
-    expect(fileMatches(findStageFile("requirements-analysis"), /requirements\.md/)).toBe(true);
+  test("3: requirements-analysis steps mention the `requirements` artifact", () => {
+    expect(fileMatches(findStageFile("requirements-analysis"), /`requirements`/)).toBe(true);
   });
 
-  test("4: scope-definition steps mention scope-document.md", () => {
-    expect(fileMatches(findStageFile("scope-definition"), /scope-document\.md/)).toBe(true);
+  test("4: scope-definition steps mention the `scope-document` artifact", () => {
+    expect(fileMatches(findStageFile("scope-definition"), /`scope-document`/)).toBe(true);
   });
 
-  test("5: domain-design steps mention components.md", () => {
-    expect(fileMatches(findStageFile("domain-design"), /components\.md/)).toBe(true);
+  test("5: domain-design steps mention the `components` artifact", () => {
+    expect(fileMatches(findStageFile("domain-design"), /`components`/)).toBe(true);
   });
 
   test("6: units-generation steps mention unit-of-work.md", () => {
     expect(fileMatches(findStageFile("units-generation"), /unit-of-work\.md/)).toBe(true);
   });
 
-  test("7: delivery-planning steps mention bolt-plan.md", () => {
-    expect(fileMatches(findStageFile("delivery-planning"), /bolt-plan\.md/)).toBe(true);
+  test("7: delivery-planning steps mention the `bolt-plan` artifact", () => {
+    expect(fileMatches(findStageFile("delivery-planning"), /`bolt-plan`/)).toBe(true);
   });
 
-  test("7a: delivery-planning steps mention risk-and-sequencing-rationale.md", () => {
+  test("7a: delivery-planning steps mention the `risk-and-sequencing-rationale` artifact", () => {
     expect(
-      fileMatches(findStageFile("delivery-planning"), /risk-and-sequencing-rationale\.md/),
+      fileMatches(findStageFile("delivery-planning"), /`risk-and-sequencing-rationale`/),
     ).toBe(true);
   });
 
-  test("7b: delivery-planning steps mention external-dependency-map.md", () => {
+  test("7b: delivery-planning steps mention the `external-dependency-map` artifact", () => {
     expect(
-      fileMatches(findStageFile("delivery-planning"), /external-dependency-map\.md/),
+      fileMatches(findStageFile("delivery-planning"), /`external-dependency-map`/),
     ).toBe(true);
   });
 
-  test("8: feasibility steps mention feasibility-assessment.md", () => {
-    expect(fileMatches(findStageFile("feasibility"), /feasibility-assessment\.md/)).toBe(true);
+  test("8: feasibility steps mention the `feasibility-assessment` artifact", () => {
+    expect(fileMatches(findStageFile("feasibility"), /`feasibility-assessment`/)).toBe(true);
   });
 
   // ============================================================

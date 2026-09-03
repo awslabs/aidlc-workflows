@@ -67,7 +67,7 @@ Run ambiguity detection and contradiction analysis.
 
 ### Step 4: Generate Artifacts
 
-Create feasibility assessment (technical viability, risk analysis), constraint register (technical, organizational, regulatory), and RAID log (Risks, Assumptions, Issues, Dependencies).
+Create the `feasibility-assessment` artifact (technical viability, risk analysis), the `constraint-register` artifact (technical, organizational, regulatory), and the `raid-log` artifact (Risks, Assumptions, Issues, Dependencies).
 
 The orchestrator will pass these artifacts to aidlc-aws-platform-agent for AWS landscape assessment and aidlc-compliance-agent for regulatory scanning, then synthesize all inputs.
 

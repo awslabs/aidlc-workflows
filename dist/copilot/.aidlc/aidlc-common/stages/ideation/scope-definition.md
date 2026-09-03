@@ -61,7 +61,7 @@ Run ambiguity detection, contradiction analysis, and scope-vs-timeline validatio
 
 ### Step 4: Generate Artifacts
 
-Create scope definition document (in/out boundary), prioritized intent backlog (proto-Units using MoSCoW/WSJF/RICE), and value stream map.
+Create the `scope-document` artifact (in/out boundary), the `intent-backlog` artifact (proto-Units using MoSCoW/WSJF/RICE), and value stream map.
 
 ### Step 5: Completion Handoff
 
