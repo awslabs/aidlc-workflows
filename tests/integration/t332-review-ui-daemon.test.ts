@@ -249,6 +249,7 @@ describe("t332 review UI daemon HTTP API", () => {
     const feedback = await authorized("/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+
       body: JSON.stringify({
         stage: "requirements-analysis",
         unit: null,
@@ -267,6 +268,25 @@ describe("t332 review UI daemon HTTP API", () => {
         ],
       }),
     });
+    const staleFeedback = await authorized("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        stage: "requirements-analysis",
+        unit: null,
+        revision: 1,
+        decision_hint: "none",
+        annotations: [],
+      }),
+    });
+    expect(staleFeedback.status).toBe(409);
+
+    const tooLarge = await authorized("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "x".repeat(1024 * 1024 + 1),
+    });
+    expect(tooLarge.status).toBe(413);
     expect(feedback.status).toBe(200);
     const feedbackBody = await feedback.json();
     expect(feedbackBody.file).toBe("feedback-001.md");

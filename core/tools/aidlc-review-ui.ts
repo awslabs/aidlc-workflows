@@ -472,12 +472,18 @@ function validFeedbackBody(value: unknown): value is FeedbackRequest {
     (body.general !== undefined && typeof body.general !== "string") ||
     !Array.isArray(body.annotations)
   ) return false;
-  const kinds = new Set(["comment", "delete", "looks-good", "label", "edit"]);
+  const kinds: Record<string, true> = {
+    comment: true,
+    delete: true,
+    "looks-good": true,
+    label: true,
+    edit: true,
+  };
   return body.annotations.every((raw) => {
     if (!raw || typeof raw !== "object") return false;
     const annotation = raw as Partial<ReviewAnnotation>;
     return typeof annotation.artifact === "string" &&
-      kinds.has(String(annotation.kind)) &&
+      kinds[String(annotation.kind)] === true &&
       Array.isArray(annotation.heading_path) &&
       annotation.heading_path.every((entry) => typeof entry === "string") &&
       (annotation.selection === undefined || typeof annotation.selection === "string") &&
@@ -505,7 +511,11 @@ async function feedbackResponse(projectDir: string, request: Request): Promise<R
   if (!validFeedbackBody(parsed)) throw new HttpError(400, "invalid feedback body");
 
   const { current, manifest, stageDir } = currentStageContext(projectDir);
-  if (parsed.stage !== current.stage) throw new HttpError(409, "stage no longer current");
+  if (
+    parsed.stage !== current.stage ||
+    parsed.unit !== current.unit ||
+    parsed.revision !== current.revision
+  ) throw new HttpError(409, "review target no longer current");
   const sources: Record<string, string> = {};
   for (const annotation of parsed.annotations) {
     const matches = manifest.artifacts.filter((entry) => basename(entry.path) === basename(annotation.artifact));
@@ -516,7 +526,7 @@ async function feedbackResponse(projectDir: string, request: Request): Promise<R
       sources[basename(annotation.artifact)] = readFileSync(artifactPath, "utf-8");
     }
   }
-  const markdown = renderFeedbackMarkdown(parsed, { sources });
+  const created = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const reviewDir = stageReviewUiDir(stageDir);
   mkdirSync(reviewDir, { recursive: true });
 
@@ -533,7 +543,7 @@ async function feedbackResponse(projectDir: string, request: Request): Promise<R
       throw error;
     }
     try {
-      writeFileSync(descriptor, markdown, "utf-8");
+      writeFileSync(descriptor, renderFeedbackMarkdown(parsed, { created, sources }), "utf-8");
     } finally {
       closeSync(descriptor);
     }

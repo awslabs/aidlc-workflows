@@ -364,7 +364,7 @@ export function renderFeedbackMarkdown(
   input: FeedbackRequest,
   options: { created?: string; sources?: Readonly<Record<string, string>> } = {},
 ): string {
-  const created = options.created ?? new Date().toISOString();
+  const created = options.created ?? new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const sections = new Map<string, ReviewAnnotation[]>();
   for (const annotation of input.annotations) {
     const artifact = basename(annotation.artifact);
