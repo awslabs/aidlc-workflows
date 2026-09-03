@@ -4796,7 +4796,9 @@ function verifyReviewerPreconditionForUnit(
     content,
   );
   if (reviewClass === "none") return;
+  // The same governed checkpoint as the stage-level verifier, for one Unit.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  observeChangeControl(pd, content, receipts);
   if (!receipts.unitVerdicts.has(unit)) {
     const message =
       `Refusing gate for unit "${unit}" of "${stage.slug}": no fresh ` +
@@ -4849,6 +4851,7 @@ function verifyTeamUnitGateEvidence(
       stateContent: content,
       unit: context.unit,
     });
+    observeChangeControl(pd, content, summary);
     if (!summary.ok) {
       refuseStateGuard(pd, content, stage, {
         code: "SUMMARY_EVIDENCE_INVALID",

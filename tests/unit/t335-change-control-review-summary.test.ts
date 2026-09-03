@@ -20,6 +20,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  artifactFilename,
   auditBlockField,
   CHANGE_CONTROL_FIELD,
   checkSummaryConfirmationEvidence,
@@ -36,6 +37,7 @@ import {
   FIXTURES_DIR,
   recordArtifactWriteViaHook,
   seedAidlcMemory,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -526,7 +528,7 @@ describe("t335 (4) an invalid memory Mode is the validation error at the checkpo
     const refused = run(STATE_TOOL, ["gate-start", STAGE], proj, SUMMARY_ENV);
     expect(refused.status).not.toBe(0);
     expectValidationError(refused.stderr, path);
-    expect(refused.stderr).not.toContain("SUMMARY_ARTIFACT_UNAUTHORIZED");
+    expect(refused.stderr).not.toContain("was last saved before the confirmed answers");
     expect(acceptedRows(proj)).toHaveLength(0);
   });
 
@@ -562,6 +564,159 @@ describe("t335 (4) an invalid memory Mode is the validation error at the checkpo
     const gate = run(STATE_TOOL, ["gate-start", STAGE], review);
     expect(gate.status, gate.stderr).toBe(0);
     expect(gate.stderr).not.toContain("Invalid Change Control Mode");
+  });
+});
+
+describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
+  const UNIT_STAGE = "functional-design";
+  const UNIT_REVIEWER = "aidlc-architecture-reviewer-agent";
+  const UNIT = "alpha";
+  const UNIT_ENV = { ...TEST_ENV, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+
+  /** A Construction project under team ownership, one Unit, functional-design in progress. */
+  function teamProject(mode: "strict" | "relaxed"): string {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    writeFileSync(
+      seededStateFile(proj),
+      [
+        "# AI-DLC State Tracking",
+        "",
+        "## Project Information",
+        "- **Project**: team unit change control test",
+        "- **Project Type**: Greenfield",
+        "- **Scope**: feature",
+        "- **State Version**: 8",
+        "- **Skeleton Stance**: on",
+        "",
+        "## Runtime State",
+        "- **Revision Count**: 0",
+        "- **Construction Iteration**: unit-major",
+        "- **Unit Ownership**: team",
+        "",
+        "## Scope Configuration",
+        "- **Stages to Execute**: all",
+        "- **Stages to Skip**: none",
+        "- **Depth**: Standard",
+        "- **Test Strategy**: Standard",
+        `- **Change Control**: ${mode} (set by you)`,
+        "",
+        "## Stage Progress",
+        "",
+        "### CONSTRUCTION PHASE",
+        `- [-] ${UNIT_STAGE} — EXECUTE`,
+        "- [ ] nfr-requirements — EXECUTE",
+        "- [ ] nfr-design — EXECUTE",
+        "- [ ] infrastructure-design — EXECUTE",
+        "- [ ] code-generation — EXECUTE",
+        "- [ ] build-and-test — EXECUTE",
+        "",
+        "## Current Status",
+        "- **Lifecycle Phase**: CONSTRUCTION",
+        `- **Current Stage**: ${UNIT_STAGE}`,
+        "- **Status**: Running",
+        "- **Last Updated**: 2026-08-20T00:00:00Z",
+        "",
+      ].join("\n"),
+    );
+    seedBoltDag(proj, [UNIT]);
+    return proj;
+  }
+
+  function unitDir(proj: string): string {
+    const dir = join(seededRecordDir(proj), "construction", UNIT, UNIT_STAGE);
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  function reviewedUnitArtifact(proj: string): string {
+    return join(unitDir(proj), "functional-spec.md");
+  }
+
+  /** Start and complete the Unit's stage body, then record one READY review for it. */
+  function settleUnit(proj: string): void {
+    const started = run(STATE_TOOL, ["unit", "start", "--stage", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
+    expect(started.status, started.stderr).toBe(0);
+    for (const name of ["entities", "rules", "functional-spec", "traceability"]) {
+      writeFileSync(join(unitDir(proj), artifactFilename(name)), `# ${name} for ${UNIT}\n`);
+    }
+    const completed = run(STATE_TOOL, ["unit", "complete", "--stage", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
+    expect(completed.status, completed.stderr).toBe(0);
+    const base = ["review", "--stage", UNIT_STAGE, "--reviewer", UNIT_REVIEWER, "--unit", UNIT, "--iteration", "1"];
+    const requested = run(LOG_TOOL, base, proj, UNIT_ENV);
+    expect(requested.status, requested.stderr).toBe(0);
+    appendFileSync(
+      reviewedUnitArtifact(proj),
+      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${UNIT_REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+      "utf-8",
+    );
+    const done = run(LOG_TOOL, [...base, "--verdict", "READY"], proj, UNIT_ENV);
+    expect(done.status, done.stderr).toBe(0);
+  }
+
+  function editReviewedUnitArtifact(proj: string): void {
+    appendFileSync(reviewedUnitArtifact(proj), "\nA rule added after the review.\n", "utf-8");
+    appendAuditEntry(
+      "ARTIFACT_UPDATED",
+      {
+        File: reviewedUnitArtifact(proj),
+        Tool: "Edit",
+        Unit: UNIT,
+        Context: `construction > ${UNIT} > ${UNIT_STAGE} > functional-spec.md`,
+      },
+      proj,
+    );
+  }
+
+  test("relaxed keeps the Unit's verdict, writes the row for the Unit once, and tells the human", () => {
+    const proj = teamProject("relaxed");
+    settleUnit(proj);
+    editReviewedUnitArtifact(proj);
+    const gate = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
+    expect(gate.status, gate.stderr).toBe(0);
+    const relativeArtifact = relative(proj, reviewedUnitArtifact(proj));
+    expect(printedNotices(gate.stdout)).toEqual([
+      `${relativeArtifact} changed after it was reviewed. Continuing to the gate with the diff (Change Control: relaxed).`,
+    ]);
+    const rows = acceptedRows(proj);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Unit")).toBe(UNIT);
+    expect(auditBlockField(rows[0].block, "Checkpoint")).toBe("review-receipt");
+    // The verdict stands as recorded; the gate presented again writes nothing more.
+    expect(reviewCompletedRows(proj)).toHaveLength(1);
+    const again = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
+    expect(again.status, again.stderr).toBe(0);
+    expect(printedNotices(again.stdout)).toEqual([]);
+    expect(acceptedRows(proj)).toHaveLength(1);
+  });
+
+  test("strict is today's refusal for the Unit", () => {
+    const proj = teamProject("strict");
+    settleUnit(proj);
+    editReviewedUnitArtifact(proj);
+    const refused = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain(`Refusing gate for unit \\"${UNIT}\\"`);
+    expect(acceptedRows(proj)).toHaveLength(0);
+  });
+
+  test("an invalid memory Mode is the validation error at the Unit gate", () => {
+    const proj = teamProject("relaxed");
+    settleUnit(proj);
+    editReviewedUnitArtifact(proj);
+    const path = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+    writeFileSync(
+      path,
+      readFileSync(path, "utf-8").replace("## Change Control\n", "## Change Control\n\nMode: sometimes\n"),
+    );
+    const refused = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain(
+      `Invalid Change Control Mode \\"sometimes\\" in ${path} (section: Change Control). Expected one of: strict, relaxed.`,
+    );
+    expect(refused.stderr).not.toContain("Refusing gate for unit");
+    expect(acceptedRows(proj)).toHaveLength(0);
   });
 });
 
