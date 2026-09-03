@@ -60,6 +60,10 @@ import {
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
+import {
+  ensureReviewUiDaemon,
+  reviewUiEnabled,
+} from "../tools/aidlc-review-ui-shared.ts";
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -172,6 +176,20 @@ try {
 }
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
+// Review UI daemon: ensure it is running for this project. No link is minted
+// here — the gate's `report` step mints the single-use link the human needs,
+// so nothing token-adjacent ever lands in session context.
+if (reviewUiEnabled()) {
+  try {
+    await ensureReviewUiDaemon(projectDir, {
+      toolsDir: join(projectDir, harnessDir(), "tools"),
+      waitMs: 1500,
+    });
+  } catch (e) {
+    recordHookDrop(projectDir, "session-start", errorMessage(e));
+  }
+}
+
 
 // No workflow active — retain only the session identity recorded above.
 if (!existsSync(stateFile)) {

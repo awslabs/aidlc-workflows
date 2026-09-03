@@ -52,6 +52,13 @@ import {
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
+  liveReviewUiOrigin,
+  mintReviewUiOpenUrl,
+  readServerInfo,
+  reviewUiEnabled,
+  serverInfoLooksAlive,
+} from "./aidlc-review-ui-shared.ts";
+import {
   type cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
   main as unitMain,
@@ -1484,6 +1491,8 @@ function handleStatus(projectDir: string, flags: Record<string, string>): void {
     space: flags.space,
     intent: flags.intent,
   });
+  const reviewUiUrl = reviewUiEnabled() ? mintReviewUiOpenUrl(projectDir) : null;
+  const reviewUiLine = reviewUiUrl ? `Review UI: ${reviewUiUrl}\n` : "";
   const sp =
     selection.intent === null
       ? join(intentsDir(projectDir, selection.space), "aidlc-state.md")
@@ -1496,7 +1505,7 @@ To get started:
   /aidlc "build the auth service"   Describe what to build (creates the workflow record automatically)
   /aidlc <scope>      Start a workflow by scope (e.g., /aidlc feature)
   /aidlc --help       Show all commands and scopes
-`
+${reviewUiLine}`
     );
     return;
   }
@@ -1715,10 +1724,10 @@ Next Stage:     ${nextStage}
         }`,
       );
     }
-    process.stdout.write(`${output}\n${board.stdout.trimEnd()}\n`);
+    process.stdout.write(`${output}\n${board.stdout.trimEnd()}\n${reviewUiLine}`);
     return;
   }
-  process.stdout.write(output);
+  process.stdout.write(`${output}${reviewUiLine}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -2262,9 +2271,55 @@ function appendPluginDoctorChecks(
   }
 }
 
-function handleDoctor(projectDir: string, flags: Record<string, string> = {}): void {
+async function handleDoctor(projectDir: string, flags: Record<string, string> = {}): Promise<void> {
   const results: DoctorCheckResult[] = [];
   const isWindows = process.platform === "win32";
+  if (!reviewUiEnabled()) {
+    results.push({
+      pass: true,
+      label: "review-ui: disabled (AIDLC_REVIEW_UI unset)",
+      id: "review-ui",
+      severity: "info",
+    });
+  } else {
+    const info = readServerInfo(projectDir);
+    const origin = liveReviewUiOrigin(projectDir);
+    let reachable = false;
+    if (serverInfoLooksAlive(info)) {
+      try {
+        const healthUrl = new URL("/api/health", info.url);
+        const response = await fetch(healthUrl, {
+          signal: AbortSignal.timeout(500),
+        });
+        const body: unknown = response.ok ? await response.json() : null;
+        reachable = Boolean(
+          body && typeof body === "object" && "ok" in body && body.ok === true,
+        );
+      } catch {
+        // A live pid without a responding health endpoint is not a usable daemon.
+      }
+    }
+    if (reachable && origin) {
+      results.push({
+        pass: true,
+        label: `review-ui: alive at ${origin}`,
+        id: "review-ui",
+        severity: "info",
+      });
+    } else {
+      const quotedProject = /^[A-Za-z0-9_./:@%+=,-]+$/.test(projectDir)
+        ? projectDir
+        : `'${projectDir.replaceAll("'", "'\"'\"'")}'`;
+      results.push({
+        pass: true,
+        label: "review-ui: enabled but daemon is not alive or reachable (warning)",
+        fix: `bun ${harnessDir()}/tools/aidlc-review-ui.ts serve --project-dir ${quotedProject}`,
+        id: "review-ui",
+        severity: "warning",
+      });
+    }
+  }
+
 
   // 1. bun installed — check PATH (Bun.which handles Windows .exe suffix automatically)
   const bunHome = process.env.HOME ? join(process.env.HOME, ".bun", "bin", "bun") : "";
@@ -8209,7 +8264,7 @@ export async function main(argv: string[]): Promise<void> {
       unitMain(["participate", "--project-dir", projectDir]);
       break;
     case "doctor":
-      handleDoctor(projectDir, flags);
+      await handleDoctor(projectDir, flags);
       break;
     case "intent-create":
       handleIntentCreate(projectDir, flags);

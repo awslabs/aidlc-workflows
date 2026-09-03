@@ -58,6 +58,10 @@ export type GateValue = boolean | typeof GATE_UNRESOLVED;
 // is chunked against DIRECTIVE_MAX_BYTES with limited headroom, so narration is
 // never the thing that pushes a directive over transport budget.
 export type NarrationField = string;
+export interface ReviewUiDirective {
+  origin: string;
+  url?: string;
+}
 
 export const VALID_PROTOCOL_MODULES = [
   "reviewer",
@@ -238,6 +242,8 @@ export interface RunStageDirective {
   // verbatim and NEVER infers the next stage itself (issue: the placeholder used
   // to render as a guessed "Code Generation" regardless of the real target).
   next_stage?: string | null;
+  /** Live local browser review surface; absent when disabled or unavailable. */
+  review_ui?: ReviewUiDirective;
   // unit: present ONLY on a per-unit Construction directive (for_each:
   // unit-of-work) that the engine resolved to a CONCRETE Unit of Work; absent
   // otherwise, and absent when the engine fell back to the {unit-name}
@@ -489,9 +495,12 @@ type DirectivePayload =
   | ParkedDirective
   | NoticeDirective;
 
-/** `stage_validity` is universal and advisory; `kind` still owns routing. */
+/** Advisory fields do not alter the directive kind's routing contract. */
 export type Directive = DirectivePayload & {
   stage_validity?: StageValidityAdvisory;
+  review_ui?: ReviewUiDirective;
+  /** Browser feedback carried forward after an approved report. */
+  approval_notes?: string;
 };
 
 export type ValidationResult =
@@ -624,11 +633,19 @@ const NOTICE_FIELDS = ["kind", "message"] as const;
 // attach a line without touching this file.
 const NARRATION_FIELD = "narration" as const;
 const STAGE_VALIDITY_FIELD = "stage_validity" as const;
+const REVIEW_UI_FIELD = "review_ui" as const;
+const APPROVAL_NOTES_FIELD = "approval_notes" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the
 // record of what is kind-SPECIFIC and this one helper adds what is universal.
 function withNarration(fields: readonly string[]): readonly string[] {
-  return [...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD];
+  return [
+    ...fields,
+    NARRATION_FIELD,
+    STAGE_VALIDITY_FIELD,
+    REVIEW_UI_FIELD,
+    APPROVAL_NOTES_FIELD,
+  ];
 }
 
 const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> = {
@@ -692,6 +709,8 @@ export function validateDirective(obj: unknown): ValidationResult {
   // would otherwise be handed a non-sentence to speak.
   checkOptionalString(o, NARRATION_FIELD, kind, errors);
   checkOptionalStageValidity(o, kind, errors);
+  checkOptionalReviewUi(o, kind, errors);
+  checkOptionalString(o, APPROVAL_NOTES_FIELD, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
@@ -1082,6 +1101,31 @@ function checkOptionalString(
   }
 }
 
+function checkOptionalReviewUi(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(REVIEW_UI_FIELD in o)) return;
+  const value = o[REVIEW_UI_FIELD];
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: review_ui must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "origin" && key !== "url") {
+      errors.push(`${kind}: review_ui unknown key: ${key}`);
+    }
+  }
+  if (typeof value.origin !== "string") {
+    errors.push(
+      `${kind}: review_ui.origin must be string, got ${describe(value.origin)}`,
+    );
+  }
+  if ("url" in value && typeof value.url !== "string") {
+    errors.push(`${kind}: review_ui.url must be string, got ${describe(value.url)}`);
+  }
+}
 function checkOptionalLegacyPlanApprovalChoices(
   o: Record<string, unknown>,
   kind: DirectiveKind,

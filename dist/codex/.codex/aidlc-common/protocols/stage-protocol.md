@@ -282,6 +282,9 @@ question.
 ```markdown
 **Review:** `<record>/[path to artifacts]`
 ```
+When `directive.review_ui` is present, print `**Browser:** <directive.review_ui.url>`
+on the line immediately after `**Review:**`; copy the URL verbatim, including its
+query string. When `directive.review_ui` is absent, print nothing extra.
 Then present the structured approval question as defined above.
 
 ### Part 4: Progress update (mandatory — after user approves)
