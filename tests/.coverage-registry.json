@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 817,
+    "total": 818,
     "enumeratedByClass": {
       "function": 519,
-      "audit": 91,
+      "audit": 92,
       "scope": 11,
       "stage": 33,
       "hook": 18,
@@ -482,6 +482,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEW_UI_FEEDBACK",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "audit",
@@ -6721,6 +6728,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t336-review-ui-session-start.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t40-settings-hook-config.test.ts",
           "mechanism": "none"
         },
@@ -9340,6 +9351,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t337-review-ui-status-doctor.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t37.test.ts",
           "mechanism": "cli"
         },
@@ -9828,6 +9843,10 @@
         },
         {
           "file": "tests/unit/t27.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t337-review-ui-status-doctor.test.ts",
           "mechanism": "cli"
         },
         {
