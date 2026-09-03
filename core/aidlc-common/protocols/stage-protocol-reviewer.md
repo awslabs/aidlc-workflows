@@ -298,8 +298,8 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
 The reviewer also re-runs on the Part 0 revision path: when a human rejection
 leads to a revision that changes a `produces[]` artifact, re-run this step
-before reporting `revised` - step 1's request-first delete rule removes the
-stale Markdown or HTML Review appendix (it predates the revised content) so
+before reporting `revised` - step 1's request-first delete rule removes the stale
+`## Review` verdict or HTML review section (it predates the revised content) so
 step 3 cannot mistake it for coverage of the revision. An `adversarial` review
 re-enters with
 the same lead-alone loop and iteration budget as at first entry; an
