@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI-DLC Review</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity">
+      <strong id="project-name">AI-DLC Review</strong>
+      <span id="intent-name">No active intent</span>
+      <span aria-hidden="true">/</span>
+      <span id="stage-name">No stage</span>
+      <span id="stage-status" class="status-badge">Idle</span>
+    </div>
+    <div class="header-actions">
+      <button id="export-button" type="button" disabled>Export</button>
+      <button id="diff-button" type="button" disabled>Diff</button>
+    </div>
+  </header>
+
+  <div class="app-grid">
+    <aside class="sidebar" aria-label="Review navigation">
+      <section>
+        <h2>Current stage</h2>
+        <p id="stage-summary" class="muted">Nothing is under review.</p>
+        <ul id="artifact-list" class="artifact-list"></ul>
+      </section>
+      <section class="tree-section">
+        <h2>Record</h2>
+        <div id="record-tree" class="record-tree muted">Loading…</div>
+      </section>
+    </aside>
+
+    <main id="main-pane" class="main-pane">
+      <div id="paused-overlay" class="paused-overlay" role="status">Live updates paused — reconnecting…</div>
+      <div class="viewer-actions">
+        <button id="global-comment-button" type="button" disabled>Global comment</button>
+        <button id="edit-button" type="button" disabled>Edit</button>
+        <span id="artifact-meta" class="muted"></span>
+      </div>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <article id="viewer" class="viewer empty-state">
+        <h1>Review artifacts in your browser</h1>
+        <p>Select an artifact from the current stage.</p>
+      </article>
+      <section id="editor-panel" class="editor-panel" hidden>
+        <label for="source-editor">Artifact source</label>
+        <textarea id="source-editor" spellcheck="false"></textarea>
+        <div class="row-actions">
+          <button id="add-edit-button" class="primary" type="button">Add edit to feedback</button>
+          <button id="cancel-edit-button" type="button">Cancel</button>
+        </div>
+      </section>
+      <section id="diff-panel" class="diff-panel" hidden>
+        <div class="panel-heading">
+          <h2 id="diff-title">Revision diff</h2>
+          <button id="close-diff-button" type="button">Close</button>
+        </div>
+        <pre id="diff-output" class="diff-output"></pre>
+      </section>
+    </main>
+
+    <aside class="feedback-drawer" aria-label="Feedback drawer">
+      <h2>Feedback</h2>
+      <p id="feedback-empty" class="muted">Select text or add a global comment.</p>
+      <ol id="annotation-list" class="annotation-list"></ol>
+      <label for="general-notes">General notes</label>
+      <textarea id="general-notes" rows="5" placeholder="Feedback about the stage as a whole"></textarea>
+      <fieldset>
+        <legend>Decision hint</legend>
+        <label><input type="radio" name="decision" value="approve"> Approve</label>
+        <label><input type="radio" name="decision" value="request-changes"> Request changes</label>
+        <label><input type="radio" name="decision" value="none" checked> None</label>
+      </fieldset>
+      <button id="send-feedback-button" class="primary send-button" type="button" disabled>Send feedback</button>
+      <p id="feedback-banner" class="success-banner" role="status" hidden></p>
+    </aside>
+  </div>
+
+  <div id="selection-toolbar" class="floating-card selection-toolbar" role="toolbar" aria-label="Annotate selection" hidden>
+    <button type="button" data-kind="comment">Comment</button>
+    <button type="button" data-kind="delete">Delete</button>
+    <button type="button" data-kind="looks-good">Looks good</button>
+    <button type="button" data-kind="label">Label</button>
+  </div>
+
+  <div id="anchor-confirm" class="floating-card anchor-confirm" role="dialog" aria-label="Confirm HTML anchor" hidden>
+    <strong>Use this page anchor?</strong>
+    <p id="anchor-preview"></p>
+    <div class="anchor-actions">
+      <button type="button" data-kind="comment">Comment</button>
+      <button type="button" data-kind="delete">Delete</button>
+      <button type="button" data-kind="looks-good">Looks good</button>
+      <button type="button" data-kind="label">Label</button>
+      <button type="button" data-dismiss>Dismiss</button>
+    </div>
+  </div>
+
+  <dialog id="revision-dialog">
+    <form method="dialog">
+      <h2>Compare revision</h2>
+      <label for="revision-select">From</label>
+      <select id="revision-select"></select>
+      <div class="row-actions">
+        <button id="show-diff-button" class="primary" value="default">Show diff</button>
+        <button value="cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
