@@ -16,7 +16,7 @@
       <span id="stage-name">No stage</span>
       <span id="stage-status" class="status-badge">Idle</span>
     </div>
-    <div class="header-actions">
+    <div id="header-actions" class="header-actions">
       <button id="export-button" type="button" disabled>Export</button>
       <button id="diff-button" type="button" disabled>Diff</button>
     </div>
@@ -29,6 +29,13 @@
         <p id="stage-summary" class="muted">Nothing is under review.</p>
         <ul id="artifact-list" class="artifact-list"></ul>
       </section>
+      <section id="questions-nav" hidden>
+        <h2>Questions</h2>
+        <button id="questions-button" class="artifact-button" type="button" aria-current="false">
+          <span>Questions</span>
+          <span id="questions-badge" class="file-badge questions-badge" aria-label="Questions answered">0/0</span>
+        </button>
+      </section>
       <section class="tree-section">
         <h2>Record</h2>
         <div id="record-tree" class="record-tree muted">Loading…</div>
@@ -37,12 +44,29 @@
 
     <main id="main-pane" class="main-pane">
       <div id="paused-overlay" class="paused-overlay" role="status">Live updates paused — reconnecting…</div>
-      <div class="viewer-actions">
+      <div id="viewer-actions" class="viewer-actions">
         <button id="global-comment-button" type="button" disabled>Global comment</button>
         <button id="edit-button" type="button" disabled>Edit</button>
         <span id="artifact-meta" class="muted"></span>
       </div>
       <div id="notice" class="notice" role="status" hidden></div>
+      <section id="questions-view" class="questions-view" aria-labelledby="questions-title" hidden>
+        <form id="questions-form" class="questions-form-pane">
+          <div class="questions-heading">
+            <div>
+              <h1 id="questions-title">Questions</h1>
+              <p id="questions-meta" class="muted"></p>
+            </div>
+            <button id="save-answers-button" class="primary" type="submit" disabled>Save answers</button>
+          </div>
+          <div id="questions-content" class="questions-content"></div>
+          <p id="questions-banner" class="success-banner" role="status" hidden></p>
+        </form>
+        <aside class="guide-pane" aria-labelledby="guide-title">
+          <h2 id="guide-title">Explainer</h2>
+          <div id="guide-content" class="guide-content muted">No explainer yet</div>
+        </aside>
+      </section>
       <article id="viewer" class="viewer empty-state">
         <h1>Review artifacts in your browser</h1>
         <p>Select an artifact from the current stage.</p>
@@ -64,7 +88,7 @@
       </section>
     </main>
 
-    <aside class="feedback-drawer" aria-label="Feedback drawer">
+    <aside id="feedback-drawer" class="feedback-drawer" aria-label="Feedback drawer">
       <h2>Feedback</h2>
       <p id="feedback-empty" class="muted">Select text or add a global comment.</p>
       <ol id="annotation-list" class="annotation-list"></ol>

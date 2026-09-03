@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 827,
+    "total": 828,
     "enumeratedByClass": {
       "function": 528,
       "audit": 92,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 138,
+      "subcommand": 139,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -8207,6 +8207,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log answers-apply",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "subcommand",

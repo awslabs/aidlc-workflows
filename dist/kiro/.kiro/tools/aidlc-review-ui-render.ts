@@ -26,6 +26,321 @@ export interface FeedbackRequest {
   annotations: ReviewAnnotation[];
 }
 
+export interface ReviewQuestionOption {
+  letter: string | null;
+  text: string;
+}
+
+export interface ReviewQuestion {
+  id: string;
+  title: string;
+  prompt: string;
+  options: ReviewQuestionOption[];
+  multi: boolean;
+  answer: string | null;
+  note: string | null;
+  confirmation: boolean;
+}
+
+export interface AnswerSubmissionEntry {
+  id: string;
+  labels?: string[];
+  other?: string;
+  note?: string;
+}
+
+interface MarkdownSectionLine {
+  text: string;
+  structural: boolean;
+}
+
+interface MarkdownH2Section {
+  title: string;
+  body: MarkdownSectionLine[];
+}
+
+const QUESTION_TITLE = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/;
+const ANSWER_LINE = /^\[Answer\]:[ \t]*(.*)$/;
+const NOTE_LINE = /^\[Note\]:[ \t]*(.*)$/;
+const OPTION_LINE = /^([A-Z])\.\s+(.*)$/;
+const SUMMARY_CONFIRMATION_TITLE = "Consolidated Summary Confirmation";
+const MAX_ANSWER_ID_LENGTH = 128;
+const MAX_ANSWER_TEXT_LENGTH = 64 * 1024;
+
+function atxH2Title(line: string): string | null {
+  const match = /^ {0,3}##(?:[ \t]+(.*)|[ \t]*)$/.exec(line);
+  if (match === null) return null;
+  return (match[1] ?? "").replace(/[ \t]+#+[ \t]*$/, "").trim();
+}
+
+function markdownH2Sections(source: string): MarkdownH2Section[] {
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  const sections: MarkdownH2Section[] = [];
+  let current: MarkdownH2Section | null = null;
+  let fenceCharacter: "`" | "~" | null = null;
+  let fenceLength = 0;
+  let inComment = false;
+  let rawHtmlEnd: RegExp | null = null;
+
+  for (const rawLine of lines) {
+    if (rawHtmlEnd !== null) {
+      if (current !== null) current.body.push({ text: rawLine, structural: false });
+      if (rawHtmlEnd.test(rawLine)) rawHtmlEnd = null;
+      continue;
+    }
+    if (fenceCharacter !== null) {
+      const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(rawLine);
+      if (current !== null) current.body.push({ text: rawLine, structural: false });
+      if (
+        closing !== null &&
+        closing[1][0] === fenceCharacter &&
+        closing[1].length >= fenceLength
+      ) {
+        fenceCharacter = null;
+        fenceLength = 0;
+      }
+      continue;
+    }
+
+    let line = "";
+    let cursor = 0;
+    while (cursor < rawLine.length) {
+      if (inComment) {
+        const end = rawLine.indexOf("-->", cursor);
+        if (end === -1) {
+          cursor = rawLine.length;
+          continue;
+        }
+        inComment = false;
+        cursor = end + 3;
+        continue;
+      }
+      const start = rawLine.indexOf("<!--", cursor);
+      if (start === -1) {
+        line += rawLine.slice(cursor);
+        break;
+      }
+      line += rawLine.slice(cursor, start);
+      inComment = true;
+      cursor = start + 4;
+    }
+    const rawHtml = /^ {0,3}<(script|pre|style|textarea)(?:[ \t>]|$)/i.exec(line);
+    if (rawHtml !== null) {
+      const closing = new RegExp(`</${rawHtml[1]}>`, "i");
+      if (!closing.test(line.slice(rawHtml[0].length))) rawHtmlEnd = closing;
+      if (current !== null) current.body.push({ text: line, structural: false });
+      continue;
+    }
+
+    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (
+      opening !== null &&
+      !(opening[1][0] === "`" && opening[2].includes("`"))
+    ) {
+      fenceCharacter = opening[1][0] as "`" | "~";
+      fenceLength = opening[1].length;
+      if (current !== null) current.body.push({ text: line, structural: false });
+      continue;
+    }
+
+    const structural = !/^(?: {4}|\t)/.test(line);
+    const title = structural ? atxH2Title(line) : null;
+    if (title !== null) {
+      current = { title, body: [] };
+      sections.push(current);
+    } else if (current !== null) {
+      current.body.push({ text: line, structural });
+    }
+  }
+
+  return sections;
+}
+
+function trimmedParagraphs(lines: readonly string[]): string {
+  const normalized = lines.map((line) => line.replace(/[ \t]+$/, ""));
+  while (normalized.length > 0 && normalized[0].trim() === "") normalized.shift();
+  while (normalized.length > 0 && normalized[normalized.length - 1].trim() === "") {
+    normalized.pop();
+  }
+
+  const compact: string[] = [];
+  for (const line of normalized) {
+    if (line.trim() === "") {
+      if (compact.length > 0 && compact[compact.length - 1] !== "") compact.push("");
+    } else {
+      compact.push(line);
+    }
+  }
+  return compact.join("\n");
+}
+
+function parseQuestionSection(
+  section: MarkdownH2Section,
+  id: string,
+  confirmation: boolean,
+): ReviewQuestion {
+  let answer: string | null = null;
+  let note: string | null = null;
+  let contentEnd = section.body.length;
+
+  for (let index = 0; index < section.body.length; index++) {
+    const line = section.body[index];
+    if (!line.structural) continue;
+    const answerMatch = ANSWER_LINE.exec(line.text);
+    if (answerMatch !== null) {
+      contentEnd = Math.min(contentEnd, index);
+      if (answer === null) answer = answerMatch[1].trim() || null;
+      continue;
+    }
+    const noteMatch = NOTE_LINE.exec(line.text);
+    if (noteMatch !== null) {
+      contentEnd = Math.min(contentEnd, index);
+      if (note === null) note = noteMatch[1].trim() || null;
+    }
+  }
+
+  const options: ReviewQuestionOption[] = [];
+  const promptLines: string[] = [];
+  for (const line of section.body.slice(0, contentEnd)) {
+    if (confirmation) {
+      if (line.structural && (line.text === "- Looks correct" || line.text === "- Request changes")) {
+        options.push({ letter: null, text: line.text.slice(2) });
+      } else {
+        promptLines.push(line.text);
+      }
+      continue;
+    }
+
+    const optionMatch = line.structural ? OPTION_LINE.exec(line.text) : null;
+    if (optionMatch !== null && optionMatch[2].trim() !== "") {
+      options.push({ letter: optionMatch[1], text: optionMatch[2].trim() });
+    } else {
+      promptLines.push(line.text);
+    }
+  }
+
+  const prompt = trimmedParagraphs(promptLines);
+  return {
+    id,
+    title: section.title,
+    prompt,
+    options,
+    multi: !confirmation && /\(select all that apply\)/i.test(`${section.title}\n${prompt}`),
+    answer,
+    note,
+    confirmation,
+  };
+}
+
+export function parseQuestionsMarkdown(source: string): ReviewQuestion[] {
+  const questions: ReviewQuestion[] = [];
+  for (const section of markdownH2Sections(source)) {
+    if (section.title === SUMMARY_CONFIRMATION_TITLE) {
+      questions.push(parseQuestionSection(section, "summary-confirmation", true));
+      continue;
+    }
+    const match = QUESTION_TITLE.exec(section.title);
+    if (match !== null) questions.push(parseQuestionSection(section, `Q${match[1]}`, false));
+  }
+  return questions;
+}
+
+function invalidAnswer(message: string): never {
+  throw new Error(`invalid question answers: ${message}`);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+export function validateQuestionAnswers(
+  questions: readonly ReviewQuestion[],
+  value: unknown,
+): AnswerSubmissionEntry[] {
+  if (!Array.isArray(value)) invalidAnswer("answers must be an array");
+
+  const questionsById = new Map(questions.map((question) => [question.id, question]));
+  const seenIds = new Set<string>();
+  const normalized: AnswerSubmissionEntry[] = [];
+
+  for (let index = 0; index < value.length; index++) {
+    const candidate: unknown = value[index];
+    if (!isPlainObject(candidate)) invalidAnswer(`entry ${index + 1} must be a plain object`);
+
+    const id = candidate.id;
+    if (typeof id !== "string" || id.length === 0 || id.length > MAX_ANSWER_ID_LENGTH) {
+      invalidAnswer(`entry ${index + 1} has an invalid id`);
+    }
+    if (seenIds.has(id)) invalidAnswer(`duplicate question id "${id}"`);
+    seenIds.add(id);
+
+    const question = questionsById.get(id);
+    if (question === undefined) invalidAnswer(`unknown question id "${id}"`);
+    if (id === "summary-confirmation" || question.confirmation) {
+      invalidAnswer(`question "${id}" is read-only`);
+    }
+    let labels: string[] | undefined;
+    if (candidate.labels !== undefined) {
+      if (!Array.isArray(candidate.labels) || candidate.labels.length > 26) {
+        invalidAnswer(`question "${id}" has malformed labels`);
+      }
+      labels = [];
+      const seenLabels = new Set<string>();
+      const validLabels = new Set(
+        question.options.flatMap((option) => option.letter === null ? [] : [option.letter]),
+      );
+      for (const rawLabel of candidate.labels) {
+        if (typeof rawLabel !== "string" || !/^[A-Za-z]$/.test(rawLabel)) {
+          invalidAnswer(`question "${id}" has malformed label`);
+        }
+        const label = rawLabel.toUpperCase();
+        if (seenLabels.has(label)) invalidAnswer(`question "${id}" repeats label "${label}"`);
+        if (!validLabels.has(label)) invalidAnswer(`label "${label}" is not valid for question "${id}"`);
+        seenLabels.add(label);
+        labels.push(label);
+      }
+      if (!question.multi && labels.length > 1) {
+        invalidAnswer(`question "${id}" accepts only one label`);
+      }
+    }
+
+    let other: string | undefined;
+    if (candidate.other !== undefined) {
+      if (
+        typeof candidate.other !== "string" ||
+        candidate.other.length > MAX_ANSWER_TEXT_LENGTH
+      ) {
+        invalidAnswer(`question "${id}" has invalid other text`);
+      }
+      other = candidate.other.trim();
+    }
+
+    const hasOtherLabel = labels?.includes("X") ?? false;
+    if (hasOtherLabel && !other) invalidAnswer(`question "${id}" requires other text for label X`);
+    if (!hasOtherLabel && candidate.other !== undefined) {
+      invalidAnswer(`question "${id}" has other text without label X`);
+    }
+
+    let note: string | undefined;
+    if (candidate.note !== undefined) {
+      if (typeof candidate.note !== "string" || candidate.note.length > MAX_ANSWER_TEXT_LENGTH) {
+        invalidAnswer(`question "${id}" has an invalid note`);
+      }
+      note = candidate.note.trim();
+    }
+
+    const entry: AnswerSubmissionEntry = { id };
+    if (labels !== undefined) entry.labels = labels;
+    if (other !== undefined) entry.other = other;
+    if (note !== undefined) entry.note = note;
+    normalized.push(entry);
+  }
+
+  return normalized;
+}
+
 export type DiffLine = {
   type: "context" | "add" | "delete";
   text: string;
