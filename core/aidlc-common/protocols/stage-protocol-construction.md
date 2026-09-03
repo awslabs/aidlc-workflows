@@ -400,14 +400,21 @@ An `invoke-swarm` directive for `code-generation` changes where generation
 runs, not whether planning and Plan Approval happen. Before `aidlc-swarm.ts
 prepare`:
 
-1. For every unit in `directive.units`, execute Code Generation Part 1 through
-   Plan Approval preparation in the main workspace: create
-   `code-generation-plan.md`, embed the exact `## Testing Contract` emitted by
-   `aidlc-testing-posture.ts render`, create `unit-test-instructions.md`, write
-   the current `[Approval Fingerprint]` and `[Planned Source]` tags, and present
-   that unit's Plan Approval
-   question. A revision resets `[Answer]:` to blank before the resolver or
-   fingerprint is regenerated.
+1. For every unit in `directive.units`, one at a time, run Code Generation
+   Part 1 through Plan Approval preparation in the main workspace: dispatch
+   `aidlc-developer-agent` with the stage's planning brief (first line
+   `AIDLC-PLANNING: <unit>`; no generation marker), which writes
+   `code-generation-plan.md` with the exact `## Testing Contract` emitted by
+   `aidlc-testing-posture.ts render` embedded, and `unit-test-instructions.md`,
+   under that unit's record dir, then returns a summary. The plan-approval
+   guard admits that dispatch without approval evidence, confines its writes to
+   the unit's record dir, and runs one planning dispatch at a time, so wait for
+   each to return before dispatching the next unit. You then write the current
+   `[Approval Fingerprint]` and `[Planned Source]` tags into that unit's
+   questions file and present its Plan Approval question. You never write or
+   revise the plan or the instructions yourself; a revision resets `[Answer]:`
+   to blank, re-dispatches the planning brief with the human's feedback, and
+   only then regenerates the resolver output and fingerprint.
 2. STOP for each unanswered Plan Approval. After the human explicitly chooses
    `Approve Plan`, record the answer through the reserved
    `PLAN_APPROVAL_RECORDED` receipt and re-run `next`; the engine may re-emit
