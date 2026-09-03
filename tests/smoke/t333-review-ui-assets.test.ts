@@ -59,14 +59,18 @@ describe("t333 — review UI static assets", () => {
     expect(license).toContain("Permission is hereby granted, free of charge");
   });
 
-  test("guards sandbox messages behind trusted interaction and emits only anchors", () => {
+  test("emits only trusted anchors and the guide-load message", () => {
     const bridge = readFileSync(join(ASSET_DIR, "bridge.js"), "utf8");
-    expect(bridge).toContain("isTrusted");
     expect(bridge).toContain('type: "aidlc-anchor"');
+    expect(bridge).toContain('type: "aidlc-guide"');
+    expect(bridge).toMatch(/addEventListener\("mouseup", \(event\) => {\s*if \(!event\.isTrusted\) return;/);
+    expect(bridge).toMatch(/addEventListener\("click", \(event\) => {\s*if \(!event\.isTrusted \|\| !event\.altKey\) return;/);
     const postedTypes = [...bridge.matchAll(/type:\s*["']([^"']+)["']/g)].map((match) => match[1]);
-    expect(postedTypes).toEqual(["aidlc-anchor"]);
+    expect(postedTypes).toHaveLength(2);
+    expect(postedTypes).toContain("aidlc-anchor");
+    expect(postedTypes).toContain("aidlc-guide");
     const postCalls = bridge.match(/\.postMessage\s*\(/g) ?? [];
-    expect(postCalls).toHaveLength(1);
-    expect(bridge).toContain("window.parent === window");
+    expect(postCalls).toHaveLength(2);
+    expect(bridge).toMatch(/function postAnchor\([^)]*\)\s*{\s*if \(window\.parent === window\) return;/);
   });
 });
