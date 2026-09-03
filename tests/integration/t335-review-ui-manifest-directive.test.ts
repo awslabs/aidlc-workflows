@@ -42,10 +42,12 @@ function fixture(): { project: string; home: string; env: NodeJS.ProcessEnv; sta
   writeFileSync(join(stageDir, "raid-log.md"), "# raid\ngamma\n");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    AIDLC_RUNTIME_HARNESS_ROOT: join(ROOT, "dist", "claude", ".claude"),
     AIDLC_REVIEW_UI: "1",
     AIDLC_REVIEW_HOME: home,
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
   };
   return { project, home, env, stageDir };
 }
@@ -58,7 +60,9 @@ function report(project: string, env: NodeJS.ProcessEnv, args: string[]): Record
     stderr: "pipe",
   });
   expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
-  return JSON.parse(new TextDecoder().decode(result.stdout).trim());
+  const output = JSON.parse(new TextDecoder().decode(result.stdout).trim()) as Record<string, unknown>;
+  expect(output.kind, String(output.message ?? "")).not.toBe("error");
+  return output;
 }
 
 function server(project: string, env: NodeJS.ProcessEnv, heartbeat: string): void {

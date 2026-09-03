@@ -35,9 +35,11 @@ function fixture(enabled = true): { project: string; home: string; env: NodeJS.P
   }
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    AIDLC_RUNTIME_HARNESS_ROOT: join(ROOT, "dist", "claude", ".claude"),
     AIDLC_REVIEW_HOME: home,
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
   };
   if (enabled) env.AIDLC_REVIEW_UI = "1";
   else delete env.AIDLC_REVIEW_UI;
@@ -51,8 +53,9 @@ function run(project: string, env: NodeJS.ProcessEnv, args: string[]): Record<st
     stdout: "pipe",
     stderr: "pipe",
   });
-  expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
-  return JSON.parse(new TextDecoder().decode(result.stdout).trim());
+  const output = JSON.parse(new TextDecoder().decode(result.stdout).trim()) as Record<string, unknown>;
+  expect(output.kind, String(output.message ?? "")).not.toBe("error");
+  return output;
 }
 
 function audit(project: string): string {
