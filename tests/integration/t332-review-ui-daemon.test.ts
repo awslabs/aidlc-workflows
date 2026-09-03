@@ -314,6 +314,7 @@ describe("t332 review UI daemon HTTP API", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+
         stage: "requirements-analysis",
         unit: null,
         revision: 1,
@@ -322,6 +323,23 @@ describe("t332 review UI daemon HTTP API", () => {
       }),
     });
     expect(staleFeedback.status).toBe(409);
+    const tree = await authorized("/api/tree");
+    expect(tree.status).toBe(200);
+    const treeBody = await tree.json();
+    expect(treeBody.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: artifactPath, type: "file" }),
+      ]),
+    );
+    expect(treeBody.entries.some((entry: { path: string }) => entry.path.includes(".review-ui"))).toBeFalse();
+
+    const stageDir = artifactPath.slice(0, artifactPath.lastIndexOf("/"));
+    const snapshots = await authorized(`/api/snapshots?stage_dir=${encodeURIComponent(stageDir)}`);
+    expect(await snapshots.json()).toEqual({ revisions: [0] });
+    const snapshot = await authorized(
+      `/api/snapshot?stage_dir=${encodeURIComponent(stageDir)}&revision=0&file=requirements.md`,
+    );
+    expect(await snapshot.json()).toEqual({ source: "# Requirements\n\nOriginal requirement.\n" });
 
     const tooLarge = await authorized("/api/feedback", {
       method: "POST",
