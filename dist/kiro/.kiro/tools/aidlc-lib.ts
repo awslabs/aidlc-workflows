@@ -6884,6 +6884,8 @@ export function summaryConfirmationContentHash(content: string): string {
   for (const [start, end] of excludedRanges) {
     for (let line = start; line < end; line++) excluded.add(line);
   }
+  // `[Note]:` lines are discussion input: they remain ordinary semantic
+  // content in the confirmation hash, but are never parsed as answer tags.
   const confirmedContent = lines
     .filter((_, line) => !excluded.has(line))
     .join("\n")

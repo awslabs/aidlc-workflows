@@ -387,12 +387,14 @@ options:
     description: I'll fill in the answers in the file directly
   - label: Chat
     description: Discuss freely — I'll extract decisions from our conversation
+  - label: Guide me in the browser
+    description: Read an explainer with trade-offs and answer in the browser
 ```
 
-On a numbered-prose harness, this interaction-mode question has four visible
-numbered lines: `1. Guide me`, `2. I'll edit the file`, `3. Chat`, and the final
-`4. Other`. Mentioning Other in a nearby tip or sentence does not satisfy the
-structured-question contract.
+Include **Guide me in the browser** ONLY when `directive.review_ui` is present.
+On a numbered-prose harness that gives five visible lines: the four semantic
+options above, then the final Other; without `review_ui`, retain the existing
+three semantic options plus Other.
 
 Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Question interaction log format.
 
@@ -481,6 +483,10 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
   checkpoint from Step 3a. Editing the source file does not waive the separate
   pre-generation confirmation.
 
+**Step 3d: If "Guide me in the browser":**
+- Load `stage-protocol-guide.md`, write and check `<stage-dir>/<slug>-questions-guide.html`, then say: "Open the review UI (`**Browser:** <review_ui.url>` or origin fallback) → Questions. When you have saved your answers there, send **done**." END TURN.
+- On done run `bun .cursor/tools/aidlc-log.ts answers-apply --stage <slug> --questions-file <path> [--unit <unit>]`, then continue exactly as Step 3b: read the file, present the consolidated summary, and run the same **Looks correct / Request changes** checkpoint.
+
 **Step 3c: If "Chat" (freeform mode):**
 - Engage in open-ended conversation about the stage's topic
 - Ask questions naturally and let the user elaborate at their own pace
@@ -517,6 +523,7 @@ After collecting answers, analyze ALL responses for:
 - Vague answers: "mix of", "not sure", "depends", "probably"
 - Contradictions between answers
 - Missing details needed for the next step
+- `[Note]:` lines are discussion input for follow-ups; they are never answers and never invalid-answer errors.
 
 If ANY ambiguity found: create follow-up questions and resolve before proceeding.
 **When in doubt, ask.** Incomplete answers lead to poor designs.

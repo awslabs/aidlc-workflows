@@ -69,6 +69,7 @@ export const VALID_PROTOCOL_MODULES = [
   "construction",
   "swarm",
   "html",
+  "guide",
 ] as const;
 export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
 

@@ -493,6 +493,84 @@ export function checkHtmlArtifact(
 	return { ok: findings.length === 0, findings };
 }
 
+function guideQuestionOptions(markdown: string): Map<string, Set<string>> {
+	const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+	const questions = new Map<string, Set<string>>();
+	let current: Set<string> | null = null;
+	let inFence = false;
+	for (const line of lines) {
+		if (/^\s{0,3}(?:```|~~~)/.test(line)) {
+			inFence = !inFence;
+			continue;
+		}
+		if (inFence) continue;
+		const heading = /^\s{0,3}##[ \t]+Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?[ \t]*#*[ \t]*$/.exec(line);
+		if (heading) {
+			const id = `Q${heading[1]}`;
+			if (!questions.has(id)) questions.set(id, new Set());
+			current = questions.get(id)!;
+			continue;
+		}
+		if (/^\s{0,3}##(?:[ \t]|$)/.test(line)) {
+			current = null;
+			continue;
+		}
+		const option = /^\s*([A-Z])\.\s+/.exec(line);
+		if (current && option) current.add(option[1]);
+	}
+	return questions;
+}
+
+/** Check a browser explainer against its authoritative questions file. */
+export function checkGuideArtifact(
+	html: string,
+	questionsMarkdown: string,
+	identity: HtmlArtifactIdentity = {},
+): HtmlArtifactCheck {
+	const base = checkHtmlArtifact(html, identity);
+	const findings = [...base.findings];
+	const questions = guideQuestionOptions(questionsMarkdown);
+	const root = parseHtml(html);
+	const guideSections = elements(root.children).filter(
+		(node) => node.tag === "section" && "data-aidlc-question" in node.attrs,
+	);
+	const sectionsById = new Map<string, HtmlElement[]>();
+	for (const section of guideSections) {
+		const id = section.attrs["data-aidlc-question"];
+		const matches = sectionsById.get(id) ?? [];
+		matches.push(section);
+		sectionsById.set(id, matches);
+		if (!questions.has(id)) {
+			findings.push(`guide has extra question section "${id}"`);
+		}
+	}
+	for (const id of questions.keys()) {
+		const count = sectionsById.get(id)?.length ?? 0;
+		if (count === 0) findings.push(`guide is missing question section "${id}"`);
+		else if (count > 1) findings.push(`guide has ${count} sections for question "${id}"`);
+	}
+
+	const visit = (nodes: readonly HtmlNode[], questionId: string | null): void => {
+		for (const node of nodes) {
+			if (node.type === "text") continue;
+			const sectionId = node.tag === "section" && "data-aidlc-question" in node.attrs
+				? node.attrs["data-aidlc-question"]
+				: questionId;
+			if ("data-aidlc-recommend" in node.attrs) {
+				const letter = node.attrs["data-aidlc-recommend"];
+				if (!sectionId) {
+					findings.push(`recommendation "${letter}" is outside a question section`);
+				} else if (!questions.get(sectionId)?.has(letter)) {
+					findings.push(`recommendation "${letter}" is not an option for ${sectionId}`);
+				}
+			}
+			visit(node.children, sectionId);
+		}
+	};
+	visit(root.children, null);
+	return { ok: findings.length === 0, findings };
+}
+
 function localAssetPath(baseDir: string, reference: string): string | null {
 	if (unsafeReference(reference)) return null;
 	const clean = reference.split(/[?#]/, 1)[0];
@@ -567,6 +645,7 @@ export function exportSelfContained(path: string): string {
 const USAGE = `Usage:
   bun aidlc-html.ts text <file>
   bun aidlc-html.ts check <file> [--name <name>] [--stage <slug>]
+  bun aidlc-html.ts check --guide <file> --questions <md>
   bun aidlc-html.ts export <file> [--out <path>]`;
 
 function usage(): number {
@@ -575,10 +654,13 @@ function usage(): number {
 }
 
 function cli(argv: string[]): number {
-	const [command, path, ...args] = argv;
-	if (!command || !path || !["text", "check", "export"].includes(command)) return usage();
-	if (!existsSync(path)) {
-		process.stderr.write(`aidlc-html: file not found: ${path}\n`);
+	const [command, first, ...rest] = argv;
+	if (!command || !first || !["text", "check", "export"].includes(command)) return usage();
+	const guideMode = command === "check" && first === "--guide";
+	const path = guideMode ? rest[0] : first;
+	const args = guideMode ? rest.slice(1) : rest;
+	if (!path || !existsSync(path)) {
+		process.stderr.write(`aidlc-html: file not found: ${path ?? ""}\n`);
 		return 1;
 	}
 	const flags: Record<string, string> = {};
@@ -594,11 +676,28 @@ function cli(argv: string[]): number {
 		return 0;
 	}
 	if (command === "check") {
-		if (Object.keys(flags).some((flag) => flag !== "name" && flag !== "stage")) return usage();
-		const result = checkHtmlArtifact(readFileSync(path, "utf-8"), {
-			name: flags.name ?? basename(path).replace(/\.html$/i, ""),
-			stage: flags.stage ?? basename(dirname(path)),
-		});
+		const allowed = guideMode ? ["questions"] : ["name", "stage"];
+		if (Object.keys(flags).some((flag) => !allowed.includes(flag))) return usage();
+		if (guideMode && (!flags.questions || !existsSync(flags.questions))) {
+			process.stderr.write(`aidlc-html: questions file not found: ${flags.questions ?? ""}\n`);
+			return 1;
+		}
+		const artifactName = basename(path).replace(/\.html$/i, "");
+		const identity = {
+			name: flags.name ?? artifactName,
+			stage: flags.stage ?? (
+				guideMode
+					? artifactName.replace(/-questions-guide$/, "")
+					: basename(dirname(path))
+			),
+		};
+		const result = guideMode
+			? checkGuideArtifact(
+				readFileSync(path, "utf-8"),
+				readFileSync(flags.questions, "utf-8"),
+				identity,
+			)
+			: checkHtmlArtifact(readFileSync(path, "utf-8"), identity);
 		if (!result.ok) process.stdout.write(`${result.findings.join("\n")}\n`);
 		return result.ok ? 0 : 1;
 	}

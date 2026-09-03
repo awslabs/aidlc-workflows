@@ -418,12 +418,23 @@ function prepareEmission(directive: Directive): PreparedEmission {
       const recordPrefix = engineRelativeRecordDir(engineProjectDir);
       const record = recordPrefix ? join(engineProjectDir, ...recordPrefix.split("/")) : null;
       const open = record ? readCurrentPointer(record)?.open : null;
+      const reviewUi = {
+        origin,
+        ...(openLinkIsFresh(open, engineProjectDir) ? { url: open.url } : {}),
+      };
       transported = {
         ...transported,
-        review_ui: {
-          origin,
-          ...(openLinkIsFresh(open, engineProjectDir) ? { url: open.url } : {}),
-        },
+        review_ui: reviewUi,
+        ...(transported.kind === "run-stage"
+          ? {
+            protocol_modules: [
+              ...(transported.protocol_modules ?? []),
+              ...((transported.protocol_modules ?? []).includes("guide")
+                ? []
+                : (["guide"] as const)),
+            ],
+          }
+          : {}),
       } as Directive;
     }
   }
