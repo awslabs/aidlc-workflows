@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 924,
+    "total": 930,
     "enumeratedByClass": {
-      "function": 623,
+      "function": 629,
       "audit": 93,
       "scope": 11,
       "stage": 33,
@@ -1224,6 +1224,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:admitPlanningDispatch",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:advanceContinuationCursor",
       "minMechanism": "none",
       "coveredBy": [
@@ -2088,6 +2095,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:completePlanningDispatch",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4264,6 +4278,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parsePlanningDispatchRecord",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parsePluginCommand",
       "minMechanism": "none",
       "coveredBy": [
@@ -4454,6 +4475,20 @@
     {
       "unitClass": "function",
       "unitId": "function:planFilePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:PLANNING_DISPATCH_TTL_MS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:planningDispatchPath",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4754,6 +4789,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPlanningDispatchWindow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
