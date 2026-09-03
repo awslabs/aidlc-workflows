@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
@@ -19,6 +19,19 @@ import {
 
 const created: string[] = [];
 
+const originalReviewHome = process.env.AIDLC_REVIEW_HOME;
+let reviewHome = "";
+
+beforeAll(() => {
+  reviewHome = mkdtempSync(join(tmpdir(), "aidlc-review-home-"));
+  process.env.AIDLC_REVIEW_HOME = reviewHome;
+});
+
+afterAll(() => {
+  if (originalReviewHome === undefined) delete process.env.AIDLC_REVIEW_HOME;
+  else process.env.AIDLC_REVIEW_HOME = originalReviewHome;
+  rmSync(reviewHome, { recursive: true, force: true });
+});
 afterEach(() => {
   while (created.length > 0) rmSync(created.pop()!, { recursive: true, force: true });
 });

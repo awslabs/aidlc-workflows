@@ -85,11 +85,8 @@ Options:
   --help                            Show this help
 `;
 
-function forbiddenPage(importedFromOpenLink = false): Response {
-  const reason = importedFromOpenLink
-    ? "This review link expired or was already used."
-    : "This review UI needs a fresh login link.";
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Review UI access required</title></head><body><main><h1>Review UI access required</h1><p>${reason}</p><p>Run <code>bun &lt;harnessDir&gt;/tools/aidlc-review-ui.ts open</code> for a fresh one.</p></main></body></html>`;
+function forbiddenPage(): Response {
+  const html = '<!doctype html><html><head><meta charset="utf-8"><title>Review UI access required</title></head><body><main><h1>Review UI access required</h1><p>This review link expired or was already used.</p><p>Run <code>bun &lt;harnessDir&gt;/tools/aidlc-review-ui.ts open</code> for a fresh one.</p></main></body></html>';
   return new Response(html, {
     status: 403,
     headers: {
@@ -630,7 +627,7 @@ async function serve(projectDir: string): Promise<void> {
 
       const openMatch = /^\/open\/([^/]+)$/.exec(url.pathname);
       if (request.method === "GET" && openMatch) {
-        if (!consumeReviewUiOpenNonce(projectDir, openMatch[1])) return forbiddenPage(true);
+        if (!consumeReviewUiOpenNonce(projectDir, openMatch[1])) return forbiddenPage();
         return new Response(null, {
           status: 302,
           headers: {
@@ -775,7 +772,21 @@ function status(projectDir: string, asJson: boolean): void {
   const info = readServerInfo(projectDir);
   const running = serverInfoLooksAlive(info);
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ running, server: info }, null, 2)}\n`);
+    const server = info
+      ? {
+          version: info.version,
+          pid: info.pid,
+          host: info.host,
+          port: info.port,
+          url: info.url,
+          project_dir: info.project_dir,
+          project_id: info.project_id,
+          started_at: info.started_at,
+          heartbeat_at: info.heartbeat_at,
+          idle_minutes: info.idle_minutes,
+        }
+      : null;
+    process.stdout.write(`${JSON.stringify({ running, server }, null, 2)}\n`);
     return;
   }
   if (!running || !info) {
