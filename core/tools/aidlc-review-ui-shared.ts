@@ -17,7 +17,7 @@
 //   <stage-dir>/.review-ui/answers-<NNN>.json      browser answer submissions (daemon-written; M3)
 //   <stage-dir>/.review-ui/consumed.json           feedback/answers already ingested by the engine
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -89,13 +89,19 @@ export function serverLogPath(projectDir: string, env: NodeJS.ProcessEnv = proce
   return join(reviewUiProjectHome(projectDir, env), "server.log");
 }
 
+/** One-time open capabilities live here as `<nonce>` files whose content is the expiry ISO time. */
+export function noncesDir(projectDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return join(reviewUiProjectHome(projectDir, env), "nonces");
+}
+
 export interface ServerInfo {
   version: 1;
   pid: number;
   host: string;
   port: number;
-  /** Full URL including the `?k=<token>` query the first request must carry. */
+  /** Tokenless origin with trailing slash, e.g. `http://localhost:47391/`. Never carries the token. */
   url: string;
+  /** Long-lived bearer; lives only here (0600) and in the HttpOnly cookie the daemon sets. */
   token: string;
   project_dir: string;
   project_id: string;
@@ -158,10 +164,69 @@ export function serverInfoLooksAlive(info: ServerInfo | null, now: number = Date
   return now - beat <= HEARTBEAT_STALE_MS;
 }
 
-/** The URL the engine prints at the gate, or null when no live daemon serves this project. */
-export function liveReviewUiUrl(projectDir: string, env: NodeJS.ProcessEnv = process.env): string | null {
+/** Tokenless origin of the live daemon, or null. Safe to print anywhere. */
+export function liveReviewUiOrigin(projectDir: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const info = readServerInfo(projectDir, env);
   return serverInfoLooksAlive(info) ? info.url : null;
+}
+
+export const OPEN_NONCE_TTL_MS = 30 * 60_000;
+const NONCE_RE = /^[0-9a-f]{32}$/;
+
+/**
+ * Mint a single-use `/open/<nonce>` link for a human to click. The nonce is a
+ * 0600 file in the daemon's private dir; the daemon consumes it (deletes it)
+ * and answers with the HttpOnly session cookie. Printed links therefore never
+ * carry the long-lived token, and a link copied out of a transcript dies after
+ * one use or `ttlMs`. Returns null when no live daemon serves the project.
+ */
+export function mintReviewUiOpenUrl(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  ttlMs: number = OPEN_NONCE_TTL_MS,
+  now: number = Date.now(),
+): string | null {
+  const info = readServerInfo(projectDir, env);
+  if (!serverInfoLooksAlive(info, now)) return null;
+  const dir = noncesDir(projectDir, env);
+  ensurePrivateDir(dir);
+  sweepExpiredNonces(dir, now);
+  const nonce = randomBytes(16).toString("hex");
+  writeFileSync(join(dir, nonce), new Date(now + ttlMs).toISOString(), { mode: 0o600 });
+  return `${info.url}open/${nonce}`;
+}
+
+/** Daemon side: true (and the nonce file is gone) iff the nonce was valid and unexpired. */
+export function consumeReviewUiOpenNonce(
+  projectDir: string,
+  nonce: string,
+  env: NodeJS.ProcessEnv = process.env,
+  now: number = Date.now(),
+): boolean {
+  if (!NONCE_RE.test(nonce)) return false;
+  const path = join(noncesDir(projectDir, env), nonce);
+  let expiry: number;
+  try {
+    expiry = Date.parse(readFileSync(path, "utf-8").trim());
+  } catch {
+    return false;
+  }
+  rmSync(path, { force: true });
+  return Number.isFinite(expiry) && now <= expiry;
+}
+
+function sweepExpiredNonces(dir: string, now: number): void {
+  for (const entry of readdirSync(dir)) {
+    if (!NONCE_RE.test(entry)) continue;
+    const path = join(dir, entry);
+    let expiry = Number.NaN;
+    try {
+      expiry = Date.parse(readFileSync(path, "utf-8").trim());
+    } catch {
+      // Unreadable: treat as expired below.
+    }
+    if (!Number.isFinite(expiry) || now > expiry) rmSync(path, { force: true });
+  }
 }
 
 // --- Record-side layout --------------------------------------------------------
