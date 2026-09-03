@@ -66,7 +66,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |
 | [Agents](06-agents.md) | The 14-agent roster: 11 domain experts, 2 reviewers, and the composer |
 | [Agent deep dives](agents/README.md) | Per-agent reference pages: responsibilities, stages, knowledge |
-| [Interaction Modes](07-interaction-modes.md) | Guide Me / Edit File / Chat and approval gates |
+| [Interaction Modes](07-interaction-modes.md) | Guide Me / Edit File / Chat, optional Guide me in the browser, and approval gates |
 | [Review in the Browser](18-review-in-the-browser.md) | Local artifact annotations, revision diffs, exports, browser questions and explainers, optional HTML artifacts |
 | [Knowledge](08-knowledge.md) | Adding company standards and cataloguing team documents |
 | [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) | Self-learning behavioral rules |
