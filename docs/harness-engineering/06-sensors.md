@@ -54,27 +54,28 @@ User Guide.
 
 ---
 
-## The six sensors that ship
+## The seven sensors that ship
 
-Six manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
+Seven manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
 
 | Manifest | Dispatch | Checks |
 |----------|----------|--------|
 | `aidlc-claim-sources.md` | Gate | Every Intent Capture claim carries a resolvable source tag; registered description, scope, and memory values match authoritative inputs; retained assumptions exactly match explicit human confirmation |
-| `aidlc-required-sections.md` | Gate | The output carries the required H2 headings — a generic content-shape check |
-| `aidlc-upstream-coverage.md` | Gate | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
+| `aidlc-html-shape.md` | Gate | HTML outputs follow the self-contained artifact authoring contract; stages with no HTML outputs pass |
+| `aidlc-required-sections.md` | Gate | Markdown and HTML outputs carry the required H2 headings — a generic content-shape check |
+| `aidlc-upstream-coverage.md` | Gate | The stage's Markdown and HTML deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
 | `aidlc-traceability.md` | Write: `**/traceability.json` | Validates stable upstream IDs, statuses, deterministic targets, and derived business-rule orphans |
 | `aidlc-linter.md` | Write: `.ts` / `.js` | Wraps your configured linter (ESLint by default) |
 | `aidlc-type-check.md` | Write: `.ts` / `.tsx` | Wraps your configured type-checker (`tsc` by default) |
 
-All six are gated by a `matches:` glob (more on that below): the provenance
-check and two document-shape checks scope to the artifact tree (the shipped manifests carry
+All seven are gated by a `matches:` glob (more on that below): the provenance
+check and three document-shape checks scope to the artifact tree (the shipped manifests carry
 `**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy
 `aidlc-docs/` arm kept for a pre-migration project), traceability scopes to
 `**/traceability.json`, and the two code-quality checks to their language globs
 (`**/*.{ts,js}`, `**/*.{ts,tsx}`).
 Read `aidlc-required-sections.md` end to end before authoring your own — it is
-the smallest of the six and shows the whole shape, frontmatter plus prose body.
+the smallest of the seven and shows the whole shape, frontmatter plus prose body.
 
 ---
 

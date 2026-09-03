@@ -1,9 +1,9 @@
-// covers: function:parseSensorManifest, function:validateSensorManifest, file:sensors/aidlc-claim-sources.md, file:sensors/aidlc-required-sections.md, file:sensors/aidlc-upstream-coverage.md, file:sensors/aidlc-traceability.md, file:sensors/aidlc-linter.md, file:sensors/aidlc-type-check.md
+// covers: function:parseSensorManifest, function:validateSensorManifest, file:sensors/aidlc-claim-sources.md, file:sensors/aidlc-html-shape.md, file:sensors/aidlc-required-sections.md, file:sensors/aidlc-upstream-coverage.md, file:sensors/aidlc-traceability.md, file:sensors/aidlc-linter.md, file:sensors/aidlc-type-check.md
 //
-// t86 — sensor manifest schema for the 6 framework sensors + the legacy
+// t86 — sensor manifest schema for the 7 framework sensors + the legacy
 // negative-case fixtures. Migrated from tests/unit/t86-sensor-manifest-schema.sh
-// (extended plan 40: Part 1 = 7 existence rows, Part 2 = 6 manifests × 5
-// frontmatter rows = 30, Part 3 = 3 negative-fixture rejection rows).
+// (expanded plan 46: Part 1 = 8 directory/existence rows, Part 2 = 7 manifests
+// × 5 frontmatter rows = 35, Part 3 = 3 negative-fixture rejection rows).
 //
 // Mechanism: none. This is a pure schema / structural check over shipped bytes
 // — no process boundary, no argv/exit/stdout seam, no LLM, zero tokens. The .sh
@@ -78,11 +78,12 @@ import {
 const SENSORS_DIR = join(AIDLC_SRC, "sensors");
 const NEG_DIR = join(FIXTURES_DIR, "v05-mr3-sensors-dir");
 
-// The 6 framework manifests, keyed by their expected frontmatter id. id MUST
+// The 7 framework manifests, keyed by their expected frontmatter id. id MUST
 // equal the filename stem minus the `aidlc-` prefix and the `.md` suffix
 // (filename↔id contract). Same roster as the .sh's SENSOR_NAMES.
 const SENSOR_NAMES = [
   "claim-sources",
+  "html-shape",
   "required-sections",
   "upstream-coverage",
   "traceability",
@@ -94,6 +95,7 @@ const manifestPath = (name: string): string =>
   join(SENSORS_DIR, `aidlc-${name}.md`);
 const GATE_SENSORS = new Set([
   "claim-sources",
+  "html-shape",
   "required-sections",
   "upstream-coverage",
 ]);
@@ -123,7 +125,7 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
     expect(statSync(SENSORS_DIR).isDirectory()).toBe(true);
   });
 
-  test("each of the 6 framework manifests exists [Part 1 ×6]", () => {
+  test("each of the 7 framework manifests exists [Part 1 ×7]", () => {
     for (const name of SENSOR_NAMES) {
       const f = manifestPath(name);
       expect(existsSync(f), `missing sensors/aidlc-${name}.md`).toBe(true);
@@ -279,23 +281,24 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
     ).toThrow(/default_severity must be one of: "advisory", "blocking"/);
   });
 
-  // Re-count the original migrated assertion budget. The fire/severity enum
-  // cases above are additive coverage for the expanded schema.
-  test("covers EXACTLY 40 migrated assertions", () => {
-    const PART1 = 1 + SENSOR_NAMES.length; // dir + 6 files = 7
-    const PART2 = SENSOR_NAMES.length * 5; // 6 manifests × 5 checks = 30
-    const PART3 = 3; // 3 negative-case fixtures
-    expect(PART1).toBe(7);
-    expect(PART2).toBe(30);
-    expect(PART3).toBe(3);
-    expect(PART1 + PART2 + PART3).toBe(40);
-    expect([...SENSOR_NAMES]).toEqual([
-      "claim-sources",
-      "required-sections",
-      "upstream-coverage",
-      "traceability",
-      "linter",
-      "type-check",
-    ]);
-  });
+	// Re-count the original manifest assertions for the expanded catalogue. The
+	// fire/severity enum cases above remain additive coverage.
+	test("covers EXACTLY 46 manifest assertions", () => {
+		const PART1 = 1 + SENSOR_NAMES.length; // dir + 7 files = 8
+		const PART2 = SENSOR_NAMES.length * 5; // 7 manifests × 5 checks = 35
+		const PART3 = 3; // 3 negative-case fixtures
+		expect(PART1).toBe(8);
+		expect(PART2).toBe(35);
+		expect(PART3).toBe(3);
+		expect(PART1 + PART2 + PART3).toBe(46);
+		expect([...SENSOR_NAMES]).toEqual([
+			"claim-sources",
+			"html-shape",
+			"required-sections",
+			"upstream-coverage",
+			"traceability",
+			"linter",
+			"type-check",
+		]);
+	});
 });

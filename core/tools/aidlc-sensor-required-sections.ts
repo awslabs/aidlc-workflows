@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { errorMessage, parseBoltDag } from "./aidlc-lib.ts";
+import { readArtifactText } from "./aidlc-html.ts";
 
 interface Result {
 	pass: boolean;
@@ -122,11 +123,9 @@ export function main(argv: string[]): void {
 		fail(`--output-path not found: ${flags.outputPath}`);
 	}
 
-	// This sensor validates Markdown document shape. Its broad record-tree
-	// manifest glob also matches structured stage artifacts such as
-	// traceability.json, so non-Markdown outputs quiet-pass before any read,
-	// heading, template, or filename-specific logic.
-	if (!flags.outputPath.toLowerCase().endsWith(".md")) {
+	// Structured machine artifacts remain outside this document-shape sensor;
+	// authored HTML is projected to Markdown so heading checks stay identical.
+	if (!/\.(?:md|html)$/i.test(flags.outputPath)) {
 		const result: Result = {
 			pass: true,
 			h2_count: 0,
@@ -139,7 +138,7 @@ export function main(argv: string[]): void {
 
 	let body: string;
 	try {
-		body = readFileSync(flags.outputPath, "utf-8");
+		body = readArtifactText(flags.outputPath);
 	} catch (err) {
 		fail(
 			`failed to read --output-path ${flags.outputPath}: ${errorMessage(err)}`,
@@ -185,7 +184,7 @@ export function main(argv: string[]): void {
 	// artifact set, so the dispatcher threads --template-eligible. A resolved
 	// template applies ONLY when the stem ∈ that set; otherwise it is ignored
 	// and an advisory config warning is emitted (the output keeps its floor).
-	const stem = basename(flags.outputPath).replace(/\.md$/, "");
+	const stem = basename(flags.outputPath).replace(/\.(?:md|html)$/i, "");
 	const templatePath = resolveTemplatePath(stem, flags);
 	if (templatePath) {
 		const eligible = (flags.templateEligible ?? []).includes(stem);

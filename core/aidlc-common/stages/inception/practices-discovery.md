@@ -38,6 +38,7 @@ requires_stage:
   - state-init
   - reverse-engineering
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
 scopes:
@@ -267,7 +268,7 @@ Use the stage-protocol.md completion template:
 This stage's declared outputs are markdown artifacts under
 `<record>/inception/practices-discovery/`.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: `code-structure`, `technology-stack`, `dependencies`, `code-quality-assessment`, `architecture`, `business-overview`.
 
