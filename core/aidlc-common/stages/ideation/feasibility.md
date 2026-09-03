@@ -27,6 +27,7 @@ requires_stage:
   - intent-capture
   - market-research
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
 scopes:
@@ -86,7 +87,7 @@ Standard approval gate (Approve / Request Changes).
 
 This stage's outputs are markdown artefacts under `<record>/ideation/feasibility/`.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: `intent-statement`, `competitive-analysis`, `market-trends`, `build-vs-buy`.
 
