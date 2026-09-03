@@ -1,3 +1,5 @@
+// covers: function:htmlToMarkdown, function:readArtifactText, function:checkHtmlArtifact, function:exportSelfContained
+
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

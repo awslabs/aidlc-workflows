@@ -1,3 +1,5 @@
+// covers: subcommand:aidlc-sensor-html-shape, subcommand:aidlc-sensor-required-sections
+
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
