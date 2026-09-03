@@ -14,6 +14,7 @@ import {
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTarGz, type ArchiveEntry } from "../core/tools/aidlc-archive.ts";
+import { parseVersion, PREVIEW_CHANNEL, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { projectionFiles, walkFiles } from "../core/tools/aidlc-distribution.ts";
 import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
 import { digest, type ReleaseAsset, type ReleaseManifest } from "../core/tools/aidlc-release.ts";
@@ -21,6 +22,10 @@ import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RELEASE_SOURCE_REF = "refs/heads/main";
+// Stable builds publish the source version; a preview build carries the id
+// AIDLC_BUILD_VERSION stamped into the projections regenerated below, so
+// version.json, every aidlc-version.ts copy, and the release tag agree.
+const BUILD_VERSION = releaseBuildVersion();
 
 function valueAfter(argv: string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
@@ -356,12 +361,15 @@ function build(argv: string[]): void {
     "m",
   ).exec(changelog)?.[1];
   if (!releaseDate) throw new Error(`CHANGELOG.md has no dated ${AIDLC_VERSION} release heading`);
+  const build = parseVersion(BUILD_VERSION);
   const date = process.env.SOURCE_DATE_EPOCH
     ? new Date(Number(process.env.SOURCE_DATE_EPOCH) * 1000).toISOString().slice(0, 10)
+    : build.channel === PREVIEW_CHANNEL && build.date
+    ? `${build.date.slice(0, 4)}-${build.date.slice(4, 6)}-${build.date.slice(6, 8)}`
     : releaseDate;
   const manifest: ReleaseManifest = {
     schemaVersion: 1,
-    version: AIDLC_VERSION,
+    version: BUILD_VERSION,
     date,
     sourceRef: RELEASE_SOURCE_REF,
     sourceDigest: releaseSourceDigest(),

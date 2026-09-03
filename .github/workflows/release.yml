@@ -4,23 +4,55 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Unused version tag to publish
+        description: Unused version tag to publish (stable channel only)
         type: string
-        required: true
+        required: false
+      channel:
+        description: Release channel to publish
+        type: choice
+        default: stable
+        options:
+          - stable
+          - preview
+  # The preview channel publishes the main stream once a day (a non-top-of-hour
+  # minute avoids the GitHub scheduler's busiest slots). A scheduled run is
+  # always a preview run; it exits early when main has not moved since the
+  # newest preview was cut.
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
 
+# One release run per channel at a time, never cancelled. A scheduled preview
+# and a manual preview dispatched in the same window would otherwise both call
+# ci.yml, whose ci-<ref> group cancels the older run; queued here instead, the
+# second run observes the freshly published preview and exits early.
+concurrency:
+  group: release-${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'stable' }}
+  cancel-in-progress: false
+
 jobs:
   authorize:
     runs-on: ubuntu-latest
-    environment: release
+    # One workflow, two environments. A stable run enters `release`, whose
+    # required reviewers (aidlc-admins) approve every stable publication. A
+    # preview run enters `preview`: the same publication variables and App
+    # secret, the same main-only deployment policy, but no required reviewers,
+    # so the daily schedule runs unattended. The human review that guards a
+    # preview is the approval every merge to main already needs, plus the ci.yml
+    # gate below. publish and promote select the environment the same way.
+    environment: ${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'release' }}
     permissions:
       actions: read
       contents: read
     outputs:
-      tag: ${{ steps.authorize.outputs.tag }}
+      channel: ${{ steps.authorize.outputs.channel }}
+      tag: ${{ steps.plan.outputs.tag || steps.authorize.outputs.tag }}
       sha: ${{ steps.authorize.outputs.sha }}
+      skip: ${{ steps.plan.outputs.skip == 'true' }}
+      preview_version: ${{ steps.plan.outputs.preview_version }}
+      preview_plan: ${{ steps.plan.outputs.preview_plan }}
       publication_repository: ${{ steps.authorize.outputs.publication_repository }}
       publication_owner: ${{ steps.authorize.outputs.publication_owner }}
       publication_name: ${{ steps.authorize.outputs.publication_name }}
@@ -35,13 +67,36 @@ jobs:
         env:
           PUBLICATION_REPOSITORY: ${{ vars.AIDLC_PUBLICATION_REPOSITORY }}
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          # Stable: a manual dispatch naming the unused vX.Y.Z tag. Preview: the
+          # daily schedule, or a manual dispatch selecting the preview channel;
+          # the tag is allocated later from the publication repository.
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            channel=preview
+          else
+            test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+            channel="${RELEASE_CHANNEL:-stable}"
+          fi
+          case "$channel" in
+            stable)
+              [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+              ;;
+            preview)
+              if [ -n "$RELEASE_TAG" ]; then
+                echo "::error title=Release input failure::The preview channel allocates its own tag; leave the tag input empty."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error title=Release input failure::Unknown release channel $channel."
+              exit 1
+              ;;
+          esac
           test "$GITHUB_REF" = "refs/heads/main"
           if [ -z "$PUBLICATION_REPOSITORY" ]; then
-            echo "::error title=Release repository policy failure::The protected release environment must provide AIDLC_PUBLICATION_REPOSITORY."
+            echo "::error title=Release repository policy failure::The protected release or preview environment must provide AIDLC_PUBLICATION_REPOSITORY."
             exit 1
           fi
           git fetch --no-tags origin main
@@ -53,8 +108,8 @@ jobs:
           publication_owner="${PUBLICATION_REPOSITORY%%/*}"
           publication_name="${PUBLICATION_REPOSITORY#*/}"
           test "$publication_owner" = "$GITHUB_REPOSITORY_OWNER"
-          printf 'tag=%s\nsha=%s\npublication_repository=%s\npublication_owner=%s\npublication_name=%s\n' \
-            "$RELEASE_TAG" "$main_sha" "$PUBLICATION_REPOSITORY" \
+          printf 'channel=%s\ntag=%s\nsha=%s\npublication_repository=%s\npublication_owner=%s\npublication_name=%s\n' \
+            "$channel" "$RELEASE_TAG" "$main_sha" "$PUBLICATION_REPOSITORY" \
             "$publication_owner" "$publication_name" >> "$GITHUB_OUTPUT"
       - name: Require protected release authorization identity
         shell: bash
@@ -91,6 +146,7 @@ jobs:
           GH_TOKEN: ${{ steps.release-authorization-token.outputs.token }}
           PUBLICATION_REPOSITORY: ${{ steps.authorize.outputs.publication_repository }}
           RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          RELEASE_CHANNEL: ${{ steps.authorize.outputs.channel }}
         run: |
           set -euo pipefail
           authorization_failure() {
@@ -101,35 +157,48 @@ jobs:
             echo "::error title=Release repository policy failure::$1"
             exit 1
           }
-          if ! environment="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")"; then
+          # The channel's environment. A stable run is approved through the
+          # aidlc-admins reviewer rule on `release`; a preview run enters `preview`,
+          # which must carry no reviewer rule at all, because an approval-gated
+          # schedule is not a daily channel. Both must keep the main-only policy.
+          if [ "$RELEASE_CHANNEL" = preview ]; then
+            environment_name=preview
+            reviewer_policy='([.protection_rules[] | select(.type == "required_reviewers")] | length) == 0'
+            reviewer_message="The preview environment must disable administrator bypass and carry no required reviewers."
+          else
+            environment_name=release
+            reviewer_policy='
+              (
+                [.protection_rules[] | select(.type == "required_reviewers")]
+                | length
+              ) == 1 and
+              (
+                [.protection_rules[] | select(.type == "required_reviewers")][0]
+                | .prevent_self_review == true and
+                  (.reviewers | length) == 1 and
+                  .reviewers[0].type == "Team" and
+                  .reviewers[0].reviewer.slug == "aidlc-admins"
+              )'
+            reviewer_message="The release environment must disable administrator bypass and self-review and require exactly the aidlc-admins team."
+          fi
+          if ! environment="$(gh api "repos/$GITHUB_REPOSITORY/environments/$environment_name")"; then
             authorization_failure \
-              "The protected GitHub App identity could not read the release environment."
+              "The protected GitHub App identity could not read the $environment_name environment."
           fi
           if ! jq -e '
             .can_admins_bypass == false and
             .deployment_branch_policy.protected_branches == false and
             .deployment_branch_policy.custom_branch_policies == true and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")]
-              | length
-            ) == 1 and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")][0]
-              | .prevent_self_review == true and
-                (.reviewers | length) == 1 and
-                .reviewers[0].type == "Team" and
-                .reviewers[0].reviewer.slug == "aidlc-admins"
-            )
+            ('"$reviewer_policy"')
           ' <<<"$environment" >/dev/null; then
-            policy_failure \
-              "The release environment must disable administrator bypass and self-review and require exactly the aidlc-admins team."
+            policy_failure "$reviewer_message"
           fi
           if ! policies="$(
             gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
+              "repos/$GITHUB_REPOSITORY/environments/$environment_name/deployment-branch-policies"
           )"; then
             authorization_failure \
-              "The protected GitHub App identity could not read release deployment policies."
+              "The protected GitHub App identity could not read $environment_name deployment policies."
           fi
           if ! jq -e '
             ([.[].branch_policies[]] | length) == 1 and
@@ -137,7 +206,7 @@ jobs:
             [.[].branch_policies[]][0].type == "branch"
           ' <<<"$policies" >/dev/null; then
             policy_failure \
-              "The release environment must allow exactly the main branch deployment policy and no others."
+              "The $environment_name environment must allow exactly the main branch deployment policy and no others."
           fi
           if ! immutable="$(
             gh api "repos/$PUBLICATION_REPOSITORY/immutable-releases"
@@ -201,9 +270,58 @@ jobs:
             --publication-repository "$PUBLICATION_REPOSITORY" \
             --creation-actor-id "$RELEASE_AUTH_APP_ID" \
             --creation-actor-type Integration
+      - name: Plan preview publication
+        id: plan
+        if: steps.authorize.outputs.channel == 'preview'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-authorization-token.outputs.token }}
+          PUBLICATION_REPOSITORY: ${{ steps.authorize.outputs.publication_repository }}
+          AUTHORIZED_SHA: ${{ steps.authorize.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Reads the publication repository's preview tags and releases (public
+          # data) to skip an unchanged main and to allocate today's build counter,
+          # then renders the notes from this checkout's full history.
+          plan="$RUNNER_TEMP/aidlc-preview-plan.json"
+          bun scripts/plan-preview-release.ts \
+            --repository "$PUBLICATION_REPOSITORY" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-digest "$AUTHORIZED_SHA" \
+            --output "$plan"
+          {
+            printf 'preview_plan='
+            jq -c . "$plan"
+          } >> "$GITHUB_OUTPUT"
+
+  # Preview gate: the same deterministic tiers that guard every pull request
+  # (contract checks, smoke + unit, integration + e2e under --no-llm) run on the
+  # authorized main head before a preview builds anything. Nothing else
+  # re-verifies main after a merge. The called workflow checks out the caller's
+  # commit (github.sha), which authorize has already proven equal to origin/main.
+  # Stable runs skip it: their tag-gated dispatch keeps the verify job below as
+  # its gate. gate-result is the join that lets the build chain depend on the
+  # gate without skipping stable runs when the gate itself is skipped, and that
+  # stops the chain when a preview gate fails or when main has not moved since
+  # the newest preview.
+  gate:
+    needs: authorize
+    if: needs.authorize.outputs.channel == 'preview' && needs.authorize.outputs.skip != 'true'
+    uses: ./.github/workflows/ci.yml
+
+  gate-result:
+    needs: [authorize, gate]
+    if: ${{ !cancelled() && needs.authorize.result == 'success' && needs.authorize.outputs.skip != 'true' && (needs.authorize.outputs.channel != 'preview' || needs.gate.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - shell: bash
+        env:
+          CHANNEL: ${{ needs.authorize.outputs.channel }}
+          GATE_RESULT: ${{ needs.gate.result }}
+        run: echo "preview gate for the $CHANNEL channel finished with $GATE_RESULT"
 
   verify:
-    needs: authorize
+    needs: [authorize, gate-result]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -238,9 +356,15 @@ jobs:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
       # t238 builds the native binary from dist-release/; regenerate first so
-      # the smoke proves CI-built bytes on every OS in the matrix.
+      # the smoke proves CI-built bytes on every OS in the matrix. A preview run
+      # stamps the projections and the binary with the preview id (empty for
+      # stable, which leaves the source version in place).
       - run: bun scripts/package.ts
+        env:
+          AIDLC_BUILD_VERSION: ${{ needs.authorize.outputs.preview_version }}
       - run: bun test tests/unit/t238-build-binaries.test.ts
+        env:
+          AIDLC_BUILD_VERSION: ${{ needs.authorize.outputs.preview_version }}
       - if: runner.os == 'Windows'
         run: bun test tests/unit/t244-install-management.test.ts -t "t244 Windows and completion release surfaces"
       - name: PSScriptAnalyzer installer
@@ -281,6 +405,10 @@ jobs:
             target: bun-windows-x64
             directory: windows-x64
     runs-on: ${{ matrix.runner }}
+    env:
+      # Empty for stable; a preview id stamps every projected aidlc-version.ts
+      # copy, the projection stamps, and the compiled binary's version gate.
+      AIDLC_BUILD_VERSION: ${{ needs.authorize.outputs.preview_version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -332,6 +460,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      AIDLC_BUILD_VERSION: ${{ needs.authorize.outputs.preview_version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -467,7 +597,7 @@ jobs:
           & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pointer = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'active-executable')
-          if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+\\aidlc\.exe$') {
+          if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8}\.[1-9][0-9]*)?\\aidlc\.exe$') {
             throw "invalid active executable pointer: $pointer"
           }
           $env:COPILOT_HOME = Join-Path $env:RUNNER_TEMP 'aidlc-copilot-home'
@@ -526,7 +656,7 @@ jobs:
           gh_bin="$RUNNER_TEMP/aidlc-gh"
           gh_marker="$RUNNER_TEMP/aidlc-gh-verified"
           manifest_version="$(
-            sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' \
+            sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9A-Za-z.-]*\)".*/\1/p' \
               "$release/version.json" | head -n 1
           )"
           test -n "$manifest_version"
@@ -600,7 +730,7 @@ jobs:
   publish:
     needs: [authorize, musl-smoke, windows-lifecycle, unix-lifecycle]
     runs-on: ubuntu-latest
-    environment: release
+    environment: ${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'release' }}
     permissions:
       contents: read
       id-token: write
@@ -659,7 +789,7 @@ jobs:
   promote:
     needs: [authorize, publish]
     runs-on: ubuntu-latest
-    environment: release
+    environment: ${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'release' }}
     permissions:
       contents: read
     steps:
@@ -848,30 +978,40 @@ jobs:
           GH_TOKEN: ${{ steps.release-policy-token.outputs.token }}
           PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
           RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          RELEASE_CHANNEL: ${{ needs.authorize.outputs.channel }}
         run: |
           set -euo pipefail
+          # Same channel-to-environment rule as authorize (see that step).
+          if [ "$RELEASE_CHANNEL" = preview ]; then
+            environment_name=preview
+            reviewer_policy='([.protection_rules[] | select(.type == "required_reviewers")] | length) == 0'
+          else
+            environment_name=release
+            reviewer_policy='
+              (
+                [.protection_rules[] | select(.type == "required_reviewers")]
+                | length
+              ) == 1 and
+              (
+                [.protection_rules[] | select(.type == "required_reviewers")][0]
+                | .prevent_self_review == true and
+                  (.reviewers | length) == 1 and
+                  .reviewers[0].type == "Team" and
+                  .reviewers[0].reviewer.slug == "aidlc-admins"
+              )'
+          fi
           environment="$(
-            gh api "repos/$GITHUB_REPOSITORY/environments/release"
+            gh api "repos/$GITHUB_REPOSITORY/environments/$environment_name"
           )"
           jq -e '
             .can_admins_bypass == false and
             .deployment_branch_policy.protected_branches == false and
             .deployment_branch_policy.custom_branch_policies == true and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")]
-              | length
-            ) == 1 and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")][0]
-              | .prevent_self_review == true and
-                (.reviewers | length) == 1 and
-                .reviewers[0].type == "Team" and
-                .reviewers[0].reviewer.slug == "aidlc-admins"
-            )
+            ('"$reviewer_policy"')
           ' <<<"$environment" >/dev/null
           policies="$(
             gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
+              "repos/$GITHUB_REPOSITORY/environments/$environment_name/deployment-branch-policies"
           )"
           jq -e '
             ([.[].branch_policies[]] | length) == 1 and
@@ -957,6 +1097,8 @@ jobs:
           PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
           AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
           RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          RELEASE_CHANNEL: ${{ needs.authorize.outputs.channel }}
+          PREVIEW_PLAN: ${{ needs.authorize.outputs.preview_plan }}
           STAGING_TAG: aidlc-staging-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
@@ -969,9 +1111,15 @@ jobs:
             --directory "$release" \
             --tag "$RELEASE_TAG" \
             --source-digest "$AUTHORIZED_SHA"
+          # The preview plan (id, source commit, notes) was computed by authorize
+          # from the full history; stable ignores it and reads CHANGELOG.md.
+          preview_plan="$RUNNER_TEMP/aidlc-preview-plan.json"
+          printf '%s\n' "${PREVIEW_PLAN:-null}" >"$preview_plan"
           bun scripts/publish-release.ts \
             --directory "$release" \
             --tag "$RELEASE_TAG" \
+            --channel "$RELEASE_CHANNEL" \
+            --preview-plan "$preview_plan" \
             --staging-tag "$STAGING_TAG" \
             --target "${{ steps.publication-target.outputs.sha }}" \
             --repository "$PUBLICATION_REPOSITORY" \

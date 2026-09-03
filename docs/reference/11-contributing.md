@@ -89,7 +89,11 @@ verifies every manifest asset through online and offline provenance, runs the
 installer journey from a separate copy, rechecks the original digest set, and
 publishes through the write-isolated release repository. Never rebuild,
 repackage, substitute, or grant source-repository writers authority over the
-publication draft. The full trust design is
+publication draft. The same workflow runs the preview channel: a daily schedule
+(or `channel: preview` on dispatch) plans `<x.y.z>-preview.<YYYYMMDD>.<N>` with
+`scripts/plan-preview-release.ts`, gates it on `ci.yml` through `workflow_call`,
+stamps the build with `AIDLC_BUILD_VERSION`, and publishes an annotated-tag
+prerelease that is never "latest". The full trust design is
 [Supply-Chain Security](19-supply-chain-security.md).
 
 ## Testing

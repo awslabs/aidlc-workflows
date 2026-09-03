@@ -54,6 +54,15 @@ const LIFECYCLE = join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts");
 const INSTALL_SH = join(REPO_ROOT, "scripts", "install.sh");
 const INSTALL_PS1 = join(REPO_ROOT, "scripts", "install.ps1");
 const RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
+// One workflow, two environments: a preview run (schedule, or dispatch with
+// channel=preview) enters `preview`, which has no required reviewers; a stable
+// run enters `release`, whose reviewers approve every stable publication. Pinned
+// verbatim because a drift here silently changes which credentials and which
+// approvals a run gets. The concurrency group serializes runs per channel.
+const RELEASE_ENVIRONMENT =
+  `\${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'release' }}`;
+const RELEASE_CONCURRENCY_GROUP =
+  `release-\${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'stable' }}`;
 const RELEASE_PUBLISHER = join(REPO_ROOT, "scripts", "publish-release.ts");
 const V1_RELEASE_DISPATCH_WORKFLOW = join(
   REPO_ROOT,
@@ -1980,14 +1989,19 @@ describe("t244 Windows and completion release surfaces", () => {
       .toBeLessThan(workflow.indexOf("bun scripts/verify-release.ts controls"));
     expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     expect(workflow).toContain("AIDLC_RELEASE_SOURCE_DIGEST:");
+    // Third-party actions are pinned to a full commit SHA. A same-repository
+    // reusable workflow (`./.github/workflows/...`) is referenced by path and
+    // resolves to the commit already being run, so it carries no ref to pin.
     const actionRefs = [...workflow.matchAll(
       /^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm,
     )].map((match) => match[1]);
     expect(actionRefs.length).toBeGreaterThan(0);
     for (const ref of actionRefs) {
+      if (ref.startsWith("./.github/workflows/")) continue;
       expect(ref).toMatch(/^[^@\s]+@[a-f0-9]{40}$/);
     }
     expect(workflow).not.toMatch(/^\s*(?:-\s+)?uses:\s+[^@\s]+@v\d/m);
+    expect(actionRefs).toContain("./.github/workflows/ci.yml");
     expect(workflow).toContain("shellcheck scripts/install.sh");
     expect(workflow).toContain("Invoke-ScriptAnalyzer -Path scripts/install.ps1");
     expect(workflow).toContain("unix-lifecycle:");
@@ -2291,8 +2305,13 @@ describe("t244 Windows and completion release surfaces", () => {
       "id-token": "write",
       attestations: "write",
     });
-    expect(parsed.jobs.authorize.environment).toBe("release");
-    expect(parsed.jobs.publish.environment).toBe("release");
+    expect(parsed.jobs.authorize.environment).toBe(RELEASE_ENVIRONMENT);
+    expect(parsed.jobs.publish.environment).toBe(RELEASE_ENVIRONMENT);
+    const top = Bun.YAML.parse(workflow) as {
+      concurrency?: { group?: string; "cancel-in-progress"?: boolean };
+    };
+    expect(top.concurrency?.group).toBe(RELEASE_CONCURRENCY_GROUP);
+    expect(top.concurrency?.["cancel-in-progress"]).toBe(false);
     const publish = workflowJob(workflow, "publish");
     expect(publish).toContain(`ref: \${{ needs.authorize.outputs.sha }}`);
     expect(publish).toContain("git fetch --no-tags origin main");
@@ -2335,7 +2354,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).not.toContain("\n  verify-release:\n");
     expect(parsed.jobs.promote.needs).toEqual(["authorize", "publish"]);
     expect(parsed.jobs.promote.permissions).toEqual({ contents: "read" });
-    expect(parsed.jobs.promote.environment).toBe("release");
+    expect(parsed.jobs.promote.environment).toBe(RELEASE_ENVIRONMENT);
     expect(parsed.jobs.promote.if).toBeUndefined();
     const writeCapableJobs = Object.entries(parsed.jobs)
       .filter(([, job]) => job.permissions?.contents === "write");
@@ -2447,7 +2466,7 @@ describe("t244 Windows and completion release surfaces", () => {
     };
     expect(parsed.jobs.promote.needs).toEqual(["authorize", "publish"]);
     expect(parsed.jobs.promote.permissions).toEqual({ contents: "read" });
-    expect(parsed.jobs.promote.environment).toBe("release");
+    expect(parsed.jobs.promote.environment).toBe(RELEASE_ENVIRONMENT);
     expect(parsed.jobs.promote.if).toBeUndefined();
     const verificationStep = parsed.jobs.promote.steps?.find(
       (step) => step.name === "Authenticate and verify immutable release bytes",

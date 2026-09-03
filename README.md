@@ -15,7 +15,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.7.1-blue)
+![version](https://img.shields.io/badge/version-2.7.2-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -381,7 +381,7 @@ two; `bun scripts/package.ts` materializes the third.
 aidlc-claude/
 │  ─────────── HAND-AUTHORED SOURCE — edit here ───────────
 ├── core/                       # ONE harness-neutral source of truth
-│   ├── tools/                  #   68 aidlc-*.ts engine and authoring tools
+│   ├── tools/                  #   69 aidlc-*.ts engine and authoring tools
 │   ├── aidlc-common/           #   stage protocol + 33 stage files + conductor
 │   ├── agents/                 #   14 agents: 11 domain + 2 reviewers + composer
 │   ├── knowledge/ memory/ scopes/ sensors/ hooks/
@@ -406,6 +406,9 @@ aidlc-claude/
 │   │                           #   runner-gen → emit() per tree. --check = two-build determinism guard
 │   ├── build-binaries.ts       # release-only CLI bundles under ignored build/
 │   ├── package-release.ts      # flat release assets, data archives, checksums, version manifest
+│   ├── publish-release.ts      # verified draft -> immutable GitHub release (stable tag or preview prerelease)
+│   ├── plan-preview-release.ts # preview id allocation, skip-unchanged-main check, release notes
+│   ├── preview-release.ts      # preview tag message and plan record shared by the two above
 │   ├── install.sh              # macOS/Linux online and offline bootstrap
 │   ├── install.ps1             # Windows online and offline bootstrap
 │   └── manifest-types.ts       # shared manifest contract

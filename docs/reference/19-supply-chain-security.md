@@ -44,10 +44,17 @@ dispatches it from
 same commit, and requires protected-environment
 `AIDLC_PUBLICATION_REPOSITORY` to name a different repository under the same
 owner.
-The protected `release` environment requires non-author approval and protects
-the authorization App credentials. Its sole deployment policy is the `main`
-branch because GitHub evaluates environment policies against the dispatch ref,
-not the tag supplied as workflow input. `authorize` proves the exact equality
+A stable run enters the protected `release` environment, which requires
+non-author approval and protects the authorization App credentials. Its sole
+deployment policy is the `main` branch because GitHub evaluates environment
+policies against the dispatch ref, not the tag supplied as workflow input. A
+preview run (the schedule, or a dispatch with `channel: preview`) enters the
+`preview` environment instead: the same publication variables and App secret
+and the same `main`-only deployment policy, but no required reviewers, so the
+daily run is unattended. The human review that guards a preview is the
+approval every merge to `main` already needs, plus the CI gate below; the
+accepted cost is that any commit on `main` becomes a signed preview within a
+day. Stable publication keeps its per-run approval. `authorize` proves the exact equality
 above using only the normal read token. Only then does it mint a short-lived App
 token scoped to the source and publication repositories, use it to read the
 otherwise-hidden ruleset bypass actors, publication collaborator permissions,
@@ -100,6 +107,35 @@ by a new patch release. A compromised release is excluded from update
 discovery and linked to its corrective release without deleting the original
 release, tag, attestations, or audit record.
 
+The preview channel publishes `main` through the same pipeline once a day
+(`schedule`, or `workflow_dispatch` with `channel: preview`). `authorize`
+decides the channel, then runs `scripts/plan-preview-release.ts` against the
+publication repository: it reads the newest published preview's annotated tag
+message to find the source commit it was cut from and ends the run early when
+`main` has not moved, otherwise allocates `<x.y.z>-preview.<YYYYMMDD>.<N>` from
+every existing preview tag for the UTC date (a tag that outlived a failed
+publication still occupies its counter) and renders the notes from the
+CHANGELOG sections, or the merged commit subjects, added since that commit. The
+`gate` job then calls `.github/workflows/ci.yml` (`workflow_call`) on the
+authorized commit, so the contract checks, the smoke and unit tiers, and the
+deterministic integration and e2e tiers that guard every pull request also
+guard every preview; `gate-result` joins that verdict into the build chain and
+is a no-op for stable runs, whose tag-gated dispatch keeps `verify` as its gate.
+Build, smoke, and staging jobs receive the preview id as `AIDLC_BUILD_VERSION`,
+which the packager stamps into every projected `aidlc-version.ts` copy and
+projection stamp and `package-release.ts` writes into `version.json`; the
+source tree keeps `x.y.z`, and `bun scripts/package.ts --check` measures the
+same stamped projection. `promote` follows the stable staging-draft flow
+unchanged up to publication, then creates the annotated `v<id>` tag object and
+ref (message: title, `Source: <repo>@<sha>`, `Build date`), and publishes the
+draft as `prerelease: true` with `make_latest: false`, so the
+`latest/download` redirect that stable installs and `aidlc update` follow never
+resolves to a preview. Preview releases are immutable exactly like stable
+releases. Consumers opt in with `aidlc config --channel preview`; the client
+lists the publication repository's releases through the GitHub API, selects the
+newest published prerelease whose tag is a preview id, and installs it through
+the exact-version download path with the same provenance verification.
+
 `scripts/package-release.ts` stages `version.json`, `checksums.txt`, installers,
 binaries, and `aidlc-runtime.tar.gz`. Full package generation first removes
 generated harness and plugin roots that no longer exist in source, and release
@@ -150,13 +186,15 @@ provenance for the post-gate release subjects.
 ### Release or tag hijack
 
 Tag protection, publication-repository access isolation, and the protected
-`release` environment are required GitHub settings. They are not represented by
+`release` and `preview` environments are required GitHub settings. They are not represented by
 files in this repository and must be confirmed before the first publication.
 The authorization job reads those settings through a protected-environment
 GitHub App identity and fails unless
-the environment has exactly the `aidlc-admins` team as its reviewer, self-review
-and administrator bypass are disabled, and `main` is the only deployment
-policy. It separately requires immutable releases to be enabled and enforced by
+the `release` environment has exactly the `aidlc-admins` team as its reviewer,
+self-review and administrator bypass are disabled, and `main` is the only
+deployment policy; a preview run checks the `preview` environment instead and
+requires no required-reviewers rule together with the same `main`-only
+deployment policy. It separately requires immutable releases to be enabled and enforced by
 the repository owner. It also requires
 two separate active tag rulesets over exactly `refs/tags/v*`, with no
 exclusions: a creation-only ruleset with exactly the protected release App
@@ -295,7 +333,9 @@ replace the provenance trust root.
 Fork release rehearsals must also configure the protected `release`
 environment with exactly the `main` branch deployment policy, its authorization
 App identity, the `aidlc-admins` team as the sole reviewer, immutable releases,
-and both release-tag rulesets. A personal-account fork without teams cannot
+and both release-tag rulesets; preview rehearsals additionally need the
+`preview` environment with the same variables, secret, and deployment policy
+and no required reviewers. A personal-account fork without teams cannot
 satisfy this production release contract.
 
 Verify every artifact covered by the checksum file:
@@ -326,8 +366,8 @@ schema.
 - Every third-party action in `.github/workflows/release.yml` is pinned to a
   full 40-hex commit SHA, with the release line retained as a comment.
 - Workflow-global permissions are `contents: read`.
-- `authorize` runs inside the protected `release` environment. The environment
-  stores `AIDLC_RELEASE_AUTH_APP_ID` and
+- `authorize` runs inside the channel's protected environment (`release` for
+  stable, `preview` for preview). The environment stores `AIDLC_RELEASE_AUTH_APP_ID` and
   `AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY`; missing configuration fails before any
   ruleset request.
 - `authorize` mints a GitHub App installation token scoped to the source and
@@ -352,7 +392,7 @@ schema.
   digest set. It uses the reviewed changelog for notes plus separate read-only
   policy and publication-only Contents write tokens. The last token creates the
   isolated publication commit and performs the staging-tag-to-`v*` publication.
-- No job outside the protected `release` environment receives any write
+- No job outside the channel's protected environment receives any write
   permission.
 - OIDC supplies short-lived identity to Sigstore; no long-lived signing key is
   stored in the repository.
@@ -387,7 +427,8 @@ platform-level trust boundary, not a release duty assignment.
 | Duty | Owner |
 |------|-------|
 | Approve the release-prep PR | `@awslabs/aidlc-admins` |
-| Approve protected release execution | `@awslabs/aidlc-admins` |
+| Approve protected release execution (stable) | `@awslabs/aidlc-admins` |
+| Authorize a preview publication | Merge approval on `main` by `@awslabs/aidlc-admins` plus the CI gate; no per-run approval |
 | Create the isolated publication commit, protected tag, and GitHub Release | Protected release App |
 | Update latest and installer metadata | `@awslabs/aidlc-admins` |
 | Respond to partial publication failure | `@awslabs/aidlc-admins` |
@@ -473,6 +514,12 @@ and explicit metadata refresh, but does not block a user-requested
 - Create the protected `release` environment with non-author approval,
   self-review and administrator bypass disabled, exactly the `aidlc-admins`
   reviewer team, and exactly the `main` branch deployment policy.
+- Create the `preview` environment with the same `AIDLC_PUBLICATION_REPOSITORY`
+  and `AIDLC_RELEASE_AUTH_APP_ID` variables, the same
+  `AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY` secret, exactly the `main` branch
+  deployment policy, and no required reviewers; the preview preflight fails if
+  a reviewer rule is present, because an approval-gated schedule is not a
+  daily channel.
 - Create `awslabs/aidlc-workflows-releases` (or configure another dedicated
   `AIDLC_PUBLICATION_REPOSITORY`) under the same owner. Grant no direct human,
   team, or ordinary source-writer push, maintain, or administrator access beyond
@@ -497,9 +544,10 @@ and explicit metadata refresh, but does not block a user-requested
   deletion controls also apply to `v*`; leaving it active intentionally fails
   the exact-policy preflight.
 - Decide whether repeated protected-environment approvals across `authorize`,
-  `publish`, and `promote` are an acceptable manual-release UX cost. Do not remove
-  the environment merely to avoid those approvals; it protects both the App
-  private key and public visibility.
+  `publish`, and `promote` are an acceptable manual stable-release UX cost. Do
+  not remove the environment merely to avoid those approvals; it protects both
+  the App private key and public visibility. Preview runs carry no per-run
+  approval by design (section 2).
 - Confirm the team-based ownership assignment in section 7
   (`@awslabs/aidlc-admins` on every duty, with its two separation-of-duties
   qualifiers).
