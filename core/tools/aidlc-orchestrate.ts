@@ -114,6 +114,7 @@ import {
   advanceContinuationCursor,
   activeUnitCheckpoint,
   artifactFilename,
+  artifactFormatsFromState,
   auditBlockField,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxState,
@@ -147,7 +148,6 @@ import {
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
-  primeArtifactFormats,
   pipelineLinkEvidence,
   parseBoltDag,
   type KnowledgeCommand,
@@ -234,8 +234,11 @@ import {
   resolveHarnessRoot,
 } from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries, appendAuditEntry } from "./aidlc-audit.ts";
-import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { artifactFormat } from "./aidlc-artifact-vocabulary.ts";
+import {
+  artifactFormat,
+  type ArtifactFormats,
+  MARKDOWN_ONLY,
+} from "./aidlc-artifact-vocabulary.ts";
 import {
   ingestPendingFeedback,
   publishReviewManifest,
@@ -263,13 +266,7 @@ import {
 // not an error to throw. Composes engineStateFilePath() for the canonical location.
 function loadStateFileIfPresent(projectDir: string): string | null {
   const path = engineStateFilePath(projectDir);
-  if (!existsSync(path)) {
-    primeArtifactFormats("");
-    return null;
-  }
-  const content = readFileSync(path, "utf-8");
-  primeArtifactFormats(content);
-  return content;
+  return existsSync(path) ? readFileSync(path, "utf-8") : null;
 }
 
 // The default scope when neither the state file, a --scope flag, nor the
@@ -2483,9 +2480,10 @@ function resolveArtifactPath(
   owner: GraphStage,
   unit: string | null,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
   codekbCtx?: CodekbCtx,
 ): string {
-  const filename = artifactFilename(name);
+  const filename = artifactFilename(name, formats);
   // Codekb artifacts live in the space-level codekb dir, keyed by repo — NOT
   // under the per-intent record dir. This arm fires for BOTH produces[] (owner
   // is the directive's own node) AND consumes[] (owner is the producing stage
@@ -2508,16 +2506,19 @@ function resolveArtifactPaths(
   owner: GraphStage,
   unit: string | null,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
   codekbCtx?: CodekbCtx,
 ): string[] {
   if (isCodekb(owner) && codekbCtx && codekbCtx.repos.length > 1) {
-    const filename = artifactFilename(name);
+    const filename = artifactFilename(name, formats);
     return codekbArtifactRepos(codekbCtx).map(
       (repo) =>
         `${relativeCodekbDir(codekbCtx.projectDir, repo, codekbCtx.space)}/${filename}`,
     );
   }
-  return [resolveArtifactPath(name, owner, unit, recordPrefix, codekbCtx)];
+  return [
+    resolveArtifactPath(name, owner, unit, recordPrefix, formats, codekbCtx),
+  ];
 }
 
 // Resolve a consumed artifact under its producer. Compile enforces exactly one
@@ -2530,6 +2531,7 @@ function resolveConsumePaths(
   node: GraphStage,
   unit: string | null,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
   codekbCtx?: CodekbCtx,
 ): string[] {
   const producer = producersOf(name)[0];
@@ -2538,6 +2540,7 @@ function resolveConsumePaths(
     producer ?? node,
     unit,
     recordPrefix,
+    formats,
     codekbCtx,
   );
 }
@@ -2576,6 +2579,7 @@ function resolveConsumes(
   projectType: "brownfield" | "greenfield" | null,
   unit: string | null,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
 ): ResolvedConsume[] {
@@ -2605,6 +2609,7 @@ function resolveConsumes(
       node,
       unit,
       recordPrefix,
+      formats,
       codekbCtx,
     )) {
       resolved.push({
@@ -2694,8 +2699,9 @@ function conditionalRuntimeSkipStages(projectDir: string): Set<string> {
 function artifactProduceEntry(
   artifact: string,
   path: string,
+  formats: ArtifactFormats,
 ): ArtifactProduceEntry {
-  return artifactFormat(artifact) === "html"
+  return artifactFormat(artifact, formats) === "html"
     ? { path, format: "html" }
     : path;
 }
@@ -2703,8 +2709,9 @@ function artifactProduceEntry(
 function artifactConsumeEntry(
   artifact: string,
   path: string,
+  formats: ArtifactFormats,
 ): ArtifactConsumeEntry {
-  return artifactFormat(artifact) === "html"
+  return artifactFormat(artifact, formats) === "html"
     ? {
         path,
         format: "html",
@@ -2716,6 +2723,7 @@ function artifactConsumeEntry(
 function splitConsumesByPresence(
   consumes: ResolvedConsume[],
   scope: string,
+  formats: ArtifactFormats,
   codekbCtx?: CodekbCtx,
   stateContent?: string | null,
 ): {
@@ -2724,7 +2732,9 @@ function splitConsumesByPresence(
 } {
   if (!codekbCtx) {
     return {
-      present: consumes.map((c) => artifactConsumeEntry(c.artifact, c.path)),
+      present: consumes.map((c) =>
+        artifactConsumeEntry(c.artifact, c.path, formats)
+      ),
       absent: [],
     };
   }
@@ -2736,12 +2746,12 @@ function splitConsumesByPresence(
   const absent: Array<{ path: string; expected: boolean }> = [];
   for (const c of consumes) {
     if (c.path.includes(UNIT_NAME_PLACEHOLDER)) {
-      present.push(artifactConsumeEntry(c.artifact, c.path));
+      present.push(artifactConsumeEntry(c.artifact, c.path, formats));
       continue;
     }
     const abs = join(codekbCtx.projectDir, ...c.path.split("/"));
     if (existsSync(abs)) {
-      present.push(artifactConsumeEntry(c.artifact, c.path));
+      present.push(artifactConsumeEntry(c.artifact, c.path, formats));
       continue;
     }
     if (!c.required) continue; // optional + missing → not an input, not a gap
@@ -2775,13 +2785,14 @@ function resolveProduces(
   node: GraphStage,
   unit: string | null,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
 ): ArtifactProduceEntry[] {
   return applicableProduceNames(node, unitKind, true)
     .flatMap((name) =>
-      resolveArtifactPaths(name, node, unit, recordPrefix, codekbCtx)
-        .map((path) => artifactProduceEntry(name, path))
+      resolveArtifactPaths(name, node, unit, recordPrefix, formats, codekbCtx)
+        .map((path) => artifactProduceEntry(name, path, formats))
     );
 }
 
@@ -3264,6 +3275,9 @@ function buildRunStageDirective(
   forcePersona = false,
   singleRun = false,
 ): RunStageDirective {
+  const formats = stateContent === null
+    ? MARKDOWN_ONLY
+    : artifactFormatsFromState(stateContent);
   const artifactUnit =
     unit === UNIT_NAME_PLACEHOLDER &&
       usesStageLevelPerUnitArtifacts(scope, stateContent)
@@ -3275,12 +3289,14 @@ function buildRunStageDirective(
     projectType,
     artifactUnit,
     recordPrefix,
+    formats,
     codekbCtx,
     unitKind,
   );
   const { present, absent } = splitConsumesByPresence(
     resolvedConsumes,
     scope,
+    formats,
     codekbCtx,
     stateContent,
   );
@@ -3310,6 +3326,7 @@ function buildRunStageDirective(
       node,
       artifactUnit,
       recordPrefix,
+      formats,
       codekbCtx,
       unitKind,
     ),
@@ -5102,6 +5119,7 @@ function unitCovered(
   node: GraphStage,
   unit: string,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
   codekbCtx: CodekbCtx,
   unitKind: string | null,
 ): boolean {
@@ -5109,7 +5127,14 @@ function unitCovered(
   if (names.length === 0) return false;
   const applicable = applicableProduceNames(node, unitKind, false);
   for (const name of applicable) {
-    const rel = resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx);
+    const rel = resolveArtifactPath(
+      name,
+      node,
+      unit,
+      recordPrefix,
+      formats,
+      codekbCtx,
+    );
     const abs = join(projectDir, ...rel.split("/"));
     if (!isRegularFile(abs)) return false;
   }
@@ -5166,11 +5191,22 @@ function unitSettled(
   node: GraphStage,
   unit: string,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
   codekbCtx: CodekbCtx,
   unitKind: string | null,
   ledger: UnitLedger,
 ): boolean {
-  if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return false;
+  if (
+    !unitCovered(
+      projectDir,
+      node,
+      unit,
+      recordPrefix,
+      formats,
+      codekbCtx,
+      unitKind,
+    )
+  ) return false;
   if (!ledger.inUse) return true;
   if (kindVacuous(node, unitKind)) {
     return true; // vacuous for this kind — no directive, no receipt to earn
@@ -5192,6 +5228,7 @@ function nextUncoveredUnit(
   node: GraphStage,
   units: string[],
   recordPrefix: string | null,
+  formats: ArtifactFormats,
   codekbCtx: CodekbCtx,
   kinds: Map<string, string> | null,
   stateContent: string | null,
@@ -5205,6 +5242,7 @@ function nextUncoveredUnit(
         node,
         unit,
         recordPrefix,
+        formats,
         codekbCtx,
         kinds?.get(unit) ?? null,
         ledger,
@@ -5264,6 +5302,7 @@ function waveEntry(
   scope: string,
   stateContent: string | null,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
   codekbCtx: CodekbCtx,
   buildRequired: boolean,
   completionRequired: boolean,
@@ -5276,12 +5315,14 @@ function waveEntry(
     projectType,
     unit,
     recordPrefix,
+    formats,
     codekbCtx,
     unitKind,
   );
   const { present, absent } = splitConsumesByPresence(
     resolvedConsumes,
     scope,
+    formats,
     codekbCtx,
     stateContent,
   );
@@ -5299,6 +5340,7 @@ function waveEntry(
       node,
       unit,
       recordPrefix,
+      formats,
       codekbCtx,
       unitKind,
     ),
@@ -5310,8 +5352,10 @@ function waveEntry(
           node,
           unit,
           recordPrefix,
+          formats,
           codekbCtx,
         ),
+        formats,
       ),
     ),
   };
@@ -5371,6 +5415,9 @@ function activePerUnitWave(
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
 ): ActiveWave {
+  const formats = stateContent === null
+    ? MARKDOWN_ONLY
+    : artifactFormatsFromState(stateContent);
   const reviewClass = node.reviewer
     ? resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent)
     : "none";
@@ -5397,6 +5444,7 @@ function activePerUnitWave(
         node,
         unit,
         recordPrefix,
+        formats,
         codekbCtx,
         unitKind,
       );
@@ -5448,6 +5496,7 @@ function activePerUnitWave(
             scope,
             stateContent,
             recordPrefix,
+            formats,
             codekbCtx,
             buildRequired,
             completionRequired,
@@ -5494,6 +5543,9 @@ function emitPerUnitRunStage(
   resolution?: BoltBatchesResolution,
   allowWave = true,
 ): void {
+  const formats = stateContent === null
+    ? MARKDOWN_ONLY
+    : artifactFormatsFromState(stateContent);
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
     const directive = buildRunStageDirective(
       node,
@@ -5620,6 +5672,7 @@ function emitPerUnitRunStage(
     node,
     units,
     recordPrefix,
+    formats,
     codekbCtx,
     kinds,
     stateContent,
@@ -5758,6 +5811,7 @@ function teamUnitProgressModel(
   mainOwnedUnits: ReadonlySet<string>,
   mergedUnitOverrides?: ReadonlySet<string>,
 ): TeamUnitProgressModel {
+  const formats = artifactFormatsFromState(stateContent);
   const ledgers = new Map(
     block.map((stage) => [
       stage.slug,
@@ -5799,6 +5853,7 @@ function teamUnitProgressModel(
           stage,
           unit,
           recordPrefix,
+          formats,
           codekbCtx,
           unitKind,
           ledgers.get(stage.slug) ?? unitLedgerFor(projectDir, stage.slug),
@@ -5855,6 +5910,7 @@ function teamUnitProgressModel(
           stage,
           unit,
           recordPrefix,
+          formats,
           codekbCtx,
           unitKind,
           ledger,
@@ -6111,6 +6167,7 @@ function emitTeamUnitMajorRunStage(
   resolution: Extract<BoltBatchesResolution, { state: "ok" }>,
   block: GraphStage[],
 ): void {
+  const formats = artifactFormatsFromState(stateContent);
   const scopeStamp = readApplicableTeamUnitScopeStamp(projectDir, stateContent);
   if (scopeStamp) {
     try {
@@ -6204,6 +6261,7 @@ function emitTeamUnitMajorRunStage(
           stage,
           unit,
           recordPrefix,
+          formats,
           codekbCtx,
           unitKind,
           ledger,
@@ -6353,6 +6411,9 @@ function emitUnitMajorRunStage(
   codekbCtx: CodekbCtx,
   projectDir: string,
 ): void {
+  const formats = stateContent === null
+    ? MARKDOWN_ONLY
+    : artifactFormatsFromState(stateContent);
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
     emitPerUnitRunStage(
       node,
@@ -6485,7 +6546,18 @@ function emitUnitMajorRunStage(
   for (const u of units) {
     for (const k of block) {
       const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
-      if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
+      if (
+        !unitSettled(
+          projectDir,
+          k,
+          u,
+          recordPrefix,
+          formats,
+          codekbCtx,
+          kinds?.get(u) ?? null,
+          ledger,
+        )
+      ) {
         const directive = buildRunStageDirective(
           k, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
           kinds?.get(u) ?? null,
@@ -6922,10 +6994,18 @@ function reviewPublishNode(
   node: GraphStage,
   unit: string | null,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
 ): ReviewPublishStageNode {
   const codekbCtx = codekbCtxFor(projectDir);
   const resolved = applicableProduceNames(node, null, true).flatMap((name) =>
-    resolveArtifactPaths(name, node, unit, recordPrefix, codekbCtx).map((path) => ({
+    resolveArtifactPaths(
+      name,
+      node,
+      unit,
+      recordPrefix,
+      formats,
+      codekbCtx,
+    ).map((path) => ({
       name,
       path,
     }))
@@ -6941,9 +7021,16 @@ function pendingReviewFeedback(
   node: GraphStage,
   unit: string | null,
   recordPrefix: string | null,
+  formats: ArtifactFormats,
 ): { stageDir: string; files: string[] } | null {
   if (!reviewUiEnabled()) return null;
-  const publishNode = reviewPublishNode(projectDir, node, unit, recordPrefix);
+  const publishNode = reviewPublishNode(
+    projectDir,
+    node,
+    unit,
+    recordPrefix,
+    formats,
+  );
   const stageDir = reviewStageDir(projectDir, publishNode, unit);
   if (!stageDir) return null;
   const files = pendingFeedback(stageDir).map((item) => item.file);
@@ -7392,6 +7479,7 @@ function checkStageCompletionEvidence(
   stateContent: string,
   pd: string,
 ): EnsembleEvidenceResult {
+  const formats = artifactFormatsFromState(stateContent);
   const stageLevelPerUnit =
     isPerUnit(node) &&
     usesStageLevelPerUnitArtifacts(scope, stateContent);
@@ -7442,6 +7530,7 @@ function checkStageCompletionEvidence(
         node,
         units,
         recordPrefix,
+        formats,
         codekbCtxFor(pd),
         unitKinds,
         stateContent,
@@ -7807,6 +7896,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     });
     return;
   }
+  const formats = artifactFormatsFromState(stateContent);
 
   // Prefer the stage the conductor explicitly reports. This closes the stale
   // pointer gap where the conductor may have already moved Current Stage by a
@@ -7981,7 +8071,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           ));
           return;
         }
-        const pending = pendingReviewFeedback(pd, node, unit, reviewRecordPrefix);
+        const pending = pendingReviewFeedback(
+          pd,
+          node,
+          unit,
+          reviewRecordPrefix,
+          formats,
+        );
         if (pending) {
           feedbackStageDir = pending.stageDir;
           const bodies = pendingFeedback(pending.stageDir);
@@ -8038,7 +8134,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const publishedState = loadStateFileIfPresent(pd) ?? stateContent;
         publishReviewManifest(
           pd,
-          reviewPublishNode(pd, node, unit, reviewRecordPrefix),
+          reviewPublishNode(pd, node, unit, reviewRecordPrefix, formats),
           unit,
           reportRevisionCount(publishedState),
           "awaiting-approval",
@@ -8061,13 +8157,19 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         publishReviewPointer(
           pd,
-          reviewPublishNode(pd, node, unit, reviewRecordPrefix),
+          reviewPublishNode(pd, node, unit, reviewRecordPrefix, formats),
           unit,
           revisionCount + 1,
           "revising",
         );
       } else if (reviewUiEnabled() && flags.result === "approved") {
-        const pending = pendingReviewFeedback(pd, node, unit, reviewRecordPrefix);
+        const pending = pendingReviewFeedback(
+          pd,
+          node,
+          unit,
+          reviewRecordPrefix,
+          formats,
+        );
         if (pending) {
           const files = pendingFeedback(pending.stageDir);
           appendReviewFeedbackAudit(
@@ -8086,7 +8188,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         publishReviewPointer(
           pd,
-          reviewPublishNode(pd, node, unit, reviewRecordPrefix),
+          reviewPublishNode(pd, node, unit, reviewRecordPrefix, formats),
           unit,
           revisionCount,
           "approved",
@@ -8265,6 +8367,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         node,
         reviewUnit,
         reviewRecordPrefix,
+        formats,
       );
       if (pending) {
         feedbackStageDir = pending.stageDir;
@@ -8311,7 +8414,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const publishedState = loadStateFileIfPresent(pd) ?? stateContent;
       publishReviewManifest(
         pd,
-        reviewPublishNode(pd, node, reviewUnit, reviewRecordPrefix),
+        reviewPublishNode(
+          pd,
+          node,
+          reviewUnit,
+          reviewRecordPrefix,
+          formats,
+        ),
         reviewUnit,
         reportRevisionCount(publishedState),
         "awaiting-approval",
@@ -8334,7 +8443,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       publishReviewPointer(
         pd,
-        reviewPublishNode(pd, node, reviewUnit, reviewRecordPrefix),
+        reviewPublishNode(
+          pd,
+          node,
+          reviewUnit,
+          reviewRecordPrefix,
+          formats,
+        ),
         reviewUnit,
         revisionCount + 1,
         "revising",
@@ -8413,7 +8528,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   let approvalNotes: string | undefined;
   let approvedFeedbackStageDir: string | null = null;
   if (flags.result === "approved" && reviewUiEnabled()) {
-    const pending = pendingReviewFeedback(pd, node, reviewUnit, reviewRecordPrefix);
+    const pending = pendingReviewFeedback(
+      pd,
+      node,
+      reviewUnit,
+      reviewRecordPrefix,
+      formats,
+    );
     if (pending) approvedFeedbackStageDir = pending.stageDir;
   }
   if (stageCheckbox.state === "completed") {
@@ -8524,7 +8645,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
     publishReviewPointer(
       pd,
-      reviewPublishNode(pd, node, reviewUnit, reviewRecordPrefix),
+      reviewPublishNode(
+        pd,
+        node,
+        reviewUnit,
+        reviewRecordPrefix,
+        formats,
+      ),
       reviewUnit,
       revisionCount,
       "approved",
