@@ -92,7 +92,15 @@ function submission(
   }, null, 2)}\n`);
 }
 
-function run(project: string, questions: string): { status: number; stdout: string; output: string } {
+function run(
+  project: string,
+  questions: string,
+  options: { presenceGuard?: boolean } = {},
+): { status: number; stdout: string; output: string } {
+  // The suite runner exports AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1; the refusal case
+  // must see the real guard, exactly like t188's `guarded()` helper.
+  const env = { ...process.env };
+  if (options.presenceGuard) delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const result = Bun.spawnSync({
     cmd: [
       BUN,
@@ -105,6 +113,7 @@ function run(project: string, questions: string): { status: number; stdout: stri
       "--project-dir",
       project,
     ],
+    env,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -194,7 +203,7 @@ describe("aidlc-log answers-apply", () => {
     ]);
     appendAuditEntry("DECISION_RECORDED", { Stage: "feasibility", Decision: "Question mode" }, project);
 
-    const result = run(project, questions);
+    const result = run(project, questions, { presenceGuard: true });
     expect(result.status).toBe(1);
     expect(result.output).toContain("no new human reply has arrived");
     expect(readFileSync(questions, "utf-8")).toBe(QUESTIONS);
