@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 923,
+    "total": 924,
     "enumeratedByClass": {
-      "function": 622,
+      "function": 623,
       "audit": 93,
       "scope": 11,
       "stage": 33,
@@ -121,6 +121,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1682,6 +1686,10 @@
         {
           "file": "tests/unit/t332-summary-authorization.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2771,6 +2779,10 @@
         },
         {
           "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4932,6 +4944,10 @@
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5176,6 +5192,13 @@
     {
       "unitClass": "function",
       "unitId": "function:renderChangedPaths",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:renderSourcePathKeys",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -7754,6 +7777,10 @@
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7829,6 +7856,10 @@
         },
         {
           "file": "tests/unit/t321-source-recovery-freeze.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9376,6 +9407,10 @@
         {
           "file": "tests/unit/t328-nodag-per-unit-continuity.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9602,6 +9637,10 @@
         },
         {
           "file": "tests/unit/t324-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9833,6 +9872,10 @@
         {
           "file": "tests/unit/t291-review-receipt-recovery.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9936,6 +9979,10 @@
         },
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
         }
       ],

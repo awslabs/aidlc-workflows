@@ -735,6 +735,40 @@ export function reviewInvalidationDetails(
   };
 }
 
+/**
+ * The CHANGE_ACCEPTED rows for reviewed content of `stageSlug` in the current
+ * attempt: the human line each carried and the paths it named, oldest first.
+ */
+export function acceptedReviewChanges(
+  projectDir: string,
+  stageSlug: string,
+): Array<{ notice: string; changed: string[] | null }> {
+  const attemptView = reviewInvalidationAttemptView(
+    readAuditShardEvents(projectDir),
+    stageSlug,
+  );
+  const accepted: Array<{ notice: string; changed: string[] | null }> = [];
+  for (const event of attemptView.events) {
+    if (
+      event.event !== "CHANGE_ACCEPTED" ||
+      !attemptEventAfterFrontier(attemptView.floor, event) ||
+      auditBlockField(event.block, "Stage") !== stageSlug ||
+      auditBlockField(event.block, "Checkpoint") !== "review-receipt"
+    ) {
+      continue;
+    }
+    const changed = auditBlockField(event.block, "Changed");
+    accepted.push({
+      notice: auditBlockField(event.block, "Details") ?? "Reviewed content changed after it was reviewed.",
+      changed:
+        changed === null || changed === "(paths unavailable)"
+          ? null
+          : changed.split(", ").map((path) => path.trim()).filter((path) => path.length > 0),
+    });
+  }
+  return accepted;
+}
+
 export function renderReviewBrief(
   projectDir: string,
   stage: ReviewFingerprintStage & { name: string },
@@ -796,6 +830,18 @@ export function renderReviewBrief(
     `**Review outcome:** ${outcome}`,
     `**Why now:** ${why}`,
   ];
+  // Reviewed content that changed after the receipt and was accepted under
+  // Change Control `relaxed` (the ledger's CHANGE_ACCEPTED rows for this stage
+  // in the current attempt). The verdict above is the reviewer's; these lines
+  // tell the human what moved since it was recorded.
+  for (const accepted of acceptedReviewChanges(projectDir, stage.slug)) {
+    lines.push(`**Reviewed content differs:** ${accepted.notice}`);
+    if (accepted.changed !== null) {
+      lines.push(
+        `**Changed after review:** ${accepted.changed.map((path) => `\`${path}\``).join(", ")}`,
+      );
+    }
+  }
   if (reason === "stale") {
     const invalidation = reviewInvalidationDetails(
       projectDir,

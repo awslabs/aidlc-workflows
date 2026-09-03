@@ -510,9 +510,15 @@ type DirectivePayload =
   | ParkedDirective
   | NoticeDirective;
 
-/** `stage_validity` is universal and advisory; `kind` still owns routing. */
+/**
+ * `stage_validity` is universal and advisory; `kind` still owns routing.
+ * `change_notices` is universal too: the one-line sentences for input changes a
+ * governed checkpoint accepted under Change Control `relaxed`, already worded
+ * for the human, each said once verbatim.
+ */
 export type Directive = DirectivePayload & {
   stage_validity?: StageValidityAdvisory;
+  change_notices?: string[];
 };
 
 export type ValidationResult =
@@ -650,11 +656,12 @@ const NOTICE_FIELDS = ["kind", "message"] as const;
 // attach a line without touching this file.
 const NARRATION_FIELD = "narration" as const;
 const STAGE_VALIDITY_FIELD = "stage_validity" as const;
+const CHANGE_NOTICES_FIELD = "change_notices" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the
 // record of what is kind-SPECIFIC and this one helper adds what is universal.
 function withNarration(fields: readonly string[]): readonly string[] {
-  return [...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD];
+  return [...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD, CHANGE_NOTICES_FIELD];
 }
 
 const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> = {
@@ -718,6 +725,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   // would otherwise be handed a non-sentence to speak.
   checkOptionalString(o, NARRATION_FIELD, kind, errors);
   checkOptionalStageValidity(o, kind, errors);
+  checkOptionalStringArray(o, CHANGE_NOTICES_FIELD, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.

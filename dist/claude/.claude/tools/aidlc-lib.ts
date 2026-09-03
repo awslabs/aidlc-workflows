@@ -7434,7 +7434,12 @@ type SummaryConfirmationStage = Pick<
 >;
 
 export type SummaryConfirmationEvidence =
-  | { ok: true; required: boolean }
+  | {
+      ok: true;
+      required: boolean;
+      /** Output saves accepted under Change Control `relaxed`, for the mutating caller to record. */
+      acceptedChanges?: AcceptedChange[];
+    }
   | {
       ok: false;
       message: string;
@@ -7865,6 +7870,22 @@ export function checkSummaryConfirmationEvidence(
       }),
     };
   };
+  // Change Control is read only when an output save fails to descend from the
+  // current confirmation, and read once. Resolution failures (an invalid memory
+  // value) fail closed to strict, today's behavior. This check reads and never
+  // writes: the accepted changes go back to the caller.
+  let resolvedChangeControl: ChangeControl | null = null;
+  const changeControl = (): ChangeControl => {
+    if (resolvedChangeControl === null) {
+      try {
+        resolvedChangeControl = resolveChangeControl(projectDir, options.stateContent ?? null).value;
+      } catch {
+        resolvedChangeControl = "strict";
+      }
+    }
+    return resolvedChangeControl;
+  };
+  const acceptedChanges: AcceptedChange[] = [];
   if (summaryConfirmationGuardDisabled()) {
     return { ok: true, required: false };
   }
@@ -8292,6 +8313,31 @@ export function checkSummaryConfirmationEvidence(
           (entry) => auditBlockField(entry.block, SUMMARY_AUTHORIZATION_FIELD) !== receiptAuthorization,
         );
         if (newestWrites.length === 0 || unauthorized.length > 0) {
+          // The governed checkpoint: the output was saved without the current
+          // confirmation. Strict refuses with the existing remedy; relaxed
+          // records the change once, tells the human once, and continues. The
+          // confirmation and its receipt are untouched either way.
+          if (changeControl() === "relaxed") {
+            const stamps = [
+              ...new Set(
+                unauthorized.map(
+                  (entry) => auditBlockField(entry.block, SUMMARY_AUTHORIZATION_FIELD) ?? "unstamped",
+                ),
+              ),
+            ].sort();
+            acceptedChanges.push({
+              checkpoint: "summary-confirmation",
+              stage: stage.slug,
+              unit: question.unit ?? options.unit ?? null,
+              changed: [toPosix(relative(projectDir, artifactAbs))],
+              recorded: receiptAuthorization,
+              current: stamps.length > 0 ? stamps.join(", ") : "unrecorded",
+              notice:
+                `${toPosix(relative(projectDir, artifactAbs))} was saved without the current ` +
+                "summary confirmation. Continuing (Change Control: relaxed).",
+            });
+            continue;
+          }
           const stampedElsewhere = unauthorized.some(
             (entry) => auditBlockField(entry.block, SUMMARY_AUTHORIZATION_FIELD) !== null,
           );
@@ -8363,7 +8409,7 @@ export function checkSummaryConfirmationEvidence(
     }
   }
 
-  return { ok: true, required: true };
+  return { ok: true, required: true, acceptedChanges };
 }
 
 // Read the FIRST `**Field**: value` line from one audit block (tolerates an
@@ -8924,6 +8970,13 @@ export interface FreshReviewReceipts {
    * awaiting merge evidence.
    */
   openBoltUnits: Set<string>;
+  /**
+   * Reviewed content that changed after a terminal receipt and was accepted
+   * under Change Control `relaxed` instead of invalidating the receipt. The
+   * verdicts above are kept exactly as the reviewer recorded them; a mutating
+   * caller writes these as CHANGE_ACCEPTED rows and tells the human once.
+   */
+  acceptedChanges: AcceptedChange[];
 }
 
 export interface ReviewFingerprintStage {
@@ -12080,6 +12133,7 @@ export function freshReviewReceipts(
     unitPending: new Map(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
+    acceptedChanges: [],
   };
   const reviewer = stage.reviewer;
   if (!reviewer) return empty;
@@ -12214,6 +12268,23 @@ export function freshReviewReceipts(
   let stageIteration: number | null = null;
   let stageReceiptRecovery = false;
   let stagePending: PendingReviewProgress | null = null;
+  // Change Control decides what a content change after a terminal receipt does:
+  // strict invalidates the receipt (the stale/recovery machinery below), relaxed
+  // keeps the verdict and records the change once. Resolution failures (an
+  // invalid memory value) fail closed to strict, today's behavior.
+  let relaxed = false;
+  try {
+    relaxed = resolveChangeControl(projectDir, stateContent).value === "relaxed";
+  } catch {
+    relaxed = false;
+  }
+  // Per scope (unit name, or "" for stage-level): the accepted artifact change,
+  // opened when a terminal receipt's recorded artifact fingerprint no longer
+  // matches the current bytes, and fed the produces[] paths written after it.
+  const acceptedArtifactChanges = new Map<string, AcceptedChange>();
+  const acceptedChanges: AcceptedChange[] = [];
+  const relaxedReviewNotice = (artifact: string): string =>
+    `${artifact} changed after it was reviewed. Continuing to the gate with the diff (Change Control: relaxed).`;
   const resetUnitReviewState = (unit: string): void => {
     for (const [key, request] of pendingRequests) {
       if (request.unit === unit) pendingRequests.delete(key);
@@ -12304,6 +12375,21 @@ export function freshReviewReceipts(
       if (!file) continue;
       const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
       if (targetUnit === undefined) continue;
+      if (relaxed) {
+        // The receipt stays valid. Whether the reviewed bytes actually differ is
+        // decided by the fingerprint comparison on the receipt itself; this
+        // write only names the path for that accepted change's diff summary.
+        const scopes =
+          !perUnit ? [""] : targetUnit === null ? [...acceptedArtifactChanges.keys()] : [targetUnit];
+        const changedPath = toPosix(relative(projectDir, resolveAuditProjectPath(projectDir, file)));
+        for (const scope of scopes) {
+          const accepted = acceptedArtifactChanges.get(scope);
+          if (accepted && accepted.changed !== null && !accepted.changed.includes(changedPath)) {
+            accepted.changed.push(changedPath);
+          }
+        }
+        continue;
+      }
       if (!perUnit) {
         if (stageVerdict !== null) {
           stageStale = true;
@@ -12473,22 +12559,41 @@ export function freshReviewReceipts(
       continue;
     }
     if (!fingerprintMatches) {
-      if (fingerprintUsable) {
-        if (unit) {
-          unitStale.add(unit);
-          unitStaleProgress.set(unit, {
-            nextIteration: iteration + 1,
-            recoverySpent: request.recovery,
-          });
-        } else {
-          stageStale = true;
-          stageStaleProgress = {
-            nextIteration: iteration + 1,
-            recoverySpent: request.recovery,
-          };
+      if (fingerprintUsable && relaxed && recordedFingerprint !== null && currentFingerprint !== null) {
+        // Reviewed content differs from the receipt. Under relaxed the verdict
+        // stands as the reviewer recorded it; the change is carried to the gate
+        // and recorded once. The paths written after this receipt are added as
+        // the scan meets them.
+        acceptedArtifactChanges.set(unit ?? "", {
+          checkpoint: "review-receipt",
+          stage: stage.slug,
+          unit: unit ?? null,
+          changed: [],
+          recorded: recordedFingerprint,
+          current: currentFingerprint,
+          notice: "",
+        });
+      } else {
+        if (fingerprintUsable) {
+          if (unit) {
+            unitStale.add(unit);
+            unitStaleProgress.set(unit, {
+              nextIteration: iteration + 1,
+              recoverySpent: request.recovery,
+            });
+          } else {
+            stageStale = true;
+            stageStaleProgress = {
+              nextIteration: iteration + 1,
+              recoverySpent: request.recovery,
+            };
+          }
         }
+        continue;
       }
-      continue;
+    } else if (relaxed) {
+      // A newer matching receipt supersedes any change accepted for this scope.
+      acceptedArtifactChanges.delete(unit ?? "");
     }
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
@@ -12547,11 +12652,34 @@ export function freshReviewReceipts(
     : null;
   const currentSourceFingerprint = currentSourceState?.fingerprint ?? null;
   const currentSourceListing = currentSourceState?.listing ?? null;
+  const sourceMismatch =
+    newestSourceFingerprint !== null &&
+    newestSourceFingerprint !== UNBINDABLE_FINGERPRINT &&
+    currentSourceFingerprint !== null &&
+    currentSourceFingerprint !== newestSourceFingerprint;
+  // An unbindable boundary or an unreadable workspace is not a change and stays
+  // stale under both values; a moved fingerprint is the governed drift.
   const sourceStale =
     newestSourceFingerprint !== null &&
     (newestSourceFingerprint === UNBINDABLE_FINGERPRINT ||
       currentSourceFingerprint === null ||
-      currentSourceFingerprint !== newestSourceFingerprint);
+      (sourceMismatch && !relaxed));
+  if (
+    sourceMismatch &&
+    relaxed &&
+    newestSourceFingerprint !== null &&
+    currentSourceFingerprint !== null
+  ) {
+    acceptedChanges.push({
+      checkpoint: "review-receipt",
+      stage: stage.slug,
+      unit: newestSourceUnit,
+      changed: null,
+      recorded: newestSourceFingerprint,
+      current: currentSourceFingerprint,
+      notice: relaxedReviewNotice("Reviewed source"),
+    });
+  }
 
   const freshUnitClaims = new Map<string, SourceClaimModel>();
   if (sourceFreshnessApplies && currentSourceListing !== null) {
@@ -12604,6 +12732,13 @@ export function freshReviewReceipts(
         } else {
           claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
           reviewedListing = snapshot.listing;
+          // Every claimed path whose bytes moved since the review, and every
+          // claimed path that appeared after it. Both exact and directory
+          // claims bind future additions: an exact claim that was absent at
+          // review cannot launder a later-created path, so over-claiming
+          // invalidates more receipts, never fewer. A newer validated claimant
+          // may still shield a path.
+          const movedPathKeys: string[] = [];
           for (const [pathKey, reviewedOid] of reviewedListing) {
             if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
             if (
@@ -12612,24 +12747,38 @@ export function freshReviewReceipts(
                 reviewedOid,
               )
             ) {
-              stale = true;
-              break;
+              movedPathKeys.push(pathKey);
             }
           }
-          if (!stale) {
-            // Both exact and directory claims bind future additions. An exact
-            // claim that was absent at review cannot launder a later-created
-            // path; over-claiming therefore invalidates more receipts, never
-            // fewer. A newer validated claimant may still shield the path.
-            for (const [pathKey] of currentSourceListing) {
-              const newlyPresentExact = manifest.claims.has(pathKey) && !reviewedListing.has(pathKey);
-              const newlyPresentUnderPrefix =
-                manifest.prefixes.some((prefix) => pathKey.startsWith(prefix)) &&
-                !reviewedListing.has(pathKey);
-              if (!newlyPresentExact && !newlyPresentUnderPrefix) continue;
-              if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
+          for (const [pathKey] of currentSourceListing) {
+            const newlyPresentExact = manifest.claims.has(pathKey) && !reviewedListing.has(pathKey);
+            const newlyPresentUnderPrefix =
+              manifest.prefixes.some((prefix) => pathKey.startsWith(prefix)) &&
+              !reviewedListing.has(pathKey);
+            if (!newlyPresentExact && !newlyPresentUnderPrefix) continue;
+            if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
+            movedPathKeys.push(pathKey);
+          }
+          if (movedPathKeys.length > 0) {
+            if (relaxed) {
+              // Reviewed source moved: the verdict stands, the change is carried
+              // to the gate as the paths that moved, and recorded once.
+              const paths = renderSourcePathKeys(movedPathKeys);
+              acceptedChanges.push({
+                checkpoint: "review-receipt",
+                stage: stage.slug,
+                unit,
+                changed: paths,
+                recorded: receipt.fingerprint,
+                current: unitSourceFingerprint(
+                  currentSourceListing,
+                  claimModel,
+                  manifest.rawBytesSha256,
+                ),
+                notice: relaxedReviewNotice(renderChangedPaths(paths)),
+              });
+            } else {
               stale = true;
-              break;
             }
           }
         }
@@ -12765,6 +12914,18 @@ export function freshReviewReceipts(
     unitPending,
     mergedBoltUnits,
     openBoltUnits,
+    acceptedChanges: [
+      ...[...acceptedArtifactChanges.values()].map((change) => ({
+        ...change,
+        changed: change.changed !== null && change.changed.length > 0 ? change.changed : null,
+        notice: relaxedReviewNotice(
+          change.changed !== null && change.changed.length > 0
+            ? renderChangedPaths(change.changed)
+            : stage.review_artifact ?? `The ${stage.slug} output`,
+        ),
+      })),
+      ...acceptedChanges,
+    ],
   };
 }
 
@@ -16510,6 +16671,17 @@ export function readWorkspaceSourceSnapshot(
   return parseSourceListing(serialized.slice(newline + 1));
 }
 
+/** `repo/path` (or `path` for the lone repo) for each canonical listing key, sorted. */
+export function renderSourcePathKeys(keys: Iterable<string>): string[] {
+  return [...new Set(keys)]
+    .map((key) => {
+      const parsed = splitSourcePathKey(key);
+      if (parsed === null) return key;
+      return parsed.repo ? `${parsed.repo}/${parsed.path}` : parsed.path;
+    })
+    .sort();
+}
+
 /** Paths whose entry differs between two listings, rendered `repo/path`, sorted. */
 export function sourceListingChangedPaths(
   before: ReadonlyMap<string, string>,
@@ -16522,13 +16694,7 @@ export function sourceListingChangedPaths(
   for (const key of after.keys()) {
     if (!before.has(key)) changed.add(key);
   }
-  return [...changed]
-    .map((key) => {
-      const parsed = splitSourcePathKey(key);
-      if (parsed === null) return key;
-      return parsed.repo ? `${parsed.repo}/${parsed.path}` : parsed.path;
-    })
-    .sort();
+  return renderSourcePathKeys(changed);
 }
 
 /**

@@ -1531,6 +1531,7 @@ function handleReview(args: string[]): void {
     let recovery: "stale-receipt" | undefined;
     let requestId: string | null = null;
     let reviewFile: string | null = null;
+    const requestChangeNotices: string[] = [];
     // Open the reviewer's slot for this request: any draft an earlier dispatch of
     // the same iteration left behind is not this dispatch's review.
     const openReviewDraftSlot = (floor: string): void => {
@@ -1579,11 +1580,21 @@ function handleReview(args: string[]): void {
           node.slug,
           flags.unit,
         );
+        // The review request is a governed Change Control checkpoint: resolve the
+        // setting, then record what the receipt scan and the summary check
+        // accepted under relaxed. The human line rides on this command's JSON.
+        governedChangeControl(pd, state);
         const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
           stateContent: state,
           unit: flags.unit,
           workflow: fields.Workflow,
         });
+        requestChangeNotices.push(
+          ...recordAcceptedChanges(pd, [
+            ...(receipts?.acceptedChanges ?? []),
+            ...(summaryEvidence.ok ? summaryEvidence.acceptedChanges ?? [] : []),
+          ]),
+        );
         if (!summaryEvidence.ok) {
           const message = reviewSummaryEvidenceMessage(
             flags.stage,
@@ -1996,6 +2007,7 @@ function handleReview(args: string[]): void {
       ...(recovery ? { recovery } : {}),
       requestId,
       reviewFile,
+      ...(requestChangeNotices.length > 0 ? { change_notices: requestChangeNotices } : {}),
     }));
     return;
   }

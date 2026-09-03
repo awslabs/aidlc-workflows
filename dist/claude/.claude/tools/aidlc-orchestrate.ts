@@ -7387,6 +7387,36 @@ function spawnState(
   };
 }
 
+// The human lines a state transition printed for input changes it accepted
+// under Change Control `relaxed`: every stdout line that is a JSON object with a
+// `change_notices` string array. The state tool writes them as it records the
+// CHANGE_ACCEPTED rows, so the engine's directive can carry them to the human
+// exactly once.
+function changeNoticesFromToolOutput(stdout: string): string[] {
+  const notices: string[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object" || !("change_notices" in parsed)) continue;
+    const carried = parsed.change_notices;
+    if (!Array.isArray(carried)) continue;
+    for (const notice of carried) {
+      if (typeof notice === "string" && notice.length > 0) notices.push(notice);
+    }
+  }
+  return notices;
+}
+
+/** A directive with the notices attached, or unchanged when there are none. */
+function withChangeNotices<T extends Directive>(directive: T, notices: string[]): T {
+  return notices.length > 0 ? { ...directive, change_notices: notices } : directive;
+}
+
 // The guard-recovery ask an enforcing tool carried on the last line of its
 // refusal, validated as a directive so the router emits exactly what the tool
 // would have shown. Null when the refusal is prose only.
@@ -8474,6 +8504,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
       const committed: string[] = [];
+      const changeNotices: string[] = [];
       for (const subArgs of sequence) {
         const res = spawnState(pd, subArgs);
         if (res.exitCode !== 0) {
@@ -8490,18 +8521,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           return;
         }
         committed.push(subArgs[0]);
+        changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
       }
       emit(
-        flags.result === "approved"
-          ? {
-              kind: "done",
-              reason:
-                `Committed ${committed.join(" + ")} for unit "${unit}" of "${slug}". ` +
-                "Run next to continue the unit-major walk.",
-            }
-          : printDirective(
-              `Recorded ${flags.result} for unit "${unit}" of "${slug}".`,
-            ),
+        withChangeNotices(
+          flags.result === "approved"
+            ? {
+                kind: "done",
+                reason:
+                  `Committed ${committed.join(" + ")} for unit "${unit}" of "${slug}". ` +
+                  "Run next to continue the unit-major walk.",
+              }
+            : printDirective(
+                `Recorded ${flags.result} for unit "${unit}" of "${slug}".`,
+              ),
+          changeNotices,
+        ),
       );
       return;
     }
@@ -8704,10 +8739,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     emit(
-      printDirective(
-        revalidatingOpenGate
-          ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
-          : `Recorded ${flags.result} for "${slug}".`,
+      withChangeNotices(
+        printDirective(
+          revalidatingOpenGate
+            ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
+            : `Recorded ${flags.result} for "${slug}".`,
+        ),
+        changeNoticesFromToolOutput(res.stdout),
       ),
     );
     return;
@@ -8848,6 +8886,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
   const committed: string[] = [];
+  const changeNotices: string[] = [];
   for (const subArgs of sequence) {
     const res = spawnState(pd, subArgs);
     if (res.exitCode !== 0) {
@@ -8868,6 +8907,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     committed.push(subArgs[0]);
+    changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
   }
   if (committed.length === 0) {
     emit({
@@ -8880,12 +8920,17 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // The transition committed. Emit a terminal `done` directive naming the move
   // — the loop driver reads this to know the report landed and the next `next`
   // will see fresh state.
-  emit({
-    kind: "done",
-    reason:
-      `Committed ${committed.join(" + ")} for "${slug}" (scope: ${scope}). ` +
-      "State advanced; run next to continue.",
-  });
+  emit(
+    withChangeNotices(
+      {
+        kind: "done",
+        reason:
+          `Committed ${committed.join(" + ")} for "${slug}" (scope: ${scope}). ` +
+          "State advanced; run next to continue.",
+      },
+      changeNotices,
+    ),
+  );
 }
 
 // The `park` handler (issue #367). Parks the workflow at the current inter-stage

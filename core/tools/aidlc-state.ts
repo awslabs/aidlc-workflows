@@ -41,6 +41,9 @@ import {
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
+  type AcceptedChange,
+  governedChangeControl,
+  recordAcceptedChanges,
   claimAttemptFields,
   codekbDir,
   codekbRepoName,
@@ -609,6 +612,12 @@ function parseFlags(args: string[]): Record<string, string> {
 }
 
 // --- CLI entry point ---
+
+// The engine's in-process guard preflight runs the same admission checks as a
+// question, not a transition; while it runs, Change Control observes and leaves
+// the ledger and stdout alone (see observeAcceptedChanges). Declared at module
+// top for the same temporal-dead-zone reason as HARNESS_DOC_DIRS.
+let changeControlPreflight = false;
 
 let projectDir: string | undefined;
 
@@ -3403,6 +3412,20 @@ function verifyStageArtifacts(
   }
 }
 
+// Change Control at a governed checkpoint of this tool: resolve the setting (a
+// memory edit that moved it is recorded), write the CHANGE_ACCEPTED rows for
+// input changes a check accepted under `relaxed`, and print the one-line
+// sentences as their own JSON line so the engine's report carries them onto its
+// directive and a direct caller sees them the same way. The engine's in-process
+// preflight runs the same admission checks as a question, not a transition, so
+// it observes and leaves both the ledger and stdout alone.
+function observeAcceptedChanges(pd: string, content: string, changes: AcceptedChange[]): void {
+  if (changeControlPreflight) return;
+  governedChangeControl(pd, content);
+  const notices = recordAcceptedChanges(pd, changes);
+  if (notices.length > 0) console.log(JSON.stringify({ change_notices: notices }));
+}
+
 function verifySummaryConfirmationPrecondition(
   pd: string,
   content: string,
@@ -3421,17 +3444,19 @@ function verifySummaryConfirmationPrecondition(
   const evidence = checkSummaryConfirmationEvidence(pd, stage, {
     stateContent: content,
   });
-  if (!evidence.ok) {
-    refuseStateGuard(pd, content, stage, {
-      code: evidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
-      blockedAction: "summary-confirmation",
-      invariant:
-        evidence.refusal?.invariant ??
-        "Generated outputs descend from a current human-backed summary confirmation.",
-      userMessage: evidence.message,
-      summaryCoverage: evidence.summaryCoverage,
-    });
+  if (evidence.ok) {
+    observeAcceptedChanges(pd, content, evidence.acceptedChanges ?? []);
+    return;
   }
+  refuseStateGuard(pd, content, stage, {
+    code: evidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
+    blockedAction: "summary-confirmation",
+    invariant:
+      evidence.refusal?.invariant ??
+      "Generated outputs descend from a current human-backed summary confirmation.",
+    userMessage: evidence.message,
+    summaryCoverage: evidence.summaryCoverage,
+  });
 }
 
 // --- Reviewer precondition (§12a / RFC Track 1) -----------------------------
@@ -3569,7 +3594,11 @@ function verifyReviewerPrecondition(
   // event interleave (timestamp, buffer-position tiebreak), the stage-agnostic
   // WORKFLOW_STARTED/STAGE_JUMPED floor, the unit-major STAGE_STARTED skip,
   // and per-unit write invalidation are all documented there.
+  // This precondition is a governed Change Control checkpoint: resolve the
+  // setting (a memory edit that moved it is recorded here), then write the rows
+  // for reviewed content the scan accepted under relaxed and tell the human once.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  observeAcceptedChanges(pd, content, receipts.acceptedChanges);
   const perUnit =
     stage.for_each === "unit-of-work" &&
     !usesStageLevelPerUnitArtifacts(getField(content, "Scope"), content);
@@ -4942,6 +4971,7 @@ export function guardPreflight(
     // and the recovery-spent branch in the per-unit wave); nothing to add here.
     return { executable: true };
   }
+  changeControlPreflight = true;
   try {
     admitStageAction(pd, stateContent, stage, {
       action: options.action,
@@ -4959,6 +4989,8 @@ export function guardPreflight(
       };
     }
     return { executable: true };
+  } finally {
+    changeControlPreflight = false;
   }
 }
 

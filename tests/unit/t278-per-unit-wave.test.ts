@@ -128,6 +128,7 @@ ${ownership ? `- **Unit Ownership**: ${ownership}\n` : ""}
 - **Stages to Skip**: none
 - **Depth**: Standard
 - **Test Strategy**: Standard
+- **Change Control**: strict (from scope feature)
 
 ## Stage Progress
 
