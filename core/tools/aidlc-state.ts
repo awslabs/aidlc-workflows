@@ -44,6 +44,7 @@ import {
   type AcceptedChange,
   governedChangeControl,
   recordAcceptedChanges,
+  resolveChangeControl,
   claimAttemptFields,
   codekbDir,
   codekbRepoName,
@@ -3412,17 +3413,30 @@ function verifyStageArtifacts(
   }
 }
 
-// Change Control at a governed checkpoint of this tool: resolve the setting (a
-// memory edit that moved it is recorded), write the CHANGE_ACCEPTED rows for
-// input changes a check accepted under `relaxed`, and print the one-line
-// sentences as their own JSON line so the engine's report carries them onto its
-// directive and a direct caller sees them the same way. The engine's in-process
-// preflight runs the same admission checks as a question, not a transition, so
-// it observes and leaves both the ledger and stdout alone.
-function observeAcceptedChanges(pd: string, content: string, changes: AcceptedChange[]): void {
-  if (changeControlPreflight) return;
+// Change Control at a governed checkpoint of this tool. The shared read-only
+// checks (the summary evidence, the receipt scan) read the setting only when
+// they meet an input change after an approval, and say so; they fall back to
+// strict on a resolution failure. When one has read it, this tool resolves it
+// again as the mutating caller: an invalid memory `Mode:` value is then the
+// validation error naming the file and the allowed values, and a transition
+// records a memory edit that moved the value. Then it writes the CHANGE_ACCEPTED
+// rows for the changes the check accepted under `relaxed` and prints the
+// one-line sentences as their own JSON line so the engine's report carries them
+// onto its directive and a direct caller sees them the same way. The engine's
+// in-process preflight runs the same admission checks as a question, not a
+// transition, so it resolves without writing and observes nothing.
+function observeChangeControl(
+  pd: string,
+  content: string,
+  checked: { changeControlRead?: boolean; acceptedChanges?: AcceptedChange[] },
+): void {
+  if (!checked.changeControlRead) return;
+  if (changeControlPreflight) {
+    resolveChangeControl(pd, content);
+    return;
+  }
   governedChangeControl(pd, content);
-  const notices = recordAcceptedChanges(pd, changes);
+  const notices = recordAcceptedChanges(pd, checked.acceptedChanges ?? []);
   if (notices.length > 0) console.log(JSON.stringify({ change_notices: notices }));
 }
 
@@ -3444,10 +3458,8 @@ function verifySummaryConfirmationPrecondition(
   const evidence = checkSummaryConfirmationEvidence(pd, stage, {
     stateContent: content,
   });
-  if (evidence.ok) {
-    observeAcceptedChanges(pd, content, evidence.acceptedChanges ?? []);
-    return;
-  }
+  observeChangeControl(pd, content, evidence);
+  if (evidence.ok) return;
   refuseStateGuard(pd, content, stage, {
     code: evidence.refusal?.code ?? "SUMMARY_EVIDENCE_INVALID",
     blockedAction: "summary-confirmation",
@@ -3594,11 +3606,13 @@ function verifyReviewerPrecondition(
   // event interleave (timestamp, buffer-position tiebreak), the stage-agnostic
   // WORKFLOW_STARTED/STAGE_JUMPED floor, the unit-major STAGE_STARTED skip,
   // and per-unit write invalidation are all documented there.
-  // This precondition is a governed Change Control checkpoint: resolve the
-  // setting (a memory edit that moved it is recorded here), then write the rows
-  // for reviewed content the scan accepted under relaxed and tell the human once.
+  // This precondition is a governed Change Control checkpoint when the scan met
+  // reviewed content that changed after a terminal receipt: the setting is then
+  // resolved here (an invalid memory value errors; a memory edit that moved it
+  // is recorded), the rows for what the scan accepted under relaxed are written,
+  // and the human is told once.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
-  observeAcceptedChanges(pd, content, receipts.acceptedChanges);
+  observeChangeControl(pd, content, receipts);
   const perUnit =
     stage.for_each === "unit-of-work" &&
     !usesStageLevelPerUnitArtifacts(getField(content, "Scope"), content);

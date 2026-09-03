@@ -7439,12 +7439,16 @@ export type SummaryConfirmationEvidence =
       required: boolean;
       /** Output saves accepted under Change Control `relaxed`, for the mutating caller to record. */
       acceptedChanges?: AcceptedChange[];
+      /** True when this check read Change Control (an output save did not descend from the current confirmation). */
+      changeControlRead?: true;
     }
   | {
       ok: false;
       message: string;
       summaryCoverage: "stale" | "missing";
       refusal?: GuardRefusal;
+      /** As above; a mutating caller resolves the setting again to raise an invalid memory value as its own error. */
+      changeControlRead?: true;
     };
 
 interface SummaryQuestionFile {
@@ -7844,8 +7848,9 @@ export function checkSummaryConfirmationEvidence(
     message: string,
     summaryCoverage: "stale" | "missing",
   ): SummaryConfirmationEvidence => {
+    const read = changeControlRead ? { changeControlRead: true as const } : {};
     if (options.stateContent === undefined || options.stateContent === null) {
-      return { ok: false, message, summaryCoverage };
+      return { ok: false, message, summaryCoverage, ...read };
     }
     return {
       ok: false,
@@ -7868,15 +7873,20 @@ export function checkSummaryConfirmationEvidence(
         },
         humanAuthority: humanAuthorityState(projectDir),
       }),
+      ...read,
     };
   };
   // Change Control is read only when an output save fails to descend from the
-  // current confirmation, and read once. Resolution failures (an invalid memory
-  // value) fail closed to strict, today's behavior. This check reads and never
-  // writes: the accepted changes go back to the caller.
+  // current confirmation, and read once; the result says whether it was read.
+  // A resolution failure (an invalid memory value) fails closed to strict here,
+  // today's behavior, and the mutating caller that sees `changeControlRead`
+  // resolves again to raise it as the validation error. This check reads and
+  // never writes: the accepted changes go back to the caller.
+  let changeControlRead = false;
   let resolvedChangeControl: ChangeControl | null = null;
   const changeControl = (): ChangeControl => {
     if (resolvedChangeControl === null) {
+      changeControlRead = true;
       try {
         resolvedChangeControl = resolveChangeControl(projectDir, options.stateContent ?? null).value;
       } catch {
@@ -8415,6 +8425,7 @@ export function checkSummaryConfirmationEvidence(
     ok: true,
     required: true,
     ...(acceptedChanges.length > 0 ? { acceptedChanges } : {}),
+    ...(changeControlRead ? { changeControlRead: true as const } : {}),
   };
 }
 
@@ -8983,6 +8994,14 @@ export interface FreshReviewReceipts {
    * caller writes these as CHANGE_ACCEPTED rows and tells the human once.
    */
   acceptedChanges: AcceptedChange[];
+  /**
+   * True when the scan met a content change after a terminal receipt and read
+   * Change Control to decide it. A mutating caller resolves the setting again
+   * then, so an invalid memory value is its own validation error and a memory
+   * edit that moved the value is traced; a scan that read nothing is not a
+   * governed checkpoint.
+   */
+  changeControlRead: boolean;
 }
 
 export interface ReviewFingerprintStage {
@@ -12140,6 +12159,7 @@ export function freshReviewReceipts(
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
+    changeControlRead: false,
   };
   const reviewer = stage.reviewer;
   if (!reviewer) return empty;
@@ -12276,14 +12296,24 @@ export function freshReviewReceipts(
   let stagePending: PendingReviewProgress | null = null;
   // Change Control decides what a content change after a terminal receipt does:
   // strict invalidates the receipt (the stale/recovery machinery below), relaxed
-  // keeps the verdict and records the change once. Resolution failures (an
-  // invalid memory value) fail closed to strict, today's behavior.
-  let relaxed = false;
-  try {
-    relaxed = resolveChangeControl(projectDir, stateContent).value === "relaxed";
-  } catch {
-    relaxed = false;
-  }
+  // keeps the verdict and records the change once. The setting is read only when
+  // the scan meets such a change, and once; the result says whether it was read.
+  // A resolution failure (an invalid memory value) fails closed to strict here,
+  // today's behavior, and the mutating caller that sees `changeControlRead`
+  // resolves again to raise it as the validation error.
+  let changeControlRead = false;
+  let resolvedRelaxed: boolean | null = null;
+  const isRelaxed = (): boolean => {
+    if (resolvedRelaxed === null) {
+      changeControlRead = true;
+      try {
+        resolvedRelaxed = resolveChangeControl(projectDir, stateContent).value === "relaxed";
+      } catch {
+        resolvedRelaxed = false;
+      }
+    }
+    return resolvedRelaxed;
+  };
   // Per scope (unit name, or "" for stage-level): the accepted artifact change,
   // opened when a terminal receipt's recorded artifact fingerprint no longer
   // matches the current bytes, and fed the produces[] paths written after it.
@@ -12381,7 +12411,15 @@ export function freshReviewReceipts(
       if (!file) continue;
       const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
       if (targetUnit === undefined) continue;
-      if (relaxed) {
+      // The governed input change: a produces[] write after a terminal receipt
+      // for its scope. A write with no receipt in play reads nothing and takes
+      // today's path below.
+      const receiptInPlay = !perUnit
+        ? stageVerdict !== null
+        : targetUnit === null
+          ? unitVerdicts.size > 0
+          : unitVerdicts.has(targetUnit);
+      if (receiptInPlay && isRelaxed()) {
         // The receipt stays valid. Whether the reviewed bytes actually differ is
         // decided by the fingerprint comparison on the receipt itself; this
         // write only names the path for that accepted change's diff summary.
@@ -12565,7 +12603,7 @@ export function freshReviewReceipts(
       continue;
     }
     if (!fingerprintMatches) {
-      if (fingerprintUsable && relaxed && recordedFingerprint !== null && currentFingerprint !== null) {
+      if (fingerprintUsable && recordedFingerprint !== null && currentFingerprint !== null && isRelaxed()) {
         // Reviewed content differs from the receipt. Under relaxed the verdict
         // stands as the reviewer recorded it; the change is carried to the gate
         // and recorded once. The paths written after this receipt are added as
@@ -12597,8 +12635,9 @@ export function freshReviewReceipts(
         }
         continue;
       }
-    } else if (relaxed) {
-      // A newer matching receipt supersedes any change accepted for this scope.
+    } else {
+      // A newer matching receipt supersedes any change accepted for this scope
+      // (an entry exists only under relaxed; nothing is read here).
       acceptedArtifactChanges.delete(unit ?? "");
     }
     if (unit) {
@@ -12669,12 +12708,12 @@ export function freshReviewReceipts(
     newestSourceFingerprint !== null &&
     (newestSourceFingerprint === UNBINDABLE_FINGERPRINT ||
       currentSourceFingerprint === null ||
-      (sourceMismatch && !relaxed));
+      (sourceMismatch && !isRelaxed()));
   if (
     sourceMismatch &&
-    relaxed &&
     newestSourceFingerprint !== null &&
-    currentSourceFingerprint !== null
+    currentSourceFingerprint !== null &&
+    isRelaxed()
   ) {
     acceptedChanges.push({
       checkpoint: "review-receipt",
@@ -12766,7 +12805,7 @@ export function freshReviewReceipts(
             movedPathKeys.push(pathKey);
           }
           if (movedPathKeys.length > 0) {
-            if (relaxed) {
+            if (isRelaxed()) {
               // Reviewed source moved: the verdict stands, the change is carried
               // to the gate as the paths that moved, and recorded once.
               const paths = renderSourcePathKeys(movedPathKeys);
@@ -12932,6 +12971,7 @@ export function freshReviewReceipts(
       })),
       ...acceptedChanges,
     ],
+    changeControlRead,
   };
 }
 

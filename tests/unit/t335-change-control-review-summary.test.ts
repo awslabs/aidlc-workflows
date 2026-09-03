@@ -343,71 +343,72 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
   });
 });
 
+function questionsBody(answer: string): string {
+  return [
+    "# Requirements Questions",
+    "",
+    "## Q1",
+    "",
+    "- Keep the login flow.",
+    "",
+    "## Consolidated Summary Confirmation",
+    "",
+    "- Looks correct",
+    "- Request changes",
+    "",
+    `[Answer]: ${answer}`,
+    "",
+  ].join("\n");
+}
+
+const SUMMARY_ENV = {
+  ...TEST_ENV,
+  AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0",
+  AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",
+};
+
+/** Present and confirm the summary through the shipped log command. */
+function confirm(proj: string, questions: string): void {
+  writeFileSync(questions, questionsBody(""));
+  const decision = run(
+    LOG_TOOL,
+    [
+      "decision",
+      "--stage",
+      STAGE,
+      "--checkpoint",
+      "summary-confirmation",
+      "--questions-file",
+      questions,
+      "--decision",
+      "Does this all look correct?",
+    ],
+    proj,
+    {},
+  );
+  expect(decision.status, decision.stderr).toBe(0);
+  appendAuditEntry("HUMAN_TURN", {}, proj);
+  writeFileSync(questions, questionsBody("Looks correct"));
+  const answered = run(
+    LOG_TOOL,
+    [
+      "answer",
+      "--stage",
+      STAGE,
+      "--checkpoint",
+      "summary-confirmation",
+      "--questions-file",
+      questions,
+      "--details",
+      "Looks correct",
+    ],
+    proj,
+    {},
+  );
+  expect(answered.status, answered.stderr).toBe(0);
+}
+
 describe("t335 (2) summary confirmation: relaxed continues with a row", () => {
-  function questionsBody(answer: string): string {
-    return [
-      "# Requirements Questions",
-      "",
-      "## Q1",
-      "",
-      "- Keep the login flow.",
-      "",
-      "## Consolidated Summary Confirmation",
-      "",
-      "- Looks correct",
-      "- Request changes",
-      "",
-      `[Answer]: ${answer}`,
-      "",
-    ].join("\n");
-  }
-
-  const SUMMARY_ENV = {
-    ...TEST_ENV,
-    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0",
-    AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",
-  };
-
-  /** Present and confirm the summary through the shipped log command. */
-  function confirm(proj: string, questions: string): void {
-    writeFileSync(questions, questionsBody(""));
-    const decision = run(
-      LOG_TOOL,
-      [
-        "decision",
-        "--stage",
-        STAGE,
-        "--checkpoint",
-        "summary-confirmation",
-        "--questions-file",
-        questions,
-        "--decision",
-        "Does this all look correct?",
-      ],
-      proj,
-      {},
-    );
-    expect(decision.status, decision.stderr).toBe(0);
-    appendAuditEntry("HUMAN_TURN", {}, proj);
-    writeFileSync(questions, questionsBody("Looks correct"));
-    const answered = run(
-      LOG_TOOL,
-      [
-        "answer",
-        "--stage",
-        STAGE,
-        "--checkpoint",
-        "summary-confirmation",
-        "--questions-file",
-        questions,
-        "--details",
-        "Looks correct",
-      ],
-      proj,
-      {},
-    );
-    expect(answered.status, answered.stderr).toBe(0);
-  }
 
   function evidence(proj: string) {
     const prior = process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
@@ -494,6 +495,73 @@ describe("t335 (2) summary confirmation: relaxed continues with a row", () => {
       expect(checked.message).toContain("has no recorded write");
       expect(acceptedRows(proj)).toHaveLength(0);
     }
+  });
+});
+
+describe("t335 (4) an invalid memory Mode is the validation error at the checkpoint", () => {
+  function declareInvalidMode(proj: string): string {
+    const path = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+    const content = readFileSync(path, "utf-8");
+    expect(content).toContain("## Change Control");
+    writeFileSync(path, content.replace("## Change Control\n", "## Change Control\n\nMode: sometimes\n"));
+    return path;
+  }
+
+  function expectValidationError(stderr: string, path: string): void {
+    // The tool prints its error as a JSON line, so the quotes arrive escaped.
+    expect(stderr).toContain(
+      `Invalid Change Control Mode \\"sometimes\\" in ${path} (section: Change Control). Expected one of: strict, relaxed.`,
+    );
+  }
+
+  test("the summary checkpoint names the file and the allowed values, not a swallowed strict refusal", () => {
+    const proj = project("relaxed");
+    const questions = join(stageDir(proj), `${STAGE}-questions.md`);
+    // An output saved before the confirmation: the governed branch, which under
+    // a swallowed strict would be the unauthorized-output refusal.
+    writeFileSync(artifact(proj), "# Requirements\n");
+    recordArtifactWriteViaHook(proj, artifact(proj), "Write");
+    confirm(proj, questions);
+    const path = declareInvalidMode(proj);
+    const refused = run(STATE_TOOL, ["gate-start", STAGE], proj, SUMMARY_ENV);
+    expect(refused.status).not.toBe(0);
+    expectValidationError(refused.stderr, path);
+    expect(refused.stderr).not.toContain("SUMMARY_ARTIFACT_UNAUTHORIZED");
+    expect(acceptedRows(proj)).toHaveLength(0);
+  });
+
+  test("the review checkpoint names the file and the allowed values, not a stale-receipt refusal", () => {
+    const proj = project("relaxed");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    editReviewedArtifact(proj);
+    const path = declareInvalidMode(proj);
+    const refused = run(STATE_TOOL, ["approve", STAGE], proj);
+    expect(refused.status).not.toBe(0);
+    expectValidationError(refused.stderr, path);
+    expect(refused.stderr).not.toContain("changed after");
+    expect(acceptedRows(proj)).toHaveLength(0);
+  });
+
+  test("a checkpoint that met no input change reads nothing: the invalid value does not stop it", () => {
+    // The setting is read only where an input changed after an approval. An
+    // output saved after the confirmation, and a reviewed output left alone,
+    // pass the same gate with the invalid memory value in place.
+    const summary = project("relaxed");
+    confirm(summary, join(stageDir(summary), `${STAGE}-questions.md`));
+    writeFileSync(artifact(summary), "# Requirements\n");
+    recordArtifactWriteViaHook(summary, artifact(summary), "Write");
+    declareInvalidMode(summary);
+    const opened = run(STATE_TOOL, ["gate-start", STAGE], summary, SUMMARY_ENV);
+    expect(opened.status, opened.stderr).toBe(0);
+    expect(opened.stderr).not.toContain("Invalid Change Control Mode");
+
+    const review = project("relaxed");
+    recordReadyReview(review);
+    declareInvalidMode(review);
+    const gate = run(STATE_TOOL, ["gate-start", STAGE], review);
+    expect(gate.status, gate.stderr).toBe(0);
+    expect(gate.stderr).not.toContain("Invalid Change Control Mode");
   });
 });
 

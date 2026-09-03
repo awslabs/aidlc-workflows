@@ -301,10 +301,9 @@ function handleDecision(args: string[]): void {
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
       : null;
-  // The plan-approval checkpoint is a governed Change Control read: resolve the
-  // setting first (a memory edit that moved it is recorded here), then judge
-  // the source the plan was written against.
-  if (flags.checkpoint === "plan-approval") governedChangeControl(pd);
+  // The plan-approval checkpoint reads Change Control inside the evidence, only
+  // when the source the plan was written against has moved; that read traces a
+  // memory edit and raises an invalid memory value as its own error.
   const planEvidence =
     flags.checkpoint === "plan-approval"
       ? codeGenerationPlanApprovalQuestionEvidence(
@@ -665,7 +664,6 @@ function handleAnswer(args: string[]): void {
   // appendAuditEntry / emitError re-acquire reentrantly (per-pd depth).
   withAuditLock(pd, () => {
     if (planCheckpoint) {
-      governedChangeControl(pd);
       planEvidence = codeGenerationPlanApprovalQuestionEvidence(
         pd,
         planApprovalTarget(flags),
@@ -1577,21 +1575,26 @@ function handleReview(args: string[]): void {
           node.slug,
           flags.unit,
         );
-        // The review request is a governed Change Control checkpoint: resolve the
-        // setting, then record what the receipt scan and the summary check
-        // accepted under relaxed. The human line rides on this command's JSON.
-        governedChangeControl(pd, state);
+        // The review request is a governed Change Control checkpoint when the
+        // receipt scan or the summary check met an input change after an
+        // approval and read the setting: resolve it again here as the mutating
+        // caller (an invalid memory value is its own error; a memory edit that
+        // moved it is recorded), then record what they accepted under relaxed.
+        // The human line rides on this command's JSON.
         const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
           stateContent: state,
           unit: flags.unit,
           workflow: fields.Workflow,
         });
-        requestChangeNotices.push(
-          ...recordAcceptedChanges(pd, [
-            ...(receipts?.acceptedChanges ?? []),
-            ...(summaryEvidence.ok ? summaryEvidence.acceptedChanges ?? [] : []),
-          ]),
-        );
+        if (receipts?.changeControlRead || summaryEvidence.changeControlRead) {
+          governedChangeControl(pd, state);
+          requestChangeNotices.push(
+            ...recordAcceptedChanges(pd, [
+              ...(receipts?.acceptedChanges ?? []),
+              ...(summaryEvidence.ok ? summaryEvidence.acceptedChanges ?? [] : []),
+            ]),
+          );
+        }
         if (!summaryEvidence.ok) {
           const message = reviewSummaryEvidenceMessage(
             flags.stage,

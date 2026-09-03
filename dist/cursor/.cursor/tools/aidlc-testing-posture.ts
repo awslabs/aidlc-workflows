@@ -32,6 +32,7 @@ import {
   readPlanApprovalViolation,
   recordAcceptedChanges,
   renderChangedPaths,
+  governedChangeControl,
   resolveBoltDag,
   resolveChangeControl,
   resolveProjectDir,
@@ -200,15 +201,22 @@ export function planSourceDriftRelaxedNotice(paths: string[] | null): string {
  * `recorded` to `current`: under strict, the refusal to throw; under relaxed,
  * the change to record. The listed paths come from the snapshot kept for the
  * recorded fingerprint when one exists; otherwise only the digests speak.
+ * This is the checkpoint's one read of the setting, so it is also where a
+ * memory edit that moved the value is traced: a mutating caller (the decision
+ * and answer records, generation start) passes `trace`, the read-only judge
+ * behind the dispatch guard and `next` does not. An invalid memory value is
+ * the resolver's validation error under both.
  */
 function judgePlanSourceDrift(
   projectDir: string,
   unit: string | null,
   recorded: string,
   current: WorkspaceSourceState | null,
+  trace: boolean,
 ): { accepted: AcceptedChange } | { refusal: PlanApprovalSourceDriftError } {
   const paths = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, recorded, current);
-  if (resolveChangeControl(projectDir).value === "strict") {
+  const resolution = trace ? governedChangeControl(projectDir) : resolveChangeControl(projectDir);
+  if (resolution.value === "strict") {
     return { refusal: new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(paths)) };
   }
   return {
@@ -1880,6 +1888,7 @@ export function recordPlanApprovalReceipt(
       evidence.authority.unit,
       evidence.plannedSourceSha256,
       stateBefore,
+      true,
     );
     if ("refusal" in judged) throw judged.refusal;
     changeNotices.push(...recordAcceptedChanges(projectDir, [judged.accepted]));
@@ -1980,7 +1989,7 @@ export function codeGenerationPlanApprovalQuestionEvidence(
     plannedSource !== UNBINDABLE_FINGERPRINT &&
     (currentSource === null || currentSource !== plannedSource)
   ) {
-    const judged = judgePlanSourceDrift(projectDir, authority.unit, plannedSource, currentState);
+    const judged = judgePlanSourceDrift(projectDir, authority.unit, plannedSource, currentState, true);
     if ("refusal" in judged) throw judged.refusal;
     // The row is written BEFORE anything is re-baselined: a ledger that cannot
     // take it refuses here, with the drift still visible to the next attempt.
@@ -2125,6 +2134,7 @@ export function evaluateCodeGenerationApproval(
           normalizedUnit,
           receipt.certifiedSourceSha256,
           current,
+          false,
         );
         if ("refusal" in judged) sourceDrift = judged.refusal.message;
       }
@@ -2205,6 +2215,7 @@ export function beginCodeGeneration(
           authority.unit,
           receipt.certifiedSourceSha256,
           stateBefore,
+          true,
         );
         if ("refusal" in judged) throw judged.refusal;
         changeNotices.push(...recordAcceptedChanges(projectDir, [judged.accepted]));
