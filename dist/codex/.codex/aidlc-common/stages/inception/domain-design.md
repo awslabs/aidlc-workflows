@@ -44,8 +44,8 @@ scopes:
   - mvp
   - classic
   - workshop
-inputs: <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)
-outputs: components.md (fenced ```yaml component catalogue plus a human-readable mermaid diagram and summary table), decisions.md (Architecture Decision Records), and traceability.json — all under this stage's record dir, engine-resolved
+inputs: the requirements artifact under <record>/inception/requirements-analysis/, the stories artifact under <record>/inception/user-stories/ (if produced), RE artifacts (if brownfield)
+outputs: components (fenced ```yaml component catalogue plus a human-readable mermaid diagram and summary table), decisions (Architecture Decision Records), and traceability.json — all under this stage's record dir, engine-resolved
 ---
 
 # Domain Design

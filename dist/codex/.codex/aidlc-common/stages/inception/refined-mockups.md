@@ -42,7 +42,7 @@ scopes:
   - classic
   - workshop
 inputs: Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage
-outputs: mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md (under this stage's record dir, engine-resolved)
+outputs: mockups, interaction-spec, design-system-mapping, accessibility-checklist, refined-mockups-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Refined Mockups & UX Design
@@ -94,7 +94,7 @@ Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/inception/refined-mockups/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/inception/refined-mockups/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 

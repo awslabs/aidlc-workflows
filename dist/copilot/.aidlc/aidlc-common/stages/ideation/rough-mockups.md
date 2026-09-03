@@ -35,7 +35,7 @@ scopes:
   - feature
   - mvp
 inputs: Intent statement, scope definition, intent backlog
-outputs: wireframes.md, user-flow.md, rough-mockups-questions.md (under this stage's record dir, engine-resolved)
+outputs: wireframes, user-flow, rough-mockups-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Rough Mockups & Concept Visualization
@@ -86,7 +86,7 @@ Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/ideation/rough-mockups/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/ideation/rough-mockups/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 

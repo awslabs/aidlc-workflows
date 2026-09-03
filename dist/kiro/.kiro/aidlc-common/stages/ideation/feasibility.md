@@ -35,7 +35,7 @@ scopes:
   - feature
   - mvp
 inputs: Intent statement from intent-capture stage, market research from market-research stage (if executed)
-outputs: feasibility-assessment.md, constraint-register.md, raid-log.md, feasibility-questions.md (under this stage's record dir, engine-resolved)
+outputs: feasibility-assessment, constraint-register, raid-log, feasibility-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Feasibility & Constraint Analysis
@@ -85,7 +85,7 @@ Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/ideation/feasibility/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/ideation/feasibility/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 

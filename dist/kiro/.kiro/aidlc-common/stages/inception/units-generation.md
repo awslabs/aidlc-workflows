@@ -39,8 +39,8 @@ scopes:
   - mvp
   - classic
   - workshop
-inputs: <record>/inception/domain-design/components.md, <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)
-outputs: unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md, traceability.json (under this stage's record dir, engine-resolved)
+inputs: the components artifact under <record>/inception/domain-design/, the requirements artifact under <record>/inception/requirements-analysis/, the stories artifact under <record>/inception/user-stories/ (if produced)
+outputs: unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map, traceability.json (under this stage's record dir, engine-resolved)
 ---
 
 # Units Generation
@@ -158,7 +158,7 @@ Use stage-protocol.md completion template with completion emoji: :wrench:
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/inception/units-generation/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/inception/units-generation/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`, `traceability`.
 

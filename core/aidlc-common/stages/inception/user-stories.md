@@ -43,8 +43,8 @@ scopes:
   - mvp
   - classic
   - workshop
-inputs: <record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)
-outputs: stories.md, personas.md, user-stories-assessment.md, traceability.json (under this stage's record dir, engine-resolved)
+inputs: the requirements artifact under <record>/inception/requirements-analysis/, RE artifacts (if brownfield)
+outputs: stories, personas, user-stories-assessment, traceability.json (under this stage's record dir, engine-resolved)
 ---
 
 # User Stories
@@ -200,7 +200,7 @@ owns every lifecycle transition and advancement.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/inception/user-stories/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/inception/user-stories/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`, `traceability`.
 

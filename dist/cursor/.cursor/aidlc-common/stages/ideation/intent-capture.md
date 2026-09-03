@@ -29,7 +29,7 @@ scopes:
   - mvp
   - poc
 inputs: Authoritative project description (project-description utility), scope selection
-outputs: intent-statement.md, stakeholder-map.md, intent-capture-questions.md (under this stage's record dir, engine-resolved)
+outputs: intent-statement, stakeholder-map, intent-capture-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Intent Capture & Framing
@@ -218,7 +218,7 @@ Use stage-protocol.md completion template with completion emoji: :bulb:
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/ideation/intent-capture/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/ideation/intent-capture/`.
 
 Imports: `claim-sources`, `html-shape`, `required-sections`, `upstream-coverage`.
 

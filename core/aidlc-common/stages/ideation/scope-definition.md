@@ -31,7 +31,7 @@ scopes:
   - feature
   - mvp
 inputs: Intent statement, feasibility assessment, constraint register
-outputs: scope-document.md, intent-backlog.md, scope-definition-questions.md (under this stage's record dir, engine-resolved)
+outputs: scope-document, intent-backlog, scope-definition-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Scope Definition & Prioritization
@@ -77,7 +77,7 @@ Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/ideation/scope-definition/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/ideation/scope-definition/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 

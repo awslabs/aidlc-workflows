@@ -45,7 +45,7 @@ scopes:
   - enterprise
   - feature
 inputs: All Ideation phase artifacts (intent, market research, feasibility, scope, team, mockups)
-outputs: initiative-brief.md, decision-log.md, approval-handoff-questions.md (under this stage's record dir, engine-resolved)
+outputs: initiative-brief, decision-log, approval-handoff-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Initiative Approval & Handoff
@@ -108,7 +108,7 @@ Approval gate: Approve (proceed to Inception) / Request Changes / Reject Initiat
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/ideation/approval-handoff/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/ideation/approval-handoff/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 

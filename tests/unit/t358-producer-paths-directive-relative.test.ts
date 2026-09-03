@@ -31,14 +31,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function stageBody(source: string): string {
-  const match = /^---\n[\s\S]*?\n---\n([\s\S]*)$/.exec(source);
-  if (!match) throw new Error("stage file has no frontmatter boundary");
-  return match[1];
-}
-
 describe("HTML-capable stage prose uses directive-relative paths", () => {
-  test("stage bodies do not hard-code capable Markdown filenames", () => {
+  test("stage files (frontmatter and body) do not hard-code capable Markdown filenames", () => {
     const graph = JSON.parse(readFileSync(STAGE_GRAPH, "utf8")) as StageNode[];
     const htmlCapable = [...new Set(graph.flatMap((stage) => stage.html_capable))];
     const usedAllowlist = new Set<AllowlistedMention>();
@@ -53,7 +47,9 @@ describe("HTML-capable stage prose uses directive-relative paths", () => {
         "utf8",
       );
 
-      for (const line of stageBody(source).split("\n")) {
+      // The agent reads the whole stage file, so `inputs:`/`outputs:` frontmatter
+      // is as operational as the body: scan every line.
+      for (const line of source.split("\n")) {
         for (const artifact of htmlCapable) {
           const markdownName = new RegExp(`\\b${escapeRegExp(artifact)}\\.md\\b`, "i");
           if (!markdownName.test(line)) continue;

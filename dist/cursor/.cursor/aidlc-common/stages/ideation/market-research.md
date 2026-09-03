@@ -25,7 +25,7 @@ scopes:
   - enterprise
   - feature
 inputs: Intent statement from intent-capture stage
-outputs: competitive-analysis.md, market-trends.md, build-vs-buy.md, market-research-questions.md (under this stage's record dir, engine-resolved)
+outputs: competitive-analysis, market-trends, build-vs-buy, market-research-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Market Research & Competitive Analysis
@@ -72,7 +72,7 @@ Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/ideation/market-research/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/ideation/market-research/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 

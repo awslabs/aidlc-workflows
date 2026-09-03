@@ -183,7 +183,7 @@
       "review_class": "advisory",
       "summary_confirmation": "required",
       "inputs": "Authoritative project description (project-description utility), scope selection",
-      "outputs": "intent-statement.md, stakeholder-map.md, intent-capture-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "intent-statement, stakeholder-map, intent-capture-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -278,7 +278,7 @@
       ],
       "summary_confirmation": "required",
       "inputs": "Intent statement from intent-capture stage",
-      "outputs": "competitive-analysis.md, market-trends.md, build-vs-buy.md, market-research-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "competitive-analysis, market-trends, build-vs-buy, market-research-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -382,7 +382,7 @@
       ],
       "summary_confirmation": "required",
       "inputs": "Intent statement from intent-capture stage, market research from market-research stage (if executed)",
-      "outputs": "feasibility-assessment.md, constraint-register.md, raid-log.md, feasibility-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "feasibility-assessment, constraint-register, raid-log, feasibility-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -479,7 +479,7 @@
       ],
       "summary_confirmation": "required",
       "inputs": "Intent statement, feasibility assessment, constraint register",
-      "outputs": "scope-document.md, intent-backlog.md, scope-definition-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "scope-document, intent-backlog, scope-definition-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -574,7 +574,7 @@
       ],
       "summary_confirmation": "required",
       "inputs": "Scope definition, intent backlog, feasibility assessment",
-      "outputs": "team-assessment.md, skill-matrix.md, mob-composition.md, team-formation-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "team-assessment, skill-matrix, mob-composition, team-formation-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -675,7 +675,7 @@
       "review_class": "advisory",
       "summary_confirmation": "required",
       "inputs": "Intent statement, scope definition, intent backlog",
-      "outputs": "wireframes.md, user-flow.md, rough-mockups-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "wireframes, user-flow, rough-mockups-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -798,7 +798,7 @@
       ],
       "summary_confirmation": "required",
       "inputs": "All Ideation phase artifacts (intent, market research, feasibility, scope, team, mockups)",
-      "outputs": "initiative-brief.md, decision-log.md, approval-handoff-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "initiative-brief, decision-log, approval-handoff-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1119,7 +1119,7 @@
       "review_class": "advisory",
       "summary_confirmation": "required",
       "inputs": "RE artifacts (if brownfield), authoritative project description (project-description utility)",
-      "outputs": "requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "requirements, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1231,8 +1231,8 @@
       "reviewer_max_iterations": 2,
       "review_class": "advisory",
       "summary_confirmation": "required",
-      "inputs": "<record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)",
-      "outputs": "stories.md, personas.md, user-stories-assessment.md, traceability.json (under this stage's record dir, engine-resolved)",
+      "inputs": "the requirements artifact under <record>/inception/requirements-analysis/, RE artifacts (if brownfield)",
+      "outputs": "stories, personas, user-stories-assessment, traceability.json (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1354,7 +1354,7 @@
       "review_class": "advisory",
       "summary_confirmation": "required",
       "inputs": "Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage",
-      "outputs": "mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "mockups, interaction-spec, design-system-mapping, accessibility-checklist, refined-mockups-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1468,8 +1468,8 @@
       "reviewer_max_iterations": 2,
       "review_class": "advisory",
       "summary_confirmation": "required",
-      "inputs": "<record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)",
-      "outputs": "components.md (fenced ```yaml component catalogue plus a human-readable mermaid diagram and summary table), decisions.md (Architecture Decision Records), and traceability.json — all under this stage's record dir, engine-resolved",
+      "inputs": "the requirements artifact under <record>/inception/requirements-analysis/, the stories artifact under <record>/inception/user-stories/ (if produced), RE artifacts (if brownfield)",
+      "outputs": "components (fenced ```yaml component catalogue plus a human-readable mermaid diagram and summary table), decisions (Architecture Decision Records), and traceability.json — all under this stage's record dir, engine-resolved",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1583,8 +1583,8 @@
       "reviewer_max_iterations": 2,
       "review_class": "advisory",
       "summary_confirmation": "required",
-      "inputs": "<record>/inception/domain-design/components.md, <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)",
-      "outputs": "unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md, traceability.json (under this stage's record dir, engine-resolved)",
+      "inputs": "the components artifact under <record>/inception/domain-design/, the requirements artifact under <record>/inception/requirements-analysis/, the stories artifact under <record>/inception/user-stories/ (if produced)",
+      "outputs": "unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map, traceability.json (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1694,8 +1694,8 @@
       "reviewer_max_iterations": 2,
       "review_class": "advisory",
       "summary_confirmation": "required",
-      "inputs": "<record>/inception/units-generation/unit-of-work.md, <record>/inception/units-generation/unit-of-work-dependency.md, <record>/inception/domain-design/components.md (if produced), <record>/inception/requirements-analysis/requirements.md",
-      "outputs": "contract-summary.md (under this stage's record dir, engine-resolved) — a human-readable overview of every contract (inter-unit boundaries and public/external APIs), each with a fenced spec block (OpenAPI / AsyncAPI / shared schema) inline",
+      "inputs": "<record>/inception/units-generation/unit-of-work.md, <record>/inception/units-generation/unit-of-work-dependency.md, the components artifact under <record>/inception/domain-design/ (if produced), the requirements artifact under <record>/inception/requirements-analysis/",
+      "outputs": "contract-summary (under this stage's record dir, engine-resolved) — a human-readable overview of every contract (inter-unit boundaries and public/external APIs), each with a fenced spec block (OpenAPI / AsyncAPI / shared schema) inline",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1821,7 +1821,7 @@
       ],
       "summary_confirmation": "required",
       "inputs": "All Inception artifacts (requirements, stories, mockups, architecture, units)",
-      "outputs": "bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "bolt-plan, team-allocation, risk-and-sequencing-rationale, external-dependency-map, delivery-planning-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",

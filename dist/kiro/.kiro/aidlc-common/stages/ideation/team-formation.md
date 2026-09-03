@@ -29,7 +29,7 @@ scopes:
   - enterprise
   - feature
 inputs: Scope definition, intent backlog, feasibility assessment
-outputs: team-assessment.md, skill-matrix.md, mob-composition.md, team-formation-questions.md (under this stage's record dir, engine-resolved)
+outputs: team-assessment, skill-matrix, mob-composition, team-formation-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Team Formation & Mob Planning
@@ -78,7 +78,7 @@ Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/ideation/team-formation/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/ideation/team-formation/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 

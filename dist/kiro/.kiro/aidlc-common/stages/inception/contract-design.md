@@ -35,8 +35,8 @@ scopes:
   - mvp
   - classic
   - workshop
-inputs: <record>/inception/units-generation/unit-of-work.md, <record>/inception/units-generation/unit-of-work-dependency.md, <record>/inception/domain-design/components.md (if produced), <record>/inception/requirements-analysis/requirements.md
-outputs: contract-summary.md (under this stage's record dir, engine-resolved) — a human-readable overview of every contract (inter-unit boundaries and public/external APIs), each with a fenced spec block (OpenAPI / AsyncAPI / shared schema) inline
+inputs: <record>/inception/units-generation/unit-of-work.md, <record>/inception/units-generation/unit-of-work-dependency.md, the components artifact under <record>/inception/domain-design/ (if produced), the requirements artifact under <record>/inception/requirements-analysis/
+outputs: contract-summary (under this stage's record dir, engine-resolved) — a human-readable overview of every contract (inter-unit boundaries and public/external APIs), each with a fenced spec block (OpenAPI / AsyncAPI / shared schema) inline
 ---
 
 # Contract Design
@@ -110,7 +110,7 @@ Use stage-protocol.md completion template with completion emoji: :handshake:
 
 ## Sensors
 
-This stage's output is a markdown artefact under `<record>/inception/contract-design/`.
+This stage's output is a document artefact (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/inception/contract-design/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 

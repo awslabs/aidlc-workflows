@@ -50,7 +50,7 @@ scopes:
   - workshop
   - express
 inputs: RE artifacts (if brownfield), authoritative project description (project-description utility)
-outputs: requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)
+outputs: requirements, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Requirements Analysis
@@ -234,7 +234,7 @@ IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Re
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/inception/requirements-analysis/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/inception/requirements-analysis/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 

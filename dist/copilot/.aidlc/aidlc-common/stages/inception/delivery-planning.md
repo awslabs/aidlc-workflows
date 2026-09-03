@@ -46,7 +46,7 @@ scopes:
   - classic
   - workshop
 inputs: All Inception artifacts (requirements, stories, mockups, architecture, units)
-outputs: bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)
+outputs: bolt-plan, team-allocation, risk-and-sequencing-rationale, external-dependency-map, delivery-planning-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Delivery Planning
@@ -218,7 +218,7 @@ Approval gate: Approve (proceed to Construction) / Request Changes.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/inception/delivery-planning/`.
+This stage's outputs are document artefacts (Markdown, or HTML when this intent authors HTML artifacts) under `<record>/inception/delivery-planning/`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
