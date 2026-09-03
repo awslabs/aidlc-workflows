@@ -387,9 +387,6 @@ export function readArtifactText(path: string): string {
 	return path.toLowerCase().endsWith(".html") ? htmlToMarkdown(body) : body;
 }
 
-function attr(element: HtmlElement | undefined, name: string): string | undefined {
-	return element?.attrs[name];
-}
 
 function unsafeReference(value: string): string | null {
 	const normalized = value.trim();
@@ -413,7 +410,7 @@ export function checkHtmlArtifact(
 	const head = all.find((node) => node.tag === "head");
 	const body = all.find((node) => node.tag === "body");
 	if (!/^\s*<!doctype\s+html\s*>/i.test(html)) findings.push("missing <!doctype html>");
-	if (!attr(htmlElement, "lang")?.trim()) findings.push("missing <html lang>");
+	if (!htmlElement?.attrs.lang?.trim()) findings.push("missing <html lang>");
 	if (!all.some((node) => node.tag === "meta" && "charset" in node.attrs)) {
 		findings.push("missing <meta charset>");
 	}
