@@ -142,7 +142,7 @@ The aidlc-product-agent asks you to choose an interaction mode:
 - **Edit File** opens the artifact for direct editing
 - **Chat** lets you discuss freely; the agent extracts decisions
 
-See [Interaction Modes](07-interaction-modes.md) for details on each mode. You can switch modes mid-stage.
+See [Interaction Modes](07-interaction-modes.md) for details on each mode. With `AIDLC_REVIEW_UI=1`, a fourth **Guide me in the browser** choice adds a side-by-side explainer and questions form. You can switch modes mid-stage.
 
 ### Approval Gate
 
@@ -345,6 +345,6 @@ Throughout the workflow on Claude Code, the custom AI-DLC status line shows your
 
 - [Spaces and Intents](03-spaces-and-intents.md) — how the workspace holds many runs, and how to start and switch between them
 - [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 33 stages
-- [Interaction Modes](07-interaction-modes.md) — Guide Me, Edit File, and Chat explained
+- [Interaction Modes](07-interaction-modes.md) — Guide Me, Edit File, Chat, and the optional browser-guided mode explained
 - [Session Management](11-session-management.md) — resuming, redoing, and jumping between stages
 - [Glossary](glossary.md) — terminology reference

@@ -34,6 +34,7 @@ The frontmatter is a flat block of YAML keys. Some are mechanical — `slug`, `p
 | `mode` | Communication topology | `inline` (voices in the conductor's context), `subagent` (hub-and-spoke dispatch), `pipeline` (chain), or `mob` (mesh in bounded rounds). |
 | `for_each` | Whether it iterates | Names an artifact whose instances drive a once-per-instance run. |
 | `reviewer` / `review_artifact` | Independent quality review | If a reviewer is declared, name the one required Markdown output that owns its appended `## Review`; never rely on `produces` order. |
+| `html_exclude` | HTML format capability | Keep selected produced artifacts (or the whole stage with `"*"`) in their native format despite otherwise being HTML-capable. |
 
 A few notes on the calls that bite hardest:
 
@@ -72,7 +73,64 @@ The dependency graph isn't written anywhere directly — it emerges from the `co
 
 When you author or move a stage, these three lists are what wire it into the workflow. Get them right and the stage appears in the correct scopes, in the correct order, with its inputs satisfied. The mechanics of wiring a brand-new stage in are covered step by step in [Adding a Stage](02-adding-a-stage.md).
 
+## Classifying artifacts for HTML
+
+Every core name in `produces` must be classified in `ARTIFACT_KIND` in `core/tools/aidlc-artifact-vocabulary.ts` as one of three kinds:
+
+| Kind | Use it for | HTML-capable? |
+|---|---|---|
+| `document` | Human-readable prose, analysis, plans, and reports | In Ideation and Inception |
+| `visual` | Human-readable design and diagram artifacts such as wireframes, mockups, and user flows | In Ideation and Inception |
+| `machine` | Anything a tool parses, promotes, configures, or treats as a form | Never |
+
+Questions, evidence, traceability, result files, generated configuration, and Reverse Engineering / CodeKB outputs are `machine`. When the choice between `document` and `machine` is unclear, use `machine`; native format is the fail-safe. The graph compiler deliberately fails closed when an Ideation or Inception stage produces an unclassified core artifact, so adding a new `produces` name includes adding its vocabulary entry.
+
+The compiler writes an always-present `html_capable` array onto each graph node. It contains the stage's `document` and `visual` outputs only when the phase is `ideation` or `inception`. A stage can narrow that capability without changing the global kind:
+
+```yaml
+produces:
+  - decision-brief
+  - compatibility-matrix
+html_exclude:
+  - compatibility-matrix
+```
+
+Use `html_exclude: "*"` when no output from that stage should be HTML. A list may contain only names declared by that stage's `produces` or `optional_produces`; typos fail schema validation. `html_exclude` describes capability, not an active-intent condition. The engine still chooses `.html` only when that intent's locked `HTML Artifacts` field is `on`.
+
+An HTML-capable stage should import `html-shape` in its `sensors:` list unless it has an intentional phase-level exception. The sensor passes when an intent resolves every output to Markdown and validates any `.html` siblings when HTML is on. See [Sensors](06-sensors.md#binding-html-shape).
+
+### Writing the HTML template
+
+Do not invent a second artifact outline for HTML. The agent resolves the ordinary Markdown template and required headings, then maps the same H2 set and order to semantic `<section>` elements. The conditional `aidlc-common/protocols/stage-protocol-html.md` module supplies the shared shell:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="aidlc-artifact" content="decision-brief">
+  <meta name="aidlc-stage" content="my-stage">
+  <title>Decision brief</title>
+</head>
+<body>
+  <section data-aidlc="summary" aria-label="Summary">
+    <p>Concise linear summary.</p>
+  </section>
+  <section>
+    <h2>Required heading</h2>
+  </section>
+</body>
+</html>
+```
+
+The summary must be the first body element. Keep the document self-contained and useful offline: no external URLs, parent paths, forms, iframes, objects, or embeds. Inline CSS, accessible SVG, and optional-enhancement scripts are allowed. Reserve a final `<section data-aidlc="review">` for the independent reviewer; the stage author never creates it.
+
+The Review UI's optional question explainer is a separate, machine-recognizable HTML shape governed by `stage-protocol-guide.md`. It starts with the same summary contract and then has one `data-aidlc-question="Q<n>"` section per questions-file section, including **Why now**, an option trade-off table, a recommendation marked with `data-aidlc-recommend`, and related decisions. Both `html` and `guide` are conditional protocol modules selected in the directive; stage body prose should not duplicate either shared contract.
+
+The complete runtime and CLI checks are in [Review UI and HTML Artifacts](../reference/19-review-ui-and-html-artifacts.md#html-authoring-and-review-appendix).
+
 ---
+
 
 ## stage-graph.json is compiled — never hand-edit it
 

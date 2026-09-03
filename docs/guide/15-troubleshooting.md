@@ -27,6 +27,9 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Statusline not appearing | Verify `bun` is on PATH and `settings.json` `statusLine.command` references `aidlc-statusline.ts` |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
+| Browser link expired or already used | Run `/aidlc --status` for a fresh single-use Review UI link |
+| Review UI unavailable over SSH | Set a fixed loopback port and forward it with `ssh -L`; set `AIDLC_REVIEW_OPEN=0` remotely |
+| Browser answers say questions changed | Reload the Questions view and save again against the current file |
 
 ---
 
@@ -78,6 +81,48 @@ Claude Code honours `"disableAllHooks": true` in any settings layer — enterpri
 - If it is **enterprise managed settings** — the highest-precedence layer — a project or user file cannot override it; IT policy must change it. If policy mandates disabled hooks, AI-DLC v2 is not compatible with that environment: its engine is hook-driven.
 
 The check reads the on-disk managed-settings **file** (`/etc/claude-code/managed-settings.json` on Linux, `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `%ProgramFiles%\ClaudeCode\managed-settings.json` on current Windows — `%PROGRAMDATA%\ClaudeCode\` is a legacy secondary) plus alphabetical JSON files in the sibling `managed-settings.d/` directory. It does **not** inspect other managed channels Claude Code supports (MDM, Windows registry, or a remote/server-managed source), so a passing row means the resolved value is not `true` in any settings file the check could read, not a guarantee those channels are clean. If your managed file lives at a non-standard path, point the check at it with `AIDLC_MANAGED_SETTINGS_PATH=/path/to/managed-settings.json`; fragments beside that file are included.
+
+---
+
+## Review UI Issues
+
+### Link expired or already used
+
+Review links are intentionally single-use and expire after 30 minutes. Run `/aidlc --status` to mint a fresh link. Do not append a token or copy one from `~/.aidlc/review-ui/`; the token is private and the printed link should contain only `/open/<nonce>`.
+
+### The daemon did not start
+
+Confirm that the harness was launched with `AIDLC_REVIEW_UI=1`. Session start normally ensures the daemon, but a harness without that hook can launch it explicitly:
+
+```bash
+bun <harnessDir>/tools/aidlc-review-ui.ts serve --project-dir "$PWD"
+```
+
+Use `/aidlc --doctor` to inspect the flag and daemon liveness. Runtime details are under `~/.aidlc/review-ui/<project-id>/server.log`; do not expose `server.json`, which contains the bearer token.
+
+### Remote browser cannot connect
+
+Keep the daemon on loopback and forward its port:
+
+```bash
+# remote harness environment
+export AIDLC_REVIEW_PORT=4765 AIDLC_REVIEW_HOST=127.0.0.1 AIDLC_REVIEW_OPEN=0
+
+# local workstation
+ssh -L 4765:127.0.0.1:4765 user@remote-host
+```
+
+Then open the single-use Browser link locally. LAN binding is not a supported workaround.
+
+### Feedback was sent but the workflow did not advance
+
+Expected behavior: **Send feedback** writes a feedback file but does not decide the gate. Return to the terminal and answer **Approve** or **Request Changes**. The engine ingests the pending file with that terminal decision and emits `REVIEW_UI_FEEDBACK`.
+
+### Browser answers were refused as stale
+
+The questions file changed after the form loaded. Reload the Questions view, review the current options, and save again. After a successful save, return to the terminal and send **done** so `answers-apply` can update the canonical questions file.
+
+For the full operating model, see [Review in the Browser](18-review-in-the-browser.md).
 
 ---
 

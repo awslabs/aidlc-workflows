@@ -4,8 +4,8 @@
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
 on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot: 14 agents
-(11 domain experts, 2 reviewers, and the composer), 33 stages, 11 scopes, a set
-of rules and sensors. This guide is for the person who
+(11 domain experts, 2 reviewers, and the composer), 33 stages, 11 scopes, and seven
+sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
 a domain the framework doesn't cover, tighten a scope, teach the framework a
 standing rule, or wire a deterministic check into a stage.
@@ -85,7 +85,7 @@ You author all of these in `core/` — the hand-authored, harness-neutral source
 | Add or modify an agent | `core/agents/<name>-agent.md` | [Adding an Agent](03-adding-an-agent.md) |
 | Define a scope | `core/scopes/aidlc-<name>.md` + per-stage `scopes:` tags | [Scopes](04-scopes.md) |
 | Teach a standing rule | `core/memory/{team,project}.md` | [Rules and the Learning Loop](05-rules-and-the-loop.md) |
-| Wire a deterministic check | a sensor manifest under `core/sensors/` + a stage's `sensors:` import | [Sensors](06-sensors.md) |
+| Wire a deterministic check, including `html-shape` | a sensor manifest under `core/sensors/` + a stage's `sensors:` import | [Sensors](06-sensors.md) |
 | Add team domain knowledge | `aidlc/knowledge/<agent>-agent/` (the space-level knowledge dir, at runtime) | [Team Knowledge](07-team-knowledge.md) |
 | Shape Construction and swarm posture | `core/memory/` + the `units-generation` stage | [Construction and the Swarm](08-construction-and-swarm.md) |
 
@@ -171,7 +171,7 @@ compiled, or adding a new audit event, is a code change — that lives there.
 Read it in order the first time:
 
 1. **[Anatomy of a Stage](01-anatomy-of-a-stage.md)** — the stage file format:
-   frontmatter contract, the three-compartment body, how the graph compiles.
+   frontmatter contract, artifact-kind/HTML capability, the three-compartment body, and how the graph compiles.
    The single most important thing to understand before changing anything.
 2. **[Adding a Stage](02-adding-a-stage.md)** — end-to-end: author the file,
    wire the dependency edges, compile, watch it appear in a scope.

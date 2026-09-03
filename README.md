@@ -46,10 +46,15 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 - **[3 test strategy levels](docs/guide/05-scopes-and-depth.md#the-3-test-strategy-levels)** (Minimal/Standard/Comprehensive) — independent of depth for flexible test coverage
 - **[CLI utilities](docs/guide/12-cli-commands.md)** — jump to any stage or phase, check status, change scope/depth/test strategy mid-workflow
 - **[Approval gates at every stage](docs/guide/07-interaction-modes.md)** — you stay in control of all decisions
+- **[Local browser review and optional HTML artifacts](docs/guide/18-review-in-the-browser.md)** — annotate artifacts, compare revisions, export offline copies, answer guided questions beside trade-off explainers, and return the decision to the terminal gate
 - **[Two-tier knowledge system](docs/guide/08-knowledge.md)** — methodology knowledge ships with the framework; team knowledge is user-managed
 - **[Rules and a learning loop](docs/guide/09-rules-and-the-learning-loop.md)** — human corrections become persistent behavioral rules
 - **[92-event audit trail](docs/guide/10-state-and-audit.md)** - structured logging for enterprise traceability
 - **[Session resume](docs/guide/11-session-management.md)** — continue from checkpoint, redo, jump to stage, or start fresh
+
+### Review UI and HTML opt-ins
+
+Launch your harness with `AIDLC_REVIEW_UI=1` to start the project-local Review UI. `AIDLC_REVIEW_PORT`, `AIDLC_REVIEW_HOST` (keep the default loopback bind), `AIDLC_REVIEW_OPEN=0`, `AIDLC_REVIEW_IDLE_MINUTES`, and `AIDLC_REVIEW_HOME` tune its local daemon. Set `AIDLC_HTML_ARTIFACTS=1` before intent creation to author eligible Ideation/Inception document and visual artifacts as self-contained HTML; the intent records and retains that choice. See [Review in the Browser](docs/guide/18-review-in-the-browser.md) for the gate flow, questions form, SSH forwarding, and security posture.
 
 ## Methodology and implementation
 
@@ -464,6 +469,7 @@ Most first-run trouble is one of these; each harness guide covers the rest.
 
 | Symptom | Harness | Fix |
 | --- | --- | --- |
+| Browser review link expired or remote UI unavailable | all | Run `/aidlc --status` for a fresh single-use link; for SSH, set a fixed loopback port and forward it with `ssh -L` ([guide](docs/guide/18-review-in-the-browser.md#remote-and-ssh-sessions)). |
 | `which bun` works in your terminal, but the harness can't find bun | all | bun isn't on the non-interactive PATH. Copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (zsh) or `~/.bashrc` (bash/Git Bash) — see the tip under [Quick Start](#quick-start). |
 | `/aidlc --doctor` reports a Codex CLI version below 0.145.0 | Codex | Upgrade to Codex CLI 0.145.0 or later. Older releases either delay compact-session workflow-context restoration or break subagent attribution and hyphenated agent TOML resolution. |
 | Bedrock calls fail with `AccessDenied` or a model-not-found error | Claude, Codex | Enable model access for the harness's configured models in your AWS account and put working credentials on your SDK chain. Confirm `AWS_REGION` is a region where you enabled them. |

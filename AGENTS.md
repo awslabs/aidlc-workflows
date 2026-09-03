@@ -26,10 +26,11 @@ trees. The core uses the same building blocks in every harness:
 - **Skills** (`skills/aidlc/`) — Orchestrator (`SKILL.md`), stage protocol, and 33 stage files across 5 phases (initialization, ideation, inception, construction, operation)
 - **Agents** (`agents/`) — 14 `aidlc-<role>-agent.md` files: 11 domain-expert personas (product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations), 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer (aidlc-composer-agent)
 - **Method/rules** (`memory/`) — Layered config in the space memory layer: `org.md` (framework defaults), `team.md` (affirmed practices), `project.md` (project overrides), and `phases/<phase>.md` for ideation/inception/construction/operation
-- **Sensors** (`sensors/`) — Deterministic verification manifests (advisory): `aidlc-claim-sources.md`, `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-traceability.md`, `aidlc-linter.md`, `aidlc-type-check.md`
+- **Sensors** (`sensors/`) — 7 deterministic verification manifests (advisory by default): `aidlc-claim-sources.md`, `aidlc-html-shape.md`, `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-traceability.md`, `aidlc-linter.md`, `aidlc-type-check.md`
 - **Knowledge** (`knowledge/`) — Methodology reference. Per-agent under `aidlc-<agent>-agent/`; cross-agent material in `aidlc-shared/`
-- **Tools** (`tools/`) — TypeScript CLI tools, all prefixed `aidlc-*.ts` and run via bun
+- **Tools** (`tools/`) — 56 TypeScript CLI/tool modules, all prefixed `aidlc-*.ts` and run via bun
 - **Hooks** (`hooks/`) — 17 framework hooks, all prefixed `aidlc-*.ts`, covering audit emission, sensor dispatch, stage-graph rebuild, session lifecycle, state validation, subagent tracking, statusline rendering, human-turn recording, exact stage-rule delivery, forwarding-loop enforcement, reviewer read-scope enforcement, review-receipt write-freeze enforcement, code-generation plan-approval enforcement, direct state-transition enforcement, and token-usage folding (the Claude-only usage-ledger producer)
+- **Protocol modules** (`aidlc-common/protocols/`) — 9 files: the shared `stage-protocol.md` plus conditional Construction, ensemble, governance, Guide mode, HTML, recovery, reviewer, and swarm modules
 
 ## Working on This Project
 

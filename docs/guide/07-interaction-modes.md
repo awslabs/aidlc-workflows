@@ -1,6 +1,6 @@
 # Interaction Modes
 
-AI-DLC provides three ways to interact with agents during stages, plus approval gates that keep you in control at every decision point.
+AI-DLC provides three standard ways to interact with agents during stages, plus an optional browser-guided mode and approval gates that keep you in control at every decision point.
 
 > **Harness note.** Gates and questions render differently per harness. Claude
 > Code uses its native question picker; Codex uses its picker when enabled.
@@ -12,15 +12,16 @@ AI-DLC provides three ways to interact with agents during stages, plus approval 
 
 ---
 
-## Tri-Mode Question Flow
+## Question Flow
 
-When a stage gathers your input, the agent presents three interaction modes. You choose which mode works best for the current stage.
+When a stage gathers your input, the agent presents three standard interaction modes. When the [Review UI](18-review-in-the-browser.md) is available, it also offers **Guide me in the browser**. You choose which mode works best for the current stage.
 
 ```
 ▸ Choose interaction mode:
   (1) Guide Me — agent asks structured questions
   (2) Edit File — write directly to the artifact
   (3) Chat — freeform discussion
+  (4) Guide me in the browser — read trade-offs and answer beside the explainer (Review UI only)
 ```
 
 ### Guide Me
@@ -38,6 +39,10 @@ The agent creates (or opens) the questions file and you edit it directly. Best w
 - The questions file appears in the intent's record dir with blank answer fields
 - You fill in answers at your own pace
 - The agent reads the completed file and proceeds
+
+### Guide me in the browser
+
+With `AIDLC_REVIEW_UI=1`, the agent can write an HTML explainer with trade-offs and recommendations and show it beside the browser questions form. Save there, return to the terminal, and send **done**; AI-DLC applies the submission to the canonical questions file before the ordinary consolidated-summary confirmation. See [Review in the Browser](18-review-in-the-browser.md#guide-me-in-the-browser).
 
 ### Chat
 
@@ -72,6 +77,8 @@ The default approval gate presents two options:
 - **Approve** reports the outcome; the engine marks the stage completed, updates
   `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
+
+When the Review UI is enabled, the completion summary also carries a single-use **Browser** link. Browser annotations become input to the same terminal decision; clicking **Send feedback** does not resolve the gate. See [Review in the Browser](18-review-in-the-browser.md#review-an-approval-gate).
 
 If your reply does not match a displayed choice, it is acknowledged and the
 valid choices are shown again; nothing is recorded and the gate remains open.

@@ -70,6 +70,8 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 
 Initialization stages run **automatically** without approval gates. All three execute inside a single deterministic tool call (`aidlc-utility intent-create`) that completes in well under a second.
 
+Ideation and Inception gates can also be reviewed in the optional local browser surface, and eligible human-readable artifacts in those phases can be authored as HTML when the intent opts in. The terminal remains the approval authority. See [Review in the Browser](18-review-in-the-browser.md).
+
 | # | Stage | Lead | Key Artifacts | Condition |
 |---|-------|------|---------------|-----------|
 | 0.1 | Workspace Scaffold | orchestrator | first intent's record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`) | ALWAYS |
