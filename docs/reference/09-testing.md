@@ -46,6 +46,15 @@ Distribution coverage is split by contract:
 - `t244-install-management.test.ts` covers machine configuration, update
   discovery, installer harness selection, Windows lifecycle surfaces,
   completions, and release-workflow candidate continuity.
+- `t330-release-channel-grammar.test.ts` pins the closed stable and preview
+  version-id grammar, the installer and lifecycle literals of it, and a preview
+  install that runs through the launcher shim.
+- `t331-preview-channel-lifecycle.test.ts` covers `config --channel`,
+  channel-aware `update` and `update --check`, API failure as unavailable,
+  switching back to stable, preview retention, and preview pins.
+- `t332-preview-release-pipeline.test.ts` covers the annotated-tag prerelease
+  publication, the preview planner and notes, the plan record, and the release
+  workflow's schedule, channel input, CI gate ordering, and build stamping.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.

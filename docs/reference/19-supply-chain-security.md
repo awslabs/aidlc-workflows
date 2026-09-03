@@ -100,6 +100,35 @@ by a new patch release. A compromised release is excluded from update
 discovery and linked to its corrective release without deleting the original
 release, tag, attestations, or audit record.
 
+The preview channel publishes `main` through the same pipeline once a day
+(`schedule`, or `workflow_dispatch` with `channel: preview`). `authorize`
+decides the channel, then runs `scripts/plan-preview-release.ts` against the
+publication repository: it reads the newest published preview's annotated tag
+message to find the source commit it was cut from and ends the run early when
+`main` has not moved, otherwise allocates `<x.y.z>-preview.<YYYYMMDD>.<N>` from
+every existing preview tag for the UTC date (a tag that outlived a failed
+publication still occupies its counter) and renders the notes from the
+CHANGELOG sections, or the merged commit subjects, added since that commit. The
+`gate` job then calls `.github/workflows/ci.yml` (`workflow_call`) on the
+authorized commit, so the contract checks, the smoke and unit tiers, and the
+deterministic integration and e2e tiers that guard every pull request also
+guard every preview; `gate-result` joins that verdict into the build chain and
+is a no-op for stable runs, whose tag-gated dispatch keeps `verify` as its gate.
+Build, smoke, and staging jobs receive the preview id as `AIDLC_BUILD_VERSION`,
+which the packager stamps into every projected `aidlc-version.ts` copy and
+projection stamp and `package-release.ts` writes into `version.json`; the
+source tree keeps `x.y.z`, and `bun scripts/package.ts --check` measures the
+same stamped projection. `promote` follows the stable staging-draft flow
+unchanged up to publication, then creates the annotated `v<id>` tag object and
+ref (message: title, `Source: <repo>@<sha>`, `Build date`), and publishes the
+draft as `prerelease: true` with `make_latest: false`, so the
+`latest/download` redirect that stable installs and `aidlc update` follow never
+resolves to a preview. Preview releases are immutable exactly like stable
+releases. Consumers opt in with `aidlc config --channel preview`; the client
+lists the publication repository's releases through the GitHub API, selects the
+newest published prerelease whose tag is a preview id, and installs it through
+the exact-version download path with the same provenance verification.
+
 `scripts/package-release.ts` stages `version.json`, `checksums.txt`, installers,
 binaries, and `aidlc-runtime.tar.gz`. Full package generation first removes
 generated harness and plugin roots that no longer exist in source, and release

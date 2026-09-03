@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-09-03
+
+Add a `preview` release channel next to the stable one. A scheduled run of the release workflow publishes the current `main` once a day as a GitHub prerelease tagged `v<x.y.z>-preview.<YYYYMMDD>.<N>` (the source version, the UTC build date, and that day's build counter), gated on the same deterministic CI tiers that guard every pull request and never marked "latest", so stable installs and `aidlc update` keep resolving the stable stream unchanged. The native lifecycle learns the preview grammar everywhere a version is a directory name. **Upgrade:** nothing to do for stable users; opt in with `aidlc config --channel preview` followed by `aidlc update`. A preview that raises the project state schema cannot be walked back to a stable build that does not understand it, so keep preview installs on projects you can recreate.
+
+* `aidlc config --channel stable|preview` persists the machine release channel (`aidlc config --channel` alone prints it); `aidlc update` follows it, `aidlc update --channel <c>` is a one-shot override, and `aidlc update --check` reports "behind" against the selected channel's newest release with the existing exit codes (5 behind, 0 current, 3 unavailable or offline, 1 checks disabled).
+* Preview discovery queries the GitHub releases API of the repository behind `--release-base-url` (derived for github.com; `--release-api-url` or `AIDLC_RELEASE_API_URL` names it for other hosts); an API failure or rate limit is reported as unavailable (exit 3) and never falls back to stable.
+* `aidlc use <id>`, `aidlc config --pin <id>`, `install.sh --version <id>`, and `install.ps1 -Version <id>` accept preview ids; `.aidlc-version` pins keep overriding the machine channel.
+* `aidlc config --channel stable` followed by `aidlc update` converges on the newest stable release even though its id sorts lower and reports the change as a channel switch, not a downgrade error.
+* Retention: after an update only the two newest complete preview installs are kept beyond the protection every release already has (active, rollback, in use, or pinned by a project); older previews are pruned and stable retention is unchanged.
+* Release workflow: `workflow_dispatch` gains a `channel` input (`stable` default); the daily `17 3 * * *` UTC schedule publishes a preview and exits early when `main` has not moved since the newest preview; preview builds are stamped through `AIDLC_BUILD_VERSION` so `aidlc version`, `version.json`, and the tag agree while the source tree keeps `x.y.z`.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.
