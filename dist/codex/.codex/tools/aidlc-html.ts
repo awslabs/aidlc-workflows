@@ -28,24 +28,35 @@ export interface HtmlArtifactIdentity {
 	stage?: string;
 }
 
-const VOID_ELEMENTS = new Set([
-	"area",
-	"base",
-	"br",
-	"col",
-	"embed",
-	"hr",
-	"img",
-	"input",
-	"link",
-	"meta",
-	"param",
-	"source",
-	"track",
-	"wbr",
-]);
-const RAW_ELEMENTS = new Set(["script", "style", "noscript", "template"]);
-const HIDDEN_ELEMENTS = new Set(["head", ...RAW_ELEMENTS]);
+const VOID_ELEMENTS: Readonly<Record<string, true>> = {
+	area: true,
+	base: true,
+	br: true,
+	col: true,
+	embed: true,
+	hr: true,
+	img: true,
+	input: true,
+	link: true,
+	meta: true,
+	param: true,
+	source: true,
+	track: true,
+	wbr: true,
+};
+const RAW_ELEMENTS: Readonly<Record<string, true>> = {
+	noscript: true,
+	script: true,
+	style: true,
+	template: true,
+};
+const HIDDEN_ELEMENTS: Readonly<Record<string, true>> = {
+	head: true,
+	noscript: true,
+	script: true,
+	style: true,
+	template: true,
+};
 const NAMED_ENTITIES: Readonly<Record<string, string>> = {
 	amp: "&",
 	apos: "'",
@@ -169,7 +180,7 @@ function parseHtml(html: string): HtmlRoot {
 		};
 		stack.at(-1)?.children.push(element);
 		index = end + 1;
-		if (RAW_ELEMENTS.has(tag)) {
+		if (tag in RAW_ELEMENTS) {
 			const close = new RegExp(`<\\s*\\/\\s*${tag}\\s*>`, "i");
 			const rest = html.slice(index);
 			const match = close.exec(rest);
@@ -178,7 +189,7 @@ function parseHtml(html: string): HtmlRoot {
 			index = match ? rawEnd + match[0].length : html.length;
 			continue;
 		}
-		if (!VOID_ELEMENTS.has(tag) && !/\/\s*>$/.test(token)) stack.push(element);
+		if (!(tag in VOID_ELEMENTS) && !/\/\s*>$/.test(token)) stack.push(element);
 	}
 	return root;
 }
@@ -205,7 +216,7 @@ function inline(nodes: readonly HtmlNode[]): string {
 	return nodes
 		.map((node) => {
 			if (node.type === "text") return compact(node.value);
-			if (HIDDEN_ELEMENTS.has(node.tag)) return "";
+			if (node.tag in HIDDEN_ELEMENTS) return "";
 			const content = inline(node.children);
 			switch (node.tag) {
 				case "br":
@@ -312,7 +323,7 @@ function blocks(nodes: readonly HtmlNode[]): string {
 			if (value) parts.push(value);
 			continue;
 		}
-		if (HIDDEN_ELEMENTS.has(node.tag)) continue;
+		if (node.tag in HIDDEN_ELEMENTS) continue;
 		if (/^h[1-6]$/.test(node.tag)) {
 			parts.push(`${"#".repeat(Number(node.tag[1]))} ${inline(node.children).trim()}`);
 			continue;

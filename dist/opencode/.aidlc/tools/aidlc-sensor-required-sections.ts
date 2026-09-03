@@ -224,7 +224,7 @@ export function main(argv: string[]): void {
 	// other markdown artefact keeps the generic ≥2-H2 check untouched. (Orthogonal
 	// to the template branch above — the edge-block check still applies even if a
 	// template for unit-of-work-dependency resolves.)
-	if (basename(flags.outputPath) === "unit-of-work-dependency.md") {
+	if (basename(flags.outputPath).replace(/\.html$/i, ".md") === "unit-of-work-dependency.md") {
 		const parsed = parseBoltDag(body);
 		const edge_block = parsed.ok ? "ok" : parsed.reason;
 		result.edge_block = edge_block;

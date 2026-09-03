@@ -1146,15 +1146,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "e2e/t11-halt-and-ask-retry-correlation.test.ts",
     "e2e/t12-bolt-runtime-graph-fork.test.ts",
     "e2e/t134-swarm-referee.test.ts",
-    "integration/t332-review-ui-daemon.test.ts",
-    "integration/t334-review-ui-feedback-ingestion.test.ts",
-    "integration/t335-review-ui-manifest-directive.test.ts",
-    "integration/t336-review-ui-session-start.test.ts",
-    "unit/t337-review-ui-status-doctor.test.ts",
     "integration/t342-html-artifacts-state-config.test.ts",
-    "integration/t345-sensors-on-html.test.ts",
     "integration/t347-directive-html-format.test.ts",
-    "unit/t344-aidlc-html.test.ts",
   ];
 
   test("the none->cli reclassification set is exactly the deterministic spawners", () => {
