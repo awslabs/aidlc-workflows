@@ -90,9 +90,11 @@ describe("review UI manifest and directive publication", () => {
     const manifest = JSON.parse(readFileSync(join(review, "manifest.json"), "utf-8"));
     expect(manifest.revision).toBe(0);
     expect(manifest.artifacts).toHaveLength(4);
+    // Kinds come from the artifact vocabulary: prose deliverables are
+    // `document`, the questions form is `machine` (never HTML-capable).
     for (const artifact of manifest.artifacts) {
       expect(artifact.format).toBe("md");
-      expect(artifact.kind).toBe("document");
+      expect(artifact.kind).toBe(artifact.name === "feasibility-questions" ? "machine" : "document");
     }
     const existing = manifest.artifacts.find((artifact: { name: string }) => artifact.name === "feasibility-assessment");
     expect(existing.sha256).toBe(createHash("sha256").update(readFileSync(join(stageDir, "feasibility-assessment.md"))).digest("hex"));
