@@ -2,6 +2,8 @@
 
 Load this module from `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-html.md` when `directive.protocol_modules` lists `html`. Apply it to every HTML artifact in `directive.produces`; Markdown artifacts keep the ordinary stage protocol unchanged.
 
+**Directive paths are authoritative.** Every stage file describes its artifacts as `<name>.md`; under this module the file is whatever `directive.produces` says — `requirements.md` in the prose means the artifact whose resolved path ends in `requirements.html`. Write the `.html` file at that exact path, read HTML inputs through the `text_command` on their `directive.consumes` entry (or the raw file when markup matters), and never write a `.md` twin: the gate refuses a stage whose HTML artifact exists only as Markdown.
+
 ## Document contract
 
 Author each artifact as one self-contained HTML file. It MUST open and remain useful offline without another file, a server, or a build step. Use this shell:

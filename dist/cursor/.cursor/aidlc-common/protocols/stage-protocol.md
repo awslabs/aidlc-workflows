@@ -999,6 +999,16 @@ Before creating any artifact file, validate:
 - No naming conflicts with existing artifacts (e.g., two components with the same name)
 - File path matches the expected convention for the stage
 
+### Directive paths are authoritative
+Stage files name artifacts by their Markdown filename (`requirements.md`,
+`components.md`) for readability. The engine resolves the real file: ALWAYS
+write each output at the exact path in `directive.produces` and read each input
+at the exact path in `directive.consumes`. When the intent's `HTML Artifacts`
+setting is `on`, an artifact the prose calls `requirements.md` resolves to
+`requirements.html` — the prose name identifies the artifact, never the file
+extension. Never create a `.md` twin for an artifact the directive resolves to
+`.html`; the gate refuses a stage whose HTML artifact exists only as Markdown.
+
 ### Template overrides
 Before writing artifact `X` (keyed by the output filename stem — artifact `X` writes to `X.md`), resolve its template in this order, override-before-default, first hit wins:
 1. **team template** — `aidlc/spaces/<space>/memory/templates/X.md` (the active space's hand-authored override);

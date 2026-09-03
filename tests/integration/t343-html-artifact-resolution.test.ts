@@ -81,4 +81,41 @@ describe("state-locked artifact format resolution", () => {
     const instance = resolveArtifactInstances(project, "intent-statement", owner)[0];
     expect(instance.absolutePath).toBe(join(dir, "intent-statement.html"));
   });
+
+  test("two intents in one process resolve independently when each call carries its own state", () => {
+    const on = projectWithSetting("on");
+    const off = projectWithSetting("off");
+    const onState = readFileSync(seededStateFile(on), "utf-8");
+    const offState = readFileSync(seededStateFile(off), "utf-8");
+    // Prime with the `on` intent, then resolve the `off` intent with ITS state:
+    // the per-call priming must win over whatever was primed last.
+    readStateFile(on);
+    expect(resolveArtifactInstances(off, "intent-statement", owner, { stateContent: offState })[0].relativePath)
+      .toEndWith("/ideation/intent-capture/intent-statement.md");
+    expect(resolveArtifactInstances(on, "intent-statement", owner, { stateContent: onState })[0].relativePath)
+      .toEndWith("/ideation/intent-capture/intent-statement.html");
+    // And the reverse order.
+    readStateFile(off);
+    expect(resolveArtifactInstances(on, "intent-statement", owner, { stateContent: onState })[0].relativePath)
+      .toEndWith("/ideation/intent-capture/intent-statement.html");
+  });
+
+  test("the gate refuses an HTML artifact that exists only as a Markdown twin", () => {
+    const project = projectWithSetting("on");
+    const dir = join(seededRecordDir(project), "ideation", "intent-capture");
+    mkdirSync(dir, { recursive: true });
+    // The agent followed the prose (`intent-statement.md`) instead of the directive.
+    writeFileSync(join(dir, "intent-statement.md"), "# Intent\n\n## Problem\n\nx\n");
+    writeFileSync(join(dir, "stakeholder-map.html"), "<!doctype html><html lang=\"en\"><body></body></html>\n");
+    writeFileSync(join(dir, "intent-capture-questions.md"), "## Q1: x\n\nA. a\nX. Other\n\n[Answer]: A\n");
+    const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    const state = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "aidlc-state.ts");
+    Bun.spawnSync({ cmd: [process.execPath, state, "checkbox", "intent-capture=in-progress", "--project-dir", project], env, stdout: "pipe", stderr: "pipe" });
+    const gate = Bun.spawnSync({ cmd: [process.execPath, state, "gate-start", "intent-capture", "--project-dir", project], env, stdout: "pipe", stderr: "pipe" });
+    const output = new TextDecoder().decode(gate.stdout) + new TextDecoder().decode(gate.stderr);
+    expect(gate.exitCode, output).toBe(1);
+    expect(output).toContain("exist only as Markdown");
+    expect(output).toContain("intent-statement.md");
+  });
 });

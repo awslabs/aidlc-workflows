@@ -34,6 +34,20 @@ describe("browser guide protocol prose", () => {
     expect(guide).toContain("aidlc-html.ts check --guide");
   });
 
+  test("directive paths are authoritative over the .md filenames stage prose uses", () => {
+    // Stage prose names capable artifacts as `<name>.md` (~100 mentions); under
+    // HTML Artifacts: on those files are `.html`. The protocol and the HTML
+    // module must both state that the directive's resolved path wins, and the
+    // gate guard backs the rule (t343 pins the refusal).
+    const protocol = readFileSync(PROTOCOL, "utf-8");
+    expect(protocol).toContain("### Directive paths are authoritative");
+    expect(protocol).toContain("ALWAYS\nwrite each output at the exact path in `directive.produces`");
+    expect(protocol).toContain("Never create a `.md` twin");
+    const html = readFileSync(join(ROOT, "core", "aidlc-common", "protocols", "stage-protocol-html.md"), "utf-8");
+    expect(html).toContain("**Directive paths are authoritative.**");
+    expect(html).toContain("never write a `.md` twin");
+  });
+
   test("note tags are ordinary content for summary hashing, never answer tags", () => {
     const withoutNote = "# Questions\n\n## Q1. Runtime\n\n[Answer]: A\n\n## Consolidated Summary Confirmation\n\n[Answer]: Looks correct\n";
     const withNote = withoutNote.replace("[Answer]: A", "[Answer]: A\n[Note]: Discuss portability next.");

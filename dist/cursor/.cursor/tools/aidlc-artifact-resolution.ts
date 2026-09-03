@@ -12,6 +12,7 @@ import {
   getField,
   intentRepos,
   isPerUnitStage,
+  primeArtifactFormats,
   recordDir,
   assertNoSymlinkInChainOrThrow,
   readRegularFileNoFollowOrThrow,
@@ -192,6 +193,11 @@ export function resolveArtifactInstances(
   owner: ArtifactOwnerNode,
   options: ArtifactResolutionOptions = {},
 ): ArtifactInstance[] {
+  // A caller that hands us the intent's state content gets that intent's
+  // format, whatever another intent primed earlier in this process. Without
+  // it the vocabulary keeps the last `readStateFile` priming (single-intent
+  // CLI runs), which is the documented seam.
+  if (options.stateContent !== undefined) primeArtifactFormats(options.stateContent);
   const filename = artifactFilename(artifact);
 
   if (isCodekbArtifactOwner(owner)) {

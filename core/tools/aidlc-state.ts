@@ -2644,6 +2644,25 @@ function producesArtifactsExist(
   return false;
 }
 
+// Under HTML Artifacts: on, list `name.md` files that exist where the resolved
+// `name.html` does not, for every html-capable artifact the stage declares.
+// Empty when the intent is Markdown-only (nothing resolves to .html).
+function staleMarkdownTwins(
+  pd: string,
+  stage: { slug: string; phase: string; for_each?: string; produces?: string[] }
+): string[] {
+  const twins: string[] = [];
+  for (const name of stage.produces ?? []) {
+    const resolved = artifactFilename(name);
+    if (!resolved.endsWith(".html")) continue;
+    for (const dir of producesDirsForStage(pd, stage)) {
+      if (isRegularFile(join(dir, resolved))) continue;
+      if (isRegularFile(join(dir, `${name}.md`))) twins.push(`${name}.md`);
+    }
+  }
+  return twins;
+}
+
 interface SensorFireVerdict {
   fire_id: string;
   sensor_id: string;
@@ -3332,6 +3351,20 @@ function verifyStageArtifacts(
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
         `to produce output before the gate. Produce the artifacts before completing. ` +
         `(declared: ${(stage.produces ?? []).join(", ") || "none"})`
+    );
+  }
+
+  // HTML Artifacts: on. Stage prose names artifacts by their Markdown filename;
+  // an agent that followed the prose instead of the directive's resolved path
+  // leaves a `.md` twin where the `.html` artifact should be. Refuse precisely
+  // rather than letting the lenient any-artifact check above wave it through.
+  const twins = staleMarkdownTwins(pd, stage);
+  if (twins.length > 0) {
+    error(
+      `${reviewerPreconditionPrefix(stage.slug, action)}: this intent authors HTML artifacts ` +
+        `(HTML Artifacts: on) but ${twins.length} declared artifact(s) exist only as Markdown ` +
+        `(${twins.join(", ")}). Write each one at the exact path in directive.produces ` +
+        `(the .html file), then remove the stale .md twin.`
     );
   }
 
