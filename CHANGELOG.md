@@ -10,7 +10,7 @@ Add a `preview` release channel next to the stable one. A scheduled run of the r
 * `aidlc use <id>`, `aidlc config --pin <id>`, `install.sh --version <id>`, and `install.ps1 -Version <id>` accept preview ids; `.aidlc-version` pins keep overriding the machine channel.
 * `aidlc config --channel stable` followed by `aidlc update` converges on the newest stable release even though its id sorts lower and reports the change as a channel switch, not a downgrade error.
 * Retention: after an update only the two newest complete preview installs are kept beyond the protection every release already has (active, rollback, in use, or pinned by a project); older previews are pruned and stable retention is unchanged.
-* Release workflow: `workflow_dispatch` gains a `channel` input (`stable` default); the daily `17 3 * * *` UTC schedule publishes a preview and exits early when `main` has not moved since the newest preview; preview builds are stamped through `AIDLC_BUILD_VERSION` so `aidlc version`, `version.json`, and the tag agree while the source tree keeps `x.y.z`.
+* Release workflow: `workflow_dispatch` gains a `channel` input (`stable` default); the daily `17 3 * * *` UTC schedule publishes a preview and exits early when `main` has not moved since the newest preview; preview builds are stamped through `AIDLC_BUILD_VERSION` so `aidlc version`, `version.json`, and the tag agree while the source tree keeps `x.y.z`; preview runs enter a `preview` environment that carries the same publication variables and App secret but no required reviewers, so the scheduled run is unattended, and release runs are serialized per channel instead of cancelling each other.
 
 ## [2.7.1] - 2026-09-01
 

@@ -146,8 +146,9 @@ URL alone does not change the provenance trust root. `AIDLC_GH_BIN` selects an
 explicit GitHub CLI executable for both installers.
 
 Fork release rehearsals also need a protected `release` environment restricted
-to exactly the source `main` branch and a separate publication repository under
-the same owner. That repository must grant no human push, maintain, or
+to exactly the source `main` branch (plus a `preview` environment with the same
+variables and secret and no required reviewers, for preview rehearsals) and a
+separate publication repository under the same owner. That repository must grant no human push, maintain, or
 administrator authority beyond the organization's unavoidable owners, who are
 trusted publication actors, and the organization default repository permission
 must be `none` or `read`. The protected App is installed on both repositories;

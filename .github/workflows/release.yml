@@ -24,10 +24,25 @@ on:
 permissions:
   contents: read
 
+# One release run per channel at a time, never cancelled. A scheduled preview
+# and a manual preview dispatched in the same window would otherwise both call
+# ci.yml, whose ci-<ref> group cancels the older run; queued here instead, the
+# second run observes the freshly published preview and exits early.
+concurrency:
+  group: release-${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'stable' }}
+  cancel-in-progress: false
+
 jobs:
   authorize:
     runs-on: ubuntu-latest
-    environment: release
+    # One workflow, two environments. A stable run enters `release`, whose
+    # required reviewers (aidlc-admins) approve every stable publication. A
+    # preview run enters `preview`: the same publication variables and App
+    # secret, the same main-only deployment policy, but no required reviewers,
+    # so the daily schedule runs unattended. The human review that guards a
+    # preview is the approval every merge to main already needs, plus the ci.yml
+    # gate below. publish and promote select the environment the same way.
+    environment: ${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'release' }}
     permissions:
       actions: read
       contents: read
@@ -81,7 +96,7 @@ jobs:
           esac
           test "$GITHUB_REF" = "refs/heads/main"
           if [ -z "$PUBLICATION_REPOSITORY" ]; then
-            echo "::error title=Release repository policy failure::The protected release environment must provide AIDLC_PUBLICATION_REPOSITORY."
+            echo "::error title=Release repository policy failure::The protected release or preview environment must provide AIDLC_PUBLICATION_REPOSITORY."
             exit 1
           fi
           git fetch --no-tags origin main
@@ -131,6 +146,7 @@ jobs:
           GH_TOKEN: ${{ steps.release-authorization-token.outputs.token }}
           PUBLICATION_REPOSITORY: ${{ steps.authorize.outputs.publication_repository }}
           RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          RELEASE_CHANNEL: ${{ steps.authorize.outputs.channel }}
         run: |
           set -euo pipefail
           authorization_failure() {
@@ -141,35 +157,48 @@ jobs:
             echo "::error title=Release repository policy failure::$1"
             exit 1
           }
-          if ! environment="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")"; then
+          # The channel's environment. A stable run is approved through the
+          # aidlc-admins reviewer rule on `release`; a preview run enters `preview`,
+          # which must carry no reviewer rule at all, because an approval-gated
+          # schedule is not a daily channel. Both must keep the main-only policy.
+          if [ "$RELEASE_CHANNEL" = preview ]; then
+            environment_name=preview
+            reviewer_policy='([.protection_rules[] | select(.type == "required_reviewers")] | length) == 0'
+            reviewer_message="The preview environment must disable administrator bypass and carry no required reviewers."
+          else
+            environment_name=release
+            reviewer_policy='
+              (
+                [.protection_rules[] | select(.type == "required_reviewers")]
+                | length
+              ) == 1 and
+              (
+                [.protection_rules[] | select(.type == "required_reviewers")][0]
+                | .prevent_self_review == true and
+                  (.reviewers | length) == 1 and
+                  .reviewers[0].type == "Team" and
+                  .reviewers[0].reviewer.slug == "aidlc-admins"
+              )'
+            reviewer_message="The release environment must disable administrator bypass and self-review and require exactly the aidlc-admins team."
+          fi
+          if ! environment="$(gh api "repos/$GITHUB_REPOSITORY/environments/$environment_name")"; then
             authorization_failure \
-              "The protected GitHub App identity could not read the release environment."
+              "The protected GitHub App identity could not read the $environment_name environment."
           fi
           if ! jq -e '
             .can_admins_bypass == false and
             .deployment_branch_policy.protected_branches == false and
             .deployment_branch_policy.custom_branch_policies == true and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")]
-              | length
-            ) == 1 and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")][0]
-              | .prevent_self_review == true and
-                (.reviewers | length) == 1 and
-                .reviewers[0].type == "Team" and
-                .reviewers[0].reviewer.slug == "aidlc-admins"
-            )
+            ('"$reviewer_policy"')
           ' <<<"$environment" >/dev/null; then
-            policy_failure \
-              "The release environment must disable administrator bypass and self-review and require exactly the aidlc-admins team."
+            policy_failure "$reviewer_message"
           fi
           if ! policies="$(
             gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
+              "repos/$GITHUB_REPOSITORY/environments/$environment_name/deployment-branch-policies"
           )"; then
             authorization_failure \
-              "The protected GitHub App identity could not read release deployment policies."
+              "The protected GitHub App identity could not read $environment_name deployment policies."
           fi
           if ! jq -e '
             ([.[].branch_policies[]] | length) == 1 and
@@ -177,7 +206,7 @@ jobs:
             [.[].branch_policies[]][0].type == "branch"
           ' <<<"$policies" >/dev/null; then
             policy_failure \
-              "The release environment must allow exactly the main branch deployment policy and no others."
+              "The $environment_name environment must allow exactly the main branch deployment policy and no others."
           fi
           if ! immutable="$(
             gh api "repos/$PUBLICATION_REPOSITORY/immutable-releases"
@@ -701,7 +730,7 @@ jobs:
   publish:
     needs: [authorize, musl-smoke, windows-lifecycle, unix-lifecycle]
     runs-on: ubuntu-latest
-    environment: release
+    environment: ${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'release' }}
     permissions:
       contents: read
       id-token: write
@@ -760,7 +789,7 @@ jobs:
   promote:
     needs: [authorize, publish]
     runs-on: ubuntu-latest
-    environment: release
+    environment: ${{ (github.event_name == 'schedule' || inputs.channel == 'preview') && 'preview' || 'release' }}
     permissions:
       contents: read
     steps:
@@ -949,30 +978,40 @@ jobs:
           GH_TOKEN: ${{ steps.release-policy-token.outputs.token }}
           PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
           RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          RELEASE_CHANNEL: ${{ needs.authorize.outputs.channel }}
         run: |
           set -euo pipefail
+          # Same channel-to-environment rule as authorize (see that step).
+          if [ "$RELEASE_CHANNEL" = preview ]; then
+            environment_name=preview
+            reviewer_policy='([.protection_rules[] | select(.type == "required_reviewers")] | length) == 0'
+          else
+            environment_name=release
+            reviewer_policy='
+              (
+                [.protection_rules[] | select(.type == "required_reviewers")]
+                | length
+              ) == 1 and
+              (
+                [.protection_rules[] | select(.type == "required_reviewers")][0]
+                | .prevent_self_review == true and
+                  (.reviewers | length) == 1 and
+                  .reviewers[0].type == "Team" and
+                  .reviewers[0].reviewer.slug == "aidlc-admins"
+              )'
+          fi
           environment="$(
-            gh api "repos/$GITHUB_REPOSITORY/environments/release"
+            gh api "repos/$GITHUB_REPOSITORY/environments/$environment_name"
           )"
           jq -e '
             .can_admins_bypass == false and
             .deployment_branch_policy.protected_branches == false and
             .deployment_branch_policy.custom_branch_policies == true and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")]
-              | length
-            ) == 1 and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")][0]
-              | .prevent_self_review == true and
-                (.reviewers | length) == 1 and
-                .reviewers[0].type == "Team" and
-                .reviewers[0].reviewer.slug == "aidlc-admins"
-            )
+            ('"$reviewer_policy"')
           ' <<<"$environment" >/dev/null
           policies="$(
             gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
+              "repos/$GITHUB_REPOSITORY/environments/$environment_name/deployment-branch-policies"
           )"
           jq -e '
             ([.[].branch_policies[]] | length) == 1 and
