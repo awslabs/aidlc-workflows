@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { renderFeedbackFrontmatter, type DecisionHint } from "./aidlc-review-ui-shared.ts";
@@ -430,7 +431,7 @@ table{border-collapse:collapse}th,td{border:1px solid #888;padding:.35rem .6rem}
 
 export function selfContainedMarkdownExport(markdown: string, mermaidScript = ""): string {
   const script = mermaidScript
-    ? `<script>${mermaidScript.replaceAll("</script", "<\\/script")}</script><script>mermaid.initialize({startOnLoad:true});</script>`
+    ? `<script>eval(atob("${Buffer.from(mermaidScript, "utf-8").toString("base64")}"))</script><script>mermaid.initialize({startOnLoad:true});</script>`
     : "";
   return [
     "<!doctype html>",

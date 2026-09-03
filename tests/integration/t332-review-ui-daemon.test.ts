@@ -105,6 +105,7 @@ beforeAll(async () => {
     state: "awaiting-approval",
     stage: "requirements-analysis",
     unit: null,
+    open: null,
     stage_dir: stageRelative,
     revision: 0,
     updated_at: "2026-09-03T10:00:00.000Z",
@@ -217,6 +218,19 @@ describe("t332 review UI daemon HTTP API", () => {
     expect(setCookie).toContain("SameSite=Strict");
     expect(setCookie).toContain("Max-Age=43200");
     expect((await fetch(openUrl!, { redirect: "manual" })).status).toBe(403);
+
+    const concurrentUrl = mintReviewUiOpenUrl(project, {
+      ...process.env,
+      AIDLC_REVIEW_HOME: reviewHome,
+    });
+    expect(concurrentUrl).toBeDefined();
+    const concurrentResponses = await Promise.all(
+      Array.from({ length: 8 }, () => fetch(concurrentUrl!, { redirect: "manual" })),
+    );
+    expect(concurrentResponses.filter((response) => response.status === 302)).toHaveLength(1);
+    expect(concurrentResponses.filter((response) => response.status === 403)).toHaveLength(7);
+    const concurrentWinner = concurrentResponses.find((response) => response.status === 302);
+    expect(concurrentWinner?.headers.get("set-cookie")).toContain(`aidlc_review=${info.token}`);
     const cookie = setCookie.split(";", 1)[0];
     const cookieState = await fetch(`${base}/api/state`, { headers: { Cookie: cookie } });
     expect(cookieState.status).toBe(200);
