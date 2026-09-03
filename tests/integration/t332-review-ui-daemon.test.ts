@@ -228,6 +228,18 @@ describe("t332 review UI daemon HTTP API", () => {
     const cliOpenUrl = openCommand.stdout.toString().trim();
     expect(cliOpenUrl).toMatch(/^http:\/\/localhost:\d+\/open\/[0-9a-f]{32}$/);
     expect((await fetch(cliOpenUrl, { redirect: "manual" })).status).toBe(302);
+
+    const humanStatusCommand = Bun.spawnSync({
+      cmd: [process.execPath, DAEMON, "status", "--project-dir", project],
+      cwd: ROOT,
+      env: cliEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(humanStatusCommand.exitCode, humanStatusCommand.stderr.toString()).toBe(0);
+    expect(humanStatusCommand.stdout.toString()).toMatch(
+      /Review UI: running \(pid \d+\)\nhttp:\/\/localhost:\d+\/open\/[0-9a-f]{32}/,
+    );
     expect(info.url).not.toContain(info.token);
     const unauthenticatedShell = await fetch(`${base}/`);
     expect(unauthenticatedShell.status).toBe(403);

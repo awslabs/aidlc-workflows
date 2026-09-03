@@ -803,7 +803,8 @@ function status(projectDir: string, asJson: boolean): void {
     process.stdout.write("Review UI: stopped\n");
     return;
   }
-  process.stdout.write(`Review UI: running (pid ${info.pid})\n${info.url}\n`);
+  const openUrl = mintReviewUiOpenUrl(projectDir) ?? info.url;
+  process.stdout.write(`Review UI: running (pid ${info.pid})\n${openUrl}\n`);
 }
 
 function stop(projectDir: string): void {
