@@ -80,6 +80,10 @@ describe("t331 review UI render helpers", () => {
       ].join("\n"),
     );
     expect(result.hunks).toHaveLength(1);
+
+    expect(lineDiff("", "first\n").unified).toContain("@@ -0,0 +1 @@\n+first");
+    expect(lineDiff("last\n", "").unified).toContain("@@ -1 +0,0 @@\n-last");
+    expect(lineDiff("same\n", "same\n").hunks).toEqual([]);
     expect(result.hunks[0]).toMatchObject({ oldStart: 1, oldLines: 3, newStart: 1, newLines: 3 });
   });
 

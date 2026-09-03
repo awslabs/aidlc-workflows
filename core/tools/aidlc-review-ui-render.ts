@@ -195,40 +195,69 @@ function splitLines(value: string): string[] {
   if (lines.at(-1) === "") lines.pop();
   return lines;
 }
-
-function lcsOperations(before: string, after: string): DiffOp[] {
+function myersOperations(before: string, after: string): DiffOp[] {
   const oldLines = splitLines(before);
   const newLines = splitLines(after);
-  const width = newLines.length + 1;
-  const table = new Uint32Array((oldLines.length + 1) * width);
-  for (let oldIndex = oldLines.length - 1; oldIndex >= 0; oldIndex--) {
-    for (let newIndex = newLines.length - 1; newIndex >= 0; newIndex--) {
-      const offset = oldIndex * width + newIndex;
-      table[offset] = oldLines[oldIndex] === newLines[newIndex]
-        ? table[(oldIndex + 1) * width + newIndex + 1] + 1
-        : Math.max(table[(oldIndex + 1) * width + newIndex], table[offset + 1]);
-    }
-  }
+  const maximum = oldLines.length + newLines.length;
+  const frontier = new Map<number, number>([[1, 0]]);
+  const trace: Array<Map<number, number>> = [];
 
-  const operations: DiffOp[] = [];
-  let oldIndex = 0;
-  let newIndex = 0;
-  while (oldIndex < oldLines.length && newIndex < newLines.length) {
-    if (oldLines[oldIndex] === newLines[newIndex]) {
-      operations.push({ type: "context", text: oldLines[oldIndex] });
-      oldIndex++;
-      newIndex++;
-    } else if (table[(oldIndex + 1) * width + newIndex] >= table[oldIndex * width + newIndex + 1]) {
-      operations.push({ type: "delete", text: oldLines[oldIndex++] });
-    } else {
-      operations.push({ type: "add", text: newLines[newIndex++] });
+  for (let distance = 0; distance <= maximum; distance++) {
+    trace.push(new Map(frontier));
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const deleting = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
+      const adding = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+      let oldIndex = diagonal === -distance || (diagonal !== distance && deleting < adding)
+        ? adding
+        : deleting + 1;
+      if (!Number.isFinite(oldIndex)) oldIndex = 0;
+      let newIndex = oldIndex - diagonal;
+      while (
+        oldIndex < oldLines.length &&
+        newIndex < newLines.length &&
+        oldLines[oldIndex] === newLines[newIndex]
+      ) {
+        oldIndex++;
+        newIndex++;
+      }
+      frontier.set(diagonal, oldIndex);
+      if (oldIndex >= oldLines.length && newIndex >= newLines.length) {
+        const operations: DiffOp[] = [];
+        let backOld = oldLines.length;
+        let backNew = newLines.length;
+        for (let step = distance; step > 0; step--) {
+          const previous = trace[step];
+          const currentDiagonal = backOld - backNew;
+          const left = previous.get(currentDiagonal - 1) ?? Number.NEGATIVE_INFINITY;
+          const down = previous.get(currentDiagonal + 1) ?? Number.NEGATIVE_INFINITY;
+          const previousDiagonal = currentDiagonal === -step ||
+              (currentDiagonal !== step && left < down)
+            ? currentDiagonal + 1
+            : currentDiagonal - 1;
+          const previousOld = previous.get(previousDiagonal) ?? 0;
+          const previousNew = previousOld - previousDiagonal;
+          while (backOld > previousOld && backNew > previousNew) {
+            operations.push({ type: "context", text: oldLines[--backOld] });
+            backNew--;
+          }
+          if (backOld === previousOld) {
+            operations.push({ type: "add", text: newLines[--backNew] });
+          } else {
+            operations.push({ type: "delete", text: oldLines[--backOld] });
+          }
+        }
+        while (backOld > 0 && backNew > 0) {
+          operations.push({ type: "context", text: oldLines[--backOld] });
+          backNew--;
+        }
+        while (backOld > 0) operations.push({ type: "delete", text: oldLines[--backOld] });
+        while (backNew > 0) operations.push({ type: "add", text: newLines[--backNew] });
+        return operations.reverse();
+      }
     }
   }
-  while (oldIndex < oldLines.length) operations.push({ type: "delete", text: oldLines[oldIndex++] });
-  while (newIndex < newLines.length) operations.push({ type: "add", text: newLines[newIndex++] });
-  return operations;
+  return [];
 }
-
 function createHunks(operations: DiffOp[], context: number): DiffHunk[] {
   const changed = operations
     .map((operation, index) => (operation.type === "context" ? -1 : index))
@@ -297,7 +326,7 @@ export function lineDiff(
   labels: { before?: string; after?: string } = {},
   context = 3,
 ): LineDiffResult {
-  const hunks = createHunks(lcsOperations(before, after), context);
+  const hunks = createHunks(myersOperations(before, after), context);
   const output = [`--- ${labels.before ?? "a/source"}`, `+++ ${labels.after ?? "b/source"}`];
   for (const hunk of hunks) {
     output.push(`@@ -${range(hunk.oldStart, hunk.oldLines)} +${range(hunk.newStart, hunk.newLines)} @@`);
