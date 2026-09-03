@@ -217,9 +217,10 @@ Browser question submission:
 ```
 
 Each answer names a visible `Q<n>`. `labels` contains existing option letters;
-`X` requires non-empty `other` text. Single-select questions accept at most one
-label. `note` is discussion input, not an answer. The daemon validates the IDs,
-letters, cardinality, and current source digest before writing the file.
+`X` requires non-empty `other` text, and `other` without `X` is refused.
+Single-select questions accept at most one label. `note` is discussion input,
+not an answer. The daemon validates the IDs, letters, cardinality, and current
+source digest before writing the file.
 
 #### `<stage-dir>/.review-ui/consumed.json`
 
