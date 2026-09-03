@@ -128,6 +128,8 @@ other `machine` artifact remain in their native format. Construction, Operation,
 Initialization, and Reverse Engineering outputs remain Markdown or their
 existing machine format.
 
+The current HTML-capable set is: `accessibility-checklist`, `bolt-plan`, `build-vs-buy`, `competitive-analysis`, `components`, `constraint-register`, `contract-summary`, `decision-log`, `decisions`, `design-system-mapping`, `external-dependency-map`, `feasibility-assessment`, `initiative-brief`, `intent-backlog`, `intent-statement`, `interaction-spec`, `market-trends`, `mob-composition`, `mockups`, `personas`, `raid-log`, `requirements`, `risk-and-sequencing-rationale`, `scope-document`, `skill-matrix`, `stakeholder-map`, `stories`, `team-allocation`, `team-assessment`, `unit-of-work-story-map`, `user-flow`, `user-stories-assessment`, and `wireframes`. The compiled stage graph is authoritative; an artifact appears as HTML only when its producing stage also runs in an eligible phase and has not excluded it.
+
 Before authoring or review begins, you may change the active intent explicitly:
 
 ```text
@@ -146,10 +148,11 @@ diffs, and exports do not make model calls.
 
 ## Remote and SSH sessions
 
-The supported deployment is loopback-only. Keep `AIDLC_REVIEW_HOST` on a
-loopback address and use SSH port forwarding rather than binding the review UI
-to a LAN interface. A fixed port makes the tunnel predictable, and disabling
-auto-open avoids trying to launch a browser on the remote host:
+The supported deployment uses the default loopback bind. Keep
+`AIDLC_REVIEW_HOST` on a loopback address and use SSH port forwarding rather
+than binding the review UI to a LAN interface. A fixed port makes the tunnel
+predictable, and disabling auto-open avoids trying to launch a browser on the
+remote host:
 
 ```bash
 # On the remote host, before starting the harness
@@ -169,8 +172,8 @@ undesirable.
 
 ## Privacy and security
 
-- The supported server bind is loopback; there is no hosted service or LAN
-  sharing mode.
+- The default server bind is loopback; there is no hosted service or supported
+  LAN sharing mode.
 - Printed links contain a random, single-use, 30-minute nonce. The bearer token
   stays in an owner-readable `server.json` file and an `HttpOnly`,
   `SameSite=Strict` cookie.

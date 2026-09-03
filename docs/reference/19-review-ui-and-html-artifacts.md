@@ -140,14 +140,17 @@ origin and tells the user to run `/aidlc --status`.
   ],
   "review_artifact": "aidlc/spaces/default/intents/260903-example/inception/requirements-analysis/requirements.html",
   "questions_file": "aidlc/spaces/default/intents/260903-example/inception/requirements-analysis/requirements-analysis-questions.md",
-  "guide": "aidlc/spaces/default/intents/260903-example/inception/requirements-analysis/requirements-analysis-questions-guide.html"
+  "guide": null
 }
 ```
 
 `artifacts` follows engine-resolved `produces` placement rather than reconstructing
 paths in the daemon. `format` is `md` or `html`; `kind` is `document`, `visual`,
 or `machine`. A missing artifact remains represented with `exists: false` and
-`sha256: null`. `questions_file` and `guide` are null when absent.
+`sha256: null`. `questions_file` is null when absent. The manifest's `guide`
+field remains null; M3 derives the optional `<slug>-questions-guide.html` from
+the active questions stage and exposes it through `GET /api/state.questions`,
+independently of the held review manifest.
 
 #### `<stage-dir>/.review-ui/snapshots/r<N>/<basename>`
 
@@ -278,8 +281,11 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `WS /ws` | Cookie plus exact own `Origin` | Server pushes `{type:"state"}` after debounced state, pointer, manifest, artifact, feedback, or answer changes |
 
 `GET /api/state` adds
-`questions: {file, guide, stage, stage_dir} | null` whenever the current stage's
-questions file exists, independently of gate state. `GET /api/questions` returns:
+`questions: {file, guide, stage, stage_dir} | null` whenever the state-derived
+current non-Unit stage's questions file exists, independently of gate state or
+the review manifest. Here `file` is the project-relative questions path and
+`guide` is the optional project-relative explainer path. Per-Unit questions
+return null in M3. `GET /api/questions` returns:
 
 ```json
 {
@@ -342,8 +348,9 @@ only while its stored link is fresh and unused. `X-AIDLC-Token` is the tooling
 and test authentication path; browsers use the cookie. WebSocket upgrades also
 require the exact daemon origin.
 
-The supported bind is loopback. A non-loopback `AIDLC_REVIEW_HOST` is not a
-supported LAN-sharing mode; remote use is through an SSH tunnel.
+The supported deployment uses the default loopback bind. A non-loopback
+`AIDLC_REVIEW_HOST` is outside the supported LAN-sharing posture; remote use is
+through an SSH tunnel.
 
 ## Engine publication and `report` ingestion
 
@@ -504,7 +511,8 @@ new failure mode. Findings name the file and violated rule.
 `<slug>-questions-guide.html` satisfies the base HTML artifact contract and uses
 metadata artifact name `<slug>-questions-guide` and stage `<slug>`. Its body
 starts with a one-paragraph `data-aidlc="summary"` section, followed in questions
-file order by one section per answerable question:
+file order by one section per ordinary `Q<n>` question. The consolidated-summary
+confirmation has no `Q<n>` id and is excluded:
 
 ```html
 <section data-aidlc-question="Q1" id="Q1">
@@ -564,7 +572,7 @@ Boolean variables use the exact string `"1"` unless a row says otherwise.
 |---|---|---|
 | `AIDLC_REVIEW_UI` | unset | `1` enables daemon startup, review publication, directive field, browser gate line, and feedback/questions UI; unset preserves legacy behavior |
 | `AIDLC_REVIEW_PORT` | `0` | TCP port; `0` asks the OS for an ephemeral port |
-| `AIDLC_REVIEW_HOST` | `127.0.0.1` | Bind host; loopback is the supported security posture |
+| `AIDLC_REVIEW_HOST` | `127.0.0.1` | Bind host; keep the default loopback address for the supported security posture |
 | `AIDLC_REVIEW_OPEN` | enabled | `0` disables automatic browser launch at the first observed awaiting-approval transition |
 | `AIDLC_REVIEW_IDLE_MINUTES` | `240` | Exit after this many minutes with no WebSocket client and no observed state change |
 | `AIDLC_REVIEW_HOME` | `~/.aidlc/review-ui` | Override private daemon discovery/log/nonce root; primarily useful for tests and isolated installations |
@@ -580,8 +588,9 @@ launcher failures.
   workflow state.
 - The browser does not write `*-questions.md`; `answers-apply` is the only
   browser-answer mutation seam.
-- There is no LAN bind, hosted collaboration server, user/account system, or
-  multi-project daemon.
+- There is no supported LAN sharing mode, hosted collaboration server,
+  user/account system, or multi-project daemon. Keep `AIDLC_REVIEW_HOST` on its
+  default loopback address.
 - There is no Markdown-to-HTML migration or extension fallback for an in-flight
   intent.
 - A Plannotator adapter is not shipped. The stable extension seam is the

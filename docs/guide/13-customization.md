@@ -44,7 +44,7 @@ The browser review surface and HTML authoring mode are opt-in environment settin
 |---|---|
 | `AIDLC_REVIEW_UI=1` | Start the local Review UI and add browser links to approval gates. |
 | `AIDLC_REVIEW_PORT=<port>` | Use a fixed port instead of an OS-selected ephemeral port. |
-| `AIDLC_REVIEW_HOST=127.0.0.1` | Set the loopback bind address; LAN binding is not supported. |
+| `AIDLC_REVIEW_HOST=127.0.0.1` | Set the bind address; keep the default loopback value for the supported security posture. |
 | `AIDLC_REVIEW_OPEN=0` | Do not auto-open a local browser. |
 | `AIDLC_REVIEW_IDLE_MINUTES=<minutes>` | Change the daemon's 240-minute idle timeout. |
 | `AIDLC_REVIEW_HOME=<path>` | Override the private `~/.aidlc/review-ui/` runtime directory. |

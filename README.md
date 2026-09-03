@@ -54,7 +54,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 ### Review UI and HTML opt-ins
 
-Launch your harness with `AIDLC_REVIEW_UI=1` to start the project-local Review UI. `AIDLC_REVIEW_PORT`, `AIDLC_REVIEW_HOST` (loopback only), `AIDLC_REVIEW_OPEN=0`, `AIDLC_REVIEW_IDLE_MINUTES`, and `AIDLC_REVIEW_HOME` tune its local daemon. Set `AIDLC_HTML_ARTIFACTS=1` before intent creation to author eligible Ideation/Inception document and visual artifacts as self-contained HTML; the intent records and retains that choice. See [Review in the Browser](docs/guide/18-review-in-the-browser.md) for the gate flow, questions form, SSH forwarding, and security posture.
+Launch your harness with `AIDLC_REVIEW_UI=1` to start the project-local Review UI. `AIDLC_REVIEW_PORT`, `AIDLC_REVIEW_HOST` (keep the default loopback bind), `AIDLC_REVIEW_OPEN=0`, `AIDLC_REVIEW_IDLE_MINUTES`, and `AIDLC_REVIEW_HOME` tune its local daemon. Set `AIDLC_HTML_ARTIFACTS=1` before intent creation to author eligible Ideation/Inception document and visual artifacts as self-contained HTML; the intent records and retains that choice. See [Review in the Browser](docs/guide/18-review-in-the-browser.md) for the gate flow, questions form, SSH forwarding, and security posture.
 
 ## Methodology and implementation
 
