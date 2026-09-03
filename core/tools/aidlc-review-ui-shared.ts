@@ -173,31 +173,58 @@ export function liveReviewUiOrigin(projectDir: string, env: NodeJS.ProcessEnv = 
 export const OPEN_NONCE_TTL_MS = 30 * 60_000;
 const NONCE_RE = /^[0-9a-f]{32}$/;
 
+export interface OpenLink {
+  url: string;
+  expires_at: string;
+}
+
 /**
- * Mint a single-use `/open/<nonce>` link for a human to click. The nonce is a
- * 0600 file in the daemon's private dir; the daemon consumes it (deletes it)
- * and answers with the HttpOnly session cookie. Printed links therefore never
- * carry the long-lived token, and a link copied out of a transcript dies after
- * one use or `ttlMs`. Returns null when no live daemon serves the project.
+ * Mint a TTL-bound `/open/<nonce>` link for a human to click. The nonce is a
+ * 0600 file in the daemon's private dir; the daemon checks it and answers with
+ * the HttpOnly session cookie. Printed links therefore never carry the
+ * long-lived token, and a link copied out of a transcript dies after `ttlMs`.
+ * Links are valid for repeated use inside the window so a re-rendered gate can
+ * print the same link. ONLY mutating callers mint (report, --status, the
+ * session-start hook, the daemon itself); read-only engine paths such as
+ * `orchestrate next` read the stored link from `CurrentPointer.open` instead.
+ * Returns null when no live daemon serves the project.
  */
-export function mintReviewUiOpenUrl(
+export function mintReviewUiOpenLink(
   projectDir: string,
   env: NodeJS.ProcessEnv = process.env,
   ttlMs: number = OPEN_NONCE_TTL_MS,
   now: number = Date.now(),
-): string | null {
+): OpenLink | null {
   const info = readServerInfo(projectDir, env);
   if (!serverInfoLooksAlive(info, now)) return null;
   const dir = noncesDir(projectDir, env);
   ensurePrivateDir(dir);
   sweepExpiredNonces(dir, now);
   const nonce = randomBytes(16).toString("hex");
-  writeFileSync(join(dir, nonce), new Date(now + ttlMs).toISOString(), { mode: 0o600 });
-  return `${info.url}open/${nonce}`;
+  const expires_at = new Date(now + ttlMs).toISOString();
+  writeFileSync(join(dir, nonce), expires_at, { mode: 0o600 });
+  return { url: `${info.url}open/${nonce}`, expires_at };
 }
 
-/** Daemon side: true (and the nonce file is gone) iff the nonce was valid and unexpired. */
-export function consumeReviewUiOpenNonce(
+/** Convenience for callers that only print: the URL of a fresh link, or null. */
+export function mintReviewUiOpenUrl(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  ttlMs: number = OPEN_NONCE_TTL_MS,
+  now: number = Date.now(),
+): string | null {
+  return mintReviewUiOpenLink(projectDir, env, ttlMs, now)?.url ?? null;
+}
+
+/** A stored link is printable only while unexpired; read-only paths use this. */
+export function openLinkIsFresh(link: OpenLink | null | undefined, now: number = Date.now()): link is OpenLink {
+  if (!link || typeof link.url !== "string") return false;
+  const expiry = Date.parse(link.expires_at);
+  return Number.isFinite(expiry) && now <= expiry;
+}
+
+/** Daemon side: true iff the nonce exists and is unexpired (multi-use inside its TTL). */
+export function checkReviewUiOpenNonce(
   projectDir: string,
   nonce: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -211,8 +238,11 @@ export function consumeReviewUiOpenNonce(
   } catch {
     return false;
   }
-  rmSync(path, { force: true });
-  return Number.isFinite(expiry) && now <= expiry;
+  if (!Number.isFinite(expiry) || now > expiry) {
+    rmSync(path, { force: true });
+    return false;
+  }
+  return true;
 }
 
 function sweepExpiredNonces(dir: string, now: number): void {
@@ -287,6 +317,11 @@ export interface CurrentPointer {
   stage_dir: string | null;
   revision: number;
   updated_at: string;
+  /**
+   * Open link minted by the mutating `report` step that wrote this pointer.
+   * Read-only directive emission prints it while `openLinkIsFresh`.
+   */
+  open: OpenLink | null;
 }
 
 export interface ReviewManifest {
