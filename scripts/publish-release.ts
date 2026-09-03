@@ -9,6 +9,15 @@ import {
   statSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import {
+  PREVIEW_CHANNEL,
+  PREVIEW_VERSION,
+  type ReleaseChannel,
+  requireReleaseChannel,
+  STABLE_CHANNEL,
+  STABLE_VERSION,
+} from "../core/tools/aidlc-channel.ts";
+import { previewTagMessage, readPreviewPlan } from "./preview-release.ts";
 
 type ReleaseAsset = {
   id: number;
@@ -48,6 +57,13 @@ export type PublishReleaseOptions = {
   apiBaseUrl?: string;
   expectedAssetCount?: number;
   log?: (message: string) => void;
+  // Stable (default) publishes a lightweight `vX.Y.Z` tag as the latest
+  // release. Preview publishes an annotated `vX.Y.Z-preview.YYYYMMDD.N` tag as
+  // a prerelease that never becomes "latest"; the tag message records the
+  // source repository and commit the preview was built from.
+  channel?: ReleaseChannel;
+  sourceRepository?: string;
+  sourceDigest?: string;
 };
 
 export type PublishedRelease = {
@@ -321,6 +337,7 @@ function assertReleaseIdentity(
   notes: ReleaseNotes,
   expectedDraft: boolean,
   expectedImmutable: boolean,
+  expectedPrerelease = false,
 ): void {
   if (
     release.tag_name !== tag ||
@@ -329,7 +346,7 @@ function assertReleaseIdentity(
     release.body !== notes.body ||
     release.draft !== expectedDraft ||
     release.immutable !== expectedImmutable ||
-    release.prerelease
+    release.prerelease !== expectedPrerelease
   ) {
     throw new Error(
       `release identity mismatch for ${tag}@${targetCommitish}: ` +
@@ -339,11 +356,15 @@ function assertReleaseIdentity(
   }
 }
 
+// Resolves a tag ref to the commit it names. Stable release tags and the
+// staging tag must be lightweight commit refs; a preview tag is annotated, so
+// its ref names a tag object that is peeled to the tagged commit.
 async function tagTarget(
   apiBaseUrl: string,
   repository: string,
   tag: string,
   token: string,
+  annotated = false,
 ): Promise<string | null> {
   const response = await request(
     apiUrl(
@@ -360,14 +381,32 @@ async function tagTarget(
   const document = await response.json() as {
     object?: { type?: unknown; sha?: unknown };
   };
-  if (
-    document.object?.type !== "commit" ||
-    typeof document.object.sha !== "string" ||
-    !/^[a-f0-9]{40}$/.test(document.object.sha)
-  ) {
+  const sha = document.object?.sha;
+  if (typeof sha !== "string" || !/^[a-f0-9]{40}$/.test(sha)) {
+    throw new Error(`tag ${tag} does not name a git object`);
+  }
+  if (document.object?.type === "commit") {
+    if (annotated) throw new Error(`tag ${tag} is not an annotated tag`);
+    return sha;
+  }
+  if (!annotated || document.object?.type !== "tag") {
     throw new Error(`tag ${tag} is not a lightweight commit ref`);
   }
-  return document.object.sha;
+  const peeled = await requestJson<{ object?: { type?: unknown; sha?: unknown } }>(
+    apiUrl(apiBaseUrl, `repos/${repository}/git/tags/${sha}`),
+    token,
+    {},
+    200,
+  );
+  const commit = peeled.value.object?.sha;
+  if (
+    peeled.value.object?.type !== "commit" ||
+    typeof commit !== "string" ||
+    !/^[a-f0-9]{40}$/.test(commit)
+  ) {
+    throw new Error(`annotated tag ${tag} does not name a commit`);
+  }
+  return commit;
 }
 
 async function requireTagAbsent(
@@ -376,9 +415,20 @@ async function requireTagAbsent(
   tag: string,
   token: string,
 ): Promise<void> {
-  if (await tagTarget(apiBaseUrl, repository, tag, token)) {
-    throw new Error(`release tag already exists: ${tag}`);
+  const response = await request(
+    apiUrl(
+      apiBaseUrl,
+      `repos/${repository}/git/ref/tags/${encodeURIComponent(tag)}`,
+    ),
+    token,
+  );
+  if (response.status === 404) {
+    await response.text();
+    return;
   }
+  if (response.status !== 200) throw await responseFailure(response);
+  await response.text();
+  throw new Error(`release tag already exists: ${tag}`);
 }
 
 async function requireTagTarget(
@@ -387,12 +437,63 @@ async function requireTagTarget(
   tag: string,
   targetCommitish: string,
   token: string,
+  annotated = false,
 ): Promise<void> {
-  const actual = await tagTarget(apiBaseUrl, repository, tag, token);
+  const actual = await tagTarget(apiBaseUrl, repository, tag, token, annotated);
   if (actual !== targetCommitish) {
     throw new Error(
       `published release tag ${tag} resolves to ${actual ?? "nothing"}, not ${targetCommitish}`,
     );
+  }
+}
+
+// Creates the annotated preview tag: a tag object carrying the source trailers,
+// then the ref that names it. GitHub attaches the published release to this
+// existing tag instead of minting a lightweight one.
+async function createAnnotatedTag(
+  apiBaseUrl: string,
+  repository: string,
+  tag: string,
+  targetCommitish: string,
+  message: string,
+  token: string,
+): Promise<void> {
+  const created = await requestJson<{ sha?: unknown; tag?: unknown }>(
+    apiUrl(apiBaseUrl, `repos/${repository}/git/tags`),
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tag,
+        message,
+        object: targetCommitish,
+        type: "commit",
+        tagger: {
+          name: "AI-DLC Release",
+          email: "2102737+apackeer@users.noreply.github.com",
+          date: new Date().toISOString(),
+        },
+      }),
+    },
+    201,
+  );
+  const sha = created.value.sha;
+  if (created.value.tag !== tag || typeof sha !== "string" || !/^[a-f0-9]{40}$/.test(sha)) {
+    throw new Error(`tag object creation returned an invalid record for ${tag}`);
+  }
+  const ref = await requestJson<{ ref?: unknown }>(
+    apiUrl(apiBaseUrl, `repos/${repository}/git/refs`),
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref: `refs/tags/${tag}`, sha }),
+    },
+    201,
+  );
+  if (ref.value.ref !== `refs/tags/${tag}`) {
+    throw new Error(`tag ref creation returned an invalid record for ${tag}`);
   }
 }
 
@@ -527,8 +628,11 @@ export async function publishRelease(
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(options.repository)) {
     throw new Error(`invalid GitHub repository ${JSON.stringify(options.repository)}`);
   }
-  if (!/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(options.tag)) {
-    throw new Error(`invalid release tag ${JSON.stringify(options.tag)}`);
+  const channel = options.channel ?? STABLE_CHANNEL;
+  const preview = channel === PREVIEW_CHANNEL;
+  const version = options.tag.startsWith("v") ? options.tag.slice(1) : "";
+  if (!(preview ? PREVIEW_VERSION : STABLE_VERSION).test(version)) {
+    throw new Error(`invalid ${channel} release tag ${JSON.stringify(options.tag)}`);
   }
   if (!/^aidlc-staging-[A-Za-z0-9._-]+$/.test(options.stagingTag)) {
     throw new Error(`invalid staging tag ${JSON.stringify(options.stagingTag)}`);
@@ -537,6 +641,14 @@ export async function publishRelease(
     throw new Error("target commit must be a lowercase 40-hex commit");
   }
   if (!options.token) throw new Error("missing GitHub token");
+  // Built eagerly so a malformed source identity fails before any remote write.
+  const previewTag = preview
+    ? previewTagMessage({
+        version,
+        sourceRepository: options.sourceRepository ?? "",
+        sourceDigest: options.sourceDigest ?? "",
+      })
+    : null;
 
   const apiBaseUrl = options.apiBaseUrl ?? "https://api.github.com";
   const expectedAssetCount = options.expectedAssetCount ?? 13;
@@ -608,6 +720,7 @@ export async function publishRelease(
         notes,
         false,
         true,
+        preview,
       );
       assertAssetInventory(candidate, local);
       if (verified) assertSameAssets(verified, candidate, "between verification and publication");
@@ -617,6 +730,7 @@ export async function publishRelease(
         options.tag,
         options.targetCommitish,
         options.token,
+        preview,
       );
       await verifyRemoteBytes(
         apiBaseUrl,
@@ -808,6 +922,19 @@ export async function publishRelease(
       options.tag,
       options.token,
     );
+    // The preview tag is created before publication so the release binds to
+    // the annotated tag object. A run that fails between here and the PATCH
+    // leaves a tag without a release; the next plan skips that build counter.
+    if (previewTag) {
+      await createAnnotatedTag(
+        apiBaseUrl,
+        options.repository,
+        options.tag,
+        options.targetCommitish,
+        previewTag,
+        options.token,
+      );
+    }
 
     publishAttempted = true;
     let publishedResponse: Response;
@@ -821,6 +948,7 @@ export async function publishRelease(
           name: notes.name,
           body: notes.body,
           draft: false,
+          ...(preview ? { prerelease: true, make_latest: "false" } : {}),
         }),
       });
     } catch (error) {
@@ -852,17 +980,30 @@ async function main(argv: string[]): Promise<void> {
   if (!Number.isInteger(expectedAssetCount) || expectedAssetCount < 1) {
     throw new Error("--expected-assets must be a positive integer");
   }
+  const channel = requireReleaseChannel(requiredOption(argv, "--channel"));
   const tag = requiredOption(argv, "--tag");
+  // Stable notes are the reviewed CHANGELOG section for the tag; preview notes
+  // come from the plan the authorize job computed with full history.
+  const plan = channel === PREVIEW_CHANNEL
+    ? readPreviewPlan(requiredOption(argv, "--preview-plan"))
+    : null;
+  if (plan && plan.tag !== tag) {
+    throw new Error(`${PREVIEW_CHANNEL} plan is for ${plan.tag}, not ${tag}`);
+  }
   await publishRelease({
     directory: requiredOption(argv, "--directory"),
     tag,
     stagingTag: requiredOption(argv, "--staging-tag"),
     targetCommitish: requiredOption(argv, "--target"),
     repository: requiredOption(argv, "--repository"),
-    notes: releaseNotesFromChangelog(requiredOption(argv, "--changelog"), tag),
+    notes: plan ? plan.notes : releaseNotesFromChangelog(requiredOption(argv, "--changelog"), tag),
     token: process.env.GH_TOKEN ?? "",
     apiBaseUrl: process.env.GITHUB_API_URL,
     expectedAssetCount,
+    channel,
+    ...(plan
+      ? { sourceRepository: plan.sourceRepository, sourceDigest: plan.sourceDigest }
+      : {}),
   });
 }
 
