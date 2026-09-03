@@ -180,9 +180,11 @@ undesirable.
 - Project paths are confined beneath the project's `aidlc/` tree, reject `..`
   and symlink escapes, and never expose the rest of the workspace through the
   API.
-- Markdown is sanitized before rendering. Authored HTML runs in a sandboxed
-  iframe with a restrictive Content Security Policy; artifacts cannot fetch
-  network resources, embed browsing contexts, or submit forms.
+- Every artifact, Markdown or HTML, renders inside a sandboxed iframe with a
+  restrictive Content Security Policy; artifacts cannot fetch network
+  resources, embed browsing contexts, or submit forms, and nothing an artifact
+  contains ever runs in the review app's own document. Workflow state, the
+  audit ledger, and engine bookkeeping directories are never served.
 - Daemon discovery, logs, and nonces live under `~/.aidlc/review-ui/` (or
   `AIDLC_REVIEW_HOME`). Project directories there are owner-only (`0700`), and
   token and nonce files are owner-readable only (`0600`). Record-side manifests,

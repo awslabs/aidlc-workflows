@@ -269,9 +269,9 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `GET /assets/<file>` | None | Static app asset with fixed MIME type |
 | `GET /api/health` | None | `{ok, project_id, pid, version}` |
 | `GET /api/state` | Cookie/header | Active project, space, intent, record, current pointer, manifest, stage marker, revision, HTML setting, and `questions` pointer |
-| `GET /api/tree` | Cookie/header | Recursive record entries `{path,type,size,mtime}`, excluding `audit/` and every `.review-ui/` subtree |
-| `GET /api/artifact?path=` | Cookie/header | Markdown `{path,format:"md",source,html,sha256,mtime}` or HTML `{path,format:"html",raw_url,sha256,mtime}` |
-| `GET /api/raw?path=` | Cookie/header | HTML bytes with trusted bridge injected and artifact CSP; non-HTML is 404 |
+| `GET /api/tree` | Cookie/header | Recursive record entries `{path,type,size,mtime}` for reviewable files only: `aidlc-state.md`, `project-description.json`, `audit/`, and every dot-directory (`.review-ui/`, `.aidlc-sensors/`, …) are omitted |
+| `GET /api/artifact?path=` | Cookie/header | Markdown `{path,format:"md",source,raw_url,sha256,mtime}` or HTML `{path,format:"html",raw_url,sha256,mtime}`; the app never receives rendered HTML. Paths outside the active record or naming a hidden file are 403 |
+| `GET /api/raw?path=` | Cookie/header | A full HTML document for the artifact sandbox: HTML artifacts verbatim, Markdown rendered server-side inside `<article data-aidlc="markdown">` (Mermaid loaded from `/assets/vendor/`); the trusted bridge is injected and the artifact CSP applied. Other extensions are 404, hidden files 403 |
 | `POST /api/feedback` | Cookie/header | Validate current stage/unit/revision, write `feedback-NNN.md`, return `{file,path}` |
 | `GET /api/snapshots?stage_dir=` | Cookie/header | `{revisions:[0,1,...]}` |
 | `GET /api/snapshot?stage_dir=&revision=&file=` | Cookie/header | `{source}` from one saved revision |
@@ -311,14 +311,22 @@ return null in M3. `GET /api/questions` returns:
 The consolidated-summary confirmation is represented with
 `confirmation: true` and is not answerable in the browser.
 
-The raw HTML response uses CSP
+Every artifact document — authored HTML and rendered Markdown alike — is served
+by `/api/raw` with CSP
 `default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src
 'unsafe-inline' 'self'; font-src data:; frame-ancestors 'self'` and
-`X-Content-Type-Options: nosniff`. The app embeds it in an iframe sandboxed with
-`allow-scripts`. The bridge emits `aidlc-anchor` messages for trusted selection
-or Alt-click events and one `aidlc-guide` message containing schema-checked
-recommendations. The parent accepts only the current iframe's `event.source`;
-the artifact's opaque sandbox origin is not trusted.
+`X-Content-Type-Options: nosniff`, and the app embeds it in an iframe sandboxed
+with `allow-scripts` (no `allow-same-origin`). Rendered Markdown therefore never
+enters the privileged app document; the server-side sanitizer is defence in
+depth, not the trust boundary. The app shell itself is served with
+`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';
+frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'`.
+The bridge emits `aidlc-anchor` messages for trusted selection or Alt-click
+events and one `aidlc-guide` message containing schema-checked recommendations.
+The parent accepts only the current iframe's `event.source`; the artifact's
+opaque sandbox origin is not trusted. For Markdown anchors the app estimates
+source lines by matching the reported selection against the artifact source.
 
 ## Authentication model
 
