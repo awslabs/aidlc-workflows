@@ -155,18 +155,20 @@ const CONTRACT_MARKER_RE =
   /^[ \t]*AIDLC-TESTING-CONTRACT[ \t]*:[ \t]*(sha256:[0-9a-f]{64})[ \t]*$/;
 const MARKDOWN_HEADING_RE = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/;
 const ANSWER_TAG_RE = /^\[Answer\]:[ \t]*(.*)$/;
-// The recorded fingerprint tag. `sha256:v2:<hex>` is the content-bound format;
-// the bare `sha256:<hex>` shape is still matched so a questions file written
-// before this change is READ and reported as "approve again" rather than looking
-// like a line the parser does not understand.
+// The recorded fingerprint tag. `sha256:v3:<hex>` is the current content-bound
+// format (plan projection plus byte-exact instructions). The `sha256:v2:<hex>`
+// shape (instructions projected like the plan) and the bare `sha256:<hex>` shape
+// (issuance-bound) are still matched so a questions file written under either
+// is READ and reported as "approve again" rather than looking like a line the
+// parser does not understand.
 const FINGERPRINT_TAG_RE =
-  /^\[Approval Fingerprint\]:[ \t]*(sha256:(?:v2:)?[0-9a-f]{64})?[ \t]*$/;
+  /^\[Approval Fingerprint\]:[ \t]*(sha256:(?:v[23]:)?[0-9a-f]{64})?[ \t]*$/;
 // The workspace source the plan was written against, recorded by the fingerprint
 // command so drift between planning and approval is caught with a remedy the
 // conductor can always execute.
 const PLANNED_SOURCE_TAG_RE =
   /^\[Planned Source\]:[ \t]*([0-9a-f]{40}|[0-9a-f]{64}|unbindable)?[ \t]*$/;
-export const APPROVAL_FINGERPRINT_PREFIX = "sha256:v2:";
+export const APPROVAL_FINGERPRINT_PREFIX = "sha256:v3:";
 
 export function approvalFingerprintIsCurrentFormat(tag: string | null): boolean {
   return tag?.startsWith(APPROVAL_FINGERPRINT_PREFIX) === true;
@@ -869,9 +871,14 @@ export function parseTestingContract(plan: string): TestingPostureContract | nul
 // projection.
 //
 // The one thing the projection cannot see is an edit made INSIDE a terminal
-// review appendix. That is closed elsewhere: the stage hands the developer agent
-// the plan BODY (this projection's input), so a step smuggled into the appendix is
-// never delivered as work.
+// review appendix. That is closed elsewhere: the worker brief carries the plan
+// BODY (this projection's input), produced by the `brief` command and checked by
+// the dispatch guard, so a step smuggled into the appendix is never delivered as
+// work.
+//
+// This projection is for the PLAN only. The unit-test instructions are not a
+// review artifact and have no mandated post-approval mutation, so they bind
+// byte-exactly (line endings aside): see `projectInstructionsContent`.
 const PLAN_TASK_MARKER_RE = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[[xX-]\](?=[ \t]|$)/;
 
 export function projectPlanApprovalContent(text: string): string {
@@ -921,12 +928,21 @@ export function projectPlanApprovalContent(text: string): string {
   return projected.join("\n");
 }
 
+// The unit-test instructions as the fingerprint binds them and as the worker
+// brief hands them over: every byte, with only the line endings normalized. No
+// review strip, no task-marker reset, no whitespace folding, not even a BOM
+// dropped: the instructions are sent to the developer in full, so anything that
+// can change what the developer reads must reopen approval.
+export function projectInstructionsContent(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 // The value recorded as `[Approval Fingerprint]:`. It binds CONTENT (the
-// projected plan and unit-test instructions plus the Testing Contract hash) to
-// PLACE (target, intent) and to ATTEMPT (the run floor). The tag carries a format
-// version so a value recorded under the previous, issuance-bound scheme is
-// recognised and answered with "approve again" instead of an unexplained
-// mismatch.
+// projected plan, the byte-exact unit-test instructions, and the Testing Contract
+// hash) to PLACE (target, intent) and to ATTEMPT (the run floor). The tag carries
+// a format version so a value recorded under a previous scheme (issuance-bound,
+// or instructions projected like the plan) is recognised and answered with
+// "approve again" instead of an unexplained mismatch.
 export function approvalFingerprint(
   plan: string,
   instructions: string,
@@ -935,13 +951,91 @@ export function approvalFingerprint(
 ): string {
   const digest = hashObject({
     plan: projectPlanApprovalContent(plan),
-    instructions: projectPlanApprovalContent(instructions),
+    instructions: projectInstructionsContent(instructions),
     testing_contract: contractHash,
     target: authority.targetId,
     intent: authority.intentId,
     run_floor: authority.runFloor,
   });
   return `${APPROVAL_FINGERPRINT_PREFIX}${digest.slice("sha256:".length)}`;
+}
+
+// --- The worker brief ------------------------------------------------------------
+//
+// What a code-generation worker is handed is exactly what the fingerprint bound,
+// and nothing else: the plan as the approval projection sees it (a terminal
+// `## Review` appendix removed, task markers reset to `[ ]`, spacing
+// normalized) and the unit-test instructions exactly as they were hashed. No
+// byte the fingerprint does not cover reaches the worker, on the interactive
+// path or the autonomous one, fresh or replayed. The brief is produced here,
+// from bytes proven to be the approved ones, so no conductor reads the plan
+// file into a prompt itself. The worker's own progress marks live in the plan
+// file it ticks as it works, not in the brief.
+
+export interface WorkerBrief {
+  unit: string | null;
+  contractHash: string;
+  /** The exact text to hand the worker: marker lines, projected plan, instructions. */
+  brief: string;
+  /** True when the plan carried a terminal review appendix, which the brief omits. */
+  appendixStripped: boolean;
+}
+
+/** The terminal `## Review` appendix of a plan, or "" when it carries none. */
+export function planReviewAppendix(plan: string): string {
+  const body = contentBeforeTerminalReviewAppendix(plan);
+  return plan.slice(body.length);
+}
+
+export function workerBrief(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): WorkerBrief {
+  const approval = evaluateCodeGenerationApproval(projectDir, target);
+  if (!approval.ok || approval.contractHash === null || approval.approvalFingerprint === null) {
+    throw new Error(
+      `Cannot assemble a worker brief for ${
+        target.unit ? `unit "${target.unit}"` : "the stage-level target"
+      }: ${approval.reason || "Plan Approval is not current"}`,
+    );
+  }
+  // Read the two files once, then prove THESE bytes are the approved ones by
+  // recomputing the fingerprint over them and matching the validated tag. A
+  // file that changed between the evaluation and this read cannot pass, so the
+  // brief is never assembled from bytes the approval did not cover.
+  const stageDir = codeGenerationRecordDir(projectDir, target.unit);
+  const plan = readFileSync(join(stageDir, "code-generation-plan.md"), "utf-8");
+  const instructions = readFileSync(join(stageDir, "unit-test-instructions.md"), "utf-8");
+  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const snapshotFingerprint = approvalFingerprint(
+    plan,
+    instructions,
+    approval.contractHash,
+    authority,
+  );
+  if (snapshotFingerprint !== approval.approvalFingerprint) {
+    throw new Error(
+      "Cannot assemble a worker brief: the plan or instructions changed while the brief " +
+        "was being assembled. Re-run the fingerprint command, re-present the plan, and approve again.",
+    );
+  }
+  const projectedPlan = projectPlanApprovalContent(plan);
+  const marker = target.unit
+    ? `AIDLC-UNIT: ${target.unit}`
+    : "AIDLC-STAGE: code-generation";
+  const brief =
+    `${marker}\n` +
+    `AIDLC-TESTING-CONTRACT: ${approval.contractHash}\n` +
+    "\n## Approved plan\n\n" +
+    `${projectedPlan}\n` +
+    "\n## Approved unit-test instructions\n\n" +
+    projectInstructionsContent(instructions);
+  return {
+    unit: approval.unit,
+    contractHash: approval.contractHash,
+    brief,
+    appendixStripped: planReviewAppendix(plan.replace(/^\uFEFF/, "")).length > 0,
+  };
 }
 
 function isPlanApprovalLabel(value: string): boolean {
@@ -1719,9 +1813,10 @@ export function codeGenerationPlanApprovalQuestionEvidence(
     throw new Error(
       artifacts.recordedFingerprint !== null &&
         !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
-        ? "The recorded Plan Approval fingerprint predates the content-bound format. " +
+        ? "The recorded Plan Approval fingerprint was written under an earlier format. " +
             "Re-run the fingerprint command, re-present the plan, and approve again."
-        : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract",
+        : "Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, instructions, and Testing Contract. " +
+            "Re-run the fingerprint command, re-present the plan, and approve again.",
     );
   }
   const latest = latestPlanApproval(artifacts.questions);
@@ -1832,8 +1927,8 @@ export function evaluateCodeGenerationApproval(
       empty.reason =
         artifacts.recordedFingerprint !== null &&
           !approvalFingerprintIsCurrentFormat(artifacts.recordedFingerprint)
-          ? "the recorded Plan Approval fingerprint predates the content-bound format; re-run the fingerprint command, re-present the plan, and approve again"
-          : "the Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, test instructions, and Testing Contract";
+          ? "the recorded Plan Approval fingerprint was written under an earlier format; re-run the fingerprint command, re-present the plan, and approve again"
+          : "the Plan Approval fingerprint does not match the active intent, target, stage attempt, plan, test instructions, and Testing Contract; re-run the fingerprint command, re-present the plan, and approve again";
       return empty;
     }
     // The raw questions-file digest is provenance on the audit row, not part of
@@ -1993,7 +2088,7 @@ function flagValue(args: string[], name: string): string | undefined {
 
 function targetFromArgs(
   args: string[],
-  subcommand: "fingerprint" | "verify" | "begin",
+  subcommand: "fingerprint" | "verify" | "begin" | "brief",
 ): CodeGenerationTarget {
   const unitIndex = args.indexOf("--unit");
   const stageLevel = args.includes("--stage-level");
@@ -2013,7 +2108,7 @@ function targetFromArgs(
 
 export function main(argv: string[]): void {
   const subcommand = argv.find((arg) =>
-    ["resolve", "render", "fingerprint", "verify", "begin"].includes(arg)
+    ["resolve", "render", "fingerprint", "verify", "begin", "brief"].includes(arg)
   );
   const projectDir = resolveProjectDir(flagValue(argv, "--project-dir"));
   try {
@@ -2086,9 +2181,27 @@ export function main(argv: string[]): void {
         console.log(JSON.stringify({ status: "generation", target }));
         return;
       }
+      case "brief": {
+        // The worker brief, verbatim on stdout: the two marker lines, the plan
+        // BODY, and the byte-exact instructions. Refuses unless approval is
+        // current, so the brief can never precede the authority it carries.
+        const target = targetFromArgs(argv, "brief");
+        const assembled = workerBrief(projectDir, target);
+        if (assembled.appendixStripped) {
+          console.error(
+            JSON.stringify({
+              note:
+                "the plan carries a terminal review appendix from an earlier protocol; " +
+                "it is not part of the approved body and was left out of the brief",
+            }),
+          );
+        }
+        process.stdout.write(assembled.brief);
+        return;
+      }
       default:
         throw new Error(
-          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin`,
+          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin, brief`,
         );
     }
   } catch (error) {

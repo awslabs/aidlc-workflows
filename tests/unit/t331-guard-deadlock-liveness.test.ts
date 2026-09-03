@@ -107,7 +107,7 @@ function state(marker: " " | "-" | "?" | "R" | "x" | "S"): string {
     "# AI-DLC State",
     "- **Scope**: feature",
     "- **Construction Iteration**: unit-major",
-    `- [${marker}] functional-design — EXECUTE`,
+    `- [${marker}] functional-design \u2014 EXECUTE`,
     "",
   ].join("\n");
 }
@@ -368,7 +368,7 @@ describe("bounded guard-remedy liveness", () => {
           blockedAction: "complete",
           stage: "requirements-analysis",
           stateContent:
-            "# State\n- [ ] requirements-analysis — EXECUTE\n",
+            "# State\n- [ ] requirements-analysis \u2014 EXECUTE\n",
           invariant: "Restart commands are directly executable.",
           userMessage: "blocked",
           attempt: {
@@ -712,10 +712,10 @@ describe("bounded guard-remedy liveness", () => {
       state("-").trimEnd(),
       "- **Unit Ownership**: team",
       "- **Unit Gate Rhythm**: unit-end",
-      "- [ ] nfr-requirements — EXECUTE",
-      "- [ ] nfr-design — EXECUTE",
-      "- [ ] infrastructure-design — EXECUTE",
-      "- [ ] code-generation — EXECUTE",
+      "- [ ] nfr-requirements \u2014 EXECUTE",
+      "- [ ] nfr-design \u2014 EXECUTE",
+      "- [ ] infrastructure-design \u2014 EXECUTE",
+      "- [ ] code-generation \u2014 EXECUTE",
       "",
     ].join("\n");
     const resolved = teamUnitGateStatus(
@@ -757,8 +757,8 @@ describe("bounded guard-remedy liveness", () => {
     expect(rejection?.command).toBeUndefined();
 
     const unresolvedState = unitEndState.replace(
-      /— EXECUTE/g,
-      "— SKIP: fixture",
+      /\u2014 EXECUTE/g,
+      "\u2014 SKIP: fixture",
     );
     const unresolved = teamUnitGateStatus(
       project,
@@ -1055,7 +1055,7 @@ describe("AttemptView projections and refusal streaks", () => {
       "- **Lifecycle Phase**: CONSTRUCTION",
       `- **Current Stage**: ${slug}`,
       "- **Status**: Running",
-      `- [R] ${slug} — EXECUTE`,
+      `- [R] ${slug} \u2014 EXECUTE`,
       "",
     ].join("\n");
     writeFileSync(seededStateFile(project), stateContent);

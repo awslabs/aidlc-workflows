@@ -78,6 +78,7 @@ import {
   codeGenerationRecordDir,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
+  planReviewAppendix,
   promptTestingContractMarkers,
 } from "../tools/aidlc-testing-posture.ts";
 
@@ -196,12 +197,20 @@ export interface UnitEvidence {
    * "present Plan Approval" steps alone.
    */
   reason?: string;
+  /**
+   * The plan's terminal `## Review` appendix, when a review recorded under the
+   * earlier protocol left one. The fingerprint deliberately excludes it, so it
+   * was never approved as work and must not appear in a developer handoff.
+   */
+  reviewAppendix?: string;
 }
 
 /** The decision's verdict. `mentioned` carries the explicit marker value(s). */
 export interface PlanApprovalVerdict {
   block: boolean;
   mentioned: string[];
+  /** The handoff carried the plan's review appendix, bytes the approval excludes. */
+  appendixInBrief?: boolean;
 }
 
 function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean {
@@ -289,14 +298,50 @@ export function evaluatePlanApprovalDispatch(
         ? ctx.units.find((u) => u.unit === null)
         : undefined;
   const contractMarkers = promptTestingContractMarkers(promptText);
+  // The approval excludes a terminal review appendix from the plan, so a brief
+  // that carries those bytes hands the developer work nobody approved. The
+  // `brief` command produces the body-only handoff; a prompt that quotes the
+  // appendix is refused whether the approval is otherwise current or not.
+  const appendixInBrief =
+    target !== undefined && promptCarriesReviewAppendix(promptText, target.reviewAppendix);
   return {
     block:
       target === undefined ||
       !approvalEvidenceIsCurrent(target) ||
       contractMarkers.length !== 1 ||
-      contractMarkers[0] !== target.contractHash,
+      contractMarkers[0] !== target.contractHash ||
+      appendixInBrief,
     mentioned,
+    ...(appendixInBrief ? { appendixInBrief: true } : {}),
   };
+}
+
+/** Whitespace-insensitive containment of a non-trivial appendix in the prompt. */
+function promptCarriesReviewAppendix(
+  promptText: string,
+  appendix: string | undefined,
+): boolean {
+  if (!appendix) return false;
+  const fold = (text: string): string => text.replace(/\s+/g, " ").trim();
+  // The heading alone is not evidence: a brief may legitimately mention that a
+  // review exists. The appendix's content lines are.
+  const content = fold(appendix.replace(/^\s*##[ \t]*Review\b[^\n]*/i, ""));
+  if (content.length === 0) return false;
+  return fold(promptText).includes(content);
+}
+
+export function appendixBlockReason(mentioned: string[]): string {
+  const scope =
+    mentioned[0] === `stage:${GUARDED_STAGE}`
+      ? "the zero-Unit stage-level implementation"
+      : `unit ${mentioned[0]}`;
+  return (
+    `Code generation cannot start for ${scope} because the developer handoff carries the ` +
+    "plan's terminal `## Review` appendix. That appendix is excluded from the approval " +
+    "fingerprint, so nobody approved it as work. Hand the developer the plan BODY and the " +
+    "unit-test instructions only: run `aidlc-testing-posture.ts brief` for this target and " +
+    "pass its output verbatim, then retry the handoff."
+  );
 }
 
 // The block reason handed back to the conductor through the harness's
@@ -393,9 +438,24 @@ export function knownUnits(projectDir: string, recordDir: string): string[] {
   return Array.from(units);
 }
 
+/** The plan's terminal review appendix for a target, or undefined when it has none. */
+function planAppendixFor(projectDir: string, unit: string | null): string | undefined {
+  try {
+    const plan = readFileSync(
+      join(codeGenerationRecordDir(projectDir, unit), "code-generation-plan.md"),
+      "utf-8",
+    );
+    const appendix = planReviewAppendix(plan);
+    return appendix.trim().length > 0 ? appendix : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvidence[] {
   return units.map((unit) => {
     const approval = evaluateCodeGenerationApproval(projectDir, { unit });
+    const reviewAppendix = planAppendixFor(projectDir, unit);
     return {
       unit,
       planExists: approval.planExists,
@@ -406,12 +466,14 @@ export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvi
       receiptValid: approval.receiptValid,
       contractHash: approval.contractHash,
       ...(approval.ok ? {} : { reason: approval.reason }),
+      ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     };
   });
 }
 
 export function gatherApprovalEvidence(projectDir: string, units: string[]): UnitEvidence[] {
   const stageApproval = evaluateCodeGenerationApproval(projectDir, { unit: null });
+  const reviewAppendix = planAppendixFor(projectDir, null);
   return [
     {
       unit: null,
@@ -423,6 +485,7 @@ export function gatherApprovalEvidence(projectDir: string, units: string[]): Uni
       receiptValid: stageApproval.receiptValid,
       contractHash: stageApproval.contractHash,
       ...(stageApproval.ok ? {} : { reason: stageApproval.reason }),
+      ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     },
     ...gatherUnitEvidence(projectDir, units),
   ];
@@ -870,6 +933,8 @@ export async function run(input: string): Promise<number> {
           blockedMutation.opaqueShell,
           blockedMutation.detail,
         )
+      : verdict.appendixInBrief
+      ? appendixBlockReason(verdict.mentioned)
       : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}\n`,
   );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks

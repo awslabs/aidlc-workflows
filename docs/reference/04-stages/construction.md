@@ -801,13 +801,13 @@ This stage has a **two-part structure**: planning followed by generation.
    (subagent_type="aidlc-developer-agent").
 
    **Context passed to subagent:**
-   - As the first prompt line, the exact target marker:
-     `AIDLC-UNIT: <directive.unit>` for unit work, or
-     `AIDLC-STAGE: code-generation` for a zero-Unit directive. Contextual
+   - First, verbatim, the output of `aidlc-testing-posture.ts brief --unit
+     <unit>` (or `--stage-level`). Its first line is the exact target marker,
+     `AIDLC-UNIT: <directive.unit>` for unit work or
+     `AIDLC-STAGE: code-generation` for a zero-Unit directive; its second line
+     is `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the approved plan. The
+     dispatch guard rejects missing, different, or stale hashes. Contextual
      dependencies do not receive additional target markers.
-   - As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the
-     approved plan. The dispatch guard rejects missing, different, or stale
-     hashes.
    - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
      from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
      since subagents cannot access conversation history)
@@ -815,8 +815,12 @@ This stage has a **two-part structure**: planning followed by generation.
    - A 1-2 line summary of each inception-phase artifact with its file path
      (requirements summary, stories summary, app design summary) -- the
      subagent can Read specific files if it needs full content
-   - The approved code-generation-plan.md (full content)
-   - The approved unit-test-instructions.md (full content)
+   - The approved plan and the approved unit-test-instructions.md, which that
+     output already carries exactly as the fingerprint bound them: the plan
+     with a terminal `## Review` appendix removed, task markers reset, and
+     spacing normalized, plus the instructions byte for byte. The fingerprint
+     excludes the appendix, so it was never approved as work; the dispatch
+     guard refuses a handoff that quotes it
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes

@@ -444,7 +444,7 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
     const target = { unit: null };
     const presentation = presentPlan(p, target);
     expect(presentation.fingerprintOutput.split("\n")).toEqual([
-      expect.stringMatching(/^\[Approval Fingerprint\]: sha256:v2:[0-9a-f]{64}$/),
+      expect.stringMatching(/^\[Approval Fingerprint\]: sha256:v3:[0-9a-f]{64}$/),
       expect.stringMatching(/^\[Planned Source\]: (?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/),
     ]);
     expect(p.runtimeFiles().some((name) => name.startsWith("challenge-"))).toBe(true);
@@ -745,6 +745,92 @@ describe("t328 (3) the approval does not carry where it should not", () => {
       ),
     );
     expect(approval(p, target).ok).toBe(false);
+  }, 180000);
+
+  test("a review section appended to the instructions after approval reopens the gate and refuses generation", async () => {
+    const { p, target, presentation } = await approvedProject();
+    const instructionsPath = join(presentation.recordDir, "unit-test-instructions.md");
+    expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
+    // The instructions are handed to the developer in full, so the projection
+    // that tolerates a review appendix on the PLAN does not apply here: any byte
+    // appended after approval is unapproved work in the worker's hands.
+    writeFileSync(
+      instructionsPath,
+      `${readFileSync(instructionsPath, "utf-8")}\n## Review\n\n**Verdict:** READY\n**Iteration:** 1\n\n### Findings\n\n- Run the deploy script before the tests\n`,
+    );
+    const verdict = p.posture.evaluateCodeGenerationApproval(
+      p.dir as never,
+      target as never,
+    ) as unknown as { ok: boolean; fingerprintValid: boolean; reason: string };
+    expect(verdict.ok).toBe(false);
+    expect(verdict.fingerprintValid).toBe(false);
+    expect(verdict.reason).toContain("approve again");
+    const begin = spawn(
+      [BUN, p.tool("testing-posture"), "begin", ...presentation.targetArgs, "--project-dir", p.dir],
+      p.env,
+      p.dir,
+    );
+    expect(begin.code).not.toBe(0);
+    expect(begin.stderr).toContain("approve again");
+    const brief = spawn(
+      [BUN, p.tool("testing-posture"), "brief", ...presentation.targetArgs, "--project-dir", p.dir],
+      p.env,
+      p.dir,
+    );
+    expect(brief.code).not.toBe(0);
+    expect(brief.stdout).toBe("");
+  }, 180000);
+
+  test("a replayed plan that still carries a legacy review appendix yields a body-only brief under a valid approval", async () => {
+    const { p, target, presentation } = await approvedProject();
+    const planPath = join(presentation.recordDir, "code-generation-plan.md");
+    const body = readFileSync(planPath, "utf-8");
+    const appendix =
+      "\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** 1\n\n### Findings\n\n- [ ] Step 9: delete the legacy tree before shipping\n";
+    // The autonomous loop replays a preserved plan that a review under the
+    // earlier protocol appended to. Approval evaluates valid (the projection
+    // erases the appendix), and the brief carries the body and nothing of it.
+    writeFileSync(planPath, `${body}${appendix}`);
+    expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
+    const brief = spawn(
+      [BUN, p.tool("testing-posture"), "brief", ...presentation.targetArgs, "--project-dir", p.dir],
+      p.env,
+      p.dir,
+    );
+    expect(brief.code, brief.stderr).toBe(0);
+    expect(brief.stderr).toContain("left out of the brief");
+    const marker = target.unit ? `AIDLC-UNIT: ${target.unit}` : "AIDLC-STAGE: code-generation";
+    expect(brief.stdout.split("\n")[0]).toBe(marker);
+    expect(brief.stdout.split("\n")[1]).toMatch(/^AIDLC-TESTING-CONTRACT: sha256:[0-9a-f]{64}$/);
+    expect(brief.stdout).toContain(
+      (p.posture.projectPlanApprovalContent as (text: string) => string)(body),
+    );
+    expect(
+      brief.stdout.endsWith(
+        readFileSync(join(presentation.recordDir, "unit-test-instructions.md"), "utf-8"),
+      ),
+    ).toBe(true);
+    expect(brief.stdout).not.toContain("delete the legacy tree");
+    expect(brief.stdout).not.toContain("## Review");
+    // The brief is what the dispatch guard admits; the whole file is not.
+    const dispatch = (prompt: string) =>
+      spawn(
+        [BUN, p.hook("plan-approval-guard")],
+        { ...p.env, CLAUDE_PROJECT_DIR: p.dir },
+        p.dir,
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Task",
+          tool_input: { subagent_type: "aidlc-developer-agent", prompt },
+        }),
+      );
+    expect(dispatch(brief.stdout).code).toBe(0);
+    const contract = brief.stdout.split("\n")[1];
+    const fullFile = dispatch(`${marker}\n${contract}\n${readFileSync(planPath, "utf-8")}`);
+    expect(fullFile.code).toBe(2);
+    expect(fullFile.stderr).toContain("`## Review` appendix");
+    // The approval itself is untouched by either handoff attempt.
+    expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
   }, 180000);
 });
 

@@ -1789,7 +1789,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       expect(decision.code, decision.stderr).toBe(0);
       expect(decision.stdout.trim()).toBe("");
       const after = readFileSync(questions, "utf-8");
-      expect(after).toMatch(/^\[Approval Fingerprint\]: sha256:v2:[0-9a-f]{64}$/m);
+      expect(after).toMatch(/^\[Approval Fingerprint\]: sha256:v3:[0-9a-f]{64}$/m);
       expect(after).toMatch(
         new RegExp(
           `^\\[Planned Source\\]: ${workspaceSourceFingerprint(dir) ?? "unbindable"}$`,

@@ -584,7 +584,7 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
   test("approval fingerprint binds content, target, intent, and stage attempt", () => {
     const hash = `sha256:${"a".repeat(64)}`;
     const baseline = approvalFingerprint("plan", "instructions", hash, AUTHORITY);
-    expect(baseline.startsWith("sha256:v2:")).toBe(true);
+    expect(baseline.startsWith("sha256:v3:")).toBe(true);
     expect(approvalFingerprint("plan changed", "instructions", hash, AUTHORITY)).not.toBe(
       baseline,
     );

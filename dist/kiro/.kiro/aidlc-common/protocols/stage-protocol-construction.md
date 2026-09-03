@@ -421,15 +421,26 @@ prepare`:
    creating any worktree. A stale memory/scope/test-strategy/project-type input
    therefore reopens approval instead of silently changing execution; re-running
    `next` for the same units and attempt does not.
-4. Every worker brief starts with exactly:
+4. Every worker brief starts with the output of
+   `bun .kiro/tools/aidlc-testing-posture.ts brief --unit <unit>`,
+   verbatim and unedited. That output begins with exactly:
 
    ```text
    AIDLC-UNIT: <unit>
    AIDLC-TESTING-CONTRACT: <contract_sha256 from that unit's approved plan>
    ```
 
-   Then include the full approved `code-generation-plan.md` and
-   `unit-test-instructions.md`. The worker must produce the unit's
+   and carries the approved plan exactly as the approval fingerprint bound it
+   (every line before a terminal `## Review` appendix and none of that appendix,
+   task markers reset to `[ ]`, spacing normalized; a replayed plan may still
+   carry an appendix from a review recorded under the earlier protocol) and the
+   approved `unit-test-instructions.md` byte for byte. Do not write either
+   marker line yourself and never read the plan file into a brief: the
+   fingerprint excludes the appendix, so its bytes were never approved as work,
+   and the plan-approval guard refuses a handoff that quotes them. The command
+   refuses until the unit's approval is current. Any further context for the
+   worker follows the command's output; the worker reads and ticks its own
+   progress in the plan file inside its worktree. The worker must produce the unit's
    `construction/<unit>/code-generation/source-manifest.json` in the worktree,
    listing every application-source path it creates, modifies, or deletes,
    before the in-Bolt review. Because a Bolt is the single selected repository,

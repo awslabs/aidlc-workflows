@@ -173,9 +173,11 @@ either, and recording a review never touches the plan.
 
 If you are asked again, one of these moved:
 
-- the plan or instructions content (anything beyond a ticked task marker, or a
-  terminal `## Review` section left by a review recorded before review records
-  existed)
+- the plan content (anything beyond a ticked task marker, or a terminal
+  `## Review` section left by a review recorded before review records existed)
+- the unit-test instructions content, any byte of it: the instructions are handed
+  to the developer in full, so they bind byte-exactly, and a section appended to
+  them after approval reopens it
 - the Testing Posture, scope, test strategy, or project type
 - the active Unit or stage target
 - the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
@@ -185,7 +187,7 @@ If you are asked again, one of these moved:
 The refusal message names which one. On a workspace-source change the remedy is
 always the same: re-run the fingerprint command, record both tags it prints, and
 present the plan again. A fingerprint recorded by an older version of the tool
-reads as "predates the content-bound format" and needs the same re-run.
+reads as "was written under an earlier format" and needs the same re-run.
 
 ---
 

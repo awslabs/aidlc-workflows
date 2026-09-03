@@ -42,6 +42,8 @@ import {
   approvalFingerprint,
   codeGenerationRecordDir,
   evaluateCodeGenerationApproval,
+  planReviewAppendix,
+  projectPlanApprovalContent,
   PLAN_APPROVAL_CHECKPOINT,
   renderTestingContract,
   resolveCodeGenerationAuthority,
@@ -487,6 +489,7 @@ function seedUnit(
     heading?: string;
     questionText?: string;
     mutateInstructions?: boolean;
+    instructionsPrefix?: string;
     receipt?: boolean;
   } = {},
 ): void {
@@ -505,7 +508,7 @@ function seedUnit(
       opts.plan === "empty"
         ? "  \n"
         : `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Step 1\n`;
-    instructions = "# Unit Test Instructions\n\n## Command\n\n`bun test todo-core.test.ts`\n";
+    instructions = `${opts.instructionsPrefix ?? ""}# Unit Test Instructions\n\n## Command\n\n\`bun test todo-core.test.ts\`\n`;
     writeFileSync(
       join(dir, "code-generation-plan.md"),
       plan,
@@ -629,6 +632,173 @@ function runHook(
 }
 
 describe("t265b hook lifecycle", () => {
+  // The bytes the approval excludes must never reach the worker, on either path.
+  const APPENDIX =
+    "\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n" +
+    "**Iteration:** 1\n\n### Findings\n\n- [ ] Step 9: also delete the legacy tree before shipping\n";
+
+  test("a review section appended to the instructions after approval blocks the dispatch and begin", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(0);
+      // The instructions are handed over in full, so a section appended to them
+      // is unapproved work in the developer's hands: the fingerprint no longer
+      // matches, the dispatch is refused, and generation cannot begin.
+      const instructions = join(
+        codeGenerationRecordDir(proj, "todo-core"),
+        "unit-test-instructions.md",
+      );
+      writeFileSync(instructions, `${readFileSync(instructions, "utf-8")}${APPENDIX}`, "utf-8");
+      const evaluation = evaluateCodeGenerationApproval(proj, { unit: "todo-core" });
+      expect(evaluation.fingerprintValid).toBe(false);
+      expect(evaluation.reason).toContain("approve again");
+      const blocked = runHook(proj, DISPATCH(proj, "Implement todo-core"));
+      expect(blocked.code).toBe(2);
+      expect(blocked.stderr).toContain("approve again");
+      const begin = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "begin",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(begin.status).not.toBe(0);
+      expect(begin.stderr).toContain("approve again");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a handoff that quotes the plan's excluded review appendix is refused; the brief command hands off the body", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      const planPath = join(codeGenerationRecordDir(proj, "todo-core"), "code-generation-plan.md");
+      const body = readFileSync(planPath, "utf-8");
+      // A review recorded under the earlier protocol left its appendix in the
+      // plan. The approval still stands: the projection erases the appendix.
+      writeFileSync(planPath, `${body}${APPENDIX}`, "utf-8");
+      expect(planReviewAppendix(readFileSync(planPath, "utf-8")).trim()).toBe(APPENDIX.trim());
+      expect(evaluateCodeGenerationApproval(proj, { unit: "todo-core" }).ok).toBe(true);
+
+      // A conductor that reads the whole file into the prompt hands the worker
+      // the appendix: refused, with the body-only remedy named.
+      const fullFile = runHook(proj, DISPATCH(proj, `Implement todo-core\n${readFileSync(planPath, "utf-8")}`));
+      expect(fullFile.code).toBe(2);
+      expect(fullFile.stderr).toContain("`## Review` appendix");
+      expect(fullFile.stderr).toContain("brief");
+      // Whitespace games do not smuggle it back in.
+      const reflowed = runHook(
+        proj,
+        DISPATCH(proj, `Implement todo-core\n${APPENDIX.replace(/\n/g, " ").replace(/ +/g, "  ")}`),
+      );
+      expect(reflowed.code).toBe(2);
+
+      // The brief command is the sanctioned source: body plus byte-exact
+      // instructions, no appendix, and the dispatch built from it is allowed.
+      const brief = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "brief",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(brief.status, brief.stderr).toBe(0);
+      expect(brief.stderr).toContain("left out of the brief");
+      expect(brief.stdout.startsWith(`AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\n`)).toBe(true);
+      // The plan reaches the worker as the fingerprint projected it: with the
+      // appendix removed and, after the developer ticks a step, with that tick
+      // reset, because a tick is not a byte the approval covers.
+      expect(brief.stdout).toContain(projectPlanApprovalContent(body));
+      // The instructions are handed over exactly as they were hashed: the brief
+      // ends with their bytes, nothing trimmed and nothing added.
+      expect(
+        brief.stdout.endsWith(
+          readFileSync(join(codeGenerationRecordDir(proj, "todo-core"), "unit-test-instructions.md"), "utf-8"),
+        ),
+      ).toBe(true);
+      expect(brief.stdout).not.toContain("delete the legacy tree");
+      expect(brief.stdout).not.toContain("## Review");
+      const viaBrief = runHook(proj, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt: brief.stdout },
+      });
+      expect(viaBrief.code, viaBrief.stderr).toBe(0);
+      // A ticked step in the plan stays approved and reaches the worker unticked.
+      writeFileSync(planPath, readFileSync(planPath, "utf-8").replace("- [ ] Step 1", "- [x] Step 1"), "utf-8");
+      expect(evaluateCodeGenerationApproval(proj, { unit: "todo-core" }).ok).toBe(true);
+      const ticked = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "brief",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(ticked.status, ticked.stderr).toBe(0);
+      expect(ticked.stdout).toContain("- [ ] Step 1");
+      expect(ticked.stdout).not.toContain("- [x] Step 1");
+      expect(ticked.stdout).toBe(brief.stdout);
+      // The instructions travel byte for byte, a leading byte order mark included:
+      // re-approve with a BOM and the brief ends with exactly those bytes.
+      const instructionsPath = join(codeGenerationRecordDir(proj, "todo-core"), "unit-test-instructions.md");
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan", instructionsPrefix: "\uFEFF" });
+      expect(readFileSync(instructionsPath, "utf-8").startsWith("\uFEFF")).toBe(true);
+      const withBom = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "brief",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(withBom.status, withBom.stderr).toBe(0);
+      expect(withBom.stdout.endsWith(readFileSync(instructionsPath, "utf-8"))).toBe(true);
+      expect(withBom.stdout).toContain("\n\n\uFEFF# Unit Test Instructions");
+      // And the brief refuses before approval, so it can never precede authority.
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const unapproved = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "brief",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(unapproved.status).not.toBe(0);
+      expect(unapproved.stdout).toBe("");
+      expect(unapproved.stderr).toContain("Cannot assemble a worker brief");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("blocks the unplanned dispatch with exit 2 + a redirecting reason", () => {
     const proj = scratchProject();
     try {
@@ -693,7 +863,7 @@ describe("t265b hook lifecycle", () => {
       // the content fingerprint, and the workspace source the plan was written
       // against (so drift between planning and approval is answerable).
       expect(fingerprint.stdout.trim().split("\n")).toEqual([
-        expect.stringMatching(/^\[Approval Fingerprint\]: sha256:v2:[0-9a-f]{64}$/),
+        expect.stringMatching(/^\[Approval Fingerprint\]: sha256:v3:[0-9a-f]{64}$/),
         expect.stringMatching(/^\[Planned Source\]: (?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/),
       ]);
       expect(runHook(proj, STAGE_DISPATCH(proj, "Implement the stage-level plan")).code).toBe(2);

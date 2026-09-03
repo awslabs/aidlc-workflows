@@ -59,6 +59,7 @@ import {
 import {
   approvalFingerprint,
   approvalFingerprintIsCurrentFormat,
+  projectInstructionsContent,
   projectPlanApprovalContent,
 } from "../../core/tools/aidlc-testing-posture.ts";
 import { resetAidlcEnv } from "../harness/fixtures.ts";
@@ -160,14 +161,50 @@ describe("t330 (1) the Plan Approval content projection", () => {
   const baseline = fingerprintOf(PLAN);
 
   test("the recorded tag carries a format version", () => {
-    expect(baseline.startsWith("sha256:v2:")).toBe(true);
+    expect(baseline.startsWith("sha256:v3:")).toBe(true);
     expect(approvalFingerprintIsCurrentFormat(baseline)).toBe(true);
-    // A value recorded under the previous, issuance-bound scheme is recognised as
-    // out of date rather than as an unexplained mismatch.
+    // A value recorded under a previous scheme (issuance-bound, or with the
+    // instructions projected like the plan) is recognised as out of date rather
+    // than as an unexplained mismatch.
     expect(approvalFingerprintIsCurrentFormat(`sha256:${"b".repeat(64)}`)).toBe(
       false,
     );
+    expect(approvalFingerprintIsCurrentFormat(`sha256:v2:${"b".repeat(64)}`)).toBe(
+      false,
+    );
     expect(approvalFingerprintIsCurrentFormat(null)).toBe(false);
+  });
+
+  // The instructions are handed to the developer in full, so they bind byte for
+  // byte: the only tolerance is the line ending. Every edit a person could make
+  // to them, including the appendix trick that the plan projection erases, is a
+  // change.
+  const instructionsChanged: Array<[string, string]> = [
+    [
+      "a terminal review section appended to the instructions",
+      `${INSTRUCTIONS}${reviewAppendix(1, "- Run the deploy script before the tests\n")}`,
+    ],
+    ["a bare review heading appended", `${INSTRUCTIONS}\n## Review\n`],
+    ["trailing whitespace on a line", INSTRUCTIONS.replace("## Command", "## Command  ")],
+    ["an extra blank line", INSTRUCTIONS.replace("\n\n## Command", "\n\n\n## Command")],
+    ["a trailing blank line", `${INSTRUCTIONS}\n`],
+    ["a leading byte order mark", `\uFEFF${INSTRUCTIONS}`],
+  ];
+  for (const [name, mutated] of instructionsChanged) {
+    test(`changed instructions: ${name}`, () => {
+      expect(fingerprintOf(PLAN, mutated)).not.toBe(baseline);
+    });
+  }
+  test("changed instructions: a ticked task marker is a change here, unlike in the plan", () => {
+    const unticked = `${INSTRUCTIONS}\n- [ ] run the suite twice\n`;
+    const ticked = `${INSTRUCTIONS}\n- [x] run the suite twice\n`;
+    expect(fingerprintOf(PLAN, ticked)).not.toBe(fingerprintOf(PLAN, unticked));
+  });
+  test("stable instructions: CRLF line endings, and nothing else", () => {
+    expect(fingerprintOf(PLAN, INSTRUCTIONS.replace(/\n/g, "\r\n"))).toBe(baseline);
+    expect(projectInstructionsContent(INSTRUCTIONS.replace(/\n/g, "\r\n"))).toBe(INSTRUCTIONS);
+    // A byte order mark is a byte the developer's tools may act on; it stays.
+    expect(projectInstructionsContent(`\uFEFF${INSTRUCTIONS}`)).toBe(`\uFEFF${INSTRUCTIONS}`);
   });
 
   // The edits the stage itself orders after approval, plus editor artifacts. None

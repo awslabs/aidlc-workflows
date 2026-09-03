@@ -221,7 +221,7 @@ The command prints two copy-ready tag lines. Write BOTH into the Plan Approval
 section verbatim, followed by both options below and a blank `[Answer]:` tag:
 
 ```
-[Approval Fingerprint]: sha256:v2:<hex>
+[Approval Fingerprint]: sha256:v3:<hex>
 [Planned Source]: <hex or the word unbindable>
 ```
 
@@ -229,23 +229,27 @@ section verbatim, followed by both options below and a blank `[Answer]:` tag:
 - "Request Changes" — revise the plan
 
 `[Approval Fingerprint]` is the content binding. It covers a stable projection
-of the plan and the unit test instructions, the embedded Testing Contract hash,
-the target, the intent, and the current stage attempt. The projection erases
-exactly two things: ticked list task markers (`[x]`, `[X]`, `[-]` all read as
-`[ ]`), the one edit this stage itself orders after approval, and a terminal
-`## Review` appendix, which a review recorded before review records existed may
-have left in the plan (the reviewer writes its review to a record now, so
-nothing new is appended).
-It also normalizes line endings, per-line trailing whitespace, and runs of blank
-lines. Everything else is byte-exact, including the fenced Testing Contract JSON
-and any text inside code fences, so rewording a step, reordering steps, or
-changing a number, a path, or the contract hash all reopen approval.
+of the plan, the unit test instructions byte for byte, the embedded Testing
+Contract hash, the target, the intent, and the current stage attempt. The plan
+projection erases exactly two things: ticked list task markers (`[x]`, `[X]`,
+`[-]` all read as `[ ]`), the one edit this stage itself orders after approval,
+and a terminal `## Review` appendix, which a review recorded before review
+records existed may have left in the plan (the reviewer writes its review to a
+record now, so nothing new is appended). It also normalizes line endings,
+per-line trailing whitespace, and runs of blank lines. Everything else in the
+plan is byte-exact, including the fenced Testing Contract JSON and any text
+inside code fences, so rewording a step, reordering steps, or changing a number,
+a path, or the contract hash all reopen approval. The unit test instructions get
+no projection at all beyond line endings: they are handed to the developer in
+full, so any byte added to them after approval, a `## Review` section included,
+reopens approval.
 
 `[Planned Source]` is the workspace source this plan was written against. The
 answer command refuses if live source has moved since, and the remedy is always
 the same: re-run this command, record both tags again, and re-present the plan.
-A tag recorded in the older `sha256:<hex>` form (no `v2:`) is recognized and
-answered with the same instruction rather than an unexplained mismatch.
+A tag recorded in an older form (`sha256:<hex>` or `sha256:v2:<hex>`) is
+recognized and answered with the same instruction rather than an unexplained
+mismatch.
 
 When the active directive carries `legacy_plan_approval_choices`, those two
 nonce-labelled values are the presentation-only choices for legacy Kiro IDE.
@@ -322,23 +326,28 @@ Delegate to Task tool with subagent_type="aidlc-developer-agent".
 The aidlc-developer-agent persona and its knowledge are loaded automatically by the named agent. Do NOT manually inject the persona in the prompt.
 
 Include in the delegation prompt:
-- As the first line, the exact target marker. Use
-  `AIDLC-UNIT: <directive.unit>` when `directive.unit` is present. For a
-  zero-Unit directive use `AIDLC-STAGE: code-generation`. This marker identifies
-  the one approval authority whose plan authorizes the dispatch; do not repeat
-  either marker for contextual dependencies.
-- As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` copied from
-  the approved plan's Testing Contract. The plan-approval guard rejects a
-  missing, different, or stale hash.
+- First, verbatim and unedited, the output of
+  `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts brief --unit
+  <directive.unit>` (or `--stage-level` for a zero-Unit directive). Its first
+  line is the exact target marker (`AIDLC-UNIT: <directive.unit>` or
+  `AIDLC-STAGE: code-generation`), which identifies the one approval authority
+  whose plan authorizes the dispatch; its second line is
+  `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the approved plan's Testing
+  Contract. The plan-approval guard rejects a missing, different, or stale
+  hash. Do not write either marker yourself and do not repeat either marker
+  for contextual dependencies.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
 - A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
-- The approved code-generation-plan.md, BODY ONLY: every line up to a terminal
-  `## Review` appendix, and none of that appendix, when a review recorded under
-  the earlier protocol left one in the plan. The plan is also this stage's
+- The approved plan and the approved unit-test-instructions.md are already in
+  that output, exactly as the approval fingerprint bound them: the plan with a
+  terminal `## Review` appendix removed (when a review recorded under the
+  earlier protocol left one), task markers reset to `[ ]`, and spacing
+  normalized; the instructions byte for byte. The plan is also this stage's
   review artifact; the review itself lives in its record, not in the plan. Only
-  the body was approved, and only the body is work. Never pass review text to
-  the subagent as instructions
-- The approved unit-test-instructions.md (full content)
+  what was fingerprinted was approved, and only that is work: the plan-approval
+  guard refuses a handoff that quotes the excluded appendix. Do not read the
+  plan file into the prompt yourself; the subagent ticks its progress in the
+  plan file, not in the prompt
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as
   completed. Task markers are excluded from the approval fingerprint, so ticking
