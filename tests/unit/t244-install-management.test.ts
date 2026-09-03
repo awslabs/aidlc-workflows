@@ -1980,14 +1980,19 @@ describe("t244 Windows and completion release surfaces", () => {
       .toBeLessThan(workflow.indexOf("bun scripts/verify-release.ts controls"));
     expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     expect(workflow).toContain("AIDLC_RELEASE_SOURCE_DIGEST:");
+    // Third-party actions are pinned to a full commit SHA. A same-repository
+    // reusable workflow (`./.github/workflows/...`) is referenced by path and
+    // resolves to the commit already being run, so it carries no ref to pin.
     const actionRefs = [...workflow.matchAll(
       /^\s*(?:-\s+)?uses:\s+([^\s#]+)(?:\s+#.*)?$/gm,
     )].map((match) => match[1]);
     expect(actionRefs.length).toBeGreaterThan(0);
     for (const ref of actionRefs) {
+      if (ref.startsWith("./.github/workflows/")) continue;
       expect(ref).toMatch(/^[^@\s]+@[a-f0-9]{40}$/);
     }
     expect(workflow).not.toMatch(/^\s*(?:-\s+)?uses:\s+[^@\s]+@v\d/m);
+    expect(actionRefs).toContain("./.github/workflows/ci.yml");
     expect(workflow).toContain("shellcheck scripts/install.sh");
     expect(workflow).toContain("Invoke-ScriptAnalyzer -Path scripts/install.ps1");
     expect(workflow).toContain("unix-lifecycle:");

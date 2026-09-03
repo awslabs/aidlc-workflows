@@ -29,10 +29,8 @@ import {
   projectionFiles,
   walkFiles,
 } from "../../core/tools/aidlc-distribution.ts";
-import {
-  requireVersion,
-  targetTriple,
-} from "../../core/tools/aidlc-install-paths.ts";
+import { requireVersion } from "../../core/tools/aidlc-channel.ts";
+import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
 import {
   digest,
   type ReleaseManifest,
@@ -333,7 +331,19 @@ export type ReleaseServerFault =
   | { kind: "truncate"; asset: string }
   | { kind: "captive-portal"; asset?: string }
   | { kind: "oversized"; asset: string; bytes?: number }
-  | { kind: "missing"; asset: string };
+  | { kind: "missing"; asset: string }
+  // The releases-list API answers with this status and body instead of the
+  // configured release list (rate limiting, outage).
+  | { kind: "api-failure"; status: number };
+
+// One GitHub-shaped release record served by the fixture's releases-list API
+// (`<baseUrl>/api/releases`). Asset downloads still resolve by basename, so a
+// fixture directory serves every listed tag with the same bytes.
+export type FixtureRelease = {
+  tag_name: string;
+  prerelease: boolean;
+  draft?: boolean;
+};
 
 function contentType(name: string): string {
   if (name === "version.json") return "application/json";
@@ -344,8 +354,10 @@ function contentType(name: string): string {
 export function serveReleaseFixture(
   root: string,
   fault: ReleaseServerFault = { kind: "none" },
+  releases: readonly FixtureRelease[] = [],
 ): {
   baseUrl: string;
+  apiUrl: string;
   requests: string[];
   stop(): void;
 } {
@@ -357,6 +369,17 @@ export function serveReleaseFixture(
       const url = new URL(request.url);
       requests.push(url.pathname);
       const name = basename(url.pathname);
+      if (url.pathname === "/api/releases") {
+        if (fault.kind === "api-failure") {
+          return Response.json({ message: "API rate limit exceeded" }, { status: fault.status });
+        }
+        return Response.json(releases.map((release, index) => ({
+          id: index + 1,
+          tag_name: release.tag_name,
+          prerelease: release.prerelease,
+          draft: release.draft ?? false,
+        })));
+      }
       if (fault.kind === "redirect" && !url.pathname.startsWith("/fixture-assets/")) {
         return Response.redirect(
           `http://127.0.0.1:${port}/fixture-assets/${name}?signature=fixture-signed-query`,
@@ -394,6 +417,7 @@ export function serveReleaseFixture(
   port = server.port ?? 0;
   return {
     baseUrl: `http://127.0.0.1:${port}`,
+    apiUrl: `http://127.0.0.1:${port}/api/releases`,
     requests,
     stop: () => server.stop(true),
   };
