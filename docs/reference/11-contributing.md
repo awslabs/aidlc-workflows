@@ -86,7 +86,9 @@ the exported bundle, validates the complete inventory, and uploads one
 `attested-release` artifact. `release` rechecks the tag and checksums, creates
 the GitHub Release in this repository with `GITHUB_TOKEN`, and verifies the
 uploaded asset inventory. Never rebuild, repackage, or substitute the
-candidate. The full trust design is
+candidate. The same workflow also schedules preview builds from `main`, gates
+them through callable CI, stamps `AIDLC_BUILD_VERSION`, and publishes an
+annotated-tag prerelease that is never "latest". The full trust design is
 [Supply-Chain Security](19-supply-chain-security.md).
 
 ## Testing

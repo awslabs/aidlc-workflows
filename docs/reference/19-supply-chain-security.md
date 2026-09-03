@@ -45,6 +45,17 @@ after the build and lifecycle jobs pass. GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
 
+The preview channel schedules the current `main` once a day and can also be
+started manually. Its planner skips an unchanged source commit, allocates
+`<x.y.z>-preview.<YYYYMMDD>.<N>` from existing preview tags, and renders notes
+from the changes since the previous preview. Callable CI gates the authorized
+commit before the normal release build chain. `AIDLC_BUILD_VERSION` stamps the
+preview id into projections, binaries, `version.json`, and the versioned runtime
+archive while the source tree keeps its stable `x.y.z` version. Publication
+creates an annotated tag that records the source repository and commit, then
+creates a prerelease with `--latest=false`; stable `latest/download` discovery
+therefore remains unchanged.
+
 When a compatible GitHub CLI is available, installers verify `checksums.txt`
 against that bundle and bind verification to:
 
