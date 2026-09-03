@@ -1,11 +1,14 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
+  artifactFilename,
   errorMessage,
+  readStateFile,
   recordDir,
   resolveBoltDag,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
+import { readArtifactText } from "./aidlc-html.ts";
 
 const VALID_STATUSES = new Set(["OK", "GAP", "ORPHAN", "Deferred", "N/A"]);
 
@@ -169,7 +172,9 @@ function readText(path: string): { content: string | null; reason?: string } {
   try {
     if (!existsSync(path)) return { content: null, reason: `required upstream artifact is missing: ${path}` };
     if (!statSync(path).isFile()) return { content: null, reason: `required upstream artifact is not a file: ${path}` };
-    return { content: readFileSync(path, "utf-8") };
+    // `.html` upstreams (HTML Artifacts: on) are read through their Markdown
+    // projection so ID extraction sees prose, not markup.
+    return { content: readArtifactText(path) };
   } catch (error) {
     return { content: null, reason: `cannot read upstream artifact ${path}: ${errorMessage(error)}` };
   }
@@ -280,27 +285,34 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     result.reasons.push("cannot resolve the active intent record directory");
     return result;
   }
-  const requirements = join(docsDir, "inception", "requirements-analysis", "requirements.md");
-  const stories = join(docsDir, "inception", "user-stories", "stories.md");
-  const storyMap = join(docsDir, "inception", "units-generation", "unit-of-work-story-map.md");
+  // Prime artifact formats from the intent's state so capable upstreams resolve
+  // to `.html` under HTML Artifacts: on (readStateFile is the priming seam).
+  try {
+    readStateFile(projectDir);
+  } catch {
+    // No state file: every artifact is Markdown.
+  }
+  const requirements = join(docsDir, "inception", "requirements-analysis", artifactFilename("requirements"));
+  const stories = join(docsDir, "inception", "user-stories", artifactFilename("stories"));
+  const storyMap = join(docsDir, "inception", "units-generation", artifactFilename("unit-of-work-story-map"));
 
   if (stage === "user-stories") {
-    addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
+    addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], artifactFilename("requirements")));
     return result;
   }
   if (stage === "domain-design") {
     addSource(
       result,
       existsSync(stories)
-        ? idsFromFile(stories, [ID_PATTERNS.US], "stories.md")
-        : idsFromFile(requirements, [ID_PATTERNS.FR], "requirements.md"),
+        ? idsFromFile(stories, [ID_PATTERNS.US], artifactFilename("stories"))
+        : idsFromFile(requirements, [ID_PATTERNS.FR], artifactFilename("requirements")),
     );
     return result;
   }
   if (stage === "units-generation") {
     const source = existsSync(stories)
-      ? idsFromFile(stories, [ID_PATTERNS.US], "stories.md")
-      : idsFromFile(requirements, [ID_PATTERNS.FR], "requirements.md");
+      ? idsFromFile(stories, [ID_PATTERNS.US], artifactFilename("stories"))
+      : idsFromFile(requirements, [ID_PATTERNS.FR], artifactFilename("requirements"));
     const sourceIds = addSource(result, source);
     const dag = resolveBoltDag(projectDir);
     if (dag.state === "malformed") {
@@ -359,12 +371,12 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
       }
       if (result.ids.size === 0) result.reasons.push(`stories mapped to unit "${unit}" contain no acceptance-criterion IDs`);
     } else {
-      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR], "requirements.md"));
+      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR], artifactFilename("requirements")));
     }
     return result;
   }
   if (stage === "nfr-requirements") {
-    addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
+    addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], artifactFilename("requirements")));
     return result;
   }
   if (stage === "nfr-design") {
@@ -416,10 +428,10 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
           }
         }
       } else {
-        addSource(result, idsFromFile(stories, [ID_PATTERNS.AC], "stories.md"));
+        addSource(result, idsFromFile(stories, [ID_PATTERNS.AC], artifactFilename("stories")));
       }
     } else {
-      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
+      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], artifactFilename("requirements")));
     }
     const nfrDir = join(docsDir, "construction", unit, "nfr-requirements");
     for (const name of ["performance-requirements.md", "security-requirements.md", "scalability-requirements.md", "reliability-requirements.md"]) {
@@ -460,8 +472,8 @@ function verifyTargets(
   const okEntries = data.coverage.filter((entry) => entry.status === "OK");
 
   if (stage === "user-stories" && docsDir) {
-    const storiesPath = join(docsDir, "inception", "user-stories", "stories.md");
-    const stories = idsFromFile(storiesPath, [ID_PATTERNS.US], "stories.md");
+    const storiesPath = join(docsDir, "inception", "user-stories", artifactFilename("stories"));
+    const stories = idsFromFile(storiesPath, [ID_PATTERNS.US], artifactFilename("stories"));
     if (stories.reason) reasons.push(stories.reason);
     for (const entry of okEntries) {
       const targets = extractIds(entry.target ?? "", [ID_PATTERNS.US]);

@@ -194,6 +194,46 @@ describe("t281 runtime schema and status validation", () => {
     expect(out.result.findings_count).toBe(0);
   });
 
+  test("HTML Artifacts: on resolves upstreams to .html and reads their Markdown projection", () => {
+    const proj = project();
+    // State locks the intent to HTML; `readStateFile` primes the resolver from
+    // the compiled graph so `requirements`/`stories` resolve to `.html`, never
+    // to the stale `.md` twins written here.
+    writeFileSync(seededStateFile(proj), "# State\n\n- **HTML Artifacts**: on\n");
+    write(proj, "inception/requirements-analysis/requirements.md", "# STALE\n\n- FR9 stale\n");
+    write(proj, "inception/requirements-analysis/requirements.html", [
+      "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Requirements</title></head><body>",
+      "<section data-aidlc=\"summary\"><p>Two requirements.</p></section>",
+      "<section><h2>Functional</h2><ul><li>FR1 Login</li><li>FR2 Recovery</li></ul></section>",
+      "</body></html>",
+    ].join("\n"));
+    write(proj, "inception/user-stories/stories.html", [
+      "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Stories</title></head><body>",
+      "<section><h2>US1.1 Login</h2><ul><li>AC1.1.1 accepts valid credentials</li></ul></section>",
+      "<section><h2>US1.2 Recovery</h2><ul><li>AC1.2.1 sends a reset link</li></ul></section>",
+      "</body></html>",
+    ].join("\n"));
+    const file = trace(proj, "inception/user-stories/traceability.json", {
+      stage: "user-stories",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "US1.1" },
+        { id: "FR2", status: "OK", target: "US1.2" },
+      ],
+    });
+    const graph = join(import.meta.dir, "../../dist/claude/.claude/tools/data/stage-graph.json");
+    const spawned = spawnSync("bun", [SCRIPT, "--stage", "user-stories", "--output-path", file], {
+      encoding: "utf-8",
+      cwd: proj,
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_STAGE_GRAPH: graph },
+    });
+    const result = JSON.parse(spawned.stdout) as SensorResult;
+    expect(spawned.status).toBe(0);
+    expect(result.pass, spawned.stdout).toBe(true);
+    // FR9 lives only in the stale Markdown twin: it must not surface anywhere.
+    expect(result.missing_from_upstream_ids).toEqual([]);
+  });
+
   test("malformed JSON and wrong-shaped entries fail without crashing", () => {
     const proj = project();
     const malformed = trace(proj, "inception/user-stories/traceability.json", "{nope", true);

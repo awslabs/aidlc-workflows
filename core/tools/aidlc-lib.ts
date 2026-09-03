@@ -16853,17 +16853,35 @@ export function authoritativeProjectDescription(raw: string): {
 
 // --- State file I/O ---
 
+let warnedUnprimedHtmlArtifacts = false;
+
 /**
  * Prime artifact formats from already-loaded state content. This is exported
  * for callers that necessarily read state through their own atomic snapshot.
+ * Never throws: a state read must not fail because the compiled stage graph is
+ * unreadable (authored-core runs, broken installs); in that case an `on` intent
+ * falls back to Markdown resolution with a one-time stderr warning.
  */
 export function primeArtifactFormats(stateContent: string): void {
   if (getField(stateContent, "HTML Artifacts") !== "on") {
     setHtmlArtifactNames(new Set());
     return;
   }
+  let stages: StageEntry[];
+  try {
+    stages = loadStageGraph();
+  } catch (error) {
+    setHtmlArtifactNames(new Set());
+    if (!warnedUnprimedHtmlArtifacts) {
+      warnedUnprimedHtmlArtifacts = true;
+      process.stderr.write(
+        `aidlc: HTML Artifacts is on but the stage graph is unreadable (${errorMessage(error)}); artifact paths resolve to Markdown\n`,
+      );
+    }
+    return;
+  }
   const capable = new Set<string>();
-  for (const stage of loadStageGraph()) {
+  for (const stage of stages) {
     for (const name of stage.html_capable ?? []) capable.add(name);
   }
   setHtmlArtifactNames(capable);

@@ -713,9 +713,9 @@
       elements.globalCommentButton.disabled = !annotatable;
       elements.editButton.disabled = !annotatable || artifact.format !== "md";
 
-      if (artifact.format === "md") renderMarkdown(artifact);
-      else if (artifact.format === "html") renderHtml(path);
-      else throw new Error(`Unsupported artifact format: ${artifact.format}`);
+      // Every artifact renders inside the sandboxed iframe: the app never
+      // injects artifact-derived HTML into its own privileged document.
+      renderInSandbox(path);
 
       document.querySelectorAll(".artifact-button").forEach((button) => {
         const current = Boolean(button.dataset.path) && button.dataset.path === path;
@@ -734,15 +734,8 @@
     }
   }
 
-  function renderMarkdown(artifact) {
-    elements.viewer.className = "viewer markdown-viewer";
-    elements.viewer.innerHTML = artifact.html;
-    renderMermaidBlocks();
-  }
-
-
-  function renderHtml(path) {
-    elements.viewer.className = "viewer html-viewer";
+  function renderInSandbox(path) {
+    elements.viewer.className = `viewer ${model.artifact?.format === "md" ? "markdown-viewer" : "html-viewer"}`;
     elements.viewer.replaceChildren();
     const frame = document.createElement("iframe");
     frame.title = basename(path);
@@ -752,73 +745,10 @@
     model.htmlFrame = frame;
   }
 
-  async function renderMermaidBlocks() {
-    const nodes = Array.from(elements.viewer.querySelectorAll("pre.mermaid"));
-    if (nodes.length === 0) return;
-    try {
-      if (!model.mermaidPromise) {
-        model.mermaidPromise = new Promise((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src = "/assets/vendor/mermaid.min.js";
-          script.onload = resolve;
-          script.onerror = () => reject(new Error("Could not load the Mermaid renderer"));
-          document.head.append(script);
-        });
-      }
-      await model.mermaidPromise;
-      window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
-      await window.mermaid.run({ nodes });
-    } catch (error) {
-      showNotice(error.message);
-    }
-  }
-
-  function handleMarkdownSelection(event) {
-    if (event.button !== 0 || model.artifact?.format !== "md") return;
-    const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || !selection.rangeCount) {
-      closeSelectionToolbar();
-      return;
-    }
-    const range = selection.getRangeAt(0);
-    const container =
-      range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
-        ? range.commonAncestorContainer
-        : range.commonAncestorContainer.parentElement;
-    if (!container || !elements.viewer.contains(container)) return;
-
-    const selectedText = selection.toString().trim();
-    if (!selectedText) return;
-    const block = container.closest("h1,h2,h3,p,li,pre,blockquote,td,th") || container;
-    const lines = estimateLineRange(block, selectedText);
-    model.selectionAnchor = {
-      selection: selectedText,
-      heading_path: headingPathBefore(block),
-      ...lines,
-    };
-
-    const rect = range.getBoundingClientRect();
-    elements.selectionToolbar.hidden = false;
-    const left = Math.min(
-      window.innerWidth - elements.selectionToolbar.offsetWidth - 12,
-      Math.max(12, rect.left + rect.width / 2 - elements.selectionToolbar.offsetWidth / 2),
-    );
-    const top = Math.max(12, rect.top - elements.selectionToolbar.offsetHeight - 10);
-    elements.selectionToolbar.style.left = `${left}px`;
-    elements.selectionToolbar.style.top = `${top}px`;
-  }
-
-  function headingPathBefore(node) {
-    const levels = [];
-    for (const heading of elements.viewer.querySelectorAll("h1,h2,h3")) {
-      if (heading === node || !(heading.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) {
-        continue;
-      }
-      const level = Number(heading.tagName.slice(1));
-      levels.length = level - 1;
-      levels[level - 1] = heading.textContent.trim();
-    }
-    return levels.filter(Boolean);
+  // Selections inside the sandbox arrive as bridge messages (receiveHtmlAnchor);
+  // nothing in the privileged document is selectable artifact content.
+  function handleMarkdownSelection() {
+    closeSelectionToolbar();
   }
 
   function normalizeLine(value) {
@@ -834,21 +764,23 @@
       .trim();
   }
 
-  function estimateLineRange(block, selectedText) {
-    if (!model.artifact?.source) return {};
-    const blockFirstLine = String(block?.textContent || "")
+  // Best-effort source lines for a Markdown selection reported by the bridge:
+  // match the selection's first line against the Markdown source.
+  function estimateLineRange(selectedText) {
+    if (!model.artifact?.source || model.artifact.format !== "md") return {};
+    const firstLine = String(selectedText || "")
       .split(/\r?\n/)
       .map((line) => normalizeLine(line))
       .find(Boolean);
-    if (!blockFirstLine) return {};
+    if (!firstLine) return {};
 
     const sourceLines = model.artifact.source.split(/\r?\n/);
     const index = sourceLines.findIndex((line) => {
       const candidate = normalizeLine(line);
       return candidate &&
-        (candidate === blockFirstLine ||
-          candidate.includes(blockFirstLine) ||
-          blockFirstLine.includes(candidate));
+        (candidate === firstLine ||
+          candidate.includes(firstLine) ||
+          firstLine.includes(candidate));
     });
     if (index < 0) return {};
     const selectedLines = Math.max(1, selectedText.split(/\r?\n/).length);
@@ -878,10 +810,14 @@
   function receiveHtmlAnchor(event) {
     const frame = model.htmlFrame;
     if (!frame || event.source !== frame.contentWindow || !isValidHtmlAnchor(event.data)) return;
+    // Markdown artifacts keep their source-line estimate; HTML artifacts keep
+    // the element path the bridge computed inside the sandbox.
+    const lines = model.artifact?.format === "md" ? estimateLineRange(event.data.selection || "") : {};
     model.pendingHtmlAnchor = {
       selection: event.data.selection || undefined,
-      css_path: event.data.css_path || undefined,
+      css_path: model.artifact?.format === "md" ? undefined : (event.data.css_path || undefined),
       heading_path: event.data.heading_path || [],
+      ...lines,
     };
     const parts = [];
     if (model.pendingHtmlAnchor.selection) parts.push(`“${model.pendingHtmlAnchor.selection}”`);

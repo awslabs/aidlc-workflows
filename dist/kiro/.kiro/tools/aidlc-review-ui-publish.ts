@@ -230,6 +230,16 @@ export function reviewStageDir(
     : fallbackStageDir(record, stageNode, unit);
 }
 
+/**
+ * Consume every pending feedback file for the stage. Called by `report` ONLY
+ * after the state transition that carried the feedback (GATE_REJECTED reason /
+ * approval notes) has committed, so the failure mode is at-least-once: a crash
+ * between the commit and this write re-ingests the same files on the next
+ * report (a visible duplicate in the reason), never a silently lost round. The
+ * inverse order would risk marking feedback consumed that no audit row holds.
+ * `consumed.json` is written atomically (temp + rename) and keyed by
+ * (file, sha256), so a rewritten feedback file is treated as new.
+ */
 export function ingestPendingFeedback(
   stageDir: string,
   result: "approved" | "rejected",

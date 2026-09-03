@@ -62,12 +62,14 @@ import {
 } from "./aidlc-review-ui-shared.ts";
 import {
   injectBridge,
+  isReviewHiddenPath,
   lineDiff,
   parseQuestionsMarkdown,
   PathConfinementError,
   renderFeedbackMarkdown,
   renderMarkdown,
   resolveProjectAidlcPath,
+  sandboxedMarkdownDocument,
   selfContainedMarkdownExport,
   validateQuestionAnswers,
   type AnswerSubmissionEntry,
@@ -79,7 +81,13 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_ANSWERS_BODY_BYTES = 256 * 1024;
 const WATCH_DEBOUNCE_MS = 150;
+// Artifact documents (HTML and rendered Markdown) run in an opaque-origin
+// sandbox with every network direction closed; `'self'` admits only the
+// daemon's own asset route (mermaid) for scripts.
 const RAW_CSP = "default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self'; font-src data:; frame-ancestors 'self'";
+// The privileged app shell: no inline scripts, same-origin everything, no
+// plugins, no forms, and only same-origin frames (the artifact sandbox).
+const APP_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const ASSET_ROOT = join(import.meta.dir, "data", "review-ui");
 
 const USAGE = `Usage: aidlc-review-ui.ts <command> [options]
@@ -382,8 +390,9 @@ function treePayload(projectDir: string): { entries: Array<Record<string, unknow
 
   const visit = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === ".review-ui" || entry.name === "audit" || entry.isSymbolicLink()) continue;
+      if (entry.isSymbolicLink()) continue;
       const path = join(dir, entry.name);
+      if (isReviewHiddenPath(posixRelative(record, path))) continue;
       let stat;
       try {
         stat = statSync(path);
@@ -403,6 +412,28 @@ function treePayload(projectDir: string): { entries: Array<Record<string, unknow
   visit(record);
   entries.sort((left, right) => String(left.path).localeCompare(String(right.path)));
   return { entries };
+}
+
+/**
+ * Reviewer-visible file: confined to the active intent's record AND not one of
+ * the engine's bookkeeping files (state, audit, dot-dirs). Everything the UI
+ * renders for a human goes through here.
+ */
+function reviewableFile(projectDir: string, requested: string): string {
+  const path = resolveProjectAidlcPath(projectDir, requested);
+  const { record } = stateContext(projectDir);
+  let recordReal = record;
+  try {
+    recordReal = realpathSync(record);
+  } catch {
+    throw new HttpError(404, "not found");
+  }
+  const relativeToRecord = posixRelative(recordReal, path);
+  if (relativeToRecord.startsWith("..") || isReviewHiddenPath(relativeToRecord)) {
+    throw new HttpError(403, "not a reviewable artifact");
+  }
+  regularFile(path);
+  return path;
 }
 
 function queryPath(url: URL, name = "path"): string {
@@ -450,17 +481,19 @@ function questionsResponse(projectDir: string, url: URL): Response {
 
 function artifactResponse(projectDir: string, url: URL): Response {
   const requested = queryPath(url);
-  const path = resolveProjectAidlcPath(projectDir, requested);
-  regularFile(path);
+  const path = reviewableFile(projectDir, requested);
   const stat = statSync(path);
   const extension = extname(path).toLowerCase();
   const source = readFileSync(path, "utf-8");
+  // Both formats render inside the sandboxed iframe via /api/raw; the app only
+  // ever receives Markdown SOURCE (for the editor and line estimates), never
+  // rendered HTML to inject into its own privileged document.
   if (extension === ".md" || extension === ".markdown") {
     return json({
       path: requested,
       format: "md",
       source,
-      html: renderMarkdown(source),
+      raw_url: `/api/raw?path=${encodeURIComponent(requested)}`,
       sha256: sha256Hex(source),
       mtime: stat.mtimeMs,
     });
@@ -478,10 +511,18 @@ function artifactResponse(projectDir: string, url: URL): Response {
 }
 
 function rawResponse(projectDir: string, url: URL): Response {
-  const path = confinedPath(projectDir, url);
-  regularFile(path);
-  if (![".html", ".htm"].includes(extname(path).toLowerCase())) throw new HttpError(404, "not found");
-  return new Response(injectBridge(readFileSync(path, "utf-8")), {
+  const requested = queryPath(url);
+  const path = reviewableFile(projectDir, requested);
+  const extension = extname(path).toLowerCase();
+  let document: string;
+  if (extension === ".html" || extension === ".htm") {
+    document = readFileSync(path, "utf-8");
+  } else if (extension === ".md" || extension === ".markdown") {
+    document = sandboxedMarkdownDocument(readFileSync(path, "utf-8"), basename(path));
+  } else {
+    throw new HttpError(404, "not found");
+  }
+  return new Response(injectBridge(document), {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Security-Policy": RAW_CSP,
@@ -873,7 +914,12 @@ async function serve(projectDir: string): Promise<void> {
           const index = join(ASSET_ROOT, "index.html");
           if (!existsSync(index)) throw new HttpError(404, "app shell not found");
           return new Response(Bun.file(index), {
-            headers: { "Content-Type": "text/html; charset=utf-8" },
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              "Content-Security-Policy": APP_CSP,
+              "X-Content-Type-Options": "nosniff",
+              "Referrer-Policy": "no-referrer",
+            },
           });
         }
         if (request.method === "GET" && url.pathname === "/api/state") return json(statePayload(projectDir));

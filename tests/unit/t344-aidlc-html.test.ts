@@ -83,6 +83,28 @@ describe("t344 HTML authoring checks", () => {
 			"must be the last body element",
 		]) expect(result.findings.some((finding) => finding.includes(fragment))).toBe(true);
 	});
+
+	test("closes every fetch vector, not just src/href", () => {
+		const result = checkHtmlArtifact(valid.replace(
+			'<section data-aidlc="summary">',
+			'<base href="https://evil.example/"><meta http-equiv="refresh" content="0;url=https://evil.example/">' +
+				'<img srcset="https://evil.example/a.png 1x, b.png 2x" alt=""><video poster="//evil.example/p.jpg"></video>' +
+				'<button formaction="https://evil.example/f">x</button><a ping="https://evil.example/ping" href="#ok">y</a>' +
+				'<svg><use xlink:href="https://evil.example/s.svg#i"></use></svg><style>@import "https://evil.example/x.css";</style>' +
+				'<section data-aidlc="summary">',
+		), { name: "requirements", stage: "requirements-analysis" });
+		expect(result.ok).toBe(false);
+		for (const fragment of [
+			"<base> is not allowed",
+			'<meta http-equiv="refresh"> is not allowed',
+			"<img> srcset has external URL",
+			"<video> poster has external URL",
+			"<button> formaction has external URL",
+			"<a> ping has external URL",
+			"<use> xlink:href has external URL",
+			"CSS @import has external URL",
+		]) expect(result.findings.some((finding) => finding.includes(fragment)), fragment).toBe(true);
+	});
 });
 
 describe("t344 offline export and CLI", () => {

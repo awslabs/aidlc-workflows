@@ -73,6 +73,8 @@ beforeAll(async () => {
   const reviewDir = join(stage, ".review-ui");
   mkdirSync(join(reviewDir, "snapshots", "r0"), { recursive: true });
   mkdirSync(join(record, ".review-ui"), { recursive: true });
+  mkdirSync(join(record, "audit"), { recursive: true });
+  writeFileSync(join(record, "audit", "host-clone.md"), "## Human Turn\n**Event**: HUMAN_TURN\n\n---\n");
   writeFileSync(join(project, "aidlc", "active-space"), "default\n");
   writeFileSync(join(project, "aidlc", "spaces", "default", "intents", "active-intent"), `${recordName}\n`);
   writeFileSync(
@@ -292,8 +294,32 @@ describe("t332 review UI daemon HTTP API", () => {
     expect(artifact.status).toBe(200);
     expect(artifactBody).toMatchObject({ path: artifactPath, format: "md" });
     expect(artifactBody.source).toContain("Current requirement.");
-    expect(artifactBody.html).toContain('<h1 id="requirements">Requirements</h1>');
-    expect(artifactBody.html).not.toContain("<script");
+    // Rendered HTML never reaches the privileged app: Markdown renders in the
+    // sandbox via /api/raw, exactly like an HTML artifact.
+    expect(artifactBody.html).toBeUndefined();
+    expect(artifactBody.raw_url).toBe(`/api/raw?path=${encodeURIComponent(artifactPath)}`);
+    const rawMarkdown = await authorized(artifactBody.raw_url);
+    expect(rawMarkdown.status).toBe(200);
+    expect(rawMarkdown.headers.get("content-security-policy")).toContain("default-src 'none'");
+    const rawMarkdownText = await rawMarkdown.text();
+    expect(rawMarkdownText).toContain('<script src="/assets/bridge.js"></script>');
+    expect(rawMarkdownText).toContain('<article data-aidlc="markdown">');
+    expect(rawMarkdownText).toContain('<h1 id="requirements">Requirements</h1>');
+    expect(rawMarkdownText).not.toContain("<script>alert");
+
+    // The app shell itself carries a same-origin CSP with no inline scripts.
+    const shell = await authorized("/");
+    expect(shell.status).toBe(200);
+    expect(shell.headers.get("content-security-policy")).toContain("script-src 'self'");
+
+    // Engine bookkeeping is never reviewable: state, audit, dot-dirs.
+    const recordPath = artifactPath.slice(0, artifactPath.indexOf("/inception/"));
+    for (const hidden of [`${recordPath}/aidlc-state.md`, `${recordPath}/audit/host-clone.md`, `${recordPath}/.review-ui/current.json`]) {
+      const denied = await authorized(`/api/artifact?path=${encodeURIComponent(hidden)}`);
+      expect(denied.status, hidden).toBe(403);
+      const deniedRaw = await authorized(`/api/raw?path=${encodeURIComponent(hidden)}`);
+      expect(deniedRaw.status, hidden).toBe(403);
+    }
 
     const feedback = await authorized("/api/feedback", {
       method: "POST",
@@ -339,6 +365,8 @@ describe("t332 review UI daemon HTTP API", () => {
       ]),
     );
     expect(treeBody.entries.some((entry: { path: string }) => entry.path.includes(".review-ui"))).toBeFalse();
+    expect(treeBody.entries.some((entry: { path: string }) => entry.path.endsWith("/aidlc-state.md"))).toBeFalse();
+    expect(treeBody.entries.some((entry: { path: string }) => entry.path.includes("/audit/"))).toBeFalse();
 
     const stageDir = artifactPath.slice(0, artifactPath.lastIndexOf("/"));
     const snapshots = await authorized(`/api/snapshots?stage_dir=${encodeURIComponent(stageDir)}`);

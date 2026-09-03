@@ -469,17 +469,30 @@ export function checkHtmlArtifact(
 		findings.push('the <section data-aidlc="review"> must be the last body element');
 	}
 	for (const element of all) {
-		if (["iframe", "object", "embed"].includes(element.tag)) {
+		if (["iframe", "object", "embed", "base"].includes(element.tag)) {
 			findings.push(`<${element.tag}> is not allowed`);
+		}
+		if (element.tag === "meta" && /^refresh$/i.test(element.attrs["http-equiv"] ?? "")) {
+			findings.push("<meta http-equiv=\"refresh\"> is not allowed");
 		}
 		if (element.tag === "form" && "action" in element.attrs) {
 			findings.push("<form action> is not allowed");
 		}
-		for (const attribute of ["src", "href"] as const) {
+		// Every attribute a browser will fetch or navigate to, not just src/href.
+		for (const attribute of ["src", "href", "poster", "data", "formaction", "ping", "xlink:href", "action", "cite", "longdesc", "manifest"] as const) {
 			const value = element.attrs[attribute];
 			if (value === undefined) continue;
 			const reason = unsafeReference(value);
 			if (reason) findings.push(`<${element.tag}> ${attribute} has ${reason}: ${value}`);
+		}
+		for (const attribute of ["srcset", "imagesrcset"] as const) {
+			const value = element.attrs[attribute];
+			if (value === undefined) continue;
+			for (const candidate of value.split(",")) {
+				const url = candidate.trim().split(/\s+/, 1)[0];
+				const reason = url ? unsafeReference(url) : null;
+				if (reason) findings.push(`<${element.tag}> ${attribute} has ${reason}: ${url}`);
+			}
 		}
 		for (const css of [element.attrs.style, element.tag === "style" ? textContent(element) : undefined]) {
 			if (!css) continue;
@@ -487,6 +500,10 @@ export function checkHtmlArtifact(
 				const value = match[2];
 				const reason = unsafeReference(value);
 				if (reason) findings.push(`CSS url() has ${reason}: ${value}`);
+			}
+			for (const match of css.matchAll(/@import\s+(['"])(.*?)\1/gi)) {
+				const reason = unsafeReference(match[2]);
+				if (reason) findings.push(`CSS @import has ${reason}: ${match[2]}`);
 			}
 		}
 	}

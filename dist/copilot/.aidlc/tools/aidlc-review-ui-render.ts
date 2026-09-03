@@ -753,3 +753,36 @@ export function selfContainedMarkdownExport(markdown: string, mermaidScript = ""
     "</body></html>",
   ].join("");
 }
+
+/**
+ * Full HTML document for rendering a Markdown artifact INSIDE the sandboxed,
+ * network-closed iframe — the same trust boundary HTML artifacts get. The
+ * privileged app never receives rendered Markdown as HTML, so `sanitizeHtml`
+ * is defence in depth rather than the security boundary. Mermaid loads from
+ * the daemon's own asset route (allowed by the raw CSP's `'self'`).
+ */
+export function sandboxedMarkdownDocument(markdown: string, title: string): string {
+  const body = renderMarkdown(markdown);
+  const mermaid = body.includes('<pre class="mermaid">')
+    ? '<script src="/assets/vendor/mermaid.min.js"></script><script>mermaid.initialize({startOnLoad:false,securityLevel:"strict"});mermaid.run();</script>'
+    : "";
+  return [
+    "<!doctype html>",
+    `<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title>`,
+    `<style>${EXPORT_CSS}body{padding:1.25rem 1.5rem}</style></head><body><article data-aidlc="markdown">`,
+    body,
+    `</article>${mermaid}</body></html>`,
+  ].join("");
+}
+
+/**
+ * Names the review UI never serves or lists: workflow state, the audit ledger,
+ * and every dot-directory (sensor details, review-ui internals). Reviewers see
+ * stage artifacts, not the engine's bookkeeping.
+ */
+export function isReviewHiddenPath(recordRelativePath: string): boolean {
+  const segments = recordRelativePath.split("/");
+  return segments.some((part) => part.startsWith(".") || part === "audit") ||
+    segments.at(-1) === "aidlc-state.md" ||
+    segments.at(-1) === "project-description.json";
+}
