@@ -15,7 +15,10 @@ import {
   resolveArtifactInstances,
   type ArtifactRuntimeUnit,
 } from "../../core/tools/aidlc-artifact-resolution.ts";
-import { artifactFilename } from "../../core/tools/aidlc-artifact-vocabulary.ts";
+import {
+  artifactFilename,
+  MARKDOWN_ONLY,
+} from "../../core/tools/aidlc-artifact-vocabulary.ts";
 import { loadGraph } from "../../core/tools/aidlc-graph.ts";
 import { producesArtifactFile } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -404,6 +407,7 @@ describe("v2 stage-graph compatibility", () => {
         stage,
         "aidlc/construction/build-and-test/test-results.md",
         new Set(),
+        MARKDOWN_ONLY,
       ),
     ).toBe(true);
     expect(
@@ -411,6 +415,7 @@ describe("v2 stage-graph compatibility", () => {
         stage,
         "aidlc/construction/build-and-test/build-test-results.md",
         new Set(),
+        MARKDOWN_ONLY,
       ),
     ).toBe(false);
   });

@@ -18,6 +18,7 @@ import {
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  artifactFormatsForProject,
   findStageBySlug,
   readAllAuditShards,
   reviewArtifactEntries,
@@ -218,7 +219,12 @@ function seedReviewedPerUnitStage(
   findingId: string,
 ): string {
   const stage = findStageBySlug(stageSlug)!;
-  const entries = reviewArtifactEntries(proj, stage, unit) ?? [];
+  const entries = reviewArtifactEntries(
+    proj,
+    stage,
+    artifactFormatsForProject(proj),
+    unit,
+  ) ?? [];
   const primary = entries.find((entry) =>
     entry.path !== null && entry.required && entry.path.endsWith(".md")
   );
