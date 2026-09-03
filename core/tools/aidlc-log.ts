@@ -991,7 +991,7 @@ function renderBrowserAnswer(
     if (!section.options.has("X")) {
       error(`answers-apply refused: ${answer.id} does not offer option X.`);
     }
-    return `X — ${other}`;
+    return `X — ${other.replace(/\s+/g, " ")}`;
   }
   const labels = answer.labels ?? [];
   if (labels.length === 0) {
@@ -1019,7 +1019,7 @@ function applyBrowserAnswers(
   for (const [id, answer] of answers) {
     const section = sections.get(id);
     if (!section) error(`answers-apply refused: questions file has no section "${id}".`);
-    const note = answer.note?.trim();
+    const note = answer.note?.replace(/\s+/g, " ").trim();
     answerAt.set(section.answerLine, {
       value: renderBrowserAnswer(answer, section),
       ...(note ? { note } : {}),
@@ -1027,6 +1027,9 @@ function applyBrowserAnswers(
     if (note) {
       for (const line of section.noteLines) replacedNotes.add(line);
     }
+  }
+  if (answers.size > 0 && answerAt.size === 0) {
+    error("answers-apply refused: no submitted answers matched the questions file.");
   }
   const output: string[] = [];
   for (let line = 0; line < lines.length; line++) {
