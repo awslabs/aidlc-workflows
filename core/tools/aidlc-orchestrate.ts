@@ -234,6 +234,7 @@ import {
   resolveHarnessRoot,
 } from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries, appendAuditEntry } from "./aidlc-audit.ts";
+import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import {
   artifactFormat,
   type ArtifactFormats,

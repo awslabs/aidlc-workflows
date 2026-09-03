@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  _resetStageGraphForTests,
   artifactFilename,
-  readStateFile,
+  artifactFormatsForProject,
 } from "../../core/tools/aidlc-lib.ts";
-import { setHtmlArtifactNames } from "../../core/tools/aidlc-artifact-vocabulary.ts";
 import { resolveArtifactInstances } from "../../core/tools/aidlc-artifact-resolution.ts";
 import {
   cleanupTestProject,
@@ -28,13 +28,14 @@ for (const stage of shippedGraph) {
 }
 writeFileSync(graphPath, `${JSON.stringify(shippedGraph, null, 2)}\n`);
 process.env.AIDLC_STAGE_GRAPH = graphPath;
+_resetStageGraphForTests();
 const projects: string[] = [];
 afterAll(() => {
-  setHtmlArtifactNames(new Set());
   for (const project of projects) cleanupTestProject(project);
   rmSync(graphDir, { recursive: true, force: true });
   if (priorGraph === undefined) delete process.env.AIDLC_STAGE_GRAPH;
   else process.env.AIDLC_STAGE_GRAPH = priorGraph;
+  _resetStageGraphForTests();
 });
 
 function projectWithSetting(setting: "on" | "off"): string {
@@ -58,18 +59,18 @@ const owner = {
 describe("state-locked artifact format resolution", () => {
   test("on resolves capable document to HTML and machine question form to Markdown", () => {
     const project = projectWithSetting("on");
-    readStateFile(project);
-    expect(artifactFilename("intent-statement")).toBe("intent-statement.html");
-    expect(artifactFilename("intent-capture-questions")).toBe("intent-capture-questions.md");
+    const formats = artifactFormatsForProject(project);
+    expect(artifactFilename("intent-statement", formats)).toBe("intent-statement.html");
+    expect(artifactFilename("intent-capture-questions", formats)).toBe("intent-capture-questions.md");
     expect(resolveArtifactInstances(project, "intent-statement", owner)[0].relativePath)
       .toEndWith("/ideation/intent-capture/intent-statement.html");
   });
 
   test("off resolves both artifacts to Markdown", () => {
     const project = projectWithSetting("off");
-    readStateFile(project);
-    expect(artifactFilename("intent-statement")).toBe("intent-statement.md");
-    expect(artifactFilename("intent-capture-questions")).toBe("intent-capture-questions.md");
+    const formats = artifactFormatsForProject(project);
+    expect(artifactFilename("intent-statement", formats)).toBe("intent-statement.md");
+    expect(artifactFilename("intent-capture-questions", formats)).toBe("intent-capture-questions.md");
   });
 
   test("stale Markdown beside expected HTML is never selected", () => {
@@ -77,27 +78,21 @@ describe("state-locked artifact format resolution", () => {
     const dir = join(seededRecordDir(project), "ideation", "intent-capture");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "intent-statement.md"), "stale\n");
-    readStateFile(project);
     const instance = resolveArtifactInstances(project, "intent-statement", owner)[0];
     expect(instance.absolutePath).toBe(join(dir, "intent-statement.html"));
   });
 
-  test("two intents in one process resolve independently when each call carries its own state", () => {
+  test("two projects in one process resolve independently when each call carries its own state", () => {
     const on = projectWithSetting("on");
     const off = projectWithSetting("off");
     const onState = readFileSync(seededStateFile(on), "utf-8");
     const offState = readFileSync(seededStateFile(off), "utf-8");
-    // Prime with the `on` intent, then resolve the `off` intent with ITS state:
-    // the per-call priming must win over whatever was primed last.
-    readStateFile(on);
     expect(resolveArtifactInstances(off, "intent-statement", owner, { stateContent: offState })[0].relativePath)
       .toEndWith("/ideation/intent-capture/intent-statement.md");
     expect(resolveArtifactInstances(on, "intent-statement", owner, { stateContent: onState })[0].relativePath)
       .toEndWith("/ideation/intent-capture/intent-statement.html");
-    // And the reverse order.
-    readStateFile(off);
-    expect(resolveArtifactInstances(on, "intent-statement", owner, { stateContent: onState })[0].relativePath)
-      .toEndWith("/ideation/intent-capture/intent-statement.html");
+    expect(resolveArtifactInstances(off, "intent-statement", owner, { stateContent: offState })[0].relativePath)
+      .toEndWith("/ideation/intent-capture/intent-statement.md");
   });
 
   test("the gate refuses an HTML artifact that exists only as a Markdown twin", () => {

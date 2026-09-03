@@ -376,9 +376,15 @@ describe("v2 stage-graph compatibility", () => {
   });
 
   test("maps collision-safe canonical names to their physical filename", () => {
-    expect(artifactFilename("build-test-results")).toBe("test-results.md");
-    expect(artifactFilename("load-test-results")).toBe("test-results.md");
-    expect(artifactFilename("requirements")).toBe("requirements.md");
+    expect(artifactFilename("build-test-results", MARKDOWN_ONLY)).toBe(
+      "test-results.md",
+    );
+    expect(artifactFilename("load-test-results", MARKDOWN_ONLY)).toBe(
+      "test-results.md",
+    );
+    expect(artifactFilename("requirements", MARKDOWN_ONLY)).toBe(
+      "requirements.md",
+    );
   });
 
   test("resolves build-test-results under test-results.md", () => {
