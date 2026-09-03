@@ -25,12 +25,15 @@
 // bash cannot import TypeScript — it was never a process-boundary contract.
 //
 // GREP FIDELITY. The .sh used `grep -q "$pattern"` (BRE) and `grep -qi`
-// (case-insensitive BRE). We mirror each exactly:
-//   - assert_grep "$f" "intent-statement.md"  -> fileMatches(f, /intent-statement.md/)
-//       NB: the unescaped `.` in the .sh pattern is a BRE any-char; the literal
-//       dot in the filename satisfies it, so a JS regex with an unescaped `.`
-//       reproduces the SAME match set. Test 3 used "requirements\.md" (escaped);
-//       we escape there too. Same observable either way (the filename is present).
+// (case-insensitive BRE). We mirror each exactly, with one deliberate
+// departure:
+//   - assert_grep "$f" "intent-statement.md"  -> fileMatches(f, /`intent-statement`/)
+//       DEPARTURE: HTML-capable artifacts (stage-graph `html_capable`) may
+//       resolve to `.html`, so their stage prose names the artifact
+//       format-neutrally and t358 forbids the `.md` literal. Tests 1-8 therefore
+//       assert the backticked artifact name instead of the filename; the
+//       observable ("the stage names the output it declares") is unchanged.
+//       Machine artifacts (Test 6, unit-of-work.md) keep the filename grep.
 //   - grep -qi "aidlc-state\|Update State"     -> /aidlc-state|update state/i
 //   - grep -qi "[Ss]kip"                        -> /skip/i (the [Ss] is redundant
 //       under -i; /skip/i is the identical match set).
@@ -40,8 +43,9 @@
 //
 // PARITY NOTES — every .sh `ok` line (plan 41) maps to one expect()-bearing
 // test() below; several are STRONGER than the original bare presence grep:
-//   - .sh Tests 1-10  (key output filenames in steps)        -> "key output
-//       filenames" describe block, 10 cases — same grep observable.
+//   - .sh Tests 1-10  (key output filenames in steps)        -> "key declared
+//       outputs" block, 10 cases — artifact-name observable for HTML-capable
+//       outputs (see GREP FIDELITY), filename grep for machine outputs.
 //   - .sh Tests 11-17 (QUESTION_STAGES question-format loop)  -> "question
 //       format" block, 7 cases. STRONGER: each case ALSO asserts the stage HAS
 //       a question output (has_question_output === true) before checking the
