@@ -95,6 +95,7 @@ import {
 } from "../core/tools/aidlc-command.ts";
 import { ROUTES } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
+import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { sha256Bytes } from "../core/tools/aidlc-distribution.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 
@@ -132,6 +133,29 @@ if (TIER_CAP) {
       "(the env cap is a one-shot write knob; persistent caps live in core/memory)",
   );
 }
+
+// The version stamped into every projected aidlc-version.ts copy and projection
+// stamp. Unset means the source version. A release build sets AIDLC_BUILD_VERSION
+// to a preview id derived from the source version; the source tree is never
+// edited. Honoured in --check mode too, so the two-build determinism guard
+// measures the same stamped projection the release will ship.
+const BUILD_VERSION = releaseBuildVersion();
+if (BUILD_VERSION !== AIDLC_VERSION) {
+  console.error(`[version] stamping projections with ${BUILD_VERSION_ENV}=${BUILD_VERSION}`);
+}
+const VERSION_ASSIGNMENT = /^export const AIDLC_VERSION = "[^"]+";$/m;
+
+function stampVersionModule(content: string): string {
+  if (BUILD_VERSION === AIDLC_VERSION) return content;
+  const matches = content.match(new RegExp(VERSION_ASSIGNMENT.source, "gm")) ?? [];
+  if (matches.length !== 1) {
+    throw new Error(
+      `aidlc-version.ts must declare exactly one AIDLC_VERSION assignment, found ${matches.length}`,
+    );
+  }
+  return content.replace(VERSION_ASSIGNMENT, `export const AIDLC_VERSION = "${BUILD_VERSION}";`);
+}
+
 // The shared onboarding-doc skeleton, rendered per harness (scripts/onboarding.ts).
 const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
@@ -355,8 +379,11 @@ function transform(
     return Buffer.from(s, "utf-8");
   }
   if (srcPath.endsWith(".ts")) {
+    const source = basename(srcPath) === "aidlc-version.ts"
+      ? stampVersionModule(content.toString("utf-8"))
+      : content.toString("utf-8");
     return Buffer.from(
-      substituteInvocationTokens(content.toString("utf-8"), harnessDir, invoke),
+      substituteInvocationTokens(source, harnessDir, invoke),
       "utf-8",
     );
   }
@@ -617,7 +644,7 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
   };
   const stamp = {
     schemaVersion: 1,
-    frameworkVersion: AIDLC_VERSION,
+    frameworkVersion: BUILD_VERSION,
     distribution: m.name,
     harnessDir: m.harnessDir,
   };

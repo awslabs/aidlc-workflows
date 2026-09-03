@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import {
   compareVersions,
+  parseVersion,
   PREVIEW_CHANNEL,
   PREVIEW_VERSION,
   requireVersion,
@@ -232,7 +233,7 @@ export function readReleaseManifest(directory: string): ReleaseManifest {
     throw new Error(`invalid version.json: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (manifest.schemaVersion !== 1) throw new Error(`unsupported release schema ${manifest.schemaVersion}`);
-  requireVersion(manifest.version);
+  const releaseVersion = parseVersion(manifest.version);
   const hasSourceRef = manifest.sourceRef !== undefined;
   const hasSourceDigest = manifest.sourceDigest !== undefined;
   if (hasSourceRef !== hasSourceDigest) {
@@ -241,7 +242,11 @@ export function readReleaseManifest(directory: string): ReleaseManifest {
   if (
     hasSourceRef &&
     (
-      manifest.sourceRef !== `refs/tags/v${manifest.version}` ||
+      manifest.sourceRef !== (
+        releaseVersion.channel === PREVIEW_CHANNEL
+          ? "refs/heads/main"
+          : `refs/tags/v${manifest.version}`
+      ) ||
       !/^[a-f0-9]{40}$/.test(manifest.sourceDigest ?? "")
     )
   ) {
