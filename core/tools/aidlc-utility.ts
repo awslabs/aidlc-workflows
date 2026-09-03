@@ -52,6 +52,7 @@ import {
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
+  htmlArtifactsRequested,
   liveReviewUiOrigin,
   mintReviewUiOpenUrl,
   readServerInfo,
@@ -217,8 +218,8 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
   standard: "Standard",
   comprehensive: "Comprehensive",
 };
-
-const CONFIG_KEYS = ["depth", "test-strategy", "review"] as const;
+const CONFIG_KEYS = ["depth", "test-strategy", "review", "html-artifacts"] as const;
+type ConfigField = "Depth" | "Test Strategy" | "Review Override" | "HTML Artifacts";
 type ReviewOverride = "adversarial" | "advisory" | "none";
 
 function parseReviewOverride(raw: string | undefined): ReviewOverride | undefined {
@@ -387,8 +388,8 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy, review)
-  config set <key> <value>  Change active workflow config (depth, test-strategy, review)
+  config get <key>  Show active workflow config (depth, test-strategy, review, html-artifacts)
+  config set <key> <value>  Change active workflow config (depth, test-strategy, review, html-artifacts)
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
@@ -409,6 +410,7 @@ Utilities:
   --scope <scope>   Set or change scope (standalone or with --stage/--phase)
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
+  --html-artifacts <on|off>  Select HTML or Markdown document artifacts before authoring starts
   --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
   --version         Show the framework version
   --help            Show this help message
@@ -421,7 +423,7 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  /aidlc config list                         Show depth, test strategy, and review override
+  /aidlc config list                         Show depth, test strategy, review, and HTML artifacts
   /aidlc plugin list                         Show installed plugin selection
   /aidlc plugin validate                     Validate the plugin in the current directory
   /aidlc plugin build claude                 Build its Claude projection
@@ -431,6 +433,7 @@ Examples:
   /aidlc --scope bugfix --depth comprehensive  Bugfix with comprehensive depth
   /aidlc --depth minimal                       Change depth of active workflow
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
+  /aidlc --html-artifacts on                 Author eligible Ideation/Inception documents as HTML
   /aidlc --review advisory                     Single-pass reviews, findings at the gate`;
 
 /** Exported for t67 unit tests. */
@@ -1521,6 +1524,7 @@ ${reviewUiLine}`
   const status = getField(content, "Status") || "Unknown";
   const activeAgent = getField(content, "Active Agent") || "None";
   const lastCompleted = getField(content, "Last Completed Stage") || "None";
+  const htmlArtifacts = getField(content, "HTML Artifacts") === "on" ? "on" : "off";
   const nextStage = getField(content, "Next Stage") || "None";
 
   // Find current stage number
@@ -1679,6 +1683,7 @@ Scope:          ${scope}
 Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 Status:         ${statusLine}
+HTML Artifacts: ${htmlArtifacts}
 Active Agent:   ${activeAgent}
 Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` — ${skipped} skipped` : ""}
 
@@ -5979,6 +5984,7 @@ function handleIntentCreateStateBuild(
 - **Stages to Skip**: ${skipStages.length > 0 ? skipStages.join(", ") : "none"}
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
+- **HTML Artifacts**: ${htmlArtifactsRequested() ? "on" : "off"}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
 
 ## Workspace State
@@ -7606,17 +7612,21 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 // config get/list/set - read or update active workflow config
 // ---------------------------------------------------------------------------
 
-function configFieldForKey(key: string): "Depth" | "Test Strategy" | "Review Override" | null {
+function configFieldForKey(key: string): ConfigField | null {
   if (key === "depth") return "Depth";
   if (key === "test-strategy") return "Test Strategy";
   if (key === "review") return "Review Override";
+  if (key === "html-artifacts") return "HTML Artifacts";
   return null;
 }
 
-function readConfigField(projectDir: string, flags: Record<string, string>, field: "Depth" | "Test Strategy" | "Review Override"): string {
+function readConfigField(projectDir: string, flags: Record<string, string>, field: ConfigField): string {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
   const content = readStateFile(projectDir, flags.intent, flags.space);
+  if (field === "HTML Artifacts") {
+    return getField(content, field) === "on" ? "on" : "off";
+  }
   return getField(content, field) || "";
 }
 
@@ -7631,20 +7641,22 @@ function handleConfigList(projectDir: string, flags: Record<string, string>): vo
   const depth = readConfigField(projectDir, flags, "Depth");
   const testStrategy = readConfigField(projectDir, flags, "Test Strategy");
   const review = readConfigField(projectDir, flags, "Review Override");
+  const htmlArtifacts = readConfigField(projectDir, flags, "HTML Artifacts");
   if (flags.json === "true") {
-    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy, review })}\n`);
+    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy, review, "html-artifacts": htmlArtifacts })}\n`);
     return;
   }
-  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\nreview: ${review}\n`);
+  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\nreview: ${review}\nhtml-artifacts: ${htmlArtifacts}\n`);
 }
 
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
   const rawDepth = flags.depth;
   const rawStrategy = flags["test-strategy"];
   const rawReview = flags.review;
+  const rawHtmlArtifacts = flags["html-artifacts"];
 
-  if (!rawDepth && !rawStrategy && !rawReview) {
-    die("config-change requires --depth, --test-strategy, and/or --review");
+  if (!rawDepth && !rawStrategy && !rawReview && !rawHtmlArtifacts) {
+    die("config-change requires --depth, --test-strategy, --review, and/or --html-artifacts");
   }
 
   let newDepth: string | undefined;
@@ -7663,12 +7675,22 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   // review class, low-wins against stage declaration and scope review_cap).
   const newReview = parseReviewOverride(rawReview);
 
+  let newHtmlArtifacts: "on" | "off" | undefined;
+  if (rawHtmlArtifacts) {
+    const normalized = rawHtmlArtifacts.toLowerCase();
+    if (normalized !== "on" && normalized !== "off") {
+      die(`Unknown HTML artifacts setting: "${rawHtmlArtifacts}". Valid: on, off.`);
+    }
+    newHtmlArtifacts = normalized;
+  }
+
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
 
   let content = readStateFile(projectDir, flags.intent, flags.space);
   const oldDepth = getField(content, "Depth");
   const oldStrategy = getField(content, "Test Strategy");
+  const oldHtmlArtifacts = getField(content, "HTML Artifacts") === "on" ? "on" : "off";
 
   // Inline existence checks (instead of caching to a boolean) so TS narrows
   // newDepth / newStrategy at each use site — avoids non-null assertions.
@@ -7678,6 +7700,51 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   if (newStrategy !== undefined && newStrategy !== oldStrategy) {
     content = setField(content, "Test Strategy", newStrategy);
   }
+  const htmlArtifactsChanging = newHtmlArtifacts !== undefined &&
+    newHtmlArtifacts !== oldHtmlArtifacts;
+  if (htmlArtifactsChanging) {
+    const gateStages = parseCheckboxes(content)
+      .filter((checkbox) => checkbox.state === "awaiting-approval" || checkbox.state === "revising")
+      .map((checkbox) => checkbox.slug);
+    const record = dirname(sp);
+    const existingFiles = new Set<string>();
+    for (const stage of loadStageGraph()) {
+      for (const name of stage.html_capable ?? []) {
+        for (const ext of ["md", "html"] as const) {
+          const direct = join(record, stage.phase, stage.slug, `${name}.${ext}`);
+          if (existsSync(direct)) {
+            existingFiles.add(relative(projectDir, direct).replaceAll("\\", "/"));
+          }
+          const phaseDir = join(record, stage.phase);
+          if (!existsSync(phaseDir)) continue;
+          for (const unit of readdirSync(phaseDir)) {
+            const perUnit = join(phaseDir, unit, stage.slug, `${name}.${ext}`);
+            if (existsSync(perUnit)) {
+              existingFiles.add(relative(projectDir, perUnit).replaceAll("\\", "/"));
+            }
+          }
+        }
+      }
+    }
+    const blockers = [
+      ...[...existingFiles].sort(),
+      ...gateStages.sort().map((slug) => `stage ${slug} is awaiting review`),
+    ];
+    if (blockers.length > 0) {
+      die(
+        `Cannot change HTML Artifacts after authoring or review has started. Blocking files/stages: ${blockers.join(", ")}.`,
+      );
+    }
+    // Pre-field records read as off. Insert immediately after Test Strategy so
+    // changing one upgrades only this locked setting, not the state schema.
+    if (getField(content, "HTML Artifacts") === null) {
+      content = content.replace(
+        /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
+        "$1\n- **HTML Artifacts**: off",
+      );
+    }
+    content = setField(content, "HTML Artifacts", newHtmlArtifacts ?? oldHtmlArtifacts);
+  }
   const reviewUpdate = applyReviewOverride(content, newReview);
   content = reviewUpdate.content;
   const { oldReview, storedReview } = reviewUpdate;
@@ -7685,7 +7752,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   const strategyChanging =
     newStrategy !== undefined && newStrategy !== oldStrategy;
   const reviewChanging = reviewUpdate.changed;
-  if (depthChanging || strategyChanging || reviewChanging) {
+  if (depthChanging || strategyChanging || reviewChanging || htmlArtifactsChanging) {
     content = setField(content, "Last Updated", isoTimestamp());
     writeStateFile(projectDir, content, flags.intent, flags.space);
   }
@@ -7729,6 +7796,13 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
       reviewChanging
         ? `Review override changed: ${oldReview || "none"} → ${display}\n`
         : `Review override is already ${display}\n`
+    );
+  }
+  if (newHtmlArtifacts !== undefined) {
+    process.stdout.write(
+      htmlArtifactsChanging
+        ? `HTML Artifacts changed: ${oldHtmlArtifacts} → ${newHtmlArtifacts}\n`
+        : `HTML Artifacts is already ${newHtmlArtifacts}\n`,
     );
   }
 }
@@ -8216,7 +8290,7 @@ export async function main(argv: string[]): Promise<void> {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--repos <name,...>] " +
+        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--html-artifacts <on|off>] [--repos <name,...>] " +
         "[--project-dir <path>]\n",
     );
     return;

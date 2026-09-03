@@ -2076,14 +2076,10 @@ function buildGraphStage(
     ? new Set(produces)
     : new Set(parsed.html_exclude ?? []);
   const html_capable: string[] = [];
-  if (HTML_ELIGIBLE_PHASES.has(parsed.phase ?? phase)) {
+  if (HTML_ELIGIBLE_PHASES.has(parsed.phase ?? phase) && parsed.plugin === undefined) {
     for (const artifact of produces) {
       const kind = artifactKind(artifact);
       if (kind === null) {
-        // Plugin manifests do not yet carry artifact_kinds through the compose
-        // seam. Fail-safe plugin outputs remain Markdown; core omissions fail
-        // loudly so every shipped artifact is deliberately classified.
-        if (parsed.plugin !== undefined) continue;
         throw new Error(
           `unclassified artifact "${artifact}" produced by ${slug}: add it to ARTIFACT_KIND in core/tools/aidlc-artifact-vocabulary.ts`,
         );
@@ -2093,6 +2089,8 @@ function buildGraphStage(
       }
     }
   }
+  // Plugin manifests do not yet carry artifact_kinds through the compose seam;
+  // their contributed outputs therefore fail safe to machine/Markdown.
   // Dependency edges are set-valued. Normalize copy-paste duplicates here so
   // every graph consumer, including topoSort's indegree accounting, observes
   // the same edge cardinality as the compile-time number seeder.
