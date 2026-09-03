@@ -105,7 +105,11 @@ beforeAll(async () => {
     state: "awaiting-approval",
     stage: "requirements-analysis",
     unit: null,
-    open: null,
+    open: {
+      url: "http://localhost:1/open/00000000000000000000000000000000",
+      nonce: "00000000000000000000000000000000",
+      expires_at: "2026-09-03T10:30:00.000Z",
+    },
     stage_dir: stageRelative,
     revision: 0,
     updated_at: "2026-09-03T10:00:00.000Z",
@@ -194,7 +198,10 @@ describe("t332 review UI daemon HTTP API", () => {
       intent: "review-fixture-12345678",
       stage_status: "[?]",
       revision_count: 0,
-      current: { stage: "requirements-analysis" },
+      current: {
+        stage: "requirements-analysis",
+        open: { nonce: "00000000000000000000000000000000" },
+      },
       manifest: { stage: "requirements-analysis" },
     });
     expect(info.url).toBe(`http://localhost:${info.port}/`);
