@@ -1148,6 +1148,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "e2e/t134-swarm-referee.test.ts",
     "integration/t342-html-artifacts-state-config.test.ts",
     "integration/t347-directive-html-format.test.ts",
+    "integration/t343-html-artifact-resolution.test.ts",
     "integration/t351-review-ui-questions-routes.test.ts",
     "integration/t352-answers-apply.test.ts",
     "integration/t356-directive-guide-module.test.ts",

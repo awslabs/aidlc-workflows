@@ -450,8 +450,20 @@ There is no existence fallback. `readStateFile()` is the single priming seam:
 after reading `aidlc-state.md`, it primes the process-wide format vocabulary
 from the union of compiled `html_capable` entries when the field is `on`, or
 clears the set otherwise. `primeArtifactFormats(stateContent)` is exported for
-callers that already hold an atomic state snapshot. A later process therefore
-follows intent state, not its current environment.
+callers that already hold an atomic state snapshot, and
+`resolveArtifactInstances(..., { stateContent })` primes per call so a process
+that touches several intents resolves each with its own setting. A later
+process therefore follows intent state, not its current environment.
+
+The primed set is process-wide by design: every engine CLI is a one-shot
+invocation for one intent, and every resolver primes and resolves inside one
+synchronous call (there is no `await` between reading state and computing a
+path), so the set cannot change under a resolver. The invariant callers must
+keep is exactly that — read the intent's state, then resolve, in the same
+synchronous step. If the stage graph is unreadable, an `on` intent resolves to
+Markdown with a one-time stderr warning rather than failing the state read.
+The gate guard enforces the outcome regardless of prose: an HTML-capable
+artifact that exists only as its `.md` twin refuses `gate-start`/`approve`.
 
 Intent creation seeds `- **HTML Artifacts**: on` only when
 `AIDLC_HTML_ARTIFACTS=1`; otherwise it writes `off`. An absent field on an old
