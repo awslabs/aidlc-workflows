@@ -6,7 +6,7 @@
 // validator: no I/O, no YAML parsing, no mutation — callers pass an
 // already-parsed object.
 
-import { artifactFilename, isPlainObject, UNIT_KINDS } from "./aidlc-lib.ts";
+import { hasArtifactFilenameException, isPlainObject, UNIT_KINDS } from "./aidlc-lib.ts";
 
 // --- Public types ---
 
@@ -60,6 +60,9 @@ export interface StageFrontmatter {
   // set - exempt from nothing. Absent map = full matrix. Each key must name a
   // produces entry; each value must be a non-empty list of valid kinds.
   produces_kinds?: Record<string, string[]>;
+  // html_exclude — artifacts that stay Markdown despite otherwise being HTML
+  // capable. A list names produced artifacts; "*" excludes the whole stage.
+  html_exclude?: string[] | "*";
   consumes: Array<{
     artifact: string;
     required: boolean;
@@ -77,8 +80,8 @@ export interface StageFrontmatter {
   // reviewer — agent slug to invoke as a quality gate after the stage body
   // (stage-protocol-reviewer.md §12a). Optional; absent when the stage has no review step.
   reviewer?: string;
-  // review_artifact — required with reviewer. Names the required Markdown
-  // produces[] artifact that owns the appended `## Review` section.
+  // review_artifact — required with reviewer. Names the required document or
+  // visual produces[] artifact that owns the appended review section.
   review_artifact?: string;
   // reviewer_max_iterations — review-cycle cap before escalating to the human.
   // Defaults to 2 when reviewer is present.
@@ -176,7 +179,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "review_artifact", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "required_sections"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "html_exclude", "sensors", "scopes", "reviewer", "review_artifact", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "required_sections"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -450,6 +453,32 @@ export function validateStageFrontmatter(
     }
   }
 
+  // html_exclude is either the literal "*" or a list of artifact names this
+  // stage produces. Reject orphan entries so a typo cannot silently opt a
+  // capable artifact back into HTML.
+  if ("html_exclude" in o && o.html_exclude !== undefined) {
+    const excluded = o.html_exclude;
+    if (excluded !== "*" && !Array.isArray(excluded)) {
+      errors.push(`html_exclude must be "*" or array, got ${describe(excluded)}`);
+    } else if (Array.isArray(excluded)) {
+      const declared = new Set<string>();
+      for (const arr of [o.produces, o.optional_produces]) {
+        if (Array.isArray(arr)) {
+          for (const name of arr) if (typeof name === "string") declared.add(name);
+        }
+      }
+      excluded.forEach((name: unknown, i: number) => {
+        if (typeof name !== "string") {
+          errors.push(`html_exclude[${i}] must be string, got ${describe(name)}`);
+        } else if (!ARTIFACT_SLUG_RE.test(name)) {
+          errors.push(`html_exclude[${i}] must be kebab-case, got "${name}"`);
+        } else if (!declared.has(name)) {
+          errors.push(`html_exclude entry "${name}" is not in produces`);
+        }
+      });
+    }
+  }
+
   // produces_kinds - optional per-kind applicability map. When present it must
   // be a plain object whose every key names a produces entry (union with
   // optional_produces read defensively so this validates both standalone and
@@ -495,9 +524,9 @@ export function validateStageFrontmatter(
         `review_artifact "${o.review_artifact}" must name a required produces entry`,
       );
     }
-    if (!artifactFilename(o.review_artifact).endsWith(".md")) {
+    if (hasArtifactFilenameException(o.review_artifact)) {
       errors.push(
-        `review_artifact "${o.review_artifact}" must resolve to a Markdown artifact`,
+        `review_artifact "${o.review_artifact}" must not use a filename exception`,
       );
     }
 

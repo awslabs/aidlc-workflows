@@ -25,7 +25,8 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 ### Flow
 
 1. **Invoke reviewer sub-agent.** Before every dispatch, not only the first,
-   and before changing an existing `## Review` section, record the request:
+   and before changing an existing Markdown or HTML Review appendix, record
+   the request:
    `bun .kiro/tools/aidlc-log.ts review --stage "<directive.stage>" --reviewer "<directive.reviewer>" --iteration <n>`;
    add `--unit "<directive.unit>"` on a per-unit stage and `--single` on an
    isolated stage run. This request-first ordering is mandatory for a
@@ -40,21 +41,22 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    `--retry-pending` to reopen the scoped suspension if the stale condition
    still exists. If the source is restored to its reviewed state while recovery
    is pending, the suspension closes immediately: do not try to replace the
-   `## Review` section after that restore. Either record the completed verdict
+   Review appendix after that restore. Either record the completed verdict
    against the restored state, or obtain the human's Request Changes decision
    before editing again.
 
-   `directive.review_artifact` names the one required Markdown output that owns
-   the review appendix; no produces-list position, plugin-added output, or
-   directory enumeration may redefine it. On a per-unit review it resolves
-   inside that Unit. The request binds every declared artifact and the exact
-   bytes before any existing terminal appendix. When such an appendix exists,
-   the successful request's JSON returns `reviewChallenge`; preserve that exact
-   value and pass it to the reviewer dispatch. A retry preserves the original
-   challenge, while a legacy unmatched request receives one during its bounded
-   `--retry-pending` modernization. After the request succeeds, if that artifact
-   already carries a
-   `## Review` section (from a prior iteration, or predating a Part 0 revision),
+   `directive.review_artifact` names the one required Markdown or HTML output
+   that owns the review appendix; no produces-list position, plugin-added
+   output, or directory enumeration may redefine it. Resolve the form from the
+   artifact's extension: `.md` uses the Markdown appendix and `.html` uses the
+   HTML appendix. On a per-unit review it resolves inside that Unit. The request
+   binds every declared artifact and the exact bytes before any existing
+   terminal appendix. When such an appendix exists, the successful request's
+   JSON returns `reviewChallenge`; preserve that exact value and pass it to the
+   reviewer dispatch. A retry preserves the original challenge, while a legacy
+   unmatched request receives one during its bounded `--retry-pending`
+   modernization. After the request succeeds, if that artifact already carries
+   a Review appendix (from a prior iteration, or predating a Part 0 revision),
    handle it in this order:
    1. On a re-dispatch (adversarial iteration greater than 1, a Part 0 revision
       re-review, or stale-receipt recovery), run
@@ -64,9 +66,11 @@ Everything else in this section is silent. Nothing is said about invoking, handi
       The tool overlays durable human dispositions from the audit ledger, so
       `Accepted risk` and `Rejected: <reason>` survive without editing the
       receipt-frozen artifact.
-   2. DELETE the existing `## Review` section and every separator byte
-      introduced with it, restoring the request-bound pre-append bytes. This
-      makes step 3's missing-section check mean the same thing on every path: a
+   2. DELETE the existing Markdown `## Review` section or HTML
+      `<section data-aidlc="review">` and every separator byte introduced with
+      it, restoring the request-bound pre-append bytes (including the HTML
+      document's closing `</body></html>` tags).
+      This makes step 3's missing-section check mean the same thing on every path: a
       fresh review that is cut off before writing leaves no old verdict to
       misread as covering new work. Receipt history remains in the audit ledger;
       the rendered context carries finding identity and disposition into the
@@ -124,9 +128,9 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    canonical section below after that byte boundary.
    If that dispatch fails, times out, or ends without a recorded verdict - the
    session died, or the reviewer returned an incomplete attempt (step 3: no
-   current `## Review` section, or no single canonical verdict) - return to the
-   start of this step, delete any partial `## Review` appendix, then rerun the
-   same request command with `--retry-pending` immediately before dispatching
+   current canonical Markdown or HTML Review section, or no single canonical
+   verdict) - return to the start of this step, delete any partial Review
+   appendix, then rerun the same request command with `--retry-pending`
    again. The logger accepts it exactly once, only while that exact request is unmatched and
    the declared artifacts and workspace source exactly match the original
    request; it reuses those original fingerprints instead of rebaselining
@@ -147,12 +151,53 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    - Reads the artifact(s) to evaluate what WAS produced
    - Verifies cross-unit contract claims against the passed shared inception contracts, not by sweeping or searching sibling units' design directories (no cross-unit grep or glob patterns); opens another unit's file only when the current unit's design explicitly names it as an integration point, and only that file
    - Runs any validation tools listed (via shell) and includes results in findings
-   - Appends exactly ONE terminal `## Review` section to `directive.review_artifact`, beginning at the request's recorded byte boundary. Before the heading it may add blank separator lines only. The section uses the knowledge template and contains exactly one total rendered `**Verdict:** READY|NOT-READY`, one total rendered `**Reviewer:** <directive.reviewer>`, and one total rendered `**Iteration:** <n>` line. When the request returned `reviewChallenge`, it also contains exactly one rendered `**Request Challenge:** <reviewChallenge>` line with that exact value; when none was returned, it omits the line. It may use H3+ subsections inside the review, but no later H1, H2, setext, or raw-HTML H1/H2 heading may open unowned top-level content. Literal headings and ownership-field examples inside fenced or inline code do not count. Step 3 treats anything else as an incomplete review.
+   - Appends exactly ONE of the following canonical terminal forms to
+     `directive.review_artifact`, beginning at the request's recorded byte
+     boundary. Select by extension and never append both forms. Blank separator
+     whitespace may precede the form.
+
+     Markdown (`.md`):
+
+     ```markdown
+     ## Review
+
+     **Verdict:** READY|NOT-READY
+     **Reviewer:** <directive.reviewer>
+     **Iteration:** <n>
+     **Request Challenge:** <reviewChallenge>
+
+     ### Findings
+
+     <findings or "No blocking findings.">
+     ```
+
+     HTML (`.html`), inserted immediately before the document's closing
+     `</body></html>` tags:
+
+     ```html
+     <section data-aidlc="review">
+       <h2>Review</h2>
+       <p><strong>Verdict:</strong> READY|NOT-READY</p>
+       <p><strong>Reviewer:</strong> &lt;directive.reviewer&gt;</p>
+       <p><strong>Iteration:</strong> &lt;n&gt;</p>
+       <p><strong>Request Challenge:</strong> &lt;reviewChallenge&gt;</p>
+       <h3>Findings</h3>
+       <p>&lt;findings or "No blocking findings."&gt;</p>
+     </section>
+     ```
+
+     Each form contains exactly one Verdict, Reviewer, and Iteration field.
+     Include the Request Challenge line only when the request returned
+     `reviewChallenge`, using its exact value; otherwise omit it. Markdown may
+     use H3+ subsections but no later rendered H1/H2. HTML may contain lower
+     headings/content inside its review section, but that section must be the
+     last element child of `body`, with exact first element child
+     `<h2>Review</h2>`. Step 3 treats anything else as incomplete.
    - Returns a response whose FIRST line is its identity marker verbatim
      (`**Reviewer:** <reviewer-agent-name>`), so the `SUBAGENT_COMPLETED` audit
      event records which reviewer ran. The reviewer's persona owns this contract.
 
-3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from `directive.review_artifact` and validate it. The review is complete only when every pre-dispatch artifact byte and the request-time source fingerprint still match and the entire appended suffix is exactly ONE terminal owned `## Review` section with the canonical verdict, reviewer, and iteration fields above, plus the conditional request-challenge field when issued. Validation uses Bun's Markdown parser: fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint top-level ownership, and rendered Markdown or raw-HTML H1/H2 headings are terminal-section escapes. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), semantic bytes before the heading, a later top-level heading, a section with no canonical verdict line, a missing/wrong/duplicate request challenge when one was issued, forged/missing/conflicting duplicate ownership fields, or duplicated sections/verdicts (conflicting - never guess which was meant). A malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
+3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the canonical Review section from `directive.review_artifact` and validate it. The review is complete only when every pre-dispatch artifact byte and the request-time source fingerprint still match and the entire appended suffix is exactly ONE terminal owned Markdown or HTML Review section with the canonical verdict, reviewer, and iteration fields above, plus the conditional request-challenge field when issued. Markdown validation uses Bun's Markdown parser: fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint top-level ownership, and rendered Markdown or raw-HTML H1/H2 headings are terminal-section escapes. HTML validation ignores comments and raw script/style text, requires the exact terminal review-section ownership marker, and reads only canonical `<p><strong>Field:</strong> value</p>` fields. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), semantic bytes before the form, a later top-level Markdown heading or HTML body element, a section with no canonical verdict line, a missing/wrong/duplicate request challenge when one was issued, forged/missing/conflicting duplicate ownership fields, or duplicated sections/verdicts (conflicting - never guess which was meant). A malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
 
    **On an incomplete attempt:** no verdict exists to record, so the step-1
    request is still unmatched. If the ledger does not yet mark a retry on this
@@ -253,9 +298,10 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
 The reviewer also re-runs on the Part 0 revision path: when a human rejection
 leads to a revision that changes a `produces[]` artifact, re-run this step
-before reporting `revised` - step 1's request-first delete rule removes the stale
-`## Review` verdict (it predates the revised content) so step 3 cannot mistake
-it for coverage of the revision. An `adversarial` review re-enters with
+before reporting `revised` - step 1's request-first delete rule removes the
+stale Markdown or HTML Review appendix (it predates the revised content) so
+step 3 cannot mistake it for coverage of the revision. An `adversarial` review
+re-enters with
 the same lead-alone loop and iteration budget as at first entry; an
 `advisory` review re-runs as one fresh advisory pass (its findings ride the
 re-presented gate using the required Review brief with `Why now: Revision
@@ -290,7 +336,8 @@ re-checked.`).
 
 ### What the reviewer does NOT do
 
-- Does not modify the artifact beyond appending `## Review`
+- Does not modify the artifact beyond appending the one extension-selected
+  canonical Review form
 - Does not communicate with the builder directly (all mediated by orchestrator)
 - Does not access the builder's plan.md or memory.md
 - Does not block the workflow — the human always gets final say at the gate

@@ -10,6 +10,7 @@
     "support_agents": [],
     "mode": "inline",
     "produces": [],
+    "html_capable": [],
     "consumes": [],
     "requires_stage": [],
     "sensors": [],
@@ -55,6 +56,7 @@
     "support_agents": [],
     "mode": "inline",
     "produces": [],
+    "html_capable": [],
     "consumes": [],
     "requires_stage": [
       "workspace-scaffold"
@@ -102,6 +104,7 @@
     "support_agents": [],
     "mode": "inline",
     "produces": [],
+    "html_capable": [],
     "consumes": [],
     "requires_stage": [
       "workspace-detection"
@@ -154,6 +157,10 @@
       "intent-statement",
       "stakeholder-map",
       "intent-capture-questions"
+    ],
+    "html_capable": [
+      "intent-statement",
+      "stakeholder-map"
     ],
     "consumes": [],
     "requires_stage": [],
@@ -236,6 +243,11 @@
       "build-vs-buy",
       "market-research-questions"
     ],
+    "html_capable": [
+      "competitive-analysis",
+      "market-trends",
+      "build-vs-buy"
+    ],
     "consumes": [
       {
         "artifact": "intent-statement",
@@ -311,6 +323,11 @@
       "constraint-register",
       "raid-log",
       "feasibility-questions"
+    ],
+    "html_capable": [
+      "feasibility-assessment",
+      "constraint-register",
+      "raid-log"
     ],
     "consumes": [
       {
@@ -400,6 +417,10 @@
       "intent-backlog",
       "scope-definition-questions"
     ],
+    "html_capable": [
+      "scope-document",
+      "intent-backlog"
+    ],
     "consumes": [
       {
         "artifact": "intent-statement",
@@ -483,6 +504,11 @@
       "mob-composition",
       "team-formation-questions"
     ],
+    "html_capable": [
+      "team-assessment",
+      "skill-matrix",
+      "mob-composition"
+    ],
     "consumes": [
       {
         "artifact": "scope-document",
@@ -564,6 +590,10 @@
       "wireframes",
       "user-flow",
       "rough-mockups-questions"
+    ],
+    "html_capable": [
+      "wireframes",
+      "user-flow"
     ],
     "consumes": [
       {
@@ -652,6 +682,10 @@
       "initiative-brief",
       "decision-log",
       "approval-handoff-questions"
+    ],
+    "html_capable": [
+      "initiative-brief",
+      "decision-log"
     ],
     "consumes": [
       {
@@ -769,6 +803,7 @@
       "code-quality-assessment",
       "reverse-engineering-timestamp"
     ],
+    "html_capable": [],
     "consumes": [],
     "requires_stage": [
       "state-init"
@@ -848,6 +883,7 @@
       "evidence",
       "practices-discovery-timestamp"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "code-structure",
@@ -949,6 +985,9 @@
     "produces": [
       "requirements",
       "requirements-analysis-questions"
+    ],
+    "html_capable": [
+      "requirements"
     ],
     "consumes": [
       {
@@ -1064,6 +1103,11 @@
       "user-stories-assessment",
       "traceability"
     ],
+    "html_capable": [
+      "stories",
+      "personas",
+      "user-stories-assessment"
+    ],
     "consumes": [
       {
         "artifact": "requirements",
@@ -1170,6 +1214,12 @@
       "accessibility-checklist",
       "refined-mockups-questions"
     ],
+    "html_capable": [
+      "mockups",
+      "interaction-spec",
+      "design-system-mapping",
+      "accessibility-checklist"
+    ],
     "consumes": [
       {
         "artifact": "wireframes",
@@ -1267,6 +1317,10 @@
       "components",
       "decisions",
       "traceability"
+    ],
+    "html_capable": [
+      "components",
+      "decisions"
     ],
     "consumes": [
       {
@@ -1378,6 +1432,9 @@
       "unit-of-work-story-map",
       "traceability"
     ],
+    "html_capable": [
+      "unit-of-work-story-map"
+    ],
     "consumes": [
       {
         "artifact": "components",
@@ -1478,6 +1535,9 @@
     "produces": [
       "contract-summary"
     ],
+    "html_capable": [
+      "contract-summary"
+    ],
     "consumes": [
       {
         "artifact": "unit-of-work",
@@ -1572,6 +1632,12 @@
       "risk-and-sequencing-rationale",
       "external-dependency-map",
       "delivery-planning-questions"
+    ],
+    "html_capable": [
+      "bolt-plan",
+      "team-allocation",
+      "risk-and-sequencing-rationale",
+      "external-dependency-map"
     ],
     "consumes": [
       {
@@ -1714,6 +1780,7 @@
         "ui"
       ]
     },
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "unit-of-work",
@@ -1862,6 +1929,7 @@
         "service"
       ]
     },
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "functional-spec",
@@ -2015,6 +2083,7 @@
         "library"
       ]
     },
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "performance-requirements",
@@ -2180,6 +2249,7 @@
         "library"
       ]
     },
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "performance-design",
@@ -2323,6 +2393,7 @@
       "code-summary",
       "traceability"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "functional-spec",
@@ -2466,6 +2537,7 @@
       "build-test-results",
       "cross-unit-traceability"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "code-generation-plan",
@@ -2562,6 +2634,7 @@
       "quality-gates",
       "ci-pipeline-questions"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "code-summary",
@@ -2665,6 +2738,7 @@
       "rollback-runbook",
       "deployment-pipeline-questions"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "ci-config",
@@ -2760,6 +2834,7 @@
       "validation-report",
       "environment-provisioning-questions"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "infrastructure-specification",
@@ -2843,6 +2918,7 @@
       "health-check-report",
       "deployment-execution-questions"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "cd-config",
@@ -2939,6 +3015,7 @@
       "anomaly-config",
       "observability-setup-questions"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "performance-design",
@@ -3034,6 +3111,7 @@
       "escalation-matrix",
       "incident-response-questions"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "dashboards",
@@ -3125,6 +3203,7 @@
       "nfr-validation-matrix",
       "performance-validation-questions"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "performance-requirements",
@@ -3221,6 +3300,7 @@
       "feedback-loop",
       "feedback-optimization-questions"
     ],
+    "html_capable": [],
     "consumes": [
       {
         "artifact": "dashboards",

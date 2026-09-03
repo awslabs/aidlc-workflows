@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { GraphStage } from "./aidlc-graph.ts";
 import { resolveArtifactInstances } from "./aidlc-artifact-resolution.ts";
+import { artifactFormat, artifactKind } from "./aidlc-artifact-vocabulary.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   readRegularFileNoFollowOrThrow,
@@ -146,8 +147,8 @@ export function publishReviewManifest(
     artifacts.push({
       name: item.name,
       path: toPosix(item.path),
-      format: "md",
-      kind: "document",
+      format: artifactFormat(item.name),
+      kind: artifactKind(item.name) ?? "document",
       sha256: bytes ? sha256Hex(bytes) : null,
       exists: bytes !== null,
     });

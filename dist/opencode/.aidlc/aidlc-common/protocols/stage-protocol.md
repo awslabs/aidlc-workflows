@@ -234,6 +234,13 @@ Walking-skeleton, ladder, Bolt-gate, halt-and-ask, and Build-and-Test
 failure-loop-back behavior lives in
 `.aidlc/aidlc-common/protocols/stage-protocol-construction.md`.
 Load it on the first Construction-phase directive of the session and on every `invoke-swarm` (the engine lists it in `directive.protocol_modules`).
+
+When `directive.protocol_modules` lists `html`, load
+`.aidlc/aidlc-common/protocols/stage-protocol-html.md` exactly like
+the conditional construction and ensemble modules. Read enriched HTML entries
+in `directive.consumes` through each entry's `text_command` unless the markup
+itself is relevant to the work.
+
 ---
 
 ## 2. Completion Messages

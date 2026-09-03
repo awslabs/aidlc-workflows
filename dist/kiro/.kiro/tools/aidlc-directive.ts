@@ -68,8 +68,17 @@ export const VALID_PROTOCOL_MODULES = [
   "ensemble",
   "construction",
   "swarm",
+  "html",
 ] as const;
 export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
+
+// Artifact paths remain bare strings for Markdown compatibility: off/absent
+// HTML state must keep the legacy directive bytes stable. HTML paths are
+// enriched so the conductor never infers format or the safe text projection.
+export type ArtifactProduceEntry = string | { path: string; format: "html" };
+export type ArtifactConsumeEntry =
+  | string
+  | { path: string; format: "html"; text_command: string };
 
 // The 11 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
@@ -124,10 +133,10 @@ export interface RunStageWaveEntry {
   review_state: WaveReviewState;
   review_iteration: number | null;
   unit_memory_path: string;
-  consumes: string[];
+  consumes: ArtifactConsumeEntry[];
   consumes_absent: Array<{ path: string; expected: boolean }>;
-  produces: string[];
-  required_produces: string[];
+  produces: ArtifactProduceEntry[];
+  required_produces: ArtifactProduceEntry[];
 }
 
 export interface RunStageWave {
@@ -190,8 +199,8 @@ export interface RunStageDirective {
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
   // conductor is never pointed at a path that cannot be read.
-  consumes: string[];
-  produces: string[];
+  consumes: ArtifactConsumeEntry[];
+  produces: ArtifactProduceEntry[];
   // Exact active-space rule paths represented by the preceding load-steering
   // bundle. On dispatched topologies the conductor passes the already-loaded
   // rule text to every agent brief.
@@ -297,8 +306,8 @@ export interface DispatchSubagentDirective {
   context_warnings?: string[];
   gate: GateValue;
   memory_path: string;
-  consumes: string[];
-  produces: string[];
+  consumes: ArtifactConsumeEntry[];
+  produces: ArtifactProduceEntry[];
   rules_in_context: string[];
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
@@ -930,8 +939,8 @@ function checkRunStageShared(
   checkOptionalStringArray(o, "context_warnings", kind, errors);
   checkGate(o, "gate", kind, errors);
   checkString(o, "memory_path", kind, errors);
-  checkStringArray(o, "consumes", kind, errors);
-  checkStringArray(o, "produces", kind, errors);
+  checkArtifactEntryArray(o, "consumes", kind, errors, "consume");
+  checkArtifactEntryArray(o, "produces", kind, errors, "produce");
   checkStringArray(o, "rules_in_context", kind, errors);
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkString(o, "stage_file", kind, errors);
@@ -1497,18 +1506,12 @@ function checkOptionalWave(
       }
     }
     for (const key of ["consumes", "produces", "required_produces"] as const) {
-      const nested = item[key];
-      if (!Array.isArray(nested)) {
-        errors.push(`${prefix}.${key} must be array, got ${describe(nested)}`);
-        continue;
-      }
-      nested.forEach((entry: unknown, j: number) => {
-        if (typeof entry !== "string") {
-          errors.push(
-            `${prefix}.${key}[${j}] must be string, got ${describe(entry)}`,
-          );
-        }
-      });
+      checkArtifactEntryArrayValue(
+        item[key],
+        `${prefix}.${key}`,
+        errors,
+        key === "consumes" ? "consume" : "produce",
+      );
     }
     if (
       Array.isArray(item.required_produces) &&
@@ -1519,9 +1522,12 @@ function checkOptionalWave(
       );
     }
     if (Array.isArray(item.produces) && Array.isArray(item.required_produces)) {
-      const produces = new Set(item.produces);
-      item.required_produces.forEach((path: unknown, j: number) => {
-        if (typeof path === "string" && !produces.has(path)) {
+      const produces = new Set(
+        item.produces.map(artifactEntryPath).filter((path): path is string => path !== null),
+      );
+      item.required_produces.forEach((entry: unknown, j: number) => {
+        const path = artifactEntryPath(entry);
+        if (path !== null && !produces.has(path)) {
           errors.push(
             `${prefix}.required_produces[${j}] must also appear in produces`,
           );
@@ -1551,6 +1557,66 @@ function checkOptionalWave(
           );
         }
       });
+    }
+  });
+}
+
+function artifactEntryPath(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  return isPlainObject(value) && typeof value.path === "string"
+    ? value.path
+    : null;
+}
+
+function checkArtifactEntryArray(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+  usage: "consume" | "produce",
+): void {
+  if (!(field in o)) {
+    errors.push(`${kind}: missing required field: ${field}`);
+    return;
+  }
+  checkArtifactEntryArrayValue(o[field], `${kind}: ${field}`, errors, usage);
+}
+
+function checkArtifactEntryArrayValue(
+  value: unknown,
+  prefix: string,
+  errors: string[],
+  usage: "consume" | "produce",
+): void {
+  if (!Array.isArray(value)) {
+    errors.push(`${prefix} must be array, got ${describe(value)}`);
+    return;
+  }
+  value.forEach((entry: unknown, i: number) => {
+    if (typeof entry === "string") return;
+    const itemPrefix = `${prefix}[${i}]`;
+    if (!isPlainObject(entry)) {
+      errors.push(`${itemPrefix} must be string or object, got ${describe(entry)}`);
+      return;
+    }
+    const allowed = usage === "consume"
+      ? new Set(["path", "format", "text_command"])
+      : new Set(["path", "format"]);
+    for (const key of Object.keys(entry)) {
+      if (!allowed.has(key)) errors.push(`${itemPrefix}: unknown key: ${key}`);
+    }
+    if (typeof entry.path !== "string") {
+      errors.push(`${itemPrefix}.path must be string, got ${describe(entry.path)}`);
+    }
+    if (entry.format !== "html") {
+      errors.push(
+        `${itemPrefix}.format must be "html", got ${JSON.stringify(entry.format)}`,
+      );
+    }
+    if (usage === "consume" && typeof entry.text_command !== "string") {
+      errors.push(
+        `${itemPrefix}.text_command must be string for an HTML consume, got ${describe(entry.text_command)}`,
+      );
     }
   });
 }

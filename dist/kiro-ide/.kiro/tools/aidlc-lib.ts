@@ -12,10 +12,13 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import {
   artifactFilename,
+  hasArtifactFilenameException,
   KNOWN_CODEKB_STAGES,
+  setHtmlArtifactNames,
 } from "./aidlc-artifact-vocabulary.ts";
 export {
   artifactFilename,
+  hasArtifactFilenameException,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
@@ -63,6 +66,9 @@ export interface StageEntry {
   // unit whose kind is not in its list (both directive paths and coverage).
   // Absent map = full matrix (every produces entry applies to every unit).
   produces_kinds?: Record<string, string[]>;
+  // Compile-derived list of this stage's document/visual outputs that may use
+  // HTML when the intent setting is on. New compiled graphs always carry it.
+  html_capable?: string[];
   consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string }>;
   requires_stage?: string[];
   scopes?: string[];
@@ -8536,9 +8542,10 @@ export interface ReviewArtifactSnapshot {
 
 /**
  * Exclude permitted blank separator lines from the reviewer-owned evidence.
- * This keeps the stale-appendix binding anchored at the canonical
- * `## Review` heading instead of letting an extra blank line shift old
- * authority past the request-time prefix check.
+ * This keeps the stale-appendix binding anchored at the canonical Review
+ * heading/section instead of letting extra whitespace shift old authority past
+ * the request-time prefix check. For HTML, the document closing tags belong to
+ * the preserved shell at the insertion boundary, not to reviewer evidence.
  */
 export function reviewAppendixEvidenceBytes(appendix: Buffer): Buffer {
   let offset = 0;
@@ -8554,7 +8561,16 @@ export function reviewAppendixEvidenceBytes(appendix: Buffer): Buffer {
       offset++;
       continue;
     }
-    return appendix.subarray(lineStart);
+    const evidence = appendix.subarray(lineStart);
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(evidence);
+    } catch {
+      return evidence;
+    }
+    return /^<\/body\s*>\s*<\/html\s*>\s*$/i.test(text)
+      ? evidence.subarray(evidence.length)
+      : evidence;
   }
   return appendix.subarray(offset);
 }
@@ -8575,7 +8591,363 @@ export function reviewAppendixDigest(appendix: Buffer): string {
     : `sha256:${createHash("sha256").update(evidence).digest("hex")}`;
 }
 
-function existingReviewAppendixOffset(body: Buffer): number | null {
+type ReviewHtmlAttribute = { name: string; value: string | null };
+
+type ReviewHtmlToken = {
+  kind: "text" | "comment" | "other" | "start" | "end";
+  start: number;
+  end: number;
+  name?: string;
+  attributes?: ReviewHtmlAttribute[];
+  selfClosing?: boolean;
+  element?: number;
+};
+
+type ReviewHtmlElement = {
+  name: string;
+  openToken: number;
+  closeToken: number | null;
+  parent: number | null;
+  attributes: ReviewHtmlAttribute[];
+};
+
+type ParsedReviewHtml = {
+  tokens: ReviewHtmlToken[];
+  elements: ReviewHtmlElement[];
+};
+
+const REVIEW_HTML_VOID_ELEMENTS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+  "meta", "param", "source", "track", "wbr",
+]);
+
+const REVIEW_HTML_RAW_TEXT_ELEMENTS = new Set([
+  "iframe", "noembed", "noframes", "plaintext", "script", "style",
+  "template", "textarea", "title", "xmp",
+]);
+
+function reviewHtmlTagEnd(text: string, start: number): number | null {
+  let quote = "";
+  for (let offset = start + 1; offset < text.length; offset++) {
+    const character = text[offset];
+    if (quote !== "") {
+      if (character === quote) quote = "";
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      return offset + 1;
+    }
+  }
+  return null;
+}
+
+function reviewHtmlAttributes(source: string): ReviewHtmlAttribute[] | null {
+  const attributes: ReviewHtmlAttribute[] = [];
+  let offset = 0;
+  while (offset < source.length) {
+    while (/\s/.test(source[offset] ?? "")) offset++;
+    if (offset >= source.length) break;
+    const name = /^[^\s"'<>/=]+/.exec(source.slice(offset))?.[0];
+    if (!name) return null;
+    offset += name.length;
+    while (/\s/.test(source[offset] ?? "")) offset++;
+    let value: string | null = null;
+    if (source[offset] === "=") {
+      offset++;
+      while (/\s/.test(source[offset] ?? "")) offset++;
+      const quote = source[offset];
+      if (quote === '"' || quote === "'") {
+        offset++;
+        const valueEnd = source.indexOf(quote, offset);
+        if (valueEnd === -1) return null;
+        value = source.slice(offset, valueEnd);
+        offset = valueEnd + 1;
+      } else {
+        const unquoted = /^[^\s"'`=<>]+/.exec(source.slice(offset))?.[0];
+        if (!unquoted) return null;
+        value = unquoted;
+        offset += unquoted.length;
+      }
+    }
+    attributes.push({ name: name.toLowerCase(), value });
+  }
+  return attributes;
+}
+
+/**
+ * Small source scanner for the HTML review ownership marker. It recognizes
+ * balanced explicit elements and keeps comments and raw-text bodies opaque,
+ * so examples in comments, scripts, and styles cannot acquire authority.
+ */
+function parseReviewHtml(text: string): ParsedReviewHtml | null {
+  const tokens: ReviewHtmlToken[] = [];
+  let offset = 0;
+  while (offset < text.length) {
+    if (text[offset] !== "<") {
+      const next = text.indexOf("<", offset);
+      const end = next === -1 ? text.length : next;
+      tokens.push({ kind: "text", start: offset, end });
+      offset = end;
+      continue;
+    }
+    if (text.startsWith("<!--", offset)) {
+      const close = text.indexOf("-->", offset + 4);
+      const end = close === -1 ? text.length : close + 3;
+      tokens.push({ kind: "comment", start: offset, end });
+      offset = end;
+      continue;
+    }
+    if (/^<![^-]|^<\?/.test(text.slice(offset, offset + 3))) {
+      const end = reviewHtmlTagEnd(text, offset);
+      if (end === null) return null;
+      tokens.push({ kind: "other", start: offset, end });
+      offset = end;
+      continue;
+    }
+    const endMatch = /^<\/\s*([A-Za-z][A-Za-z0-9:-]*)[^>]*>/.exec(
+      text.slice(offset),
+    );
+    if (endMatch) {
+      const end = offset + endMatch[0].length;
+      tokens.push({
+        kind: "end",
+        start: offset,
+        end,
+        name: endMatch[1].toLowerCase(),
+      });
+      offset = end;
+      continue;
+    }
+    const startMatch = /^<([A-Za-z][A-Za-z0-9:-]*)/.exec(text.slice(offset));
+    if (!startMatch) {
+      tokens.push({ kind: "text", start: offset, end: offset + 1 });
+      offset++;
+      continue;
+    }
+    const end = reviewHtmlTagEnd(text, offset);
+    if (end === null) return null;
+    const source = text.slice(offset, end);
+    const selfClosing = /\/\s*>$/.test(source);
+    const name = startMatch[1].toLowerCase();
+    const attributes = reviewHtmlAttributes(
+      source.slice(startMatch[0].length, source.length - (selfClosing ? 2 : 1)),
+    );
+    if (attributes === null) return null;
+    tokens.push({
+      kind: "start",
+      start: offset,
+      end,
+      name,
+      attributes,
+      selfClosing,
+    });
+    offset = end;
+
+    if (
+      REVIEW_HTML_RAW_TEXT_ELEMENTS.has(name) &&
+      !selfClosing &&
+      !REVIEW_HTML_VOID_ELEMENTS.has(name)
+    ) {
+      if (name === "plaintext") {
+        if (offset < text.length) {
+          tokens.push({ kind: "text", start: offset, end: text.length });
+        }
+        offset = text.length;
+        continue;
+      }
+      const closePattern = new RegExp(`<\\/\\s*${name}\\s*>`, "ig");
+      closePattern.lastIndex = offset;
+      const close = closePattern.exec(text);
+      if (!close) {
+        if (offset < text.length) {
+          tokens.push({ kind: "text", start: offset, end: text.length });
+        }
+        offset = text.length;
+        continue;
+      }
+      if (close.index > offset) {
+        tokens.push({ kind: "text", start: offset, end: close.index });
+      }
+      tokens.push({
+        kind: "end",
+        start: close.index,
+        end: close.index + close[0].length,
+        name,
+      });
+      offset = close.index + close[0].length;
+    }
+  }
+
+  const elements: ReviewHtmlElement[] = [];
+  const stack: number[] = [];
+  for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex++) {
+    const token = tokens[tokenIndex];
+    if (token.kind === "start") {
+      const element = elements.length;
+      token.element = element;
+      elements.push({
+        name: token.name!,
+        openToken: tokenIndex,
+        closeToken: null,
+        parent: stack.at(-1) ?? null,
+        attributes: token.attributes ?? [],
+      });
+      if (!token.selfClosing && !REVIEW_HTML_VOID_ELEMENTS.has(token.name!)) {
+        stack.push(element);
+      }
+    } else if (token.kind === "end") {
+      let match = stack.length - 1;
+      while (match >= 0 && elements[stack[match]].name !== token.name) match--;
+      if (match < 0) continue;
+      const element = stack[match];
+      elements[element].closeToken = tokenIndex;
+      token.element = element;
+      stack.length = match;
+    }
+  }
+  return { tokens, elements };
+}
+
+function reviewHtmlDecodeText(text: string): string {
+  const named: Record<string, string> = {
+    amp: "&", apos: "'", gt: ">", lt: "<", nbsp: " ", quot: '"',
+  };
+  return text.replace(
+    /&(?:#([0-9]+)|#x([0-9a-f]+)|([a-z]+));/gi,
+    (entity, decimal: string, hex: string, name: string) => {
+      const code = decimal
+        ? Number(decimal)
+        : hex
+          ? Number.parseInt(hex, 16)
+          : null;
+      if (code !== null) {
+        try {
+          return String.fromCodePoint(code);
+        } catch {
+          return entity;
+        }
+      }
+      return named[name.toLowerCase()] ?? entity;
+    },
+  );
+}
+
+function reviewHtmlTextBetween(
+  parsed: ParsedReviewHtml,
+  text: string,
+  start: number,
+  end: number,
+): string | null {
+  let rendered = "";
+  for (const token of parsed.tokens) {
+    if (token.end <= start || token.start >= end) continue;
+    if (token.start < start || token.end > end) return null;
+    if (token.kind === "text") rendered += text.slice(token.start, token.end);
+    else if (token.kind !== "comment") return null;
+  }
+  return reviewHtmlDecodeText(rendered);
+}
+
+function reviewHtmlDirectChildren(
+  parsed: ParsedReviewHtml,
+  parent: number,
+): number[] {
+  return parsed.elements
+    .map((element, index) => ({ element, index }))
+    .filter(({ element }) => element.parent === parent)
+    .map(({ index }) => index);
+}
+
+function canonicalReviewHtmlHeading(
+  parsed: ParsedReviewHtml,
+  text: string,
+  elementIndex: number,
+): boolean {
+  const element = parsed.elements[elementIndex];
+  if (
+    element.name !== "h2" ||
+    element.attributes.length !== 0 ||
+    element.closeToken === null ||
+    reviewHtmlDirectChildren(parsed, elementIndex).length !== 0
+  ) {
+    return false;
+  }
+  const open = parsed.tokens[element.openToken];
+  const close = parsed.tokens[element.closeToken];
+  return reviewHtmlTextBetween(parsed, text, open.end, close.start) === "Review";
+}
+
+function reviewHtmlDocumentBody(parsed: ParsedReviewHtml): number | null {
+  const html = parsed.elements.findIndex(
+    (element) => element.name === "html" && element.parent === null,
+  );
+  if (html < 0 || parsed.elements[html].closeToken === null) return null;
+  const bodies = reviewHtmlDirectChildren(parsed, html).filter(
+    (element) => parsed.elements[element].name === "body",
+  );
+  return bodies.length === 1 && parsed.elements[bodies[0]].closeToken !== null
+    ? bodies[0]
+    : null;
+}
+
+function terminalReviewHtmlSection(
+  parsed: ParsedReviewHtml,
+  text: string,
+  body: number,
+): number | null {
+  const children = reviewHtmlDirectChildren(parsed, body);
+  const section = children.at(-1);
+  if (section === undefined) return null;
+  const element = parsed.elements[section];
+  const marker = element.attributes.filter(
+    (attribute) => attribute.name === "data-aidlc",
+  );
+  const firstChild = reviewHtmlDirectChildren(parsed, section)[0];
+  return element.name === "section" &&
+    marker.length === 1 &&
+    reviewHtmlDecodeText(marker[0].value ?? "") === "review" &&
+    element.closeToken !== null &&
+    firstChild !== undefined &&
+    canonicalReviewHtmlHeading(parsed, text, firstChild)
+    ? section
+    : null;
+}
+
+function reviewAppendixOffsetForPrefix(text: string, appendixStart: number): number {
+  const prefix = text.slice(0, appendixStart);
+  const trailing = /\s+$/.exec(prefix);
+  if (!trailing) return Buffer.byteLength(prefix, "utf-8");
+  const contentEnd = prefix.length - trailing[0].length;
+  const retainedLineEnd = /^[ \t]*(?:\r\n|\n|\r)/.exec(
+    prefix.slice(contentEnd),
+  );
+  const offset = contentEnd + (retainedLineEnd?.[0].length ?? 0);
+  return Buffer.byteLength(text.slice(0, offset), "utf-8");
+}
+
+function htmlReviewAppendixOffset(body: Buffer): number | null {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    return null;
+  }
+  const parsed = parseReviewHtml(text);
+  if (parsed === null) return null;
+  const bodyElement = reviewHtmlDocumentBody(parsed);
+  if (bodyElement === null) return null;
+  const review = terminalReviewHtmlSection(parsed, text, bodyElement);
+  const start = review === null
+    ? parsed.tokens[parsed.elements[bodyElement].closeToken!].start
+    : parsed.tokens[parsed.elements[review].openToken].start;
+  return reviewAppendixOffsetForPrefix(text, start);
+}
+
+export function existingReviewAppendixOffset(
+  body: Buffer,
+  format: "md" | "html" = "md",
+): number | null {
+  if (format === "html") return htmlReviewAppendixOffset(body);
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(body);
@@ -8707,7 +9079,10 @@ export function reviewArtifactSnapshot(
 
   const binding = options.appendixBinding ?? {
     artifact: target.logicalPath,
-    offset: existingReviewAppendixOffset(target.body) ?? target.body.length,
+    offset: existingReviewAppendixOffset(
+      target.body,
+      target.logicalPath.endsWith(".html") ? "html" : "md",
+    ) ?? target.body.length,
   };
   if (
     binding.artifact !== target.logicalPath ||
@@ -8765,6 +9140,104 @@ export function reviewArtifactFingerprint(
   return reviewArtifactContentsFingerprint(contents, options);
 }
 
+function renderReviewHtmlAuthority(
+  text: string,
+): RenderedReviewAuthority | null {
+  const parsed = parseReviewHtml(text);
+  if (parsed === null) return null;
+  const firstContent = parsed.tokens.find(
+    (token) =>
+      token.kind !== "comment" &&
+      !(token.kind === "text" && /^\s*$/.test(text.slice(token.start, token.end))),
+  );
+  if (firstContent?.kind !== "start" || firstContent.name !== "section") {
+    return null;
+  }
+  const section = firstContent.element!;
+  const element = parsed.elements[section];
+  const marker = element.attributes.filter(
+    (attribute) => attribute.name === "data-aidlc",
+  );
+  const children = reviewHtmlDirectChildren(parsed, section);
+  if (
+    marker.length !== 1 ||
+    reviewHtmlDecodeText(marker[0].value ?? "") !== "review" ||
+    element.closeToken === null ||
+    children[0] === undefined ||
+    !canonicalReviewHtmlHeading(parsed, text, children[0])
+  ) {
+    return null;
+  }
+
+  const close = parsed.tokens[element.closeToken];
+  for (const token of parsed.tokens) {
+    if (token.start < close.end) continue;
+    if (
+      token.kind === "comment" ||
+      (token.kind === "text" && /^\s*$/.test(text.slice(token.start, token.end))) ||
+      (token.kind === "end" && (token.name === "body" || token.name === "html"))
+    ) {
+      continue;
+    }
+    return null;
+  }
+
+  const fields: Record<string, string[]> = {
+    Verdict: [],
+    Reviewer: [],
+    Iteration: [],
+    "Request Challenge": [],
+  };
+  for (let index = 0; index < parsed.elements.length; index++) {
+    const paragraph = parsed.elements[index];
+    if (paragraph.name !== "p" || paragraph.closeToken === null) continue;
+    let ancestor = paragraph.parent;
+    let owned = false;
+    while (ancestor !== null) {
+      if (ancestor === section) {
+        owned = true;
+        break;
+      }
+      ancestor = parsed.elements[ancestor].parent;
+    }
+    if (!owned) continue;
+    const paragraphChildren = reviewHtmlDirectChildren(parsed, index);
+    const strongIndex = paragraphChildren[0];
+    if (strongIndex === undefined) continue;
+    const strong = parsed.elements[strongIndex];
+    if (strong.name !== "strong" || strong.closeToken === null) continue;
+    const pOpen = parsed.tokens[paragraph.openToken];
+    const pClose = parsed.tokens[paragraph.closeToken];
+    const strongOpen = parsed.tokens[strong.openToken];
+    const strongClose = parsed.tokens[strong.closeToken];
+    if (!/^\s*$/.test(text.slice(pOpen.end, strongOpen.start))) continue;
+    const label = reviewHtmlTextBetween(
+      parsed,
+      text,
+      strongOpen.end,
+      strongClose.start,
+    );
+    if (label === null || !label.endsWith(":")) continue;
+    const field = label.slice(0, -1);
+    if (!Object.hasOwn(fields, field)) continue;
+    const value = reviewHtmlTextBetween(
+      parsed,
+      text,
+      strongClose.end,
+      pClose.start,
+    );
+    if (value !== null) fields[field].push(value.trim());
+  }
+  return {
+    markdownH1H2: false,
+    htmlH1H2: false,
+    verdicts: fields.Verdict,
+    reviewers: fields.Reviewer,
+    iterations: fields.Iteration,
+    requestChallenges: fields["Request Challenge"],
+  };
+}
+
 export function validateReviewAppendix(
   appendix: Buffer,
   expected: {
@@ -8781,35 +9254,41 @@ export function validateReviewAppendix(
     return { valid: false, reason: "the reviewer appendix is not valid UTF-8" };
   }
   const normalized = text.replace(/\r\n?/g, "\n");
-  const opening = /^(?:[ \t]*\n)*## Review[ \t]*\n/.exec(normalized);
-  if (!opening) {
-    return {
-      valid: false,
-      reason:
-        "the appended bytes must begin with only blank lines followed by an exact `## Review` heading",
-    };
-  }
-  const section = normalized.slice(opening[0].length);
-  const authority = renderReviewMarkdownAuthority(section);
-  if (authority === null) {
-    return {
-      valid: false,
-      reason: "the reviewer appendix could not be parsed as Markdown",
-    };
-  }
-  if (authority.markdownH1H2) {
-    return {
-      valid: false,
-      reason:
-        "the reviewer appendix must be terminal and contain no later rendered H1 or H2 heading",
-    };
-  }
-  if (authority.htmlH1H2) {
-    return {
-      valid: false,
-      reason:
-        "the reviewer appendix must be terminal and contain no rendered HTML H1 or H2 heading",
-    };
+  const markdownOpening = /^(?:[ \t]*\n)*## Review[ \t]*\n/.exec(normalized);
+  let authority: RenderedReviewAuthority | null;
+  if (markdownOpening) {
+    authority = renderReviewMarkdownAuthority(
+      normalized.slice(markdownOpening[0].length),
+    );
+    if (authority === null) {
+      return {
+        valid: false,
+        reason: "the reviewer appendix could not be parsed as Markdown",
+      };
+    }
+    if (authority.markdownH1H2) {
+      return {
+        valid: false,
+        reason:
+          "the reviewer appendix must be terminal and contain no later rendered H1 or H2 heading",
+      };
+    }
+    if (authority.htmlH1H2) {
+      return {
+        valid: false,
+        reason:
+          "the reviewer appendix must be terminal and contain no rendered HTML H1 or H2 heading",
+      };
+    }
+  } else {
+    authority = renderReviewHtmlAuthority(normalized);
+    if (authority === null) {
+      return {
+        valid: false,
+        reason:
+          "the appended bytes must be exactly one terminal canonical Markdown or HTML review section after blank separator whitespace",
+      };
+    }
   }
 
   if (
@@ -16369,12 +16848,35 @@ export function authoritativeProjectDescription(raw: string): {
 
 // --- State file I/O ---
 
+/**
+ * Prime artifact formats from already-loaded state content. This is exported
+ * for callers that necessarily read state through their own atomic snapshot.
+ */
+export function primeArtifactFormats(stateContent: string): void {
+  if (getField(stateContent, "HTML Artifacts") !== "on") {
+    setHtmlArtifactNames(new Set());
+    return;
+  }
+  const capable = new Set<string>();
+  for (const stage of loadStageGraph()) {
+    for (const name of stage.html_capable ?? []) capable.add(name);
+  }
+  setHtmlArtifactNames(capable);
+}
+
+/**
+ * Read state and prime the process-wide artifact-format vocabulary. This is THE
+ * seam: every engine tool that resolves artifact paths reads state first, so a
+ * later process follows the intent's locked setting rather than its environment.
+ */
 export function readStateFile(projectDir: string, intent?: string, space?: string): string {
   const path = stateFilePath(projectDir, intent, space);
   if (!existsSync(path)) {
     throw new Error(`State file not found: ${path}`);
   }
-  return readFileSync(path, "utf-8");
+  const content = readFileSync(path, "utf-8");
+  primeArtifactFormats(content);
+  return content;
 }
 
 export const PROJECT_DESCRIPTION_FILE = "project-description.json";
@@ -21285,11 +21787,11 @@ export function parseStageFrontmatter(
     if (key === WHEN_KEY) continue;
     if (key === "produces_kinds") continue; // parsed below; the scalar loop would stamp it ""
     if (ARRAY_KEYS.has(key)) continue;
-    // optional_produces and required_sections are presence-gated array fields
-    // parsed below; skip them here so the scalar loop does not stamp them with
-    // an empty-string value.
+    // Presence-gated structured fields are parsed below; skip them here so the
+    // scalar loop does not turn an authored list into a string.
     if (key === "optional_produces") continue;
     if (key === "required_sections") continue;
+    if (key === "html_exclude") continue;
     // The key was discovered at the start of some line, so it IS
     // present. scalarField returns "" for both absent AND empty-quoted
     // ("") — since we know it's present, assign the result
@@ -21335,6 +21837,14 @@ export function parseStageFrontmatter(
   // "required_sections must be array, got string".
   if (topLevelKeys.has("required_sections")) {
     obj.required_sections = listField(fm, "required_sections");
+  }
+
+  // html_exclude accepts either the literal "*" or a YAML list. Preserve the
+  // distinction so compile can exclude one stage wholesale without a sentinel
+  // artifact name.
+  if (topLevelKeys.has("html_exclude")) {
+    const scalar = scalarField(fm, "html_exclude");
+    obj.html_exclude = scalar === "*" ? "*" : listField(fm, "html_exclude");
   }
 
   // reviewer_max_iterations is the one numeric scalar field. The generic
@@ -21620,6 +22130,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "produces",
     "optional_produces",
     "produces_kinds",
+    "html_exclude",
     "consumes",
     "requires_stage",
     "sensors",

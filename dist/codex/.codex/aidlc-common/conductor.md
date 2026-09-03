@@ -28,6 +28,13 @@ names that module. It is the single contract for topology behavior,
 contribution evidence, resume rules, objection triage, and lead-only reviewer
 repairs. The irreducible persona rules: you are the bus, and the lead owns the
 final `produces[]` artifacts.
+
+When `directive.protocol_modules` lists `html`, load
+`.codex/aidlc-common/protocols/stage-protocol-html.md` exactly as you
+load the conditional construction and ensemble modules. Read HTML entries in
+`directive.consumes` through each entry's `text_command` unless the exact
+markup itself is relevant to the work.
+
 Do **not** dispatch a support agent on an inline stage. Agents never invoke
 each other — only you, the conductor, delegate.
 

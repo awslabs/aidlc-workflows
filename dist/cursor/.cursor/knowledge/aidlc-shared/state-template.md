@@ -28,6 +28,7 @@ Authoritative generated views:
 - **Stages to Skip**: [comma-separated stage numbers with reasons, or none]
 - **Depth**: [Minimal/Standard/Comprehensive]
 - **Test Strategy**: [Minimal/Standard/Comprehensive]
+- **HTML Artifacts**: [on/off]
 
 ## Workspace State
 - **Project Root**: [project-relative path, normally `.`; re-derived at runtime, never trusted as an absolute path]

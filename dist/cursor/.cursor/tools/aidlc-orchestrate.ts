@@ -91,6 +91,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type AskDirective,
+  type ArtifactConsumeEntry,
+  type ArtifactProduceEntry,
   type Directive,
   type ErrorDirective,
   GATE_UNRESOLVED,
@@ -145,6 +147,7 @@ import {
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
+  primeArtifactFormats,
   pipelineLinkEvidence,
   parseBoltDag,
   type KnowledgeCommand,
@@ -232,6 +235,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries, appendAuditEntry } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
+import { artifactFormat } from "./aidlc-artifact-vocabulary.ts";
 import {
   ingestPendingFeedback,
   publishReviewManifest,
@@ -259,8 +263,13 @@ import {
 // not an error to throw. Composes engineStateFilePath() for the canonical location.
 function loadStateFileIfPresent(projectDir: string): string | null {
   const path = engineStateFilePath(projectDir);
-  if (!existsSync(path)) return null;
-  return readFileSync(path, "utf-8");
+  if (!existsSync(path)) {
+    primeArtifactFormats("");
+    return null;
+  }
+  const content = readFileSync(path, "utf-8");
+  primeArtifactFormats(content);
+  return content;
 }
 
 // The default scope when neither the state file, a --scope flag, nor the
@@ -2545,9 +2554,9 @@ function projectTypeFrom(
 // lookup decides WHERE each one lives. `node` is passed only for the orphan
 // fallback, not as the resolution key.
 // A resolved consume: the artifact NAME and required flag carried alongside
-// the resolved path, so the presence split downstream can key producer lookups
-// and required-ness off the authored vocabulary instead of re-deriving the
-// name from the path shape.
+// the resolved path, so the presence split downstream can key producer lookups,
+// required-ness, and wire format off the authored vocabulary instead of
+// re-deriving the name from the path shape.
 type ResolvedConsume = { artifact: string; required: boolean; path: string };
 
 function resolveConsumes(
@@ -2671,27 +2680,57 @@ function conditionalRuntimeSkipStages(projectDir: string): Set<string> {
   return conditional;
 }
 
+function artifactProduceEntry(
+  artifact: string,
+  path: string,
+): ArtifactProduceEntry {
+  return artifactFormat(artifact) === "html"
+    ? { path, format: "html" }
+    : path;
+}
+
+function artifactConsumeEntry(
+  artifact: string,
+  path: string,
+): ArtifactConsumeEntry {
+  return artifactFormat(artifact) === "html"
+    ? {
+        path,
+        format: "html",
+        text_command: `bun ${harnessDir()}/tools/aidlc-html.ts text ${path}`,
+      }
+    : path;
+}
+
 function splitConsumesByPresence(
   consumes: ResolvedConsume[],
   scope: string,
   codekbCtx?: CodekbCtx,
   stateContent?: string | null,
-): { present: string[]; absent: Array<{ path: string; expected: boolean }> } {
-  if (!codekbCtx) return { present: consumes.map((c) => c.path), absent: [] };
+): {
+  present: ArtifactConsumeEntry[];
+  absent: Array<{ path: string; expected: boolean }>;
+} {
+  if (!codekbCtx) {
+    return {
+      present: consumes.map((c) => artifactConsumeEntry(c.artifact, c.path)),
+      absent: [],
+    };
+  }
   const onPath = new Set(subgraphForScope(scope).map((s) => s.slug));
   const conditionallySkipped = conditionalRuntimeSkipStages(
     codekbCtx.projectDir,
   );
-  const present: string[] = [];
+  const present: ArtifactConsumeEntry[] = [];
   const absent: Array<{ path: string; expected: boolean }> = [];
   for (const c of consumes) {
     if (c.path.includes(UNIT_NAME_PLACEHOLDER)) {
-      present.push(c.path);
+      present.push(artifactConsumeEntry(c.artifact, c.path));
       continue;
     }
     const abs = join(codekbCtx.projectDir, ...c.path.split("/"));
     if (existsSync(abs)) {
-      present.push(c.path);
+      present.push(artifactConsumeEntry(c.artifact, c.path));
       continue;
     }
     if (!c.required) continue; // optional + missing → not an input, not a gap
@@ -2727,10 +2766,11 @@ function resolveProduces(
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
-): string[] {
+): ArtifactProduceEntry[] {
   return applicableProduceNames(node, unitKind, true)
     .flatMap((name) =>
       resolveArtifactPaths(name, node, unit, recordPrefix, codekbCtx)
+        .map((path) => artifactProduceEntry(name, path))
     );
 }
 
@@ -3327,6 +3367,9 @@ function buildRunStageDirective(
   }
   if (node.phase === "construction") {
     protocolModules.push("construction");
+  }
+  if (stateContent !== null && getField(stateContent, "HTML Artifacts") === "on") {
+    protocolModules.push("html");
   }
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;
@@ -4813,7 +4856,11 @@ function applySettledSwarmShape(
   delete directive.review_artifact;
   delete directive.review_class;
   delete directive.reviewer_max_iterations;
-  directive.protocol_modules = ["construction", "swarm"];
+  directive.protocol_modules = [
+    "construction",
+    "swarm",
+    ...(directive.protocol_modules?.includes("html") ? (["html"] as const) : []),
+  ];
   directive.swarm_settled = true;
   return directive;
 }
@@ -4944,6 +4991,9 @@ function tryEmitSwarm(
     ...(node.reviewer ? (["reviewer"] as const) : []),
     "construction",
     "swarm",
+    ...(stateContent !== null && getField(stateContent, "HTML Artifacts") === "on"
+      ? (["html"] as const)
+      : []),
   ];
   if (repos.length === 1) {
     const directive: Directive = {
@@ -5242,7 +5292,8 @@ function waveEntry(
       unitKind,
     ),
     required_produces: applicableProduceNames(node, unitKind, false).map(
-      (name) =>
+      (name) => artifactProduceEntry(
+        name,
         resolveArtifactPath(
           name,
           node,
@@ -5250,6 +5301,7 @@ function waveEntry(
           recordPrefix,
           codekbCtx,
         ),
+      ),
     ),
   };
   return entry;
