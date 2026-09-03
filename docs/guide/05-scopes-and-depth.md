@@ -10,7 +10,7 @@ the same scopes are explained in user-facing terms.
 
 ## The 11 Core Scopes
 
-Core ships 11 named scopes. Each scope defines a stage set and a default depth level. Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `bun .claude/tools/aidlc-utility.ts select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
+Core ships 11 named scopes. Each scope defines a stage set, a default depth level, and a default Change Control value (strict on `enterprise`, `security-patch`, `workshop`, and `infra`; relaxed on the rest; see [Change Control](13-customization.md#change-control) for what the value does and how to set it). Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `bun .claude/tools/aidlc-utility.ts select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
 
 ### enterprise
 

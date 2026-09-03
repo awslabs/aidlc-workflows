@@ -309,6 +309,38 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(strictBlocked.code).toBe(2);
     expect(strictBlocked.stderr.replaceAll(strictProject, proj)).toBe(blocked.stderr);
   });
+
+  test("an acceptance that cannot be recorded refuses the transition instead of continuing", () => {
+    const proj = project("relaxed");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    editReviewedArtifact(proj);
+    // The ledger fault seam makes every Change Control append fail in the
+    // spawned tool, so the contract is pinned independent of file modes and of
+    // who runs the suite.
+    const refused = run(STATE_TOOL, ["gate-start", STAGE], proj, {
+      ...TEST_ENV,
+      AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT: "t335",
+    });
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain(
+      `Cannot continue under Change Control relaxed: the accepted change for \\"${STAGE}\\" could not be recorded in the audit ledger (injected ledger fault: t335). Repair the ledger, or approve again.`,
+    );
+    expect(printedNotices(refused.stdout)).toEqual([]);
+    expect(acceptedRows(proj)).toHaveLength(0);
+    // With the ledger writable the same transition records and continues.
+    const recorded = run(STATE_TOOL, ["gate-start", STAGE], proj);
+    expect(recorded.status, recorded.stderr).toBe(0);
+    expect(acceptedRows(proj)).toHaveLength(1);
+    // The verb and the memory-edit observation fail closed the same way.
+    const verb = run(join(TOOLS, "aidlc-utility.ts"), ["change-control", "strict"], proj, {
+      ...TEST_ENV,
+      AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT: "t335",
+    });
+    expect(verb.status).not.toBe(0);
+    expect(verb.stderr).toContain("Cannot record the Change Control change (relaxed to strict, source you)");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Change Control**: relaxed (set by you)");
+  });
 });
 
 describe("t335 (2) summary confirmation: relaxed continues with a row", () => {
@@ -446,6 +478,22 @@ describe("t335 (2) summary confirmation: relaxed continues with a row", () => {
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain("was last saved before the confirmed answers");
     expect(acceptedRows(proj)).toHaveLength(0);
+  });
+
+  test("an output with no recorded write is missing evidence, not a change: refused under both values", () => {
+    for (const mode of ["strict", "relaxed"] as const) {
+      const proj = project(mode);
+      const questions = join(stageDir(proj), `${STAGE}-questions.md`);
+      confirm(proj, questions);
+      // The output exists on disk but no ARTIFACT_* row records who saved it.
+      writeFileSync(artifact(proj), "# Requirements\n");
+      const checked = evidence(proj);
+      expect(checked.ok, mode).toBe(false);
+      if (checked.ok) return;
+      expect(checked.refusal?.code).toBe("SUMMARY_ARTIFACT_UNAUTHORIZED");
+      expect(checked.message).toContain("has no recorded write");
+      expect(acceptedRows(proj)).toHaveLength(0);
+    }
   });
 });
 

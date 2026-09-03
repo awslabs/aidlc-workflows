@@ -414,6 +414,7 @@ Utilities:
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
+  --change-control <value>  Set what an input change after an approval does for this piece of work (strict, relaxed)
   --version         Show the framework version
   --help            Show this help message
 
@@ -435,7 +436,8 @@ Examples:
   /aidlc --scope bugfix --depth comprehensive  Bugfix with comprehensive depth
   /aidlc --depth minimal                       Change depth of active workflow
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
-  /aidlc --review advisory                     Single-pass reviews, findings at the gate`;
+  /aidlc --review advisory                     Single-pass reviews, findings at the gate
+  /aidlc --change-control relaxed              Record and announce input changes after approval instead of re-approving`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -7800,8 +7802,10 @@ function handleChangeControl(
   }
   content = setField(content, CHANGE_CONTROL_FIELD, line);
   content = setField(content, "Last Updated", isoTimestamp());
-  writeStateFile(projectDir, content, flags.intent, flags.space);
+  // Audit first, then the state write, like every other state-mutating verb:
+  // a ledger that cannot take the row leaves the line untouched.
   recordChangeControlSet(projectDir, resolution.value, requested, "you");
+  writeStateFile(projectDir, content, flags.intent, flags.space);
   process.stdout.write(
     `Change Control changed: ${resolution.value} (${changeControlSourceLabel(resolution.source)}) to ${line}\n`,
   );
@@ -8290,7 +8294,7 @@ export async function main(argv: string[]): Promise<void> {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--repos <name,...>] " +
+        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--change-control <value>] [--repos <name,...>] " +
         "[--project-dir <path>]\n",
     );
     return;

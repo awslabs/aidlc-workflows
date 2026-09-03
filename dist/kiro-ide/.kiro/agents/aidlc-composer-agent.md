@@ -647,6 +647,8 @@ one SHORT line per stage (≤15 words), not a paragraph.
   },
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
+  "changeControl": "strict | relaxed",
+  "changeControlRationale": "<1 sentence: why an input change after approval should reopen it, or be recorded and continue>",
   "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
@@ -663,6 +665,25 @@ contains task text, copy the dispatch's task text exactly without paraphrasing. 
 composition, derive a concise description from the report's actual findings;
 for a task-less front composition, derive it from the proposed work the human
 will approve. Never return a front/report proposal that would create from only a scope name.
+
+`changeControl` is REQUIRED for every mode and is ONE value with a one-line
+`changeControlRationale`. It decides what happens when an input changes after
+the human approved or confirmed something: `strict` reopens that approval;
+`relaxed` records the change once, tells the human in one line, and continues.
+It never removes a gate. For `mode: "matched"` copy the stock scope's
+`change_control` frontmatter value (read from that one scope `.md`; strict when
+the line is absent) and say so in the rationale. For `mode: "custom"` propose
+the value from the evidence: strict when `r` (risk) or `ve` (verification
+entropy) is high, when the work is regulated, or when several people share the
+approvals; relaxed for a spike, a fix, or a solo run where re-approving on
+every changed file would only slow the human down. For `mode: "in-flight"`
+return the running intent's current value unchanged (read `Change Control`
+from `aidlc-state.md`); the composer never flips it, the human does from chat.
+Pass `changeControl` to `validate-grid --change-control <value>` so the
+validator checks it with the grid. The conductor renders it as its own gate
+row so the human can flip it before approving; a custom scope file carries it
+as `change_control: <value>` in its frontmatter and intent creation receives it
+as `--change-control <value>`.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.
@@ -759,7 +780,7 @@ For `mode: "in-flight"`, skip this step entirely. Return the approved
 `recompose` command writes the running plan.
 
 Author BOTH files at the paths printed by `detect --json`:
-- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`)
+- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, and `change_control: <the approved value>`; prose: one sentence saying what that value does)
 - `"<name>": { "stages": { ... } }` entry in `scopeGridPath` JSON
 
 **NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the

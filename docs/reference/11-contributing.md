@@ -153,6 +153,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
    - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
+   - `change_control` (optional): `strict` | `relaxed`. The Change Control default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed records the change once and continues). Absence means strict. Validated like `skeleton` (the loader names the file and the two values). A memory layer's `## Change Control` `Mode: strict` wins over any scope default.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 

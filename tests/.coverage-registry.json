@@ -9044,6 +9044,10 @@
         {
           "file": "tests/unit/t190-validate-grid.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t336-change-control-surfaces.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9566,6 +9570,10 @@
         },
         {
           "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t336-change-control-surfaces.test.ts",
           "mechanism": "cli"
         }
       ],

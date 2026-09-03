@@ -764,6 +764,7 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `scope-change` | Atomic scope updates mid-workflow (recalculate stage inclusion). Re-plans which stages are EXECUTE/SKIP. | `SCOPE_CHANGED` |
 | `config-get`, `config-list` | Read active workflow config (`depth`, `test-strategy`, `review`); `config-list --json` emits the structured shape. | none |
 | `config-change` | Write active workflow config. Dispatcher form: `/aidlc config set depth <value>`, `/aidlc config set test-strategy <value>`, or `/aidlc config set review <value>`. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED` |
+| `change-control <strict\|relaxed>` | Rewrite the intent's `Change Control` state line (`<value> (set by you)`); the target of `/aidlc --change-control <value>` and of the plain-chat request. Refuses under a memory layer's `Mode: strict` naming that file. `intent-create --change-control <value>` writes the line at creation. | `CHANGE_CONTROL_SET` |
 | `plugin-list` | List installed plugins with enabled/disabled state; `--json` emits `plugins` plus `selectionActive`. | none |
 | `plugin-sync` | Compose installed plugin roots by running each plugin's `hooks/compose.ts`; no configured roots is a clean no-op, while configured roots without a compose hook fail and mixed sets warn for each skipped root. | none |
 | `set-status` | Low-level state-field sync (called by `sync-workflow-state.ts` hook on TaskUpdate) | — |

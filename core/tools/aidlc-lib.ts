@@ -8316,8 +8316,10 @@ export function checkSummaryConfirmationEvidence(
           // The governed checkpoint: the output was saved without the current
           // confirmation. Strict refuses with the existing remedy; relaxed
           // records the change once, tells the human once, and continues. The
-          // confirmation and its receipt are untouched either way.
-          if (changeControl() === "relaxed") {
+          // confirmation and its receipt are untouched either way. An output
+          // with NO recorded write is missing evidence, not a changed input, so
+          // that case refuses under both values.
+          if (unauthorized.length > 0 && changeControl() === "relaxed") {
             const stamps = [
               ...new Set(
                 unauthorized.map(
@@ -8331,7 +8333,7 @@ export function checkSummaryConfirmationEvidence(
               unit: question.unit ?? options.unit ?? null,
               changed: [toPosix(relative(projectDir, artifactAbs))],
               recorded: receiptAuthorization,
-              current: stamps.length > 0 ? stamps.join(", ") : "unrecorded",
+              current: stamps.join(", "),
               notice:
                 `${toPosix(relative(projectDir, artifactAbs))} was saved without the current ` +
                 "summary confirmation. Continuing (Change Control: relaxed).",
@@ -26176,40 +26178,51 @@ export function changeControlMemoryStrictRefusal(
   );
 }
 
-// Best-effort ledger access for the two Change Control rows. These rows are
-// provenance: a failure to write one never changes a decision, so callers
-// swallow the append's errors. The lazy require breaks the lib <-> audit cycle
-// exactly as emitError does, and the held-lock branch keeps callers inside a
-// withAuditLock section from waiting on themselves. Null when no intent record
-// exists to write into.
-function changeControlLedger(
+// Ledger append for the two Change Control rows. Under `relaxed` the
+// CHANGE_ACCEPTED row IS the evidence that stands in for the refusal, and the
+// CHANGE_CONTROL_SET row is how a moved setting is traced, so neither append
+// is best-effort: a ledger that cannot be written refuses the checkpoint (the
+// caller's normal error path) instead of continuing unrecorded. The lazy require
+// breaks the lib <-> audit cycle exactly as emitError does. Callers hold the
+// intent's audit lock (taken with the reentrant withAuditLock) around the
+// read-then-append, so the dedupe check and the row are one step.
+function changeControlLedgerAppend(
   projectDir: string,
-): { appendAuditEntry: (event: string, fields: Record<string, string>) => void } | null {
-  if (!existsSync(stateFilePath(projectDir))) return null;
+  event: "CHANGE_ACCEPTED" | "CHANGE_CONTROL_SET",
+  fields: Record<string, string>,
+): void {
+  if (!existsSync(stateFilePath(projectDir))) {
+    throw new Error(
+      "Change Control has no intent record to write to: aidlc-state.md is missing.",
+    );
+  }
+  // Test seam (the same idiom as the Plan Approval barriers): a set
+  // AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT makes every Change Control append
+  // fail, so the fail-closed contract is pinned without depending on
+  // filesystem permissions or on who runs the suite.
+  const fault = process.env.AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT?.trim();
+  if (fault) throw new Error(`injected ledger fault: ${fault}`);
   const audit = require("./aidlc-audit.ts") as {
-    appendAuditEntry: typeof AppendAuditEntry;
     appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
   };
-  const unlocked = holdsAuditLock(projectDir);
-  return {
-    appendAuditEntry: (event, fields) => {
-      if (unlocked) audit.appendAuditEntryUnlocked(event, fields, projectDir);
-      else audit.appendAuditEntry(event, fields, projectDir);
-    },
-  };
+  // Every caller below holds the audit lock (withAuditLock is reentrant for a
+  // caller that already holds it), so the unlocked variant is the right one.
+  audit.appendAuditEntryUnlocked(event, fields, projectDir);
 }
 
 function appendChangeControlSetRow(
   projectDir: string,
   fields: { "Old Value": string; "New Value": string; Source: string },
-): boolean {
+): void {
   try {
-    const ledger = changeControlLedger(projectDir);
-    if (ledger === null) return false;
-    ledger.appendAuditEntry("CHANGE_CONTROL_SET", fields);
-    return true;
-  } catch {
-    return false;
+    withAuditLock(projectDir, () =>
+      changeControlLedgerAppend(projectDir, "CHANGE_CONTROL_SET", fields),
+    );
+  } catch (error) {
+    throw new Error(
+      `Cannot record the Change Control change (${fields["Old Value"]} to ${fields["New Value"]}, ` +
+        `source ${fields.Source}) in the audit ledger: ${errorMessage(error)}`,
+    );
   }
 }
 
@@ -26255,50 +26268,47 @@ export function changeAlreadyAccepted(
   change: AcceptedChange,
   events?: ReadonlyArray<{ event: string; block: string }>,
 ): boolean {
-  const rows = events ?? safeAuditShardEvents(projectDir);
+  const rows = events ?? readAuditShardEvents(projectDir);
   return rows.some(
     (row) => row.event === "CHANGE_ACCEPTED" && acceptedChangeMatchesRow(change, row.block),
   );
-}
-
-function safeAuditShardEvents(projectDir: string): AuditShardEvent[] {
-  try {
-    return readAuditShardEvents(projectDir);
-  } catch {
-    return [];
-  }
 }
 
 /**
  * Write the CHANGE_ACCEPTED rows for changes the ledger does not carry yet and
  * return the human lines for exactly those. Callers that mutate (a gate
  * opening, a stage completion, an answer record, a generation start) call
- * this; read-only callers such as `next` only continue.
+ * this; read-only callers such as `next` only continue. A ledger that cannot
+ * be read or written throws: an acceptance that cannot be recorded is not an
+ * acceptance, so the caller refuses instead of continuing unrecorded.
  */
 export function recordAcceptedChanges(
   projectDir: string,
   changes: readonly AcceptedChange[],
 ): string[] {
   if (changes.length === 0) return [];
-  const events = safeAuditShardEvents(projectDir);
-  const notices: string[] = [];
-  for (const change of changes) {
-    if (changeAlreadyAccepted(projectDir, change, events)) continue;
-    let written = false;
-    try {
-      const ledger = changeControlLedger(projectDir);
-      if (ledger !== null) {
-        ledger.appendAuditEntry("CHANGE_ACCEPTED", acceptedChangeFields(change));
-        written = true;
+  // Check and append under the intent's audit lock so two checkpoints that see
+  // the same change at once (a hook and a transition, two reports) cannot both
+  // miss the row and both write it. The lock is reentrant for a caller that
+  // already holds it; the ledger is re-read inside.
+  return withAuditLock(projectDir, () => {
+    const events = readAuditShardEvents(projectDir);
+    const notices: string[] = [];
+    for (const change of changes) {
+      if (changeAlreadyAccepted(projectDir, change, events)) continue;
+      try {
+        changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", acceptedChangeFields(change));
+      } catch (error) {
+        throw new Error(
+          `Cannot continue under Change Control relaxed: the accepted change for "${change.stage}"` +
+            `${change.unit ? ` (unit ${change.unit})` : ""} could not be recorded in the audit ledger ` +
+            `(${errorMessage(error)}). Repair the ledger, or approve again.`,
+        );
       }
-    } catch {
-      // Provenance only: the decision to continue does not depend on the row.
-    }
-    if (written) {
       notices.push(change.notice);
     }
-  }
-  return notices;
+    return notices;
+  });
 }
 
 /**
@@ -26313,22 +26323,28 @@ export function governedChangeControl(
   stateContent?: string | null,
 ): ChangeControlResolution {
   const resolution = resolveChangeControl(projectDir, stateContent);
-  const events = safeAuditShardEvents(projectDir);
-  let previous: ChangeControl | null = null;
-  for (const row of events) {
-    if (row.event !== "CHANGE_CONTROL_SET") continue;
-    previous = parseChangeControl(auditBlockField(row.block, "New Value")) ?? previous;
-  }
-  if (previous === null) {
-    previous = resolution.intent?.value ?? resolution.scopeDefault;
-  }
-  if (previous !== resolution.value) {
-    appendChangeControlSetRow(projectDir, {
-      "Old Value": previous,
-      "New Value": resolution.value,
-      Source: resolution.source,
-    });
-  }
+  if (!existsSync(stateFilePath(projectDir))) return resolution;
+  // The newest CHANGE_CONTROL_SET row is read and the flip row written under
+  // one lock, so two governed checks observing the same memory edit at once
+  // record it once.
+  withAuditLock(projectDir, () => {
+    const events = readAuditShardEvents(projectDir);
+    let previous: ChangeControl | null = null;
+    for (const row of events) {
+      if (row.event !== "CHANGE_CONTROL_SET") continue;
+      previous = parseChangeControl(auditBlockField(row.block, "New Value")) ?? previous;
+    }
+    if (previous === null) {
+      previous = resolution.intent?.value ?? resolution.scopeDefault;
+    }
+    if (previous !== resolution.value) {
+      appendChangeControlSetRow(projectDir, {
+        "Old Value": previous,
+        "New Value": resolution.value,
+        Source: resolution.source,
+      });
+    }
+  });
   return resolution;
 }
 
@@ -26340,8 +26356,8 @@ export function recordChangeControlSet(
   oldValue: ChangeControl | null,
   newValue: ChangeControl,
   source: string,
-): boolean {
-  return appendChangeControlSetRow(projectDir, {
+): void {
+  appendChangeControlSetRow(projectDir, {
     "Old Value": oldValue ?? "unknown",
     "New Value": newValue,
     Source: source,

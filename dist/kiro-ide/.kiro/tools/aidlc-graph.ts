@@ -77,6 +77,11 @@ import {
   mustShift,
   parseStageFrontmatter,
   planFilePath,
+  CHANGE_CONTROL_VALUES,
+  type ChangeControl,
+  changeControlMemoryStrictRefusal,
+  memoryChangeControlDeclarations,
+  parseChangeControl,
   resolveProjectDir,
   resolveWorkflowSelection,
   type ScopeDefinition,
@@ -219,6 +224,10 @@ export interface ScopeValidation {
   // not an LLM recount or the earlier mechanical screen. In-flight treats the
   // ranking as advisory and preserves the running plan.
   nearest_stock?: Array<{ scope: string; diff: number; differs: string[] }>;
+  // The Change Control value the proposal carried (`--change-control` or the
+  // proposal's `changeControl` member), echoed once validated so the gate row
+  // the human sees is the validator's word.
+  change_control?: ChangeControl;
 }
 
 // --- Module-local state ---
@@ -2791,8 +2800,39 @@ const COMMANDS: Record<string, Handler> = {
     if (kwRaw !== undefined) {
       const granted = kwRaw.split(",").map((k) => k.trim()).filter(Boolean);
       for (const err of keywordCollisions(granted)) r.errors.push(err);
-      r.valid = r.errors.length === 0;
     }
+    // The composer's Change Control proposal rides with the grid: `--change-control
+    // <value>` or a `changeControl` member beside `stages`. It must be one of the
+    // two values, and a memory layer that declares strict refuses a relaxed
+    // proposal here, before the gate, naming that file.
+    const ccIdx = args.indexOf("--change-control");
+    const ccRaw =
+      ccIdx >= 0
+        ? args[ccIdx + 1]
+        : typeof obj.changeControl === "string"
+          ? obj.changeControl
+          : undefined;
+    if (ccIdx >= 0 && (ccRaw === undefined || ccRaw.startsWith("--"))) {
+      console.error("validate-grid: --change-control requires <strict|relaxed>.");
+      process.exit(1);
+    }
+    if (ccRaw !== undefined) {
+      const changeControl = parseChangeControl(ccRaw);
+      if (changeControl === null) {
+        r.errors.push(
+          `Change Control must be one of: ${CHANGE_CONTROL_VALUES.join(", ")} (got "${ccRaw}").`,
+        );
+      } else {
+        r.change_control = changeControl;
+        if (changeControl === "relaxed") {
+          const memoryStrict = memoryChangeControlDeclarations(resolveProjectDir()).find(
+            (declaration) => declaration.value === "strict",
+          );
+          if (memoryStrict) r.errors.push(changeControlMemoryStrictRefusal(memoryStrict));
+        }
+      }
+    }
+    r.valid = r.errors.length === 0;
     process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     if (!r.valid) process.exit(1);
   },
