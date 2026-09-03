@@ -134,7 +134,7 @@ describe("t93 aidlc-sensor list (extended from t93-sensor-list-describe.sh, plan
     expect(ids).toEqual([...ids].sort());
   });
 
-  test("4: list returns exactly the 6 framework sensor ids", () => {
+  test("4: list returns exactly the 7 framework sensor ids", () => {
     const r = sensor("list");
     const ids = listRows(r.out).map((cols) => cols[0]);
     // .sh sentinel set — flags drift if a sensor is renamed/added/removed.
