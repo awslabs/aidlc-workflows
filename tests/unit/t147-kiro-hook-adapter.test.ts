@@ -911,7 +911,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("5d: every Kiro worker registers an identity-scoped lifecycle guard", () => {
+  test("5d: every Kiro worker registers identity-scoped lifecycle, plan-approval, and audit hooks", () => {
     const agentDir = join(KIRO_TREE, "agents");
     const workerFiles = require("node:fs")
       .readdirSync(agentDir)
@@ -930,6 +930,11 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             command?: string;
             timeout_ms?: number;
           }>;
+          postToolUse?: Array<{
+            matcher?: string;
+            command?: string;
+            timeout_ms?: number;
+          }>;
         };
       };
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
@@ -938,18 +943,47 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           `bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard ${config.name}`,
         timeout_ms: 15000,
       });
+      // The plan-approval guard's plan authorship rule keys on identity: each
+      // worker passes its own name (forwarded as agent_type), the conductor's
+      // aidlc.json registration passes none and reads as the main session.
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "fs_write",
         command:
-          "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+          `bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard ${config.name}`,
         timeout_ms: 15000,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
         command:
-          "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+          `bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard ${config.name}`,
         timeout_ms: 15000,
       });
+      // The audit row's Actor field needs the same identity on the write hook.
+      const audit = (config.hooks?.postToolUse ?? []).filter((entry) =>
+        (entry.command ?? "").includes("audit-and-sensors"),
+      );
+      expect(audit.length, name).toBeGreaterThan(0);
+      for (const entry of audit) {
+        expect(entry.command, name).toBe(
+          `bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors ${config.name}`,
+        );
+      }
+    }
+    const conductor = JSON.parse(readFileSync(join(agentDir, "aidlc.json"), "utf-8")) as {
+      hooks: {
+        preToolUse: Array<{ command: string }>;
+        postToolUse: Array<{ command: string }>;
+      };
+    };
+    for (const entry of conductor.hooks.preToolUse) {
+      if (entry.command.includes("plan-approval-guard")) {
+        expect(entry.command).toBe("bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard");
+      }
+    }
+    for (const entry of conductor.hooks.postToolUse) {
+      if (entry.command.includes("audit-and-sensors")) {
+        expect(entry.command).toBe("bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors");
+      }
     }
   });
 

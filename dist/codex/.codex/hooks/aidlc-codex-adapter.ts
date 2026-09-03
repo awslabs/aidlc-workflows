@@ -468,8 +468,10 @@ switch (target) {
   }
 
   case "audit-and-sensors": {
-    // apply_patch → write-audit-log THEN run-sensors per touched file (mirrors
-    // the Claude settings.json Write|Edit registration order). Advisory.
+    // apply_patch: write-audit-log THEN run-sensors per touched file (mirrors
+    // the Claude settings.json Write|Edit registration order). Advisory. The
+    // spawned agent's identity rides along so the audit row's Actor names the
+    // writer (absent on main-session calls).
     if ((codex.tool_name ?? "") === "apply_patch") {
       const command = (codex.tool_input?.command as string) ?? "";
       for (const f of patchedFiles(command)) {
@@ -477,6 +479,8 @@ switch (target) {
           hook_event_name: "PostToolUse",
           tool_name: f.tool,
           tool_input: { file_path: f.path },
+          ...(codex.agent_type ? { agent_type: codex.agent_type } : {}),
+          ...(codex.agent_id ? { agent_id: codex.agent_id } : {}),
         });
         runCore("aidlc-write-audit-log.ts", fwd);
         runCore("aidlc-run-sensors.ts", fwd);
@@ -653,10 +657,13 @@ switch (target) {
 
   case "plan-approval-guard": {
     // PreToolUse: code-generation's plan-before-generation ordering. Bash
-    // forwards directly; apply_patch fans out one Write call per touched path;
-    // spawn_agent is normalized to the core Task shape. The block contract is
-    // exit 2 + stderr, cached like reviewer-scope so duplicate delivery replays
-    // the block faithfully.
+    // forwards directly; apply_patch fans out one Write call per touched path
+    // with the spawned agent's identity (the guard's plan authorship rule keys
+    // on a payload WITHOUT agent_type being the main session); spawn_agent is
+    // normalized to the core Task shape with the session id, so the planning
+    // dispatch record it may open is retired by this session's SubagentStop.
+    // The block contract is exit 2 + stderr, cached like reviewer-scope so
+    // duplicate delivery replays the block faithfully.
     const tool = codex.tool_name ?? "";
     if (tool === "Bash") {
       const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", rawInput);
@@ -681,6 +688,8 @@ switch (target) {
             hook_event_name: "PreToolUse",
             tool_name: f.tool,
             tool_input: { file_path: f.path },
+            ...(codex.agent_type ? { agent_type: codex.agent_type } : {}),
+            ...(codex.agent_id ? { agent_id: codex.agent_id } : {}),
           }),
         );
         if (r.code === 2) {
@@ -710,6 +719,7 @@ switch (target) {
         subagent_type: target,
         prompt: spawnAgentPrompt(spawnInput),
       },
+      ...(codex.session_id ? { session_id: codex.session_id } : {}),
     });
     const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", fwd);
     persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);

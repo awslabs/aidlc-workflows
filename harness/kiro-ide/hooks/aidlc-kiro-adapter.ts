@@ -1558,6 +1558,11 @@ function buildForward(): Forward {
       }
       if (toolName === "") return null;
       if (PLAN_APPROVAL_SAFE_READ_TOOLS.has(toolName)) return null;
+      // Kiro IDE payloads carry no agent identity, and the forward says so: the
+      // guard's plan authorship rule (only the developer agent edits a
+      // fingerprinted plan) cannot tell the conductor from the developer agent
+      // here, so it does not run; the stage prose carries that rule on this
+      // harness. The ordering rules run unchanged.
       if (writeTool) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
@@ -1569,6 +1574,7 @@ function buildForward(): Forward {
               paths,
             },
             cwd: projectDir,
+            agent_identity_unavailable: true,
           },
         };
       }
@@ -1583,6 +1589,7 @@ function buildForward(): Forward {
                 typeof toolArgs.command === "string" ? toolArgs.command : "",
             },
             cwd: projectDir,
+            agent_identity_unavailable: true,
           },
         };
       }
@@ -1617,6 +1624,9 @@ function buildForward(): Forward {
             .find((value): value is string =>
               typeof value === "string" && value.trim().length > 0
             ) ?? "";
+        // The session id is spelled as the log-subagent forward spells it, so a
+        // planning dispatch record the guard opens here is retired when this
+        // session's developer dispatch returns.
         return {
           hook: "aidlc-plan-approval-guard.ts",
           input: {
@@ -1627,6 +1637,7 @@ function buildForward(): Forward {
               prompt,
             },
             cwd: projectDir,
+            session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
           },
         };
       }
@@ -1752,7 +1763,10 @@ function buildForward(): Forward {
       }
       // Kiro IDE reports the path RELATIVE to the workspace root; the core hooks
       // compare against an ABSOLUTE record root, so resolve it here. Absolute
-      // paths (defensive) pass through untouched.
+      // paths (defensive) pass through untouched. The payload carries no agent
+      // identity on this harness, and says so: the write-audit hook then omits
+      // its Actor field rather than misattributing a delegate's write to the
+      // main session.
       const filePath = isAbsolute(rawPath) ? rawPath : resolve(projectDir, rawPath);
       return {
         hook: "__audit_and_sensors__", // handled specially below (two hooks)
@@ -1760,6 +1774,7 @@ function buildForward(): Forward {
           hook_event_name: "PostToolUse",
           tool_name: canon,
           tool_input: { file_path: filePath },
+          agent_identity_unavailable: true,
         },
       };
     }

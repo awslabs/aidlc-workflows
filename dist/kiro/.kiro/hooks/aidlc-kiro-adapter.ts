@@ -599,11 +599,20 @@ if (target === "state-transition-guard") {
 // Dispatches normalize to Task. fs_write aliases normalize to Write/Edit and
 // execute_bash normalizes to Bash, matching the same payload family used by
 // review-freeze. Exit 2 + stderr is Kiro's reject contract, forwarded verbatim.
+//
+// Identity rides the registration, as it does for reviewer-scope: each worker
+// agent's JSON passes ITS OWN name as an extra argument
+// (`plan-approval-guard <agent-name>`), forwarded here as agent_type, while the
+// conductor's registration in aidlc.json passes none. The core guard reads a
+// payload without agent_type as the main session, which is what its plan
+// authorship rule (the conductor does not edit a fingerprinted plan) keys on.
 if (target === "plan-approval-guard") {
   const dispatch = kiroDispatch(kiro);
   const tool = kiro.tool_name ?? "";
   const ti = kiro.tool_input ?? {};
   const canonical = canonicalTool(tool, ti);
+  const registeredAgent = extraArgs[0] ?? "";
+  const identity = registeredAgent.length > 0 ? { agent_type: registeredAgent } : {};
   let payload: Record<string, unknown>;
   if (dispatch?.agents.includes("aidlc-developer-agent")) {
     payload = {
@@ -613,6 +622,7 @@ if (target === "plan-approval-guard") {
         subagent_type: "aidlc-developer-agent",
         prompt: dispatch.prompt,
       },
+      ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
     };
   } else if (canonical === "Bash") {
     payload = {
@@ -620,6 +630,7 @@ if (target === "plan-approval-guard") {
       tool_name: "Bash",
       tool_input: { command: (ti.command as string) ?? "" },
       cwd: projectDir,
+      ...identity,
     };
   } else if (canonical === "Write" || canonical === "Edit" || tool === "delete_file") {
     const paths = inputPaths(ti);
@@ -628,6 +639,7 @@ if (target === "plan-approval-guard") {
       tool_name: canonical === "Write" ? "Write" : "Edit",
       tool_input: { file_path: paths[0] ?? "", paths },
       cwd: projectDir,
+      ...identity,
     };
   } else {
     return 0;
@@ -876,16 +888,22 @@ function buildForward(): Forward {
       };
 
     case "audit-and-sensors": {
-      // postToolUse(write/edit) → write-audit-log THEN run-sensors (both ship core).
+      // postToolUse(write/edit): write-audit-log THEN run-sensors (both ship core).
+      // Each worker agent's JSON registers this target with ITS OWN name as an
+      // extra argument (`audit-and-sensors <agent-name>`), forwarded as
+      // agent_type so the audit row's Actor names the writer; the conductor's
+      // registration passes none and reads as the main session.
       if (tool !== "Write" && tool !== "Edit") return null;
       const filePaths = [...new Set(inputPaths(ti).map((filePath) =>
         isAbsolute(filePath) ? filePath : resolve(projectDir, filePath)
       ))];
       if (filePaths.length === 0) return null;
+      const registeredAgent = extraArgs[0] ?? "";
       const inputs = filePaths.map((filePath) => ({
         hook_event_name: "PostToolUse",
         tool_name: tool,
         tool_input: { file_path: filePath },
+        ...(registeredAgent.length > 0 ? { agent_type: registeredAgent } : {}),
       }));
       return {
         hook: "__audit_and_sensors__", // handled specially below (two hooks)
