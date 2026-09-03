@@ -159,32 +159,29 @@ function headingSlug(value: string): string {
   return plain || "section";
 }
 
-/** Render Markdown with stable heading ids and native Mermaid fence recognition. */
+/**
+ * Render Markdown with stable heading ids and native Mermaid fence recognition.
+ * `Bun.markdown.html` is the complete renderer; `Bun.markdown.render` with
+ * callbacks emits ONLY the callback-handled nodes and degrades paragraphs,
+ * lists, and tables to bare text, so headings/mermaid are post-processed here.
+ */
 export function renderMarkdown(markdown: string): string {
-  if (typeof Bun.markdown?.render !== "function") {
-    throw new Error("Bun.markdown.render is unavailable");
+  if (typeof Bun.markdown?.html !== "function") {
+    throw new Error("Bun.markdown.html is unavailable");
   }
   const ids = new Map<string, number>();
-  const rendered = Bun.markdown.render(markdown, {
-    heading: (children, { level }) => {
+  const rendered = Bun.markdown.html(markdown)
+    .replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_match, level: string, children: string) => {
       const base = headingSlug(children);
       const count = ids.get(base) ?? 0;
       ids.set(base, count + 1);
       const id = count === 0 ? base : `${base}-${count + 1}`;
       return `<h${level} id="${id}">${children}</h${level}>`;
-    },
-    code: (children, metadata) => {
-      const language = metadata?.language;
-      const source = escapeHtml(children.replace(/\n$/, ""));
-      if (language?.toLowerCase() === "mermaid") {
-        return `<pre class="mermaid">${source}</pre>`;
-      }
-      const languageClass = language
-        ? ` class="language-${escapeHtml(language.replace(/[^a-z0-9_-]/gi, ""))}"`
-        : "";
-      return `<pre><code${languageClass}>${source}</code></pre>`;
-    },
-  });
+    })
+    .replace(
+      /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
+      (_match, source: string) => `<pre class="mermaid">${source.replace(/\n$/, "")}</pre>`,
+    );
   return sanitizeHtml(rendered);
 }
 
