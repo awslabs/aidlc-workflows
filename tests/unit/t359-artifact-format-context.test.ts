@@ -109,7 +109,7 @@ describe("immutable per-call artifact format context", () => {
     const vocabulary = readFileSync(VOCABULARY, "utf-8");
     expect(vocabulary).not.toMatch(/^let /m);
     expect(vocabulary).not.toMatch(
-      /^const\s+\w*[Ff]ormat\w*\s*=\s*new Set(?:<[^>]+>)?\s*\(/m,
+      /^(?:export\s+)?const\s+\w*[Ff]ormat\w*\s*=\s*new Set(?:<[^>]+>)?\s*\(/m,
     );
     expect(vocabulary).not.toMatch(/\.html\.(?:add|delete|clear)\s*\(/);
 
@@ -155,10 +155,11 @@ describe("immutable per-call artifact format context", () => {
 
   test("readStateFile has no side effect before resolving the off intent as Markdown", () => {
     withEnvAndFreshCaches({ AIDLC_STAGE_GRAPH: graphPath }, () => {
-      const { project, onRecord, offRecord } = twoIntentProject();
+      const { project, offState, onRecord, offRecord } = twoIntentProject();
       readStateFile(project, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+      expect(artifactFilename("intent-statement")).toBe("intent-statement.md");
       expect(resolvedExtension(project, offRecord, {
-        formats: artifactFormatsForProject(project, basename(offRecord), DEFAULT_SPACE),
+        stateContent: offState,
       })).toBe("md");
       expect(resolvedExtension(project, onRecord, {
         formats: artifactFormatsForProject(project, DEFAULT_RECORD_DIR, DEFAULT_SPACE),

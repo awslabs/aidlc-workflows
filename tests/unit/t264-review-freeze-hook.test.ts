@@ -258,6 +258,14 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(blockReason(v)).toContain("Request Changes");
   });
 
+  test("uses the supplied formats to freeze the canonical HTML artifact only", () => {
+    const HTML = { html: new Set(["requirements"]) };
+    const htmlFile =
+      "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.html";
+    expect(judgeFreeze(RA, htmlFile, NONE, HTML, ready).block).toBe(true);
+    expect(judgeFreeze(RA, raFile, NONE, HTML, ready).block).toBe(false);
+  });
+
   test("blocks under a terminal NOT-READY receipt", () => {
     expect(judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, notReady).block).toBe(true);
   });
