@@ -21,7 +21,7 @@ map to the static protocol or the named conditional module.
 
 ## Protocol File Structure
 
-The stage protocol is split across seven files, loaded conditionally by the
+The stage protocol is split across nine files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
@@ -33,6 +33,8 @@ conductor based on workflow context:
 | `stage-protocol-ensemble.md` | Ensemble topology, subagent returns, contribution files, and objection triage | For subagent, pipeline, mob, or support-agent stages |
 | `stage-protocol-construction.md` | Planned Bolt-major ceremony (labeled non-executable future-state), the shipped per-unit walk, Build-and-Test loop-back, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
 | `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, convergence, finalize, and reviewer boundary | Every invoke-swarm |
+| `stage-protocol-html.md` | Self-contained HTML artifact authoring contract | When `protocol_modules` includes `html` |
+| `stage-protocol-guide.md` | Browser question explainer sections, trade-offs, and recommendations | When `protocol_modules` includes `guide` |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
 
@@ -315,13 +317,12 @@ Example: `Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval
 
 ## Question Flow
 
-When a stage gathers user input through questions, the protocol defines a
-tri-mode interaction flow with batching rules, mandatory answer analysis,
-and ambiguity detection.
+When a stage gathers input, three interaction modes are always available; a
+fourth browser guide mode appears only when `review_ui` is present.
 
 *(Protocol Section 3)*
 
-### Tri-Mode System
+### Interaction Modes
 
 **Step 1: Create the questions file** in the appropriate `<record>/`
 directory using `[Answer]:` tag format with options A-E. Every ordinary
@@ -342,11 +343,14 @@ AskUserQuestion({
     options: [
       { label: "Guide me", description: "Walk through each question interactively here" },
       { label: "I'll edit the file", description: "I'll fill in the answers in the file directly" },
-      { label: "Chat", description: "Discuss freely -- I'll extract decisions from our conversation" }
+      { label: "Chat", description: "Discuss freely -- I'll extract decisions from our conversation" },
+      { label: "Guide me in the browser", description: "Read an explainer with trade-offs and answer in the browser" }
     ]
   }]
 })
 ```
+
+The fourth option requires `review_ui`; numbered prose then has five visible lines including Other.
 
 Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
 
@@ -385,6 +389,9 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
 - Present the consolidated summary and use the same persisted, receipt-backed
   confirmation as Guide Me. Self-guided editing does not waive confirmation.
 
+#### Guide Me in the Browser
+Write and check `<slug>-questions-guide.html`, point to the Browser Questions view, and stop. On **done**, run `aidlc-log.ts answers-apply`, then use Edit File's summary and confirmation flow.
+
 #### Chat (Freeform Mode)
 
 - Open-ended conversation; extract decisions as they emerge
@@ -411,6 +418,7 @@ After collecting answers, analyze ALL responses (mandatory):
 - **Vague answers**: "mix of", "not sure", "depends", "probably"
 - **Contradictions** between answers
 - **Missing details** needed for next step
+- `[Note]:` is discussion input for follow-ups, not an answer or validation error.
 
 If ANY ambiguity found, create follow-up questions and resolve before
 proceeding. **When in doubt, ask.**

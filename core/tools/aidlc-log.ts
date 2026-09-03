@@ -7,8 +7,13 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
@@ -68,6 +73,7 @@ import {
   validateReviewAppendix,
   withAuditLock,
   workspaceSourceState,
+  writeFileAtomic,
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
 import type {
@@ -83,6 +89,14 @@ import {
   recordPlanApprovalChallenge,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
+import {
+  ANSWERS_PREFIX,
+  type ConsumedEntry,
+  readConsumed,
+  sha256Hex,
+  stageReviewUiDir,
+  writeConsumed,
+} from "./aidlc-review-ui-shared.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -764,8 +778,7 @@ function handleAnswer(args: string[]): void {
     if (targetAtApprovalGate && !pendingDecision) {
       if (
         !autonomousDecision &&
-        !humanPresenceGuardDisabled() &&
-        !humanActedSinceLastAnswer(pd)
+        !freshHumanReplyAvailable(pd)
       ) {
         error(
           "Cannot record this approval choice because no new human reply has arrived. "
@@ -786,9 +799,7 @@ function handleAnswer(args: string[]): void {
 
     if (autonomousDecision) {
       // autonomous Construction: no human presence required
-    } else if (humanPresenceGuardDisabled()) {
-      // scoped test off-switch
-    } else if (!humanActedSinceLastAnswer(pd)) {
+    } else if (!freshHumanReplyAvailable(pd)) {
       error(
         "Cannot record this answer because no new human reply has arrived for the question. "
           + "Wait for the human to type an answer, then try again."
@@ -805,6 +816,343 @@ function handleAnswer(args: string[]): void {
     console.log(
       JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage })
     );
+  });
+}
+
+// --- Subcommand: answers-apply ---
+// Usage: aidlc-log answers-apply --stage <slug> --questions-file <path>
+//   [--unit <unit>] [--project-dir <path>]
+//
+// Applies browser-authored answer submissions under the same audit lock and
+// fresh-HUMAN_TURN discipline as the ordinary `answer` subcommand.
+
+interface BrowserAnswer {
+  id: string;
+  labels?: string[];
+  other?: string;
+  note?: string;
+}
+
+interface BrowserAnswerSubmission {
+  version: 1;
+  questions_file: string;
+  source_sha256: string;
+  answers: BrowserAnswer[];
+}
+
+interface PendingAnswerSubmission {
+  file: string;
+  sha256: string;
+  submission: BrowserAnswerSubmission;
+}
+
+interface QuestionSection {
+  id: string;
+  start: number;
+  end: number;
+  answerLine: number;
+  noteLines: number[];
+  options: Set<string>;
+}
+
+function parseBrowserAnswerSubmission(
+  file: string,
+  source: string,
+): BrowserAnswerSubmission {
+  let value: unknown;
+  try {
+    value = JSON.parse(source);
+  } catch {
+    error(`answers-apply refused: ${file} is not valid JSON.`);
+  }
+  if (typeof value !== "object" || value === null) {
+    error(`answers-apply refused: ${file} is not an answer submission object.`);
+  }
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.version !== 1 ||
+    typeof candidate.questions_file !== "string" ||
+    !/^[0-9a-f]{64}$/.test(String(candidate.source_sha256 ?? "")) ||
+    !Array.isArray(candidate.answers)
+  ) {
+    error(`answers-apply refused: ${file} has an invalid answer submission shape.`);
+  }
+  const answers: BrowserAnswer[] = candidate.answers.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      error(`answers-apply refused: ${file} answer ${index + 1} is invalid.`);
+    }
+    const answer = entry as Record<string, unknown>;
+    if (
+      typeof answer.id !== "string" ||
+      !/^Q[1-9][0-9]*$/.test(answer.id) ||
+      (answer.labels !== undefined &&
+        (!Array.isArray(answer.labels) ||
+          answer.labels.some((label) => typeof label !== "string" || !/^[A-Z]$/.test(label)))) ||
+      (answer.other !== undefined && typeof answer.other !== "string") ||
+      (answer.note !== undefined && typeof answer.note !== "string")
+    ) {
+      error(`answers-apply refused: ${file} answer ${index + 1} is invalid.`);
+    }
+    return {
+      id: answer.id,
+      ...(answer.labels !== undefined ? { labels: [...answer.labels] as string[] } : {}),
+      ...(answer.other !== undefined ? { other: answer.other } : {}),
+      ...(answer.note !== undefined ? { note: answer.note } : {}),
+    };
+  });
+  return {
+    version: 1,
+    questions_file: candidate.questions_file,
+    source_sha256: candidate.source_sha256 as string,
+    answers,
+  };
+}
+
+function pendingAnswerSubmissions(stageDir: string): PendingAnswerSubmission[] {
+  const reviewDir = stageReviewUiDir(stageDir);
+  if (!existsSync(reviewDir)) return [];
+  const consumed = readConsumed(stageDir);
+  const pending: PendingAnswerSubmission[] = [];
+  for (const file of readdirSync(reviewDir).sort()) {
+    if (!file.startsWith(ANSWERS_PREFIX) || !file.endsWith(".json")) continue;
+    const source = readFileSync(join(reviewDir, file), "utf-8");
+    const sha256 = sha256Hex(source);
+    if (consumed.entries.some((entry) => entry.file === file && entry.sha256 === sha256)) {
+      continue;
+    }
+    pending.push({
+      file,
+      sha256,
+      submission: parseBrowserAnswerSubmission(file, source),
+    });
+  }
+  return pending;
+}
+
+function parseQuestionSections(lines: string[]): Map<string, QuestionSection> {
+  const starts: Array<{ id: string; line: number }> = [];
+  let inFence = false;
+  for (let line = 0; line < lines.length; line++) {
+    if (/^\s{0,3}(?:```|~~~)/.test(lines[line])) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const heading = /^\s{0,3}##[ \t]+Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?[ \t]*#*[ \t]*$/.exec(lines[line]);
+    if (heading) starts.push({ id: `Q${heading[1]}`, line });
+  }
+  const sections = new Map<string, QuestionSection>();
+  for (let index = 0; index < starts.length; index++) {
+    const start = starts[index];
+    let end = lines.length;
+    for (let line = start.line + 1; line < lines.length; line++) {
+      if (/^\s{0,3}##(?:[ \t]|$)/.test(lines[line])) {
+        end = line;
+        break;
+      }
+    }
+    if (sections.has(start.id)) {
+      error(`answers-apply refused: duplicate H2 section "${start.id}".`);
+    }
+    const answerLines: number[] = [];
+    const noteLines: number[] = [];
+    const options = new Set<string>();
+    for (let line = start.line + 1; line < end; line++) {
+      const answer = /^\s*\[Answer\]:/.test(lines[line]);
+      const note = /^\s*\[Note\]:/.test(lines[line]);
+      const option = /^\s*([A-Z])\.\s+/.exec(lines[line]);
+      if (answer) answerLines.push(line);
+      if (note) noteLines.push(line);
+      if (option) options.add(option[1]);
+    }
+    if (answerLines.length !== 1) {
+      error(
+        `answers-apply refused: ${start.id} must contain exactly one [Answer]: line.`,
+      );
+    }
+    sections.set(start.id, {
+      id: start.id,
+      start: start.line,
+      end,
+      answerLine: answerLines[0],
+      noteLines,
+      options,
+    });
+  }
+  return sections;
+}
+
+function renderBrowserAnswer(
+  answer: BrowserAnswer,
+  section: QuestionSection,
+): string {
+  const other = answer.other?.trim();
+  const labels = answer.labels ?? [];
+  if (other) {
+    if (!section.options.has("X")) {
+      error(`answers-apply refused: ${answer.id} does not offer option X.`);
+    }
+    if (labels.length > 0 && !labels.includes("X")) {
+      error(`answers-apply refused: ${answer.id} supplies Other text without selecting X.`);
+    }
+    return `X — ${other.replace(/\s+/g, " ")}`;
+  }
+  if (labels.includes("X")) {
+    error(`answers-apply refused: ${answer.id} selects X but supplies no Other text.`);
+  }
+  if (labels.length === 0) {
+    error(`answers-apply refused: ${answer.id} has no selected answer.`);
+  }
+  for (const label of labels) {
+    if (!section.options.has(label)) {
+      error(`answers-apply refused: ${answer.id} does not offer option ${label}.`);
+    }
+  }
+  return labels.join(", ");
+}
+
+function applyBrowserAnswers(
+  source: string,
+  answers: ReadonlyMap<string, BrowserAnswer>,
+): string {
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  const trailingNewline = source.endsWith("\n");
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  if (trailingNewline) lines.pop();
+  const sections = parseQuestionSections(lines);
+  const answerAt = new Map<number, { value: string; note?: string }>();
+  const replacedNotes = new Set<number>();
+  for (const [id, answer] of answers) {
+    const section = sections.get(id);
+    if (!section) error(`answers-apply refused: questions file has no section "${id}".`);
+    const note = answer.note?.replace(/\s+/g, " ").trim();
+    answerAt.set(section.answerLine, {
+      value: renderBrowserAnswer(answer, section),
+      ...(note ? { note } : {}),
+    });
+    if (note) {
+      for (const line of section.noteLines) replacedNotes.add(line);
+    }
+  }
+  if (answers.size > 0 && answerAt.size === 0) {
+    error("answers-apply refused: no submitted answers matched the questions file.");
+  }
+  const output: string[] = [];
+  for (let line = 0; line < lines.length; line++) {
+    if (replacedNotes.has(line)) continue;
+    const replacement = answerAt.get(line);
+    if (!replacement) {
+      output.push(lines[line]);
+      continue;
+    }
+    const indent = /^\s*/.exec(lines[line])?.[0] ?? "";
+    output.push(`${indent}[Answer]: ${replacement.value}`);
+    if (replacement.note) output.push(`${indent}[Note]: ${replacement.note}`);
+  }
+  return output.join(newline) + (trailingNewline ? newline : "");
+}
+
+function projectQuestionsFile(pd: string, value: string): { absolute: string; relative: string } {
+  const projectRoot = realpathSync(pd);
+  let absolute: string;
+  try {
+    absolute = realpathSync(resolve(pd, value));
+  } catch {
+    error(`answers-apply refused: questions file not found: ${value}.`);
+  }
+  const rel = relative(projectRoot, absolute);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    error("answers-apply refused: --questions-file must be a file inside the project.");
+  }
+  assertNoSymlinkInChainOrThrow(projectRoot, rel);
+  return { absolute, relative: toPosix(rel) };
+}
+
+function freshHumanReplyAvailable(pd: string): boolean {
+  return humanPresenceGuardDisabled() || humanActedSinceLastAnswer(pd);
+}
+
+function handleAnswersApply(args: string[]): void {
+  const { flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  if (!flags["questions-file"]) error("Missing --questions-file <path>");
+  const pd = resolveActiveProjectDir(projectDir);
+  if (flags.unit) validateLiveUnitScope(pd, flags.unit);
+  const questions = projectQuestionsFile(pd, flags["questions-file"]);
+  const stageDir = dirname(questions.absolute);
+
+  withAuditLock(pd, () => {
+    const pending = pendingAnswerSubmissions(stageDir);
+    if (pending.length === 0) {
+      console.log(JSON.stringify({
+        applied: 0,
+        files: [],
+        questions_file: questions.relative,
+      }));
+      return;
+    }
+    const source = readFileSync(questions.absolute, "utf-8");
+    const sourceSha256 = sha256Hex(source);
+    for (const item of pending) {
+      const submittedPath = resolve(
+        pd,
+        item.submission.questions_file,
+      );
+      if (submittedPath !== questions.absolute) {
+        error(
+          `answers-apply refused: ${item.file} targets a different questions file.`,
+        );
+      }
+      if (item.submission.source_sha256 !== sourceSha256) {
+        error(
+          `answers-apply refused: ${item.file} was recorded against an older questions file; ask the human to reload and save again.`,
+        );
+      }
+    }
+    if (!freshHumanReplyAvailable(pd)) {
+      error(
+        "Cannot apply browser answers because no new human reply has arrived for the question. " +
+          "Wait for the human to type an answer, then try again." +
+          unattendedHumanPresenceHint(),
+      );
+    }
+
+    const answers = new Map<string, BrowserAnswer>();
+    for (const item of pending) {
+      for (const answer of item.submission.answers) answers.set(answer.id, answer);
+    }
+    const updated = applyBrowserAnswers(source, answers);
+    const digest = sha256Hex(updated);
+    writeFileAtomic(questions.absolute, updated);
+    const files = pending.map((item) => item.file);
+    const fields: Record<string, string> = {
+      Stage: flags.stage,
+      Mode: "browser",
+      "Questions File": questions.relative,
+      Answers: String(answers.size),
+      Submissions: files.join(", "),
+      Digest: digest,
+    };
+    if (flags.unit) fields.Unit = flags.unit;
+    emitAudit(pd, "QUESTION_ANSWERED", fields);
+
+    const consumed = readConsumed(stageDir);
+    const consumedAt = new Date().toISOString();
+    const entries: ConsumedEntry[] = pending.map((item) => ({
+      file: item.file,
+      sha256: item.sha256,
+      consumed_at: consumedAt,
+      result: "answers-applied",
+    }));
+    writeConsumed(stageDir, {
+      version: 1,
+      entries: [...consumed.entries, ...entries],
+    });
+    console.log(JSON.stringify({
+      applied: answers.size,
+      files,
+      questions_file: questions.relative,
+    }));
   });
 }
 
@@ -2294,6 +2642,9 @@ export function main(argv: string[]): void {
       case "answer":
         handleAnswer(filteredArgs.slice(1));
         break;
+      case "answers-apply":
+        handleAnswersApply(filteredArgs.slice(1));
+        break;
       case "link":
         handleLink(filteredArgs.slice(1));
         break;
@@ -2301,7 +2652,7 @@ export function main(argv: string[]): void {
         handleReview(filteredArgs.slice(1));
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, link, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers-apply, link, review`);
     }
   } catch (e) {
     error(errorMessage(e));

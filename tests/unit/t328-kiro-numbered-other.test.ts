@@ -134,9 +134,11 @@ describe("t328 Kiro numbered Other rendering contract", () => {
       );
     }
     expect(CORE_PROTOCOL).toContain(
-      "this interaction-mode question has four visible\nnumbered lines",
+      "On a numbered-prose harness that gives five visible lines",
     );
-    expect(CORE_PROTOCOL).toContain("the final\n`4. Other`");
+    expect(CORE_PROTOCOL).toContain(
+      "without `review_ui`, retain the existing\nthree semantic options plus Other",
+    );
   });
 
   test("a streaming three-option prefix is not accepted as the completed mode list", () => {
