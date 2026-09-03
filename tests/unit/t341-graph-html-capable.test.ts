@@ -77,10 +77,19 @@ describe("compiled HTML capabilities", () => {
     expect(stages.flatMap((stage) => stage.html_capable).some((name) => name.endsWith("-questions"))).toBe(false);
   });
 
-  test("eligible core artifact without a classification fails closed", () => {
-    expect(() => fixtureCompile(fixtureStage("fixture", "unclassified-output"))).toThrow(
-      'unclassified artifact "unclassified-output" produced by fixture: add it to ARTIFACT_KIND in core/tools/aidlc-artifact-vocabulary.ts',
-    );
+  test("an unclassified artifact fails safe to Markdown at runtime and fails the strict packaging compile", () => {
+    // Runtime (a team's custom stage): compiles, never HTML-capable.
+    const relaxed = fixtureCompile(fixtureStage("fixture", "unclassified-output, intent-statement"));
+    expect(relaxed.stages[0].html_capable).toEqual(["intent-statement"]);
+    // Packaging (core stage set): the build refuses an unclassified core artifact.
+    process.env.AIDLC_GRAPH_STRICT_KINDS = "1";
+    try {
+      expect(() => fixtureCompile(fixtureStage("fixture", "unclassified-output"))).toThrow(
+        'unclassified artifact "unclassified-output" produced by fixture: add it to ARTIFACT_KIND in core/tools/aidlc-artifact-vocabulary.ts',
+      );
+    } finally {
+      delete process.env.AIDLC_GRAPH_STRICT_KINDS;
+    }
   });
 
   test("html_exclude removes an otherwise capable artifact", () => {

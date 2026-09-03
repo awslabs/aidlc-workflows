@@ -26,9 +26,9 @@ consumes:
 requires_stage:
   - units-generation
 sensors:
-  - html-shape
   - required-sections
   - upstream-coverage
+  - html-shape
 scopes:
   - enterprise
   - feature

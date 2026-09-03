@@ -9283,10 +9283,13 @@ export function validateReviewAppendix(
   } else {
     authority = renderReviewHtmlAuthority(normalized);
     if (authority === null) {
+      // Keep the long-standing Markdown wording for Markdown-looking appendices;
+      // only an attempted HTML section gets the HTML contract in its refusal.
       return {
         valid: false,
-        reason:
-          "the appended bytes must be exactly one terminal canonical Markdown or HTML review section after blank separator whitespace",
+        reason: /<section\b/i.test(normalized)
+          ? 'the appended bytes must be exactly one terminal `<section data-aidlc="review">` whose first child is `<h2>Review</h2>`, after blank separator whitespace'
+          : "the appended bytes must begin with only blank lines followed by an exact `## Review` heading",
       };
     }
   }

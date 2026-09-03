@@ -25,8 +25,8 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 ### Flow
 
 1. **Invoke reviewer sub-agent.** Before every dispatch, not only the first,
-   and before changing an existing Markdown or HTML Review appendix, record
-   the request:
+   and before changing an existing `## Review` section (or its HTML
+   `<section data-aidlc="review">` form), record the request:
    `bun .claude/tools/aidlc-log.ts review --stage "<directive.stage>" --reviewer "<directive.reviewer>" --iteration <n>`;
    add `--unit "<directive.unit>"` on a per-unit stage and `--single` on an
    isolated stage run. This request-first ordering is mandatory for a
@@ -45,8 +45,8 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    against the restored state, or obtain the human's Request Changes decision
    before editing again.
 
-   `directive.review_artifact` names the one required Markdown or HTML output
-   that owns the review appendix; no produces-list position, plugin-added
+   `directive.review_artifact` names the one required Markdown output (or its
+   `.html` form when the artifact resolves to HTML) that owns the review appendix; no produces-list position, plugin-added
    output, or directory enumeration may redefine it. Resolve the form from the
    artifact's extension: `.md` uses the Markdown appendix and `.html` uses the
    HTML appendix. On a per-unit review it resolves inside that Unit. The request
@@ -66,8 +66,8 @@ Everything else in this section is silent. Nothing is said about invoking, handi
       The tool overlays durable human dispositions from the audit ledger, so
       `Accepted risk` and `Rejected: <reason>` survive without editing the
       receipt-frozen artifact.
-   2. DELETE the existing Markdown `## Review` section or HTML
-      `<section data-aidlc="review">` and every separator byte introduced with
+   2. DELETE the existing `## Review` section (Markdown) or
+      `<section data-aidlc="review">` (HTML) and every separator byte introduced with
       it, restoring the request-bound pre-append bytes (including the HTML
       document's closing `</body></html>` tags).
       This makes step 3's missing-section check mean the same thing on every path: a
@@ -197,7 +197,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
      (`**Reviewer:** <reviewer-agent-name>`), so the `SUBAGENT_COMPLETED` audit
      event records which reviewer ran. The reviewer's persona owns this contract.
 
-3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the canonical Review section from `directive.review_artifact` and validate it. The review is complete only when every pre-dispatch artifact byte and the request-time source fingerprint still match and the entire appended suffix is exactly ONE terminal owned Markdown or HTML Review section with the canonical verdict, reviewer, and iteration fields above, plus the conditional request-challenge field when issued. Markdown validation uses Bun's Markdown parser: fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint top-level ownership, and rendered Markdown or raw-HTML H1/H2 headings are terminal-section escapes. HTML validation ignores comments and raw script/style text, requires the exact terminal review-section ownership marker, and reads only canonical `<p><strong>Field:</strong> value</p>` fields. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), semantic bytes before the form, a later top-level Markdown heading or HTML body element, a section with no canonical verdict line, a missing/wrong/duplicate request challenge when one was issued, forged/missing/conflicting duplicate ownership fields, or duplicated sections/verdicts (conflicting - never guess which was meant). A malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
+3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the canonical Review section from `directive.review_artifact` and validate it. The review is complete only when every pre-dispatch artifact byte and the request-time source fingerprint still match and the entire appended suffix is exactly ONE terminal owned `## Review` section (or, for an HTML artifact, ONE terminal owned `<section data-aidlc="review">`) with the canonical verdict, reviewer, and iteration fields above, plus the conditional request-challenge field when issued. Markdown validation uses Bun's Markdown parser: fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint top-level ownership, and rendered Markdown or raw-HTML H1/H2 headings are terminal-section escapes. HTML validation ignores comments and raw script/style text, requires the exact terminal review-section ownership marker, and reads only canonical `<p><strong>Field:</strong> value</p>` fields. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), semantic bytes before the form, a later top-level Markdown heading or HTML body element, a section with no canonical verdict line, a missing/wrong/duplicate request challenge when one was issued, forged/missing/conflicting duplicate ownership fields, or duplicated sections/verdicts (conflicting - never guess which was meant). A malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
 
    **On an incomplete attempt:** no verdict exists to record, so the step-1
    request is still unmatched. If the ledger does not yet mark a retry on this

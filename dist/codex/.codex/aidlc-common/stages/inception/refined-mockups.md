@@ -32,9 +32,9 @@ consumes:
 requires_stage:
   - user-stories
 sensors:
-  - html-shape
   - required-sections
   - upstream-coverage
+  - html-shape
 scopes:
   - enterprise
   - feature

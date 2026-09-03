@@ -800,6 +800,9 @@ function runTool(
     AIDLC_SRC: treeRoot,
     AIDLC_HARNESS_DIR: harnessDir,
     AIDLC_HARNESS_NAME: harnessName,
+    // Core stage sets must classify every produces name (HTML capability
+    // kinds); user-authored stages compiled at runtime fail safe instead.
+    AIDLC_GRAPH_STRICT_KINDS: "1",
   };
   if (rulesDirAbs) env.AIDLC_RULES_DIR = rulesDirAbs;
   const res = spawnSync("bun", [toolPath, ...rest], {

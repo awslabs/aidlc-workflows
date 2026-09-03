@@ -27,9 +27,9 @@ requires_stage:
   - scope-definition
   - team-formation
 sensors:
-  - html-shape
   - required-sections
   - upstream-coverage
+  - html-shape
 scopes:
   - enterprise
   - feature

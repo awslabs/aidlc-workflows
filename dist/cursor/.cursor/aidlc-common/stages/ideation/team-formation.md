@@ -22,9 +22,9 @@ consumes:
 requires_stage:
   - scope-definition
 sensors:
-  - html-shape
   - required-sections
   - upstream-coverage
+  - html-shape
 scopes:
   - enterprise
   - feature

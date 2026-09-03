@@ -2075,22 +2075,28 @@ function buildGraphStage(
   const htmlExcluded = parsed.html_exclude === "*"
     ? new Set(produces)
     : new Set(parsed.html_exclude ?? []);
+  // HTML capability is opt-in by classification. A produces name the
+  // vocabulary does not know is a user-authored (custom harness) or plugin
+  // artifact: it fails SAFE to Markdown so a team's own stage never breaks
+  // compile. The packager compiles with AIDLC_GRAPH_STRICT_KINDS=1 so an
+  // unclassified CORE artifact still fails the build (t340 pins the same).
   const html_capable: string[] = [];
   if (HTML_ELIGIBLE_PHASES.has(parsed.phase ?? phase) && parsed.plugin === undefined) {
     for (const artifact of produces) {
       const kind = artifactKind(artifact);
       if (kind === null) {
-        throw new Error(
-          `unclassified artifact "${artifact}" produced by ${slug}: add it to ARTIFACT_KIND in core/tools/aidlc-artifact-vocabulary.ts`,
-        );
+        if (process.env.AIDLC_GRAPH_STRICT_KINDS === "1") {
+          throw new Error(
+            `unclassified artifact "${artifact}" produced by ${slug}: add it to ARTIFACT_KIND in core/tools/aidlc-artifact-vocabulary.ts`,
+          );
+        }
+        continue;
       }
       if ((kind === "document" || kind === "visual") && !htmlExcluded.has(artifact)) {
         html_capable.push(artifact);
       }
     }
   }
-  // Plugin manifests do not yet carry artifact_kinds through the compose seam;
-  // their contributed outputs therefore fail safe to machine/Markdown.
   // Dependency edges are set-valued. Normalize copy-paste duplicates here so
   // every graph consumer, including topoSort's indegree accounting, observes
   // the same edge cardinality as the compile-time number seeder.

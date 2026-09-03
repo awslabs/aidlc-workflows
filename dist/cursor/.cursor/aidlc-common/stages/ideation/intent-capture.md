@@ -19,10 +19,10 @@ produces:
 consumes: []
 requires_stage: []
 sensors:
-  - html-shape
   - claim-sources
   - required-sections
   - upstream-coverage
+  - html-shape
 scopes:
   - enterprise
   - feature

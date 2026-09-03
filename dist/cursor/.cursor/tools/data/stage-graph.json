@@ -165,10 +165,10 @@
     "consumes": [],
     "requires_stage": [],
     "sensors": [
-      "html-shape",
       "claim-sources",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -203,14 +203,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "claim-sources",
         "path": ".cursor/sensors/aidlc-claim-sources.md",
         "fire_on": "gate",
@@ -229,6 +221,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -267,9 +267,9 @@
       "intent-capture"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -298,14 +298,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -316,6 +308,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -370,9 +370,9 @@
       "market-research"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -402,14 +402,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -420,6 +412,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -467,9 +467,9 @@
       "feasibility"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -499,14 +499,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -517,6 +509,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -563,9 +563,9 @@
       "scope-definition"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -594,14 +594,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -612,6 +604,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -659,9 +659,9 @@
       "team-formation"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -695,14 +695,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -713,6 +705,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -787,9 +787,9 @@
       "rough-mockups"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -818,14 +818,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -836,6 +828,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -984,9 +984,9 @@
       "reverse-engineering"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -1019,14 +1019,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -1037,6 +1029,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -1095,9 +1095,9 @@
       "reverse-engineering"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -1139,14 +1139,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -1157,6 +1149,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -1213,10 +1213,10 @@
       "requirements-analysis"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
       "upstream-coverage",
-      "traceability"
+      "traceability",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -1252,14 +1252,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -1282,6 +1274,14 @@
         "default_severity": "advisory",
         "category": "document-traceability",
         "matches": "**/traceability.json"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
   },
@@ -1336,9 +1336,9 @@
       "user-stories"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -1374,14 +1374,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -1392,6 +1384,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -1450,10 +1450,10 @@
       "refined-mockups"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
       "upstream-coverage",
-      "traceability"
+      "traceability",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -1489,14 +1489,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -1519,6 +1511,14 @@
         "default_severity": "advisory",
         "category": "document-traceability",
         "matches": "**/traceability.json"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
   },
@@ -1565,10 +1565,10 @@
       "domain-design"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
       "upstream-coverage",
-      "traceability"
+      "traceability",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -1604,14 +1604,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -1634,6 +1626,14 @@
         "default_severity": "advisory",
         "category": "document-traceability",
         "matches": "**/traceability.json"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
       }
     ]
   },
@@ -1677,9 +1677,9 @@
       "units-generation"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -1715,14 +1715,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -1733,6 +1725,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",
@@ -1807,9 +1807,9 @@
       "units-generation"
     ],
     "sensors": [
-      "html-shape",
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "html-shape"
     ],
     "scopes": [
       "enterprise",
@@ -1841,14 +1841,6 @@
     ],
     "sensors_applicable": [
       {
-        "id": "html-shape",
-        "path": ".cursor/sensors/aidlc-html-shape.md",
-        "fire_on": "gate",
-        "default_severity": "advisory",
-        "category": "document-shape",
-        "matches": "**/{aidlc-docs,intents}/**"
-      },
-      {
         "id": "required-sections",
         "path": ".cursor/sensors/aidlc-required-sections.md",
         "fire_on": "gate",
@@ -1859,6 +1851,14 @@
       {
         "id": "upstream-coverage",
         "path": ".cursor/sensors/aidlc-upstream-coverage.md",
+        "fire_on": "gate",
+        "default_severity": "advisory",
+        "category": "document-shape",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "html-shape",
+        "path": ".cursor/sensors/aidlc-html-shape.md",
         "fire_on": "gate",
         "default_severity": "advisory",
         "category": "document-shape",

@@ -27,9 +27,9 @@ requires_stage:
   - intent-capture
   - market-research
 sensors:
-  - html-shape
   - required-sections
   - upstream-coverage
+  - html-shape
 scopes:
   - enterprise
   - feature

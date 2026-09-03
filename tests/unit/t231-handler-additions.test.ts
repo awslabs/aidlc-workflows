@@ -151,17 +151,19 @@ describe("t231 config get/list/set handlers", () => {
 
     const human = utility(["config-list"], project);
     expect(human.status).toBe(0);
-    // review is empty on a fixture with no per-run override set (2.5.40).
-    expect(human.stdout).toBe("depth: Standard\ntest-strategy: Standard\nreview: \n");
+    // review is empty on a fixture with no per-run override set (2.5.40);
+    // html-artifacts reads `off` when the state field is absent (pre-2.8 intents).
+    expect(human.stdout).toBe("depth: Standard\ntest-strategy: Standard\nreview: \nhtml-artifacts: off\n");
 
     const json = utility(["config-list", "--json"], project);
     expect(json.status).toBe(0);
     expect(
-      parseJson<{ depth: string; "test-strategy": string; review: string }>(json.stdout)
+      parseJson<{ depth: string; "test-strategy": string; review: string; "html-artifacts": string }>(json.stdout)
     ).toEqual({
       depth: "Standard",
       "test-strategy": "Standard",
       review: "",
+      "html-artifacts": "off",
     });
   });
 

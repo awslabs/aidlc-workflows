@@ -18,9 +18,9 @@ consumes:
 requires_stage:
   - intent-capture
 sensors:
-  - html-shape
   - required-sections
   - upstream-coverage
+  - html-shape
 scopes:
   - enterprise
   - feature

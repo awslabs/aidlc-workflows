@@ -38,9 +38,9 @@ requires_stage:
   - state-init
   - reverse-engineering
 sensors:
-  - html-shape
   - required-sections
   - upstream-coverage
+  - html-shape
 scopes:
   - enterprise
   - feature

@@ -33,10 +33,10 @@ consumes:
 requires_stage:
   - requirements-analysis
 sensors:
-  - html-shape
   - required-sections
   - upstream-coverage
   - traceability
+  - html-shape
 scopes:
   - enterprise
   - feature
