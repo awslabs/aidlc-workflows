@@ -53,7 +53,8 @@ import {
   runtimeRoot,
 } from "./aidlc-install-paths.ts";
 import { defaultHarnessPath } from "./aidlc-machine-config.ts";
-import { configureProjectPin } from "./aidlc-lifecycle.ts";
+import { configureChannel, configureProjectPin } from "./aidlc-lifecycle.ts";
+import { RELEASE_CHANNELS } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
@@ -245,6 +246,7 @@ type SettingsMutation = {
 const CONFIG_VALUE_FLAGS = new Set([
   "--agent",
   "--ca-bundle",
+  "--channel",
   "--deciding-effort",
   "--default-scope",
   "--effort",
@@ -372,6 +374,7 @@ const VALID_CONFIG_SECTIONS = new Set([
 
 const ROOT_CONFIG_FLAGS = new Set([
   "--ca-bundle",
+  "--channel",
   "--dry-run",
   "--force",
   "--from",
@@ -606,10 +609,38 @@ function validateModelsArgs(argv: readonly string[]): string | null {
   return null;
 }
 
+// `config --channel [stable|preview]` reads or sets the machine release
+// channel. The value is optional: bare `--channel` prints the channel in force.
+function validateChannelConfigArgs(argv: readonly string[]): string | null {
+  const index = argv.indexOf("--channel");
+  const value = argv[index + 1];
+  const hasValue = value !== undefined && !value.startsWith("--");
+  if (hasValue && !(RELEASE_CHANNELS as readonly string[]).includes(value)) {
+    return `--channel must be ${RELEASE_CHANNELS.join(" or ")}`;
+  }
+  const rest = [
+    ...argv.slice(0, index),
+    ...argv.slice(index + (hasValue ? 2 : 1)),
+  ];
+  if (rest.includes("--channel")) return "--channel may be specified only once";
+  const grammar = validateConfigOptionGrammar(rest, "config --channel", {
+    values: new Set(["--project-dir"]),
+    bare: new Set(["--help", "--json", "--no-color", "--quiet", "--verbose"]),
+    invalidKnownFlags: ROOT_CONFIG_FLAGS,
+    invalidKnownMessage: (flag) => `${flag} is not valid with config --channel`,
+  });
+  if (grammar) return grammar;
+  return validateConfigOutputMode(argv);
+}
+
 function validateRootConfigArgs(argv: readonly string[]): string | null {
   const hasPin = argv.includes("--pin");
   const hasUnpin = argv.includes("--unpin");
   if (hasPin && hasUnpin) return "--pin and --unpin are mutually exclusive";
+  if (argv.includes("--channel")) {
+    if (hasPin || hasUnpin) return "--channel cannot be combined with --pin or --unpin";
+    return validateChannelConfigArgs(argv);
+  }
 
   const commonValues = ["--project-dir"];
   const commonBare = [
@@ -5961,6 +5992,10 @@ export async function main(
       );
       return;
     }
+  }
+  if (argv.includes("--channel")) {
+    emitResult(configureChannel(argv), options);
+    return;
   }
   if (argv.includes("--pin") || argv.includes("--unpin")) {
     emitResult(await configureProjectPin(argv), options);

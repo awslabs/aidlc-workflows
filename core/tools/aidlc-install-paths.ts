@@ -11,16 +11,8 @@ import {
   resolve,
   sep,
 } from "node:path";
+import { requireVersion, VERSION_ID } from "./aidlc-channel.ts";
 import { projectionFiles, sha256File, walkFiles } from "./aidlc-distribution.ts";
-
-export const STRICT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-
-export function requireVersion(value: string): string {
-  if (!STRICT_SEMVER.test(value)) {
-    throw new Error(`invalid version "${value}"; expected strict semver (for example 2.5.0)`);
-  }
-  return value;
-}
 
 // Machine roots are canonical paths. Every derived path (launcher body, the
 // active-executable pointer, pin targets, registry keys) is rendered from them,
@@ -183,7 +175,7 @@ export function rollbackVersionPath(): string {
 export function readVersionMarker(path: string): string | null {
   if (!existsSync(path)) return null;
   const value = readFileSync(path, "utf-8").trim();
-  return STRICT_SEMVER.test(value) ? value : null;
+  return VERSION_ID.test(value) ? value : null;
 }
 
 export function activeVersion(): string | null {
@@ -198,7 +190,7 @@ export function activeVersion(): string | null {
       const executable = realpathSync(candidatePath);
       const parent = dirname(executable);
       const candidate = basename(parent);
-      if (dirname(parent) === realpathOrResolved(versionsRoot()) && STRICT_SEMVER.test(candidate)) {
+      if (dirname(parent) === realpathOrResolved(versionsRoot()) && VERSION_ID.test(candidate)) {
         return candidate;
       }
     } catch {
@@ -230,7 +222,7 @@ export function readActiveExecutable(): string | null {
   if (
     basename(normalized).toLowerCase() !== expectedName ||
     dirname(parent) !== resolve(versionsRoot()) ||
-    !STRICT_SEMVER.test(version)
+    !VERSION_ID.test(version)
   ) {
     throw new Error(`${path} points outside the installed versions root`);
   }

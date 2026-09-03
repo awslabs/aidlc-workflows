@@ -11,7 +11,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { requireVersion } from "./aidlc-install-paths.ts";
+import {
+  compareVersions,
+  PREVIEW_CHANNEL,
+  PREVIEW_VERSION,
+  requireVersion,
+} from "./aidlc-channel.ts";
 import { resolvedReleaseSettings } from "./aidlc-machine-config.ts";
 
 export type ReleaseAsset = {
@@ -46,10 +51,16 @@ export class ReleaseUnavailableError extends Error {
 
 const MAX_ASSET_BYTES = 1024 * 1024 * 1024;
 const MAX_METADATA_BYTES = 1024 * 1024;
+const MAX_RELEASE_LIST_PAGES = 10;
 const PROGRESS_WIDTH = 72;
 const PROVENANCE_BUNDLE = "aidlc-release.intoto.jsonl";
 const DEFAULT_RELEASE_REPOSITORY = "awslabs/aidlc-workflows";
 const DEFAULT_PUBLICATION_REPOSITORY = "awslabs/aidlc-workflows-releases";
+const GITHUB_API_HEADERS = {
+  Accept: "application/vnd.github+json",
+  "User-Agent": "aidlc-native-lifecycle",
+  "X-GitHub-Api-Version": "2022-11-28",
+};
 
 function releaseTrust(): { repository: string; workflow: string } {
   const repository =
@@ -67,6 +78,27 @@ function defaultReleaseBaseUrl(): string {
     throw new Error("AIDLC_PUBLICATION_REPOSITORY must be owner/name");
   }
   return `https://github.com/${repository}/releases`;
+}
+
+// The releases-list API endpoint behind a release base URL. github.com hosts
+// derive it (`https://github.com/<owner>/<repo>/releases` becomes
+// `https://api.github.com/repos/<owner>/<repo>/releases`); every other host,
+// including the loopback test fixture, must name it explicitly through
+// AIDLC_RELEASE_API_URL or `--release-api-url`.
+export function releaseApiUrl(baseUrl: string, explicit?: string): string {
+  const configured = explicit || process.env.AIDLC_RELEASE_API_URL;
+  if (configured) {
+    assertReleaseUrl(configured);
+    return configured.replace(/\/+$/, "");
+  }
+  const parsed = new URL(baseUrl);
+  const match = /^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/releases\/?$/.exec(parsed.pathname);
+  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com" || !match) {
+    throw new ReleaseUnavailableError(
+      `${PREVIEW_CHANNEL} releases cannot be listed for ${redact(baseUrl)}; pass --release-api-url or set AIDLC_RELEASE_API_URL`,
+    );
+  }
+  return `https://api.github.com/repos/${match[1]}/${match[2]}/releases`;
 }
 
 function progress(url: string, complete: boolean): void {
@@ -365,28 +397,48 @@ function proxyFor(url: URL): string | undefined {
   return proxy;
 }
 
-async function download(
+type TransportOptions = {
+  timeoutMs: number;
+  caBundle?: string;
+  maxBytes?: number;
+  contentTypes?: readonly string[];
+  reportedTimeoutMs?: number;
+  // Release asset URLs never carry a query; API list requests do.
+  allowQuery?: boolean;
+  headers?: Record<string, string>;
+  notFound?: string;
+};
+
+const NO_RELEASE_PUBLISHED =
+  "No published native release is available yet. Pass --from <release-directory>, or run bun scripts/package.ts in an aidlc-workflows source checkout to materialize the development copy channel.";
+
+async function fetchBytes(
   url: string,
-  path: string,
-  timeoutMs: number,
-  caBundle?: string,
-  maxBytes = MAX_ASSET_BYTES,
-  contentTypes: readonly string[] = [],
-  reportedTimeoutMs = timeoutMs,
-): Promise<void> {
+  options: TransportOptions,
+): Promise<{ bytes: Buffer; headers: Headers }> {
+  const {
+    timeoutMs,
+    caBundle,
+    maxBytes = MAX_ASSET_BYTES,
+    contentTypes = [],
+    reportedTimeoutMs = timeoutMs,
+    allowQuery = false,
+    headers,
+    notFound = NO_RELEASE_PUBLISHED,
+  } = options;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  progress(url, false);
   try {
     let current = url;
     let response: Response | undefined;
     for (let redirects = 0; redirects <= 5; redirects++) {
-      const parsed = assertReleaseUrl(current, redirects > 0);
+      const parsed = assertReleaseUrl(current, allowQuery || redirects > 0);
       const proxy = proxyFor(parsed);
       try {
         response = await fetch(current, {
           redirect: "manual",
           signal: controller.signal,
+          ...(headers ? { headers } : {}),
           ...(proxy ? { proxy } : {}),
           ...(caBundle ? { tls: { ca: readFileSync(caBundle) } } : {}),
         });
@@ -421,11 +473,7 @@ async function download(
       }
     }
     if (!response) throw new ReleaseUnavailableError(`${redact(url)} returned no response`);
-    if (response.status === 404) {
-      throw new ReleaseUnavailableError(
-        "No published native release is available yet. Pass --from <release-directory>, or run bun scripts/package.ts in an aidlc-workflows source checkout to materialize the development copy channel.",
-      );
-    }
+    if (response.status === 404) throw new ReleaseUnavailableError(notFound);
     if (!response.ok) {
       throw new ReleaseUnavailableError(`${redact(url)} returned HTTP ${response.status}`);
     }
@@ -458,12 +506,11 @@ async function download(
       }
       chunks.push(chunk.value);
     }
-    writeFileSync(path, Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes));
-    progress(url, true);
+    return {
+      bytes: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes),
+      headers: response.headers,
+    };
   } catch (error) {
-    if (process.env.AIDLC_ROUTE_OUTPUT_MODE === "human" && process.stderr.isTTY) {
-      process.stderr.write(`\r${"".padEnd(PROGRESS_WIDTH)}\r`);
-    }
     if (error instanceof ReleaseUnavailableError) throw error;
     if (
       error instanceof DOMException && error.name === "AbortError" ||
@@ -477,6 +524,104 @@ async function download(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function download(
+  url: string,
+  path: string,
+  timeoutMs: number,
+  caBundle?: string,
+  maxBytes = MAX_ASSET_BYTES,
+  contentTypes: readonly string[] = [],
+  reportedTimeoutMs = timeoutMs,
+): Promise<void> {
+  progress(url, false);
+  try {
+    const { bytes } = await fetchBytes(url, {
+      timeoutMs,
+      caBundle,
+      maxBytes,
+      contentTypes,
+      reportedTimeoutMs,
+    });
+    writeFileSync(path, bytes);
+    progress(url, true);
+  } catch (error) {
+    if (process.env.AIDLC_ROUTE_OUTPUT_MODE === "human" && process.stderr.isTTY) {
+      process.stderr.write(`\r${"".padEnd(PROGRESS_WIDTH)}\r`);
+    }
+    throw error;
+  }
+}
+
+// Newest published preview in the repository behind the release base URL:
+// the GitHub releases list, filtered to non-draft prereleases whose tag is
+// `v` plus a preview id. Stable discovery never comes through here (it is the
+// `latest/download` redirect), and a preview lookup never falls back to stable:
+// every API or transport failure, rate limiting included, is "unavailable".
+export async function resolvePreviewVersion(options: {
+  baseUrl?: string;
+  apiUrl?: string;
+  caBundle?: string;
+  timeoutMs?: number;
+} = {}): Promise<string> {
+  const settings = resolvedReleaseSettings(options);
+  if (settings.offline) {
+    throw new ReleaseUnavailableError(`${PREVIEW_CHANNEL} discovery is unavailable while offline`);
+  }
+  const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
+  const listUrl = releaseApiUrl(baseUrl, options.apiUrl);
+  const timeoutMs = options.timeoutMs ?? 15_000;
+  const deadline = Date.now() + timeoutMs;
+  let newest: string | undefined;
+  let next: string | null = `${listUrl}?per_page=100`;
+  for (let page = 0; next && page < MAX_RELEASE_LIST_PAGES; page++) {
+    const { bytes, headers } = await fetchBytes(next, {
+      timeoutMs: remainingTimeout(deadline, `${PREVIEW_CHANNEL} release list`),
+      caBundle: settings.caBundle,
+      maxBytes: MAX_METADATA_BYTES,
+      contentTypes: ["application/json"],
+      reportedTimeoutMs: timeoutMs,
+      allowQuery: true,
+      headers: GITHUB_API_HEADERS,
+      notFound: `${redact(listUrl)} returned HTTP 404; the release repository has no releases API`,
+    });
+    let listed: unknown;
+    try {
+      listed = JSON.parse(bytes.toString("utf-8"));
+    } catch {
+      throw new ReleaseUnavailableError(`${redact(listUrl)} returned malformed release JSON`);
+    }
+    if (!Array.isArray(listed)) {
+      throw new ReleaseUnavailableError(`${redact(listUrl)} returned a non-array release list`);
+    }
+    for (const entry of listed) {
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        !("draft" in entry) ||
+        entry.draft !== false ||
+        !("prerelease" in entry) ||
+        entry.prerelease !== true ||
+        !("tag_name" in entry) ||
+        typeof entry.tag_name !== "string"
+      ) {
+        continue;
+      }
+      const tag = entry.tag_name;
+      if (!tag.startsWith("v") || !PREVIEW_VERSION.test(tag.slice(1))) continue;
+      const version = tag.slice(1);
+      if (!newest || compareVersions(version, newest) > 0) newest = version;
+    }
+    const link = headers.get("link") ?? "";
+    next = /<([^>]+)>;\s*rel="next"/.exec(link)?.[1] ?? null;
+  }
+  if (!newest) {
+    throw new ReleaseUnavailableError(
+      `no ${PREVIEW_CHANNEL} release is published at ${redact(listUrl)}`,
+    );
+  }
+  return newest;
 }
 
 export async function fetchReleaseMetadata(options: {

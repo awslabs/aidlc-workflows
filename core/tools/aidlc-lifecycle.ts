@@ -36,6 +36,17 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  compareVersions,
+  isReleaseChannel,
+  PREVIEW_CHANNEL,
+  RELEASE_CHANNELS,
+  type ReleaseChannel,
+  requireVersion,
+  VERSION_ID,
+  VERSION_ID_PATTERN,
+  versionChannel,
+} from "./aidlc-channel.ts";
+import {
   projectionFiles,
   sha256File,
   walkFiles,
@@ -56,25 +67,27 @@ import {
   packageManagerForExecutable,
   projectPinTargetPath,
   projectDirFrom,
-  requireVersion,
   readActiveExecutable,
   rollbackVersionPath,
   runtimeIntegrityPath,
   runtimeRoot,
-  STRICT_SEMVER,
   targetTriple,
   versionRoot,
   versionsRoot,
 } from "./aidlc-install-paths.ts";
 import {
+  channelPath,
   defaultHarnessPath,
   machineConfigPath,
+  readMachineChannel,
   updateCachePath,
+  writeMachineChannel,
 } from "./aidlc-machine-config.ts";
 import {
   acquireRelease,
   digest,
   ReleaseUnavailableError,
+  resolvePreviewVersion,
 } from "./aidlc-release.ts";
 import {
   executePlan,
@@ -82,7 +95,7 @@ import {
   transactionState,
   writeOperation,
 } from "./aidlc-transaction.ts";
-import { refreshUpdateState } from "./aidlc-update.ts";
+import { refreshUpdateState, type UpdateState } from "./aidlc-update.ts";
 import {
   recoverWindowsUninstallContinuations,
   scheduleWindowsUninstall as scheduleWindowsUninstallContinuation,
@@ -139,8 +152,10 @@ const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
   update: {
     values: new Set([
       "--ca-bundle",
+      "--channel",
       "--from",
       "--project-dir",
+      "--release-api-url",
       "--release-base-url",
       "--version",
     ]),
@@ -235,6 +250,15 @@ export function validatePublicLifecycleArgs(
       if (argv.includes(flag)) return `--check cannot be combined with ${flag}`;
     }
   }
+  if (command === "update" && argv.includes("--channel")) {
+    const channel = valueAfter(argv, "--channel");
+    if (!channel || !isReleaseChannel(channel)) {
+      return `--channel must be ${RELEASE_CHANNELS.join(" or ")}`;
+    }
+    for (const flag of ["--from", "--version"]) {
+      if (argv.includes(flag)) return `--channel cannot be combined with ${flag}`;
+    }
+  }
   return null;
 }
 
@@ -284,12 +308,14 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+const RESERVATION_ENTRY = new RegExp(`^(${VERSION_ID_PATTERN})-(\\d+)-[a-f0-9-]+$`);
+
 function reservedVersions(): Set<string> {
   const reserved = new Set<string>();
   const root = reservationRoot();
   if (!existsSync(root)) return reserved;
   for (const entry of readdirSync(root)) {
-    const match = /^(\d+\.\d+\.\d+)-(\d+)-[a-f0-9-]+$/.exec(entry);
+    const match = RESERVATION_ENTRY.exec(entry);
     const path = join(root, entry);
     if (!match || !lstatSync(path).isFile()) {
       reserved.add("*");
@@ -378,7 +404,7 @@ function windowsLauncherOwnedByInstaller(): boolean {
   try {
     const helper = readFileSync(windowsShimPath(), "utf-8");
     return readFileSync(commandPath(), "utf-8") === windowsShim() &&
-      (helper === windowsShimHelper() || helper === legacyWindowsShimHelper());
+      [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(helper);
   } catch {
     return false;
   }
@@ -387,7 +413,7 @@ function windowsLauncherOwnedByInstaller(): boolean {
 function unixLauncherOwnedByInstaller(): boolean {
   try {
     return lstatSync(commandPath()).isFile() &&
-      readFileSync(commandPath(), "utf-8") === unixShim();
+      [unixShim(), stableOnlyUnixShim()].includes(readFileSync(commandPath(), "utf-8"));
   } catch {
     return false;
   }
@@ -484,7 +510,7 @@ function readPinRegistry(reconcileProject?: string): PinRegistry {
   }
   for (const [canonical, entries] of groups) {
     const malformed = entries.filter(([, rawVersion]) =>
-      typeof rawVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(rawVersion)
+      typeof rawVersion !== "string" || !VERSION_ID.test(rawVersion)
     );
     if (malformed.length > 0) {
       for (const [project] of malformed) {
@@ -653,11 +679,11 @@ export function resolvePinnedDispatch(
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return { kind: "none" };
   const version = readFileSync(pinPath, "utf-8").trim();
-  if (!STRICT_SEMVER.test(version)) {
+  if (!VERSION_ID.test(version)) {
     return {
       kind: "failure",
       code: EXIT.usage,
-      message: `${pinPath} must contain one strict semver`,
+      message: `${pinPath} must contain one release version id`,
       remediation: "aidlc config --unpin",
     };
   }
@@ -747,17 +773,27 @@ function treesMatch(left: string, right: string): boolean {
   );
 }
 
+type RetainedVersion = {
+  version: string;
+  channel: ReleaseChannel;
+  active: boolean;
+  rollback: boolean;
+  distributions: string[];
+  complete: boolean;
+  reserved: boolean;
+  pinPaths: string[];
+  stalePinPaths: string[];
+};
+
+// Preview retention is a bounded window on top of the protection every
+// release has (active, rollback, in use, pinned): the newest complete previews
+// in this window stay so a preview user always has a recent fallback, and
+// every older preview outside it is pruned on the next update. Stable releases
+// keep the unchanged active, rollback, in-use, and pinned protection.
+const RETAINED_PREVIEWS = 2;
+
 function retainedVersions(): {
-  versions: Array<{
-    version: string;
-    active: boolean;
-    rollback: boolean;
-    distributions: string[];
-    complete: boolean;
-    reserved: boolean;
-    pinPaths: string[];
-    stalePinPaths: string[];
-  }>;
+  versions: RetainedVersion[];
   pinWarnings: string[];
 } {
   const { pins, warnings } = registeredPins();
@@ -767,9 +803,12 @@ function retainedVersions(): {
   const rollback = existsSync(rollbackVersionPath())
     ? readFileSync(rollbackVersionPath(), "utf-8").trim()
     : null;
-  const versions = readdirSync(versionsRoot()).filter((entry) => /^\d+\.\d+\.\d+$/.test(entry)).sort()
+  const versions = readdirSync(versionsRoot())
+    .filter((entry) => VERSION_ID.test(entry))
+    .sort(compareVersions)
     .map((version) => ({
       version,
+      channel: versionChannel(version),
       active: version === active,
       rollback: version === rollback,
       distributions: installedDistributions(version),
@@ -787,6 +826,53 @@ function retainedVersions(): {
   return { versions, pinWarnings: warnings };
 }
 
+function recentPreviews(versions: readonly RetainedVersion[]): Set<string> {
+  return new Set(
+    versions
+      .filter((item) => item.channel === PREVIEW_CHANNEL && item.complete)
+      .sort((left, right) => compareVersions(right.version, left.version))
+      .slice(0, RETAINED_PREVIEWS)
+      .map((item) => item.version),
+  );
+}
+
+function protectionReasons(
+  item: RetainedVersion,
+  recent: ReadonlySet<string>,
+): string[] {
+  return [
+    ...(item.active ? ["active"] : []),
+    ...(item.rollback ? ["rollback"] : []),
+    ...(item.reserved ? ["in use"] : []),
+    ...item.pinPaths.map((path) => `pinned by ${path}`),
+    ...item.stalePinPaths.map((path) => `stale pin ${path}`),
+    ...(item.channel === PREVIEW_CHANNEL && recent.has(item.version)
+      ? [`recent ${PREVIEW_CHANNEL}`]
+      : []),
+  ];
+}
+
+function partitionRetained(versions: readonly RetainedVersion[]): {
+  removable: RetainedVersion[];
+  protectedVersions: RetainedVersion[];
+  protection: string;
+} {
+  const recent = recentPreviews(versions);
+  const removable: RetainedVersion[] = [];
+  const protectedVersions: RetainedVersion[] = [];
+  const reasons: string[] = [];
+  for (const item of versions) {
+    const why = protectionReasons(item, recent);
+    if (why.length === 0) {
+      removable.push(item);
+    } else {
+      protectedVersions.push(item);
+      reasons.push(`${item.version} (${why.join(", ")})`);
+    }
+  }
+  return { removable, protectedVersions, protection: reasons.join("; ") };
+}
+
 function assertVersionsRemainPrunable(versions: readonly string[]): void {
   const refreshed = retainedVersions();
   if (refreshed.pinWarnings.length > 0) {
@@ -795,16 +881,10 @@ function assertVersionsRemainPrunable(versions: readonly string[]): void {
       EXIT.integrity,
     );
   }
-  const current = new Map(refreshed.versions.map((item) => [item.version, item]));
-  const protectedVersions = versions.filter((version) => {
-    const item = current.get(version);
-    return !item ||
-      item.active ||
-      item.rollback ||
-      item.reserved ||
-      item.pinPaths.length > 0 ||
-      item.stalePinPaths.length > 0;
-  });
+  const stillRemovable = new Set(
+    partitionRetained(refreshed.versions).removable.map((item) => item.version),
+  );
+  const protectedVersions = versions.filter((version) => !stillRemovable.has(version));
   if (protectedVersions.length > 0) {
     commandError(
       `prune cancelled because version protection changed: ${protectedVersions.join(", ")}`,
@@ -847,7 +927,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   if (
     windows &&
     existsSync(windowsShimPath()) &&
-    ![shimHelper, legacyWindowsShimHelper()].includes(
+    ![shimHelper, ...previousWindowsShimHelpers()].includes(
       readFileSync(windowsShimPath(), "utf-8"),
     )
   ) {
@@ -959,7 +1039,52 @@ function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
-function unixShim(): string {
+// The launcher re-validates the active version marker before trusting the
+// pointer, so its grammar must accept every id the lifecycle can activate. The
+// stable-only text that shipped before preview ids is still recognised as
+// installer-owned so an existing install can be updated in place.
+const STABLE_ONLY_VALID_VERSION = [
+  "valid_version() {",
+  "  version_value=$1",
+  "  case \"$version_value\" in *[!0-9.]*|'') return 1 ;; esac",
+  "  old_ifs=$IFS",
+  "  IFS=.",
+  "  set -- $version_value",
+  "  IFS=$old_ifs",
+  "  [ \"$#\" -eq 3 ] && valid_number \"$1\" && valid_number \"$2\" && valid_number \"$3\"",
+  "}",
+];
+
+// Shell literal of PREVIEW_CHANNEL: `<x.y.z>-preview.<YYYYMMDD>.<N>`.
+const VALID_VERSION = [
+  "valid_build() {",
+  "  case \"$1\" in ''|*[!0-9]*|0*) return 1 ;; *) return 0 ;; esac",
+  "}",
+  "valid_version() {",
+  "  version_value=$1",
+  "  preview_suffix=",
+  "  case \"$version_value\" in",
+  `    *-${PREVIEW_CHANNEL}.*)`,
+  `      preview_suffix=\${version_value#*-${PREVIEW_CHANNEL}.}`,
+  `      version_value=\${version_value%%-${PREVIEW_CHANNEL}.*}`,
+  "      ;;",
+  "  esac",
+  "  case \"$version_value\" in *[!0-9.]*|'') return 1 ;; esac",
+  "  old_ifs=$IFS",
+  "  IFS=.",
+  "  set -- $version_value",
+  "  IFS=$old_ifs",
+  "  [ \"$#\" -eq 3 ] && valid_number \"$1\" && valid_number \"$2\" && valid_number \"$3\" || return 1",
+  "  [ -n \"$preview_suffix\" ] || return 0",
+  "  case \"$preview_suffix\" in",
+  "    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].*) ;;",
+  "    *) return 1 ;;",
+  "  esac",
+  `  valid_build "\${preview_suffix#*.}"`,
+  "}",
+];
+
+function renderUnixShim(validVersion: readonly string[]): string {
   const pointer = shellSingleQuote(activeExecutablePath());
   const versionPointer = shellSingleQuote(activeVersionPath());
   const versions = shellSingleQuote(versionsRoot());
@@ -982,15 +1107,7 @@ function unixShim(): string {
     "valid_number() {",
     "  case \"$1\" in ''|*[!0-9]*) return 1 ;; 0) return 0 ;; 0*) return 1 ;; *) return 0 ;; esac",
     "}",
-    "valid_version() {",
-    "  version_value=$1",
-    "  case \"$version_value\" in *[!0-9.]*|'') return 1 ;; esac",
-    "  old_ifs=$IFS",
-    "  IFS=.",
-    "  set -- $version_value",
-    "  IFS=$old_ifs",
-    "  [ \"$#\" -eq 3 ] && valid_number \"$1\" && valid_number \"$2\" && valid_number \"$3\"",
-    "}",
+    ...validVersion,
     "if ! read_one_line \"$active_version_pointer\" || ! valid_version \"$line\"; then",
     "  printf 'aidlc: active version marker is missing or malformed\\n' >&2",
     "  printf 'Run: aidlc update --version <version> --from <release-directory>\\n' >&2",
@@ -1010,6 +1127,14 @@ function unixShim(): string {
   ].join("\n");
 }
 
+function unixShim(): string {
+  return renderUnixShim(VALID_VERSION);
+}
+
+function stableOnlyUnixShim(): string {
+  return renderUnixShim(STABLE_ONLY_VALID_VERSION);
+}
+
 function windowsShim(): string {
   const helper = windowsShimPath().replaceAll("%", "%%");
   return [
@@ -1024,7 +1149,7 @@ function windowsShimPath(): string {
   return join(installRoot(), "aidlc-shim.ps1");
 }
 
-function windowsShimHelper(): string {
+function renderWindowsShimHelper(versionPattern: string): string {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const versionPointer = activeVersionPath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
@@ -1035,7 +1160,7 @@ function windowsShimHelper(): string {
     `$versions = [IO.Path]::GetFullPath('${root}')`,
     "try {",
     "  $versionRaw = [IO.File]::ReadAllText($versionPointer)",
-    "  if ($versionRaw -notmatch '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\r?\\n?$') { exit 4 }",
+    `  if ($versionRaw -notmatch '^${versionPattern}\\r?\\n?$') { exit 4 }`,
     "  $activeVersion = $versionRaw.TrimEnd(\"`r\", \"`n\")",
     "  $raw = [IO.File]::ReadAllText($pointer)",
     "  if ($raw -notmatch '^[^\\r\\n]+\\r?\\n?$') { exit 4 }",
@@ -1053,30 +1178,40 @@ function windowsShimHelper(): string {
   ].join("\r\n");
 }
 
-function legacyWindowsShimHelper(): string {
+// The .NET regex source is the shared VERSION_ID_PATTERN verbatim.
+function windowsShimHelper(): string {
+  return renderWindowsShimHelper(VERSION_ID_PATTERN);
+}
+
+// Helper texts written by earlier installers, oldest last: the stable-only
+// marker grammar, then the pointer-prefix check that predates the marker.
+function previousWindowsShimHelpers(): string[] {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
   return [
-    "$ErrorActionPreference = 'Stop'",
-    `$pointer = '${pointer}'`,
-    `$versions = [IO.Path]::GetFullPath('${root}')`,
-    "try {",
-    "  $raw = [IO.File]::ReadAllText($pointer)",
-    "  if ($raw -notmatch '^[^\\r\\n]+\\r?\\n?$') { exit 4 }",
-    "  $executable = [IO.Path]::GetFullPath($raw.TrimEnd(\"`r\", \"`n\"))",
-    "  $prefix = $versions.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar",
-    "  if (-not $executable.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { exit 4 }",
-    "  $relative = $executable.Substring($prefix.Length)",
-    "  if ($relative -notmatch '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\\\aidlc\\.exe$') { exit 4 }",
-    "  if (-not [IO.File]::Exists($executable)) { exit 4 }",
-    "  $env:AIDLC_SHIM_PID = [string]$PID",
-    "  & $executable @args",
-    "  exit $LASTEXITCODE",
-    "} catch {",
-    "  exit 4",
-    "}",
-    "",
-  ].join("\r\n");
+    renderWindowsShimHelper("(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"),
+    [
+      "$ErrorActionPreference = 'Stop'",
+      `$pointer = '${pointer}'`,
+      `$versions = [IO.Path]::GetFullPath('${root}')`,
+      "try {",
+      "  $raw = [IO.File]::ReadAllText($pointer)",
+      "  if ($raw -notmatch '^[^\\r\\n]+\\r?\\n?$') { exit 4 }",
+      "  $executable = [IO.Path]::GetFullPath($raw.TrimEnd(\"`r\", \"`n\"))",
+      "  $prefix = $versions.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar",
+      "  if (-not $executable.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { exit 4 }",
+      "  $relative = $executable.Substring($prefix.Length)",
+      "  if ($relative -notmatch '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\\\aidlc\\.exe$') { exit 4 }",
+      "  if (-not [IO.File]::Exists($executable)) { exit 4 }",
+      "  $env:AIDLC_SHIM_PID = [string]$PID",
+      "  & $executable @args",
+      "  exit $LASTEXITCODE",
+      "} catch {",
+      "  exit 4",
+      "}",
+      "",
+    ].join("\r\n"),
+  ];
 }
 
 async function installVersion(options: {
@@ -1087,8 +1222,21 @@ async function installVersion(options: {
   dryRun: boolean;
   baseUrl?: string;
   caBundle?: string;
+  channel?: ReleaseChannel;
+  apiUrl?: string;
 }): Promise<{ version: string; distributions: string[] }> {
-  const wantedVersion = options.version ? requestedVersion(options.version) : undefined;
+  // An explicit version or local directory bypasses discovery. Otherwise the
+  // stable channel is the `latest/download` redirect and the preview channel is
+  // the newest published preview, installed through the explicit-version path.
+  const wantedVersion = options.version
+    ? requestedVersion(options.version)
+    : !options.from && options.channel === PREVIEW_CHANNEL
+    ? await resolvePreviewVersion({
+        baseUrl: options.baseUrl,
+        apiUrl: options.apiUrl,
+        caBundle: options.caBundle,
+      })
+    : undefined;
   const target = targetTriple();
   const required = [binaryAsset(target), RUNTIME_ASSET];
   const release = await acquireRelease({
@@ -1231,24 +1379,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
         EXIT.integrity,
       );
     }
-    const protectedVersions = versions.filter((item) =>
-      item.active ||
-      item.rollback ||
-      item.reserved ||
-      item.pinPaths.length > 0 ||
-      item.stalePinPaths.length > 0
-    );
-    const removable = versions.filter((item) => !protectedVersions.includes(item));
-    const protection = protectedVersions.map((item) => {
-      const reasons = [
-        ...(item.active ? ["active"] : []),
-        ...(item.rollback ? ["rollback"] : []),
-        ...(item.reserved ? ["in use"] : []),
-        ...item.pinPaths.map((path) => `pinned by ${path}`),
-        ...item.stalePinPaths.map((path) => `stale pin ${path}`),
-      ];
-      return `${item.version} (${reasons.join(", ")})`;
-    }).join("; ");
+    const { removable, protectedVersions, protection } = partitionRetained(versions);
     if (removable.length === 0) {
       return success(
         protection
@@ -1268,18 +1399,10 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
         EXIT.failure,
       );
     }
-    const refreshedByVersion = new Map(
-      refreshed.versions.map((item) => [item.version, item]),
+    const stillRemovable = new Set(
+      partitionRetained(refreshed.versions).removable.map((item) => item.version),
     );
-    const newlyProtected = removable.filter((item) => {
-      const current = refreshedByVersion.get(item.version);
-      return !current ||
-        current.active ||
-        current.rollback ||
-        current.reserved ||
-        current.pinPaths.length > 0 ||
-        current.stalePinPaths.length > 0;
-    });
+    const newlyProtected = removable.filter((item) => !stillRemovable.has(item.version));
     if (newlyProtected.length > 0) {
       commandError(
         `prune cancelled because version protection changed: ${
@@ -1310,7 +1433,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
   }
   if (verb !== "install") return usage("usage: aidlc system versions <list|install|prune>");
   const version = argv[2];
-  if (!version || version.startsWith("--")) return usage("versions install requires a strict version");
+  if (!version || version.startsWith("--")) return usage("versions install requires a release version");
   if (argv.includes("--harness")) return usage("unknown argument: --harness");
   const result = await installVersion({
     version,
@@ -1335,13 +1458,7 @@ function pruneUnprotectedVersions(): string[] {
       EXIT.integrity,
     );
   }
-  const removable = versions.filter((item) =>
-    !item.active &&
-    !item.rollback &&
-    !item.reserved &&
-    item.pinPaths.length === 0 &&
-    item.stalePinPaths.length === 0
-  );
+  const { removable } = partitionRetained(versions);
   if (removable.length === 0) return [];
   const root = machineTransactionRoot();
   executePlan({
@@ -1441,6 +1558,7 @@ function uninstallCommand(argv: string[]): CommandResult {
           updateCachePath(),
           join(installRoot(), "pins.json"),
           defaultHarnessPath(),
+          channelPath(),
         ]
       : []),
   ].filter(existsSync);
@@ -1474,12 +1592,34 @@ function scheduleWindowsUninstall(purge: boolean): CommandResult {
     updateCachePath(),
     join(installRoot(), "pins.json"),
     defaultHarnessPath(),
+    channelPath(),
   ];
   scheduleWindowsUninstallContinuation(purge, preserved);
   return success(
     `uninstall scheduled; Windows cleanup will finish after this command exits`,
     { purge, deferred: true },
   );
+}
+
+// The channel an update follows: the one-shot `--channel` override, else the
+// machine marker (stable when absent). An explicit `--version` or `--from`
+// selects an exact release regardless of channel.
+function requestedChannel(argv: readonly string[]): ReleaseChannel {
+  const explicit = valueAfter(argv, "--channel");
+  if (explicit) {
+    if (!isReleaseChannel(explicit)) {
+      commandError(`--channel must be ${RELEASE_CHANNELS.join(" or ")}`, EXIT.usage);
+    }
+    return explicit;
+  }
+  try {
+    return readMachineChannel();
+  } catch (error) {
+    return commandError(
+      error instanceof Error ? error.message : String(error),
+      EXIT.integrity,
+    );
+  }
 }
 
 async function updateCommand(argv: string[]): Promise<CommandResult> {
@@ -1494,13 +1634,17 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
   }
   const current = activeVersion();
   if (argv.includes("--harness")) return usage("unknown argument: --harness");
+  const channel = requestedChannel(argv);
+  const apiUrl = valueAfter(argv, "--release-api-url");
   if (argv.includes("--check")) {
-    let state: Awaited<ReturnType<typeof refreshUpdateState>>;
+    let state: UpdateState;
     try {
       state = await refreshUpdateState(15_000, {
         offline: offline(argv),
         baseUrl: valueAfter(argv, "--release-base-url"),
         caBundle: valueAfter(argv, "--ca-bundle"),
+        channel,
+        apiUrl,
       });
     } catch (error) {
       commandError(
@@ -1538,7 +1682,18 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
     dryRun,
     baseUrl: valueAfter(argv, "--release-base-url"),
     caBundle: valueAfter(argv, "--ca-bundle"),
+    channel,
+    apiUrl,
   });
+  // Moving between channels is a switch, never a downgrade error: the newest
+  // stable sorts below a preview built after it, and converging on it is the
+  // documented way back.
+  const channelSwitch = current && versionChannel(current) !== versionChannel(result.version)
+    ? { from: versionChannel(current), to: versionChannel(result.version) }
+    : undefined;
+  const switched = channelSwitch
+    ? ` (switched channel ${channelSwitch.from} -> ${channelSwitch.to})`
+    : "";
   let pruned: string[] = [];
   let pruneWarning: string | undefined;
   if (!dryRun) {
@@ -1550,12 +1705,43 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
   }
   return success(
     dryRun
-      ? `update plan: ${current ?? "none"} -> ${result.version} [${result.distributions.join(",")}]`
-      : `updated ${current ?? "new install"} -> ${result.version}${
+      ? `update plan: ${current ?? "none"} -> ${result.version} [${result.distributions.join(",")}]${switched}`
+      : `updated ${current ?? "new install"} -> ${result.version}${switched}${
         pruned.length > 0 ? `; pruned ${pruned.join(", ")}` : ""
       }`,
-    { ...result, pruned, ...(pruneWarning ? { pruneWarning } : {}) },
+    {
+      ...result,
+      channel,
+      ...(channelSwitch ? { channelSwitch } : {}),
+      pruned,
+      ...(pruneWarning ? { pruneWarning } : {}),
+    },
   );
+}
+
+// `aidlc config --channel [stable|preview]`: with a value, persist the machine
+// release channel; without one, report the channel in force.
+export function configureChannel(argv: readonly string[]): CommandResult {
+  const requested = valueAfter(argv, "--channel");
+  try {
+    if (!requested || requested.startsWith("--")) {
+      const channel = readMachineChannel();
+      return success(`release channel: ${channel}`, {
+        channel,
+        source: existsSync(channelPath()) ? "machine" : "default",
+      });
+    }
+    if (!isReleaseChannel(requested)) {
+      return usage(`--channel must be ${RELEASE_CHANNELS.join(" or ")}`);
+    }
+    const channel = writeMachineChannel(requested);
+    return success(
+      `release channel set to ${channel}; run aidlc update to install its newest release`,
+      { channel, source: "machine" },
+    );
+  } catch (error) {
+    return lifecycleFailureResult(error, argv);
+  }
 }
 
 function rollbackCommand(argv: string[]): ReturnType<typeof success> {
@@ -1628,7 +1814,7 @@ export async function configureProjectPin(argv: string[]): Promise<CommandResult
       );
     }
     const requested = valueAfter(argv, "--pin");
-    if (!requested) return usage("--pin requires a strict version");
+    if (!requested) return usage("--pin requires a release version");
     const version = requestedVersion(requested);
     const releaseReservation = dryRun ? null : reserveVersion(version);
     try {
@@ -1815,35 +2001,44 @@ function humanLifecycleNarration(
   if (command === "update" && !argv.includes("--check")) {
     const data = result.data as {
       version?: string;
+      channel?: ReleaseChannel;
+      channelSwitch?: { from: ReleaseChannel; to: ReleaseChannel };
       pruned?: string[];
       pruneWarning?: string;
     } | undefined;
     const target = data?.version;
     if (!target) return null;
+    const channelWord = data?.channel && data.channel !== "stable" ? `${data.channel} ` : "";
     const pruned = data?.pruned ?? [];
     const pruneLine = pruned.length > 0
       ? `\nPruned unprotected releases: ${pruned.join(", ")}.`
       : data?.pruneWarning
       ? `\nWarning: update succeeded, but old-release cleanup was skipped: ${data.pruneWarning}`
       : "";
+    const switchLine = data?.channelSwitch
+      ? `Switched release channel from ${data.channelSwitch.from} to ${data.channelSwitch.to}.`
+      : null;
     if (argv.includes("--dry-run")) {
       return warnVerdict(
-        `Would update aidlc from ${before ?? "not installed"} to ${target}.`,
+        `Would update aidlc from ${before ?? "not installed"} to ${target}${
+          switchLine ? ` (switching to the ${data?.channelSwitch?.to} channel)` : ""
+        }.`,
         process.stdout,
       );
     }
     if (before === target) {
       return `${successText(
-        `You're on the latest version of aidlc (${target}).`,
+        `You're on the latest ${channelWord}version of aidlc (${target}).`,
         process.stdout,
       )}${pruneLine}`;
     }
     return [
-      `Checking for releases ... ${before ?? "not installed"} -> ${target}`,
+      `Checking for ${channelWord}releases ... ${before ?? "not installed"} -> ${target}`,
       `Downloading aidlc ${target} ... done (verified)`,
       `Staging and switching ... done (${
         before ? `${before} retained` : "no prior version retained"
       })`,
+      ...(switchLine ? [switchLine] : []),
       ...(pruned.length > 0 ? [`Pruned unprotected releases: ${pruned.join(", ")}.`] : []),
       ...(data?.pruneWarning
         ? [`Warning: old-release cleanup was skipped: ${data.pruneWarning}`]
