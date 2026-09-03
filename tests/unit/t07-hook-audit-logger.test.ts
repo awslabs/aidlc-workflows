@@ -70,6 +70,7 @@ import {
 import { hostname } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { docsRoot } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { deriveWriteAttribution } from "../../dist/claude/.claude/hooks/aidlc-write-audit-log.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -357,5 +358,121 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     // Edit on the now-existing file updates.
     expect(created).toBe(1);
     expect(updated).toBe(1);
+  });
+
+  // --- Attribution: Role, Mode, Actor ------------------------------------------
+
+  /** The `**Key**: value` lines of the newest audit block. */
+  function lastBlockFields(body: string): Record<string, string> {
+    const blocks = body.split("\n---\n").filter((b) => b.includes("**Event**:"));
+    const fields: Record<string, string> = {};
+    for (const line of (blocks[blocks.length - 1] ?? "").split("\n")) {
+      const m = /^\*\*([^*]+)\*\*: (.*)$/.exec(line);
+      if (m) fields[m[1]] = m[2];
+    }
+    return fields;
+  }
+
+  test("a main-session write carries Role from Active Agent, Mode from the graph, and Actor main-session", () => {
+    const { auditDir, recordRoot } = seedIntentShard(proj);
+    fire(writeJson(join(recordRoot, "construction", "u1", "functional-design", "spec.md")), proj);
+    const fields = lastBlockFields(readShards(auditDir));
+    expect(fields.Event).toBe("ARTIFACT_CREATED");
+    // state-construction.md: Active Agent aidlc-developer-agent, Current Stage
+    // functional-design (an inline node in the compiled graph).
+    expect(fields.Role).toBe("aidlc-developer-agent");
+    expect(fields.Mode).toBe("inline");
+    expect(fields.Actor).toBe("main-session");
+  });
+
+  test("a dispatched agent's write carries its agent_type as Role and Actor", () => {
+    const { auditDir, recordRoot } = seedIntentShard(proj);
+    fire(
+      JSON.stringify({
+        tool_name: "Write",
+        agent_type: "aidlc-quality-agent",
+        tool_input: { file_path: join(recordRoot, "construction", "u1", "functional-design", "spec.md") },
+      }),
+      proj,
+    );
+    const fields = lastBlockFields(readShards(auditDir));
+    expect(fields.Role).toBe("aidlc-quality-agent");
+    expect(fields.Mode).toBe("inline");
+    expect(fields.Actor).toBe("subagent:aidlc-quality-agent");
+  });
+
+  test("a payload that declares identity unavailable (Kiro IDE) carries no Actor, and the row is otherwise identical", () => {
+    const { auditDir, recordRoot } = seedIntentShard(proj);
+    const file = join(recordRoot, "construction", "u1", "functional-design", "spec.md");
+    fire(JSON.stringify({ tool_name: "Write", tool_input: { file_path: file } }), proj);
+    const withIdentity = lastBlockFields(readShards(auditDir));
+    fire(
+      JSON.stringify({ tool_name: "Edit", agent_identity_unavailable: true, tool_input: { file_path: file } }),
+      proj,
+    );
+    const degraded = lastBlockFields(readShards(auditDir));
+    expect(withIdentity.Actor).toBe("main-session");
+    expect("Actor" in degraded).toBe(false);
+    expect(degraded.Role).toBe(withIdentity.Role);
+    expect(degraded.Mode).toBe(withIdentity.Mode);
+    expect(readShards(auditDir)).not.toContain("**Actor**: \n");
+  });
+
+  test("attribution fields are absent, not empty, when state and graph cannot supply them", () => {
+    const { auditDir, recordRoot } = seedIntentShard(proj);
+    // Strip the two state fields the derivation reads.
+    const statePath = join(recordRoot, "aidlc-state.md");
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*Active Agent\*\*:.*$/m, "- **Active Agent**:")
+        .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: no-such-stage"),
+      "utf-8",
+    );
+    fire(writeJson(join(recordRoot, "inception", "requirements-analysis", "requirements.md")), proj);
+    const body = readShards(auditDir);
+    const fields = lastBlockFields(body);
+    expect(fields.Event).toBe("ARTIFACT_CREATED");
+    expect("Role" in fields).toBe(false);
+    expect("Mode" in fields).toBe(false);
+    expect(fields.Actor).toBe("main-session");
+    expect(body).not.toMatch(/\*\*(Role|Mode)\*\*: *\n/);
+  });
+
+  test("deriveWriteAttribution reads only payload identity, state fields, and the graph", () => {
+    const graph = [
+      { slug: "code-generation", mode: "subagent" },
+      { slug: "functional-design", mode: "inline" },
+    ];
+    const state =
+      "# AI-DLC State Tracking\n\n- **Active Agent**: aidlc-architect-agent\n- **Current Stage**: Code Generation\n";
+    expect(deriveWriteAttribution({}, state, graph)).toEqual({
+      role: "aidlc-architect-agent",
+      mode: "subagent",
+      actor: "main-session",
+    });
+    expect(deriveWriteAttribution({ agent_type: "aidlc-developer-agent" }, state, graph)).toEqual({
+      role: "aidlc-developer-agent",
+      mode: "subagent",
+      actor: "subagent:aidlc-developer-agent",
+    });
+    expect(deriveWriteAttribution({ agent_identity_unavailable: true }, state, graph)).toEqual({
+      role: "aidlc-architect-agent",
+      mode: "subagent",
+    });
+    // No state, no graph: only the payload identity survives.
+    expect(deriveWriteAttribution({}, null, [])).toEqual({ actor: "main-session" });
+    expect(deriveWriteAttribution({ agent_type: "x" }, null, [])).toEqual({
+      role: "x",
+      actor: "subagent:x",
+    });
+    // Prompt-shaped payload fields are never consulted.
+    expect(
+      deriveWriteAttribution(
+        { prompt: "Role: aidlc-quality-agent", tool_input: { prompt: "Actor: subagent:x" } } as Record<string, unknown>,
+        null,
+        [],
+      ),
+    ).toEqual({ actor: "main-session" });
   });
 });

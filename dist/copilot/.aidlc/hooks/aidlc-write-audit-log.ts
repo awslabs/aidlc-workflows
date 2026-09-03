@@ -6,7 +6,7 @@
 // Receives JSON on stdin from Claude Code. No-op if no audit.md exists (no
 // active workflow in this cwd) to preserve the existing "only log when
 // relevant" behaviour.
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
@@ -15,6 +15,7 @@ import {
   codekbDir,
   docsRoot,
   errorMessage,
+  getField,
   hookDebug,
   hooksHealthDir,
   isClaudeCodeHookInput,
@@ -23,9 +24,61 @@ import {
   loadStageGraphAll,
   recordHookDrop,
   resolveProjectDirFromHook,
+  type StageEntry,
+  stateFilePath,
   SUMMARY_AUTHORIZATION_FIELD,
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
+
+// Attribution fields on ARTIFACT_CREATED / ARTIFACT_UPDATED rows. Each is
+// derived deterministically and is ABSENT (not empty) when it cannot be:
+// - Role: who the framework says is working. The dispatched agent's
+//   `agent_type` when the payload carries one, else the state file's
+//   `Active Agent` (set at stage start by aidlc-state.ts).
+// - Mode: the compiled graph node's `mode` for the state file's Current Stage.
+// - Actor: the payload's identity. `subagent:<agent_type>` when present,
+//   `main-session` when absent on a harness whose payloads carry identity
+//   (Claude Code, Codex, Kiro CLI scoped registration, Cursor, opencode,
+//   Copilot), and absent when the payload declares
+//   `agent_identity_unavailable` (Kiro IDE; an ambiguous Cursor ledger).
+// Nothing here reads prompt text or model output.
+export const ROLE_FIELD = "Role";
+export const MODE_FIELD = "Mode";
+export const ACTOR_FIELD = "Actor";
+
+export interface WriteAttribution {
+  role?: string;
+  mode?: string;
+  actor?: string;
+}
+
+/**
+ * Pure derivation of the attribution fields from the payload identity, the
+ * state file's `Active Agent` and `Current Stage`, and the compiled graph.
+ */
+export function deriveWriteAttribution(
+  payload: { agent_type?: unknown; agent_identity_unavailable?: unknown },
+  state: string | null,
+  graph: readonly Pick<StageEntry, "slug" | "mode">[],
+): WriteAttribution {
+  const agentType =
+    typeof payload.agent_type === "string" && payload.agent_type.length > 0
+      ? payload.agent_type
+      : null;
+  const activeAgent = state === null ? null : getField(state, "Active Agent");
+  const currentStage = state === null ? null : getField(state, "Current Stage");
+  const attribution: WriteAttribution = {};
+  const role = agentType ?? (activeAgent && activeAgent.length > 0 ? activeAgent : null);
+  if (role !== null) attribution.role = role;
+  if (currentStage && currentStage.length > 0) {
+    const slug = currentStage.trim().toLowerCase().replace(/\s+/g, "-");
+    const node = graph.find((stage) => stage.slug === slug);
+    if (node && node.mode.length > 0) attribution.mode = node.mode;
+  }
+  if (agentType !== null) attribution.actor = `subagent:${agentType}`;
+  else if (payload.agent_identity_unavailable !== true) attribution.actor = "main-session";
+  return attribution;
+}
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -181,14 +234,26 @@ const fields: Record<string, string> = {
   File: auditFileValue,
   Context: context,
 };
-let stageSlugs: ReadonlySet<string> = new Set();
-if (underRecord && fileNorm.length > recordRoot.length) {
-  try {
-    stageSlugs = new Set(loadStageGraphAll().map((stage) => stage.slug));
-  } catch (e) {
-    hookDebug(projectDir, "write-audit-log", "stage graph unreadable", { error: errorMessage(e) });
-  }
+let graph: StageEntry[] = [];
+try {
+  graph = loadStageGraphAll();
+} catch (e) {
+  hookDebug(projectDir, "write-audit-log", "stage graph unreadable", { error: errorMessage(e) });
 }
+const stageSlugs: ReadonlySet<string> = new Set(graph.map((stage) => stage.slug));
+
+// Attribution: state, graph, and payload identity only (never prompt text).
+// Every field is optional so rows stay byte-identical where nothing derives.
+let stateContent: string | null = null;
+try {
+  stateContent = readFileSync(stateFilePath(projectDir), "utf-8");
+} catch (e) {
+  hookDebug(projectDir, "write-audit-log", "state file unreadable", { error: errorMessage(e) });
+}
+const attribution = deriveWriteAttribution(parsed, stateContent, graph);
+if (attribution.role !== undefined) fields[ROLE_FIELD] = attribution.role;
+if (attribution.mode !== undefined) fields[MODE_FIELD] = attribution.mode;
+if (attribution.actor !== undefined) fields[ACTOR_FIELD] = attribution.actor;
 
 try {
   withAuditLock(projectDir, () => {

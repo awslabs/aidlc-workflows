@@ -451,8 +451,8 @@ Change Control decides the consequence of an input change after a human approval
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `ARTIFACT_CREATED` | `hooks/aidlc-write-audit-log.ts` | Write to net-new path, distinguished from UPDATED via `mtimeMs == birthtimeMs` stat check. Carries `Summary Authorization Id` when the written stage and Unit have an active summary confirmation, so completion can ask whether the output descends from the current confirmation |
-| `ARTIFACT_UPDATED` | `hooks/aidlc-write-audit-log.ts` | Edit tool or Write overwriting existing file. Same `Summary Authorization Id` stamp as `ARTIFACT_CREATED` |
+| `ARTIFACT_CREATED` | `hooks/aidlc-write-audit-log.ts` | Write to net-new path, distinguished from UPDATED via `mtimeMs == birthtimeMs` stat check. Carries `Summary Authorization Id` when the written stage and Unit have an active summary confirmation, so completion can ask whether the output descends from the current confirmation. Also carries three optional attribution fields, each derived by the hook from state, graph, and harness payload identity (never from prompt text) and absent rather than empty when it cannot be derived: `Role` (the dispatched agent's `agent_type` when the payload names one, else the state file's `Active Agent`), `Mode` (the compiled graph node's `mode` for the state file's `Current Stage`), and `Actor` (`subagent:<agent_type>` when the payload names an agent, `main-session` when a harness that delivers identity names none, absent when the payload declares `agent_identity_unavailable`, as Kiro IDE's does) |
+| `ARTIFACT_UPDATED` | `hooks/aidlc-write-audit-log.ts` | Edit tool or Write overwriting existing file. Same `Summary Authorization Id`, `Role`, `Mode`, and `Actor` stamps as `ARTIFACT_CREATED` |
 | `ARTIFACT_REUSED` | `tools/aidlc-state.ts` | `reuse-artifact` subcommand — keep/modify/redo decisions; optional `Repo` scopes evidence to one registered repo, optional `--single` binds it to the open synthetic attempt, but only `keep` with a complete authoritative artifact set and still-`CURRENT` isolated Reverse Engineering store grants that pipeline exemption |
 
 ### Construction Bolts
