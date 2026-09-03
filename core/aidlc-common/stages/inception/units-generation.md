@@ -90,7 +90,7 @@ Present the decomposition plan to the user as a structured question:
 
 ### Step 5: Execute Plan — Generate Unit Artifacts
 
-Based on the approved plan, generate 4 artifacts in `<record>/inception/units-generation/` (the three Unit artifacts below plus `traceability.json`, whose contents are specified at the end of this step):
+Based on the approved plan, generate the four artifacts at their `directive.produces` paths (the three Unit artifacts below plus `traceability.json`, whose contents are specified at the end of this step):
 
 **unit-of-work.md:**
 - Unit definitions (name, description, boundaries)
@@ -121,7 +121,7 @@ units:
 
 NOTE: This artifact describes topology only. It does NOT pick a single "recommended build order" or identify a critical path — those are economic decisions made in 2.9 (Delivery Planning) using this DAG as input.
 
-**unit-of-work-story-map.md:**
+**`unit-of-work-story-map` artifact:**
 - Each user story mapped by `USx.y` ID to its implementing Unit `U{n}` ID and directory name
 - Stories that span multiple units (cross-cutting concerns)
 - Story implementation order within each unit

@@ -76,7 +76,7 @@ Follow stage-protocol.md question flow.
 
 ### Step 3: Compile Initiative Brief
 
-Create `<record>/ideation/approval-handoff/initiative-brief.md` — a one-pager combining:
+Create the `initiative-brief` artifact at its `directive.produces` path — a one-pager combining:
 - Intent and problem statement
 - Market validation summary
 - Feasibility and risk highlights
@@ -85,7 +85,7 @@ Create `<record>/ideation/approval-handoff/initiative-brief.md` — a one-pager 
 - Team plan
 - Go/no-go recommendation
 
-Create `<record>/ideation/approval-handoff/decision-log.md` — record of all decisions made during Ideation.
+Create the `decision-log` artifact at its `directive.produces` path — record all decisions made during Ideation.
 
 ### Step 4: Phase Boundary Verification
 
