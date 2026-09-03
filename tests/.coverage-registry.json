@@ -2759,13 +2759,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:htmlArtifactNames",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:humanActedSinceGate",
       "minMechanism": "none",
       "coveredBy": [
@@ -3919,13 +3912,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:primeArtifactFormats",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5173,13 +5159,6 @@
     {
       "unitClass": "function",
       "unitId": "function:setFieldStrict",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:setHtmlArtifactNames",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
