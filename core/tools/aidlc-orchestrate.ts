@@ -7901,6 +7901,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       const status = unitGateStatus(pd, slug, unit, gateScope);
       const sequence: string[][] = [];
+      let feedbackStageDir: string | null = null;
       if (flags.result === "awaiting-approval") {
         if (status === "awaiting-approval") {
           emit(printDirective(
@@ -7910,12 +7911,20 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(["gate-start", slug, "--unit", unit]);
       } else if (flags.result === "rejected") {
-        const feedback = (flags.userInput ?? flags.reason)?.trim();
+        let feedback = (flags.reason ?? flags.userInput)?.trim();
         if (!feedback) {
           emit(errorDirective(
             `report --result rejected for unit "${unit}" of "${slug}" requires nonblank --user-input or --reason feedback.`,
           ));
           return;
+        }
+        const pending = pendingReviewFeedback(pd, node, unit, reviewRecordPrefix);
+        if (pending) {
+          feedbackStageDir = pending.stageDir;
+          const bodies = pendingFeedback(pending.stageDir);
+          feedback += `\n\n## Browser review feedback\n\n${bodies.map((item) =>
+            `### ${item.file}\n\n${item.body}`
+          ).join("\n\n")}`;
         }
         const rejectArgs = ["reject", slug, "--feedback", feedback, "--unit", unit];
         for (const finding of flags.rejectFindings ?? []) {
@@ -7958,6 +7967,68 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         committed.push(subArgs[0]);
       }
+      let approvalNotes: string | undefined;
+      if (
+        reviewUiEnabled() &&
+        (flags.result === "awaiting-approval" || flags.result === "revised")
+      ) {
+        const publishedState = loadStateFileIfPresent(pd) ?? stateContent;
+        publishReviewManifest(
+          pd,
+          reviewPublishNode(pd, node, unit, reviewRecordPrefix),
+          unit,
+          reportRevisionCount(publishedState),
+          "awaiting-approval",
+        );
+      } else if (reviewUiEnabled() && flags.result === "rejected") {
+        if (feedbackStageDir) {
+          const pending = pendingFeedback(feedbackStageDir);
+          if (pending.length > 0) {
+            appendReviewFeedbackAudit(
+              pd,
+              slug,
+              unit,
+              revisionCount,
+              "rejected",
+              pending.map((item) => item.file),
+              sha256Hex(pending.map((item) => item.body).join("")),
+            );
+            ingestPendingFeedback(feedbackStageDir, "rejected");
+          }
+        }
+        publishReviewPointer(
+          pd,
+          reviewPublishNode(pd, node, unit, reviewRecordPrefix),
+          unit,
+          revisionCount + 1,
+          "revising",
+        );
+      } else if (reviewUiEnabled() && flags.result === "approved") {
+        const pending = pendingReviewFeedback(pd, node, unit, reviewRecordPrefix);
+        if (pending) {
+          const files = pendingFeedback(pending.stageDir);
+          appendReviewFeedbackAudit(
+            pd,
+            slug,
+            unit,
+            revisionCount,
+            "approved",
+            files.map((item) => item.file),
+            sha256Hex(files.map((item) => item.body).join("")),
+          );
+          approvalNotes = ingestPendingFeedback(
+            pending.stageDir,
+            "approved",
+          ).combinedBody;
+        }
+        publishReviewPointer(
+          pd,
+          reviewPublishNode(pd, node, unit, reviewRecordPrefix),
+          unit,
+          revisionCount,
+          "approved",
+        );
+      }
       emit(
         flags.result === "approved"
           ? {
@@ -7965,6 +8036,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
               reason:
                 `Committed ${committed.join(" + ")} for unit "${unit}" of "${slug}". ` +
                 "Run next to continue the unit-major walk.",
+              ...(approvalNotes ? { approval_notes: approvalNotes } : {}),
             }
           : printDirective(
               `Recorded ${flags.result} for unit "${unit}" of "${slug}".`,
