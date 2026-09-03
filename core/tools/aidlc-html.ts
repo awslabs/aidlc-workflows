@@ -682,9 +682,14 @@ function cli(argv: string[]): number {
 			process.stderr.write(`aidlc-html: questions file not found: ${flags.questions ?? ""}\n`);
 			return 1;
 		}
+		const artifactName = basename(path).replace(/\.html$/i, "");
 		const identity = {
-			name: flags.name ?? basename(path).replace(/\.html$/i, ""),
-			stage: flags.stage ?? basename(dirname(path)),
+			name: flags.name ?? artifactName,
+			stage: flags.stage ?? (
+				guideMode
+					? artifactName.replace(/-questions-guide$/, "")
+					: basename(dirname(path))
+			),
 		};
 		const result = guideMode
 			? checkGuideArtifact(

@@ -1044,8 +1044,13 @@ function applyBrowserAnswers(
 }
 
 function projectQuestionsFile(pd: string, value: string): { absolute: string; relative: string } {
-  const absolute = realpathSync(resolve(pd, value));
   const projectRoot = realpathSync(pd);
+  let absolute: string;
+  try {
+    absolute = realpathSync(resolve(pd, value));
+  } catch {
+    error(`answers-apply refused: questions file not found: ${value}.`);
+  }
   const rel = relative(projectRoot, absolute);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     error("answers-apply refused: --questions-file must be a file inside the project.");
