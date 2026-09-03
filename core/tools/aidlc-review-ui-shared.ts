@@ -29,6 +29,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -233,7 +234,12 @@ export function openLinkIsFresh(
   return existsSync(join(noncesDir(projectDir, env), link.nonce));
 }
 
-/** Daemon side: true (and the nonce file is gone) iff the nonce was valid and unexpired. */
+/**
+ * Daemon side: true iff the nonce was valid and unexpired. Consumption is
+ * atomic: the caller first claims the nonce by renaming it (POSIX rename is
+ * atomic, so exactly one of N concurrent requests wins; the rest see ENOENT),
+ * then reads and deletes its private claim file.
+ */
 export function consumeReviewUiOpenNonce(
   projectDir: string,
   nonce: string,
@@ -242,20 +248,36 @@ export function consumeReviewUiOpenNonce(
 ): boolean {
   if (!NONCE_RE.test(nonce)) return false;
   const path = join(noncesDir(projectDir, env), nonce);
-  let expiry: number;
+  const claim = `${path}.claim.${process.pid}.${randomBytes(4).toString("hex")}`;
   try {
-    expiry = Date.parse(readFileSync(path, "utf-8").trim());
+    renameSync(path, claim);
   } catch {
     return false;
   }
-  rmSync(path, { force: true });
+  let expiry = Number.NaN;
+  try {
+    expiry = Date.parse(readFileSync(claim, "utf-8").trim());
+  } catch {
+    // Unreadable claim: treated as invalid below.
+  } finally {
+    rmSync(claim, { force: true });
+  }
   return Number.isFinite(expiry) && now <= expiry;
 }
 
 function sweepExpiredNonces(dir: string, now: number): void {
   for (const entry of readdirSync(dir)) {
-    if (!NONCE_RE.test(entry)) continue;
     const path = join(dir, entry);
+    // A claim file only outlives a consume call if that process crashed mid-way.
+    if (entry.includes(".claim.")) {
+      try {
+        if (now - statSync(path).mtimeMs > OPEN_NONCE_TTL_MS) rmSync(path, { force: true });
+      } catch {
+        // Already gone.
+      }
+      continue;
+    }
+    if (!NONCE_RE.test(entry)) continue;
     let expiry = Number.NaN;
     try {
       expiry = Date.parse(readFileSync(path, "utf-8").trim());
