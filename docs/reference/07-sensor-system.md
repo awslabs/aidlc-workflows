@@ -201,6 +201,7 @@ at compile time.
 | Manifest | `matches` |
 |---|---|
 | `aidlc-claim-sources.md` | `**/{aidlc-docs,intents}/**` |
+| `aidlc-html-shape.md` | `**/{aidlc-docs,intents}/**` |
 | `aidlc-required-sections.md` | `**/{aidlc-docs,intents}/**` |
 | `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents}/**` |
 | `aidlc-traceability.md` | `**/traceability.json` |
@@ -211,7 +212,7 @@ For `fire_on: write`, `matches` is the fire filter: the hook compares the path
 being written against the glob and an entry without a glob never fires. For
 `fire_on: gate`, `gate-start` and `revise` enumerate every existing declared
 deliverable, skip paths outside each sensor's `matches` capability, and dispatch
-only matching paths; an omitted glob accepts every deliverable. All six shipped
+only matching paths; an omitted glob accepts every deliverable. All seven shipped
 manifests declare a glob. The compile resolver copies it into
 `sensors_applicable[]`.
 
