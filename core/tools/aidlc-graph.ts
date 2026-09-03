@@ -53,6 +53,10 @@ import {
   runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 import {
+  artifactKind,
+  HTML_ELIGIBLE_PHASES,
+} from "./aidlc-artifact-vocabulary.ts";
+import {
   _resetAgentsForTests,
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
@@ -155,6 +159,9 @@ export interface GraphStage extends StageEntry {
   // stage-graph.json. The engine's produces filter reads it to prune the
   // per-unit construction matrix; an unlisted artifact applies to all kinds.
   produces_kinds?: Record<string, string[]>;
+  // Always-present capability list derived from phase, artifact kind, and the
+  // stage's optional html_exclude declaration.
+  html_capable: string[];
   consumes: Consume[];
   requires_stage: string[];
   // sensors is the stage-side pull import — a list of sensor manifest
@@ -188,7 +195,7 @@ export interface GraphStage extends StageEntry {
   // Absent when no review step is configured. Parsed from stage frontmatter
   // `reviewer:` field and carried through to the run-stage directive.
   reviewer?: string;
-  // Required Markdown output that owns the appended reviewer section.
+  // Required document/visual output that owns the appended reviewer section.
   review_artifact?: string;
   // reviewer_max_iterations — review cycle cap before escalating to human.
   // Defaults to 2 when reviewer is present.
@@ -471,6 +478,7 @@ const FIELD_ORDER = [
   "produces",
   "optional_produces",
   "produces_kinds",
+  "html_capable",
   "consumes",
   "requires_stage",
   "sensors",
@@ -2064,6 +2072,27 @@ function buildGraphStage(
   // (parseStageFrontmatter normalises empty).
   const support_agents = parsed.support_agents ?? [];
   const produces = parsed.produces ?? [];
+  const htmlExcluded = parsed.html_exclude === "*"
+    ? new Set(produces)
+    : new Set(parsed.html_exclude ?? []);
+  const html_capable: string[] = [];
+  if (HTML_ELIGIBLE_PHASES.has(parsed.phase ?? phase)) {
+    for (const artifact of produces) {
+      const kind = artifactKind(artifact);
+      if (kind === null) {
+        // Plugin manifests do not yet carry artifact_kinds through the compose
+        // seam. Fail-safe plugin outputs remain Markdown; core omissions fail
+        // loudly so every shipped artifact is deliberately classified.
+        if (parsed.plugin !== undefined) continue;
+        throw new Error(
+          `unclassified artifact "${artifact}" produced by ${slug}: add it to ARTIFACT_KIND in core/tools/aidlc-artifact-vocabulary.ts`,
+        );
+      }
+      if ((kind === "document" || kind === "visual") && !htmlExcluded.has(artifact)) {
+        html_capable.push(artifact);
+      }
+    }
+  }
   // Dependency edges are set-valued. Normalize copy-paste duplicates here so
   // every graph consumer, including topoSort's indegree accounting, observes
   // the same edge cardinality as the compile-time number seeder.
@@ -2090,6 +2119,7 @@ function buildGraphStage(
     support_agents,
     mode: parsed.mode,
     produces,
+    html_capable,
     consumes,
     requires_stage,
     inputs: parsed.inputs ?? "",
