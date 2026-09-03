@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { MARKDOWN_ONLY } from "../../core/tools/aidlc-artifact-vocabulary.ts";
 import {
   artifactFilename,
   parseStageFrontmatter,
@@ -149,12 +150,15 @@ describe("t281 traceability artifact contract", () => {
       ["construction", "infrastructure-design"],
       ["construction", "code-generation"],
     ];
-    expect(artifactFilename("traceability")).toBe("traceability.json");
+    expect(artifactFilename("traceability", MARKDOWN_ONLY)).toBe(
+      "traceability.json",
+    );
     expect(
       producesArtifactFile(
         { slug: "user-stories", produces: ["traceability"] },
         "/project/record/inception/user-stories/traceability.json",
         new Set(),
+        MARKDOWN_ONLY,
       ),
     ).toBe(true);
     expect(
@@ -162,6 +166,7 @@ describe("t281 traceability artifact contract", () => {
         { slug: "user-stories", produces: ["traceability"] },
         "/project/record/inception/user-stories/traceability.md",
         new Set(),
+        MARKDOWN_ONLY,
       ),
     ).toBe(false);
     for (const [phase, slug] of emitting) {
@@ -196,9 +201,9 @@ describe("t281 runtime schema and status validation", () => {
 
   test("HTML Artifacts: on resolves upstreams to .html and reads their Markdown projection", () => {
     const proj = project();
-    // State locks the intent to HTML; `readStateFile` primes the resolver from
-    // the compiled graph so `requirements`/`stories` resolve to `.html`, never
-    // to the stale `.md` twins written here.
+    // The sensor derives an immutable format context from this state snapshot,
+    // so `requirements`/`stories` resolve to `.html`, never to the stale `.md`
+    // twins written here.
     writeFileSync(seededStateFile(proj), "# State\n\n- **HTML Artifacts**: on\n");
     write(proj, "inception/requirements-analysis/requirements.md", "# STALE\n\n- FR9 stale\n");
     write(proj, "inception/requirements-analysis/requirements.html", [
