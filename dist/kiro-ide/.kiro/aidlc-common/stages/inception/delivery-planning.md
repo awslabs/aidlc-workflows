@@ -58,9 +58,9 @@ outputs: bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, ext
 Read all Inception phase artifacts:
 - Requirements from `<record>/inception/requirements-analysis/`
 - User stories from `<record>/inception/user-stories/`
-- Domain design (component catalogue) from `<record>/inception/domain-design/components.md`
+- Domain design from the `components` artifact at its `directive.consumes` path
 - Units from `<record>/inception/units-generation/`
-- Inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — contract ownership and open contract questions map onto Bolt sequencing and the walking skeleton
+- Inter-unit contracts from the `contract-summary` artifact at its `directive.consumes` path (if produced) — contract ownership and open contract questions map onto Bolt sequencing and the walking skeleton
 - Team formation from `<record>/ideation/team-formation/` (if exists)
 
 **If practices-discovery executed**, resolve three sections from
@@ -70,7 +70,7 @@ most-specific non-empty statement:
 - `## Walking Skeleton` — whether the first Bolt should be a minimal end-to-end slice (gated, separate user approval) or a regular Bolt
 - `## Deployment` — parallel-vs-serial Bolt execution stance and approval-gate preferences
 
-Use these affirmed practices when populating `bolt-plan.md`. If no narrower
+Use these affirmed practices when populating the `bolt-plan` artifact. If no narrower
 statement exists (including when practices-discovery was skipped), use the
 active space's `memory/org.md` defaults.
 
@@ -79,7 +79,7 @@ active space's `memory/org.md` defaults.
 This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); this stage (2.9) chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
 
 **Definitions for this stage:**
-- **Bolt** — per `stage-protocol.md` Glossary: the planned Construction delivery slice from this stage (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The engine does not consume `bolt-plan.md` for Unit grouping or walk order; runtime batches come from `unit-of-work-dependency.md`. A **Batch** is the group of Units that build concurrently (runtime; from that 2.7 artifact).
+- **Bolt** — per `stage-protocol.md` Glossary: the planned Construction delivery slice from this stage (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The engine does not consume the `bolt-plan` artifact for Unit grouping or walk order; runtime batches come from `unit-of-work-dependency.md`. A **Batch** is the group of Units that build concurrently (runtime; from that 2.7 artifact).
 
 These definitions are for YOU. They are not written to be read out, and the user
 has not seen them. Every one of them names something that is about to appear in
@@ -113,7 +113,7 @@ Per-Bolt questions (the aidlc-delivery-agent loops these during artifact generat
 - What will shipping this Bolt tell us that we do not know yet?
 - Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, classic — default to aidlc-developer-agent for all Bolts.)
 
-NOTE: Bolt sequencing is economic, not topological. Bolt order may deviate from 2.7's topological order when a risk-first or walking-skeleton-first argument justifies it. The deviation must be captured in `risk-and-sequencing-rationale.md`.
+NOTE: Bolt sequencing is economic, not topological. Bolt order may deviate from 2.7's topological order when a risk-first or walking-skeleton-first argument justifies it. The deviation must be captured in the `risk-and-sequencing-rationale` artifact.
 
 NOTE: This stage plans the Bolt sequence. It does NOT decide which AIDLC stages to run or at what depth — that is handled by the `/aidlc` skill's scope selection.
 
@@ -129,7 +129,7 @@ Create the four declared artifacts at their `directive.produces` paths. These ar
 documents the user opens and reads at the gate, so the same rule the questions
 follow applies to the prose inside them: a term of art carries a one-clause
 definition at its first appearance in that file, and each file stands alone (the
-reader may open `team-allocation.md` without having read `bolt-plan.md`). "Bolt",
+reader may open the `team-allocation` artifact without having read the `bolt-plan` artifact). "Bolt",
 "mob", "walking skeleton", "Program Board", and any scoring model named by
 initials all qualify. Gloss and move on; do not restructure the artifact around
 the explanation.
@@ -162,7 +162,7 @@ Hand completion to `stage-protocol.md` via
 `bun .kiro/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-**Construction iteration.** Classify how the approved `bolt-plan.md` wants the
+**Construction iteration.** Classify how the approved `bolt-plan` artifact wants the
 per-unit construction stages (functional-design, nfr-requirements, nfr-design,
 infrastructure-design, code-generation) to iterate over Units of Work. A
 unit-at-a-time or walking-skeleton-first plan typically calls for designing AND

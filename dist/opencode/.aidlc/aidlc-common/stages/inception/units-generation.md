@@ -55,10 +55,10 @@ NOTE: **Stage 2.7 produces the dependency DAG (topology). Stage 2.9 Delivery Pla
 
 ### Step 1: Load Prior Context
 
-- Read the component catalogue from `<record>/inception/domain-design/components.md` (the fenced `yaml` block plus the diagram, summary, and rationale)
-- Read the Architecture Decision Records from `<record>/inception/domain-design/decisions.md` (if produced) — the boundary/ownership ADRs constrain how components may be grouped into units (a decision to keep two components separately deployable, for instance, forbids bundling them into one unit)
-- Read `<record>/inception/requirements-analysis/requirements.md`
-- Read `<record>/inception/user-stories/stories.md` (if produced)
+- Read the `components` artifact at its `directive.consumes` path (the fenced `yaml` block plus the diagram, summary, and rationale)
+- Read the `decisions` artifact at its `directive.consumes` path (if produced) — the boundary/ownership ADRs constrain how components may be grouped into units (a decision to keep two components separately deployable, for instance, forbids bundling them into one unit)
+- Read the `requirements` artifact at its `directive.consumes` path
+- Read the `stories` artifact at its `directive.consumes` path (if produced)
 
 ### Step 2: Create Decomposition Plan with Questions
 
@@ -128,9 +128,9 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 - Coverage verification: every story assigned, every unit has stories
 
 Create `<record>/inception/units-generation/traceability.json`. When
-`stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`.
+the `stories` artifact exists, enumerate every `USx.y`; otherwise enumerate every `FR`.
 Each `OK` target is one Unit ID or construction directory that also appears on
-the story's row in `unit-of-work-story-map.md`:
+the story's row in the `unit-of-work-story-map` artifact:
 
 ```json
 {

@@ -58,8 +58,8 @@ This stage does NOT decide deployment topology (monolith, microservices, serverl
 
 ### Step 1: Load Prior Context
 
-- Read `<record>/inception/requirements-analysis/requirements.md`
-- Read `<record>/inception/user-stories/stories.md` (if produced)
+- Read the `requirements` artifact at its `directive.consumes` path
+- Read the `stories` artifact at its `directive.consumes` path (if produced)
 - If brownfield: Read relevant RE artifacts (especially architecture.md, component-inventory.md, dependencies.md)
 
 ### Step 2: Create Design Plan with Questions
@@ -137,7 +137,7 @@ trade-off before recording the decision:
 
 The team chooses at the gate (ownership stays with the team), then record the
 chosen decomposition plus an **Alternatives Rejected** note in the Rationale
-section of components.md.
+section of the `components` artifact.
 
 When only one decomposition is viable, state why and skip the block.
 
@@ -158,9 +158,9 @@ Number ADRs sequentially (`ADR-001`, `ADR-002`, …). Where a decision came from
 ### Step 6: Record Traceability
 
 Create `<record>/inception/domain-design/traceability.json`. When
-`stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`
-from `requirements.md`. Map each upstream ID to the **component or entity**
-in `components.md` that realizes it — those are the only identifiers this
+the `stories` artifact exists, enumerate every `USx.y`; otherwise enumerate every
+`FR` from the `requirements` artifact. Map each upstream ID to the **component or entity**
+in the `components` artifact that realizes it — those are the only identifiers this
 stage's source of truth defines (it does not name services or public methods;
 method- and API-level targets are pinned later in Contract Design and
 Functional Design):
@@ -186,7 +186,7 @@ That `report` call owns every lifecycle transition and advancement; never perfor
 
 Use stage-protocol.md completion template with completion emoji: :building_construction:
 - Summary of components identified (count, key boundaries, entity ownership)
-- Key boundary decisions highlighted (with a pointer to the ADR log in `decisions.md`)
+- Key boundary decisions highlighted (with a pointer to the `decisions` ADR log)
 - Review path: `<record>/inception/domain-design/`
 - Structured approval question with options:
   - Approve (continue to next stage)
@@ -199,7 +199,7 @@ before re-entering the approval flow.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/inception/domain-design/` (`components.md` and `decisions.md`) plus `traceability.json`.
+This stage's outputs are the `components` and `decisions` artifacts at their `directive.produces` paths, plus `traceability.json`.
 
 Imports: `html-shape`, `required-sections`, `upstream-coverage`, `traceability`.
 

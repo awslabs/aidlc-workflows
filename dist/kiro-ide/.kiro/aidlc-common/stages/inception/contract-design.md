@@ -54,8 +54,8 @@ This stage runs once per workflow (not per unit) — it maps the whole set of bo
 
 - Read `<record>/inception/units-generation/unit-of-work.md` (unit definitions and kinds)
 - Read `<record>/inception/units-generation/unit-of-work-dependency.md` (the dependency DAG — every edge is a candidate contract)
-- Read `<record>/inception/domain-design/components.md` (if produced) — the entity shapes inform payload design
-- Read `<record>/inception/requirements-analysis/requirements.md` (if produced) — NFRs shape SLAs and error budgets
+- Read the `components` artifact at its `directive.consumes` path (if produced) — the entity shapes inform payload design
+- Read the `requirements` artifact at its `directive.consumes` path (if produced) — NFRs shape SLAs and error budgets
 
 ### Step 2: Create Contract Plan with Questions
 
