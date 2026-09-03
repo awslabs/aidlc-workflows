@@ -53,6 +53,8 @@ import { join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   acquireAuditLock,
+  artifactFormatsFromState,
+  type ArtifactFormats,
   auditFilePath,
   type ClaudeCodeHookInput,
   errorMessage,
@@ -106,6 +108,7 @@ export function judgeFreeze(
   >,
   file: string,
   recordedRepos: ReadonlySet<string>,
+  formats: ArtifactFormats,
   receipts: {
     stageVerdict: string | null;
     unitVerdicts: Map<string, string>;
@@ -142,7 +145,7 @@ export function judgeFreeze(
     }
     return artifactStale || sourceStale;
   };
-  const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+  const targetUnit = producesArtifactUnit(stage, file, recordedRepos, formats);
   if (targetUnit === undefined) return { block: false }; // not this stage's artifact
   if (stage.for_each === "unit-of-work") {
     if (targetUnit !== null) {
@@ -294,6 +297,7 @@ export async function run(input: string): Promise<number> {
   try {
     const content = readStateFile(projectDir);
     stateContent = content;
+    const formats = artifactFormatsFromState(content);
     // Only NOT-completed reviewer-bearing stages can hold a receipt the gate
     // still depends on. Completed ([x]) and skipped stages are excluded: their
     // artifacts are permanent record, and a redo re-opens them via jump or
@@ -311,7 +315,7 @@ export async function run(input: string): Promise<number> {
       // matched a target (freshReviewReceipts walks the whole ledger).
       let receipts: ReturnType<typeof freshReviewReceipts> | null = null;
       for (const file of targets) {
-        const probe = producesArtifactUnit(stage, file, recordedRepos);
+        const probe = producesArtifactUnit(stage, file, recordedRepos, formats);
         if (probe === undefined) continue;
         const reviewClass = resolveReviewClass(
           stage.review_class ?? "adversarial",
@@ -321,7 +325,7 @@ export async function run(input: string): Promise<number> {
         receipts ??= freshReviewReceipts(projectDir, content, stage, {
           reviewClass,
         });
-        verdict = judgeFreeze(stage, file, recordedRepos, receipts);
+        verdict = judgeFreeze(stage, file, recordedRepos, formats, receipts);
         if (verdict.block) break;
       }
       if (verdict.block) break;

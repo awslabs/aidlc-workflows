@@ -75,7 +75,7 @@ Collect answers following stage-protocol.md §3 question flow (offer interaction
 
 ### Step 4: Generate the Contract Summary
 
-Create `<record>/inception/contract-design/contract-summary.md`. This single artifact carries both the human-readable overview and the contract specs themselves.
+Create the `contract-summary` artifact at its `directive.produces` path. This single artifact carries both the human-readable overview and the contract specs themselves.
 
 **Contracts table** — one row per boundary (inter-unit and public/external):
 

@@ -7,8 +7,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
+import type { ArtifactFormats } from "./aidlc-artifact-vocabulary.ts";
 import {
   type AuditShardEvent,
+  artifactFormatsForProject,
   auditBlockField,
   extractMarkdownSection,
   findStageBySlug,
@@ -235,9 +237,10 @@ export function readReviewArtifactContexts(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
+  formats: ArtifactFormats = artifactFormatsForProject(projectDir),
 ): ReviewArtifactContext[] {
   const contexts: ReviewArtifactContext[] = [];
-  const entries = reviewArtifactEntries(projectDir, stage, unit);
+  const entries = reviewArtifactEntries(projectDir, stage, formats, unit);
   if (entries === null) return contexts;
   for (const entry of entries) {
     if (entry.path === null || !existsSync(entry.path)) continue;
@@ -398,10 +401,11 @@ export function acceptedRiskDispositionField(
   stages: ReviewDispositionStages,
   unit?: string,
 ): string | undefined {
+  const formats = artifactFormatsForProject(projectDir);
   const dispositions = dispositionStages(stages).flatMap((stage) => {
     if (!stage.reviewer) return [];
     const hydrated = hydrateReviewArtifactContexts(
-      readReviewArtifactContexts(projectDir, stage, unit),
+      readReviewArtifactContexts(projectDir, stage, unit, formats),
       readReviewFindingDispositions(projectDir, stage.slug, unit),
     );
     return hydrated.flatMap((context) =>
@@ -443,6 +447,7 @@ export function rejectedFindingDispositionField(
   unit?: string,
 ): string | undefined {
   if (specs.length === 0) return undefined;
+  const formats = artifactFormatsForProject(projectDir);
   const stageList = dispositionStages(stages);
   if (!stageList.some((stage) => stage.reviewer)) {
     const subject = stageList.length === 1
@@ -456,7 +461,7 @@ export function rejectedFindingDispositionField(
   const findings = stageList.flatMap((stage) => {
     if (!stage.reviewer) return [];
     return hydrateReviewArtifactContexts(
-      readReviewArtifactContexts(projectDir, stage, unit),
+      readReviewArtifactContexts(projectDir, stage, unit, formats),
       readReviewFindingDispositions(projectDir, stage.slug, unit),
     ).flatMap((context) => context.findings);
   });
@@ -624,6 +629,7 @@ export function reviewInvalidationDetails(
   projectDir: string,
   stage: ReviewFingerprintStage,
   contexts: ReviewArtifactContext[],
+  formats: ArtifactFormats = artifactFormatsForProject(projectDir),
 ): ReviewInvalidationDetails {
   const events = readAuditShardEvents(projectDir).sort((a, b) => {
     if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -648,7 +654,7 @@ export function reviewInvalidationDetails(
     afterFrontier(attemptFrontier, event);
 
   const currentArtifacts = new Set(
-    (reviewArtifactEntries(projectDir, stage) ?? []).map((entry) =>
+    (reviewArtifactEntries(projectDir, stage, formats) ?? []).map((entry) =>
       workspaceArtifactPath(projectDir, entry)
     ),
   );
@@ -840,7 +846,13 @@ export function reviewInvalidationDetails(
         ? findStageBySlug(consumedStageSlug)
         : undefined;
       if (!consumedStage) continue;
-      for (const entry of reviewArtifactEntries(projectDir, consumedStage) ?? []) {
+      for (
+        const entry of reviewArtifactEntries(
+          projectDir,
+          consumedStage,
+          formats,
+        ) ?? []
+      ) {
         const path = workspaceArtifactPath(projectDir, entry);
         consumedArtifacts.add(path);
         consumedReviews.add(`${path}#Review`);
@@ -877,15 +889,16 @@ export function renderReviewBrief(
   unit?: string,
   fallbackFinding?: string,
 ): string {
+  const formats = artifactFormatsForProject(projectDir);
   // Per-Unit review dispatches are isolated, but their final human approval is
   // one stage-level gate. The last Unit is only the execution cursor.
   const contextUnit = stage.for_each === "unit-of-work" ? undefined : unit;
   let contexts = hydrateReviewArtifactContexts(
-    readReviewArtifactContexts(projectDir, stage, contextUnit),
+    readReviewArtifactContexts(projectDir, stage, contextUnit, formats),
     readReviewFindingDispositions(projectDir, stage.slug),
   );
   if (contexts.length === 0 && fallbackFinding) {
-    const entry = reviewArtifactEntries(projectDir, stage, unit)?.[0];
+    const entry = reviewArtifactEntries(projectDir, stage, formats, unit)?.[0];
     const artifact = entry
       ? workspaceArtifactPath(projectDir, entry)
       : `${stage.phase}/${stage.slug}`;
@@ -936,6 +949,7 @@ export function renderReviewBrief(
       projectDir,
       stage,
       contexts,
+      formats,
     );
     if (invalidation.changedUpstream.length > 0) {
       lines.push(
@@ -974,6 +988,7 @@ export function renderSummaryConfirmationBrief(
   questionsFile: string,
   unit?: string,
 ): string {
+  const formats = artifactFormatsForProject(projectDir);
   const absoluteQuestions = resolve(projectDir, questionsFile);
   const record = recordDir(projectDir);
   if (
@@ -988,7 +1003,7 @@ export function renderSummaryConfirmationBrief(
       `Summary confirmation questions file must exist inside the active intent record: ${questionsFile}`,
     );
   }
-  const entries = reviewArtifactEntries(projectDir, stage, unit) ?? [];
+  const entries = reviewArtifactEntries(projectDir, stage, formats, unit) ?? [];
   const artifacts = entries.map((entry) =>
     `\`${workspaceArtifactPath(projectDir, entry)}\``
   );
@@ -1046,8 +1061,9 @@ export function main(argv: string[]): void {
     return;
   }
   if (command === "context") {
+    const formats = artifactFormatsForProject(projectDir);
     const contexts = hydrateReviewArtifactContexts(
-      readReviewArtifactContexts(projectDir, stage, flags.unit),
+      readReviewArtifactContexts(projectDir, stage, flags.unit, formats),
       readReviewFindingDispositions(projectDir, stage.slug),
     );
     process.stdout.write(`${renderFindingsContext(contexts)}\n`);

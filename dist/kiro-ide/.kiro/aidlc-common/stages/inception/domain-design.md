@@ -81,7 +81,7 @@ Collect answers following stage-protocol.md §3 question flow (offer interaction
 
 ### Step 4: Generate the Component Catalogue
 
-Create `<record>/inception/domain-design/components.md`. This single artifact carries both a machine-readable catalogue and the human-readable view.
+Create the `components` artifact at its `directive.produces` path. This single artifact carries both a machine-readable catalogue and the human-readable view.
 
 **Entity capture depth.** Capture entities at the **ownership + shape** level only — which component owns each entity, its identifier, its attribute names, and any cross-component references. Do NOT specify data types, validation constraints, allowed values, or relationship cardinality here — that full schema belongs to Functional Design (`entities.md`). Every entity has **exactly one** owning component; ambiguous ownership is a design smell to resolve before the gate.
 
@@ -143,7 +143,7 @@ When only one decomposition is viable, state why and skip the block.
 
 ### Step 5: Record Architecture Decisions (ADRs)
 
-Create `<record>/inception/domain-design/decisions.md`. The `components.md` Rationale table is a quick per-component justification; `decisions.md` is the durable Architecture Decision Record log that the Inception phase rule requires. Record one ADR for every **significant** design choice made here — component-boundary decompositions, entity-ownership calls, cross-component interaction styles, and any deliberate dependency cycle.
+Create the `decisions` artifact at its `directive.produces` path. The `components` artifact's Rationale table is a quick per-component justification; `decisions` is the durable Architecture Decision Record log that the Inception phase rule requires. Record one ADR for every **significant** design choice made here — component-boundary decompositions, entity-ownership calls, cross-component interaction styles, and any deliberate dependency cycle.
 
 Each ADR MUST follow this structure (per the Inception phase guardrails):
 

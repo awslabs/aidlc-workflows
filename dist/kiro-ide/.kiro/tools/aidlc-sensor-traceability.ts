@@ -2,7 +2,10 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   artifactFilename,
+  artifactFormatsFromState,
+  type ArtifactFormats,
   errorMessage,
+  MARKDOWN_ONLY,
   readStateFile,
   recordDir,
   resolveBoltDag,
@@ -50,6 +53,7 @@ interface UnitContext {
 }
 
 interface UpstreamResolution {
+  formats: ArtifactFormats;
   ids: Set<string>;
   reasons: string[];
   extraGaps: string[];
@@ -279,40 +283,43 @@ function addSource(result: UpstreamResolution, source: { ids: Set<string>; reaso
 }
 
 function resolveUpstream(stage: string, projectDir: string, outputPath: string): UpstreamResolution {
-  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [] };
+  let formats: ArtifactFormats = MARKDOWN_ONLY;
+  try {
+    const stateContent = readStateFile(projectDir);
+    formats = artifactFormatsFromState(stateContent);
+  } catch {
+    // No readable state means Markdown-only artifact resolution.
+  }
+  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [], formats };
   const docsDir = recordDir(projectDir);
   if (!docsDir) {
     result.reasons.push("cannot resolve the active intent record directory");
     return result;
   }
-  // Prime artifact formats from the intent's state so capable upstreams resolve
-  // to `.html` under HTML Artifacts: on (readStateFile is the priming seam).
-  try {
-    readStateFile(projectDir);
-  } catch {
-    // No state file: every artifact is Markdown.
-  }
-  const requirements = join(docsDir, "inception", "requirements-analysis", artifactFilename("requirements"));
-  const stories = join(docsDir, "inception", "user-stories", artifactFilename("stories"));
-  const storyMap = join(docsDir, "inception", "units-generation", artifactFilename("unit-of-work-story-map"));
+  const requirementsFilename = artifactFilename("requirements", formats);
+  const storiesFilename = artifactFilename("stories", formats);
+  const storyMapFilename = artifactFilename("unit-of-work-story-map", formats);
+  const requirements = join(docsDir, "inception", "requirements-analysis", requirementsFilename);
+  const stories = join(docsDir, "inception", "user-stories", storiesFilename);
+  const storyMap = join(docsDir, "inception", "units-generation", storyMapFilename);
 
   if (stage === "user-stories") {
-    addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], artifactFilename("requirements")));
+    addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], requirementsFilename));
     return result;
   }
   if (stage === "domain-design") {
     addSource(
       result,
       existsSync(stories)
-        ? idsFromFile(stories, [ID_PATTERNS.US], artifactFilename("stories"))
-        : idsFromFile(requirements, [ID_PATTERNS.FR], artifactFilename("requirements")),
+        ? idsFromFile(stories, [ID_PATTERNS.US], storiesFilename)
+        : idsFromFile(requirements, [ID_PATTERNS.FR], requirementsFilename),
     );
     return result;
   }
   if (stage === "units-generation") {
     const source = existsSync(stories)
-      ? idsFromFile(stories, [ID_PATTERNS.US], artifactFilename("stories"))
-      : idsFromFile(requirements, [ID_PATTERNS.FR], artifactFilename("requirements"));
+      ? idsFromFile(stories, [ID_PATTERNS.US], storiesFilename)
+      : idsFromFile(requirements, [ID_PATTERNS.FR], requirementsFilename);
     const sourceIds = addSource(result, source);
     const dag = resolveBoltDag(projectDir);
     if (dag.state === "malformed") {
@@ -371,12 +378,12 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
       }
       if (result.ids.size === 0) result.reasons.push(`stories mapped to unit "${unit}" contain no acceptance-criterion IDs`);
     } else {
-      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR], artifactFilename("requirements")));
+      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR], requirementsFilename));
     }
     return result;
   }
   if (stage === "nfr-requirements") {
-    addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], artifactFilename("requirements")));
+    addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], requirementsFilename));
     return result;
   }
   if (stage === "nfr-design") {
@@ -428,10 +435,10 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
           }
         }
       } else {
-        addSource(result, idsFromFile(stories, [ID_PATTERNS.AC], artifactFilename("stories")));
+        addSource(result, idsFromFile(stories, [ID_PATTERNS.AC], storiesFilename));
       }
     } else {
-      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], artifactFilename("requirements")));
+      addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], requirementsFilename));
     }
     const nfrDir = join(docsDir, "construction", unit, "nfr-requirements");
     for (const name of ["performance-requirements.md", "security-requirements.md", "scalability-requirements.md", "reliability-requirements.md"]) {
@@ -464,6 +471,7 @@ function verifyTargets(
   projectDir: string,
   outputPath: string,
   upstream: UpstreamResolution,
+  formats: ArtifactFormats,
 ): { invalidTargets: string[]; derivedOrphans: string[]; reasons: string[] } {
   const invalidTargets: string[] = [];
   const derivedOrphans: string[] = [];
@@ -472,8 +480,9 @@ function verifyTargets(
   const okEntries = data.coverage.filter((entry) => entry.status === "OK");
 
   if (stage === "user-stories" && docsDir) {
-    const storiesPath = join(docsDir, "inception", "user-stories", artifactFilename("stories"));
-    const stories = idsFromFile(storiesPath, [ID_PATTERNS.US], artifactFilename("stories"));
+    const storiesFilename = artifactFilename("stories", formats);
+    const storiesPath = join(docsDir, "inception", "user-stories", storiesFilename);
+    const stories = idsFromFile(storiesPath, [ID_PATTERNS.US], storiesFilename);
     if (stories.reason) reasons.push(stories.reason);
     for (const entry of okEntries) {
       const targets = extractIds(entry.target ?? "", [ID_PATTERNS.US]);
@@ -613,7 +622,7 @@ function main(): void {
     reasons.push(`upstream ID set is empty for stage "${stage}"`);
   }
 
-  const targetChecks = verifyTargets(stage, data, projectDir, outputPath, upstream);
+  const targetChecks = verifyTargets(stage, data, projectDir, outputPath, upstream, upstream.formats);
   reasons.push(...targetChecks.reasons);
   orphans.push(...targetChecks.derivedOrphans);
 

@@ -125,7 +125,7 @@ Validate the chosen Bolt sequence respects 2.7's dependency DAG (with aidlc-arch
 
 ### Step 4: Generate Artifacts
 
-Create four artifacts in `<record>/inception/delivery-planning/`. These are
+Create the four declared artifacts at their `directive.produces` paths. These are
 documents the user opens and reads at the gate, so the same rule the questions
 follow applies to the prose inside them: a term of art carries a one-clause
 definition at its first appearance in that file, and each file stands alone (the
@@ -134,10 +134,10 @@ reader may open `team-allocation.md` without having read `bolt-plan.md`). "Bolt"
 initials all qualify. Gloss and move on; do not restructure the artifact around
 the explanation.
 
-- `bolt-plan.md` — the ordered sequence of Bolts. Each Bolt entry: included Unit(s) of Work, walking-skeleton marker if applicable, Definition of Done for that Bolt, confidence hypothesis ("what will shipping this Bolt prove?"), expected demo.
-- `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, classic), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
-- `risk-and-sequencing-rationale.md` — the why behind the Bolt ordering: WSJF-style scoring, risk-first argument, walking-skeleton-first argument, or value-first argument. References the heuristic used (Cohn, Reinertsen CD3, or SAFe WSJF).
-- `external-dependency-map.md` — gated items (external APIs, data availability windows, approval lead times, external-team hand-offs) mapped to the Bolts that consume them. Lightweight or empty when fully AI-contained.
+- **`bolt-plan` artifact** — the ordered sequence of Bolts. Each Bolt entry: included Unit(s) of Work, walking-skeleton marker if applicable, Definition of Done for that Bolt, confidence hypothesis ("what will shipping this Bolt prove?"), expected demo.
+- **`team-allocation` artifact** — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, classic), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
+- **`risk-and-sequencing-rationale` artifact** — the why behind the Bolt ordering: WSJF-style scoring, risk-first argument, walking-skeleton-first argument, or value-first argument. References the heuristic used (Cohn, Reinertsen CD3, or SAFe WSJF).
+- **`external-dependency-map` artifact** — gated items (external APIs, data availability windows, approval lead times, external-team hand-offs) mapped to the Bolts that consume them. Lightweight or empty when fully AI-contained.
 
 ### Step 5: Phase Boundary Verification
 

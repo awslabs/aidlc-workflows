@@ -65,7 +65,7 @@ Assess whether user stories add value for this project. Provide reasoning:
 - **Execute if**: user-facing features, multiple user personas, complex business logic, cross-team coordination needed
 - **Skip if**: pure refactoring, isolated bug fixes, infrastructure-only, developer tooling
 
-Create `<record>/inception/user-stories/user-stories-assessment.md` documenting the assessment:
+Create the `user-stories-assessment` artifact at its `directive.produces` path, documenting the assessment:
 - Decision: Execute or Skip
 - Rationale: Why user stories are or are not needed for this project
 - Factors considered: project type, user-facing scope, complexity signals
@@ -124,11 +124,11 @@ participants, and the Product Leader reviews afterwards (`stage-protocol-reviewe
 
 **Round 0 — lead drafts.** As the lead, based on the approved plan, draft:
 
-**`<record>/inception/user-stories/personas.md`:**
+**`personas` artifact (`directive.produces` path):**
 - User persona definitions (name, role, goals, pain points, context)
 - Persona relationships and priority ranking
 
-**`<record>/inception/user-stories/stories.md`:**
+**`stories` artifact (`directive.produces` path):**
 - User stories in standard format: "As a [persona], I want [goal], so that [benefit]". Give each story a stable `US{group}.{seq}` ID (for example `US1.1`).
 - Acceptance criteria for each story. Give each criterion a three-segment `AC{story-group}.{story-seq}.{criterion-seq}` ID (for example `AC1.1.1`).
 - Story priority (Must Have / Should Have / Could Have / Won't Have)

@@ -158,7 +158,7 @@ Apply this grounding contract to both artifacts:
 7. Each artifact MUST contain `## Assumptions & Open Questions`. Write `None.`
    when there are none.
 
-Create `<record>/ideation/intent-capture/intent-statement.md` containing:
+Create the `intent-statement` artifact at its `directive.produces` path, containing:
 - **Problem Statement** — What business problem is being solved
 - **Target Customer** — Who benefits and how
 - **Success Metrics** — Measurable outcomes
@@ -166,7 +166,7 @@ Create `<record>/ideation/intent-capture/intent-statement.md` containing:
 - **Initial Scope Signal** — Show the workflow-selected scope separately from
   the user-confirmed product boundary
 
-Create `<record>/ideation/intent-capture/stakeholder-map.md` containing:
+Create the `stakeholder-map` artifact at its `directive.produces` path, containing:
 - Key stakeholders and their interests
 - Decision-makers vs. influencers
 - Communication requirements

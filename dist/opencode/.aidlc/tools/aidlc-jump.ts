@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import type { ArtifactFormats } from "./aidlc-artifact-vocabulary.ts";
 import {
+  artifactFormatsFromState,
   type CheckboxState,
   countCheckboxes,
   emitError,
@@ -54,8 +56,12 @@ function emitAudit(
   appendAuditEntry(eventType, fields, pd);
 }
 
-function stageArtifactPaths(pd: string, stage: StageEntry): string[] {
-  const entries = reviewArtifactEntries(pd, stage) ?? [];
+function stageArtifactPaths(
+  pd: string,
+  stage: StageEntry,
+  formats: ArtifactFormats,
+): string[] {
+  const entries = reviewArtifactEntries(pd, stage, formats) ?? [];
   return [...new Set(entries.map((entry) =>
     entry.path === null
       ? entry.logicalPath
@@ -63,8 +69,12 @@ function stageArtifactPaths(pd: string, stage: StageEntry): string[] {
   ))].sort();
 }
 
-function existingStageArtifactPaths(pd: string, stage: StageEntry): string[] {
-  return stageArtifactPaths(pd, stage).filter((path) =>
+function existingStageArtifactPaths(
+  pd: string,
+  stage: StageEntry,
+  formats: ArtifactFormats,
+): string[] {
+  return stageArtifactPaths(pd, stage, formats).filter((path) =>
     existsSync(resolveProjectPath(pd, path))
   );
 }
@@ -73,8 +83,12 @@ function resolveProjectPath(pd: string, path: string): string {
   return resolve(pd, path);
 }
 
-function stageReviewPaths(pd: string, stage: StageEntry): string[] {
-  return existingStageArtifactPaths(pd, stage).filter((path) => {
+function stageReviewPaths(
+  pd: string,
+  stage: StageEntry,
+  formats: ArtifactFormats,
+): string[] {
+  return existingStageArtifactPaths(pd, stage, formats).filter((path) => {
     try {
       return extractMarkdownSection(
         readFileSync(resolveProjectPath(pd, path), "utf-8"),
@@ -260,6 +274,7 @@ function handleExecute(args: string[]): void {
   const flags = parseFlags(args);
   const pd = resolveProjectDir(projectDir);
   let content = readStateFile(pd);
+  const formats = artifactFormatsFromState(content);
 
   const targetSlug = flags.target;
   if (!targetSlug) error("Usage: execute --target <slug> --direction <forward|backward|redo> [--scope <scope>]");
@@ -459,7 +474,9 @@ function handleExecute(args: string[]): void {
     "code-generation",
   );
   const changedUpstreamArtifacts =
-    direction === "backward" ? stageArtifactPaths(pd, targetStage) : [];
+    direction === "backward"
+      ? stageArtifactPaths(pd, targetStage, formats)
+      : [];
   const downstreamStages = direction === "backward"
     ? stagesReset
       .filter((slug) => slug !== targetSlug)
@@ -469,12 +486,16 @@ function handleExecute(args: string[]): void {
   const invalidatedDownstreamArtifacts = [
     ...new Set(
       downstreamStages.flatMap((stage) =>
-        existingStageArtifactPaths(pd, stage)
+        existingStageArtifactPaths(pd, stage, formats)
       ),
     ),
   ].sort();
   const invalidatedDownstreamReviews = [
-    ...new Set(downstreamStages.flatMap((stage) => stageReviewPaths(pd, stage))),
+    ...new Set(
+      downstreamStages.flatMap((stage) =>
+        stageReviewPaths(pd, stage, formats)
+      ),
+    ),
   ].sort();
 
   // Atomic audit emissions (audit-first — throws before writeStateFile if any fail)

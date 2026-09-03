@@ -19,6 +19,8 @@ import {
   activeIntentUuid,
   activeSpace,
   artifactFilename,
+  artifactFormatsFromState,
+  type ArtifactFormats,
   auditBlockField,
   auditShardName,
   type CachedUnitClaim,
@@ -1023,6 +1025,7 @@ function candidateReviewFingerprint(
     produces_kinds?: Record<string, string[]>;
   },
   unitKind: string | null,
+  formats: ArtifactFormats,
 ): string {
   const names = filterProducesByKind(
     stage.produces_kinds,
@@ -1031,7 +1034,7 @@ function candidateReviewFingerprint(
   );
   const manifest: Array<[string, string]> = names.map((name) => {
     const logicalPath =
-      `construction/${unit}/${stage.slug}/${artifactFilename(name)}`;
+      `construction/${unit}/${stage.slug}/${artifactFilename(name, formats)}`;
     const path = `${recordPrefix}/${logicalPath}`;
     if (!gitPathExistsAt(projectDir, oid, path)) {
       return [logicalPath, "missing"];
@@ -1062,6 +1065,7 @@ function candidateReviewerReady(
     produces_kinds?: Record<string, string[]>;
   },
   unitKind: string | null,
+  formats: ArtifactFormats,
 ): boolean {
   const expectedFingerprint = candidateReviewFingerprint(
     projectDir,
@@ -1070,6 +1074,7 @@ function candidateReviewerReady(
     unit,
     stage,
     unitKind,
+    formats,
   );
   const pending = new Set<string>();
   let ready = false;
@@ -1430,6 +1435,7 @@ function candidateEvidence(
   if (!isTeamUnitOwnership(integrationState)) {
     fail("Pinned integration state does not record Unit Ownership: team.");
   }
+  const formats = artifactFormatsFromState(integrationState);
   const scope = getField(integrationState, "Scope") ?? "";
   const stages = unitMajorConstructionStageSlugs(
     scope,
@@ -1538,6 +1544,7 @@ function candidateEvidence(
             unitName,
             stageNode,
             unitKind,
+            formats,
           ),
       },
     ).receipts.has(claim.unit)
@@ -1567,7 +1574,7 @@ function candidateEvidence(
       unitKind,
     );
     for (const name of names) {
-      const path = `${recordPrefix}/construction/${claim.unit}/${stageSlug}/${artifactFilename(name)}`;
+      const path = `${recordPrefix}/construction/${claim.unit}/${stageSlug}/${artifactFilename(name, formats)}`;
       if (!gitPathExistsAt(projectDir, claim.oid, path)) {
         fail(`Pinned candidate is missing required artifact ${path}.`);
       }
@@ -1591,6 +1598,7 @@ function candidateEvidence(
             claim.generation,
             stage,
             unitKind,
+            formats,
           )
         ) {
           reviewersReady.push(stageSlug);

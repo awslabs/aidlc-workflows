@@ -5227,7 +5227,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t232-phase-progress-flip.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

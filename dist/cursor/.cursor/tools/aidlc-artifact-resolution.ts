@@ -2,9 +2,12 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   artifactFilename,
+  type ArtifactFormats,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
 import {
+  artifactFormatsForProject,
+  artifactFormatsFromState,
   codekbDir,
   codekbRepoName,
   effectivePlanAction,
@@ -12,7 +15,6 @@ import {
   getField,
   intentRepos,
   isPerUnitStage,
-  primeArtifactFormats,
   recordDir,
   assertNoSymlinkInChainOrThrow,
   readRegularFileNoFollowOrThrow,
@@ -52,6 +54,8 @@ export interface ArtifactResolutionOptions {
   codekbRepos?: readonly string[];
   /** Workflow state used to mirror the engine's stage-level decision. */
   stateContent?: string;
+  /** Immutable artifact-format selection for this resolution. */
+  formats?: ArtifactFormats;
 }
 
 export interface RequiredArtifactFailure {
@@ -193,12 +197,10 @@ export function resolveArtifactInstances(
   owner: ArtifactOwnerNode,
   options: ArtifactResolutionOptions = {},
 ): ArtifactInstance[] {
-  // A caller that hands us the intent's state content gets that intent's
-  // format, whatever another intent primed earlier in this process. Without
-  // it the vocabulary keeps the last `readStateFile` priming (single-intent
-  // CLI runs), which is the documented seam.
-  if (options.stateContent !== undefined) primeArtifactFormats(options.stateContent);
-  const filename = artifactFilename(artifact);
+  const formats = options.formats ?? (options.stateContent
+    ? artifactFormatsFromState(options.stateContent)
+    : artifactFormatsForProject(projectDir));
+  const filename = artifactFilename(artifact, formats);
 
   if (isCodekbArtifactOwner(owner)) {
     return codekbReposFor(projectDir, options.codekbRepos).map((repo) => {

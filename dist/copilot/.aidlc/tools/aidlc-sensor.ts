@@ -48,6 +48,7 @@ import {
 } from "./aidlc-graph.ts";
 import {
 	artifactFilename,
+	artifactFormatsForProject,
 	codekbDir,
 	errorMessage,
 	getField,
@@ -317,12 +318,13 @@ function artifactDirsForProducer(
 }
 
 function presentConsumes(pd: string, slugs: string[]): string[] {
+	const formats = artifactFormatsForProject(pd);
 	if (recordDir(pd) === null) return slugs;
 	return slugs.filter((name) => {
 		const producer = producersOf(name)[0];
 		if (!producer) return true;
 		for (const dir of artifactDirsForProducer(pd, producer)) {
-			if (existsSync(join(dir, artifactFilename(name)))) return true;
+			if (existsSync(join(dir, artifactFilename(name, formats)))) return true;
 		}
 		return false;
 	});

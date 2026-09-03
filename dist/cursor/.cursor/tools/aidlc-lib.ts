@@ -14,12 +14,15 @@ import {
   artifactFilename,
   hasArtifactFilenameException,
   KNOWN_CODEKB_STAGES,
-  setHtmlArtifactNames,
+  MARKDOWN_ONLY,
+  type ArtifactFormats,
 } from "./aidlc-artifact-vocabulary.ts";
 export {
   artifactFilename,
   hasArtifactFilenameException,
   KNOWN_CODEKB_STAGES,
+  MARKDOWN_ONLY,
+  type ArtifactFormats,
 } from "./aidlc-artifact-vocabulary.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
 // runtime require() below avoids the circular import (aidlc-graph.ts
@@ -7015,13 +7018,14 @@ function summaryAnswerFromFile(path: string): string | null {
 function summaryArtifactPaths(
   stage: SummaryConfirmationStage,
   question: SummaryQuestionFile,
+  formats: ArtifactFormats,
 ): string[] {
   const names = [
     ...(stage.produces ?? []),
     ...(stage.optional_produces ?? []),
   ].filter((name) => !name.endsWith("-questions"));
   return names
-    .map((name) => join(question.dir, artifactFilename(name)))
+    .map((name) => join(question.dir, artifactFilename(name, formats)))
     .filter((path) => existsSync(path));
 }
 
@@ -7037,6 +7041,9 @@ export function checkSummaryConfirmationEvidence(
     unit?: string;
   } = {},
 ): SummaryConfirmationEvidence {
+  const formats = typeof options.stateContent === "string"
+    ? artifactFormatsFromState(options.stateContent)
+    : artifactFormatsForProject(projectDir);
   if (summaryConfirmationGuardDisabled()) {
     return { ok: true, required: false };
   }
@@ -7457,7 +7464,7 @@ export function checkSummaryConfirmationEvidence(
       };
     }
 
-    for (const artifact of summaryArtifactPaths(stage, question)) {
+    for (const artifact of summaryArtifactPaths(stage, question, formats)) {
       const artifactAbs = resolvePath(artifact);
       const artifactSuffix = "/" + toPosix(relative(projectDir, artifactAbs));
       const writes = events.filter((entry) => {
@@ -7930,18 +7937,18 @@ export function resolveAuditWorktreePath(
 // a write to one repo's durable codekb cannot revise an unrelated intent. The
 // audit File field is stored forward-slash-normalised (aidlc-write-audit-log.ts),
 // so the forward-slash matching is harness-neutral; we still normalise
-// defensively in case a caller passes a raw OS path.
 export function producesArtifactFile(
   stage: { slug: string; produces?: string[] },
   file: string,
-  recordedRepos: ReadonlySet<string>
+  recordedRepos: ReadonlySet<string>,
+  formats: ArtifactFormats,
 ): boolean {
   const produces = stage.produces ?? [];
   if (produces.length === 0) return false;
   const norm = file.replace(/\\/g, "/");
   if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
     return produces.some((name) => {
-      const filename = artifactFilename(name);
+      const filename = artifactFilename(name, formats);
       const idx = norm.lastIndexOf(`/${filename}`);
       if (idx === -1 || idx + `/${filename}`.length !== norm.length) return false;
       // Exactly one <repo> segment between /codekb/ and /<name>.md.
@@ -7958,7 +7965,7 @@ export function producesArtifactFile(
     });
   }
   return produces.some((name) =>
-    norm.endsWith(`/${stage.slug}/${artifactFilename(name)}`)
+    norm.endsWith(`/${stage.slug}/${artifactFilename(name, formats)}`)
   );
 }
 
@@ -7975,6 +7982,7 @@ export function producesArtifactUnit(
   },
   file: string,
   recordedRepos: ReadonlySet<string>,
+  formats: ArtifactFormats,
 ): string | null | undefined {
   const reviewedArtifacts = [
     ...(stage.produces ?? []),
@@ -7985,6 +7993,7 @@ export function producesArtifactUnit(
       { slug: stage.slug, produces: reviewedArtifacts },
       file,
       recordedRepos,
+      formats,
     )
   ) {
     return undefined;
@@ -7993,7 +8002,7 @@ export function producesArtifactUnit(
 
   const norm = file.replace(/\\/g, "/");
   for (const name of reviewedArtifacts) {
-    const suffix = `/${stage.slug}/${artifactFilename(name)}`;
+    const suffix = `/${stage.slug}/${artifactFilename(name, formats)}`;
     if (!norm.endsWith(suffix)) continue;
     const parent = norm.slice(0, -suffix.length);
     const marker = "/construction/";
@@ -8134,6 +8143,7 @@ export interface ReviewArtifactBytesSnapshot {
 export function reviewArtifactEntries(
   projectDir: string,
   stage: ReviewFingerprintStage,
+  formats: ArtifactFormats,
   unit?: string,
   options: {
     boltDag?: BoltDagResolution;
@@ -8180,7 +8190,7 @@ export function reviewArtifactEntries(
     }
     if (repos.length === 0) {
       return allArtifacts.map((artifact) => ({
-        logicalPath: `codekb/*/${artifactFilename(artifact.name)}`,
+        logicalPath: `codekb/*/${artifactFilename(artifact.name, formats)}`,
         path: null,
         boundary: root,
         required: artifact.required,
@@ -8189,8 +8199,8 @@ export function reviewArtifactEntries(
     }
     return repos.flatMap((repo) =>
       allArtifacts.map((artifact) => ({
-        logicalPath: `codekb/${repo}/${artifactFilename(artifact.name)}`,
-        path: join(codekbDir(projectDir, repo), artifactFilename(artifact.name)),
+        logicalPath: `codekb/${repo}/${artifactFilename(artifact.name, formats)}`,
+        path: join(codekbDir(projectDir, repo), artifactFilename(artifact.name, formats)),
         boundary: root,
         required: artifact.required,
         reviewAppendixTarget: artifact.reviewAppendixTarget,
@@ -8202,8 +8212,8 @@ export function reviewArtifactEntries(
   if (record === null) return null;
   if (stage.for_each !== "unit-of-work") {
     return allArtifacts.map((artifact) => ({
-      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
-      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name, formats)}`,
+      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name, formats)),
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
@@ -8212,15 +8222,15 @@ export function reviewArtifactEntries(
 
   const stageLevelEntries = (): ReviewArtifactEntry[] =>
     allArtifacts.map((artifact) => ({
-      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
-      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name, formats)}`,
+      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name, formats)),
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
     }));
   const stageLevelPresent = allArtifacts.some((artifact) =>
     existsSync(
-      join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      join(record, stage.phase, stage.slug, artifactFilename(artifact.name, formats)),
     )
   );
   const construction = join(record, "construction");
@@ -8281,7 +8291,7 @@ export function reviewArtifactEntries(
   }
   if (units.length === 0) {
     return allArtifacts.map((artifact) => ({
-      logicalPath: `construction/*/${stage.slug}/${artifactFilename(artifact.name)}`,
+      logicalPath: `construction/*/${stage.slug}/${artifactFilename(artifact.name, formats)}`,
       path: null,
       boundary: record,
       required: artifact.required,
@@ -8290,8 +8300,8 @@ export function reviewArtifactEntries(
   }
   return units.flatMap((name) =>
     artifactsForKind(unitKinds.get(name) ?? null).map((artifact) => ({
-      logicalPath: `construction/${name}/${stage.slug}/${artifactFilename(artifact.name)}`,
-      path: join(record, "construction", name, stage.slug, artifactFilename(artifact.name)),
+      logicalPath: `construction/${name}/${stage.slug}/${artifactFilename(artifact.name, formats)}`,
+      path: join(record, "construction", name, stage.slug, artifactFilename(artifact.name, formats)),
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
@@ -9059,9 +9069,10 @@ export function reviewArtifactSnapshot(
     }) => void;
   } = {},
 ): ReviewArtifactSnapshot | null {
+  const formats = artifactFormatsForProject(projectDir);
   let entries: ReviewArtifactEntry[] | null;
   try {
-    entries = reviewArtifactEntries(projectDir, stage, unit, {
+    entries = reviewArtifactEntries(projectDir, stage, formats, unit, {
       boltDag: options.boltDag,
       mergedBoltUnits: options.mergedBoltUnits,
     });
@@ -9126,9 +9137,12 @@ export function reviewArtifactFingerprint(
     mergedBoltUnits?: ReadonlySet<string>;
   } = {},
 ): string | null {
+  const formats = typeof options.stateContent === "string"
+    ? artifactFormatsFromState(options.stateContent)
+    : artifactFormatsForProject(projectDir);
   let entries: ReviewArtifactEntry[] | null;
   try {
-    entries = reviewArtifactEntries(projectDir, stage, unit, {
+    entries = reviewArtifactEntries(projectDir, stage, formats, unit, {
       boltDag: options.boltDag,
       stateContent: options.stateContent,
       mergedBoltUnits: options.mergedBoltUnits,
@@ -9667,9 +9681,12 @@ export function reviewArtifactBytesSnapshot(
     mergedBoltUnits?: ReadonlySet<string>;
   } = {},
 ): ReviewArtifactBytesSnapshot | null {
+  const formats = typeof options.stateContent === "string"
+    ? artifactFormatsFromState(options.stateContent)
+    : artifactFormatsForProject(projectDir);
   let entries: ReviewArtifactEntry[] | null;
   try {
-    entries = reviewArtifactEntries(projectDir, stage, unit, {
+    entries = reviewArtifactEntries(projectDir, stage, formats, unit, {
       boltDag: options.boltDag,
       stateContent: options.stateContent,
       mergedBoltUnits: options.mergedBoltUnits,
@@ -10201,6 +10218,7 @@ export function freshReviewReceipts(
     attemptWindow?: ReviewAttemptWindow;
   } = {},
 ): FreshReviewReceipts {
+  const formats = artifactFormatsFromState(stateContent);
   const empty: FreshReviewReceipts = {
     stageVerdict: null,
     stageStale: false,
@@ -10462,7 +10480,7 @@ export function freshReviewReceipts(
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
       const file = auditBlockField(e.block, "File");
       if (!file) continue;
-      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+      const targetUnit = producesArtifactUnit(stage, file, recordedRepos, formats);
       if (targetUnit === undefined) continue;
       if (!perUnit) {
         if (stageVerdict !== null) {
@@ -10860,7 +10878,10 @@ export function freshReviewReceipts(
       }
       if (event.event === "ARTIFACT_CREATED" || event.event === "ARTIFACT_UPDATED") {
         const file = auditBlockField(event.block, "File");
-        if (file && producesArtifactUnit(stage, file, recordedRepos) !== undefined) {
+        if (
+          file &&
+          producesArtifactUnit(stage, file, recordedRepos, formats) !== undefined
+        ) {
           firstWork = i;
           break;
         }
@@ -16853,53 +16874,58 @@ export function authoritativeProjectDescription(raw: string): {
 
 // --- State file I/O ---
 
-let warnedUnprimedHtmlArtifacts = false;
+let warnedUnreadableHtmlArtifactGraph = false;
 
 /**
- * Prime artifact formats from already-loaded state content. This is exported
- * for callers that necessarily read state through their own atomic snapshot.
- * Never throws: a state read must not fail because the compiled stage graph is
- * unreadable (authored-core runs, broken installs); in that case an `on` intent
- * falls back to Markdown resolution with a one-time stderr warning.
+ * Resolve artifact formats from already-loaded state content. Never throws: an
+ * unreadable compiled graph falls back to Markdown without making state reads
+ * fail, and reports that degraded resolution once per process.
  */
-export function primeArtifactFormats(stateContent: string): void {
+export function artifactFormatsFromState(
+  stateContent: string,
+): ArtifactFormats {
   if (getField(stateContent, "HTML Artifacts") !== "on") {
-    setHtmlArtifactNames(new Set());
-    return;
+    return MARKDOWN_ONLY;
   }
   let stages: StageEntry[];
   try {
     stages = loadStageGraph();
   } catch (error) {
-    setHtmlArtifactNames(new Set());
-    if (!warnedUnprimedHtmlArtifacts) {
-      warnedUnprimedHtmlArtifacts = true;
+    if (!warnedUnreadableHtmlArtifactGraph) {
+      warnedUnreadableHtmlArtifactGraph = true;
       process.stderr.write(
         `aidlc: HTML Artifacts is on but the stage graph is unreadable (${errorMessage(error)}); artifact paths resolve to Markdown\n`,
       );
     }
-    return;
+    return MARKDOWN_ONLY;
   }
-  const capable = new Set<string>();
+  const html = new Set<string>();
   for (const stage of stages) {
-    for (const name of stage.html_capable ?? []) capable.add(name);
+    for (const name of stage.html_capable ?? []) html.add(name);
   }
-  setHtmlArtifactNames(capable);
+  return Object.freeze({ html });
 }
 
-/**
- * Read state and prime the process-wide artifact-format vocabulary. This is THE
- * seam: every engine tool that resolves artifact paths reads state first, so a
- * later process follows the intent's locked setting rather than its environment.
- */
+/** Resolve one project's formats, falling back to Markdown when state is absent. */
+export function artifactFormatsForProject(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): ArtifactFormats {
+  try {
+    return artifactFormatsFromState(readStateFile(projectDir, intent, space));
+  } catch {
+    return MARKDOWN_ONLY;
+  }
+}
+
+/** Read one workflow state file without changing process-global behavior. */
 export function readStateFile(projectDir: string, intent?: string, space?: string): string {
   const path = stateFilePath(projectDir, intent, space);
   if (!existsSync(path)) {
     throw new Error(`State file not found: ${path}`);
   }
-  const content = readFileSync(path, "utf-8");
-  primeArtifactFormats(content);
-  return content;
+  return readFileSync(path, "utf-8");
 }
 
 export const PROJECT_DESCRIPTION_FILE = "project-description.json";
@@ -20937,6 +20963,7 @@ export function unitLifecycleSnapshot(
           ? options.artifactFingerprint(stage, row.unit)
           : reviewArtifactFingerprint(projectDir, stage, row.unit, {
               requireRequiredArtifacts: true,
+              stateContent,
             });
     if (
       recorded !== null &&

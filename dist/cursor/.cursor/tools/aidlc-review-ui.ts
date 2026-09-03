@@ -17,9 +17,12 @@ import {
   type FSWatcher,
 } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { ArtifactFormats } from "./aidlc-artifact-vocabulary.ts";
 import {
   activeIntent,
   activeSpace,
+  artifactFormatsForProject,
+  artifactFormatsFromState,
   CHECKBOX_MAP,
   docsRoot,
   findStageBySlug,
@@ -45,7 +48,6 @@ import {
   HEARTBEAT_INTERVAL_MS,
   consumeReviewUiOpenNonce,
   mintReviewUiOpenUrl,
-  htmlArtifactsRequested,
   nextSequence,
   readCurrentPointer,
   readManifest,
@@ -264,6 +266,7 @@ interface StateContext {
   intent: string | null;
   record: string;
   state: string | null;
+  formats: ArtifactFormats;
   current: CurrentPointer | null;
   manifest: ReviewManifest | null;
 }
@@ -287,7 +290,10 @@ function stateContext(projectDir: string): StateContext {
       manifest = null;
     }
   }
-  return { space, intent, record, state, current, manifest };
+  const formats = state !== null
+    ? artifactFormatsFromState(state)
+    : artifactFormatsForProject(projectDir, intent ?? undefined, space);
+  return { space, intent, record, state, formats, current, manifest };
 }
 
 interface QuestionsTarget {
@@ -371,7 +377,7 @@ function statePayload(projectDir: string): Record<string, unknown> {
     manifest: context.manifest,
     stage_status: stageMarker(context.state, currentStage),
     revision_count: revision !== null && Number.isInteger(revision) ? revision : null,
-    html_artifacts: htmlArtifactsRequested(),
+    html_artifacts: context.formats.html.size > 0,
     questions: questions === null
       ? null
       : {

@@ -181,13 +181,13 @@ questions-file path; fill the confirmation `[Answer]:` before recording the
 answer receipt. If the user requests changes, ask **"What should change?"** and
 end the turn again. Do not update any answer until the user supplies that
 feedback. Then record the feedback, update the affected answers, reset the
-confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
-`requirements.md` until the confirmation entry contains the user's explicit
-`Looks correct` answer and the receipt command succeeds.
+confirmation `[Answer]:` to blank, and repeat this step. Do NOT create the
+`requirements` artifact until the confirmation entry contains the user's
+explicit `Looks correct` answer and the receipt command succeeds.
 
 ### Step 10: Generate Requirements
 
-Create `<record>/inception/requirements-analysis/requirements.md` containing:
+Create the `requirements` artifact at its `directive.produces` path, containing:
 - **Intent analysis** — What the user is trying to achieve (goals, not just features)
 - **Functional requirements** — Organized by feature area or domain. Give every requirement a stable `FR{n}` ID (for example `FR1`) and every sub-requirement an `FR{n}.{m}` ID (for example `FR1.2`).
 - **Non-functional requirements** — Performance, security, scalability, reliability, and observability targets. Give every requirement a stable `NFR{n}` ID (for example `NFR3`).

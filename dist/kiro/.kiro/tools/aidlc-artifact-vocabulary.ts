@@ -142,18 +142,19 @@ export function artifactKind(name: string): ArtifactKind | null {
   return ARTIFACT_KIND[name] ?? null;
 }
 
-let htmlNames: ReadonlySet<string> = new Set();
-
-export function setHtmlArtifactNames(names: ReadonlySet<string>): void {
-  htmlNames = new Set(names);
+export interface ArtifactFormats {
+  readonly html: ReadonlySet<string>;
 }
 
-export function htmlArtifactNames(): ReadonlySet<string> {
-  return htmlNames;
-}
+export const MARKDOWN_ONLY: ArtifactFormats = Object.freeze({
+  html: new Set<string>(),
+});
 
-export function artifactFormat(name: string): ArtifactFormat {
-  return htmlNames.has(name) ? "html" : "md";
+export function artifactFormat(
+  name: string,
+  formats: ArtifactFormats = MARKDOWN_ONLY,
+): ArtifactFormat {
+  return formats.html.has(name) ? "html" : "md";
 }
 
 const ARTIFACT_FILENAMES: Readonly<Record<string, string>> = {
@@ -162,8 +163,11 @@ const ARTIFACT_FILENAMES: Readonly<Record<string, string>> = {
   traceability: "traceability.json",
 };
 
-export function artifactFilename(name: string): string {
-  return ARTIFACT_FILENAMES[name] ?? `${name}.${artifactFormat(name)}`;
+export function artifactFilename(
+  name: string,
+  formats: ArtifactFormats = MARKDOWN_ONLY,
+): string {
+  return ARTIFACT_FILENAMES[name] ?? `${name}.${artifactFormat(name, formats)}`;
 }
 
 /** True when an artifact has a fixed non-canonical filename. */
