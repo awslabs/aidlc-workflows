@@ -33,6 +33,7 @@ consumes:
 requires_stage:
   - requirements-analysis
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
   - traceability
@@ -201,7 +202,7 @@ owns every lifecycle transition and advancement.
 
 This stage's outputs are markdown artefacts under `<record>/inception/user-stories/`.
 
-Imports: `required-sections`, `upstream-coverage`, `traceability`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`, `traceability`.
 
 Upstream targets: `requirements`, `business-overview`, `component-inventory`, `team-practices`.
 

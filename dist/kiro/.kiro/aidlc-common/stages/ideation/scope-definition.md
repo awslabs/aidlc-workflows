@@ -23,6 +23,7 @@ requires_stage:
   - intent-capture
   - feasibility
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
 scopes:
@@ -78,7 +79,7 @@ Standard approval gate (Approve / Request Changes).
 
 This stage's outputs are markdown artefacts under `<record>/ideation/scope-definition/`.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: `intent-statement`, `feasibility-assessment`, `constraint-register`.
 

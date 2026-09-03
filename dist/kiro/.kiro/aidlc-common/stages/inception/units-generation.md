@@ -29,6 +29,7 @@ consumes:
 requires_stage:
   - domain-design
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
   - traceability
@@ -159,7 +160,7 @@ Use stage-protocol.md completion template with completion emoji: :wrench:
 
 This stage's outputs are markdown artefacts under `<record>/inception/units-generation/`.
 
-Imports: `required-sections`, `upstream-coverage`, `traceability`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`, `traceability`.
 
 Upstream targets: `components`, `decisions`, `requirements`, `stories`.
 

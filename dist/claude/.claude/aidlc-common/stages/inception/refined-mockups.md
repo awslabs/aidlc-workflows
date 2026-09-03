@@ -32,6 +32,7 @@ consumes:
 requires_stage:
   - user-stories
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
 scopes:
@@ -95,7 +96,7 @@ Standard approval gate (Approve / Request Changes).
 
 This stage's outputs are markdown artefacts under `<record>/inception/refined-mockups/`.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: `wireframes`, `user-flow`, `stories`, `requirements`, `team-practices`.
 

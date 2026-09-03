@@ -36,6 +36,7 @@ consumes:
 requires_stage:
   - units-generation
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
 scopes:
@@ -219,7 +220,7 @@ Approval gate: Approve (proceed to Construction) / Request Changes.
 
 This stage's outputs are markdown artefacts under `<record>/inception/delivery-planning/`.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `contract-summary`, `team-practices`.
 

@@ -22,6 +22,7 @@ consumes:
 requires_stage:
   - scope-definition
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
 scopes:
@@ -79,7 +80,7 @@ Standard approval gate (Approve / Request Changes).
 
 This stage's outputs are markdown artefacts under `<record>/ideation/team-formation/`.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: `scope-document`, `intent-backlog`, `feasibility-assessment`.
 

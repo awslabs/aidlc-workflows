@@ -26,6 +26,7 @@ consumes:
 requires_stage:
   - units-generation
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
 scopes:
@@ -111,7 +112,7 @@ Use stage-protocol.md completion template with completion emoji: :handshake:
 
 This stage's output is a markdown artefact under `<record>/inception/contract-design/`.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: `unit-of-work`, `unit-of-work-dependency`, `components`, `requirements`.
 

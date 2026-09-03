@@ -34,6 +34,7 @@ requires_stage:
   - approval-handoff
   - reverse-engineering
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
 scopes:
@@ -235,7 +236,7 @@ IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Re
 
 This stage's outputs are markdown artefacts under `<record>/inception/requirements-analysis/`.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: `intent-statement`, `scope-document`, `business-overview`, `architecture`, `code-structure`, `team-practices`.
 

@@ -19,6 +19,7 @@ produces:
 consumes: []
 requires_stage: []
 sensors:
+  - html-shape
   - claim-sources
   - required-sections
   - upstream-coverage
@@ -219,7 +220,7 @@ Use stage-protocol.md completion template with completion emoji: :bulb:
 
 This stage's outputs are markdown artefacts under `<record>/ideation/intent-capture/`.
 
-Imports: `claim-sources`, `required-sections`, `upstream-coverage`.
+Imports: `claim-sources`, `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: none.
 

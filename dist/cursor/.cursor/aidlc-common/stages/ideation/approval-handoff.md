@@ -38,6 +38,7 @@ requires_stage:
   - team-formation
   - rough-mockups
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
 scopes:
@@ -109,7 +110,7 @@ Approval gate: Approve (proceed to Inception) / Request Changes / Reject Initiat
 
 This stage's outputs are markdown artefacts under `<record>/ideation/approval-handoff/`.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`.
 
 Upstream targets: `intent-statement`, `stakeholder-map`, `scope-document`, `intent-backlog`, `competitive-analysis`, `feasibility-assessment`, `constraint-register`, `team-assessment`, `wireframes`.
 

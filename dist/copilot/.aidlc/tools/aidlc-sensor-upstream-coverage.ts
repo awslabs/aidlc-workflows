@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { errorMessage } from "./aidlc-lib.ts";
+import { readArtifactText } from "./aidlc-html.ts";
 
 interface Result {
 	pass: boolean;
@@ -153,8 +154,10 @@ export function main(argv: string[]): void {
 		scanPaths.push(firedPath);
 	} else {
 		for (const stem of deliverables) {
-			const p = resolve(join(dir, `${stem}.md`));
-			if (existsSync(p)) scanPaths.push(p);
+			const markdownPath = resolve(join(dir, `${stem}.md`));
+			const htmlPath = resolve(join(dir, `${stem}.html`));
+			if (existsSync(htmlPath)) scanPaths.push(htmlPath);
+			else if (existsSync(markdownPath)) scanPaths.push(markdownPath);
 		}
 		if (!firedIsScaffolding && !scanPaths.includes(firedPath)) {
 			scanPaths.push(firedPath);
@@ -165,7 +168,7 @@ export function main(argv: string[]): void {
 	const scannedFiles: string[] = [];
 	for (const p of scanPaths) {
 		try {
-			body += `\n${readFileSync(p, "utf-8")}`;
+			body += `\n${readArtifactText(p)}`;
 			scannedFiles.push(p);
 		} catch (err) {
 			if (p === firedPath) {

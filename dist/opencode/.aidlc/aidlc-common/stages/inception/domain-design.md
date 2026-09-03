@@ -34,6 +34,7 @@ requires_stage:
   - requirements-analysis
   - refined-mockups
 sensors:
+  - html-shape
   - required-sections
   - upstream-coverage
   - traceability
@@ -200,7 +201,7 @@ before re-entering the approval flow.
 
 This stage's outputs are markdown artefacts under `<record>/inception/domain-design/` (`components.md` and `decisions.md`) plus `traceability.json`.
 
-Imports: `required-sections`, `upstream-coverage`, `traceability`.
+Imports: `html-shape`, `required-sections`, `upstream-coverage`, `traceability`.
 
 Upstream targets: `requirements`, `stories`, `architecture`, `component-inventory`, `team-practices`.
 

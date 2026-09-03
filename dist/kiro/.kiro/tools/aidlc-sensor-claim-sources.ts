@@ -6,6 +6,7 @@ import {
 	readProjectDescriptionAuthority,
 	visibleMarkdownLines,
 } from "./aidlc-lib.ts";
+import { readArtifactText } from "./aidlc-html.ts";
 
 interface Flags {
 	stage?: string;
@@ -1265,7 +1266,7 @@ function inspectDeliverable(
 	const findings: string[] = [];
 	let body: string;
 	try {
-		body = readFileSync(path, "utf-8");
+		body = readArtifactText(path);
 	} catch (error) {
 		return {
 			findings: [`${basename(path)}: failed to read: ${errorMessage(error)}`],
@@ -1368,7 +1369,12 @@ export function main(argv: string[]): void {
 	const scanPaths =
 		deliverables.length > 0
 			? deliverables
-					.map((stem) => resolve(join(stageDir, `${stem}.md`)))
+					.map((stem) => {
+						const htmlPath = resolve(join(stageDir, `${stem}.html`));
+						return existsSync(htmlPath)
+							? htmlPath
+							: resolve(join(stageDir, `${stem}.md`));
+					})
 					.filter((path) => existsSync(path))
 			: firedIsScaffolding
 				? []
