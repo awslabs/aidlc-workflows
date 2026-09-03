@@ -120,7 +120,23 @@ in-flight run. The compile snapshot holds until the next workflow starts. The
 full resolver mechanics are in
 [How stages import sensors](../reference/07-sensor-system.md#how-stages-import-sensors).
 
+### Binding `html-shape`
+
+Every Ideation and Inception stage that can author an HTML `document` or `visual` artifact imports `html-shape`; Reverse Engineering remains native and does not. Add the bare id beside the stage's other document checks:
+
+```yaml
+sensors:
+  - required-sections
+  - upstream-coverage
+  - html-shape
+```
+
+`html-shape` is gate-fired and advisory. On each dispatch it scans all `.html` siblings in the stage output directory, not only the path that caused the fire, and applies the shared HTML authoring check: doctype, language, identity metadata, leading summary, offline-safe references, prohibited embeds/forms, and terminal Review appendix placement. When no `.html` output exists it passes with `no HTML outputs`, which keeps Markdown-only intents behaviorally unchanged.
+
+This sensor validates the generic HTML envelope. It does not replace `required-sections` (the artifact-specific H2 set), `upstream-coverage` (cross-artifact evidence), or `claim-sources` (claim provenance). An HTML-capable stage normally carries all applicable checks. See [Anatomy of a Stage § Classifying artifacts for HTML](01-anatomy-of-a-stage.md#classifying-artifacts-for-html) for `ARTIFACT_KIND`, `html_exclude`, and the authoring template.
+
 ---
+
 
 ## Authoring a new sensor
 

@@ -86,6 +86,7 @@ fields that carry the structural weight:
 | `for_each` | Optional — names an artifact whose instances drive iteration |
 | `summary_confirmation` | Optional — `required` for stages that always collect file-backed answers, `if-present` for conditional question flows |
 | `reviewer` / `review_artifact` | Optional pair — the review agent and the required Markdown `produces` entry that exclusively owns its `## Review` appendix |
+| `html_exclude` | Optional — names produced artifacts that must stay native, or `"*"` for the whole stage |
 
 The body opens with `## Steps` — the imperative prose the lead agent follows.
 The `## Sensors` compartment then summarizes output location, exact frontmatter
@@ -119,6 +120,8 @@ wiring, and they must agree with each other:
   `produces` and `optional_produces`; `aidlc-graph compile` rejects duplicates
   and names both producer files. Reusing an artifact name is valid only when no
   stage consumes it.
+
+For every new core `produces` name, add its `document`, `visual`, or `machine` classification to `ARTIFACT_KIND`. The compiler fails closed on an unclassified Ideation/Inception artifact because otherwise it cannot decide HTML capability safely. If the artifact is human-readable but cannot satisfy the shared self-contained HTML template, keep its truthful kind and add it to this stage's `html_exclude`; do not misclassify it as machine merely to control format. Add `html-shape` to `sensors:` when the stage has an eligible HTML output. The full decision recipe is in [Anatomy of a Stage § Classifying artifacts for HTML](01-anatomy-of-a-stage.md#classifying-artifacts-for-html).
 
 Get these three consistent and the compiler places the stage automatically;
 you never edit `stage-graph.json` by hand to position it. The nuances of
