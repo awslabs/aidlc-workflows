@@ -143,11 +143,10 @@ describe("t336 review UI session-start lifecycle", () => {
     expect(firstInfo).not.toBeNull();
     const spawnedPid = firstInfo!.pid;
     daemonPid = spawnedPid;
-    const firstContext = additionalContext(first.stdout);
-    expect(firstContext).toStartWith(
-      `${additionalContext(baseline.stdout)}\nReview UI: ${firstInfo!.url}open/`,
-    );
-    expect(firstContext.slice(-32)).toMatch(/^[0-9a-f]{32}$/);
+    // The hook only ensures the daemon; links are minted by the gate's mutating
+    // `report` step, so session context is byte-identical with the flag on.
+    expect(additionalContext(first.stdout)).toBe(additionalContext(baseline.stdout));
+    expect(first.stdout).not.toContain("/open/");
     expect(() => process.kill(spawnedPid, 0)).not.toThrow();
 
     const second = runHook(true, reviewHome);
