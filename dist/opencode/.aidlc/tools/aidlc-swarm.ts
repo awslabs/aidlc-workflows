@@ -1618,6 +1618,9 @@ function handlePrepare(rest: string[]): void {
     .toLowerCase()
     .replace(/\s+/g, "-");
   const autonomy = (getField(state, "Construction Autonomy Mode") ?? "").trim();
+  // Human lines for source drift accepted under Change Control `relaxed` when
+  // protected Code Generation authority started for the batch's units.
+  const swarmChangeNotices: string[] = [];
   if (stage === "code-generation" && autonomy === "autonomous") {
     const invalid = units
       .map((unit) => evaluateCodeGenerationApproval(projectDir, { unit }))
@@ -1632,7 +1635,7 @@ function handlePrepare(rest: string[]): void {
     }
     try {
       for (const unit of units) {
-        beginCodeGeneration(projectDir, { unit });
+        swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
       }
     } catch (error) {
       fail(
@@ -1794,7 +1797,13 @@ function handlePrepare(rest: string[]): void {
 
   console.log(
     JSON.stringify(
-      { batch: flags.batch, base, concurrency: Number(concurrency), units: prepared },
+      {
+        batch: flags.batch,
+        base,
+        concurrency: Number(concurrency),
+        units: prepared,
+        ...(swarmChangeNotices.length > 0 ? { change_notices: swarmChangeNotices } : {}),
+      },
       null,
       2
     )

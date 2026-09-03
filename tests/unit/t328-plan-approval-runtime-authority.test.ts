@@ -563,7 +563,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(firstExit).not.toBe(0);
     expect(secondExit).not.toBe(0);
     expect(`${firstError}\n${secondError}`).toMatch(
-      /source changed while Code Generation authority was starting|protected approval receipt/,
+      /Source files changed while code generation was starting\. Retry the step\.|1 file changed since this plan was approved: src\/zz-persistent-publication-race\.ts\. Look them over and approve the plan again to continue\./,
     );
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
   }, 60000);
@@ -872,9 +872,10 @@ describe("t328 Plan Approval runtime authority", () => {
     } else {
       // The answer won the race, so a receipt exists and the refusal comes from the
       // source check instead. Which of the two fires is timing, so accept either, and
-      // pin what actually matters: the refusal names the source and the remedy.
+      // pin what actually matters: the refusal names the changed file and asks for
+      // the plan to be approved again (Change Control strict on this fixture).
       expect(approval.reason).toMatch(
-        /protected Plan Approval receipt|workspace source changed after this plan was approved/,
+        /protected Plan Approval receipt|1 file changed since this plan was approved: src\/zz-after-validation\.ts\. Look them over and approve the plan again to continue\./,
       );
     }
   }, 60000);

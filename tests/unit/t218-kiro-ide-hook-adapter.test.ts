@@ -1656,7 +1656,12 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       expect(driftedAnswer.stderr).toContain(
         "Legacy Plan Approval mediation did not complete",
       );
-      expect(driftedAnswer.stderr).toContain("Workspace source changed");
+      expect(driftedAnswer.stderr).toContain(
+        "1 file changed since this plan was approved: src/base.ts. Look them over and approve the plan again to continue.",
+      );
+      expect(driftedAnswer.stderr).toContain(
+        "Re-run the fingerprint command and re-present the plan.",
+      );
       expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(false);
       expect(
         runIde(

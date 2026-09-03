@@ -105,7 +105,8 @@ import {
   splitKiroCommandArgs,
   stateFilePath,
   UNBINDABLE_FINGERPRINT,
-  workspaceSourceFingerprint,
+  workspaceSourceState,
+  writeWorkspaceSourceSnapshot,
 } from "../tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -452,9 +453,14 @@ function processLegacyPlanApprovalWrite(
     // source. The legacy channel cannot run the fingerprint command itself, so
     // the adapter records the live workspace source here, falling back to the
     // unbindable marker when the workspace has no source fingerprint rather
-    // than refusing the whole mediation.
-    const plannedSource =
-      workspaceSourceFingerprint(projectDir) ?? UNBINDABLE_FINGERPRINT;
+    // than refusing the whole mediation. The listing behind the source is kept
+    // exactly as the fingerprint command keeps it, so a later drift can be told
+    // to the human as the files that changed.
+    const plannedState = workspaceSourceState(projectDir);
+    if (plannedState !== null) {
+      writeWorkspaceSourceSnapshot(projectDir, "code-generation", plannedState);
+    }
+    const plannedSource = plannedState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
     const withPlannedSource = /^\[Planned Source\]:.*$/m.test(withFingerprint)
       ? withFingerprint.replace(
           /^\[Planned Source\]:.*$/m,

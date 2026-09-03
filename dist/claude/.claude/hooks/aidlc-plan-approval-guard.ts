@@ -78,6 +78,7 @@ import {
   codeGenerationRecordDir,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
+  PlanApprovalSourceDriftError,
   planReviewAppendix,
   promptTestingContractMarkers,
 } from "../tools/aidlc-testing-posture.ts";
@@ -860,27 +861,39 @@ export async function run(input: string): Promise<number> {
     verdict = { block: true, mentioned: [] };
   }
   if (!verdict.block) {
+    // Under Change Control `relaxed`, generation start may accept source that
+    // moved after approval: the ledger row is written there and the one human
+    // line comes back to be printed on this hook's stdout.
+    const changeNotices: string[] = [];
     try {
       if (guardedDispatch) {
         for (const mentioned of verdict.mentioned) {
-          beginCodeGeneration(projectDir, {
-            unit:
-              mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
-          });
+          changeNotices.push(
+            ...beginCodeGeneration(projectDir, {
+              unit:
+                mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
+            }),
+          );
         }
       } else if (blockedMutation === null) {
         const state = readFileSync(stateFilePath(projectDir), "utf-8");
         const marker = readActiveDirectiveMarker(projectDir, state);
         if (marker?.version === 2 && marker.kind === "run-stage") {
-          beginCodeGeneration(projectDir, {
-            unit: marker.unit?.trim() || null,
-          });
+          changeNotices.push(
+            ...beginCodeGeneration(projectDir, {
+              unit: marker.unit?.trim() || null,
+            }),
+          );
         }
       }
     } catch (e) {
       authorityFailure =
-        `Code Generation could not start from its protected approval receipt: ${errorMessage(e)}`;
+        `Code Generation could not start from its protected approval receipt: ${errorMessage(e)}` +
+        (e instanceof PlanApprovalSourceDriftError ? ` ${e.remedy}` : "");
       verdict = { block: true, mentioned: verdict.mentioned };
+    }
+    if (!verdict.block) {
+      for (const notice of changeNotices) process.stdout.write(`${notice}\n`);
     }
   }
   if (!verdict.block) return 0;

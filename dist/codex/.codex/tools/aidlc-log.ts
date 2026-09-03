@@ -57,6 +57,8 @@ import {
   pipelineLinks,
   pendingReviewRequestStatus,
   readAllAuditShards,
+  recordAcceptedChanges,
+  governedChangeControl,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -110,6 +112,7 @@ import {
   codeGenerationPlanApprovalQuestionEvidence,
   type CodeGenerationTarget,
   PLAN_APPROVAL_CHECKPOINT,
+  PlanApprovalSourceDriftError,
   recordPlanApprovalChallenge,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
@@ -298,6 +301,10 @@ function handleDecision(args: string[]): void {
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
       : null;
+  // The plan-approval checkpoint is a governed Change Control read: resolve the
+  // setting first (a memory edit that moved it is recorded here), then judge
+  // the source the plan was written against.
+  if (flags.checkpoint === "plan-approval") governedChangeControl(pd);
   const planEvidence =
     flags.checkpoint === "plan-approval"
       ? codeGenerationPlanApprovalQuestionEvidence(
@@ -307,6 +314,12 @@ function handleDecision(args: string[]): void {
           "",
         )
       : null;
+  // Record the acceptance before the decision row and the challenge: the
+  // re-baseline already happened in the questions file, so the ledger must
+  // carry the change even if a later step in this command refuses.
+  const changeNotices = planEvidence
+    ? recordAcceptedChanges(pd, planEvidence.acceptedChanges)
+    : [];
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Decision: flags.decision,
@@ -371,7 +384,11 @@ function handleDecision(args: string[]): void {
   }
 
   console.log(
-    JSON.stringify({ emitted: "DECISION_RECORDED", stage: flags.stage })
+    JSON.stringify({
+      emitted: "DECISION_RECORDED",
+      stage: flags.stage,
+      ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+    })
   );
 }
 
@@ -651,6 +668,7 @@ function handleAnswer(args: string[]): void {
   // appendAuditEntry / emitError re-acquire reentrantly (per-pd depth).
   withAuditLock(pd, () => {
     if (planCheckpoint) {
+      governedChangeControl(pd);
       planEvidence = codeGenerationPlanApprovalQuestionEvidence(
         pd,
         planApprovalTarget(flags),
@@ -837,14 +855,22 @@ function handleAnswer(args: string[]): void {
     }
 
     if (planCheckpoint) {
+      // Drift the evidence accepted is recorded before the receipt so the
+      // ledger carries it even if certification refuses a later race.
+      const changeNotices = recordAcceptedChanges(pd, planEvidence!.acceptedChanges);
       try {
-        recordPlanApprovalReceipt(
+        const recorded = recordPlanApprovalReceipt(
           pd,
           planEvidence!,
           fields.Session,
           flags.details as "Approve Plan" | "Request Changes",
         );
+        changeNotices.push(...recorded.changeNotices);
       } catch (e) {
+        if (e instanceof PlanApprovalSourceDriftError) {
+          console.error(JSON.stringify({ remedy: e.remedy }));
+          error(e.message);
+        }
         error(`Refusing to record Plan Approval: ${errorMessage(e)}`);
       }
       try {
@@ -864,6 +890,7 @@ function handleAnswer(args: string[]): void {
               : "QUESTION_ANSWERED",
           checkpoint: "plan-approval",
           stage: flags.stage,
+          ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
         }),
       );
       return;
@@ -2329,6 +2356,11 @@ export function main(argv: string[]): void {
         error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, link, review`);
     }
   } catch (e) {
+    // A Plan Approval source-drift refusal is the human sentence; the
+    // conductor's remedy (which command reopens approval) rides beside it.
+    if (e instanceof PlanApprovalSourceDriftError) {
+      console.error(JSON.stringify({ remedy: e.remedy }));
+    }
     error(errorMessage(e));
   }
 }

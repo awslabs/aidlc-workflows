@@ -244,12 +244,20 @@ no projection at all beyond line endings: they are handed to the developer in
 full, so any byte added to them after approval, a `## Review` section included,
 reopens approval.
 
-`[Planned Source]` is the workspace source this plan was written against. The
-answer command refuses if live source has moved since, and the remedy is always
-the same: re-run this command, record both tags again, and re-present the plan.
-A tag recorded in an older form (`sha256:<hex>` or `sha256:v2:<hex>`) is
-recognized and answered with the same instruction rather than an unexplained
-mismatch.
+`[Planned Source]` is the workspace source this plan was written against. What
+happens when live source has moved since is decided by the intent's Change
+Control value (`/aidlc --status` shows it). Under `strict` the decision and
+answer commands refuse, telling the human which files changed, and the remedy
+is always the same: re-run this command, record both tags again, and re-present
+the plan. Under `relaxed` they continue: the change is recorded once as a
+`CHANGE_ACCEPTED` row, the command's JSON carries one `change_notices` line for
+the human (say it verbatim, once), and the recorded source is re-baselined so
+the same change is not reported again. The human can still say "review the
+plan again", which is this same re-run and re-present path. A tag recorded in
+an older form (`sha256:<hex>` or `sha256:v2:<hex>`) is recognized and answered
+with the same instruction rather than an unexplained mismatch. Edits to the plan,
+the unit test instructions, or the Testing Contract reopen approval under both
+values; Change Control governs only the source drift.
 
 When the active directive carries `legacy_plan_approval_choices`, those two
 nonce-labelled values are the presentation-only choices for legacy Kiro IDE.

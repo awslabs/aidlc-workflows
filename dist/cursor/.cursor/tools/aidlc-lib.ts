@@ -16449,6 +16449,105 @@ export function readBaselineSourceSnapshot(
   return serialized === null ? null : parseSourceListing(serialized);
 }
 
+// --- Workspace source snapshots keyed by the workspace fingerprint -----------
+//
+// A Plan Approval binds to the workspace source FINGERPRINT (the `[Planned
+// Source]` tag, then the receipt's certified source). The fingerprint alone can
+// say that source moved, never which files. These snapshots keep the per-path
+// listing that produced a fingerprint so a later drift can be told to the human
+// as paths, under either Change Control value. They are advisory to the human
+// line only: the decision compares fingerprints, never these bytes.
+
+const WORKSPACE_SNAPSHOT_HEADER = "workspace";
+
+function workspaceSourceSnapshotPath(
+  projectDir: string,
+  stageSlug: string,
+  fingerprint: string,
+): string | null {
+  const dir = sourceSnapshotDir(projectDir, stageSlug);
+  if (dir === null || !/^[0-9a-f]{64}$/.test(fingerprint)) return null;
+  return join(dir, `${WORKSPACE_SNAPSHOT_HEADER}-${fingerprint.slice(0, 12)}.tsv`);
+}
+
+/** Persist the listing behind one workspace fingerprint; a no-op when it exists. */
+export function writeWorkspaceSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  state: WorkspaceSourceState,
+): boolean {
+  const path = workspaceSourceSnapshotPath(projectDir, stageSlug, state.fingerprint);
+  if (path === null) return false;
+  const serialized =
+    `${WORKSPACE_SNAPSHOT_HEADER}\t${state.fingerprint}\t-\n${serializeSourceListing(state.listing)}`;
+  try {
+    writeSourceSnapshot(path, serialized);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The listing recorded for one workspace fingerprint, or null when none was kept. */
+export function readWorkspaceSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  fingerprint: string,
+): WorkspaceSourceListing | null {
+  const path = workspaceSourceSnapshotPath(projectDir, stageSlug, fingerprint);
+  if (path === null) return null;
+  let serialized: string;
+  try {
+    serialized = readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+  const newline = serialized.indexOf("\n");
+  if (newline === -1) return null;
+  if (serialized.slice(0, newline) !== `${WORKSPACE_SNAPSHOT_HEADER}\t${fingerprint}\t-`) {
+    return null;
+  }
+  return parseSourceListing(serialized.slice(newline + 1));
+}
+
+/** Paths whose entry differs between two listings, rendered `repo/path`, sorted. */
+export function sourceListingChangedPaths(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): string[] {
+  const changed = new Set<string>();
+  for (const [key, entry] of before) {
+    if (!sourceListingEntriesEqual(after.get(key), entry)) changed.add(key);
+  }
+  for (const key of after.keys()) {
+    if (!before.has(key)) changed.add(key);
+  }
+  return [...changed]
+    .map((key) => {
+      const parsed = splitSourcePathKey(key);
+      if (parsed === null) return key;
+      return parsed.repo ? `${parsed.repo}/${parsed.path}` : parsed.path;
+    })
+    .sort();
+}
+
+/**
+ * The changed paths between a recorded workspace fingerprint and the current
+ * state, when the recorded listing was kept; null when only the digests can
+ * be compared.
+ */
+export function workspaceSourceChangedPaths(
+  projectDir: string,
+  stageSlug: string,
+  recordedFingerprint: string,
+  current: WorkspaceSourceState | null,
+): string[] | null {
+  if (current === null) return null;
+  const recorded = readWorkspaceSourceSnapshot(projectDir, stageSlug, recordedFingerprint);
+  if (recorded === null) return null;
+  return sourceListingChangedPaths(recorded, current.listing);
+}
+
 export function currentStageSourceBaseline(
   projectDir: string,
   stageSlug: string,

@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
+  type AcceptedChange,
   auditBlockField,
   collectStalePlanApprovalReceipts,
   contentBeforeTerminalReviewAppendix,
@@ -29,7 +30,10 @@ import {
   readPlanApprovalReceipt,
   readPlanApprovalResponse,
   readPlanApprovalViolation,
+  recordAcceptedChanges,
+  renderChangedPaths,
   resolveBoltDag,
+  resolveChangeControl,
   resolveProjectDir,
   stalePlanApprovalReceiptsForTarget,
   resolveWorkflowSelection,
@@ -41,16 +45,20 @@ import {
   visibleMarkdownLines,
   withActiveDirectiveLock,
   withAuditLock,
+  workspaceSourceChangedPaths,
   workspaceSourceFingerprint,
+  workspaceSourceState,
   writePlanApprovalChallenge,
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalReceipt,
   writePlanApprovalResponse,
+  writeWorkspaceSourceSnapshot,
   type PlanApprovalReceiptKey,
   type PlanApprovalRuntimeChallenge,
   type PlanApprovalRuntimeIdentity,
   type PlanApprovalRuntimeProvenance,
   type PlanApprovalRuntimeReceipt,
+  type WorkspaceSourceState,
 } from "./aidlc-lib.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
@@ -110,6 +118,8 @@ export interface CodeGenerationApproval {
   contractHash: string | null;
   approvalFingerprint: string | null;
   directiveEpoch: string | null;
+  /** The reason is the strict source-drift refusal; its remedy is PLAN_SOURCE_DRIFT_REMEDY. */
+  sourceDrift?: true;
 }
 
 export interface CodeGenerationTarget {
@@ -134,6 +144,108 @@ export interface PlanApprovalQuestionEvidence {
   questionsSha256: string;
   promptSha256: string;
   plannedSourceSha256: string;
+  /**
+   * Source drift this evidence accepted under Change Control `relaxed`, for
+   * the caller that records the checkpoint to write as CHANGE_ACCEPTED rows.
+   * Empty under `strict` (drift throws) and when nothing moved.
+   */
+  acceptedChanges: AcceptedChange[];
+}
+
+// --- Source drift at the Plan Approval checkpoint --------------------------
+//
+// The plan binds to a workspace source fingerprint. When live source no longer
+// matches it, Change Control decides the consequence: `strict` refuses with the
+// human sentence below (the conductor's remedy travels separately), `relaxed`
+// accepts, records the change once, tells the human once, and re-baselines the
+// recorded source so the same change is not reported at every later check.
+
+const CODE_GENERATION_STAGE = "code-generation";
+
+/** Conductor-only: the command path that reopens approval. Never the human sentence. */
+export const PLAN_SOURCE_DRIFT_REMEDY =
+  "Re-run the fingerprint command and re-present the plan.";
+
+export class PlanApprovalSourceDriftError extends Error {
+  readonly remedy = PLAN_SOURCE_DRIFT_REMEDY;
+  constructor(message: string) {
+    super(message);
+    this.name = "PlanApprovalSourceDriftError";
+  }
+}
+
+function describeSourceDrift(paths: string[] | null): string {
+  if (paths === null || paths.length === 0) {
+    return "Source files changed since this plan was approved.";
+  }
+  const count = paths.length === 1 ? "1 file" : `${paths.length} files`;
+  return `${count} changed since this plan was approved: ${renderChangedPaths(paths)}.`;
+}
+
+/** The strict human sentence for source drift after the plan was approved. */
+export function planSourceDriftStrictMessage(paths: string[] | null): string {
+  return `${describeSourceDrift(paths)} Look them over and approve the plan again to continue.`;
+}
+
+/** The relaxed human sentence for source drift after the plan was approved. */
+export function planSourceDriftRelaxedNotice(paths: string[] | null): string {
+  return (
+    `${describeSourceDrift(paths)} Continuing (Change Control: relaxed). ` +
+    "Say 'review the plan again' to reopen approval."
+  );
+}
+
+/**
+ * The Change Control consequence of the workspace source moving from
+ * `recorded` to `current`: under strict, the refusal to throw; under relaxed,
+ * the change to record. The listed paths come from the snapshot kept for the
+ * recorded fingerprint when one exists; otherwise only the digests speak.
+ */
+function judgePlanSourceDrift(
+  projectDir: string,
+  unit: string | null,
+  recorded: string,
+  current: WorkspaceSourceState | null,
+): { accepted: AcceptedChange } | { refusal: PlanApprovalSourceDriftError } {
+  const paths = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, recorded, current);
+  if (resolveChangeControl(projectDir).value === "strict") {
+    return { refusal: new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(paths)) };
+  }
+  return {
+    accepted: {
+      checkpoint: "plan-approval",
+      stage: CODE_GENERATION_STAGE,
+      unit,
+      changed: paths,
+      recorded,
+      current: current?.fingerprint ?? UNBINDABLE_FINGERPRINT,
+      notice: planSourceDriftRelaxedNotice(paths),
+    },
+  };
+}
+
+/** Keep the listing behind the current fingerprint so a later drift can name paths. */
+function keepWorkspaceSourceSnapshot(
+  projectDir: string,
+  state: WorkspaceSourceState | null,
+): void {
+  if (state !== null) writeWorkspaceSourceSnapshot(projectDir, CODE_GENERATION_STAGE, state);
+}
+
+// Re-baseline the `[Planned Source]` tag in a questions file to `fingerprint`.
+// Used only before the challenge is minted: after that the prompt hash binds
+// the file bytes and the receipt's certified source is the baseline instead.
+function upsertPlannedSourceTag(questions: string, fingerprint: string): string {
+  const eol = questions.includes("\r\n") ? "\r\n" : "\n";
+  const raw = questions.split(/\r?\n/);
+  const visible = visibleMarkdownLines(questions);
+  for (let index = visible.length - 1; index >= 0; index--) {
+    if (PLANNED_SOURCE_TAG_RE.test(visible[index])) {
+      raw[index] = `[Planned Source]: ${fingerprint}`;
+      return raw.join(eol);
+    }
+  }
+  throw new Error("Plan Approval questions file has no [Planned Source]: tag to re-baseline");
 }
 
 interface ClassifiedPosture {
@@ -1696,12 +1808,18 @@ export function recordPlanApprovalHumanResponse(
   return { recorded: false };
 }
 
+export interface PlanApprovalReceiptResult {
+  receipt: PlanApprovalRuntimeReceipt | null;
+  /** Human lines for source drift accepted under `relaxed` while certifying. */
+  changeNotices: string[];
+}
+
 export function recordPlanApprovalReceipt(
   projectDir: string,
   evidence: PlanApprovalQuestionEvidence,
   session: string,
   choice: "Approve Plan" | "Request Changes",
-): PlanApprovalRuntimeReceipt | null {
+): PlanApprovalReceiptResult {
   return withActiveDirectiveLock(projectDir, () => {
   const identity = runtimeIdentity(evidence);
   const provenance = runtimeProvenance(evidence);
@@ -1738,22 +1856,33 @@ export function recordPlanApprovalReceipt(
     // because nothing else about the identity had moved.
     clearPlanApprovalChallenge(projectDir, session);
     clearPlanApprovalReceipt(projectDir, identity);
-    return null;
+    return { receipt: null, changeNotices: [] };
   }
   // Certify the source twice, then write. The answer path never unlinks a
   // receipt it just wrote: a mutation that lands between the two reads is
   // refused before anything exists on disk, and one that lands after the
   // second read is caught by generation start, which keeps the receipt and
-  // asks for re-approval.
-  const sourceBefore = workspaceSourceFingerprint(projectDir);
-  if (
-    sourceBefore === null ||
-    sourceBefore !== evidence.plannedSourceSha256
-  ) {
+  // asks for re-approval. Source that moved since the plan was fingerprinted
+  // is the governed drift: strict refuses, relaxed records the change and
+  // certifies the source found now, which every later check compares against.
+  const stateBefore = workspaceSourceState(projectDir);
+  const sourceBefore = stateBefore?.fingerprint ?? null;
+  if (sourceBefore === null) {
     throw new Error(
       "Plan Approval requires workspace source to match the source recorded when this plan was fingerprinted. " +
         "Re-run the fingerprint command and re-present the plan.",
     );
+  }
+  const changeNotices: string[] = [];
+  if (sourceBefore !== evidence.plannedSourceSha256) {
+    const judged = judgePlanSourceDrift(
+      projectDir,
+      evidence.authority.unit,
+      evidence.plannedSourceSha256,
+      stateBefore,
+    );
+    if ("refusal" in judged) throw judged.refusal;
+    changeNotices.push(...recordAcceptedChanges(projectDir, [judged.accepted]));
   }
   const sourceAfter = workspaceSourceFingerprint(projectDir);
   if (sourceAfter === null || sourceAfter !== sourceBefore) {
@@ -1774,6 +1903,7 @@ export function recordPlanApprovalReceipt(
     status: "approved",
   };
   writePlanApprovalReceipt(projectDir, receipt);
+  keepWorkspaceSourceSnapshot(projectDir, stateBefore);
   clearPlanApprovalChallenge(projectDir, session);
   // Sweep this target's receipts from attempts that have ended. Nothing deletes a
   // receipt to invalidate it any more, so the store is tidied here instead.
@@ -1783,7 +1913,7 @@ export function recordPlanApprovalReceipt(
     identity.targetId,
     identity.runFloor,
   );
-  return receipt;
+  return { receipt, changeNotices };
   });
 }
 
@@ -1841,15 +1971,30 @@ export function codeGenerationPlanApprovalQuestionEvidence(
         "Re-run the fingerprint command, record both tags it prints, and re-present the plan.",
     );
   }
-  const currentSource = workspaceSourceFingerprint(projectDir);
+  const currentState = workspaceSourceState(projectDir);
+  const currentSource = currentState?.fingerprint ?? null;
+  let questions = artifacts.questions;
+  let boundSource = plannedSource;
+  const acceptedChanges: AcceptedChange[] = [];
   if (
     plannedSource !== UNBINDABLE_FINGERPRINT &&
     (currentSource === null || currentSource !== plannedSource)
   ) {
-    throw new Error(
-      "Workspace source changed after this plan was fingerprinted. " +
-        "Re-run the fingerprint command and re-present the plan.",
-    );
+    const judged = judgePlanSourceDrift(projectDir, authority.unit, plannedSource, currentState);
+    if ("refusal" in judged) throw judged.refusal;
+    acceptedChanges.push(judged.accepted);
+    // Before the challenge is minted (the decision record) the questions file
+    // is still the conductor's draft, so the tag itself is re-baselined and the
+    // human sees the plan against the source it will be approved on. At the
+    // answer the prompt hash already binds these bytes; the receipt certifies
+    // the current source instead, and that certified value is the baseline
+    // every later check compares against.
+    if (expectedAnswer === "" && currentSource !== null) {
+      questions = upsertPlannedSourceTag(questions, currentSource);
+      writeFileSync(suppliedPath, questions, "utf-8");
+      keepWorkspaceSourceSnapshot(projectDir, currentState);
+      boundSource = currentSource;
+    }
   }
   return {
     authority,
@@ -1857,17 +2002,18 @@ export function codeGenerationPlanApprovalQuestionEvidence(
     questionsPath: suppliedPath,
     questionsRelativePath: toPosix(relative(projectDir, suppliedPath)),
     questionsSha256: createHash("sha256")
-      .update(artifacts.questions, "utf-8")
+      .update(questions, "utf-8")
       .digest("hex"),
     promptSha256: createHash("sha256")
       .update(
-        `${artifacts.questions
+        `${questions
           .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
           .trimEnd()}\n`,
         "utf-8",
       )
       .digest("hex"),
-    plannedSourceSha256: plannedSource,
+    plannedSourceSha256: boundSource,
+    acceptedChanges,
   };
 }
 
@@ -1964,21 +2110,33 @@ export function evaluateCodeGenerationApproval(
       return empty;
     }
     const receipt = readPlanApprovalReceipt(projectDir, identity);
-    const sourceCurrent =
-      receipt !== null &&
-      (
-        receipt.status === "generation" ||
-        workspaceSourceFingerprint(projectDir) === receipt.certifiedSourceSha256
-      );
+    // Source that moved after the receipt certified it is the governed drift:
+    // strict retires the approval until the human approves again; relaxed keeps
+    // it current (generation start records the change and re-baselines the
+    // receipt). This evaluation reads and never writes, so it only judges.
+    let sourceDrift: string | null = null;
+    if (receipt !== null && receipt.status !== "generation") {
+      const current = workspaceSourceState(projectDir);
+      if (current === null || current.fingerprint !== receipt.certifiedSourceSha256) {
+        const judged = judgePlanSourceDrift(
+          projectDir,
+          normalizedUnit,
+          receipt.certifiedSourceSha256,
+          current,
+        );
+        if ("refusal" in judged) sourceDrift = judged.refusal.message;
+      }
+    }
+    const sourceCurrent = receipt !== null && sourceDrift === null;
     empty.receiptValid =
       receipt !== null &&
       runtimeIdentityMatches(receipt, identity) &&
       receipt.choice === "Approve Plan" &&
       sourceCurrent;
     if (!empty.receiptValid) {
-      if (receipt !== null && !sourceCurrent) {
-        empty.reason =
-          "workspace source changed after this plan was approved and before generation began; approve again (that re-baselines the source this plan is bound to)";
+      if (receipt !== null && sourceDrift !== null) {
+        empty.reason = sourceDrift;
+        empty.sourceDrift = true;
         return empty;
       }
       // Distinguish "never approved" from "approved in an attempt that has since
@@ -2008,11 +2166,12 @@ export function evaluateCodeGenerationApproval(
 export function beginCodeGeneration(
   projectDir: string,
   target: CodeGenerationTarget,
-): void {
-  withAuditLock(projectDir, () => {
+): string[] {
+  return withAuditLock(projectDir, () =>
     withActiveDirectiveLock(projectDir, () => {
       const approval = evaluateCodeGenerationApproval(projectDir, target);
       if (!approval.ok || !approval.approvalFingerprint) {
+        if (approval.sourceDrift) throw new PlanApprovalSourceDriftError(approval.reason);
         throw new Error(approval.reason || "Code Generation requires Plan Approval");
       }
       const authority = resolveCodeGenerationAuthority(projectDir, target);
@@ -2025,27 +2184,36 @@ export function beginCodeGeneration(
       if (!receipt) {
         throw new Error("Code Generation has no protected approval receipt");
       }
-      if (receipt.status === "generation") return;
-      const sourceBefore = workspaceSourceFingerprint(projectDir);
-      if (
-        sourceBefore === null ||
-        sourceBefore !== receipt.certifiedSourceSha256
-      ) {
-        // Refuse and KEEP the receipt. Deleting the human's recorded decision
-        // because the workspace moved turned a recoverable drift into a state with
-        // no way back: the remedy is a fresh approval, which re-baselines the
-        // source this plan is bound to.
-        throw new Error(
-          "Workspace source changed after Plan Approval and before generation began. " +
-            "Re-run the fingerprint command to refresh `[Planned Source]`, then approve " +
-            "again (that re-baselines the source this plan is bound to).",
+      if (receipt.status === "generation") return [];
+      const stateBefore = workspaceSourceState(projectDir);
+      const sourceBefore = stateBefore?.fingerprint ?? null;
+      if (sourceBefore === null) {
+        throw new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(null));
+      }
+      const changeNotices: string[] = [];
+      if (sourceBefore !== receipt.certifiedSourceSha256) {
+        // Strict refuses and KEEPS the receipt: deleting the human's recorded
+        // decision because the workspace moved turned a recoverable drift into
+        // a state with no way back, and a fresh approval re-baselines the
+        // source this plan is bound to. Relaxed records the change and moves
+        // that baseline to the source found now, so generation begins and the
+        // same change is not reported again.
+        const judged = judgePlanSourceDrift(
+          projectDir,
+          authority.unit,
+          receipt.certifiedSourceSha256,
+          stateBefore,
         );
+        if ("refusal" in judged) throw judged.refusal;
+        changeNotices.push(...recordAcceptedChanges(projectDir, [judged.accepted]));
+        keepWorkspaceSourceSnapshot(projectDir, stateBefore);
       }
       // Publication is the generation boundary. It sits between two source
       // fingerprints while both authority locks are held: neither another
       // guard nor directive publication can retire this receipt mid-start.
       writePlanApprovalReceipt(projectDir, {
         ...receipt,
+        certifiedSourceSha256: sourceBefore,
         status: "generation",
       });
       const publicationBarrier =
@@ -2067,12 +2235,12 @@ export function beginCodeGeneration(
       const sourceAfter = workspaceSourceFingerprint(projectDir);
       if (sourceAfter === null || sourceAfter !== sourceBefore) {
         // Revert the generation boundary rather than delete the approval: the
-        // human's decision is still a fact, only the start is not.
+        // human's decision is still a fact, only the start is not. This is the
+        // race window, not the governed drift, so both Change Control values
+        // ask for the step again.
         writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
         throw new Error(
-          "Workspace source changed while Code Generation authority was starting. " +
-            "Re-run the fingerprint command to refresh `[Planned Source]`, then approve " +
-            "again (that re-baselines the source this plan is bound to).",
+          "Source files changed while code generation was starting. Retry the step.",
         );
       }
       collectStalePlanApprovalReceipts(
@@ -2081,8 +2249,9 @@ export function beginCodeGeneration(
         authority.targetId,
         authority.runFloor,
       );
-    });
-  });
+      return changeNotices;
+    }),
+  );
 }
 
 function flagValue(args: string[], name: string): string | undefined {
@@ -2157,8 +2326,11 @@ export function main(argv: string[]): void {
         // copy: the content fingerprint, and the workspace source this plan was
         // written against. Recording the source here is what makes drift between
         // planning and approval answerable - re-run this command and re-present.
-        const plannedSource =
-          workspaceSourceFingerprint(projectDir) ?? UNBINDABLE_FINGERPRINT;
+        // The listing behind the source is kept so a later drift can be told to
+        // the human as the files that changed.
+        const plannedState = workspaceSourceState(projectDir);
+        keepWorkspaceSourceSnapshot(projectDir, plannedState);
+        const plannedSource = plannedState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
         console.log(
           `[Approval Fingerprint]: ${
             approvalFingerprint(
@@ -2181,8 +2353,14 @@ export function main(argv: string[]): void {
       }
       case "begin": {
         const target = targetFromArgs(argv, "begin");
-        beginCodeGeneration(projectDir, target);
-        console.log(JSON.stringify({ status: "generation", target }));
+        const changeNotices = beginCodeGeneration(projectDir, target);
+        console.log(
+          JSON.stringify({
+            status: "generation",
+            target,
+            ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+          }),
+        );
         return;
       }
       case "brief": {
@@ -2209,9 +2387,12 @@ export function main(argv: string[]): void {
         );
     }
   } catch (error) {
+    // The human sentence is the error; the conductor's remedy (which command
+    // reopens approval) rides beside it, never inside it.
     console.error(
       JSON.stringify({
         error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof PlanApprovalSourceDriftError ? { remedy: error.remedy } : {}),
       }),
     );
     process.exit(1);

@@ -863,7 +863,7 @@ describe("t328 (4) workspace source, bound with a remedy that always works", () 
       p.dir,
     );
     expect(refused.code).not.toBe(0);
-    expect(`${refused.stderr}${refused.stdout}`).toMatch(/approve again/i);
+    expect(`${refused.stderr}${refused.stdout}`).toMatch(/approve the plan again/i);
     // The human's decision is evidence. A guard refuses; it does not delete it.
     expect(p.receipts().length).toBe(1);
 
