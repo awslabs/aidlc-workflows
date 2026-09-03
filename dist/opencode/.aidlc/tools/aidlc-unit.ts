@@ -76,6 +76,7 @@ import {
 import {
   parseTestingContract,
   PLAN_APPROVAL_CHECKPOINT,
+  recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
 
@@ -1546,10 +1547,7 @@ function candidateEvidence(
       `${recordPrefix}/construction/${claim.unit}/code-generation/unit-test-instructions.md`,
     );
     const questions = gitTextAt(projectDir, claim.oid, questionsPath);
-    const fingerprint =
-      /^\[Approval Fingerprint\]:\s*(sha256:(?:v2:)?[0-9a-f]{64})\s*$/m.exec(
-        questions,
-      );
+    const fingerprint = recordedApprovalFingerprint(questions);
     const embedded = parseTestingContract(plan);
     const currentContract = resolveTestingPosture(projectDir);
     const approvalEvent = events.findLast((event) =>
@@ -1585,7 +1583,7 @@ function candidateEvidence(
       auditBlockField(approvalEvent.block, "Intent") ===
         claim.payload.intent_uuid &&
       auditBlockField(approvalEvent.block, "Approval Fingerprint") ===
-        fingerprint[1] &&
+        fingerprint &&
       auditBlockField(approvalEvent.block, "Questions File") ===
         questionsPath &&
       auditBlockField(approvalEvent.block, "Questions SHA-256") ===
@@ -1598,7 +1596,7 @@ function candidateEvidence(
       (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0 &&
       /^\[Answer\]:\s*A\.\s*Approve Plan\s*$/m.test(questions)
     ) {
-      planFingerprint = fingerprint[1];
+      planFingerprint = fingerprint;
     }
   }
   const mergeHeld = (getField(state, "Merge-Held") ?? "").trim() === "true";

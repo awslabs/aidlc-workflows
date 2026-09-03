@@ -173,6 +173,20 @@ export const APPROVAL_FINGERPRINT_PREFIX = "sha256:v3:";
 export function approvalFingerprintIsCurrentFormat(tag: string | null): boolean {
   return tag?.startsWith(APPROVAL_FINGERPRINT_PREFIX) === true;
 }
+
+/**
+ * The `[Approval Fingerprint]` tag recorded in a questions file, in any format
+ * this tool has ever written (bare, v2, v3), or null when the file carries no
+ * well-formed tag. The one grammar every consumer of the tag reads through, so
+ * a format bump never strands a reader that copied the regex.
+ */
+export function recordedApprovalFingerprint(questions: string): string | null {
+  for (const line of questions.split(/\r?\n/)) {
+    const match = FINGERPRINT_TAG_RE.exec(line);
+    if (match) return match[1] ?? null;
+  }
+  return null;
+}
 const APPROVE_PLAN_RE = /^(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?$/i;
 const QUESTION_PREFIX_RE =
   /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)/i;

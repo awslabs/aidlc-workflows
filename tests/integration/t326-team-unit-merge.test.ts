@@ -2381,7 +2381,7 @@ describe("t326 pinned team Unit merge", () => {
     writeFileSync(
       auditPath,
       audit.replace(
-        /(\*\*Event\*\*: PLAN_APPROVAL_RECORDED[\s\S]*?\*\*Approval Fingerprint\*\*: )sha256:(?:v2:)?[0-9a-f]{64}/,
+        /(\*\*Event\*\*: PLAN_APPROVAL_RECORDED[\s\S]*?\*\*Approval Fingerprint\*\*: )sha256:(?:v[23]:)?[0-9a-f]{64}/,
         `$1sha256:${"0".repeat(64)}`,
       ),
     );
