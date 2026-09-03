@@ -85,7 +85,7 @@ Create the `initiative-brief` artifact at its `directive.produces` path — a on
 - Team plan
 - Go/no-go recommendation
 
-Create the `decision-log` artifact at its `directive.produces` path — record all decisions made during Ideation.
+Create the `decision-log` artifact at its `directive.produces` path — record of all decisions made during Ideation.
 
 ### Step 4: Phase Boundary Verification
 
