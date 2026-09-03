@@ -198,6 +198,36 @@ describe("t332 review UI daemon HTTP API", () => {
       manifest: { stage: "requirements-analysis" },
     });
     expect(info.url).toBe(`http://localhost:${info.port}/`);
+    const cliEnv = {
+      ...process.env,
+      AIDLC_REVIEW_HOME: reviewHome,
+      AIDLC_REVIEW_OPEN: "0",
+      DISPLAY: "",
+      WAYLAND_DISPLAY: "",
+    };
+    const statusCommand = Bun.spawnSync({
+      cmd: [process.execPath, DAEMON, "status", "--project-dir", project, "--json"],
+      cwd: ROOT,
+      env: cliEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(statusCommand.exitCode, statusCommand.stderr.toString()).toBe(0);
+    const statusBody = statusCommand.stdout.toString();
+    expect(JSON.parse(statusBody)).toMatchObject({ running: true, server: { url: info.url } });
+    expect(statusBody).not.toContain(info.token);
+
+    const openCommand = Bun.spawnSync({
+      cmd: [process.execPath, DAEMON, "open", "--project-dir", project],
+      cwd: ROOT,
+      env: cliEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(openCommand.exitCode, openCommand.stderr.toString()).toBe(0);
+    const cliOpenUrl = openCommand.stdout.toString().trim();
+    expect(cliOpenUrl).toMatch(/^http:\/\/localhost:\d+\/open\/[0-9a-f]{32}$/);
+    expect((await fetch(cliOpenUrl, { redirect: "manual" })).status).toBe(302);
     expect(info.url).not.toContain(info.token);
     const unauthenticatedShell = await fetch(`${base}/`);
     expect(unauthenticatedShell.status).toBe(403);
