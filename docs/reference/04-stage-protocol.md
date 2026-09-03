@@ -56,8 +56,6 @@ The conductor's Routing section defines the loading rules:
 - **`stage-protocol-construction.md`**: load on the first Construction
   directive of the session and every invoke-swarm.
 - **`stage-protocol-swarm.md`**: load for invoke-swarm.
-- **`stage-protocol-html.md`**: load when `protocol_modules` includes `html`.
-- **`stage-protocol-guide.md`**: load when `protocol_modules` includes `guide`; this is derived from a live `review_ui` on run-stage directives.
 
 Before running the stage body, the conductor reads every module named by
 `directive.protocol_modules` and skips modules already loaded in the session.
@@ -319,9 +317,8 @@ Example: `Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval
 
 ## Question Flow
 
-When a stage gathers user input through questions, the protocol defines three
-always-available interaction modes plus a browser guide mode when `review_ui`
-is present, with batching rules, mandatory answer analysis, and ambiguity detection.
+When a stage gathers input, three interaction modes are always available; a
+fourth browser guide mode appears only when `review_ui` is present.
 
 *(Protocol Section 3)*
 
@@ -353,8 +350,7 @@ AskUserQuestion({
 })
 ```
 
-The fourth semantic option is present only when the directive has `review_ui`;
-numbered-prose rendering then has five visible lines including final Other.
+The fourth option requires `review_ui`; numbered prose then has five visible lines including Other.
 
 Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
 
@@ -394,11 +390,7 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   confirmation as Guide Me. Self-guided editing does not waive confirmation.
 
 #### Guide Me in the Browser
-
-Write `<slug>-questions-guide.html` per `stage-protocol-guide.md`, pass
-`aidlc-html.ts check --guide <file> --questions <md>`, point the human to the
-Browser line's Questions view, and stop. On **done**, run `aidlc-log.ts
-answers-apply`, then use the same summary and confirmation flow as Edit File.
+Write and check `<slug>-questions-guide.html`, point to the Browser Questions view, and stop. On **done**, run `aidlc-log.ts answers-apply`, then use Edit File's summary and confirmation flow.
 
 #### Chat (Freeform Mode)
 

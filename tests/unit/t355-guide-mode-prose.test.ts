@@ -20,8 +20,8 @@ describe("browser guide protocol prose", () => {
 
     const reference = readFileSync(REFERENCE, "utf-8");
     expect(reference).toContain("Guide Me in the Browser");
-    expect(reference).toContain("five visible lines including final Other");
-    expect(reference).toContain("aidlc-log.ts\nanswers-apply");
+    expect(reference).toContain("five visible lines including Other");
+    expect(reference).toContain("aidlc-log.ts answers-apply");
   });
 
   test("guide module exists and stays concise", () => {
