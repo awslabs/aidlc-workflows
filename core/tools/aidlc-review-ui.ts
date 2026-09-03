@@ -22,13 +22,18 @@ import {
   activeSpace,
   CHECKBOX_MAP,
   docsRoot,
+  findStageBySlug,
   getField,
+  isPerUnitStage,
   parseCheckboxes,
   readStateFile,
   recordDir,
+  stageDir,
   stateFilePath,
 } from "./aidlc-lib.ts";
 import {
+  ANSWERS_PREFIX,
+  answersFileName,
   DEFAULT_IDLE_MINUTES,
   DEFAULT_REVIEW_HOST,
   ENV_REVIEW_HOST,
@@ -58,17 +63,21 @@ import {
 import {
   injectBridge,
   lineDiff,
+  parseQuestionsMarkdown,
   PathConfinementError,
   renderFeedbackMarkdown,
   renderMarkdown,
   resolveProjectAidlcPath,
   selfContainedMarkdownExport,
+  validateQuestionAnswers,
+  type AnswerSubmissionEntry,
   type FeedbackRequest,
   type ReviewAnnotation,
 } from "./aidlc-review-ui-render.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_ANSWERS_BODY_BYTES = 256 * 1024;
 const WATCH_DEBOUNCE_MS = 150;
 const RAW_CSP = "default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self'; font-src data:; frame-ancestors 'self'";
 const ASSET_ROOT = join(import.meta.dir, "data", "review-ui");
@@ -273,6 +282,66 @@ function stateContext(projectDir: string): StateContext {
   return { space, intent, record, state, current, manifest };
 }
 
+interface QuestionsTarget {
+  file: string;
+  guide: string | null;
+  stage: string;
+  stage_dir: string;
+  questionsPath: string;
+  stagePath: string;
+}
+
+function currentQuestionsTarget(projectDir: string, context = stateContext(projectDir)): QuestionsTarget | null {
+  const currentStage = context.state ? getField(context.state, "Current Stage") : null;
+  if (!currentStage) return null;
+
+  let stage;
+  try {
+    stage = findStageBySlug(currentStage);
+  } catch {
+    // Source-tree daemon fixtures may not carry compiled graph data yet.
+    return null;
+  }
+  if (!stage || isPerUnitStage(stage)) return null;
+
+  const stagePath = stageDir(
+    projectDir,
+    stage.phase,
+    stage.slug,
+    context.intent ?? undefined,
+    context.space,
+  );
+  const stageRelative = posixRelative(projectDir, stagePath);
+  const file = `${stageRelative}/${stage.slug}-questions.md`;
+  let questionsPath: string;
+  try {
+    questionsPath = resolveProjectAidlcPath(projectDir, file);
+    regularFile(questionsPath);
+  } catch (error) {
+    if (error instanceof PathConfinementError) throw error;
+    return null;
+  }
+
+  const guideFile = `${stageRelative}/${stage.slug}-questions-guide.html`;
+  let guide: string | null = null;
+  try {
+    const guidePath = resolveProjectAidlcPath(projectDir, guideFile);
+    regularFile(guidePath);
+    guide = guideFile;
+  } catch (error) {
+    if (error instanceof PathConfinementError) throw error;
+    // The explainer is optional while the questions file is being prepared.
+  }
+  return {
+    file,
+    guide,
+    stage: stage.slug,
+    stage_dir: stageRelative,
+    questionsPath,
+    stagePath: realpathSync(stagePath),
+  };
+}
+
 function stageMarker(state: string | null, currentStage: string | null): string | null {
   if (!state || !currentStage) return null;
   const checkbox = parseCheckboxes(state).find((entry) => entry.slug === currentStage);
@@ -284,6 +353,7 @@ function statePayload(projectDir: string): Record<string, unknown> {
   const revisionValue = context.state ? getField(context.state, "Revision Count") : null;
   const revision = revisionValue === null ? null : Number(revisionValue);
   const currentStage = context.current?.stage ?? (context.state ? getField(context.state, "Current Stage") : null);
+  const questions = currentQuestionsTarget(projectDir, context);
   return {
     project_dir: projectDir,
     space: context.space,
@@ -294,6 +364,14 @@ function statePayload(projectDir: string): Record<string, unknown> {
     stage_status: stageMarker(context.state, currentStage),
     revision_count: revision !== null && Number.isInteger(revision) ? revision : null,
     html_artifacts: htmlArtifactsRequested(),
+    questions: questions === null
+      ? null
+      : {
+          file: questions.file,
+          guide: questions.guide,
+          stage: questions.stage,
+          stage_dir: questions.stage_dir,
+        },
   };
 }
 
@@ -345,6 +423,29 @@ function regularFile(path: string): void {
     throw new HttpError(404, "not found");
   }
   if (!stat.isFile() || stat.isSymbolicLink()) throw new HttpError(404, "not found");
+}
+
+function requireCurrentQuestionsTarget(projectDir: string, requested: string, path: string): QuestionsTarget {
+  const target = currentQuestionsTarget(projectDir);
+  if (target === null || requested !== target.file || path !== target.questionsPath) {
+    throw new HttpError(409, "questions target no longer current");
+  }
+  return target;
+}
+
+function questionsResponse(projectDir: string, url: URL): Response {
+  const requested = queryPath(url);
+  const path = resolveProjectAidlcPath(projectDir, requested);
+  regularFile(path);
+  if (extname(path).toLowerCase() !== ".md") throw new HttpError(404, "not found");
+  const target = requireCurrentQuestionsTarget(projectDir, requested, path);
+  const source = readFileSync(path);
+  return json({
+    path: target.file,
+    sha256: sha256Hex(source),
+    stage: target.stage,
+    questions: parseQuestionsMarkdown(new TextDecoder().decode(source)),
+  });
 }
 
 function artifactResponse(projectDir: string, url: URL): Response {
@@ -551,6 +652,121 @@ async function feedbackResponse(projectDir: string, request: Request): Promise<R
   }
 }
 
+interface AnswersRequest {
+  questions_file: string;
+  source_sha256: string;
+  answers: AnswerSubmissionEntry[];
+}
+
+async function limitedRequestBytes(request: Request, maximum: number): Promise<Uint8Array> {
+  const contentLengthHeader = request.headers.get("content-length");
+  if (contentLengthHeader !== null) {
+    const contentLength = Number(contentLengthHeader);
+    if (Number.isFinite(contentLength) && contentLength > maximum) {
+      throw new HttpError(413, "request body too large");
+    }
+  }
+  if (request.body === null) return new Uint8Array();
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (length + value.byteLength > maximum) {
+        await reader.cancel();
+        throw new HttpError(413, "request body too large");
+      }
+      chunks.push(value);
+      length += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function validAnswersEnvelope(value: unknown): value is Omit<AnswersRequest, "answers"> & { answers: unknown } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const body = value as Record<string, unknown>;
+  const keys = Object.keys(body);
+  return keys.length === 3 &&
+    keys.every((key) => key === "questions_file" || key === "source_sha256" || key === "answers") &&
+    typeof body.questions_file === "string" &&
+    body.questions_file.length > 0 &&
+    typeof body.source_sha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(body.source_sha256) &&
+    Array.isArray(body.answers);
+}
+
+async function answersResponse(projectDir: string, request: Request): Promise<Response> {
+  const bytes = await limitedRequestBytes(request, MAX_ANSWERS_BODY_BYTES);
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new HttpError(400, "invalid JSON");
+  }
+  if (!validAnswersEnvelope(body)) throw new HttpError(400, "invalid answers body");
+
+  const questionsPath = resolveProjectAidlcPath(projectDir, body.questions_file);
+  regularFile(questionsPath);
+  if (extname(questionsPath).toLowerCase() !== ".md") throw new HttpError(400, "invalid questions file");
+  const target = requireCurrentQuestionsTarget(projectDir, body.questions_file, questionsPath);
+  const source = readFileSync(questionsPath);
+  const sourceSha256 = sha256Hex(source);
+  if (body.source_sha256 !== sourceSha256) {
+    throw new HttpError(409, "questions file changed; reload");
+  }
+
+  let answers: AnswerSubmissionEntry[];
+  try {
+    answers = validateQuestionAnswers(
+      parseQuestionsMarkdown(new TextDecoder().decode(source)),
+      body.answers,
+    );
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid question answers");
+  }
+
+  const reviewDir = stageReviewUiDir(target.stagePath);
+  mkdirSync(reviewDir, { recursive: true });
+  const created = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  let sequence = nextSequence(reviewDir, ANSWERS_PREFIX);
+  while (true) {
+    const file = answersFileName(sequence++);
+    const path = join(reviewDir, file);
+    let descriptor: number;
+    try {
+      descriptor = openSync(path, "wx");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw error;
+    }
+    try {
+      writeFileSync(descriptor, `${JSON.stringify({
+        version: 1,
+        questions_file: target.file,
+        source_sha256: sourceSha256,
+        created,
+        answers,
+      }, null, 2)}\n`, "utf-8");
+    } finally {
+      closeSync(descriptor);
+    }
+    return json({ file });
+  }
+}
+
 function exportResponse(projectDir: string, url: URL): Response {
   const path = confinedPath(projectDir, url);
   regularFile(path);
@@ -664,8 +880,10 @@ async function serve(projectDir: string): Promise<void> {
         if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir));
         if (request.method === "GET" && url.pathname === "/api/artifact") return artifactResponse(projectDir, url);
         if (request.method === "GET" && url.pathname === "/api/raw") return rawResponse(projectDir, url);
+        if (request.method === "GET" && url.pathname === "/api/questions") return questionsResponse(projectDir, url);
         if (request.method === "POST" && url.pathname === "/api/feedback") return await feedbackResponse(projectDir, request);
         if (request.method === "GET" && url.pathname === "/api/snapshots") return snapshotsResponse(projectDir, url);
+        if (request.method === "POST" && url.pathname === "/api/answers") return await answersResponse(projectDir, request);
         if (request.method === "GET" && url.pathname === "/api/snapshot") return snapshotResponse(projectDir, url);
         if (request.method === "GET" && url.pathname === "/api/diff") return diffResponse(projectDir, url);
         if (request.method === "GET" && url.pathname === "/api/export") return exportResponse(projectDir, url);

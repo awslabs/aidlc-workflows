@@ -61,6 +61,37 @@
     window.parent.postMessage(payload, "*");
   }
 
+  let guidePosted = false;
+
+  function postGuideRecommendations() {
+    if (guidePosted || window.parent === window) return;
+    const recommendations = {};
+    let hasValidSection = false;
+    let recommendationCount = 0;
+
+    for (const section of document.querySelectorAll("[data-aidlc-question]")) {
+      const questionId = section.getAttribute("data-aidlc-question") || "";
+      if (!/^Q\d+$/.test(questionId)) continue;
+      hasValidSection = true;
+      if (recommendationCount >= 200 || Object.hasOwn(recommendations, questionId)) continue;
+
+      const recommendation = section.querySelector("[data-aidlc-recommend]")?.getAttribute("data-aidlc-recommend") || "";
+      if (!/^[A-Z]$/.test(recommendation)) continue;
+      recommendations[questionId] = recommendation;
+      recommendationCount += 1;
+    }
+
+    if (!hasValidSection) return;
+    guidePosted = true;
+    window.parent.postMessage({ type: "aidlc-guide", recommendations }, "*");
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", postGuideRecommendations, { once: true });
+  } else {
+    postGuideRecommendations();
+  }
+
   document.addEventListener("mouseup", (event) => {
     if (!event.isTrusted) return;
     const selection = window.getSelection();

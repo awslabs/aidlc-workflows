@@ -8,8 +8,22 @@
     stageStatus: document.querySelector("#stage-status"),
     stageSummary: document.querySelector("#stage-summary"),
     artifactList: document.querySelector("#artifact-list"),
+    questionsNav: document.querySelector("#questions-nav"),
+    questionsButton: document.querySelector("#questions-button"),
+    questionsBadge: document.querySelector("#questions-badge"),
     recordTree: document.querySelector("#record-tree"),
     viewer: document.querySelector("#viewer"),
+    appGrid: document.querySelector(".app-grid"),
+    headerActions: document.querySelector("#header-actions"),
+    viewerActions: document.querySelector("#viewer-actions"),
+    feedbackDrawer: document.querySelector("#feedback-drawer"),
+    questionsView: document.querySelector("#questions-view"),
+    questionsForm: document.querySelector("#questions-form"),
+    questionsMeta: document.querySelector("#questions-meta"),
+    questionsContent: document.querySelector("#questions-content"),
+    questionsBanner: document.querySelector("#questions-banner"),
+    saveAnswersButton: document.querySelector("#save-answers-button"),
+    guideContent: document.querySelector("#guide-content"),
     artifactMeta: document.querySelector("#artifact-meta"),
     notice: document.querySelector("#notice"),
     pausedOverlay: document.querySelector("#paused-overlay"),
@@ -40,9 +54,16 @@
 
   const model = {
     state: null,
+    view: "artifact",
     artifact: null,
     artifactPath: null,
     htmlFrame: null,
+    questions: null,
+    questionsStorageKey: null,
+    guideFrame: null,
+    guidePath: null,
+    guideBaseUrl: null,
+    recommendations: new Map(),
     selectionAnchor: null,
     pendingHtmlAnchor: null,
     annotations: [],
@@ -142,6 +163,396 @@
   function decisionHint() {
     return document.querySelector('input[name="decision"]:checked')?.value || "none";
   }
+  function questionsStorageKey(result) {
+    return result?.path && result?.sha256
+      ? `aidlc-review-questions:${result.path}:${result.sha256}`
+      : null;
+  }
+
+  function setQuestionsMode(active) {
+    model.view = active ? "questions" : "artifact";
+    elements.appGrid.classList.toggle("questions-mode", active);
+    elements.questionsView.hidden = !active;
+    elements.viewerActions.hidden = active;
+    elements.headerActions.hidden = active;
+    elements.feedbackDrawer.hidden = active;
+    elements.viewer.hidden = active;
+    elements.questionsButton.setAttribute("aria-current", active ? "page" : "false");
+    if (active) {
+      closeSelectionToolbar();
+      closeAnchorConfirm();
+      elements.editorPanel.hidden = true;
+      elements.diffPanel.hidden = true;
+    }
+  }
+
+  function ordinaryQuestions() {
+    return (model.questions?.questions || []).filter((question) => !question.confirmation);
+  }
+
+  function updateQuestionsBadge(result = model.questions) {
+    const questions = (result?.questions || []).filter((question) => !question.confirmation);
+    let answered = questions.filter((question) => Boolean(question.answer?.trim())).length;
+    if (result === model.questions && model.view === "questions") {
+      answered = questions.filter((question) => {
+        const card = elements.questionsContent.querySelector(`[data-question-id="${question.id}"]`);
+        return Boolean(card?.querySelector('input[data-choice]:checked'));
+      }).length;
+    }
+    elements.questionsBadge.removeAttribute("title");
+    elements.questionsBadge.textContent = `${answered}/${questions.length}`;
+    elements.questionsBadge.setAttribute(
+      "aria-label",
+      `${answered} of ${questions.length} questions answered`,
+    );
+  }
+
+  async function refreshQuestionsBadge(pointer) {
+    if (!pointer?.file) return;
+    elements.questionsBadge.textContent = "…";
+    try {
+      const result = await requestJson(apiUrl("/api/questions", { path: pointer.file }));
+      if (model.state?.questions?.file === pointer.file && model.view !== "questions") {
+        updateQuestionsBadge(result);
+      }
+    } catch (error) {
+      if (model.state?.questions?.file === pointer.file && model.view !== "questions") {
+        elements.questionsBadge.textContent = "!";
+        elements.questionsBadge.setAttribute("aria-label", "Questions could not be loaded");
+        elements.questionsBadge.title = error.message;
+      }
+    }
+  }
+
+  function questionInitialAnswer(question) {
+    const entry = { id: question.id };
+    const valid = new Set(question.options.map((option) => option.letter).filter(Boolean));
+    const raw = typeof question.answer === "string" ? question.answer.trim() : "";
+    const separator = raw.search(/\s+[—–-]\s+/);
+    const labelsPart = separator >= 0 ? raw.slice(0, separator) : raw;
+    const labels = labelsPart
+      .split(",")
+      .map((label) => label.trim())
+      .filter((label) => valid.has(label));
+    if (labels.length) entry.labels = question.multi ? labels : labels.slice(0, 1);
+    if (entry.labels?.includes("X") && separator >= 0) {
+      const other = raw.slice(separator).replace(/^\s*[—–-]\s*/, "").trim();
+      if (other) entry.other = other;
+    }
+    if (typeof question.note === "string" && question.note.trim()) entry.note = question.note.trim();
+    return entry;
+  }
+
+  function renderQuestions(result) {
+    elements.questionsContent.replaceChildren();
+    const ordinary = result.questions.filter((question) => !question.confirmation);
+    for (const question of result.questions) {
+      if (question.confirmation) renderConfirmation(question);
+      else renderQuestionCard(question, questionInitialAnswer(question));
+    }
+    elements.questionsMeta.textContent = `${basename(result.path)} · ${ordinary.length} question${ordinary.length === 1 ? "" : "s"}`;
+    model.savedAnswers = JSON.stringify(collectQuestionAnswers());
+    restoreQuestionAnswers();
+    syncQuestionForm();
+  }
+
+  function renderQuestionCard(question, initial) {
+    const card = document.createElement("fieldset");
+    const legend = document.createElement("legend");
+    const prompt = document.createElement("p");
+    const options = document.createElement("div");
+    card.className = "question-card";
+    card.dataset.questionId = question.id;
+    legend.textContent = question.title;
+    prompt.className = "question-prompt";
+    prompt.textContent = question.prompt;
+    options.className = "question-options";
+
+    for (const option of question.options) {
+      if (!option.letter) continue;
+      const row = document.createElement("div");
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      const text = document.createElement("span");
+      row.className = "question-option";
+      row.dataset.optionLetter = option.letter;
+      input.type = question.multi ? "checkbox" : "radio";
+      input.name = `question-${question.id}`;
+      input.value = option.letter;
+      input.dataset.choice = "";
+      input.checked = initial.labels?.includes(option.letter) || false;
+      text.textContent = `${option.letter}. ${option.text}`;
+      label.append(input, text);
+      row.append(label);
+      if (option.letter === "X") {
+        const otherLabel = document.createElement("label");
+        const otherInput = document.createElement("input");
+        otherLabel.className = "other-input";
+        otherLabel.textContent = "Other answer";
+        otherInput.type = "text";
+        otherInput.dataset.other = "";
+        otherInput.value = initial.other || "";
+        otherLabel.append(otherInput);
+        row.append(otherLabel);
+      }
+      options.append(row);
+    }
+
+    const noteLabel = document.createElement("label");
+    const note = document.createElement("textarea");
+    noteLabel.className = "question-note";
+    noteLabel.textContent = "Note (optional)";
+    note.rows = 3;
+    note.dataset.note = "";
+    note.value = initial.note || "";
+    noteLabel.append(note);
+    card.append(legend, prompt, options, noteLabel);
+    card.addEventListener("click", () => navigateGuide(question.id));
+    card.addEventListener("focusin", () => navigateGuide(question.id));
+    elements.questionsContent.append(card);
+  }
+
+  function renderConfirmation(question) {
+    const section = document.createElement("section");
+    const title = document.createElement("h2");
+    const prompt = document.createElement("p");
+    const choices = document.createElement("ul");
+    section.className = "question-card confirmation-card";
+    section.dataset.questionId = question.id;
+    title.textContent = question.title;
+    prompt.className = "question-prompt";
+    prompt.textContent = question.prompt;
+    for (const option of question.options) {
+      const item = document.createElement("li");
+      item.textContent = option.text;
+      choices.append(item);
+    }
+    const hint = document.createElement("p");
+    hint.className = "muted";
+    hint.textContent = "Read-only — confirm this summary in the terminal after your answers are applied.";
+    section.append(title, prompt, choices, hint);
+    elements.questionsContent.append(section);
+  }
+
+  function applyQuestionEntry(entry) {
+    if (!entry || typeof entry !== "object" || !/^Q\d+$/.test(entry.id)) return;
+    const question = ordinaryQuestions().find((candidate) => candidate.id === entry.id);
+    const card = elements.questionsContent.querySelector(`[data-question-id="${entry.id}"]`);
+    if (!question || !card) return;
+    const valid = new Set(question.options.map((option) => option.letter).filter(Boolean));
+    const labels = Array.isArray(entry.labels)
+      ? entry.labels.filter((letter) => typeof letter === "string" && valid.has(letter))
+      : [];
+    for (const input of card.querySelectorAll("input[data-choice]")) {
+      input.checked = labels.includes(input.value);
+    }
+    const other = card.querySelector("input[data-other]");
+    if (other && typeof entry.other === "string" && entry.other.length <= 100_000) {
+      other.value = entry.other;
+    }
+    const note = card.querySelector("textarea[data-note]");
+    if (note && typeof entry.note === "string" && entry.note.length <= 100_000) {
+      note.value = entry.note;
+    }
+  }
+
+  function restoreQuestionAnswers() {
+    if (!model.questionsStorageKey) return;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(model.questionsStorageKey) || "[]");
+      if (!Array.isArray(saved) || saved.length > 200) throw new Error("Invalid saved answers");
+      for (const entry of saved) applyQuestionEntry(entry);
+    } catch {
+      sessionStorage.removeItem(model.questionsStorageKey);
+    }
+  }
+
+  function collectQuestionAnswers() {
+    const answers = [];
+    for (const question of ordinaryQuestions()) {
+      const card = elements.questionsContent.querySelector(`[data-question-id="${question.id}"]`);
+      if (!card) continue;
+      const labels = [...card.querySelectorAll("input[data-choice]:checked")].map(
+        (input) => input.value,
+      );
+      const other = card.querySelector("input[data-other]")?.value.trim() || "";
+      const note = card.querySelector("textarea[data-note]")?.value.trim() || "";
+      if (!labels.length) continue;
+      const entry = { id: question.id };
+      if (labels.length) entry.labels = labels;
+      if (labels.includes("X") && other) entry.other = other;
+      if (note) entry.note = note;
+      answers.push(entry);
+    }
+    return answers;
+  }
+
+  function syncOtherInputs() {
+    for (const card of elements.questionsContent.querySelectorAll(".question-card")) {
+      const other = card.querySelector("input[data-other]");
+      if (!other) continue;
+      const selected = card.querySelector('input[data-choice][value="X"]')?.checked || false;
+      other.parentElement.hidden = !selected;
+      other.required = selected;
+      if (!selected) other.setCustomValidity("");
+    }
+  }
+
+  function syncQuestionForm() {
+    syncOtherInputs();
+    updateQuestionsBadge();
+    const answers = collectQuestionAnswers();
+    const serialized = JSON.stringify(answers);
+    const dirty = serialized !== model.savedAnswers;
+    elements.saveAnswersButton.disabled = !dirty || answers.length === 0;
+    if (dirty) {
+      elements.questionsBanner.hidden = true;
+      if (model.questionsStorageKey) {
+        try {
+          sessionStorage.setItem(model.questionsStorageKey, serialized);
+        } catch {
+          showNotice("Could not preserve pending answers in this browser session.", "info");
+        }
+      }
+    } else if (model.questionsStorageKey) {
+      sessionStorage.removeItem(model.questionsStorageKey);
+    }
+  }
+
+  function renderGuide(pointer) {
+    model.guideFrame = null;
+    model.guidePath = pointer?.guide || null;
+    model.guideBaseUrl = null;
+    elements.guideContent.replaceChildren();
+    if (!model.guidePath) {
+      elements.guideContent.className = "guide-content muted";
+      elements.guideContent.textContent = "No explainer yet";
+      return;
+    }
+    const frame = document.createElement("iframe");
+    model.guideBaseUrl = apiUrl("/api/raw", { path: model.guidePath });
+    frame.className = "guide-frame";
+    frame.title = `Explainer for ${model.questions?.stage || "questions"}`;
+    frame.sandbox = "allow-scripts";
+    frame.src = model.guideBaseUrl;
+    elements.guideContent.className = "guide-content";
+    elements.guideContent.append(frame);
+    model.guideFrame = frame;
+  }
+
+  function navigateGuide(questionId) {
+    if (!model.guideFrame || !model.guideBaseUrl || !/^Q\d+$/.test(questionId)) return;
+    const target = `${model.guideBaseUrl}#${questionId}`;
+    if (model.guideFrame.getAttribute("src") !== target) model.guideFrame.src = target;
+  }
+
+  function isGuideRecommendations(data) {
+    if (!data || typeof data !== "object" || data.type !== "aidlc-guide") return false;
+    if (!data.recommendations || typeof data.recommendations !== "object" || Array.isArray(data.recommendations)) {
+      return false;
+    }
+    const entries = Object.entries(data.recommendations);
+    return (
+      entries.length <= 200 &&
+      entries.every(([id, letter]) => /^Q\d+$/.test(id) && /^[A-Z]$/.test(letter))
+    );
+  }
+
+  function receiveGuideRecommendations(event) {
+    const frame = model.guideFrame;
+    if (!frame || event.source !== frame.contentWindow || !isGuideRecommendations(event.data)) return;
+    model.recommendations = new Map(Object.entries(event.data.recommendations));
+    for (const question of ordinaryQuestions()) {
+      const letter = model.recommendations.get(question.id);
+      const card = elements.questionsContent.querySelector(`[data-question-id="${question.id}"]`);
+      const row = card?.querySelector(`[data-option-letter="${letter}"]`);
+      if (!row) continue;
+      if (!row.querySelector(".recommended-tag")) {
+        const tag = document.createElement("span");
+        tag.className = "recommended-tag";
+        tag.textContent = "Recommended";
+        row.querySelector("label")?.append(tag);
+      }
+      if (!question.answer?.trim() && !card.querySelector("input[data-choice]:checked")) {
+        row.querySelector("input[data-choice]").checked = true;
+      }
+    }
+    syncQuestionForm();
+  }
+
+  async function openQuestions(options = {}) {
+    const pointer = model.state?.questions;
+    if (!pointer?.file) return;
+    const refreshing =
+      Boolean(options.refresh) && model.questions?.path === pointer.file && model.view === "questions";
+    setQuestionsMode(true);
+    clearNotice();
+    if (!refreshing) {
+      elements.questionsBanner.hidden = true;
+      elements.questionsContent.className = "questions-content loading";
+      elements.questionsContent.textContent = "Loading questions…";
+      elements.saveAnswersButton.disabled = true;
+    }
+    const path = pointer.file;
+    try {
+      const result = await requestJson(apiUrl("/api/questions", { path }));
+      if (model.state?.questions?.file !== path) return;
+      if (refreshing && result.sha256 === model.questions.sha256) {
+        if (pointer.guide !== model.guidePath) renderGuide(pointer);
+        updateQuestionsBadge();
+        return;
+      }
+      const changed = refreshing && result.sha256 !== model.questions.sha256;
+      model.questions = result;
+      model.questionsStorageKey = questionsStorageKey(result);
+      model.recommendations = new Map();
+      elements.questionsContent.className = "questions-content";
+      elements.questionsBanner.hidden = true;
+      renderQuestions(result);
+      renderGuide(pointer);
+      if (changed) showNotice("Questions changed. Review the latest version before saving.", "info");
+    } catch (error) {
+      if (model.state?.questions?.file !== path) return;
+      if (!refreshing) {
+        model.questions = null;
+        model.questionsStorageKey = null;
+        elements.questionsContent.className = "questions-content empty-state";
+        elements.questionsContent.textContent = "Could not load questions.";
+        renderGuide(null);
+      }
+      showNotice(`Could not load questions: ${error.message}`);
+    }
+  }
+
+  async function saveQuestionAnswers(event) {
+    event.preventDefault();
+    if (!model.questions || !elements.questionsForm.reportValidity()) return;
+    const answers = collectQuestionAnswers();
+    elements.saveAnswersButton.disabled = true;
+    elements.saveAnswersButton.textContent = "Saving…";
+    elements.questionsBanner.hidden = true;
+    clearNotice();
+    try {
+      const result = await requestJson("/api/answers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          questions_file: model.questions.path,
+          source_sha256: model.questions.sha256,
+          answers,
+        }),
+      });
+      model.savedAnswers = JSON.stringify(answers);
+      if (model.questionsStorageKey) sessionStorage.removeItem(model.questionsStorageKey);
+      elements.questionsBanner.textContent = `Saved as ${basename(result.file)}. Return to the terminal and send **done**.`;
+      elements.questionsBanner.hidden = false;
+    } catch (error) {
+      showNotice(`Could not save answers: ${error.message}`);
+    } finally {
+      elements.saveAnswersButton.textContent = "Save answers";
+      syncQuestionForm();
+    }
+  }
 
   async function refreshState() {
     try {
@@ -154,8 +565,22 @@
         elements.generalNotes.value = "";
         renderAnnotations();
       }
+      const priorQuestionsFile = model.state?.questions?.file || null;
       model.state = nextState;
       renderState();
+
+      if (!nextState.questions && model.view === "questions") {
+        model.questions = null;
+        model.questionsStorageKey = null;
+        model.guideFrame = null;
+        setQuestionsMode(false);
+        showNotice("Questions are no longer available. The current review state has changed.", "info");
+      } else if (nextState.questions && model.view === "questions") {
+        await openQuestions({ refresh: priorQuestionsFile === nextState.questions.file });
+        return;
+      } else if (nextState.questions) {
+        refreshQuestionsBadge(nextState.questions);
+      }
 
       const artifacts = nextState.manifest?.artifacts || [];
       const currentStillExists = artifacts.some(
@@ -205,6 +630,13 @@
     } else {
       elements.stageSummary.textContent = "Nothing is under review.";
     }
+    elements.questionsNav.hidden = !state?.questions;
+    elements.questionsButton.setAttribute("aria-current", model.view === "questions" ? "page" : "false");
+    if (!state?.questions) {
+      elements.questionsBadge.textContent = "0/0";
+      elements.questionsBadge.setAttribute("aria-label", "0 of 0 questions answered");
+      elements.questionsBadge.removeAttribute("title");
+    }
 
     elements.artifactList.replaceChildren();
     for (const artifact of manifest?.artifacts || []) {
@@ -215,7 +647,10 @@
       button.className = "artifact-button";
       button.disabled = !artifact.exists;
       button.dataset.path = artifact.path;
-      button.setAttribute("aria-current", artifact.path === model.artifactPath ? "page" : "false");
+      button.setAttribute(
+        "aria-current",
+        model.view === "artifact" && artifact.path === model.artifactPath ? "page" : "false",
+      );
       button.append(document.createTextNode(artifact.name || basename(artifact.path)));
       badge.className = `file-badge ${artifact.exists ? "exists" : "missing"}`;
       badge.textContent = artifact.exists ? "exists" : "missing";
@@ -255,7 +690,9 @@
   }
 
   async function openArtifact(path, options = {}) {
-    if (!path || (!options.force && path === model.artifactPath)) return;
+    if (!path) return;
+    setQuestionsMode(false);
+    if (!options.force && path === model.artifactPath) return;
     clearNotice();
     closeSelectionToolbar();
     closeAnchorConfirm();
@@ -281,7 +718,8 @@
       else throw new Error(`Unsupported artifact format: ${artifact.format}`);
 
       document.querySelectorAll(".artifact-button").forEach((button) => {
-        button.setAttribute("aria-current", button.dataset.path === path ? "page" : "false");
+        const current = Boolean(button.dataset.path) && button.dataset.path === path;
+        button.setAttribute("aria-current", current ? "page" : "false");
       });
     } catch (error) {
       model.artifact = null;
@@ -776,8 +1214,13 @@
   elements.closeDiffButton.addEventListener("click", closeDiff);
   elements.generalNotes.addEventListener("input", renderAnnotations);
   elements.sendFeedbackButton.addEventListener("click", sendFeedback);
+  elements.questionsButton.addEventListener("click", openQuestions);
+  elements.questionsForm.addEventListener("submit", saveQuestionAnswers);
+  elements.questionsForm.addEventListener("input", syncQuestionForm);
+  elements.questionsForm.addEventListener("change", syncQuestionForm);
   elements.viewer.addEventListener("mouseup", handleMarkdownSelection);
   window.addEventListener("message", receiveHtmlAnchor);
+  window.addEventListener("message", receiveGuideRecommendations);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeSelectionToolbar();
