@@ -143,15 +143,16 @@ A sensor result is **advisory** in this release. A failing sensor produces an au
 
 Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap — the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](10-state-and-audit.md).
 
-### The six framework sensors
+### The seven framework sensors
 
-Six sensors ship with the framework:
+Seven sensors ship with the framework:
 
 | Sensor | Fires on | Checks |
 |--------|----------|--------|
 | `claim-sources` | Intent Capture record-dir outputs | Every claim has a visible source tag; registered description, workflow scope, and memory text match authoritative inputs; retained assumptions exactly match explicit confirmation |
-| `required-sections` | Any record-dir markdown output | The output contains the required H2 headings (a generic content-shape check) |
-| `upstream-coverage` | Any record-dir markdown output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
+| `html-shape` | Ideation and Inception record-dir outputs | Every HTML artifact follows the self-contained authoring contract; Markdown-only stages pass without findings |
+| `required-sections` | Any record-dir Markdown or HTML output | The output contains the required H2 headings (a generic content-shape check) |
+| `upstream-coverage` | Any record-dir Markdown or HTML output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
 | `traceability` | `traceability.json` stage artifacts | Stable upstream IDs are declared and covered, statuses and targets are valid, and deterministic downstream targets exist |
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |
 | `type-check` | `.ts` / `.tsx` code outputs | Wraps your configured type-checker (`tsc` by default) |
