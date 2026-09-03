@@ -293,9 +293,10 @@ Structured bullet-point summary of what was produced:
 ```markdown
 **Review:** `<record>/[path to artifacts]`
 ```
-When a directive includes `review_ui`, render `**Browser:** <directive.review_ui.url>`
-immediately after the Review line, preserving the complete URL and query string.
-Omit the Browser line when `review_ui` is absent.
+When a directive includes `review_ui`, render a `**Browser:**` line immediately
+after the Review line: the single-use `review_ui.url` when present, otherwise
+`review_ui.origin` plus a pointer to `/aidlc --status` for a fresh link. Omit the
+Browser line when `review_ui` is absent.
 
 Followed by the `AskUserQuestion` approval gate (see Approval Gates section).
 
