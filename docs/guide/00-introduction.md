@@ -52,7 +52,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Scopes | 11 (enterprise through express, plus workshop) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
-| Audit event types | 91 |
+| Audit event types | 92 |
 
 ## Guide Map
 

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 818,
+    "total": 827,
     "enumeratedByClass": {
-      "function": 519,
+      "function": 528,
       "audit": 92,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 299,
+      "function": 300,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -1240,6 +1240,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ARTIFACT_KIND",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:artifactFilename",
       "minMechanism": "none",
       "coveredBy": [
@@ -1249,6 +1256,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:artifactFormat",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:artifactKind",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2359,6 +2380,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:existingReviewAppendixOffset",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t346-html-review-appendix.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:exportBundle",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2615,6 +2648,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hasArtifactFilenameException",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hasCurrentSharedResumeWait",
       "minMechanism": "none",
       "coveredBy": [
@@ -2706,6 +2746,20 @@
     {
       "unitClass": "function",
       "unitId": "function:hooksHealthDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:HTML_ELIGIBLE_PHASES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:htmlArtifactNames",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3868,6 +3922,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:primeArtifactFormats",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:producersOf",
       "minMechanism": "none",
       "coveredBy": [
@@ -4738,6 +4799,10 @@
         {
           "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t346-html-review-appendix.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -5108,6 +5173,13 @@
     {
       "unitClass": "function",
       "unitId": "function:setFieldStrict",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:setHtmlArtifactNames",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -5945,6 +6017,10 @@
         {
           "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t346-html-review-appendix.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

@@ -7963,7 +7963,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(["gate-start", slug, "--unit", unit]);
       } else if (flags.result === "rejected") {
-        let feedback = (flags.reason ?? flags.userInput)?.trim();
+        let feedback = (flags.userInput ?? flags.reason)?.trim();
         if (!feedback) {
           emit(errorDirective(
             `report --result rejected for unit "${unit}" of "${slug}" requires nonblank --user-input or --reason feedback.`,
@@ -8263,6 +8263,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ).join("\n\n")}`;
       }
       subArgs = ["reject", slug, "--feedback", feedback];
+      if (flags.userInput) subArgs.push("--user-input", flags.userInput);
       for (const finding of flags.rejectFindings ?? []) {
         subArgs.push("--reject-finding", finding);
       }
