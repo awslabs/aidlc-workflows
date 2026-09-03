@@ -446,23 +446,21 @@ HTML Artifacts is on AND artifact is in compiled html_capable union → .html
 otherwise                                                       → .md/native
 ```
 
-There is no existence fallback. `readStateFile()` is the single priming seam:
-after reading `aidlc-state.md`, it primes the process-wide format vocabulary
-from the union of compiled `html_capable` entries when the field is `on`, or
-clears the set otherwise. `primeArtifactFormats(stateContent)` is exported for
-callers that already hold an atomic state snapshot, and
-`resolveArtifactInstances(..., { stateContent })` primes per call so a process
-that touches several intents resolves each with its own setting. A later
-process therefore follows intent state, not its current environment.
+There is no existence fallback and no ambient format state. Each operation
+derives an immutable `ArtifactFormats` value once and passes it through every
+artifact lookup. `artifactFormatsFromState(stateContent)` uses the caller's
+atomic state snapshot and the compiled `html_capable` union; `readStateFile()`
+only reads and returns `aidlc-state.md` and has no format side effects.
+`resolveArtifactInstances(..., { stateContent })` gives that supplied snapshot
+precedence, while calls without one derive formats from the owning project.
 
-The primed set is process-wide by design: every engine CLI is a one-shot
-invocation for one intent, and every resolver primes and resolves inside one
-synchronous call (there is no `await` between reading state and computing a
-path), so the set cannot change under a resolver. The invariant callers must
-keep is exactly that — read the intent's state, then resolve, in the same
-synchronous step. If the stage graph is unreadable, an `on` intent resolves to
-Markdown with a one-time stderr warning rather than failing the state read.
-The gate guard enforces the outcome regardless of prose: an HTML-capable
+When only project identity is available,
+`artifactFormatsForProject(projectDir, intent?, space?)` reads that project's
+state and derives the same per-call context. This keeps concurrent and
+multi-intent operations isolated while preserving Markdown byte behavior when
+HTML Artifacts is off or absent. If the stage graph is unreadable, an `on`
+intent resolves to Markdown and emits a warning rather than failing the state
+read. The gate guard enforces the outcome regardless of prose: an HTML-capable
 artifact that exists only as its `.md` twin refuses `gate-start`/`approve`.
 
 Intent creation seeds `- **HTML Artifacts**: on` only when

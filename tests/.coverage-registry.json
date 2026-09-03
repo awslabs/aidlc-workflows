@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 300,
+      "function": 305,
       "audit": 49,
       "scope": 11,
       "stage": 11,
@@ -1253,6 +1253,10 @@
         {
           "file": "tests/unit/t281-sensor-traceability.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t359-artifact-format-context.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -1261,8 +1265,37 @@
       "unitClass": "function",
       "unitId": "function:artifactFormat",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t359-artifact-format-context.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:artifactFormatsForProject",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t359-artifact-format-context.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:artifactFormatsFromState",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t359-artifact-format-context.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2759,13 +2792,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:htmlArtifactNames",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:humanActedSinceGate",
       "minMechanism": "none",
       "coveredBy": [
@@ -3443,6 +3469,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:MARKDOWN_ONLY",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t359-artifact-format-context.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:markEngineTouch",
       "minMechanism": "none",
       "coveredBy": [
@@ -3922,13 +3960,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:primeArtifactFormats",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:producersOf",
       "minMechanism": "none",
       "coveredBy": [
@@ -4266,8 +4297,13 @@
       "unitClass": "function",
       "unitId": "function:readStateFile",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t359-artifact-format-context.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5179,13 +5215,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:setHtmlArtifactNames",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:setOrInsertField",
       "minMechanism": "none",
       "coveredBy": [],
@@ -5198,7 +5227,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t232-phase-progress-flip.test.ts",
-          "mechanism": "cli"
+          "mechanism": "none"
         }
       ],
       "status": "covered"

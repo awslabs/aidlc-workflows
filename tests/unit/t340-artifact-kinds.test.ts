@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -6,9 +6,13 @@ import {
   artifactFilename,
   artifactFormat,
   artifactKind,
-  setHtmlArtifactNames,
+  type ArtifactFormats,
 } from "../../core/tools/aidlc-artifact-vocabulary.ts";
 import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
+
+const HTML_INTENT_STATEMENT: ArtifactFormats = {
+  html: new Set(["intent-statement"]),
+};
 
 const STAGES = join(import.meta.dir, "..", "..", "core", "aidlc-common", "stages");
 
@@ -30,8 +34,6 @@ function producedNames(): string[] {
   return [...names].sort();
 }
 
-afterEach(() => setHtmlArtifactNames(new Set()));
-
 describe("artifact kind and format vocabulary", () => {
   test("classifies every artifact produced by the core stage set", () => {
     expect(producedNames().filter((name) => artifactKind(name) === null)).toEqual([]);
@@ -43,17 +45,18 @@ describe("artifact kind and format vocabulary", () => {
     );
   });
 
-  test("priming flips only selected artifact formats", () => {
+  test("an explicit context flips only selected artifact formats", () => {
     expect(artifactFormat("intent-statement")).toBe("md");
-    setHtmlArtifactNames(new Set(["intent-statement"]));
-    expect(artifactFormat("intent-statement")).toBe("html");
-    expect(artifactFormat("intent-capture-questions")).toBe("md");
+    expect(artifactFormat("intent-statement", HTML_INTENT_STATEMENT)).toBe("html");
+    expect(artifactFormat("intent-capture-questions", HTML_INTENT_STATEMENT)).toBe("md");
   });
 
   test("filename exceptions win over the selected format", () => {
-    setHtmlArtifactNames(new Set(["traceability", "build-test-results", "intent-statement"]));
-    expect(artifactFilename("traceability")).toBe("traceability.json");
-    expect(artifactFilename("build-test-results")).toBe("test-results.md");
-    expect(artifactFilename("intent-statement")).toBe("intent-statement.html");
+    const formats: ArtifactFormats = {
+      html: new Set(["traceability", "build-test-results", "intent-statement"]),
+    };
+    expect(artifactFilename("traceability", formats)).toBe("traceability.json");
+    expect(artifactFilename("build-test-results", formats)).toBe("test-results.md");
+    expect(artifactFilename("intent-statement", formats)).toBe("intent-statement.html");
   });
 });

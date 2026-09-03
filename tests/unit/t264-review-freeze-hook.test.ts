@@ -11,7 +11,7 @@
 // and the completion-refusal window cannot diverge. This test exercises:
 //
 //   (a) the pure decision layer (judgeFreeze + writeTargets, imported from the
-//       DIST tree) - stage-level and per-unit freeze/no-freeze cases;
+//       authored CORE tree) - stage-level and per-unit freeze/no-freeze cases;
 //   (b) the SHIPPED hook as a subprocess over a REAL audit ledger written by
 //       the real aidlc-log/audit tools: allow before receipt, block after
 //       READY or terminal advisory NOT-READY, release on GATE_REJECTED, allow for
@@ -42,6 +42,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { MARKDOWN_ONLY } from "../../core/tools/aidlc-artifact-vocabulary.ts";
 import {
   blockReason,
   judgeFreeze,
@@ -51,8 +52,8 @@ import {
   shellCommandInvocationDetails,
   shellCommandInvocations,
   writeTargets,
-} from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+} from "../../core/hooks/aidlc-review-freeze.ts";
+import { readAllAuditShards } from "../../core/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -249,7 +250,7 @@ describe("t264 (a) judgeFreeze decision table", () => {
   const raFile = "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.md";
 
   test("blocks a produces[] write under a fresh READY stage receipt", () => {
-    const v = judgeFreeze(RA, raFile, NONE, ready);
+    const v = judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, ready);
     expect(v.block).toBe(true);
     expect(v.stage).toBe("requirements-analysis");
     expect(blockReason(v)).toContain("latest review is final");
@@ -257,54 +258,62 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(blockReason(v)).toContain("Request Changes");
   });
 
+  test("uses the supplied formats to freeze the canonical HTML artifact only", () => {
+    const HTML = { html: new Set(["requirements"]) };
+    const htmlFile =
+      "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.html";
+    expect(judgeFreeze(RA, htmlFile, NONE, HTML, ready).block).toBe(true);
+    expect(judgeFreeze(RA, raFile, NONE, HTML, ready).block).toBe(false);
+  });
+
   test("blocks under a terminal NOT-READY receipt", () => {
-    expect(judgeFreeze(RA, raFile, NONE, notReady).block).toBe(true);
+    expect(judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, notReady).block).toBe(true);
   });
 
   test("never blocks with no receipt (normal stage work)", () => {
-    expect(judgeFreeze(RA, raFile, NONE, noReceipt).block).toBe(false);
+    expect(judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, noReceipt).block).toBe(false);
   });
 
   test("never blocks a non-produces path (diary, questions of another stage)", () => {
     const diary = "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/memory.md";
-    expect(judgeFreeze(RA, diary, NONE, ready).block).toBe(false);
+    expect(judgeFreeze(RA, diary, NONE, MARKDOWN_ONLY, ready).block).toBe(false);
   });
 
   test("per-unit: freezes only the reviewed unit", () => {
     const u3 = "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
     const u4 = "/p/aidlc/spaces/default/intents/i1/construction/U04/nfr-requirements/nfr-requirements.md";
     const receipts = { stageVerdict: "READY", unitVerdicts: new Map([["U03", "READY"]]) };
-    const v3 = judgeFreeze(NFR, u3, NONE, receipts);
+    const v3 = judgeFreeze(NFR, u3, NONE, MARKDOWN_ONLY, receipts);
     expect(v3.block).toBe(true);
     expect(v3.unit).toBe("U03");
     expect(blockReason(v3)).toContain('unit "U03"');
-    expect(judgeFreeze(NFR, u4, NONE, receipts).block).toBe(false);
+    expect(judgeFreeze(NFR, u4, NONE, MARKDOWN_ONLY, receipts).block).toBe(false);
   });
 
   test("per-unit: a terminal NOT-READY receipt freezes that unit", () => {
     const u3 = "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
     const receipts = { stageVerdict: "NOT-READY", unitVerdicts: new Map([["U03", "NOT-READY"]]) };
-    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
+    expect(judgeFreeze(NFR, u3, NONE, MARKDOWN_ONLY, receipts).block).toBe(true);
   });
 
   test("only a validated pending recovery request suspends its exact scope", () => {
     const raFile =
       "/p/aidlc/spaces/default/intents/i1/inception/requirements-analysis/requirements.md";
     expect(
-      judgeFreeze(RA, raFile, NONE, {
+      judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, {
         ...ready,
         stageStale: true,
         stagePending: { recovery: true, suspensionActive: true },
       }).block,
     ).toBe(false);
     expect(
-      judgeFreeze(RA, raFile, NONE, {
+      judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, {
         ...ready,
         stagePending: { recovery: true, suspensionActive: true },
       }).block,
     ).toBe(true);
     expect(
-      judgeFreeze(RA, raFile, NONE, {
+      judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, {
         ...ready,
         stageStale: true,
         sourceStale: false,
@@ -317,7 +326,7 @@ describe("t264 (a) judgeFreeze decision table", () => {
       }).block,
     ).toBe(true);
     expect(
-      judgeFreeze(RA, raFile, NONE, {
+      judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, {
         ...ready,
         stageStale: true,
         sourceStale: true,
@@ -330,7 +339,7 @@ describe("t264 (a) judgeFreeze decision table", () => {
       }).block,
     ).toBe(false);
     expect(
-      judgeFreeze(RA, raFile, NONE, {
+      judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, {
         ...ready,
         stageStale: true,
         stagePending: { recovery: false, suspensionActive: false },
@@ -352,8 +361,8 @@ describe("t264 (a) judgeFreeze decision table", () => {
         ["U03", { recovery: true, suspensionActive: true }],
       ]),
     };
-    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(false);
-    expect(judgeFreeze(NFR, u4, NONE, receipts).block).toBe(true);
+    expect(judgeFreeze(NFR, u3, NONE, MARKDOWN_ONLY, receipts).block).toBe(false);
+    expect(judgeFreeze(NFR, u4, NONE, MARKDOWN_ONLY, receipts).block).toBe(true);
   });
 
   test("guidance failures fall back without changing the freeze decision", () => {
@@ -366,7 +375,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
       },
     );
     expect(guidance).toBe(REVIEW_FREEZE_FALLBACK_GUIDANCE);
-    expect(blockReason(judgeFreeze(RA, raFile, NONE, ready), guidance)).toContain(
+    expect(
+      blockReason(judgeFreeze(RA, raFile, NONE, MARKDOWN_ONLY, ready), guidance),
+    ).toContain(
       REVIEW_FREEZE_FALLBACK_GUIDANCE,
     );
   });

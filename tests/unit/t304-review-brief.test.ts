@@ -20,10 +20,13 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   findStageBySlug,
   readAllAuditShards,
-  reviewArtifactEntries,
   sourcePathKey,
   writeUnitSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFormatsForProject,
+  reviewArtifactEntries,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   acceptedRiskDispositionField,
   hydrateReviewArtifactContexts,
@@ -218,7 +221,12 @@ function seedReviewedPerUnitStage(
   findingId: string,
 ): string {
   const stage = findStageBySlug(stageSlug)!;
-  const entries = reviewArtifactEntries(proj, stage, unit) ?? [];
+  const entries = reviewArtifactEntries(
+    proj,
+    stage,
+    artifactFormatsForProject(proj),
+    unit,
+  ) ?? [];
   const primary = entries.find((entry) =>
     entry.path !== null && entry.required && entry.path.endsWith(".md")
   );

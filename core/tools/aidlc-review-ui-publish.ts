@@ -2,8 +2,13 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import type { GraphStage } from "./aidlc-graph.ts";
 import { resolveArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { artifactFormat, artifactKind } from "./aidlc-artifact-vocabulary.ts";
 import {
+  artifactFormat,
+  type ArtifactFormats,
+  artifactKind,
+} from "./aidlc-artifact-vocabulary.ts";
+import {
+  artifactFormatsForProject,
   assertNoSymlinkInChainOrThrow,
   readRegularFileNoFollowOrThrow,
   recordDir,
@@ -74,12 +79,14 @@ function resolvedArtifacts(
   projectDir: string,
   stageNode: ReviewPublishStageNode,
   unit: string | null,
+  formats: ArtifactFormats,
 ): Array<{ name: string; path: string }> {
   if (stageNode.resolved_produces) return [...stageNode.resolved_produces];
   const owner = stageNode as GraphStage;
   return (stageNode.produces ?? []).flatMap((name) =>
     resolveArtifactInstances(projectDir, name, owner, {
       ...(unit ? { runtimeUnits: [{ name: unit, kind: null }] } : {}),
+      formats,
     }).map((instance) => ({ name, path: instance.relativePath })),
   );
 }
@@ -126,8 +133,9 @@ export function publishReviewManifest(
   if (!reviewUiEnabled()) return null;
   const record = recordDir(projectDir);
   if (!record) return null;
+  const formats = artifactFormatsForProject(projectDir);
 
-  const resolved = resolvedArtifacts(projectDir, stageNode, unit);
+  const resolved = resolvedArtifacts(projectDir, stageNode, unit, formats);
   const stageDir = resolved.length > 0
     ? dirname(confinedProjectPath(projectDir, resolved[0].path))
     : fallbackStageDir(record, stageNode, unit);
@@ -147,7 +155,7 @@ export function publishReviewManifest(
     artifacts.push({
       name: item.name,
       path: toPosix(item.path),
-      format: artifactFormat(item.name),
+      format: artifactFormat(item.name, formats),
       kind: artifactKind(item.name) ?? "document",
       sha256: bytes ? sha256Hex(bytes) : null,
       exists: bytes !== null,
@@ -198,7 +206,8 @@ export function publishReviewPointer(
   if (!reviewUiEnabled()) return null;
   const record = recordDir(projectDir);
   if (!record) return null;
-  const resolved = resolvedArtifacts(projectDir, stageNode, unit);
+  const formats = artifactFormatsForProject(projectDir);
+  const resolved = resolvedArtifacts(projectDir, stageNode, unit, formats);
   const stageDir = resolved.length > 0
     ? dirname(confinedProjectPath(projectDir, resolved[0].path))
     : fallbackStageDir(record, stageNode, unit);
@@ -224,7 +233,8 @@ export function reviewStageDir(
   if (!reviewUiEnabled()) return null;
   const record = recordDir(projectDir);
   if (!record) return null;
-  const resolved = resolvedArtifacts(projectDir, stageNode, unit);
+  const formats = artifactFormatsForProject(projectDir);
+  const resolved = resolvedArtifacts(projectDir, stageNode, unit, formats);
   return resolved.length > 0
     ? dirname(confinedProjectPath(projectDir, resolved[0].path))
     : fallbackStageDir(record, stageNode, unit);

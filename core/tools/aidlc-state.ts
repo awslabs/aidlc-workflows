@@ -36,6 +36,8 @@ import {
   appendSlug,
   appendUnderHeading,
   artifactFilename,
+  artifactFormatsFromState,
+  type ArtifactFormats,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
@@ -463,7 +465,8 @@ function auditTailHasFields(
 // with Revision Count 0 and no GATE_REJECTED row.
 function unrecordedRevisionSinceGateOpen(
   pd: string,
-  stage: { slug: string; produces?: string[] }
+  stage: { slug: string; produces?: string[] },
+  formats: ArtifactFormats,
 ): boolean {
   const audit = readAllAuditShards(pd);
   if (audit.length === 0) return false; // no ledger -> nothing to reconcile
@@ -541,7 +544,7 @@ function unrecordedRevisionSinceGateOpen(
       } else if (
         (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
         e.file !== null &&
-        producesArtifactFile(stage, e.file, recordedRepos)
+        producesArtifactFile(stage, e.file, recordedRepos, formats)
       ) {
         wroteBeforeHuman = true;
       }
@@ -555,7 +558,7 @@ function unrecordedRevisionSinceGateOpen(
     if (
       (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
       e.file !== null &&
-      producesArtifactFile(stage, e.file, recordedRepos)
+      producesArtifactFile(stage, e.file, recordedRepos, formats)
     ) {
       return true;
     }
@@ -1853,6 +1856,7 @@ function handleUnit(args: string[]): void {
   // `unit start` calls could both pass the single-active-unit check.
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
+    const formats = artifactFormatsFromState(content);
     const scope = getField(content, "Scope");
     if (usesStageLevelPerUnitArtifacts(scope, content)) {
       error(
@@ -1939,7 +1943,7 @@ function handleUnit(args: string[]): void {
     // the claim-1 inversion — the artifact walk moved from "is the transition"
     // to "is checked by the transition".
     if (action === "complete" && !artifactGuardDisabled()) {
-      const missing = missingUnitArtifacts(pd, stage, unit);
+      const missing = missingUnitArtifacts(pd, stage, unit, formats);
       if (missing.length > 0) {
         error(
           `Refusing to complete unit "${unit}" for "${slug}": required artifacts are missing on disk ` +
@@ -2269,6 +2273,7 @@ function missingUnitArtifacts(
   pd: string,
   stage: { slug: string; produces?: string[]; produces_kinds?: Record<string, string[]> },
   unit: string,
+  formats: ArtifactFormats,
 ): string[] {
   const rec = recordDir(pd);
   if (rec === null) return stage.produces ?? ["<no record dir>"];
@@ -2285,7 +2290,7 @@ function missingUnitArtifacts(
   }
   const missing: string[] = [];
   for (const name of required) {
-    const p = join(rec, "construction", unit, stage.slug, artifactFilename(name));
+    const p = join(rec, "construction", unit, stage.slug, artifactFilename(name, formats));
     if (!isRegularFile(p)) missing.push(name);
   }
   return missing;
@@ -2606,7 +2611,8 @@ function producesDirsForStage(
 // exactly as strict as today.
 function producesArtifactsExist(
   pd: string,
-  stage: { slug: string; phase: string; for_each?: string; produces?: string[]; produces_kinds?: Record<string, string[]> }
+  stage: { slug: string; phase: string; for_each?: string; produces?: string[]; produces_kinds?: Record<string, string[]> },
+  formats: ArtifactFormats,
 ): boolean {
   const produces = stage.produces ?? [];
   if (produces.length === 0) return true; // nothing declared -> nothing to verify
@@ -2632,13 +2638,13 @@ function producesArtifactsExist(
   if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
     return dirs.length > 0 && dirs.every((dir) =>
       produces.every((name) =>
-        isRegularFile(join(dir, artifactFilename(name)))
+        isRegularFile(join(dir, artifactFilename(name, formats)))
       )
     );
   }
   for (const dir of dirs) {
     for (const name of produces) {
-      if (isRegularFile(join(dir, artifactFilename(name)))) return true;
+      if (isRegularFile(join(dir, artifactFilename(name, formats)))) return true;
     }
   }
   return false;
@@ -2649,11 +2655,12 @@ function producesArtifactsExist(
 // Empty when the intent is Markdown-only (nothing resolves to .html).
 function staleMarkdownTwins(
   pd: string,
-  stage: { slug: string; phase: string; for_each?: string; produces?: string[] }
+  stage: { slug: string; phase: string; for_each?: string; produces?: string[] },
+  formats: ArtifactFormats,
 ): string[] {
   const twins: string[] = [];
   for (const name of stage.produces ?? []) {
-    const resolved = artifactFilename(name);
+    const resolved = artifactFilename(name, formats);
     if (!resolved.endsWith(".html")) continue;
     for (const dir of producesDirsForStage(pd, stage)) {
       if (isRegularFile(join(dir, resolved))) continue;
@@ -2704,13 +2711,14 @@ function existingDeclaredArtifactPaths(
     produces?: string[];
     optional_produces?: string[];
   },
+  formats: ArtifactFormats,
   artifacts?: string,
 ): string[] {
   const names = [
     ...(stage.produces ?? []),
     ...(stage.optional_produces ?? []),
   ];
-  const declaredFilenames = new Set(names.map(artifactFilename));
+  const declaredFilenames = new Set(names.map((name) => artifactFilename(name, formats)));
   const dirs = producesDirsForStage(pd, stage);
   const projectRoot = realpathSync(pd);
   const roots = dirs.flatMap((dir) => {
@@ -2762,7 +2770,7 @@ function existingDeclaredArtifactPaths(
     if (!value) continue;
     const variants = declaredFilenames.has(basename(value))
       ? [value]
-      : [value, artifactFilename(value)];
+      : [value, artifactFilename(value, formats)];
     for (const variant of variants) {
       if (
         isAbsolute(variant) ||
@@ -2837,9 +2845,10 @@ function artifactFingerprint(path: string): string | null {
 function fireGateSensors(
   pd: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  formats: ArtifactFormats,
   artifacts?: string,
 ): GateSensorEvaluation {
-  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
+  const paths = existingDeclaredArtifactPaths(pd, stage, formats, artifacts);
   const issues: BlockingSensorIssue[] = [];
   const fingerprints = new Map<string, string>();
   if (paths.length === 0) return { issues, fingerprints };
@@ -3169,8 +3178,9 @@ function verifyGateOpeningGuards(
   pd: string,
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  formats: ArtifactFormats,
 ): void {
-  verifyStageArtifacts(pd, stage, "present-approval-gate");
+  verifyStageArtifacts(pd, stage, formats, "present-approval-gate");
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyPipelineLinkPrecondition(pd, stage);
   if (!reviewerGateGuardDisabled()) {
@@ -3321,6 +3331,7 @@ function workspaceHasWork(pd: string): boolean {
 function verifyStageArtifacts(
   pd: string,
   stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean },
+  formats: ArtifactFormats,
   action: ReviewerPreconditionAction = "complete",
 ): void {
   if (artifactGuardDisabled()) return;
@@ -3345,7 +3356,7 @@ function verifyStageArtifacts(
   }
   if (settledSwarm) return;
 
-  if (!producesArtifactsExist(pd, stage)) {
+  if (!producesArtifactsExist(pd, stage, formats)) {
     error(
       `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
@@ -3358,7 +3369,7 @@ function verifyStageArtifacts(
   // an agent that followed the prose instead of the directive's resolved path
   // leaves a `.md` twin where the `.html` artifact should be. Refuse precisely
   // rather than letting the lenient any-artifact check above wave it through.
-  const twins = staleMarkdownTwins(pd, stage);
+  const twins = staleMarkdownTwins(pd, stage, formats);
   if (twins.length > 0) {
     error(
       `${reviewerPreconditionPrefix(stage.slug, action)}: this intent authors HTML artifacts ` +
@@ -3956,6 +3967,7 @@ function handleAdvance(
   // withAuditLock's finally.
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
+  const formats = artifactFormatsFromState(content);
 
   // Look up stage data
   const completedStage = findStageBySlug(completedSlug);
@@ -4079,7 +4091,7 @@ function handleAdvance(
 
   // Artifact guard (issue #366). Only enforce when THIS advance is the
   if (!alreadyMarkedCompleted) {
-    verifyStageArtifacts(pd, completedStage);
+    verifyStageArtifacts(pd, completedStage, formats);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
     verifyPipelineLinkPrecondition(pd, completedStage);
   }
@@ -4195,6 +4207,7 @@ function handleFinalize(args: string[]): void {
   // C2b lost-update safety: read→decide→write under one lock (no audit here).
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
+  const formats = artifactFormatsFromState(content);
 
   const completedStage = findStageBySlug(completedSlug);
   if (!completedStage) error(`Unknown stage: ${completedSlug}`);
@@ -4214,7 +4227,7 @@ function handleFinalize(args: string[]): void {
     !alreadyMarkedCompleted,
   );
   if (!alreadyMarkedCompleted) {
-    verifyStageArtifacts(pd, completedStage);
+    verifyStageArtifacts(pd, completedStage, formats);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
     verifyPipelineLinkPrecondition(pd, completedStage);
   }
@@ -4317,6 +4330,7 @@ function handleCompleteWorkflow(
   // unlocked variant because the lock is held.
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
+  const formats = artifactFormatsFromState(content);
 
   const completedStage = findStageBySlug(completedSlug);
   if (!completedStage) error(`Unknown stage: ${completedSlug}`);
@@ -4344,7 +4358,7 @@ function handleCompleteWorkflow(
     !alreadyMarkedCompleted,
   );
   if (!alreadyMarkedCompleted) {
-    verifyStageArtifacts(pd, completedStage);
+    verifyStageArtifacts(pd, completedStage, formats);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
     verifyPipelineLinkPrecondition(pd, completedStage);
   }
@@ -4579,10 +4593,11 @@ function verifyTeamUnitGateEvidence(
   pd: string,
   content: string,
   context: TeamGateContext,
+  formats: ArtifactFormats,
 ): void {
   for (const stage of context.stages) {
     if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
-    const missing = missingUnitArtifacts(pd, stage, context.unit);
+    const missing = missingUnitArtifacts(pd, stage, context.unit, formats);
     if (missing.length > 0) {
       error(
         `Refusing gate for unit "${context.unit}" of "${stage.slug}": required ` +
@@ -4601,7 +4616,7 @@ function verifyTeamUnitGateEvidence(
     });
     if (!summary.ok) error(summary.message);
     verifyReviewerPreconditionForUnit(pd, content, stage, context.unit);
-    if (stage.workspace_requires) verifyStageArtifacts(pd, stage);
+    if (stage.workspace_requires) verifyStageArtifacts(pd, stage, formats);
   }
 }
 
@@ -4647,6 +4662,7 @@ function handleGateStart(args: string[]): void {
   // Sensor dispatch MUST stay outside the state transaction: aidlc-sensor.ts
   // takes the same audit lock around its FIRED and terminal rows.
   const preflightContent = readStateFile(pd);
+  const preflightFormats = artifactFormatsFromState(preflightContent);
   const preflightStage = findStageBySlug(slug);
   if (!preflightStage) error(`Unknown stage: ${slug}`);
   const preflightTeamGate = teamGateContext(
@@ -4655,7 +4671,7 @@ function handleGateStart(args: string[]): void {
     args.slice(1),
   );
   if (preflightTeamGate) {
-    verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate);
+    verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate, preflightFormats);
     for (const gateStage of preflightTeamGate.stages) {
       verifyPipelineLinkPrecondition(pd, gateStage);
     }
@@ -4669,11 +4685,13 @@ function handleGateStart(args: string[]): void {
       pd,
       preflightContent,
       preflightStage,
+      preflightFormats,
     );
   }
   const gateSensorEvaluation = fireGateSensors(
     pd,
     preflightStage,
+    preflightFormats,
     artifacts,
   );
   enforceBlockingGateSensors(
@@ -4690,12 +4708,13 @@ function handleGateStart(args: string[]): void {
   // lock (the state-precondition check and the write see one snapshot).
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
+  const formats = artifactFormatsFromState(content);
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
   const teamGate = teamGateContext(content, stage, args.slice(1));
   if (teamGate) {
-    verifyTeamUnitGateEvidence(pd, content, teamGate);
+    verifyTeamUnitGateEvidence(pd, content, teamGate, formats);
     for (const gateStage of teamGate.stages) {
       verifyPipelineLinkPrecondition(pd, gateStage);
     }
@@ -4747,7 +4766,7 @@ function handleGateStart(args: string[]): void {
   }
   validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
   const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
-  verifyGateOpeningGuards(pd, content, stage);
+  verifyGateOpeningGuards(pd, content, stage, formats);
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
   if (alreadyAwaiting) {
     if (
@@ -4879,6 +4898,7 @@ function handleApprove(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const preflightContent = readStateFile(pd);
+  const preflightFormats = artifactFormatsFromState(preflightContent);
   const preflightStage = findStageBySlug(slug);
   if (!preflightStage) error(`Unknown stage: ${slug}`);
   const preflightTeamGate = teamGateContext(
@@ -4897,9 +4917,9 @@ function handleApprove(args: string[]): void {
     preflightTeamGate !== null,
   );
   if (preflightTeamGate) {
-    verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate);
+    verifyTeamUnitGateEvidence(pd, preflightContent, preflightTeamGate, preflightFormats);
   } else {
-    verifyStageArtifacts(pd, preflightStage);
+    verifyStageArtifacts(pd, preflightStage, preflightFormats);
     verifySummaryConfirmationPrecondition(
       pd,
       preflightContent,
@@ -4910,9 +4930,9 @@ function handleApprove(args: string[]): void {
     preflightTeamGate === null &&
     !revisionBackstopDisabled() &&
     !preflightDecision.autonomousDecision &&
-    unrecordedRevisionSinceGateOpen(pd, preflightStage);
+    unrecordedRevisionSinceGateOpen(pd, preflightStage, preflightFormats);
   const backstopSensorEvaluation = preflightBackstop
-    ? fireGateSensors(pd, preflightStage)
+    ? fireGateSensors(pd, preflightStage, preflightFormats)
     : { issues: [], fingerprints: new Map<string, string>() };
 
   // Per-stage token/cost rollup - computed BEFORE the lock opens (ledger read
@@ -4930,6 +4950,7 @@ function handleApprove(args: string[]): void {
   // own state (slug → [x]) BEFORE delegating, so the nested re-read sees it.
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
+  const formats = artifactFormatsFromState(content);
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
@@ -4946,7 +4967,7 @@ function handleApprove(args: string[]): void {
   );
 
   if (teamGate) {
-    verifyTeamUnitGateEvidence(pd, content, teamGate);
+    verifyTeamUnitGateEvidence(pd, content, teamGate, formats);
     const reviewFindingDispositions = acceptedRiskDispositionField(
       pd,
       teamGate.stages,
@@ -5007,7 +5028,7 @@ function handleApprove(args: string[]): void {
   // enforcement point on the approve path. Bypass via AIDLC_SKIP_ARTIFACT_GUARD.
   // Covers per-unit Construction stages (globs the record's
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
-  verifyStageArtifacts(pd, stage);
+  verifyStageArtifacts(pd, stage, formats);
   verifySummaryConfirmationPrecondition(pd, content, stage);
 
   // Gate-revision backstop: reconcile a revision the conductor performed at an
@@ -5024,7 +5045,7 @@ function handleApprove(args: string[]): void {
   const backstopNow =
     !revisionBackstopDisabled() &&
     !autonomousDecision &&
-    unrecordedRevisionSinceGateOpen(pd, stage);
+    unrecordedRevisionSinceGateOpen(pd, stage, formats);
   if (backstopNow && !preflightBackstop) {
     error(
       `Refusing to approve "${slug}": revision evidence changed during the gate ` +
@@ -5440,6 +5461,7 @@ function handleRevise(args: string[]): void {
   // Sensor dispatch MUST stay outside the state transaction: aidlc-sensor.ts
   // takes the same audit lock around its FIRED and terminal rows.
   const preflightContent = readStateFile(pd);
+  const preflightFormats = artifactFormatsFromState(preflightContent);
   const preflightStage = findStageBySlug(slug);
   if (!preflightStage) error(`Unknown stage: ${slug}`);
   validateSlugInState(preflightContent, slug, "revising");
@@ -5447,8 +5469,9 @@ function handleRevise(args: string[]): void {
     pd,
     preflightContent,
     preflightStage,
+    preflightFormats,
   );
-  const gateSensorEvaluation = fireGateSensors(pd, preflightStage);
+  const gateSensorEvaluation = fireGateSensors(pd, preflightStage, preflightFormats);
   enforceBlockingGateSensors(
     pd,
     preflightContent,
@@ -5462,6 +5485,7 @@ function handleRevise(args: string[]): void {
   // C2b lost-update safety: validate→transition→emit-audit→write under one lock.
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
+  const formats = artifactFormatsFromState(content);
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
@@ -5479,7 +5503,7 @@ function handleRevise(args: string[]): void {
           "only a revising gate can re-enter approval.",
       );
     }
-    verifyTeamUnitGateEvidence(pd, content, teamGate);
+    verifyTeamUnitGateEvidence(pd, content, teamGate, formats);
     const timestamp = isoTimestamp();
     content = setField(content, "Last Updated", timestamp);
     try {
@@ -5501,7 +5525,7 @@ function handleRevise(args: string[]): void {
     return;
   }
   validateSlugInState(content, slug, "revising");
-  verifyGateOpeningGuards(pd, content, stage);
+  verifyGateOpeningGuards(pd, content, stage, formats);
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
 
   content = setCheckbox(content, slug, "awaiting-approval");

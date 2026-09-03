@@ -15,7 +15,10 @@ import {
   resolveArtifactInstances,
   type ArtifactRuntimeUnit,
 } from "../../core/tools/aidlc-artifact-resolution.ts";
-import { artifactFilename } from "../../core/tools/aidlc-artifact-vocabulary.ts";
+import {
+  artifactFilename,
+  MARKDOWN_ONLY,
+} from "../../core/tools/aidlc-artifact-vocabulary.ts";
 import { loadGraph } from "../../core/tools/aidlc-graph.ts";
 import { producesArtifactFile } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -373,9 +376,15 @@ describe("v2 stage-graph compatibility", () => {
   });
 
   test("maps collision-safe canonical names to their physical filename", () => {
-    expect(artifactFilename("build-test-results")).toBe("test-results.md");
-    expect(artifactFilename("load-test-results")).toBe("test-results.md");
-    expect(artifactFilename("requirements")).toBe("requirements.md");
+    expect(artifactFilename("build-test-results", MARKDOWN_ONLY)).toBe(
+      "test-results.md",
+    );
+    expect(artifactFilename("load-test-results", MARKDOWN_ONLY)).toBe(
+      "test-results.md",
+    );
+    expect(artifactFilename("requirements", MARKDOWN_ONLY)).toBe(
+      "requirements.md",
+    );
   });
 
   test("resolves build-test-results under test-results.md", () => {
@@ -404,6 +413,7 @@ describe("v2 stage-graph compatibility", () => {
         stage,
         "aidlc/construction/build-and-test/test-results.md",
         new Set(),
+        MARKDOWN_ONLY,
       ),
     ).toBe(true);
     expect(
@@ -411,6 +421,7 @@ describe("v2 stage-graph compatibility", () => {
         stage,
         "aidlc/construction/build-and-test/build-test-results.md",
         new Set(),
+        MARKDOWN_ONLY,
       ),
     ).toBe(false);
   });
