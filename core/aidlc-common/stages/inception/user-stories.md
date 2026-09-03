@@ -78,7 +78,7 @@ The engine records the skip and advances to the next in-scope stage.
 
 ### Step 3: Load Prior Context
 
-- Read `<record>/inception/requirements-analysis/requirements.md`
+- Read the `requirements` artifact at its `directive.consumes` path
 - If brownfield: Read relevant RE artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints)
 
 ---
@@ -137,7 +137,7 @@ participants, and the Product Leader reviews afterwards (`stage-protocol-reviewe
 
 **Round 1 — dispatch the mob.** Per stage-protocol-ensemble.md §5 `mode: mob`,
 dispatch all three support agents in parallel against the draft (artifacts
-by path: the two draft artifacts, the Q&A file, requirements.md; rules as the
+by path: the two draft artifacts, the Q&A file, the `requirements` artifact; rules as the
 accumulated steering bundle), mutually blind. Each WRITES its contribution file at
 `<record>/inception/user-stories/contributions/<agent-slug>.md` (§11 format:
 identity-marker first line, Contribution, Positions): design on UX and
@@ -156,7 +156,7 @@ evidence — the engine refuses approval while any is missing.
 
 **Write element-level traceability.** Create
 `<record>/inception/user-stories/traceability.json`. Enumerate every `FR` and
-`NFR` ID from `requirements.md` in `upstream_ids`, with one `coverage` row per
+`NFR` ID from the `requirements` artifact in `upstream_ids`, with one `coverage` row per
 ID. `OK` targets must name one or more existing `USx.y` IDs. Use `Deferred`
 only with a named downstream stage and `N/A` only with a justification:
 
@@ -207,7 +207,7 @@ Imports: `html-shape`, `required-sections`, `upstream-coverage`, `traceability`.
 Upstream targets: `requirements`, `business-overview`, `component-inventory`, `team-practices`.
 
 `traceability` owns `traceability.json`, verifies every requirement is
-declared and covered, and checks that each `OK` target exists in `stories.md`.
+declared and covered, and checks that each `OK` target exists in the `stories` artifact.
 
 ## Learn
 
