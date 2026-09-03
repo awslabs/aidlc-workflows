@@ -419,6 +419,8 @@ function scratchProject(): string {
     "aidlc-runtime-paths.ts",
     "aidlc-audit.ts",
     "aidlc-log.ts",
+    // aidlc-log's answers-apply subcommand shares the review UI file contract.
+    "aidlc-review-ui-shared.ts",
     "aidlc-testing-posture.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
