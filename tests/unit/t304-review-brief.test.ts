@@ -18,13 +18,15 @@ import {
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  artifactFormatsForProject,
   findStageBySlug,
   readAllAuditShards,
-  reviewArtifactEntries,
   sourcePathKey,
   writeUnitSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFormatsForProject,
+  reviewArtifactEntries,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   acceptedRiskDispositionField,
   hydrateReviewArtifactContexts,

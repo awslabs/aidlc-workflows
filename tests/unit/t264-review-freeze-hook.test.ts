@@ -11,7 +11,7 @@
 // and the completion-refusal window cannot diverge. This test exercises:
 //
 //   (a) the pure decision layer (judgeFreeze + writeTargets, imported from the
-//       DIST tree) - stage-level and per-unit freeze/no-freeze cases;
+//       authored CORE tree) - stage-level and per-unit freeze/no-freeze cases;
 //   (b) the SHIPPED hook as a subprocess over a REAL audit ledger written by
 //       the real aidlc-log/audit tools: allow before receipt, block after
 //       READY or terminal advisory NOT-READY, release on GATE_REJECTED, allow for
@@ -52,8 +52,8 @@ import {
   shellCommandInvocationDetails,
   shellCommandInvocations,
   writeTargets,
-} from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+} from "../../core/hooks/aidlc-review-freeze.ts";
+import { readAllAuditShards } from "../../core/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
