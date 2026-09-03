@@ -73,6 +73,10 @@ they may not be weakened to make a step pass.
 
 Affirm a stricter posture in `team.md` if the team commits to one.
 
+## Change Control
+
+<!-- Mode: strict or relaxed. Strict here holds for every intent in this space and cannot be changed from chat. -->
+
 ## Deployment
 
 We **deploy on merge** to staging environments. Production deploys gate

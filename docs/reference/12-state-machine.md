@@ -355,7 +355,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**91 events**, grouped below into 19 categories (the canonical `audit-format.md` registry splits the same 91 into 22 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**93 events**, grouped below into 19 categories (the canonical `audit-format.md` registry splits the same 93 into 23 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -442,6 +442,10 @@ column.
 | `UNIT_GATE_RHYTHM_SET` | `tools/aidlc-state.ts` | `set-unit-gate-rhythm per-stage|unit-end`; team mode only |
 | `REVIEW_CLASS_CHANGED` | `tools/aidlc-utility.ts` | `config set review <value>` / `config-change --review` / a combined `scope-change --review` set or cleared the per-run review override |
 | `RECOMPOSED` | `tools/aidlc-utility.ts` | `recompose` subcommand - the adaptive composer's in-flight plan re-shape (pending-stage suffix flips under the audit lock) |
+| `CHANGE_CONTROL_SET` | `tools/aidlc-lib.ts` | The intent's Change Control value moved: the `change-control <strict\|relaxed>` verb (behind `/aidlc --change-control` and the plain-chat request), a `scope-change` carrying a scope-supplied value to the new scope's default, or a governed checkpoint observing a memory-layer edit. Fields: `Old Value`, `New Value`, `Source` (`you`, `scope <name>`, `<layer>.md`) |
+| `CHANGE_ACCEPTED` | `tools/aidlc-lib.ts` | A governed checkpoint (plan-approval source drift, review-receipt content change, summary-confirmation authorization) accepted an input change under `relaxed` and continued. Fields: `Stage`, optional `Unit`, `Checkpoint`, `Changed`, `Recorded`, `Current`, `Details` (the one line the human hears). One row per distinct change; the same values never produce a second row |
+
+Change Control decides the consequence of an input change after a human approval or confirmation (`strict` reopens the approval with the existing remedy, `relaxed` records the change and continues); it never removes a gate, never alters a reviewer's verdict, and never deletes evidence.
 
 ### Artifacts
 

@@ -141,6 +141,13 @@ const VALID_EVENT_TYPES = new Set([
   // Per-run review-class override changed (config-change --review). The
   // effective class each stage runs at is resolved at directive emission.
   "REVIEW_CLASS_CHANGED",
+  // Change Control: the per-intent value moved (the change-control verb, or a
+  // memory layer edit observed by a governed checkpoint), and a governed
+  // checkpoint accepted an input change under `relaxed` instead of refusing.
+  // Emitted through the library by aidlc-utility.ts and the checkpoint owners
+  // (aidlc-state.ts, aidlc-log.ts, aidlc-testing-posture.ts).
+  "CHANGE_CONTROL_SET",
+  "CHANGE_ACCEPTED",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
@@ -255,6 +262,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
   REVIEW_CLASS_CHANGED: "Review Class Change",
+  CHANGE_CONTROL_SET: "Change Control Set",
+  CHANGE_ACCEPTED: "Change Accepted",
   RECOMPOSED: "Plan Recomposed",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
@@ -399,6 +408,11 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  // Change Control provenance: a governed checkpoint owns the acceptance row
+  // and the verb owns the setting row. A CLI-forged CHANGE_ACCEPTED would make
+  // a change look already reported and suppress the genuine row.
+  "CHANGE_CONTROL_SET",
+  "CHANGE_ACCEPTED",
 ]);
 // Events a WORKTREE DELTA may never carry into the main intent shard. This is
 // deliberately an explicit enumeration, not prefix families: a Bolt/swarm

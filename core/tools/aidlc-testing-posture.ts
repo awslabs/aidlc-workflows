@@ -34,6 +34,7 @@ import {
   stalePlanApprovalReceiptsForTarget,
   resolveWorkflowSelection,
   stateFilePath,
+  structuredField,
   toPosix,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
@@ -283,17 +284,6 @@ function defaultOrdering(methodology: TestingMethodology): string {
     case "custom":
       return "Preserve the explicitly affirmed custom ordering without converting it to another methodology.";
   }
-}
-
-function structuredField(section: string, field: string): string | null {
-  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = section.match(
-    new RegExp(
-      `^[ \\t]*(?:[-*][ \\t]*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?[ \\t]*:[ \\t]*(.+?)[ \\t]*$`,
-      "im",
-    ),
-  );
-  return match?.[1].trim() || null;
 }
 
 type MarkdownFence = { marker: "`" | "~"; length: number };

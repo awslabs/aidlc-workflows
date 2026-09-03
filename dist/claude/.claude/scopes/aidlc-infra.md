@@ -7,6 +7,7 @@ keywords:
   - infra
 description: Infrastructure changes
 skeleton: on
+change_control: strict
 ---
 
 # infra scope
@@ -16,6 +17,8 @@ leans on the back half of the graph: it skips ideation and the
 application-code construction stages, and instead runs practices-discovery,
 the NFR design pass, infrastructure-design, the CI pipeline, and the full
 deployment + observability set in operation.
+
+Change Control defaults to strict: provisioning and deployment inputs that move after approval are approved again.
 
 ## Why these stages, why skip those
 

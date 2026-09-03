@@ -22,7 +22,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (91 events, 22 categories)
+## Event Registry (93 events, 23 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -91,6 +91,15 @@ operational evidence, not a tamper-proof human-authorship boundary.
 | `REVIEW_CLASS_CHANGED` | `--review` changed the per-run review override | Timestamp, Old Override, New Override | `tools/aidlc-utility.ts` |
 | `SCOPE_DETECTED` | Auto-detected from freeform text | Timestamp, Detected scope, Input text, Source, Matched keywords (optional; present when `Source=keyword`) | `tools/aidlc-utility.ts detect-scope` |
 | `RECOMPOSED` | The adaptive composer re-shaped a running workflow's pending stages (suffix flips via `recompose`) | Timestamp, Scope, Stages skipped, Stages added, Stages in Scope | `tools/aidlc-utility.ts recompose` |
+
+### Change Control Events (2 events)
+
+Change Control is one per-intent setting, `strict` or `relaxed`, that decides what a governed checkpoint does when an input changed after the human approved or confirmed something. Both rows are provenance emitted through the library by their owners; the public audit CLI refuses them.
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `CHANGE_CONTROL_SET` | The intent's Change Control value moved: the `change-control <strict\|relaxed>` verb (from the `--change-control` flag or a plain-chat request) rewrote the state line, a `scope-change` carried a scope-supplied value to the new scope's default, or a governed checkpoint observed that a memory layer edit changed the effective value for this running intent | Timestamp, Old Value, New Value, Source (`you`, `scope <name>`, or `<layer>.md`) | `tools/aidlc-lib.ts` (`recordChangeControlSet` for the verb and `scope-change`, `governedChangeControl` for the checkpoints) |
+| `CHANGE_ACCEPTED` | A governed checkpoint found that an input changed after a human approval or confirmation and, under `relaxed`, recorded the change and continued instead of refusing. Written once per distinct change: the same Recorded and Current values for the same Checkpoint, Stage, and Unit never produce a second row | Timestamp, Stage, optional Unit, Checkpoint (`plan-approval`, `review-receipt`, `summary-confirmation`), Changed (a bounded path list or `(paths unavailable)`), Recorded, Current, Details (the one line the human hears) | `tools/aidlc-lib.ts` (`recordAcceptedChanges`, called by the checkpoint owners: `aidlc-log.ts decision` / `answer` / `review`, `aidlc-testing-posture.ts begin`, `aidlc-state.ts` gate and completion checks, the plan-approval guard hook) |
 
 ### Interaction Events (10 events)
 

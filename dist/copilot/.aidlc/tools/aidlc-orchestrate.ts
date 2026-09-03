@@ -162,6 +162,7 @@ import {
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
+  parseChangeControl,
   pipelineLinkEvidence,
   parseBoltDag,
   type KnowledgeCommand,
@@ -1472,6 +1473,7 @@ interface ParsedFlags {
   depth?: string;
   testStrategy?: string;
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
+  changeControl?: string; // --change-control <strict|relaxed>: the per-intent Change Control value
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   resume?: boolean; // --resume: continue an existing workflow directly
@@ -1598,6 +1600,20 @@ function parseNextFlags(args: string[]): ParsedFlags {
         flags.review = value;
         i++;
       }
+    } else if (a === "--change-control") {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = "--change-control requires <strict|relaxed>.";
+      } else {
+        const parsed = parseChangeControl(value);
+        if (parsed === null) {
+          flags.parseError =
+            `--change-control requires <strict|relaxed>; received "${value}".`;
+        } else {
+          flags.changeControl = parsed;
+        }
+        i++;
+      }
     } else if (a === "--new-scope") {
       flags.newScope = true;
     } else if (a === "--report" && i + 1 < args.length) {
@@ -1714,6 +1730,7 @@ function createPrintDirective(
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
+  if (flags.changeControl) cmd.push(`--change-control ${flags.changeControl}`);
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
@@ -4480,6 +4497,16 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       if (flags.review) parts.push(`--review ${flags.review}`);
       emit(printDirective(
         `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${parts.join(" ")}\` to change scope, then print its output verbatim and stop.`,
+      ));
+      return;
+    }
+    // `--change-control <value>` against a live workflow names the verb that
+    // rewrites the intent's line; the verb owns the memory-strict refusal and
+    // the CHANGE_CONTROL_SET row. Ordered before config-change so the two
+    // never combine into one command line.
+    if (flags.changeControl) {
+      emit(printDirective(
+        `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts change-control ${flags.changeControl}\` to update Change Control, then print its output verbatim and stop.`,
       ));
       return;
     }

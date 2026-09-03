@@ -127,6 +127,9 @@ export interface ScopeDefinition {
   plugin?: string;
   runner?: boolean;
   skeleton?: boolean;
+  /** The scope's Change Control default (`change_control:` frontmatter);
+   *  absent means strict. Resolution lives in resolveChangeControl. */
+  changeControl?: ChangeControl;
 }
 
 export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
@@ -24129,6 +24132,9 @@ interface ScopeMetadata {
    *  (plugin-only installs where the core `classic` default is
    *  deselected). At most one enabled scope should set this. */
   freeformDefault?: boolean;
+  /** The scope's Change Control default (`change_control:` frontmatter).
+   *  Absent = strict. Resolution lives in resolveChangeControl. */
+  changeControl?: ChangeControl;
 }
 
 let _scopeMetadata: Record<string, ScopeMetadata> | null = null;
@@ -24235,6 +24241,15 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
         );
       }
       meta.reviewCap = reviewCap;
+    }
+    const changeControl = scalarField(fm, "change_control");
+    if (changeControl) {
+      if (changeControl !== "strict" && changeControl !== "relaxed") {
+        throw new Error(
+          `Scope file ${filePath} has invalid change_control value "${changeControl}". Expected "strict" or "relaxed".`
+        );
+      }
+      meta.changeControl = changeControl;
     }
     out[name] = meta;
   }
@@ -24366,6 +24381,7 @@ export function loadScopeMapping(): Record<string, ScopeDefinition> {
     if (meta.plugin !== undefined) def.plugin = meta.plugin;
     if (meta.runner !== undefined) def.runner = meta.runner;
     def.skeleton = meta.skeleton;
+    if (meta.changeControl !== undefined) def.changeControl = meta.changeControl;
     out[name] = def;
   }
   _scopeMapping = out;
@@ -25659,6 +25675,412 @@ export function emitError(
   }
   console.error(JSON.stringify({ error: msg }));
   process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Change Control
+//
+// One setting, two values. It decides what a governed checkpoint does when an
+// INPUT changed after the human approved or confirmed something: `strict`
+// refuses with the existing remedy, `relaxed` records a CHANGE_ACCEPTED row,
+// tells the human in one line, and continues. It never removes a gate, never
+// alters a reviewer's verdict, and never deletes evidence. The value is the
+// intent's own state line when present, else the scope default; any memory
+// layer that declares strict wins over both and cannot be flipped from chat.
+// ---------------------------------------------------------------------------
+
+export type ChangeControl = "strict" | "relaxed";
+export const CHANGE_CONTROL_VALUES: readonly ChangeControl[] = ["strict", "relaxed"];
+export const CHANGE_CONTROL_FIELD = "Change Control";
+export const CHANGE_CONTROL_HEADING = "## Change Control";
+export const CHANGE_CONTROL_MEMORY_LAYERS = ["org", "team", "project"] as const;
+export type ChangeControlMemoryLayer = (typeof CHANGE_CONTROL_MEMORY_LAYERS)[number];
+export const CHANGE_CONTROL_MAX_LISTED_PATHS = 10;
+
+export type ChangeCheckpoint =
+  | "plan-approval"
+  | "review-receipt"
+  | "summary-confirmation";
+
+/** One accepted input change, ready to become a CHANGE_ACCEPTED row. */
+export interface AcceptedChange {
+  checkpoint: ChangeCheckpoint;
+  stage: string;
+  unit: string | null;
+  /** Changed paths when they could be listed; null when only digests are known. */
+  changed: string[] | null;
+  /** The value the approval recorded and the value found now. */
+  recorded: string;
+  current: string;
+  /** The one plain-language line the human hears. */
+  notice: string;
+}
+
+export interface ChangeControlMemoryDeclaration {
+  layer: ChangeControlMemoryLayer;
+  path: string;
+  value: ChangeControl;
+}
+
+export interface ChangeControlResolution {
+  value: ChangeControl;
+  /** Where the value came from, worded for humans: `scope classic`,
+   *  `project.md`, or `you`. */
+  source: string;
+  scopeDefault: ChangeControl;
+  /** The intent's own state line, when it carries one. */
+  intent: { value: ChangeControl; source: string } | null;
+  /** The first memory layer declaring strict, when one does. */
+  memoryStrict: ChangeControlMemoryDeclaration | null;
+}
+
+// A `Field: value` line inside a memory section, with an optional list marker
+// and optional bolding around the field name. Shared with Testing Posture so
+// both memory sections read the same grammar.
+export function structuredField(section: string, field: string): string | null {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = section.match(
+    new RegExp(
+      `^[ \\t]*(?:[-*][ \\t]*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?[ \\t]*:[ \\t]*(.+?)[ \\t]*$`,
+      "im",
+    ),
+  );
+  return match?.[1].trim() || null;
+}
+
+// The visible body of one `## Heading` memory section: headings hidden in HTML
+// comments or fences cannot open or close it, and commented-out lines inside
+// it are not read.
+export function memorySectionBody(content: string, heading: string): string {
+  const lines = visibleMarkdownLines(content);
+  let start = -1;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (start < 0) {
+      if (line.trimEnd() === heading) start = index + 1;
+      continue;
+    }
+    if (/^## [^\n]*$/.test(line)) return lines.slice(start, index).join("\n");
+  }
+  return start < 0 ? "" : lines.slice(start).join("\n");
+}
+
+/** The value named by a memory `Mode:` line or a flag; null when it is not one of the two. */
+export function parseChangeControl(raw: string | null | undefined): ChangeControl | null {
+  if (raw === null || raw === undefined) return null;
+  const word = raw.toLowerCase().replace(/[`*_]/g, "").trim();
+  return word === "strict" || word === "relaxed" ? word : null;
+}
+
+// The state line reads `<value> (<source>)`; only the value decides anything.
+// The source label is kept for `--status` and the human line.
+const CHANGE_CONTROL_STATE_LINE_RE = /^(strict|relaxed)\b(?:\s*\((.*)\))?\s*$/i;
+
+export function parseChangeControlStateLine(
+  raw: string | null | undefined,
+): { value: ChangeControl; source: string } | null {
+  if (!raw) return null;
+  const match = CHANGE_CONTROL_STATE_LINE_RE.exec(raw.trim());
+  if (!match) return null;
+  const value = match[1].toLowerCase() as ChangeControl;
+  const label = (match[2] ?? "").trim();
+  return { value, source: changeControlSourceFromLabel(label) };
+}
+
+function changeControlSourceFromLabel(label: string): string {
+  if (label === "set by you" || label === "you") return "you";
+  const from = /^from\s+(.+)$/.exec(label);
+  return from ? from[1].trim() : label || "you";
+}
+
+/** The label rendered after the value: `from scope classic`, `from project.md`, `set by you`. */
+export function changeControlSourceLabel(source: string): string {
+  return source === "you" ? "set by you" : `from ${source}`;
+}
+
+/** The full state-line value / status suffix, e.g. `relaxed (from scope classic)`. */
+export function formatChangeControl(value: ChangeControl, source: string): string {
+  return `${value} (${changeControlSourceLabel(source)})`;
+}
+
+function changeControlMemoryDir(projectDir: string): string {
+  let space = "default";
+  try {
+    space = resolveWorkflowSelection(projectDir).space;
+  } catch {
+    // No resolvable selection: the default space memory still governs.
+  }
+  return join(projectDir, "aidlc", "spaces", space, "memory");
+}
+
+/**
+ * Every memory layer that declares a Change Control mode, org then team then
+ * project. An invalid `Mode:` value is a validation error naming the file and
+ * the allowed values. An absent section or a missing `Mode:` line declares
+ * nothing.
+ */
+export function memoryChangeControlDeclarations(
+  projectDir: string,
+): ChangeControlMemoryDeclaration[] {
+  const memoryDir = changeControlMemoryDir(projectDir);
+  const declarations: ChangeControlMemoryDeclaration[] = [];
+  for (const layer of CHANGE_CONTROL_MEMORY_LAYERS) {
+    const path = join(memoryDir, `${layer}.md`);
+    if (!existsSync(path)) continue;
+    const body = memorySectionBody(readFileSync(path, "utf-8"), CHANGE_CONTROL_HEADING);
+    if (!body.trim()) continue;
+    const raw = structuredField(body, "Mode");
+    if (raw === null) continue;
+    const value = parseChangeControl(raw);
+    if (value === null) {
+      throw new Error(
+        `Invalid Change Control Mode "${raw}" in ${path} (section: Change Control). ` +
+          `Expected one of: ${CHANGE_CONTROL_VALUES.join(", ")}.`,
+      );
+    }
+    declarations.push({ layer, path, value });
+  }
+  return declarations;
+}
+
+/** The scope's default from its frontmatter; strict when the scope declares none. */
+export function scopeChangeControlDefault(scope: string | null | undefined): ChangeControl {
+  if (!scope) return "strict";
+  let mapping: Record<string, ScopeDefinition>;
+  try {
+    mapping = loadScopeMapping();
+  } catch {
+    return "strict";
+  }
+  return mapping[scope.trim().toLowerCase()]?.changeControl ?? "strict";
+}
+
+/**
+ * Resolved value = the intent's own line if present, else the scope default.
+ * Then, if ANY memory layer declares strict, the resolved value is strict and
+ * that file is the source. Memory `relaxed` or an absent section has no effect.
+ * Pure: reads state and memory, writes nothing.
+ */
+export function resolveChangeControl(
+  projectDir: string,
+  stateContent?: string | null,
+): ChangeControlResolution {
+  let state = stateContent ?? null;
+  if (state === null) {
+    try {
+      state = readFileSync(stateFilePath(projectDir), "utf-8");
+    } catch {
+      state = "";
+    }
+  }
+  const scope = getField(state, "Scope");
+  const scopeDefault = scopeChangeControlDefault(scope);
+  const intent = parseChangeControlStateLine(getField(state, CHANGE_CONTROL_FIELD));
+  const memoryStrict =
+    memoryChangeControlDeclarations(projectDir).find(
+      (declaration) => declaration.value === "strict",
+    ) ?? null;
+  if (memoryStrict !== null) {
+    return {
+      value: "strict",
+      source: `${memoryStrict.layer}.md`,
+      scopeDefault,
+      intent,
+      memoryStrict,
+    };
+  }
+  if (intent !== null) {
+    return { value: intent.value, source: intent.source, scopeDefault, intent, memoryStrict: null };
+  }
+  return {
+    value: scopeDefault,
+    source: `scope ${(scope ?? "").trim().toLowerCase() || "unknown"}`,
+    scopeDefault,
+    intent: null,
+    memoryStrict: null,
+  };
+}
+
+/** The one sentence a chat or flag flip gets while a memory layer holds strict. */
+export function changeControlMemoryStrictRefusal(
+  declaration: ChangeControlMemoryDeclaration,
+): string {
+  return (
+    `Change Control is set to strict in ${declaration.path} (section: Change Control), ` +
+    "so it cannot be changed from chat. Edit that line to change it for everyone on this repo."
+  );
+}
+
+// Best-effort ledger access for the two Change Control rows. These rows are
+// provenance: a failure to write one never changes a decision, so callers
+// swallow the append's errors. The lazy require breaks the lib <-> audit cycle
+// exactly as emitError does, and the held-lock branch keeps callers inside a
+// withAuditLock section from waiting on themselves. Null when no intent record
+// exists to write into.
+function changeControlLedger(
+  projectDir: string,
+): { appendAuditEntry: (event: string, fields: Record<string, string>) => void } | null {
+  if (!existsSync(stateFilePath(projectDir))) return null;
+  const audit = require("./aidlc-audit.ts") as {
+    appendAuditEntry: typeof AppendAuditEntry;
+    appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
+  };
+  const unlocked = holdsAuditLock(projectDir);
+  return {
+    appendAuditEntry: (event, fields) => {
+      if (unlocked) audit.appendAuditEntryUnlocked(event, fields, projectDir);
+      else audit.appendAuditEntry(event, fields, projectDir);
+    },
+  };
+}
+
+function appendChangeControlSetRow(
+  projectDir: string,
+  fields: { "Old Value": string; "New Value": string; Source: string },
+): boolean {
+  try {
+    const ledger = changeControlLedger(projectDir);
+    if (ledger === null) return false;
+    ledger.appendAuditEntry("CHANGE_CONTROL_SET", fields);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A bounded, human-readable list of changed paths. */
+export function renderChangedPaths(paths: readonly string[]): string {
+  const shown = paths.slice(0, CHANGE_CONTROL_MAX_LISTED_PATHS);
+  const more = paths.length - shown.length;
+  return more > 0 ? `${shown.join(", ")} (and ${more} more)` : shown.join(", ");
+}
+
+/** The audit fields a CHANGE_ACCEPTED row carries for one accepted change. */
+export function acceptedChangeFields(change: AcceptedChange): Record<string, string> {
+  return {
+    Stage: change.stage,
+    ...(change.unit ? { Unit: change.unit } : {}),
+    Checkpoint: change.checkpoint,
+    Changed: change.changed === null ? "(paths unavailable)" : renderChangedPaths(change.changed),
+    Recorded: change.recorded,
+    Current: change.current,
+    Details: change.notice,
+  };
+}
+
+function acceptedChangeMatchesRow(change: AcceptedChange, block: string): boolean {
+  const fields = acceptedChangeFields(change);
+  return (
+    auditBlockField(block, "Stage") === fields.Stage &&
+    (auditBlockField(block, "Unit") ?? null) === (change.unit ?? null) &&
+    auditBlockField(block, "Checkpoint") === fields.Checkpoint &&
+    auditBlockField(block, "Changed") === fields.Changed &&
+    auditBlockField(block, "Recorded") === fields.Recorded &&
+    auditBlockField(block, "Current") === fields.Current
+  );
+}
+
+/**
+ * True when the ledger already carries this exact acceptance. A change is
+ * reported once: the same recorded and current values for the same checkpoint,
+ * stage, and unit never produce a second row or a second human line.
+ */
+export function changeAlreadyAccepted(
+  projectDir: string,
+  change: AcceptedChange,
+  events?: ReadonlyArray<{ event: string; block: string }>,
+): boolean {
+  const rows = events ?? safeAuditShardEvents(projectDir);
+  return rows.some(
+    (row) => row.event === "CHANGE_ACCEPTED" && acceptedChangeMatchesRow(change, row.block),
+  );
+}
+
+function safeAuditShardEvents(projectDir: string): AuditShardEvent[] {
+  try {
+    return readAuditShardEvents(projectDir);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Write the CHANGE_ACCEPTED rows for changes the ledger does not carry yet and
+ * return the human lines for exactly those. Callers that mutate (a gate
+ * opening, a stage completion, an answer record, a generation start) call
+ * this; read-only callers such as `next` only continue.
+ */
+export function recordAcceptedChanges(
+  projectDir: string,
+  changes: readonly AcceptedChange[],
+): string[] {
+  if (changes.length === 0) return [];
+  const events = safeAuditShardEvents(projectDir);
+  const notices: string[] = [];
+  for (const change of changes) {
+    if (changeAlreadyAccepted(projectDir, change, events)) continue;
+    let written = false;
+    try {
+      const ledger = changeControlLedger(projectDir);
+      if (ledger !== null) {
+        ledger.appendAuditEntry("CHANGE_ACCEPTED", acceptedChangeFields(change));
+        written = true;
+      }
+    } catch {
+      // Provenance only: the decision to continue does not depend on the row.
+    }
+    if (written) {
+      notices.push(change.notice);
+    }
+  }
+  return notices;
+}
+
+/**
+ * Resolve the setting at a governed checkpoint and, when a memory edit moved
+ * the effective value for this running intent since it was last recorded,
+ * write one CHANGE_CONTROL_SET row naming that source. The previous effective
+ * value is the newest CHANGE_CONTROL_SET row, else the intent's own line, else
+ * the scope default.
+ */
+export function governedChangeControl(
+  projectDir: string,
+  stateContent?: string | null,
+): ChangeControlResolution {
+  const resolution = resolveChangeControl(projectDir, stateContent);
+  const events = safeAuditShardEvents(projectDir);
+  let previous: ChangeControl | null = null;
+  for (const row of events) {
+    if (row.event !== "CHANGE_CONTROL_SET") continue;
+    previous = parseChangeControl(auditBlockField(row.block, "New Value")) ?? previous;
+  }
+  if (previous === null) {
+    previous = resolution.intent?.value ?? resolution.scopeDefault;
+  }
+  if (previous !== resolution.value) {
+    appendChangeControlSetRow(projectDir, {
+      "Old Value": previous,
+      "New Value": resolution.value,
+      Source: resolution.source,
+    });
+  }
+  return resolution;
+}
+
+/**
+ * The CHANGE_CONTROL_SET row the verb writes when it rewrites the state line.
+ */
+export function recordChangeControlSet(
+  projectDir: string,
+  oldValue: ChangeControl | null,
+  newValue: ChangeControl,
+  source: string,
+): boolean {
+  return appendChangeControlSetRow(projectDir, {
+    "Old Value": oldValue ?? "unknown",
+    "New Value": newValue,
+    Source: source,
+  });
 }
 
 // --- Helpers ---

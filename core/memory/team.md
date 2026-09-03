@@ -23,6 +23,10 @@
 <!-- We use BDD. Specifications drive scenarios; scenarios drive code. -->
 <!-- Each Unit ships with feature files in /features/. -->
 
+## Change Control
+
+<!-- Affirmed by the team. Mode: strict or relaxed. Strict here holds for every intent and cannot be changed from chat. -->
+
 ## Deployment
 
 <!-- Affirmed during practices-discovery. -->

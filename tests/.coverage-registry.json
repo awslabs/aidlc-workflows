@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 895,
+    "total": 919,
     "enumeratedByClass": {
-      "function": 597,
-      "audit": 91,
+      "function": 618,
+      "audit": 93,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 138,
+      "subcommand": 139,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 361,
-      "audit": 49,
+      "function": 371,
+      "audit": 50,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 125,
+      "subcommand": 126,
       "render-surface": 7
     }
   },
@@ -109,6 +109,25 @@
       "coveredBy": [
         {
           "file": "tests/unit/t322-fix-round-hardening.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "CHANGE_ACCEPTED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "CHANGE_CONTROL_SET",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1084,6 +1103,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:acceptedChangeFields",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:acquireAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -1555,6 +1581,62 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CHANGE_CONTROL_FIELD",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CHANGE_CONTROL_HEADING",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CHANGE_CONTROL_MAX_LISTED_PATHS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CHANGE_CONTROL_MEMORY_LAYERS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CHANGE_CONTROL_VALUES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:changeAlreadyAccepted",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:changeControlMemoryStrictRefusal",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:changeControlSourceLabel",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2606,6 +2688,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:formatChangeControl",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:formatReceivedReply",
       "minMechanism": "none",
       "coveredBy": [
@@ -2693,6 +2787,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t314-source-freshness-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:governedChangeControl",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3829,6 +3935,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:memoryChangeControlDeclarations",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:memoryDirFor",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3840,6 +3958,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:memorySectionBody",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4014,6 +4144,30 @@
         },
         {
           "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseChangeControl",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseChangeControlStateLine",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4750,6 +4904,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recordAcceptedChanges",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordChangeControlSet",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordCopilotHumanSequence",
       "minMechanism": "none",
       "coveredBy": [
@@ -4975,6 +5148,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:renderChangedPaths",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:renderTeamConstructionBoard",
       "minMechanism": "none",
       "coveredBy": [
@@ -5100,6 +5280,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveChangeControl",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5633,6 +5825,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:scopeChangeControlDefault",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:scopeCostSummary",
       "minMechanism": "none",
       "coveredBy": [
@@ -6125,6 +6329,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:structuredField",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9237,6 +9453,10 @@
         {
           "file": "tests/unit/t324-team-unit-progress-gates.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10024,6 +10244,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-utility change-control",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-utility claim",
       "minMechanism": "cli",
       "coveredBy": [
@@ -10426,6 +10658,10 @@
         {
           "file": "tests/unit/t232-phase-progress-flip.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10573,6 +10809,10 @@
         },
         {
           "file": "tests/unit/t27.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         },
         {
@@ -10728,6 +10968,10 @@
         },
         {
           "file": "tests/unit/t27.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         },
         {
