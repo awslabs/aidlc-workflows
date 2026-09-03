@@ -987,13 +987,19 @@ function renderBrowserAnswer(
   section: QuestionSection,
 ): string {
   const other = answer.other?.trim();
+  const labels = answer.labels ?? [];
   if (other) {
     if (!section.options.has("X")) {
       error(`answers-apply refused: ${answer.id} does not offer option X.`);
     }
+    if (labels.length > 0 && !labels.includes("X")) {
+      error(`answers-apply refused: ${answer.id} supplies Other text without selecting X.`);
+    }
     return `X — ${other.replace(/\s+/g, " ")}`;
   }
-  const labels = answer.labels ?? [];
+  if (labels.includes("X")) {
+    error(`answers-apply refused: ${answer.id} selects X but supplies no Other text.`);
+  }
   if (labels.length === 0) {
     error(`answers-apply refused: ${answer.id} has no selected answer.`);
   }
