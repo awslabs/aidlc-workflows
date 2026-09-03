@@ -12,10 +12,13 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import {
   artifactFilename,
+  hasArtifactFilenameException,
   KNOWN_CODEKB_STAGES,
+  setHtmlArtifactNames,
 } from "./aidlc-artifact-vocabulary.ts";
 export {
   artifactFilename,
+  hasArtifactFilenameException,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
@@ -63,6 +66,9 @@ export interface StageEntry {
   // unit whose kind is not in its list (both directive paths and coverage).
   // Absent map = full matrix (every produces entry applies to every unit).
   produces_kinds?: Record<string, string[]>;
+  // Compile-derived list of this stage's document/visual outputs that may use
+  // HTML when the intent setting is on. New compiled graphs always carry it.
+  html_capable?: string[];
   consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string }>;
   requires_stage?: string[];
   scopes?: string[];
@@ -16369,12 +16375,35 @@ export function authoritativeProjectDescription(raw: string): {
 
 // --- State file I/O ---
 
+/**
+ * Prime artifact formats from already-loaded state content. This is exported
+ * for callers that necessarily read state through their own atomic snapshot.
+ */
+export function primeArtifactFormats(stateContent: string): void {
+  if (getField(stateContent, "HTML Artifacts") !== "on") {
+    setHtmlArtifactNames(new Set());
+    return;
+  }
+  const capable = new Set<string>();
+  for (const stage of loadStageGraph()) {
+    for (const name of stage.html_capable ?? []) capable.add(name);
+  }
+  setHtmlArtifactNames(capable);
+}
+
+/**
+ * Read state and prime the process-wide artifact-format vocabulary. This is THE
+ * seam: every engine tool that resolves artifact paths reads state first, so a
+ * later process follows the intent's locked setting rather than its environment.
+ */
 export function readStateFile(projectDir: string, intent?: string, space?: string): string {
   const path = stateFilePath(projectDir, intent, space);
   if (!existsSync(path)) {
     throw new Error(`State file not found: ${path}`);
   }
-  return readFileSync(path, "utf-8");
+  const content = readFileSync(path, "utf-8");
+  primeArtifactFormats(content);
+  return content;
 }
 
 export const PROJECT_DESCRIPTION_FILE = "project-description.json";
@@ -21285,11 +21314,11 @@ export function parseStageFrontmatter(
     if (key === WHEN_KEY) continue;
     if (key === "produces_kinds") continue; // parsed below; the scalar loop would stamp it ""
     if (ARRAY_KEYS.has(key)) continue;
-    // optional_produces and required_sections are presence-gated array fields
-    // parsed below; skip them here so the scalar loop does not stamp them with
-    // an empty-string value.
+    // Presence-gated structured fields are parsed below; skip them here so the
+    // scalar loop does not turn an authored list into a string.
     if (key === "optional_produces") continue;
     if (key === "required_sections") continue;
+    if (key === "html_exclude") continue;
     // The key was discovered at the start of some line, so it IS
     // present. scalarField returns "" for both absent AND empty-quoted
     // ("") — since we know it's present, assign the result
@@ -21335,6 +21364,14 @@ export function parseStageFrontmatter(
   // "required_sections must be array, got string".
   if (topLevelKeys.has("required_sections")) {
     obj.required_sections = listField(fm, "required_sections");
+  }
+
+  // html_exclude accepts either the literal "*" or a YAML list. Preserve the
+  // distinction so compile can exclude one stage wholesale without a sentinel
+  // artifact name.
+  if (topLevelKeys.has("html_exclude")) {
+    const scalar = scalarField(fm, "html_exclude");
+    obj.html_exclude = scalar === "*" ? "*" : listField(fm, "html_exclude");
   }
 
   // reviewer_max_iterations is the one numeric scalar field. The generic
@@ -21620,6 +21657,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "produces",
     "optional_produces",
     "produces_kinds",
+    "html_exclude",
     "consumes",
     "requires_stage",
     "sensors",

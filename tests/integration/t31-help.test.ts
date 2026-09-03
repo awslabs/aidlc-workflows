@@ -146,6 +146,7 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
     "--phase",
     "--scope",
     "--test-strategy", // S4
+    "--html-artifacts", // M2 per-intent document format
     "--version", // S4
     "intent", // P4: the intent verb family
     "space", // P4: the space verb family
