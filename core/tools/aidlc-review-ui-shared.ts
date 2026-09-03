@@ -19,6 +19,8 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -30,7 +32,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 // --- Environment ---------------------------------------------------------------
 
@@ -123,8 +125,9 @@ export function readServerInfo(projectDir: string, env: NodeJS.ProcessEnv = proc
   }
 }
 
+/** server.json carries the bearer token: owner-only dir (0700) and file (0600). */
 export function writeServerInfo(info: ServerInfo, env: NodeJS.ProcessEnv = process.env): void {
-  atomicWriteJson(serverInfoPath(info.project_dir, env), info);
+  atomicWriteJson(serverInfoPath(info.project_dir, env), info, { private: true });
 }
 
 export function removeServerInfo(projectDir: string, env: NodeJS.ProcessEnv = process.env): void {
@@ -385,11 +388,33 @@ export function sha256Hex(data: string | Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-export function atomicWriteJson(path: string, value: unknown): void {
-  const dir = join(path, "..");
-  mkdirSync(dir, { recursive: true });
+export function ensurePrivateDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // mkdir's mode is umask-filtered and ignored for pre-existing dirs; pin it.
+  try {
+    chmodSync(dir, 0o700);
+  } catch {
+    // Non-POSIX filesystems: best effort.
+  }
+}
+
+/**
+ * Write-then-rename. `private` pins the parent dir to 0700 and the file to
+ * 0600 (for token-bearing files); otherwise the umask applies as usual.
+ */
+export function atomicWriteJson(path: string, value: unknown, options: { private?: boolean } = {}): void {
+  const dir = dirname(path);
+  if (options.private) ensurePrivateDir(dir);
+  else mkdirSync(dir, { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, options.private ? { mode: 0o600 } : undefined);
+  if (options.private) {
+    try {
+      chmodSync(tmp, 0o600);
+    } catch {
+      // Non-POSIX filesystems: best effort.
+    }
+  }
   renameSync(tmp, path);
 }
 
@@ -410,20 +435,25 @@ export interface SpawnOptions {
  */
 export function spawnReviewUiDaemon(projectDir: string, options: SpawnOptions): number | null {
   const env = options.env ?? process.env;
-  const home = reviewUiProjectHome(projectDir, env);
-  mkdirSync(home, { recursive: true });
-  const log = openSync(serverLogPath(projectDir, env), "a");
   const script = join(options.toolsDir, "aidlc-review-ui.ts");
   if (!existsSync(script)) return null;
-  const bun = options.bunPath ?? (process.versions.bun ? process.execPath : "bun");
-  const child = spawn(bun, [script, "serve", "--project-dir", resolve(projectDir)], {
-    detached: true,
-    stdio: ["ignore", log, log],
-    env: { ...env },
-    cwd: resolve(projectDir),
-  });
-  child.unref();
-  return child.pid ?? null;
+  const home = reviewUiProjectHome(projectDir, env);
+  ensurePrivateDir(home);
+  const log = openSync(serverLogPath(projectDir, env), "a", 0o600);
+  try {
+    const bun = options.bunPath ?? (process.versions.bun ? process.execPath : "bun");
+    const child = spawn(bun, [script, "serve", "--project-dir", resolve(projectDir)], {
+      detached: true,
+      stdio: ["ignore", log, log],
+      env: { ...env },
+      cwd: resolve(projectDir),
+    });
+    child.unref();
+    return child.pid ?? null;
+  } finally {
+    // The child holds its own copies; keeping ours open would pin the hook process.
+    closeSync(log);
+  }
 }
 
 /**
