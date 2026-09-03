@@ -62,7 +62,6 @@ import {
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import {
   ensureReviewUiDaemon,
-  mintReviewUiOpenUrl,
   reviewUiEnabled,
 } from "../tools/aidlc-review-ui-shared.ts";
 
@@ -177,17 +176,15 @@ try {
 }
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
-let reviewUiContext = "";
+// Review UI daemon: ensure it is running for this project. No link is minted
+// here — the gate's `report` step mints the single-use link the human needs,
+// so nothing token-adjacent ever lands in session context.
 if (reviewUiEnabled()) {
   try {
-    const info = await ensureReviewUiDaemon(projectDir, {
+    await ensureReviewUiDaemon(projectDir, {
       toolsDir: join(projectDir, harnessDir(), "tools"),
       waitMs: 1500,
     });
-    if (info) {
-      const openUrl = mintReviewUiOpenUrl(projectDir);
-      if (openUrl) reviewUiContext = `Review UI: ${openUrl}`;
-    }
   } catch (e) {
     recordHookDrop(projectDir, "session-start", errorMessage(e));
   }
@@ -200,8 +197,7 @@ if (!existsSync(stateFile)) {
     process.stdout.write(`${JSON.stringify({
       additionalContext:
         `AIDLC Runtime Session: ${sessionId}\n` +
-        "Use this exact value for any Plan Approval --session argument in this conversation." +
-        (reviewUiContext ? `\n${reviewUiContext}` : ""),
+        "Use this exact value for any Plan Approval --session argument in this conversation.",
     })}\n`);
   }
   return 0;
@@ -327,8 +323,7 @@ if (rebindCheckOnly) {
     }
     process.stdout.write(`${JSON.stringify({
       additionalContext:
-        `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}` +
-        (reviewUiContext ? `${reviewUiContext}\n` : ""),
+        `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}`,
     })}\n`);
   }
   return 0;
@@ -401,9 +396,7 @@ FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc-jump.ts execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.`;
 
 // Output additionalContext as JSON
-const output = JSON.stringify({
-  additionalContext: context + (reviewUiContext ? `\n${reviewUiContext}` : ""),
-});
+const output = JSON.stringify({ additionalContext: context });
 process.stdout.write(`${output}\n`);
 return 0;
 }
