@@ -230,8 +230,23 @@ import {
   resolveHarnessPath,
   resolveHarnessRoot,
 } from "./aidlc-runtime-paths.ts";
-import { appendAuditEntries } from "./aidlc-audit.ts";
+import { appendAuditEntries, appendAuditEntry } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
+import {
+  ingestPendingFeedback,
+  publishReviewManifest,
+  publishReviewPointer,
+  reviewStageDir,
+  type ReviewPublishStageNode,
+} from "./aidlc-review-ui-publish.ts";
+import {
+  liveReviewUiOrigin,
+  openLinkIsFresh,
+  pendingFeedback,
+  readCurrentPointer,
+  reviewUiEnabled,
+  sha256Hex,
+} from "./aidlc-review-ui-shared.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
 import {
   readRuleBundle,
@@ -287,6 +302,7 @@ interface PreparedLegacyPlanApproval {
 }
 
 let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
+let engineProjectDir: string | undefined;
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
 
 function projectStageValidityAdvisory(
@@ -382,6 +398,25 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ...transported,
       stage_validity: activeStageValidityAdvisory,
     } as Directive;
+  }
+  if (
+    engineProjectDir &&
+    reviewUiEnabled() &&
+    (transported.kind === "run-stage" || engineInvocation?.commandKind === "report")
+  ) {
+    const origin = liveReviewUiOrigin(engineProjectDir);
+    if (origin !== null) {
+      const recordPrefix = engineRelativeRecordDir(engineProjectDir);
+      const record = recordPrefix ? join(engineProjectDir, ...recordPrefix.split("/")) : null;
+      const open = record ? readCurrentPointer(record)?.open : null;
+      transported = {
+        ...transported,
+        review_ui: {
+          origin,
+          ...(openLinkIsFresh(open, engineProjectDir) ? { url: open.url } : {}),
+        },
+      } as Directive;
+    }
   }
   // Per-unit Construction beats: `unit` is attached by callers after the
   // run-stage is built, so the builder's stage-entry line is wrong here (the
@@ -6813,6 +6848,63 @@ function isConcreteIsoInstant(value: string | null): boolean {
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
   return isoInstant.test(value) && !Number.isNaN(Date.parse(value));
 }
+function reportRevisionCount(stateContent: string): number {
+  const raw = getField(stateContent, "Revision Count");
+  const parsed = raw ? parseInt(raw, 10) : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function reviewPublishNode(
+  projectDir: string,
+  node: GraphStage,
+  unit: string | null,
+  recordPrefix: string | null,
+): ReviewPublishStageNode {
+  const codekbCtx = codekbCtxFor(projectDir);
+  const resolved = applicableProduceNames(node, null, true).flatMap((name) =>
+    resolveArtifactPaths(name, node, unit, recordPrefix, codekbCtx).map((path) => ({
+      name,
+      path,
+    }))
+  );
+  return {
+    ...node,
+    resolved_produces: resolved,
+  };
+}
+
+function pendingReviewFeedback(
+  projectDir: string,
+  node: GraphStage,
+  unit: string | null,
+  recordPrefix: string | null,
+): { stageDir: string; files: string[] } | null {
+  if (!reviewUiEnabled()) return null;
+  const publishNode = reviewPublishNode(projectDir, node, unit, recordPrefix);
+  const stageDir = reviewStageDir(projectDir, publishNode, unit);
+  if (!stageDir) return null;
+  const files = pendingFeedback(stageDir).map((item) => item.file);
+  return files.length > 0 ? { stageDir, files } : null;
+}
+
+function appendReviewFeedbackAudit(
+  projectDir: string,
+  stage: string,
+  unit: string | null,
+  revision: number,
+  result: "approved" | "rejected",
+  files: string[],
+  digest: string,
+): void {
+  appendAuditEntry("REVIEW_UI_FEEDBACK", {
+    Stage: stage,
+    ...(unit ? { Unit: unit } : {}),
+    Revision: String(revision),
+    Result: result,
+    Files: files.join(", "),
+    Digest: digest,
+  }, projectDir);
+}
 
 // Promotion owns a two-part receipt: the concrete state timestamp and a
 // PRACTICES_AFFIRMED audit row in the current stage attempt AND after the
@@ -7690,6 +7782,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
   const stageCheckbox = checkboxForSlug(stateContent, slug);
+  const reviewUnit = flags.unit?.trim() || null;
+  const reviewRecordPrefix = reviewUiEnabled() ? engineRelativeRecordDir(pd) : null;
+  const revisionCount = reviewUiEnabled() ? reportRevisionCount(stateContent) : 0;
   if (!stageCheckbox) {
     emit({
       kind: "error",
@@ -7990,6 +8085,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
 
     let subArgs: string[];
+    let feedbackStageDir: string | null = null;
     let revalidatingOpenGate = false;
     if (flags.result === "awaiting-approval") {
       if (stageCheckbox.state === "awaiting-approval") {
@@ -8022,15 +8118,27 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ));
         return;
       }
-      const feedback = flags.reason?.trim() ?? flags.userInput?.trim();
+      let feedback = flags.reason?.trim() ?? flags.userInput?.trim();
       if (!feedback) {
         emit(errorDirective(
           `report --result rejected for "${slug}" requires nonblank revision feedback.`,
         ));
         return;
       }
+      const pending = pendingReviewFeedback(
+        pd,
+        node,
+        reviewUnit,
+        reviewRecordPrefix,
+      );
+      if (pending) {
+        feedbackStageDir = pending.stageDir;
+        const bodies = pendingFeedback(pending.stageDir);
+        feedback += `\n\n## Browser review feedback\n\n${bodies.map((item) =>
+          `### ${item.file}\n\n${item.body}`
+        ).join("\n\n")}`;
+      }
       subArgs = ["reject", slug, "--feedback", feedback];
-      if (flags.userInput) subArgs.push("--user-input", flags.userInput);
       for (const finding of flags.rejectFindings ?? []) {
         subArgs.push("--reject-finding", finding);
       }
@@ -8059,6 +8167,42 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
       ));
       return;
+    }
+    if (
+      reviewUiEnabled() &&
+      (flags.result === "awaiting-approval" || flags.result === "revised")
+    ) {
+      const publishedState = loadStateFileIfPresent(pd) ?? stateContent;
+      publishReviewManifest(
+        pd,
+        reviewPublishNode(pd, node, reviewUnit, reviewRecordPrefix),
+        reviewUnit,
+        reportRevisionCount(publishedState),
+        "awaiting-approval",
+      );
+    } else if (reviewUiEnabled() && flags.result === "rejected") {
+      if (feedbackStageDir) {
+        const pending = pendingFeedback(feedbackStageDir);
+        if (pending.length > 0) {
+          appendReviewFeedbackAudit(
+            pd,
+            slug,
+            reviewUnit,
+            revisionCount,
+            "rejected",
+            pending.map((item) => item.file),
+            sha256Hex(pending.map((item) => item.body).join("")),
+          );
+          ingestPendingFeedback(feedbackStageDir, "rejected");
+        }
+      }
+      publishReviewPointer(
+        pd,
+        reviewPublishNode(pd, node, reviewUnit, reviewRecordPrefix),
+        reviewUnit,
+        revisionCount + 1,
+        "revising",
+      );
     }
     emit(
       printDirective(
@@ -8130,6 +8274,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  let approvalNotes: string | undefined;
+  let approvedFeedbackStageDir: string | null = null;
+  if (flags.result === "approved" && reviewUiEnabled()) {
+    const pending = pendingReviewFeedback(pd, node, reviewUnit, reviewRecordPrefix);
+    if (pending) approvedFeedbackStageDir = pending.stageDir;
+  }
   if (stageCheckbox.state === "completed") {
     if (isFinal) {
       if (status === "Completed") {
@@ -8198,8 +8348,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   for (const subArgs of sequence) {
     const res = spawnState(pd, subArgs);
     if (res.exitCode !== 0) {
-      // aidlc-state.ts rejected the transition (error() exits non-zero). Surface
-      // its message verbatim so the rejection is a clear signal, not a silent miss.
       const detail = (res.stderr || res.stdout).trim();
       emit({
         kind: "error",
@@ -8219,14 +8367,39 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // The transition committed. Emit a terminal `done` directive naming the move
-  // — the loop driver reads this to know the report landed and the next `next`
-  // will see fresh state.
+  if (flags.result === "approved") {
+    if (approvedFeedbackStageDir) {
+      const pending = pendingFeedback(approvedFeedbackStageDir);
+      if (pending.length > 0) {
+        appendReviewFeedbackAudit(
+          pd,
+          slug,
+          reviewUnit,
+          revisionCount,
+          "approved",
+          pending.map((item) => item.file),
+          sha256Hex(pending.map((item) => item.body).join("")),
+        );
+        approvalNotes = ingestPendingFeedback(
+          approvedFeedbackStageDir,
+          "approved",
+        ).combinedBody;
+      }
+    }
+    publishReviewPointer(
+      pd,
+      reviewPublishNode(pd, node, reviewUnit, reviewRecordPrefix),
+      reviewUnit,
+      revisionCount,
+      "approved",
+    );
+  }
   emit({
     kind: "done",
     reason:
       `Committed ${committed.join(" + ")} for "${slug}" (scope: ${scope}). ` +
       "State advanced; run next to continue.",
+    ...(approvalNotes ? { approval_notes: approvalNotes } : {}),
   });
 }
 
@@ -8534,6 +8707,7 @@ export function main(argv: string[]): void {
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
+  engineProjectDir = resolvedProjectDir;
   const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
   if (commandKind) engineInvocation = {
     commandKind,
@@ -8575,6 +8749,7 @@ export function main(argv: string[]): void {
     engineSessionId = undefined;
     engineSelections.clear();
     requestedSteeringContinuation = null;
+    engineProjectDir = undefined;
   }
 }
 
