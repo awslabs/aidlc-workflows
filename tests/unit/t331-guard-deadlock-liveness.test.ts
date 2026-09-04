@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
+  type ActiveDirectiveGuardRemedy,
   type AttemptView,
   type AuditShardEvent,
   artifactFilename,
@@ -38,6 +39,8 @@ import {
   candidateReviewCoverageProjection,
   consumeSharedDirectiveAsk,
   evaluateGuardRefusal,
+  type GuardRecoveryFeedbackStatus,
+  type GuardRemedyOp,
   findStageBySlug,
   GUARD_REMEDY_OPS,
   GUARD_RECOVERY_ASK_TYPE,
@@ -1676,6 +1679,107 @@ describe("AttemptView projections and refusal streaks", () => {
     );
   });
 
+  test("guard-recovery selections resolve only to an offered remedy", () => {
+    const commonRemedies: ActiveDirectiveGuardRemedy[] = [
+      { op: "reconfirm-summary", action: "Present the current summary again" },
+      { op: "request-changes", action: "Ask what should change" },
+    ];
+    const cases: Array<{
+      name: string;
+      remedies: ActiveDirectiveGuardRemedy[];
+      response: string;
+      selectedOp: GuardRemedyOp | null;
+      feedbackStatus: GuardRecoveryFeedbackStatus;
+    }> = [
+      {
+        name: "literal op",
+        remedies: commonRemedies,
+        response: "request-changes",
+        selectedOp: "request-changes",
+        feedbackStatus: "awaiting-feedback",
+      },
+      {
+        name: "plain number",
+        remedies: commonRemedies,
+        response: "2",
+        selectedOp: "request-changes",
+        feedbackStatus: "awaiting-feedback",
+      },
+      {
+        name: "number with punctuation",
+        remedies: commonRemedies,
+        response: "2)",
+        selectedOp: "request-changes",
+        feedbackStatus: "awaiting-feedback",
+      },
+      {
+        name: "number with a terminal dot",
+        remedies: commonRemedies,
+        response: "2.",
+        selectedOp: "request-changes",
+        feedbackStatus: "awaiting-feedback",
+      },
+      {
+        name: "unmatched text",
+        remedies: commonRemedies,
+        response: "Do something else",
+        selectedOp: null,
+        feedbackStatus: "other-remedy",
+      },
+      {
+        name: "ambiguous duplicate action",
+        remedies: [
+          { op: "reconfirm-summary" as const, action: "Choose this remedy" },
+          { op: "request-changes" as const, action: "Choose this remedy" },
+        ],
+        response: "Choose this remedy",
+        selectedOp: null,
+        feedbackStatus: "other-remedy",
+      },
+      {
+        name: "terminal ask",
+        remedies: [],
+        response: "Request Changes",
+        selectedOp: null,
+        feedbackStatus: "other-remedy",
+      },
+    ];
+
+    for (const scenario of cases) {
+      const project = createTestProject();
+      projects.push(project);
+      seedStateFile(project, join(FIXTURES_DIR, "state-construction.md"));
+      const state = readFileSync(seededStateFile(project), "utf-8");
+      writeActiveDirectiveMarker(project, {
+        kind: "ask",
+        ask_type: GUARD_RECOVERY_ASK_TYPE,
+        stage: "functional-design",
+        state_sha256: stateDigest(state),
+        remedies: scenario.remedies,
+      });
+
+      expect(consumeSharedDirectiveAsk(project, scenario.response), scenario.name).toBe(true);
+      const marker = JSON.parse(
+        readFileSync(join(seededRecordDir(project), ".aidlc-active-directive.json"), "utf-8"),
+      ) as {
+        guard_recovery_response?: { selected_op?: string | null };
+      };
+      expect(marker.guard_recovery_response?.selected_op, scenario.name).toBe(
+        scenario.selectedOp,
+      );
+      expect(
+        guardRecoveryFeedbackStatus(
+          project,
+          state,
+          "functional-design",
+          undefined,
+          "anything",
+        ),
+        scenario.name,
+      ).toBe(scenario.feedbackStatus);
+    }
+  });
+
   test("Request Changes binds to the guard-recovery ask by the gate the report path allows", () => {
     // Routing refuses a Unit, so the ask names that Unit. The reject names the
     // gate ownership permits: solo ownership refuses `--unit`, so its reject is
@@ -1697,6 +1801,9 @@ describe("AttemptView projections and refusal streaks", () => {
         stage: "functional-design",
         unit: "alpha",
         state_sha256: stateDigest(state),
+        remedies: [
+          { op: "request-changes", action: "Ask what should change" },
+        ],
       });
       const status = (stage: string, unit: string | undefined, feedback = "anything") =>
         guardRecoveryFeedbackStatus(project, state, stage, unit, feedback);

@@ -4258,6 +4258,11 @@ interface ActiveDirectiveResume {
   issuing_session: string; issuing_intent_uuid: string | null; action?: ResumeAction;
 }
 
+export interface ActiveDirectiveGuardRemedy {
+  op: GuardRemedyOp;
+  action: string;
+}
+
 // The human's answer to a guard-recovery ask, kept on the ask marker so the
 // selection survives the engine re-issuing the same ask and so the later Request
 // Changes feedback can be bound to the human's own words. Both hashes are over
@@ -4265,6 +4270,7 @@ interface ActiveDirectiveResume {
 export interface ActiveDirectiveGuardRecoveryResponse {
   status: "awaiting-feedback" | "ready";
   selection_sha256: string;
+  selected_op?: GuardRemedyOp | null;
   feedback_sha256?: string;
 }
 
@@ -4282,6 +4288,7 @@ export interface ActiveDirectiveMarker {
   cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
   ask_type?: string;
+  remedies?: ActiveDirectiveGuardRemedy[];
   guard_recovery_response?: ActiveDirectiveGuardRecoveryResponse;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
@@ -4893,6 +4900,25 @@ function activeDirectiveContext(target: ActiveDirectiveTarget, stateContent: str
   };
 }
 
+function isGuardRemedyOp(value: unknown): value is GuardRemedyOp {
+  return typeof value === "string" &&
+    GUARD_REMEDY_OPS.includes(value as GuardRemedyOp);
+}
+
+function validActiveDirectiveGuardRemedies(
+  value: unknown,
+): value is ActiveDirectiveGuardRemedy[] {
+  return Array.isArray(value) && value.every((remedy) => {
+    if (!isPlainObject(remedy)) return false;
+    const keys = Object.keys(remedy).sort();
+    return keys.length === 2 &&
+      keys[0] === "action" &&
+      keys[1] === "op" &&
+      isGuardRemedyOp(remedy.op) &&
+      typeof remedy.action === "string";
+  });
+}
+
 function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | null {
   if (!isPlainObject(parsed)) return null;
   const stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
@@ -4930,6 +4956,12 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
             validateUnitName(unit.trim()) !== null,
         )
       )) ||
+    ("remedies" in parsed &&
+      (
+        parsed.kind !== "ask" ||
+        parsed.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+        !validActiveDirectiveGuardRemedies(parsed.remedies)
+      )) ||
     ("cursor_harness" in parsed &&
       (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
     ("ask_type" in parsed &&
@@ -4939,6 +4971,19 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
         parsed.kind !== "ask" ||
         parsed.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
         !guardRecovery ||
+        Object.keys(guardRecovery).some((key) =>
+          !["status", "selection_sha256", "selected_op", "feedback_sha256"].includes(key)
+        ) ||
+        ("selected_op" in guardRecovery &&
+          guardRecovery.selected_op !== null &&
+          !isGuardRemedyOp(guardRecovery.selected_op)) ||
+        (isGuardRemedyOp(guardRecovery.selected_op) &&
+          (
+            !validActiveDirectiveGuardRemedies(parsed.remedies) ||
+            !parsed.remedies.some(
+              (remedy) => remedy.op === guardRecovery.selected_op,
+            )
+          )) ||
         !["awaiting-feedback", "ready"].includes(String(guardRecovery.status)) ||
         !/^[0-9a-f]{64}$/.test(String(guardRecovery.selection_sha256 ?? "")) ||
         (
@@ -5206,6 +5251,7 @@ export function writeActiveDirectiveMarker(
     rules_bundle?: string;
     directive_sha256?: string;
     ask_type?: string;
+    remedies?: ActiveDirectiveGuardRemedy[];
   },
   invocation?: {
     attemptId?: string;
@@ -5221,6 +5267,9 @@ export function writeActiveDirectiveMarker(
   }
   if (marker.unit !== undefined && marker.unit.trim().length === 0) {
     throw new Error("Invalid active-directive unit: empty");
+  }
+  if (marker.remedies !== undefined && !validActiveDirectiveGuardRemedies(marker.remedies)) {
+    throw new Error("Invalid active-directive guard remedies");
   }
   if (!/^[0-9a-f]{64}$/.test(marker.state_sha256)) {
     throw new Error("Invalid active-directive state digest");
@@ -5508,6 +5557,11 @@ export function writeActiveDirectiveMarker(
       ...(marker.kind === "ask" && marker.ask_type
         ? { ask_type: marker.ask_type }
         : { ask_type: undefined }),
+      ...(marker.kind === "ask" &&
+          marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+          marker.remedies !== undefined
+        ? { remedies: marker.remedies }
+        : { remedies: undefined }),
       // A fresh publication is a fresh question. The guard-recovery ask that is
       // re-issued for an unchanged state never reaches this write (the caller
       // retains the issued marker), so clearing here cannot discard a selection.
@@ -5629,6 +5683,34 @@ export function normalizeGuardRecoveryText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function resolveGuardRecoverySelection(
+  remedies: readonly ActiveDirectiveGuardRemedy[] | undefined,
+  responseText: string,
+): GuardRemedyOp | null {
+  if (remedies === undefined || remedies.length === 0) return null;
+  const normalized = normalizeGuardRecoveryText(responseText);
+  const matchedOps = new Set<GuardRemedyOp>();
+  remedies.forEach((remedy) => {
+    if (
+      normalized === normalizeGuardRecoveryText(remedy.action) ||
+      normalized === remedy.op ||
+      (remedy.op === "request-changes" &&
+        isRequestChangesChoice(responseText))
+    ) {
+      matchedOps.add(remedy.op);
+    }
+  });
+  const numeric = /^([1-9]\d*)[.)]?$/.exec(normalized);
+  if (numeric !== null) {
+    const index = Number(numeric[1]) - 1;
+    const remedy = remedies[index];
+    if (remedy !== undefined) matchedOps.add(remedy.op);
+  }
+  return matchedOps.size === 1
+    ? (matchedOps.values().next().value ?? null)
+    : null;
+}
+
 function guardRecoveryTextSha256(text: string): string | null {
   const normalized = normalizeGuardRecoveryText(text);
   return normalized.length === 0 ? null : contentSha256(normalized);
@@ -5689,6 +5771,10 @@ export function consumeSharedDirectiveAsk(
         guard_recovery_response: {
           status: "awaiting-feedback",
           selection_sha256: responseSha256,
+          selected_op: resolveGuardRecoverySelection(
+            marker.remedies,
+            humanResponseText,
+          ),
         },
       },
       result: true,
@@ -5698,6 +5784,7 @@ export function consumeSharedDirectiveAsk(
 
 export type GuardRecoveryFeedbackStatus =
   | "not-applicable"
+  | "other-remedy"
   | "awaiting-feedback"
   | "mismatch"
   | "match";
@@ -5734,6 +5821,9 @@ export function guardRecoveryFeedbackStatus(
   ) {
     return "not-applicable";
   }
+  if (marker.guard_recovery_response.selected_op !== "request-changes") {
+    return "other-remedy";
+  }
   if (marker.guard_recovery_response.status !== "ready") {
     return "awaiting-feedback";
   }
@@ -5741,6 +5831,33 @@ export function guardRecoveryFeedbackStatus(
       guardRecoveryTextSha256(feedback)
     ? "match"
     : "mismatch";
+}
+
+export function selectedGuardRecoveryRemedyAction(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string | undefined,
+): string | null {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  const sameGate = isTeamUnitOwnership(stateContent)
+    ? (marker?.unit ?? undefined) === unit
+    : unit === undefined;
+  if (
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.stage !== stage ||
+    !sameGate
+  ) {
+    return null;
+  }
+  const selectedOp = marker.guard_recovery_response?.selected_op;
+  if (selectedOp === undefined || selectedOp === null) return null;
+  const matches = (marker.remedies ?? []).filter(
+    (remedy) => remedy.op === selectedOp,
+  );
+  return matches.length === 1 ? matches[0].action : null;
 }
 
 // The issued guard-recovery ask marker for exactly this ask and state, if one
@@ -19774,10 +19891,8 @@ function lifecycleResetRemedies(
         action:
           `Ask "What should change?" for stage "${reportStage}"${unitContext} ` +
           "and end the turn. After the human answers, submit Request Changes with " +
-          "their exact text unchanged as the report reason" +
-          (input.humanAuthority.freshTurn
-            ? "."
-            : "; that unlocks revision and a fresh review."),
+          "their exact text unchanged as the report reason; that unlocks revision " +
+          "and a fresh review.",
         requiresHuman: true,
         executableNow: true,
       },
@@ -19807,7 +19922,7 @@ function lifecycleResetRemedies(
       action:
         input.attempt.sourceCoverage === "unbindable"
           ? "This stage is already approved; repair .aidlc-source-paths.json or the " +
-            "workspace source boundary so it can be fingerprinted, or jump back with " +
+            "workspace source boundary so the application source can be checked, or jump back with " +
             `/aidlc --stage ${input.stage} to redo it.`
           : "This stage is already approved; restore the reviewed source state, or " +
             `jump back with /aidlc --stage ${input.stage} to redo it.`,
@@ -19911,7 +20026,7 @@ export function evaluateGuardRefusal(
         op: "repair-source-boundary",
         action:
           "Repair .aidlc-source-paths.json or the workspace source boundary so " +
-          "the application source can be fingerprinted, then request a fresh review.",
+          "the application source can be checked, then request a fresh review.",
         requiresHuman: false,
         executableNow: state !== "completed",
       });
@@ -19945,7 +20060,7 @@ export function evaluateGuardRefusal(
       remedies.push({
         op: "start-recovery-review",
         action:
-          "Start the one stale-receipt recovery review against the current " +
+          "Start the one stale-review recovery review against the current " +
           "artifact and source state.",
         requiresHuman: false,
         executableNow: input.attempt.summaryCoverage === "current" && openForWork,

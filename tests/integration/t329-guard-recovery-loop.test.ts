@@ -73,6 +73,19 @@ function directive(run: Run): Record<string, unknown> {
   return JSON.parse(line) as Record<string, unknown>;
 }
 
+function rejectedReport(p: Project, userInput: string, feedback: string): Run {
+  return p.report([
+    "--stage",
+    "functional-design",
+    "--result",
+    "rejected",
+    "--user-input",
+    userInput,
+    "--reason",
+    feedback,
+  ]);
+}
+
 // The Claude transcript shape the Stop hook reads to decide whether the ending
 // turn was conversational. Every cycle carries an engine call, so the
 // conversational carve-out never releases the stop; only the ask wait may.
@@ -336,6 +349,9 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(marker?.unit).toBe(UNIT);
     expect(marker?.delivery).toBe("issued");
     expect(marker?.guard_recovery_response).toBeUndefined();
+    expect(marker?.remedies).toEqual(
+      remedies.map(({ op, action }) => ({ op, action })),
+    );
 
     // The observer sees the same ask and publishes nothing.
     const before = readFileSync(p.markerPath, "utf-8");
@@ -370,8 +386,10 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(consumed?.delivery).toBe("consumed");
     expect(consumed?.guard_recovery_response).toMatchObject({
       status: "awaiting-feedback",
+      selected_op: "request-changes",
     });
     const revisionAfterPick = consumed?.revision;
+    const markerRemediesAfterPick = consumed?.remedies;
 
     // The Stop hook lets the turn end: the engine is waiting on the human.
     for (const stopHookActive of [false, true]) {
@@ -386,31 +404,31 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(again.kind).toBe("ask");
     expect(again.ask_type).toBe("guard-recovery");
     expect(again.reason_codes).toEqual(ask.reason_codes);
-    // Same ask by identity (guard state, ops); the prose may reflect that a
-    // human has now acted this turn, which is presentation, not identity.
+    // Same ask by identity: the exact ordered op/action offer is unchanged.
+    // Incidental human-presence state must not rewrite visible offer text.
     expect(again.state_signature).toBe(ask.state_signature);
-    expect((again.remedies as Array<Record<string, unknown>>).map((r) => r.op)).toEqual(
-      remedies.map((r) => r.op),
-    );
+    expect(
+      (again.remedies as Array<Record<string, unknown>>).map(({ op, action }) => ({
+        op,
+        action,
+      })),
+    ).toEqual(remedies.map(({ op, action }) => ({ op, action })));
     const afterNext = p.marker();
     expect(afterNext?.delivery).toBe("consumed");
     expect(afterNext?.guard_recovery_response).toMatchObject({
       status: "awaiting-feedback",
+      selected_op: "request-changes",
     });
     expect(afterNext?.revision).toBe(revisionAfterPick);
+    expect(afterNext?.remedies).toEqual(markerRemediesAfterPick);
 
     // Before the human's feedback exists, the conductor cannot submit Request
     // Changes on their behalf: the pick is a choice, not revision feedback.
-    const premature = p.report([
-      "--stage",
-      "functional-design",
-      "--result",
-      "rejected",
-      "--user-input",
+    const premature = rejectedReport(
+      p,
       "Request Changes",
-      "--reason",
       "anything the conductor made up",
-    ]);
+    );
     const prematureDirective = directive(premature);
     expect(prematureDirective.kind).toBe("error");
     expect(String(prematureDirective.message)).toContain("not revision feedback");
@@ -418,36 +436,159 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     // The human answers; the marker binds the feedback text.
     const feedback = "Split the save-search workflow into two steps";
     expect(p.humanPrompt(feedback).code).toBe(0);
-    expect(p.marker()?.guard_recovery_response).toMatchObject({ status: "ready" });
+    expect(p.marker()?.guard_recovery_response).toMatchObject({
+      status: "ready",
+      selected_op: "request-changes",
+    });
 
     // A paraphrase is refused; the human's own words, re-wrapped and with the
     // label typed casually, are accepted and open the revision.
-    const paraphrased = p.report([
+    const paraphrased = rejectedReport(
+      p,
+      "Request Changes",
+      "Please split the save-search flow in two",
+    );
+    expect(String(directive(paraphrased).message)).toContain("does not exactly match");
+    const accepted = rejectedReport(
+      p,
+      "request changes.",
+      "Split the\n  save-search workflow   into two steps",
+    );
+    expect(accepted.code, accepted.stderr).toBe(0);
+    const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
+    expect(state).toMatch(/^- \[R\] functional-design/m);
+    const stateAfterReject = p.stopHook(entries, false);
+    expect(stateAfterReject.stdout.trim()).toBe("");
+  }, 240000);
+
+  test("a Request Changes choice cannot stand in for a separate nonblank rejection reason", () => {
+    const p = project();
+    const entries: TranscriptEntry[] = [transcript.human("Continue the AIDLC workflow")];
+    const ask = routeToAsk(p, entries);
+    const requestChanges = (ask.remedies as Array<Record<string, unknown>>).find(
+      (remedy) => remedy.op === "request-changes",
+    );
+    expect(requestChanges).toBeDefined();
+    expect(
+      p.humanPick(ask.question as string, requestChanges?.action as string).code,
+    ).toBe(0);
+
+    const statePath = join(seededRecordDir(p.dir), "aidlc-state.md");
+    const stateBeforeReport = readFileSync(statePath, "utf-8");
+    const rejected = p.report([
       "--stage",
       "functional-design",
       "--result",
       "rejected",
       "--user-input",
       "Request Changes",
-      "--reason",
-      "Please split the save-search flow in two",
     ]);
-    expect(String(directive(paraphrased).message)).toContain("does not exactly match");
-    const accepted = p.report([
-      "--stage",
-      "functional-design",
-      "--result",
-      "rejected",
-      "--user-input",
-      "request changes.",
-      "--reason",
-      "Split the\n  save-search workflow   into two steps",
-    ]);
+    const rejection = directive(rejected);
+    expect(rejection.kind).toBe("error");
+    expect(String(rejection.message)).toContain("guard-recovery choice is not revision feedback");
+    expect(String(rejection.message)).toContain("What should change?");
+    expect(String(rejection.message)).toContain("separate response");
+    expect(readFileSync(statePath, "utf-8")).toBe(stateBeforeReport);
+  }, 240000);
+
+  test("a tolerant Request Changes selection binds later exact feedback", () => {
+    const p = project();
+    const entries: TranscriptEntry[] = [transcript.human("Continue the AIDLC workflow")];
+    const ask = routeToAsk(p, entries);
+    expect(
+      (ask.remedies as Array<Record<string, unknown>>).some(
+        (remedy) => remedy.op === "request-changes",
+      ),
+    ).toBe(true);
+
+    expect(p.humanPick(ask.question as string, "B.  Request   Changes").code).toBe(0);
+    expect(p.marker()?.guard_recovery_response).toMatchObject({
+      status: "awaiting-feedback",
+      selected_op: "request-changes",
+    });
+    const feedback = "Keep saved searches private until their owner shares them";
+    expect(p.humanPrompt(feedback).code).toBe(0);
+    const accepted = rejectedReport(p, "Request Changes", feedback);
     expect(accepted.code, accepted.stderr).toBe(0);
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toMatch(/^- \[R\] functional-design/m);
-    const stateAfterReject = p.stopHook(entries, false);
-    expect(stateAfterReject.stdout.trim()).toBe("");
+  }, 240000);
+
+  test("a different recovery choice cannot authorize a later rejection", () => {
+    const p = project();
+    const entries: TranscriptEntry[] = [transcript.human("Continue the AIDLC workflow")];
+    const ask = routeToAsk(p, entries);
+    const reconfirm = (ask.remedies as Array<Record<string, unknown>>).find(
+      (remedy) => remedy.op === "reconfirm-summary",
+    );
+    expect(reconfirm).toBeDefined();
+    expect(p.humanPick(ask.question as string, reconfirm?.action as string).code).toBe(0);
+    expect(p.marker()?.guard_recovery_response).toMatchObject({
+      status: "awaiting-feedback",
+      selected_op: "reconfirm-summary",
+    });
+
+    const laterMessage = "The current consolidated summary is accurate";
+    expect(p.humanPrompt(laterMessage).code).toBe(0);
+    const stateBeforeRefusal = readFileSync(
+      join(seededRecordDir(p.dir), "aidlc-state.md"),
+      "utf-8",
+    );
+    const refused = rejectedReport(p, "Request Changes", laterMessage);
+    expect(refused.code, refused.stderr).toBe(0);
+    const refusal = directive(refused);
+    expect(refusal.kind).toBe("error");
+    expect(String(refusal.message)).toContain(
+      "recovery-question choice was not Request Changes",
+    );
+    expect(String(refusal.message)).toContain(reconfirm?.action as string);
+    const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
+    expect(state).toBe(stateBeforeRefusal);
+    expect(state).toMatch(/^- \[-\] functional-design/m);
+    expect(state).not.toMatch(/^- \[R\] functional-design/m);
+  }, 240000);
+
+  test("a legacy consumed selection without its selected remedy cannot authorize rejection", () => {
+    const p = project();
+    const entries: TranscriptEntry[] = [transcript.human("Continue the AIDLC workflow")];
+    const ask = routeToAsk(p, entries);
+    const requestChanges = (ask.remedies as Array<Record<string, unknown>>).find(
+      (remedy) => remedy.op === "request-changes",
+    );
+    expect(requestChanges).toBeDefined();
+    expect(p.humanPick(ask.question as string, requestChanges?.action as string).code).toBe(0);
+    const feedback = "Separate query validation from persistence";
+    expect(p.humanPrompt(feedback).code).toBe(0);
+
+    const legacyMarker = p.marker();
+    const legacyResponse = {
+      ...(legacyMarker?.guard_recovery_response as Record<string, unknown>),
+    };
+    delete legacyResponse.selected_op;
+    writeFileSync(
+      p.markerPath,
+      `${JSON.stringify({
+        ...legacyMarker,
+        guard_recovery_response: legacyResponse,
+      })}\n`,
+      "utf-8",
+    );
+
+    const stateBeforeRefusal = readFileSync(
+      join(seededRecordDir(p.dir), "aidlc-state.md"),
+      "utf-8",
+    );
+    const refused = rejectedReport(p, "Request Changes", feedback);
+    expect(refused.code, refused.stderr).toBe(0);
+    const refusal = directive(refused);
+    expect(refusal.kind).toBe("error");
+    expect(String(refusal.message)).toContain(
+      "recovery-question choice was not Request Changes",
+    );
+    const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
+    expect(state).toBe(stateBeforeRefusal);
+    expect(state).toMatch(/^- \[-\] functional-design/m);
+    expect(state).not.toMatch(/^- \[R\] functional-design/m);
   }, 240000);
 
   test("the recorded selection is the human's words, whitespace-normalized", () => {
@@ -464,6 +605,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(marker?.guard_recovery_response).toEqual({
       status: "awaiting-feedback",
       selection_sha256: expected,
+      selected_op: (ask.remedies as Array<Record<string, unknown>>)[0].op,
     });
   }, 180000);
 });

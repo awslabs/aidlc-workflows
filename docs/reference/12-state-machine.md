@@ -706,17 +706,24 @@ ever emits an `error` directive or counts silently.
 
 **The human's selection survives the re-ask.** A guard-recovery ask is published
 as an active-directive marker (`kind: "ask"`, `ask_type: "guard-recovery"`). The
+marker carries `remedies`, the offered `op`/`action` entries in display order. The
 human-turn hook records the human's remedy selection on it (`delivery: consumed`,
-`guard_recovery_response.status: awaiting-feedback`) and their later feedback
-(`status: ready`). A repeated `next` that derives the same ask for an unchanged
-state returns the ask without rewriting the marker, and the Stop hook releases
-the turn on the ask, so the conductor is never told to re-present a question the
-human already answered. `reject` then requires `--feedback` to be that human's
-own words, compared whitespace-normalized; a paraphrase is refused, and a
-selection alone is refused with "ask what should change". The ask names the
-blocked target, so it may carry a Unit; the reject names the gate the report
-path allows, which is `--unit <name>` under Unit Ownership: team and the stage
-alone under solo ownership (where `--unit` is refused). The binding follows
+`guard_recovery_response.status: awaiting-feedback`) together with the response's
+`selection_sha256` and `selected_op`; `selected_op` is null when the selection is
+unmatched or ambiguous. Their later feedback changes the response to `status:
+ready`. A repeated `next` that derives the same ask for an unchanged state, gate,
+and ordered remedy `op`/`action` entries returns the ask without rewriting the
+marker, and the Stop hook releases the turn on the ask, so the conductor is never
+told to re-present a question the human already answered. `reject` is allowed only
+after `selected_op` records `request-changes` and matching human feedback arrives:
+`--feedback` must be that human's own words, compared whitespace-normalized. A
+paraphrase is refused, and a selection alone is refused with "ask what should
+change". Legacy consumed responses without `selected_op` are refused rather than
+treated as authorization.
+The ask names the blocked target, so it may carry a Unit; the reject
+names the gate the report path allows, which is `--unit <name>` under Unit
+Ownership: team and the stage alone under solo ownership (where `--unit` is
+refused). The binding follows
 that same rule: team compares stage and Unit, solo compares the stage. The
 gate's "Request Changes" choice is matched tolerant of case, an option prefix,
 quotes, and trailing punctuation; Plan Approval keeps its exact labels because

@@ -66,6 +66,7 @@ import {
   freshReviewReceipts,
   getField,
   guardRecoveryFeedbackStatus,
+  selectedGuardRecoveryRemedyAction,
   type GuardAttemptState,
   type StageEntry,
   type GuardRefusal,
@@ -5711,10 +5712,38 @@ function handleReject(args: string[]): void {
   if (!teamGate) {
     validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
   }
+  const feedbackStatus = guardRecoveryFeedbackStatus(
+    pd,
+    content,
+    slug,
+    teamGate?.unit,
+    feedback ?? "",
+  );
+  if (feedbackStatus === "other-remedy") {
+    const selectedAction = selectedGuardRecoveryRemedyAction(
+      pd,
+      content,
+      slug,
+      teamGate?.unit,
+    );
+    error(
+      `Refusing to reject "${slug}": the recovery-question choice was not Request Changes.` +
+        (selectedAction ? ` The selected action was "${selectedAction}".` : "") +
+        " Carry out that action, or re-present the recovery question and wait for the human to choose Request Changes.",
+    );
+  }
+  if (feedbackStatus === "awaiting-feedback") {
+    error(
+      `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
+        `feedback. Ask "What should change?", end the turn, and wait for the ` +
+        "human's separate response before retrying.",
+    );
+  }
   const autonomousDecision =
     !teamGate && isAutonomousConstructionDecision(content, stage.phase);
   if (
     !autonomousDecision &&
+    feedbackStatus === "not-applicable" &&
     !humanPresenceGuardDisabled() &&
     !isRequestChangesChoice(decision)
   ) {
@@ -5739,20 +5768,6 @@ function handleReject(args: string[]): void {
       `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
         "cancellation boilerplate. Re-present the original held gate with every offered choice " +
         "and wait for the human to choose one.",
-    );
-  }
-  const feedbackStatus = guardRecoveryFeedbackStatus(
-    pd,
-    content,
-    slug,
-    teamGate?.unit,
-    feedback,
-  );
-  if (feedbackStatus === "awaiting-feedback") {
-    error(
-      `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
-        `feedback. Ask "What should change?", end the turn, and wait for the ` +
-        "human's separate response before retrying.",
     );
   }
   if (feedbackStatus === "mismatch") {
