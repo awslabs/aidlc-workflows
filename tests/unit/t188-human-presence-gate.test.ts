@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:stripRecommendedDecorator, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -248,6 +248,21 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     // Auto-advanced off feasibility.
     expect(field(proj, "Current Stage")).not.toBe(slug);
+  });
+
+  // --- Scenario B2: LEGIT, decorated picker label -----------------------------
+  //
+  // Same legit flow as B, but the reply is the picker label the documented
+  // question-rendering convention produces: "Approve (Recommended)". The
+  // decorator is presentation, not choice content, so approve COMMITS.
+  test("B2: approve COMMITS when the reply carries the (Recommended) label decorator", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", slug]);
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve (Recommended)"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
   // --- Scenario C: CASCADE (load-bearing) ------------------------------------
@@ -868,6 +883,66 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "approved",
         "--user-input",
         "The user approved",
+      ]);
+      expect(approve.rc).toBe(0);
+      expect(approve.out).toContain('"kind":"error"');
+      expect(approve.out).toContain("did not match an offered choice");
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    });
+
+    test("a picker label carrying the (Recommended) decorator still approves", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      const approve = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "approved",
+        "--user-input",
+        "Approve (Recommended)",
+      ]);
+      expect(approve.rc).toBe(0);
+      expect(approve.out).toContain('"kind":"done"');
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    });
+
+    test("a decorated Request Changes label still rejects with feedback", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      const reject = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes (Recommended)",
+        "--reason",
+        "tighten the schema",
+      ]);
+      expect(reject.rc).toBe(0);
+      expect(reject.out).not.toContain('"kind":"error"');
+      expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
+    });
+
+    test("the decorator does not rescue a non-matching reply", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      const approve = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "approved",
+        "--user-input",
+        "Looks good (Recommended)",
       ]);
       expect(approve.rc).toBe(0);
       expect(approve.out).toContain('"kind":"error"');
