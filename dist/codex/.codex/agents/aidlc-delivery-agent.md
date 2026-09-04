@@ -9,7 +9,6 @@ description: >
   Leads Team Formation, Initiative Approval & Handoff, and Delivery Planning stages.
   Supports Scope Definition and Units Generation.
 disallowedTools: Task
-model: openai.gpt-5.6-terra
 effort: medium
 ---
 <!-- aidlc-delegated-knowledge-preflight -->

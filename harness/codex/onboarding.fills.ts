@@ -31,17 +31,17 @@ gate).`,
 
     prereq_bullets: `- **Codex CLI ≥ 0.145.0**: earlier releases defer compact-source SessionStart after a mid-turn auto-compaction, so one model continuation can run without the restored workflow mission. Releases before 0.139.0 also lack reliable subagent role attribution and hyphenated agent-TOML resolution. \`$aidlc --doctor\` enforces the pin. Check with \`codex --version\`.
 - **bun**: Required for CLI tools and hook scripts (state management, audit logging, jump orchestration). Install via \`curl -fsSL https://bun.sh/install | bash\`. On Windows: \`npm install -g bun\` or \`powershell -c "irm bun.sh/install.ps1 | iex"\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
-- **Model provider**: The shipped \`.codex/config.toml\` defaults to **Amazon Bedrock** — the session (and judgment-tier agents, which inherit it) on \`openai.gpt-5.5\`, balanced/templated agents pinned to \`openai.gpt-5.6-terra\` (the tier projection). Set your AWS profile/region under \`[model_providers.amazon-bedrock.aws]\` (shipped defaults \`profile = "default"\`, \`region = "us-east-1"\`); you need Bedrock model access and AWS credentials on the default SDK credential chain. For OpenAI auth instead, comment out \`model_provider\` and the \`[model_providers]\` block. Note: \`web_search\` is unavailable on Bedrock, so the market-research stage degrades gracefully.
+- **Model provider**: The shipped \`.codex/config.toml\` does not select a model provider, model, context window, or reasoning effort. Codex keeps the provider and authentication from \`~/.codex/config.toml\`; all AI-DLC roles inherit the selected model, while balanced/templated roles reduce only their reasoning effort to \`medium\`.
 - **MCP servers (optional)**: Codex reads MCP server definitions from \`[mcp_servers.<name>]\` tables in \`config.toml\` (project \`.codex/config.toml\` or \`~/.codex/config.toml\`). The shipped config declares none — add the servers you need there. Credentials flow through your environment; a server you have no credentials for is simply unavailable and never blocks a workflow.`,
 
     prereq_bullets_tail: `- **Permissions**: \`.codex/rules/default.rules\` (Starlark prefix rules) pre-allows the deterministic core's exact command prefixes — \`bun .codex/tools/\`, \`bun .codex/hooks/\`, and \`git worktree\`/\`commit\`/\`add\` — so workflows run without per-call prompts. The sandbox is \`workspace-write\`; commands outside the allowlist prompt.
-- **Personal overrides**: Settings in \`~/.codex/config.toml\` merge over the project \`.codex/config.toml\`. Put machine-specific overrides (model, AWS profile/region, environment variables) there to avoid changing the shared project config.`,
+- **Personal configuration**: Keep machine-specific provider, authentication, model, AWS profile/region, and environment settings in \`~/.codex/config.toml\`. Current Codex versions ignore provider/authentication keys in project-local \`.codex/config.toml\`.`,
 
     agents_note: `On Codex all 14 expert roles are transposed into \`.codex/agents/\` TOMLs (the \`/aidlc\` session reads the role \`.md\` bodies as prose); the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through Codex subagent roles.`,
 
     structure_extra: "",
 
-    guide_pointer: `The Codex-specific guide (prerequisites, trust pre-seed, Bedrock config, the git-repo requirement) is \`docs/guide/harnesses/codex-cli.md\`.`,
+    guide_pointer: `The Codex-specific guide (prerequisites, trust pre-seed, provider configuration, the git-repo requirement) is \`docs/guide/harnesses/codex-cli.md\`.`,
 
     sections_before_resumption: `## What's different on this harness
 

@@ -9,7 +9,6 @@ description: >
   Leads Observability Setup, Incident Response, and Feedback & Optimization stages.
   Supports Performance Validation.
 disallowedTools: Task
-model: openai.gpt-5.6-terra
 effort: medium
 ---
 <!-- aidlc-delegated-knowledge-preflight -->

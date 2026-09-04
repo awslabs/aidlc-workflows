@@ -67,7 +67,7 @@ const EXPECTED: Record<
     // with no finding-quality loss (an xhigh session pin was silently
     // doubling every review's cost via inherit).
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    codex: { model: null, effort: "medium" },
     // Cursor never pins a model either: model availability is Cursor-plan-
     // dependent (Free rejects every named id), so all tiers inherit.
     cursor: { model: null },
@@ -79,7 +79,7 @@ const EXPECTED: Record<
   },
   templated: {
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    codex: { model: null, effort: "medium" },
     cursor: { model: null },
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
@@ -291,15 +291,15 @@ describe("t220 tier projection module", () => {
 describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
   const dist = (...p: string[]): string => join(REPO_ROOT, "dist", ...p);
 
-  test("codex TOMLs: judgment omits model+effort, balanced and templated pin both", () => {
+  test("codex TOMLs: every tier inherits model; balanced and templated pin medium effort", () => {
     const arch = readFileSync(dist("codex", ".codex", "agents", "aidlc-architect-agent.toml"), "utf-8");
     expect(/^model\s*=/m.test(arch), "judgment TOML must omit model").toBe(false);
     expect(/^model_reasoning_effort\s*=/m.test(arch), "judgment TOML must omit effort").toBe(false);
     const lead = readFileSync(dist("codex", ".codex", "agents", "aidlc-product-lead-agent.toml"), "utf-8");
-    expect(lead).toContain('model = "openai.gpt-5.6-terra"');
+    expect(lead).not.toMatch(/^model\s*=/m);
     expect(lead).toContain('model_reasoning_effort = "medium"');
     const delivery = readFileSync(dist("codex", ".codex", "agents", "aidlc-delivery-agent.toml"), "utf-8");
-    expect(delivery).toContain('model = "openai.gpt-5.6-terra"');
+    expect(delivery).not.toMatch(/^model\s*=/m);
     expect(delivery).toContain('model_reasoning_effort = "medium"');
   });
 
