@@ -7777,7 +7777,7 @@ function handleChangeControl(
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
   let content = readStateFile(projectDir, flags.intent, flags.space);
-  const resolution = resolveChangeControl(projectDir, content);
+  const resolution = resolveChangeControl(projectDir, content, { tolerateInvalidState: true });
   if (resolution.memoryStrict !== null && requested !== "strict") {
     die(changeControlMemoryStrictRefusal(resolution.memoryStrict));
   }
@@ -7804,11 +7804,15 @@ function handleChangeControl(
   content = setField(content, "Last Updated", isoTimestamp());
   // Audit first, then the state write, like every other state-mutating verb:
   // a ledger that cannot take the row leaves the line untouched.
-  recordChangeControlSet(projectDir, resolution.value, requested, "you");
+  const oldAuditValue = resolution.intent === null && resolution.rawStateValue !== null
+    ? resolution.rawStateValue
+    : resolution.value;
+  recordChangeControlSet(projectDir, oldAuditValue, requested, "you");
   writeStateFile(projectDir, content, flags.intent, flags.space);
-  process.stdout.write(
-    `Change Control changed: ${resolution.value} (${changeControlSourceLabel(resolution.source)}) to ${line}\n`,
-  );
+  const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
+    ? resolution.rawStateValue
+    : formatChangeControl(resolution.value, resolution.source);
+  process.stdout.write(`Change Control changed: ${oldDisplay} to ${line}\n`);
 }
 
 // ---------------------------------------------------------------------------

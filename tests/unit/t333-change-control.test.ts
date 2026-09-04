@@ -8,9 +8,9 @@
 // subcommand:aidlc-orchestrate:next, audit:CHANGE_CONTROL_SET
 //
 // t333 - Change Control is one setting with two values, strict and relaxed.
-// The resolved value is the intent's own state line if present, else the scope
-// default; then any memory layer that declares strict wins and a chat or flag
-// flip to relaxed is refused with a message naming that file. These tests pin
+// The resolved value is the intent's own valid state line when present; a
+// missing line stays strict for compatibility, then any memory layer that
+// declares strict wins. These tests pin
 // the resolver precedence, the scope defaults the maintainer decided, the
 // memory grammar and its validation error, the source labels the human sees,
 // the verb and flag surfaces, and the CHANGE_CONTROL_SET rows.
@@ -171,6 +171,7 @@ describe("t333 (2) the grammar", () => {
     expect(formatChangeControl("strict", "project.md")).toBe("strict (from project.md)");
     expect(formatChangeControl("relaxed", "scope classic")).toBe("relaxed (from scope classic)");
     expect(formatChangeControl("strict", "you")).toBe("strict (set by you)");
+    expect(formatChangeControl("strict", "not set")).toBe("strict (not set)");
   });
 
   test("a Mode value is a closed list read through the Testing Posture field grammar", () => {
@@ -263,15 +264,32 @@ describe("t333 (3) resolution precedence", () => {
     );
   });
 
-  test("a state file without the line resolves from the scope, for intents created before the setting", () => {
-    const { proj, state } = project("bugfix");
+  test("a state file without the line stays strict for intents created before the setting", () => {
+    const { proj, state } = project("classic");
     const content = readFileSync(state, "utf-8").replace(/^- \*\*Change Control\*\*:.*\n/m, "");
     expect(getField(content, CHANGE_CONTROL_FIELD)).toBeNull();
     writeFileSync(state, content);
     const resolved = resolveChangeControl(proj);
-    expect(resolved.value).toBe("relaxed");
-    expect(resolved.source).toBe("scope bugfix");
+    expect(resolved.value).toBe("strict");
+    expect(resolved.source).toBe("not set");
+    expect(resolved.stateValue).toBe("strict");
     expect(resolved.intent).toBeNull();
+  });
+
+  test("an invalid state line is a validation error that names the field and repair command", () => {
+    const { proj, state } = project("classic");
+    writeFileSync(
+      state,
+      setField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD, "stricct (set by you)"),
+    );
+    const message =
+      `Invalid Change Control "stricct (set by you)" in ${state} (field: Change Control). ` +
+      "Expected one of: strict, relaxed. Run /aidlc --change-control strict or " +
+      "/aidlc --change-control relaxed to repair it.";
+    expect(() => resolveChangeControl(proj)).toThrow(message);
+    const status = run(UTILITY, ["status"], proj);
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout).toContain(`Change Control: unavailable (${message})\n`);
   });
 });
 
@@ -298,6 +316,27 @@ describe("t333 (4) the verb, the flag, and the status line", () => {
     expect(again.status).toBe(0);
     expect(again.stdout).toBe("Change Control is already strict (set by you)\n");
     expect(changeControlRows(proj)).toHaveLength(1);
+  });
+
+  test("the verb repairs an invalid state line and records its old text", () => {
+    const { proj, state } = project("classic");
+    writeFileSync(
+      state,
+      setField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD, "stricct (set by you)"),
+    );
+    const repaired = run(UTILITY, ["change-control", "strict"], proj);
+    expect(repaired.status, repaired.stderr).toBe(0);
+    expect(repaired.stdout).toBe(
+      "Change Control changed: stricct (set by you) to strict (set by you)\n",
+    );
+    expect(getField(readFileSync(state, "utf-8"), CHANGE_CONTROL_FIELD)).toBe(
+      "strict (set by you)",
+    );
+    const rows = changeControlRows(proj);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("stricct (set by you)");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("you");
   });
 
   test("the verb refuses a value outside the two", () => {
@@ -447,6 +486,19 @@ describe("t333 (5) a memory edit observed by a governed check", () => {
     expect(auditBlockField(rows[1].block, "Old Value")).toBe("strict");
     expect(auditBlockField(rows[1].block, "New Value")).toBe("relaxed");
     expect(auditBlockField(rows[1].block, "Source")).toBe("scope classic");
+  });
+
+  test("a governed check leaves a legacy lineless intent strict and writes no row", () => {
+    const { proj, state } = project("classic");
+    const withoutLine = readFileSync(state, "utf-8").replace(/^- \*\*Change Control\*\*:.*\n/m, "");
+    writeFileSync(state, withoutLine);
+    const resolved = governedChangeControl(proj);
+    expect(resolved.value).toBe("strict");
+    expect(resolved.source).toBe("not set");
+    expect(readFileSync(state, "utf-8")).toBe(withoutLine);
+    expect(changeControlRows(proj)).toHaveLength(0);
+    const status = run(UTILITY, ["status"], proj);
+    expect(status.stdout).toContain("Change Control: strict (not set)\n");
   });
 
   test("a governed check with no state file resolves strict and writes nothing", () => {

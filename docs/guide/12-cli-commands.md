@@ -347,7 +347,7 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Change Control value with where it came from (`Change Control: strict (from project.md)`, `relaxed (from scope classic)`, or `strict (set by you)`), and the stage progress list. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Change Control value with where it came from (`Change Control: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), and the stage progress list. An invalid Change Control field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
 
 Under `Unit Ownership: team`, it appends a clearly labeled **Team Construction
 Snapshot** with the same board unscoped main renders: Unit Progress, locally
@@ -884,12 +884,14 @@ asked, and a reviewer's verdict is never changed. Runs
 `aidlc-utility.ts change-control <value>` behind the scenes, which rewrites
 the `Change Control` line in `aidlc-state.md` (so the value is committed with
 the intent, survives sessions, and teammates see it) and logs a
-`CHANGE_CONTROL_SET` audit event. A plain-chat request ("stop asking me to
-re-approve when files change") runs the same command. The next intent starts
-from its scope's default again. When a memory layer's `## Change Control`
-section says `Mode: strict`, the command refuses and names that file: edit the
-line there to change it for everyone. At creation the flag can be given with
-the scope (`/aidlc --scope poc --change-control strict "..."`).
+`CHANGE_CONTROL_SET` audit event. The same command repairs an invalid line and
+records the old text. A plain-chat request ("stop asking me to re-approve when
+files change") runs the same command. An older intent without the line stays
+strict until this command sets it; a new intent starts from its scope's default.
+When a memory layer's `## Change Control` section says `Mode: strict`, the
+command refuses and names that file: edit the line there to change it for
+everyone. At creation the flag can be given with the scope (`/aidlc --scope poc
+--change-control strict "..."`).
 
 **Valid values:** `strict`, `relaxed`.
 

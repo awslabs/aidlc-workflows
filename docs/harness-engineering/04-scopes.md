@@ -76,13 +76,15 @@ The optional `change_control:` field is the value a new intent on this scope
 starts with, written to its state file at creation as
 `- **Change Control**: <value> (from scope <name>)`. The human can flip it for
 that one intent with `/aidlc --change-control <value>` or a plain-chat request;
-the next intent starts from the scope default again. To hold a value for
+an older intent without this line remains strict until explicitly set, while
+the next new intent starts from the scope default again. To hold a value for
 everyone on the repo, do not edit eleven scope files: declare it once in memory
 (`## Change Control` with `Mode: strict` in `aidlc/spaces/<space>/memory/org.md`,
 `team.md`, or `project.md`). A memory `strict` wins over every scope default and
 refuses chat or flag flips by naming the file; a memory `relaxed` or an absent
 section has no effect. The validation error for anything other than the two
-values names the file and the allowed values.
+values names the file and the allowed values; the per-intent command repairs an
+invalid state line.
 
 **2. The membership tag — each stage's `scopes:` frontmatter.** A stage names the scopes it runs under in its own frontmatter, in `core/aidlc-common/stages/<phase>/<slug>.md`:
 

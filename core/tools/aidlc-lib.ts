@@ -26277,11 +26277,15 @@ export interface ChangeControlMemoryDeclaration {
 export interface ChangeControlResolution {
   value: ChangeControl;
   /** Where the value came from, worded for humans: `scope classic`,
-   *  `project.md`, or `you`. */
+   *  `project.md`, `you`, or `not set`. */
   source: string;
   scopeDefault: ChangeControl;
-  /** The intent's own state line, when it carries one. */
+  /** The intent's own valid state line, when it carries one. */
   intent: { value: ChangeControl; source: string } | null;
+  /** The state-derived value before memory is applied: the line, else strict. */
+  stateValue: ChangeControl;
+  /** The field text exactly as stored, including invalid text; null when absent. */
+  rawStateValue: string | null;
   /** The first memory layer declaring strict, when one does. */
   memoryStrict: ChangeControlMemoryDeclaration | null;
 }
@@ -26345,8 +26349,9 @@ function changeControlSourceFromLabel(label: string): string {
   return from ? from[1].trim() : label || "you";
 }
 
-/** The label rendered after the value: `from scope classic`, `from project.md`, `set by you`. */
+/** The label rendered after the value: `from scope classic`, `from project.md`, `set by you`, `not set`. */
 export function changeControlSourceLabel(source: string): string {
+  if (source === "not set") return source;
   return source === "you" ? "set by you" : `from ${source}`;
 }
 
@@ -26408,14 +26413,16 @@ export function scopeChangeControlDefault(scope: string | null | undefined): Cha
 }
 
 /**
- * Resolved value = the intent's own line if present, else the scope default.
- * Then, if ANY memory layer declares strict, the resolved value is strict and
- * that file is the source. Memory `relaxed` or an absent section has no effect.
- * Pure: reads state and memory, writes nothing.
+ * Resolved value = the intent's own valid line if present, else strict. Then,
+ * if ANY memory layer declares strict, the resolved value is strict and that
+ * file is the source. Memory `relaxed` or an absent section has no effect. A
+ * malformed state line is a validation error unless the repair command opts
+ * into reading it tolerantly. Pure: reads state and memory, writes nothing.
  */
 export function resolveChangeControl(
   projectDir: string,
   stateContent?: string | null,
+  options: { tolerateInvalidState?: boolean } = {},
 ): ChangeControlResolution {
   let state = stateContent ?? null;
   if (state === null) {
@@ -26427,7 +26434,17 @@ export function resolveChangeControl(
   }
   const scope = getField(state, "Scope");
   const scopeDefault = scopeChangeControlDefault(scope);
-  const intent = parseChangeControlStateLine(getField(state, CHANGE_CONTROL_FIELD));
+  const rawStateValue = getField(state, CHANGE_CONTROL_FIELD);
+  const intent = parseChangeControlStateLine(rawStateValue);
+  if (rawStateValue !== null && intent === null && !options.tolerateInvalidState) {
+    throw new Error(
+      `Invalid Change Control "${rawStateValue}" in ${stateFilePath(projectDir)} ` +
+        `(field: ${CHANGE_CONTROL_FIELD}). Expected one of: ${CHANGE_CONTROL_VALUES.join(", ")}. ` +
+        "Run /aidlc --change-control strict or /aidlc --change-control relaxed to repair it.",
+    );
+  }
+  const stateValue = intent?.value ?? "strict";
+  const stateSource = intent?.source ?? "not set";
   const memoryStrict =
     memoryChangeControlDeclarations(projectDir).find(
       (declaration) => declaration.value === "strict",
@@ -26438,17 +26455,18 @@ export function resolveChangeControl(
       source: `${memoryStrict.layer}.md`,
       scopeDefault,
       intent,
+      stateValue,
+      rawStateValue,
       memoryStrict,
     };
   }
-  if (intent !== null) {
-    return { value: intent.value, source: intent.source, scopeDefault, intent, memoryStrict: null };
-  }
   return {
-    value: scopeDefault,
-    source: `scope ${(scope ?? "").trim().toLowerCase() || "unknown"}`,
+    value: stateValue,
+    source: stateSource,
     scopeDefault,
-    intent: null,
+    intent,
+    stateValue,
+    rawStateValue,
     memoryStrict: null,
   };
 }
@@ -26612,8 +26630,8 @@ export function recordAcceptedChanges(
  * Resolve the setting at a governed checkpoint and, when a memory edit moved
  * the effective value for this running intent since it was last recorded,
  * write one CHANGE_CONTROL_SET row naming that source. The previous effective
- * value is the newest CHANGE_CONTROL_SET row, else the intent's own line, else
- * the scope default.
+ * value is the newest CHANGE_CONTROL_SET row, else the state-derived value
+ * (the intent's line when valid, otherwise strict).
  */
 export function governedChangeControl(
   projectDir: string,
@@ -26632,7 +26650,7 @@ export function governedChangeControl(
       previous = parseChangeControl(auditBlockField(row.block, "New Value")) ?? previous;
     }
     if (previous === null) {
-      previous = resolution.intent?.value ?? resolution.scopeDefault;
+      previous = resolution.stateValue;
     }
     if (previous !== resolution.value) {
       appendChangeControlSetRow(projectDir, {
@@ -26650,7 +26668,7 @@ export function governedChangeControl(
  */
 export function recordChangeControlSet(
   projectDir: string,
-  oldValue: ChangeControl | null,
+  oldValue: string | null,
   newValue: ChangeControl,
   source: string,
 ): void {

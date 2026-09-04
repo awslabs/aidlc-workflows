@@ -138,7 +138,7 @@ A composed scope carries the value the composer proposed and you approved at its
 
 ### Where the value lives
 
-The resolved value is written to the intent's `aidlc-state.md` at creation as `- **Change Control**: <value> (from scope <name>)`, rewritten by the flag or the chat request, and read by value only. Because the state file is committed with the intent, the value survives sessions and teammates see the same one; a memory edit that changes the effective value for a running intent is recorded as a `CHANGE_CONTROL_SET` row naming the memory file the next time a governed check runs. The next intent starts from its scope's default again.
+The resolved value is written to the intent's `aidlc-state.md` at creation as `- **Change Control**: <value> (from scope <name>)`, rewritten by the flag or the chat request, and read by value only. Because the state file is committed with the intent, the value survives sessions and teammates see the same one; a memory edit that changes the effective value for a running intent is recorded as a `CHANGE_CONTROL_SET` row naming the memory file the next time a governed check runs. An intent created before this field existed stays `strict (not set)` until you set it; an invalid field is unavailable until `/aidlc --change-control strict|relaxed` repairs it. The next intent starts from its scope's default again.
 
 ---
 
