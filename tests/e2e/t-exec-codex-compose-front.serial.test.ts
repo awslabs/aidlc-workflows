@@ -32,19 +32,18 @@
 // The composed scope's NAME is the model's choice, so beat 2 pins the SHAPE of
 // the sanctioned write (a composed `.codex/scopes/aidlc-*.md` exists and the
 // state's Scope field names it) rather than a literal name. The sanctioned
-// write needs a sandbox grant: under workspace-write codex carves the project-
-// root `.codex/` out of the writable root (same read-only-by-design treatment
-// as `.git/`), so the composer's `.codex/scopes/` + scope-grid write is
-// EPERM-denied and a headless exec run cannot escalate it to an approval. The
-// config.toml below grants `<proj>/.codex` up front (see setupCodexProject),
-// which is what lets this test prove the REAL product arc instead of the
-// model's env-seam improvisation. Denied-path + mechanism pinned by
-// tmp/adaptive-workflows/spike-codex-resume/FINDINGS.md §5.
+// `.codex/` remains a protected workspace carveout. The shared headless config
+// deliberately adds no split writable root: native Windows rejects reopening a
+// protected descendant that way. The shipped `bun .codex/tools/` allow rule
+// and `--approve-for-me` authorize the reviewed protected-write retry for this
+// one compose session, which lets this test prove the REAL product arc instead
+// of the model's env-seam improvisation. Status, memory-include, and the
+// in-flight compose file retain the default headless `approval: never` contract.
 //
 // `--last` filters recorded sessions by cwd, so beat 2 MUST run with the same
 // cwd as beat 1 (both use the project dir).
 //
-// LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
+// LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.147.0 binary
 // (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
 // AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise.
 
@@ -59,11 +58,17 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  CODEX_AUTO_REVIEW_MIN_VERSION,
+  CODEX_AUTO_REVIEW_MIN_VERSION_LABEL,
+  codexExecArgv,
+  codexVersionAtLeast,
+  writeCodexExecConfig,
+} from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 // The ten shipped stock scopes. A composed scope whose name is NOT one of
@@ -86,8 +91,6 @@ const STOCK_SCOPES = new Set([
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
-const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
-const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
 const PER_BEAT_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
@@ -98,17 +101,19 @@ const TEST_TIMEOUT_MS = PER_BEAT_TIMEOUT_MS * 3 + 30_000;
 
 function codexVersionOk(): boolean {
   const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
-  const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
-  if (r.status !== 0 || !m) return false;
-  const [maj, min] = [Number(m[1]), Number(m[2])];
-  return maj > 0 || min >= 145;
+  return (
+    r.status === 0 &&
+    codexVersionAtLeast(r.stdout ?? "", CODEX_AUTO_REVIEW_MIN_VERSION)
+  );
 }
 
 function skipReason(): string | null {
   if (process.env.AIDLC_CODEX_EXEC_LIVE !== "1") {
     return "set AIDLC_CODEX_EXEC_LIVE=1 to run the live codex-exec journey (uses Bedrock)";
   }
-  if (!codexVersionOk()) return `codex >= 0.145.0 not found (AIDLC_CODEX_BIN=${CODEX_BIN})`;
+  if (!codexVersionOk()) {
+    return `codex >= ${CODEX_AUTO_REVIEW_MIN_VERSION_LABEL} not found (AIDLC_CODEX_BIN=${CODEX_BIN})`;
+  }
   if (!existsSync(CODEX_DIST)) return `distributable missing: ${CODEX_DIST}`;
   return null;
 }
@@ -138,44 +143,7 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
     { encoding: "utf-8", cwd: REPO_ROOT },
   );
   if (trust.status !== 0) throw new Error(`trust emit failed: ${trust.stderr}`);
-  writeFileSync(
-    join(home, "config.toml"),
-    [
-      `model = "openai.gpt-5.5"`,
-      `model_provider = "amazon-bedrock"`,
-      `model_context_window = 1000000`,
-      `model_reasoning_effort = "low"`,
-      ``,
-      `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
-      ``,
-      `[shell_environment_policy]`,
-      `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
-      ``,
-      // Under workspace-write, codex carves the project-root `.codex/` out of
-      // the writable workspace root (the same read-only-by-design treatment it
-      // gives `.git/`), so the composer's sanctioned scope-file write
-      // (`.codex/scopes/aidlc-<name>.md` + the scope-grid entry) is EPERM-denied.
-      // An interactive session would escalate that denial to an approval; a
-      // headless `codex exec` run cannot, so it must grant the path up front.
-      // This is the codex-exec twin of the `.git` grant the shipped
-      // dist/codex/.codex/config.toml documents for headless runs. Granting it
-      // lets beat 2 prove the REAL product arc (scope persisted on the
-      // sanctioned path) rather than the model's env-seam improvisation.
-      // Path pinned by tmp/adaptive-workflows/spike-codex-resume/FINDINGS.md §5.
-      `sandbox_mode = "workspace-write"`,
-      ``,
-      `[sandbox_workspace_write]`,
-      `writable_roots = ["${join(proj, ".codex")}"]`,
-      ``,
-      `[projects."${proj}"]`,
-      `trust_level = "trusted"`,
-      ``,
-      trust.stdout,
-    ].join("\n"),
-    "utf-8",
-  );
+  writeCodexExecConfig(home, proj, trust.stdout);
   return { proj, home, root };
 }
 
@@ -189,7 +157,10 @@ function codexTurn(
   prompt: string,
   opts: { resume?: boolean } = {},
 ): { rc: number; stdout: string; stderr: string } {
-  const argv = opts.resume ? ["exec", "resume", "--last", prompt] : ["exec", prompt];
+  const argv = codexExecArgv(prompt, {
+    approveForMe: true,
+    resume: opts.resume,
+  });
   const r = spawnSync(CODEX_BIN, argv, {
     cwd: proj,
     encoding: "utf-8",
