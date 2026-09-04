@@ -501,6 +501,9 @@ export default async ({
                   toolInput: { file_path: filePath },
                 }));
         for (const call of planCalls) {
+          // The delegated agent's identity rides along: the guard's plan
+          // authorship rule reads a payload WITHOUT agent_type as the main
+          // session (the conductor), which may not edit a fingerprinted plan.
           const guard = await runCore(
             "aidlc-plan-approval-guard.ts",
             {
@@ -508,6 +511,7 @@ export default async ({
               tool_name: call.toolName,
               tool_input: call.toolInput,
               cwd: directory,
+              ...(delegatedAgent ? { agent_type: delegatedAgent } : {}),
             },
             directory,
           );
@@ -524,6 +528,8 @@ export default async ({
         const target =
           (args.subagent_type as string) ?? (args.agent as string) ?? "";
         if (target === "aidlc-developer-agent") {
+          // The session id lets the planning dispatch record the guard may
+          // open be retired by this session's completion forward below.
           const guard = await runCore(
             "aidlc-plan-approval-guard.ts",
             {
@@ -536,6 +542,7 @@ export default async ({
                   .join("\n"),
               },
               cwd: directory,
+              session_id: input.sessionID,
             },
             directory,
           );
@@ -589,6 +596,13 @@ export default async ({
     ) => {
       const { tool, args } = input;
       if (tool === "write" || tool === "edit" || tool === "apply_patch") {
+        // The delegated agent's identity rides along so the audit row's Actor
+        // names the writer; a main-session write carries none.
+        const namedAgent = sessionAgent.get(input.sessionID);
+        const delegatedAgent =
+          namedAgent?.startsWith("aidlc-") && namedAgent.endsWith("-agent")
+            ? namedAgent
+            : null;
         const paths =
           tool === "apply_patch"
             ? applyPatchPaths(args)
@@ -600,6 +614,7 @@ export default async ({
             hook_event_name: "PostToolUse",
             tool_name: "Write",
             tool_input: { file_path: absolutePath },
+            ...(delegatedAgent ? { agent_type: delegatedAgent } : {}),
           };
           // audit THEN sensors, mirroring the Claude settings.json order.
           await runCore("aidlc-write-audit-log.ts", payload, directory);

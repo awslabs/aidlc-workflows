@@ -347,6 +347,7 @@ export async function run(
         JSON.stringify({
           hook_event_name: "SubagentStop",
           agent_type: prior.agent,
+          ...(sessionId ? { session_id: sessionId } : {}),
         }),
       );
       retireSpawn(prior);
@@ -523,12 +524,19 @@ export async function run(
 
   function claudeShaped(eventName: string, nameOverride?: string): string {
     const agent = attributed();
+    // An ambiguous ledger cannot name the writer: say so, so the core hooks
+    // neither misattribute the call to the main session nor guess an agent.
+    // The session id is spelled the same way the SubagentStop forwards spell
+    // it, so a planning dispatch record opened on a Task call is retired by
+    // this conversation's completion.
     return JSON.stringify({
       ...cursor,
       hook_event_name: eventName,
       tool_name: nameOverride ?? toolName,
       cwd: effectiveCwd(),
+      ...(sessionId ? { session_id: sessionId } : {}),
       ...(agent && agent !== AMBIGUOUS_REVIEWER ? { agent_type: agent } : {}),
+      ...(agent === AMBIGUOUS_REVIEWER ? { agent_identity_unavailable: true } : {}),
     });
   }
 
@@ -2812,6 +2820,7 @@ export async function run(
             JSON.stringify({
               hook_event_name: "SubagentStop",
               agent_type: record.agent,
+              ...(sessionId ? { session_id: sessionId } : {}),
               last_assistant_message:
                 "inferred: Cursor emitted sessionEnd without Task postToolUse; " +
                 "the live Task record was retired.",
@@ -2827,6 +2836,7 @@ export async function run(
             JSON.stringify({
               hook_event_name: "SubagentStop",
               agent_type: record.agent,
+              ...(sessionId ? { session_id: sessionId } : {}),
               last_assistant_message:
                 "inferred: Cursor emitted sessionEnd after the primary Task ledger was lost; " +
                 "the independent delegation witness was retired.",
@@ -3023,6 +3033,7 @@ export async function run(
         const sub = cursor.tool_input?.subagent_type;
         const fwd = JSON.stringify({
           hook_event_name: "SubagentStop",
+          ...(sessionId ? { session_id: sessionId } : {}),
           ...(typeof sub === "string" && sub.length > 0 ? { agent_type: sub } : {}),
         });
         runCore("aidlc-log-subagent.ts", fwd);

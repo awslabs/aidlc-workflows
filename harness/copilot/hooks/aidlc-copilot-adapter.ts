@@ -990,6 +990,8 @@ export async function run(
           (value): value is string =>
             typeof value === "string" && value.trim().length > 0,
         )?.trim() ?? "";
+        // The session id lets the planning dispatch record the guard may open
+        // be retired by this session's SubagentStop forward.
         const planApproval = runCoreWithStderr(
           "aidlc-plan-approval-guard.ts",
           JSON.stringify({
@@ -999,6 +1001,7 @@ export async function run(
               ...dispatchInput,
               subagent_type: dispatchTarget,
             },
+            ...(sessionId ? { session_id: sessionId } : {}),
           }),
         );
         if (planApproval.code === 2) {
@@ -1041,9 +1044,12 @@ export async function run(
           process.stdout.write(denyJson(freeze.stderr));
           return 0;
         }
+        // The correlated agent identity rides along: the guard's plan
+        // authorship rule reads a payload WITHOUT agent_type as the main
+        // session (the conductor), which may not edit a fingerprinted plan.
         const planApproval = runCoreWithStderr(
           "aidlc-plan-approval-guard.ts",
-          canonicalInput,
+          withAgentType(canonicalInput),
         );
         if (planApproval.code === 2) {
           process.stdout.write(denyJson(planApproval.stderr));
@@ -1159,12 +1165,14 @@ export async function run(
               process.stdout.write(denyJson(freeze.stderr));
               return 0;
             }
+            const planAgentType = activeSubagentType();
             const planApproval = runCoreWithStderr(
               "aidlc-plan-approval-guard.ts",
               JSON.stringify({
                 hook_event_name: "PreToolUse",
                 tool_name: call.toolName,
                 tool_input: call.toolInput,
+                ...(planAgentType ? { agent_type: planAgentType } : {}),
               }),
             );
             if (planApproval.code === 2) {
@@ -1188,10 +1196,14 @@ export async function run(
             isApplyPatch,
           )
         ) {
+          // The correlated agent identity rides along so the audit row's
+          // Actor names the writer; a main-session write carries none.
+          const writerAgentType = activeSubagentType();
           const fwd = JSON.stringify({
             hook_event_name: "PostToolUse",
             tool_name: target.toolName,
             tool_input: { file_path: target.filePath },
+            ...(writerAgentType ? { agent_type: writerAgentType } : {}),
           });
           runCore("aidlc-write-audit-log.ts", fwd);
           runCore("aidlc-run-sensors.ts", fwd);

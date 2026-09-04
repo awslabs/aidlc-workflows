@@ -61,19 +61,19 @@
       },
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard aidlc-delivery-agent",
         "timeout_ms": 15000
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard aidlc-delivery-agent",
         "timeout_ms": 15000
       }
     ],
     "postToolUse": [
       {
         "matcher": "fs_write",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors aidlc-delivery-agent",
         "timeout_ms": 120000
       }
     ]

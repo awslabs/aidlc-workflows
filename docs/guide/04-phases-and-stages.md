@@ -421,7 +421,7 @@ If verification fails, the conductor reports the issues and asks whether to proc
 |------|--------|-----------------|-------------|
 | Inline (auto-proceed) | 0.1, 0.2, 0.3 | None | Run deterministically inside `aidlc-utility intent-create`, no approval gate |
 | Inline | 29 stages | Full | Agent works in conversation, approval gate at end |
-| Subagent | 2.2, 3.5 | Practices interview + final gate for 2.2; approval gate for 3.5 | Hub-and-spoke Practices Discovery; focused Code Generation |
+| Subagent | 2.2, 3.5 | Practices interview + final gate for 2.2; Plan Approval then the approval gate for 3.5 | Hub-and-spoke Practices Discovery; Code Generation dispatches the developer agent twice per Unit: once to write the code generation plan and unit-test instructions you approve, once to implement the approved plan and record its evidence (the conductor presents the plan, records your answer, and never edits the plan itself) |
 | Pipeline (2-link) | 2.1 | Approval gate only | Developer scan, then architect synthesis-and-write |
 | Mob | 2.4 | Mid-stage judgment questions + approval gate | Lead drafts; design/developer/quality collaborate in parallel via contribution files |
 

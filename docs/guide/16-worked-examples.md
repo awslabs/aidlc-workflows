@@ -111,7 +111,7 @@ The conductor generates `requirements.md` with 3 functional requirements (null h
 
 ### Stage 3.5 — Code Generation
 
-The conductor creates a code generation plan, then delegates to a aidlc-developer-agent subagent:
+The conductor dispatches the aidlc-developer-agent to write the code generation plan and unit-test instructions, presents the plan for your Plan Approval, and then dispatches the same agent to implement the approved plan:
 
 **Plan:**
 1. Fix `ProfileSerializer.serialize()` to handle null `display_name`
@@ -119,7 +119,7 @@ The conductor creates a code generation plan, then delegates to a aidlc-develope
 3. Fix `ProfileService.getProfile()` defensive check
 4. Add integration tests for the API endpoint
 
-You approve the plan. The subagent implements all 4 steps:
+You approve the plan. The subagent implements all 4 steps and records its own `code-summary.md`, `source-manifest.json`, and `traceability.json`:
 
 - **Modified**: `ProfileSerializer.java` (null-safe with username fallback)
 - **Modified**: `ProfileService.java` (defensive null handling)

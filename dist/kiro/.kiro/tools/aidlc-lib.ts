@@ -17310,6 +17310,193 @@ export function reviewerDispatchPath(projectDir: string, intent?: string, space?
 // the pathological case with margin while still bounding a crashed review.
 export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
 
+// `<root>/.aidlc-planning-dispatch.json` - the Code Generation planning
+// dispatch record. The plan-approval guard writes it when it admits an
+// `aidlc-developer-agent` dispatch that carries the `AIDLC-PLANNING` marker
+// (the developer authors the plan and unit-test instructions before Plan
+// Approval), and the SubagentStop hook removes it when that session's developer
+// dispatch returns. Exactly ONE planning dispatch is live at a time: a
+// SubagentStop payload carries no target, so two concurrent planning windows
+// could not be torn down exactly, and a shared window would let one planner
+// write another target's plan. The guard therefore refuses a second planning
+// dispatch while the record is fresh (the reviewer-scope record serializes
+// reviews for the same reason), and a fresh record confines every mutation to
+// the ONE planned target's code-generation record dir: the planning worker
+// writes the plan, the instructions, and the diary, never the workspace and
+// never a sibling target. The record carries {sessionId, target, startedAtMs} -
+// the facts no harness payload delivers at write time. Lives beside the
+// reviewer dispatch record, under the same transient gitignore rule.
+export function planningDispatchPath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-planning-dispatch.json");
+}
+
+// Freshness window for the planning dispatch record: the same orphan discipline
+// as the reviewer record (a stale record is ignored and removed, never
+// honoured). Planning is one authoring dispatch, far shorter than a review, so a
+// crashed session releases the workspace and the next planning dispatch sooner.
+export const PLANNING_DISPATCH_TTL_MS = 60 * 60 * 1000;
+
+/** The planning target: a Unit of Work name, or null for the zero-Unit stage-level target. */
+export type PlanningTarget = string | null;
+
+export interface PlanningDispatchRecord {
+  version: 1;
+  agent: string;
+  stage: string;
+  sessionId: string | null;
+  target: PlanningTarget;
+  startedAtMs: number;
+}
+
+function isPlanningTarget(value: unknown): value is PlanningTarget {
+  return value === null || (typeof value === "string" && value.length > 0);
+}
+
+/** Parse and validate a planning dispatch record. Null on any shape miss. */
+export function parsePlanningDispatchRecord(raw: string): PlanningDispatchRecord | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object") return null;
+    const r = parsed as Partial<PlanningDispatchRecord>;
+    const validSession =
+      r.sessionId === null ||
+      (typeof r.sessionId === "string" && validSessionId(r.sessionId) === r.sessionId);
+    if (
+      r.version !== 1 ||
+      typeof r.agent !== "string" ||
+      r.agent.length === 0 ||
+      typeof r.stage !== "string" ||
+      !validSession ||
+      !isPlanningTarget(r.target) ||
+      typeof r.startedAtMs !== "number" ||
+      !Number.isFinite(r.startedAtMs) ||
+      r.startedAtMs <= 0
+    ) {
+      return null;
+    }
+    return {
+      version: 1,
+      agent: r.agent,
+      stage: r.stage,
+      sessionId: r.sessionId ?? null,
+      target: r.target,
+      startedAtMs: r.startedAtMs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export interface PlanningDispatchWindow {
+  /** The record exists but cannot be parsed; the guard fails closed on it. */
+  malformed: boolean;
+  /** The fresh record, or null when no planning dispatch is live. */
+  record: PlanningDispatchRecord | null;
+}
+
+const PLANNING_WINDOW_CLOSED: PlanningDispatchWindow = { malformed: false, record: null };
+
+function removePlanningDispatchRecord(projectDir: string): void {
+  try {
+    unlinkSync(planningDispatchPath(projectDir));
+  } catch {
+    // Already absent: the window is closed either way.
+  }
+}
+
+/**
+ * The live planning window. A stale record (older than
+ * PLANNING_DISPATCH_TTL_MS) is an orphan from a crashed session: ignored and
+ * best-effort removed, so it cannot keep the workspace confined indefinitely.
+ */
+export function readPlanningDispatchWindow(projectDir: string): PlanningDispatchWindow {
+  const path = planningDispatchPath(projectDir);
+  if (!existsSync(path)) return PLANNING_WINDOW_CLOSED;
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    return existsSync(path) ? { malformed: true, record: null } : PLANNING_WINDOW_CLOSED;
+  }
+  const record = parsePlanningDispatchRecord(raw);
+  if (record === null) return { malformed: true, record: null };
+  if (Date.now() - record.startedAtMs > PLANNING_DISPATCH_TTL_MS) {
+    removePlanningDispatchRecord(projectDir);
+    return PLANNING_WINDOW_CLOSED;
+  }
+  return { malformed: false, record };
+}
+
+// The session identity a planning record is keyed by. A harness that delivers
+// no session id, or one outside the canonical safe shape, keys the record
+// anonymously on BOTH the admission and the completion side, so the two still
+// meet; the freshness window bounds the one case they cannot (a crash).
+function planningSessionIdentity(sessionId: unknown): string | null {
+  if (typeof sessionId !== "string" || sessionId.length === 0) return null;
+  return validSessionId(sessionId);
+}
+
+export type PlanningDispatchAdmission =
+  | { admitted: true }
+  | { admitted: false; live: PlanningDispatchRecord };
+
+/**
+ * Record an admitted planning dispatch, or report the live one that refuses
+ * it. Throws on a malformed record (the caller refuses the dispatch: an
+ * unreadable window is not an open one). Read and write share one audit-lock
+ * hold so two concurrent admissions cannot both win.
+ */
+export function admitPlanningDispatch(
+  projectDir: string,
+  target: PlanningTarget,
+  sessionId?: unknown,
+): PlanningDispatchAdmission {
+  const identity = planningSessionIdentity(sessionId);
+  return withAuditLock(projectDir, () => {
+    const window = readPlanningDispatchWindow(projectDir);
+    if (window.malformed) {
+      throw new Error(
+        `planning dispatch record is malformed; remove ${planningDispatchPath(projectDir)}`,
+      );
+    }
+    if (window.record !== null) return { admitted: false, live: window.record };
+    const path = planningDispatchPath(projectDir);
+    mkdirSync(dirname(path), { recursive: true });
+    const record: PlanningDispatchRecord = {
+      version: 1,
+      agent: "aidlc-developer-agent",
+      stage: "code-generation",
+      sessionId: identity,
+      target,
+      startedAtMs: Date.now(),
+    };
+    writeFileAtomic(path, `${JSON.stringify(record)}\n`);
+    return { admitted: true };
+  });
+}
+
+/**
+ * Remove the planning dispatch record when the session that opened it reports
+ * a developer dispatch returned. Returns true when a record was removed. A
+ * missing, malformed, or foreign-session record is left alone (a malformed
+ * one for the guard to report; a foreign one because that session's own
+ * completion retires it, and the freshness window bounds a crash).
+ */
+export function completePlanningDispatch(
+  projectDir: string,
+  sessionId?: unknown,
+): boolean {
+  const identity = planningSessionIdentity(sessionId);
+  return withAuditLock(projectDir, () => {
+    const window = readPlanningDispatchWindow(projectDir);
+    if (window.record === null || window.record.sessionId !== identity) {
+      return false;
+    }
+    removePlanningDispatchRecord(projectDir);
+    return true;
+  });
+}
+
 // `<projectDir>/aidlc/.aidlc-compose-pending`: the in-flight compose gate
 // marker the conductor writes before presenting the approve/edit/reject gate
 // and deletes on resolve. It lives at the WORKSPACE level (not a per-intent

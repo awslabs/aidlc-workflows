@@ -70,7 +70,7 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 - Application code goes to workspace root, NEVER to the record dir
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
-- Before review, write `source-manifest.json` listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files
+- The developer agent authors this stage's artifacts: the planning dispatch writes the plan and unit-test instructions, and the generation dispatch writes `source-manifest.json` (every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files) before review, plus `code-summary.md` and `traceability.json`. The conductor dispatches, presents, records, and verifies; it writes none of them
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
   disable a defined target, including threshold settings in test or build
@@ -110,11 +110,80 @@ directive exactly once:
 - `directive.unit` absent:
   `<record>/construction/code-generation/`
 
-### Step 2: PART 1 — Planning
+### Step 2: PART 1 - Planning (dispatched)
+
+The developer agent authors the plan; you dispatch it and relay what comes
+back. Do not write, edit, or backfill `code-generation-plan.md` or
+`unit-test-instructions.md` yourself, before or after the dispatch. The
+plan-approval guard refuses a conductor write to either file while the planning
+dispatch is live and once an `[Approval Fingerprint]` exists for the target; on
+Kiro IDE, whose hook payloads carry no agent identity, the guard cannot tell
+the conductor from the developer agent, so this rule holds there by this prose
+alone.
+
+Delegate to Task tool with subagent_type="aidlc-developer-agent". The
+aidlc-developer-agent persona and its knowledge (its `code-generation-guide.md`
+carries the planning rules below) are loaded automatically by the named agent.
+Do NOT manually inject the persona in the prompt.
+
+Include in the planning brief, in this order:
+- First, on its own line, exactly one planning marker:
+  `AIDLC-PLANNING: <directive.unit>`, or `AIDLC-PLANNING: code-generation` for
+  a zero-Unit directive. A planning brief carries none of the generation
+  brief's marker LINES: no `AIDLC-UNIT:`, `AIDLC-STAGE:`, or
+  `AIDLC-TESTING-CONTRACT:` line (the `## Testing Contract` block itself is
+  content, not a marker, and belongs in the brief). The plan-approval guard
+  admits the planning dispatch without approval evidence, refuses a brief that
+  mixes the marker lines, and runs one planning dispatch at a time.
+- The accumulated `load-steering` rule bundle, verbatim.
+- `<code-generation-record>` and the two files the worker writes there:
+  `code-generation-plan.md` and `unit-test-instructions.md`, plus this stage's
+  `memory.md` for its diary notes. It writes nothing else: no application code,
+  no other record file, nothing under another Unit. While the dispatch is live
+  the guard confines every write to that directory.
+- The design artifacts for the CURRENT UNIT ONLY, as paths (the Step 1 list),
+  and a 1-2 line summary of each inception-phase artifact with its file path
+  (requirements summary, stories summary, app design summary); the worker can
+  Read specific files if it needs full content.
+- Project workspace details (languages, frameworks, conventions from
+  aidlc-state.md), and on brownfield the path of the reverse-engineered code
+  knowledge base.
+- The Testing Contract block and instruction: run
+  `bun .codex/tools/aidlc-testing-posture.ts render` yourself and
+  paste its complete `## Testing Contract` output into the brief, followed by
+  the instruction below (the worker re-runs the same command, so the block it
+  embeds is the resolver's current output either way), then the planning rules
+  below, verbatim.
+- The return contract: the worker returns a short summary of the plan (step
+  count, layers covered, methodology and ordering, the test files it planned)
+  and of the unit test instructions (the exact unit-scoped run command). It
+  asks the human nothing, presents no gate, records no decision, runs no
+  lifecycle command, and never calls `aidlc-orchestrate.ts`. Anything it cannot
+  resolve from its inputs (for example, no runnable unit-scoped test command
+  exists, or the Testing Contract command reports a contradictory methodology)
+  comes back as an open question for you to ask the human through the stage
+  question flow; you then re-dispatch with the answers.
+
+When the worker returns, present its summary of the plan and of the unit test
+instructions to the user, then continue to Step 3. If it returned open
+questions, ask them first (stage-protocol.md S3), record the answers, and
+re-dispatch the planning brief with those answers before presenting anything.
+
+#### Testing Contract instruction (carry verbatim in the planning brief)
+
+**Test ordering follows one deterministic Testing Contract.** Run:
+
+```bash
+bun .codex/tools/aidlc-testing-posture.ts render
+```
+
+Paste the command's complete `## Testing Contract` JSON block into `code-generation-plan.md` unchanged. The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: stop and return it to the conductor as an open question so the human can revise the memory rule.
+
+#### Planning rules (carry verbatim in the planning brief)
 
 Create a detailed code generation plan at
 `<code-generation-record>/code-generation-plan.md` with checkboxes for each
-implementation step. Include story-to-code-step traceability — map each plan
+implementation step. Include story-to-code-step traceability: map each plan
 step back to the user story it implements.
 
 Plan should cover (as applicable to the unit):
@@ -128,7 +197,7 @@ Plan should cover (as applicable to the unit):
 - [ ] Documentation (inline and API docs)
 - [ ] Deployment artifacts (Dockerfiles, IaC)
 
-**Test files are MANDATORY in the plan.** Consult the active test strategy (stage-protocol.md §8 "Test Strategy") to determine test scope and volume:
+**Test files are MANDATORY in the plan.** Consult the active test strategy (stage-protocol.md section 8 "Test Strategy") to determine test scope and volume:
 - **Minimal strategy**: Requirement-driven tests (1 per requirement, happy-path unit floor per component); unit tests are the default, but a `bugfix` / `security-patch` targeted regression uses the narrowest level that reproduces the defect
 - **Standard strategy**: Unit test files per component (5-8 tests each) + integration test stubs for key boundaries
 - **Comprehensive strategy**: Unit + integration + E2E test files per component (10-15 tests each)
@@ -144,31 +213,23 @@ The plan MUST include steps for:
 - [ ] Test files appropriate to the active test strategy
 - [ ] Test configuration (vitest.config, jest.config, or equivalent)
 
-If the plan presented to the user omits test file steps, add them before presenting. Tests are not deferred to Build and Test — that stage verifies and extends, not creates from scratch.
-
-**Test ordering follows one deterministic Testing Contract.** Run:
-
-```bash
-bun .codex/tools/aidlc-testing-posture.ts render
-```
-
-Paste the command's complete `## Testing Contract` JSON block into `code-generation-plan.md` unchanged. The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
+If the plan omits test file steps, add them before returning. Tests are not deferred to Build and Test: that stage verifies and extends, not creates from scratch.
 
 Use the contract's `plan_profile.steps` as the required ordering baseline, adapting names and omitting genuinely inapplicable layers without changing the methodology:
-- **TDD**: for every applicable testable layer — data-model/database behavior, repository/data access, business logic, API/endpoint, and frontend behavior — plan Red (failing tests), Green (minimal implementation), then Refactor while green.
+- **TDD**: for every applicable testable layer (data-model/database behavior, repository/data access, business logic, API/endpoint, and frontend behavior) plan Red (failing tests), Green (minimal implementation), then Refactor while green.
 - **BDD**: define executable behavior/scenario examples before each observable feature slice, implement that slice across every required layer, run scenarios green, then refactor. Do not turn BDD into layer-local TDD.
 - **ATDD**: write executable acceptance tests before the complete cross-layer feature implementation, implement against that acceptance contract, run acceptance green, then refactor. Do not split acceptance intent into unrelated per-layer Red steps.
 - **Custom/mixed**: preserve the contract's exact `ordering` text, such as scenario-first BDD with lower-level unit tests after implementation. Never coerce a mixed posture into TDD.
 - **Test-after**: for every applicable testable layer, implement the layer and then write/run that layer's tests.
 
-The contract always puts test-runner readiness before the first executable test step. On greenfield work, bootstrap the minimal runner/configuration and dependency needed to execute the exact unit-scoped command before the first TDD Red, BDD scenario, or ATDD acceptance step. On brownfield work, verify that command before the first test-first step. Record the exact command in `unit-test-instructions.md`; a Red/Green step is invalid if no runnable command exists.
+The contract always puts test-runner readiness before the first executable test step. On greenfield work, bootstrap the minimal runner/configuration and dependency needed to execute the exact unit-scoped command before the first TDD Red, BDD scenario, or ATDD acceptance step. On brownfield work, verify that command before the first test-first step. Record the exact command in `unit-test-instructions.md`; a Red/Green step is invalid if no runnable command exists, and a plan with no runnable command is an open question for the conductor, not a guess.
 
 Number each plan step sequentially (Step 1, Step 2, etc.) for clear execution ordering and traceability. Preserve dependency ordering inside the selected methodology, and deviate only when the architecture requires it (for example, event-driven systems or independently deployable services).
 
 Also create
 `<code-generation-record>/unit-test-instructions.md`
-before Plan Approval. Consult the active test strategy (stage-protocol.md §8
-"Test Strategy") and use the matching unit-test scope:
+in the same dispatch. Consult the active test strategy (stage-protocol.md
+section 8 "Test Strategy") and use the matching unit-test scope:
 
 - **Minimal strategy**: Requirement-driven unit tests (1 test per requirement,
   happy-path floor per component), approximately 5-15 tests total
@@ -191,18 +252,20 @@ test file paths or an exact unit filter. A bare project-wide command like
 `npm test` is not acceptable. Build and Test executes every unit's commands,
 so an unscoped command would rerun the whole suite once per unit.
 
-Present a summary of the unit test instructions together with the plan summary
-to the user.
+Return a short summary of both files to the conductor; the conductor presents
+it to the user.
 
 ### Step 3: Plan Approval
 
-Before presenting the approval, create or update
+This step is yours: the questions file, the fingerprint, the decision and
+answer receipts, and the human turn. Before presenting the approval, create or
+update
 `<code-generation-record>/code-generation-questions.md`
 with a **Plan Approval** question that covers both
 `code-generation-plan.md`, its embedded Testing Contract, and
 `unit-test-instructions.md`. For a revision, reset the existing Plan Approval
-`[Answer]:` to blank before regenerating anything. After both files are final,
-run:
+`[Answer]:` to blank before regenerating anything. After the planning dispatch
+has returned and both files are final, run:
 
 Run the unit-bound form when `directive.unit` is present:
 
@@ -301,18 +364,22 @@ the exact plan, instructions, and Testing Contract content, to the target, and t
 the current stage attempt. A conductor-authored answer or forged audit row cannot
 create that authority.
 
-On "Request Changes", record that choice through the same answer command, revise
-the plan and unit test instructions as needed, reset `[Answer]:` to blank,
-regenerate the Testing Contract and fingerprint, record a fresh decision, and
-present the question again. Any post-approval change to the plan, instructions,
-or Testing Contract content, to the testing posture, scope, strategy, or project
-type, to the active target, or to the stage attempt (a jump, a rejection, or a
-workflow restart) invalidates the fingerprint/receipt and reopens Plan Approval.
-Re-running `next`, a Stop-hook probe, a status query, or a reissued directive for
-the same target and attempt does NOT reopen it: approval binds to content and
-attempt, never to which directive asked the question. Do not begin Step
-4, dispatch the developer agent, or infer approval from a forwarding-loop
-continuation. Only the matching durable receipt authorizes generation.
+On "Request Changes", record that choice through the same answer command, then
+re-dispatch the developer agent for planning: the same `AIDLC-PLANNING` brief
+as Step 2 plus the human's exact feedback. The worker revises the plan and the
+unit test instructions and returns; you never edit either file yourself (the
+guard refuses a conductor write to them once a fingerprint exists). Then reset
+`[Answer]:` to blank, regenerate the Testing Contract and fingerprint, record a
+fresh decision, and present the question again. Any post-approval change to
+the plan, instructions, or Testing Contract content, to the testing posture,
+scope, strategy, or project type, to the active target, or to the stage attempt
+(a jump, a rejection, or a workflow restart) invalidates the fingerprint/receipt
+and reopens Plan Approval. Re-running `next`, a Stop-hook probe, a status query,
+or a reissued directive for the same target and attempt does NOT reopen it:
+approval binds to content and attempt, never to which directive asked the
+question. Do not begin Step 4, dispatch the developer agent for generation, or
+infer approval from a forwarding-loop continuation. Only the matching durable
+receipt authorizes generation.
 
 > **Build-and-Test loop-back:** The construction protocol module
 > (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
@@ -370,19 +437,21 @@ Include in the delegation prompt:
   The subagent must NEVER relax, lower, or disable a defined target, including
   threshold settings in test or build configuration, to make a step pass; it
   must surface the gap instead.
+- The instruction to write, in `<code-generation-record>/` before returning,
+  the three evidence files below: `code-summary.md`, `source-manifest.json`,
+  and `traceability.json`. The worker authors them from what it actually
+  wrote; you write none of them (Step 5 only verifies).
 
-The subagent generates all code, test files, and configuration artifacts in the workspace.
+The subagent generates all code, test files, and configuration artifacts in the
+workspace, then records its own evidence:
 
-### Step 5: Generate Code Summary
-
-After subagent completes, create `<code-generation-record>/code-summary.md`
-documenting:
+`<code-generation-record>/code-summary.md` documenting:
 - Files created/modified
 - Key implementation decisions
 - Test coverage summary
 - Any deviations from the plan
 
-Create `<record>/construction/{unit-name}/code-generation/source-manifest.json`
+`<record>/construction/{unit-name}/code-generation/source-manifest.json`
 with this strict schema:
 
 ```json
@@ -406,7 +475,6 @@ relative to its single selected repo and MUST omit `repo`. The engine refuses
 to record the unit review without this manifest, and unclaimed changed paths
 block stage completion.
 
-Create
 `<code-generation-record>/traceability.json`.
 Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
 `NFR` IDs when incremental scope skipped the design chain). Every `OK` target
@@ -424,6 +492,26 @@ must be one existing workspace-relative implementation or test file:
   ]
 }
 ```
+
+### Step 5: Verify Generation Evidence
+
+After the subagent completes, verify that `code-summary.md`,
+`source-manifest.json`, and `traceability.json` exist under
+`<code-generation-record>/`, that the manifest parses against the strict schema
+above and claims every changed application-source path, and that every `OK`
+traceability target names an existing file. Do not create or repair any of the
+three yourself: a missing or invalid file is a defect in the generation
+dispatch, so re-dispatch the developer agent with the same generation brief
+(the `brief` command output) plus the exact gap, and verify again. The engine
+refuses to record the unit review without a valid manifest, and the
+`traceability` sensor owns `traceability.json`.
+
+When this stage's reviewer returns NOT-READY on the plan (the review artifact
+is `code-generation-plan`), the lead re-invocation of stage-protocol-reviewer.md
+is a planning dispatch of the developer agent: the Step 2 brief with the
+`AIDLC-PLANNING` marker plus the findings. The worker repairs the plan; you do
+not edit it. A repaired plan changes the fingerprint, so re-run Step 3 before
+any further generation.
 
 ### Step 6: Completion Handoff
 

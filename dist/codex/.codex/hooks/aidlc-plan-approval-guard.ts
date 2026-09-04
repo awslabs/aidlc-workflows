@@ -1,25 +1,27 @@
 // PreToolUse hook: deterministic enforcement of code-generation's
-// plan-before-generation ordering (stage file Step 2-4).
+// plan-before-generation ordering (stage file Step 2-4) and of who authors
+// the plan.
 //
 // The stage prose says generation never begins before the human answers
-// "Approve Plan": the conductor writes code-generation-plan.md, presents the
-// Plan Approval question through code-generation-questions.md, and only an
-// explicit approval authorizes the developer-agent dispatch. A field report
-// showed prose losing that contest: a conductor generated the code first and
-// backfilled the plan beside code-summary.md, making the plan an output
-// instead of the input. The stage-completion artifact guard cannot catch
-// this - it fires at completion time, when the backfilled plan already
-// exists. Per the framework layering (determinism belongs in tools and
-// hooks, knowledge in agents, judgement with humans), this hook is the
-// ordering's deterministic twin.
+// "Approve Plan": the developer agent, dispatched for PLANNING, writes
+// code-generation-plan.md and unit-test-instructions.md; the conductor
+// presents the Plan Approval question through code-generation-questions.md;
+// and only an explicit approval authorizes the developer-agent GENERATION
+// dispatch. A field report showed prose losing that contest: a conductor
+// generated the code first and backfilled the plan beside code-summary.md,
+// making the plan an output instead of the input. The stage-completion
+// artifact guard cannot catch this - it fires at completion time, when the
+// backfilled plan already exists. Per the framework layering (determinism
+// belongs in tools and hooks, knowledge in agents, judgement with humans),
+// this hook is the ordering's deterministic twin.
 //
 // This is one of the framework's flow-altering hooks. Its contract is the
 // harness-native PreToolUse block: print a reason to stderr and exit 2 to
 // refuse the tool call, exit 0 to allow. The refusal is scoped tightly to
-// code-generation: developer-agent dispatch and workspace mutation are both
-// blocked until the same approval evidence is current. Writes inside the
-// selected code-generation record dir remain available to create the plan,
-// instructions, questions, and diary that make approval possible.
+// code-generation: developer-agent generation dispatch and workspace mutation
+// are both blocked until the same approval evidence is current. Writes inside
+// the selected code-generation record dir remain available to create the
+// questions file and diary that make approval possible.
 //
 // How the hook decides: the active directive is the approval authority. A
 // directive with `unit` selects construction/<unit>/code-generation; a
@@ -31,6 +33,33 @@
 // explicit "Approve Plan" answer, and a matching approval fingerprint over
 // those exact bytes. Missing, conflicting, unknown, stale, and
 // post-approval-modified evidence blocks instead of guessing.
+//
+// Two authorship rules sit beside the ordering rule:
+//
+// - A PLANNING dispatch (`AIDLC-PLANNING: <unit>`, or the stage-level form
+//   `AIDLC-PLANNING: code-generation`, and no generation marker) is admitted
+//   without approval evidence when it names a target the active directive
+//   planned (its `unit`, or one of an `invoke-swarm` batch's `units`). It
+//   never starts generation. Its admission writes the planning dispatch
+//   record (`<record>/.aidlc-planning-dispatch.json`; the SubagentStop hook
+//   removes it when the session's developer dispatch returns, and a record
+//   older than PLANNING_DISPATCH_TTL_MS is an orphan). One planning dispatch
+//   is live at a time: a second is refused until the first returns. While the
+//   record is fresh, every mutation is confined to the ONE planned target's
+//   code-generation record dir, so the planning worker can write the plan,
+//   the instructions, and the diary and nothing in the workspace or in a
+//   sibling target.
+// - Once an `[Approval Fingerprint]` tag exists for a target, or while that
+//   target's planning dispatch is live, writes to its code-generation-plan.md
+//   and unit-test-instructions.md are refused unless the payload's
+//   `agent_type` is the developer agent: main-session writes (no `agent_type`;
+//   the conductor) and other agents' writes are refused. The conductor presents
+//   and records the approval but does not author or revise what the human
+//   approves; the developer agent's dispatched writes remain allowed (they ARE
+//   the planning and its revision). A payload that declares
+//   `agent_identity_unavailable: true` (Kiro IDE, whose payloads carry no
+//   agent identity) cannot be judged and skips this refusal; the stage prose
+//   carries the rule there.
 //
 // Fail-open outside code-generation: a missing or unreadable state file, an
 // active directive/current stage other than code-generation, malformed stdin,
@@ -56,6 +85,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   acquireAuditLock,
+  admitPlanningDispatch,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
   type ClaudeCodeHookInput,
@@ -66,7 +96,10 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  planningDispatchPath,
+  type PlanningTarget,
   readActiveDirectiveMarker,
+  readPlanningDispatchWindow,
   recordHookDrop,
   releaseAuditLock,
   resolveBoltDag,
@@ -81,6 +114,7 @@ import {
   PlanApprovalSourceDriftError,
   planReviewAppendix,
   promptTestingContractMarkers,
+  questionsFileApprovalFingerprint,
 } from "../tools/aidlc-testing-posture.ts";
 
 export {
@@ -94,6 +128,10 @@ const HOOK_NAME = "plan-approval-guard";
 const GUARDED_STAGE = "code-generation";
 const GUARDED_AGENT = "aidlc-developer-agent";
 const STAGE_TARGET = "stage-level";
+// The two files the developer agent authors and the human approves. Once a
+// target's questions file records an Approval Fingerprint, or while a planning
+// dispatch for it is live, a main-session write to either is refused.
+const PLAN_AUTHORED_FILES = new Set(["code-generation-plan.md", "unit-test-instructions.md"]);
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const SAFE_READ_TOOLS = new Set([
   "Read",
@@ -212,6 +250,14 @@ export interface PlanApprovalVerdict {
   mentioned: string[];
   /** The handoff carried the plan's review appendix, bytes the approval excludes. */
   appendixInBrief?: boolean;
+  /**
+   * The dispatch is a PLANNING dispatch (it carries an `AIDLC-PLANNING`
+   * marker). When admitted it consulted no approval evidence and must not
+   * start generation; `mentioned` names its one target.
+   */
+  planning?: boolean;
+  /** The brief mixed a planning marker with generation markers. */
+  mixedMarkers?: boolean;
 }
 
 function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean {
@@ -235,6 +281,7 @@ export function normalizeStageName(value: string): string {
 
 const UNIT_MARKER_RE = /^[ \t]*AIDLC-UNIT[ \t]*:[ \t]*(.*?)[ \t]*$/;
 const STAGE_MARKER_RE = /^[ \t]*AIDLC-STAGE[ \t]*:[ \t]*(.*?)[ \t]*$/;
+const PLANNING_MARKER_RE = /^[ \t]*AIDLC-PLANNING[ \t]*:[ \t]*(.*?)[ \t]*$/;
 
 /**
  * Return the distinct, non-empty target markers in encounter order. Repeated
@@ -262,12 +309,44 @@ export function promptStageMarkers(text: string): string[] {
 }
 
 /**
+ * Return the distinct, non-empty planning markers in encounter order, in the
+ * `mentioned` spelling: a Unit name as written, and the stage-level form
+ * (`AIDLC-PLANNING: code-generation`) as `stage:code-generation`.
+ */
+export function promptPlanningMarkers(text: string): string[] {
+  const targets = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const marker = line.match(PLANNING_MARKER_RE);
+    const value = marker?.[1].trim() ?? "";
+    if (value.length === 0) continue;
+    targets.add(
+      normalizeStageName(value) === GUARDED_STAGE ? `stage:${GUARDED_STAGE}` : value,
+    );
+  }
+  return Array.from(targets);
+}
+
+/** The `mentioned` spelling of a planning target, and back. */
+export function mentionedTarget(target: PlanningTarget): string {
+  return target === null ? `stage:${GUARDED_STAGE}` : target;
+}
+
+export function planningTargetOf(mentioned: string): PlanningTarget {
+  return mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned;
+}
+
+/**
  * The plan-approval dispatch decision. Pure: no I/O, no environment.
  *
- * Blocks when the dispatch targets the developer agent for code-generation
- * unless the prompt carries exactly one target marker (`AIDLC-UNIT` or the
- * stage-level `AIDLC-STAGE: code-generation`), that marker identifies a known
- * approval target, and that target has approved plan evidence.
+ * A PLANNING dispatch (one `AIDLC-PLANNING` marker, no generation marker) is
+ * admitted without approval evidence when its target is one the active
+ * directive planned (`ctx.planningTargets`); it blocks when the marker is
+ * ambiguous, names an unplanned target, or is mixed with generation markers.
+ *
+ * Every other developer dispatch for code-generation blocks unless the prompt
+ * carries exactly one target marker (`AIDLC-UNIT` or the stage-level
+ * `AIDLC-STAGE: code-generation`), that marker identifies a known approval
+ * target, and that target has approved plan evidence.
  */
 export function evaluatePlanApprovalDispatch(
   toolName: string,
@@ -276,6 +355,8 @@ export function evaluatePlanApprovalDispatch(
   ctx: {
     currentStage: string;
     units: UnitEvidence[];
+    /** Targets the active directive planned; absent means no planning dispatch is admissible. */
+    planningTargets?: PlanningTarget[];
   },
 ): PlanApprovalVerdict {
   const allow: PlanApprovalVerdict = { block: false, mentioned: [] };
@@ -289,6 +370,25 @@ export function evaluatePlanApprovalDispatch(
     ...markedUnits,
     ...markedStages.map((stage) => `stage:${stage}`),
   ];
+  const planningMarkers = promptPlanningMarkers(promptText);
+  if (planningMarkers.length > 0) {
+    const generationMarkers =
+      mentioned.length + promptTestingContractMarkers(promptText).length;
+    if (generationMarkers > 0) {
+      return {
+        block: true,
+        mentioned: [...planningMarkers, ...mentioned],
+        planning: true,
+        mixedMarkers: true,
+      };
+    }
+    if (planningMarkers.length !== 1) {
+      return { block: true, mentioned: planningMarkers, planning: true };
+    }
+    const target = planningTargetOf(planningMarkers[0]);
+    const planned = (ctx.planningTargets ?? []).some((candidate) => candidate === target);
+    return { block: !planned, mentioned: planningMarkers, planning: true };
+  }
   if (markedUnits.length + markedStages.length !== 1) {
     return { block: true, mentioned };
   }
@@ -360,12 +460,103 @@ export function blockReason(mentioned: string[], detail: string | null = null): 
         : "one target, but the brief does not name it";
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
-    `not currently approved.${detail ? ` Reason: ${detail}.` : ""} Finish Steps 2-3 in code-generation: update ` +
-    `code-generation-plan.md and unit-test-instructions.md, refresh the Testing Contract and ` +
+    `not currently approved.${detail ? ` Reason: ${detail}.` : ""} Finish Steps 2-3 in code-generation: dispatch the ` +
+    `developer agent for planning ("AIDLC-PLANNING: <unit>" or "AIDLC-PLANNING: code-generation") so ` +
+    `code-generation-plan.md and unit-test-instructions.md are current, refresh the Testing Contract and ` +
     `approval fingerprint, present Plan Approval, end the turn, and wait for the human's ` +
     `"Approve Plan" answer. Then retry the developer handoff with ` +
     `"AIDLC-UNIT: <unit>" or "AIDLC-STAGE: code-generation", followed by ` +
     `"AIDLC-TESTING-CONTRACT: <contract hash>".`
+  );
+}
+
+/**
+ * Why a planning dispatch was refused: mixed markers, an ambiguous marker, or
+ * a target the active directive did not plan.
+ */
+export function planningBlockReason(
+  verdict: PlanApprovalVerdict,
+  planningTargets: PlanningTarget[],
+): string {
+  if (verdict.mixedMarkers) {
+    return (
+      "A planning dispatch cannot carry generation markers. The brief mixes " +
+      `"AIDLC-PLANNING" with "AIDLC-UNIT", "AIDLC-STAGE", or "AIDLC-TESTING-CONTRACT" ` +
+      `(${verdict.mentioned.join(", ")}). For planning, hand the developer agent ` +
+      `"AIDLC-PLANNING: <unit>" (or "AIDLC-PLANNING: code-generation" for zero-Unit work) and ` +
+      "nothing from the approved-generation brief. For generation, after the human's " +
+      "\"Approve Plan\" answer, pass the `aidlc-testing-posture.ts brief` output verbatim instead."
+    );
+  }
+  if (verdict.mentioned.length !== 1) {
+    return (
+      "Planning cannot start because the brief names " +
+      `${verdict.mentioned.length === 0 ? "no planning target" : `several planning targets (${verdict.mentioned.join(", ")})`}. ` +
+      `Carry exactly one "AIDLC-PLANNING: <unit>" line (or "AIDLC-PLANNING: code-generation").`
+    );
+  }
+  const planned = planningTargets.map(mentionedTarget);
+  return (
+    `Planning cannot start for ${describeMentioned(verdict.mentioned[0])} because the active ` +
+    `directive does not plan that target${planned.length > 0 ? ` (it plans ${planned.join(", ")})` : ""}. ` +
+    "Plan the target the directive named, or run a fresh `aidlc-orchestrate.ts next` and use that exact directive."
+  );
+}
+
+function describeMentioned(mentioned: string): string {
+  return mentioned === `stage:${GUARDED_STAGE}`
+    ? "the zero-Unit stage-level implementation"
+    : `unit ${mentioned}`;
+}
+
+/** A second planning dispatch while one is live. */
+export function planningBusyReason(liveTarget: PlanningTarget, recordPath: string): string {
+  return (
+    `Planning cannot start because a planning dispatch for ${describeMentioned(mentionedTarget(liveTarget))} ` +
+    "is still running: one planning dispatch runs at a time so each plan has one author. Wait for it " +
+    `to return, then dispatch the next target. (If no planning dispatch is running, the record at ` +
+    `${recordPath} is an orphan; it expires on its own, or delete it.)`
+  );
+}
+
+/** A mutation outside the planned target's record dir while planning is live. */
+export function planningConfinementReason(
+  target: string,
+  liveTarget: PlanningTarget,
+  opaqueShell: boolean,
+  recordDir: string,
+): string {
+  const action = opaqueShell
+    ? `run mutation-capable ${target}`
+    : `modify "${target}"`;
+  return (
+    `Planning for ${describeMentioned(mentionedTarget(liveTarget))} cannot ${action}: while the ` +
+    "developer agent plans, writes are confined to that target's code-generation record " +
+    `directory (${recordDir}) for code-generation-plan.md, unit-test-instructions.md, and ` +
+    "memory.md. Application code, sibling targets, and other files wait for the human's " +
+    "\"Approve Plan\" answer and the generation dispatch. Return an open question to the " +
+    "conductor instead of working around this."
+  );
+}
+
+/** A main-session write to the plan or instructions once the plan has an author. */
+export function planAuthorshipReason(
+  target: string,
+  unit: string | null,
+  reason: "fingerprinted" | "planning-live",
+): string {
+  const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
+  const why =
+    reason === "fingerprinted"
+      ? "an Approval Fingerprint has been recorded for it"
+      : "the developer agent's planning dispatch for it is still running";
+  return (
+    `The conductor cannot edit "${target}" for ${scope} because ${why}. ` +
+    "The developer agent authors and revises code-generation-plan.md and " +
+    "unit-test-instructions.md: to change either, dispatch aidlc-developer-agent with " +
+    `"AIDLC-PLANNING: <unit>" (or "AIDLC-PLANNING: code-generation") and the human's feedback, ` +
+    "then refresh the fingerprint and re-present Plan Approval. The questions file, the " +
+    "fingerprint tags, the answer, and the diary remain yours."
   );
 }
 
@@ -753,10 +944,22 @@ export async function run(input: string): Promise<number> {
     (!DISPATCH_TOOLS.has(toolName) && toolName.length > 0);
   if (!guardedDispatch && !mutationCapable) return 0;
   const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
+  // Identity: Claude Code and Codex deliver the active subagent's name as
+  // agent_type (absent on main-session calls); the Kiro CLI adapter forwards
+  // the registering agent's name; Cursor, opencode, and Copilot correlate it
+  // from their ledgers. Kiro IDE payloads carry no identity at all and say so.
+  // Only the developer agent authors the two plan files; a payload whose
+  // identity is unknowable cannot be judged and passes the authorship rule.
+  const agentType = typeof parsed.agent_type === "string" ? parsed.agent_type : "";
+  const planAuthor =
+    agentType === GUARDED_AGENT || parsed.agent_identity_unavailable === true;
 
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
+  // A fully worded refusal (planning admission, planning confinement, plan
+  // authorship) that supersedes the ordering reasons below.
+  let refusal: string | null = null;
   let blockedMutation: {
     target: string;
     unit: string | null;
@@ -774,7 +977,10 @@ export async function run(input: string): Promise<number> {
     const dispatchPrompt = [toolInput.prompt, toolInput.description]
       .filter((value): value is string => typeof value === "string")
       .join("\n");
+    const planningDispatch =
+      guardedDispatch && promptPlanningMarkers(dispatchPrompt).length > 0;
     const explicitPlanDispatch =
+      planningDispatch ||
       promptUnitMarkers(dispatchPrompt).length > 0 ||
       promptStageMarkers(dispatchPrompt).length > 0 ||
       promptTestingContractMarkers(dispatchPrompt).length > 0;
@@ -806,51 +1012,195 @@ export async function run(input: string): Promise<number> {
         "the current state has no matching v2 code-generation active directive";
       verdict = { block: true, mentioned: [] };
     } else {
-      const recordDir = docsRoot(projectDir);
-      units = gatherApprovalEvidence(projectDir, knownUnits(projectDir, recordDir));
+      const planningTargets = directivePlanningTargets(activeDirective);
       if (guardedDispatch) {
+        // A planning dispatch consults no approval evidence, so the per-unit
+        // evaluation is only gathered for a generation dispatch.
+        units = planningDispatch
+          ? []
+          : gatherApprovalEvidence(projectDir, knownUnits(projectDir, docsRoot(projectDir)));
         verdict = evaluatePlanApprovalDispatch(toolName, subagentType, dispatchPrompt, {
           currentStage: activeDirective.stage,
           units,
+          planningTargets,
         });
-      } else if (activeDirective.kind !== "run-stage") {
-        authorityFailure =
-          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
-        verdict = { block: true, mentioned: [] };
+        if (verdict.planning) {
+          if (verdict.block) {
+            refusal = planningBlockReason(verdict, planningTargets);
+          } else {
+            // Admission opens the confinement window. A throw (malformed
+            // record) lands in the catch below and refuses: an unreadable
+            // window is not an open one.
+            const admission = admitPlanningDispatch(
+              projectDir,
+              planningTargetOf(verdict.mentioned[0]),
+              parsed.session_id,
+            );
+            if (!admission.admitted) {
+              verdict = { ...verdict, block: true };
+              refusal = planningBusyReason(
+                admission.live.target,
+                planningDispatchPath(projectDir),
+              );
+            }
+          }
+        } else if (!verdict.block) {
+          // Generation waits for a live planning dispatch to return: the plan
+          // it would execute may still be changing under the planner's hands.
+          const window = readPlanningDispatchWindow(projectDir);
+          if (window.malformed) {
+            authorityFailure =
+              `the planning dispatch record at ${planningDispatchPath(projectDir)} is malformed; remove it`;
+            verdict = { ...verdict, block: true };
+          } else if (window.record !== null) {
+            verdict = { ...verdict, block: true };
+            refusal = planningBusyReason(
+              window.record.target,
+              planningDispatchPath(projectDir),
+            );
+          }
+        }
       } else {
-        const unit = activeDirective.unit?.trim() || null;
-        const target: CodeGenerationTarget = { unit };
-        const approvalDir = resolve(codeGenerationRecordDir(projectDir, unit));
-        const outsideRecord = mutation.targets.find(
-          (candidate) =>
-            !isTrustedRecordTarget(projectDir, candidate, approvalDir),
-        );
-        if (!outsideRecord && !mutation.opaqueShell) return 0;
-        const approval = evaluateCodeGenerationApproval(projectDir, target);
-        const evidence: UnitEvidence = {
-          unit,
-          planExists: approval.planExists,
-          instructionsExist: approval.instructionsExist,
-          approved: approval.approved,
-          contractValid: approval.contractValid,
-          fingerprintValid: approval.fingerprintValid,
-          receiptValid: approval.receiptValid,
-          contractHash: approval.contractHash,
-          ...(approval.ok ? {} : { reason: approval.reason }),
-        };
-        verdict = {
-          block: !approvalEvidenceIsCurrent(evidence),
-          mentioned: [unit ?? `stage:${GUARDED_STAGE}`],
-        };
-        if (verdict.block) {
-          blockedMutation = {
-            target:
-              outsideRecord ??
-              `shell command: ${(mutation.shellCommand ?? "").trim().slice(0, 160)}`,
-            unit,
-            opaqueShell: outsideRecord === undefined,
-            detail: receiptDetail([evidence], verdict.mentioned),
-          };
+        const window = readPlanningDispatchWindow(projectDir);
+        if (window.malformed) {
+          authorityFailure =
+            `the planning dispatch record at ${planningDispatchPath(projectDir)} is malformed; remove it`;
+          verdict = { block: true, mentioned: [] };
+        } else if (window.record !== null) {
+          // A planning dispatch is live: every mutation is confined to the ONE
+          // planned target's record dir (nothing in the workspace, nothing in a
+          // sibling target), and inside it the two plan files take only the
+          // developer agent's writes. The conductor waits for the worker and
+          // keeps the questions file and diary; the worker plans and returns.
+          const liveTarget = window.record.target;
+          const liveDir = resolve(codeGenerationRecordDir(projectDir, liveTarget));
+          const outside = mutation.targets.find(
+            (candidate) => !isTrustedRecordTarget(projectDir, candidate, liveDir),
+          );
+          verdict = { block: false, mentioned: [mentionedTarget(liveTarget)] };
+          if (outside !== undefined || mutation.opaqueShell) {
+            verdict.block = true;
+            const target =
+              outside ??
+              `shell command: ${(mutation.shellCommand ?? "").trim().slice(0, 160)}`;
+            blockedMutation = {
+              target,
+              unit: liveTarget,
+              opaqueShell: outside === undefined,
+              detail: null,
+            };
+            refusal = planningConfinementReason(
+              target,
+              liveTarget,
+              outside === undefined,
+              liveDir,
+            );
+          } else {
+            const authored = planAuthor ? null : planFileWrite(mutation.targets, liveDir);
+            if (authored !== null) {
+              verdict.block = true;
+              blockedMutation = {
+                target: authored,
+                unit: liveTarget,
+                opaqueShell: false,
+                detail: null,
+              };
+              refusal = planAuthorshipReason(authored, liveTarget, "planning-live");
+            } else {
+              return 0;
+            }
+          }
+        } else if (activeDirective.kind === "run-stage") {
+          const unit = activeDirective.unit?.trim() || null;
+          const target: CodeGenerationTarget = { unit };
+          const approvalDir = resolve(codeGenerationRecordDir(projectDir, unit));
+          const outsideRecord = mutation.targets.find(
+            (candidate) =>
+              !isTrustedRecordTarget(projectDir, candidate, approvalDir),
+          );
+          if (!outsideRecord && !mutation.opaqueShell) {
+            // A record-dir write. Once the plan is fingerprinted, the conductor
+            // no longer edits the two files the human approves.
+            const authored = planAuthor ? null : planFileWrite(mutation.targets, approvalDir);
+            if (authored === null || !approvalFingerprintRecorded(projectDir, unit)) return 0;
+            verdict = { block: true, mentioned: [mentionedTarget(unit)] };
+            blockedMutation = { target: authored, unit, opaqueShell: false, detail: null };
+            refusal = planAuthorshipReason(authored, unit, "fingerprinted");
+          } else {
+            const approval = evaluateCodeGenerationApproval(projectDir, target);
+            const evidence: UnitEvidence = {
+              unit,
+              planExists: approval.planExists,
+              instructionsExist: approval.instructionsExist,
+              approved: approval.approved,
+              contractValid: approval.contractValid,
+              fingerprintValid: approval.fingerprintValid,
+              receiptValid: approval.receiptValid,
+              contractHash: approval.contractHash,
+              ...(approval.ok ? {} : { reason: approval.reason }),
+            };
+            verdict = {
+              block: !approvalEvidenceIsCurrent(evidence),
+              mentioned: [mentionedTarget(unit)],
+            };
+            if (verdict.block) {
+              blockedMutation = {
+                target:
+                  outsideRecord ??
+                  `shell command: ${(mutation.shellCommand ?? "").trim().slice(0, 160)}`,
+                unit,
+                opaqueShell: outsideRecord === undefined,
+                detail: receiptDetail([evidence], verdict.mentioned),
+              };
+            }
+          }
+        } else if (activeDirective.kind === "invoke-swarm" && planningTargets.length > 0) {
+          // Autonomous planning turns: the batch's record dirs stay writable
+          // for the questions files and diaries (the same carve-out the
+          // run-stage path grants its one target); every other mutation waits
+          // for `aidlc-swarm.ts prepare`, which owns the worktrees.
+          const dirs = planningTargets.map((planned) => ({
+            unit: planned,
+            dir: resolve(codeGenerationRecordDir(projectDir, planned)),
+          }));
+          const insideBatch =
+            !mutation.opaqueShell &&
+            mutation.targets.every((candidate) =>
+              dirs.some((entry) => isTrustedRecordTarget(projectDir, candidate, entry.dir)),
+            );
+          if (!insideBatch) {
+            authorityFailure =
+              `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
+            verdict = { block: true, mentioned: [] };
+          } else {
+            const authoredEntry = planAuthor
+              ? undefined
+              : dirs
+                  .map((entry) => ({ entry, path: planFileWrite(mutation.targets, entry.dir) }))
+                  .find((hit) => hit.path !== null);
+            if (
+              authoredEntry === undefined ||
+              !approvalFingerprintRecorded(projectDir, authoredEntry.entry.unit)
+            ) {
+              return 0;
+            }
+            verdict = { block: true, mentioned: [mentionedTarget(authoredEntry.entry.unit)] };
+            blockedMutation = {
+              target: authoredEntry.path ?? "",
+              unit: authoredEntry.entry.unit,
+              opaqueShell: false,
+              detail: null,
+            };
+            refusal = planAuthorshipReason(
+              authoredEntry.path ?? "",
+              authoredEntry.entry.unit,
+              "fingerprinted",
+            );
+          }
+        } else {
+          authorityFailure =
+            `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
+          verdict = { block: true, mentioned: [] };
         }
       }
     }
@@ -863,19 +1213,19 @@ export async function run(input: string): Promise<number> {
   if (!verdict.block) {
     // Under Change Control `relaxed`, generation start may accept source that
     // moved after approval: the ledger row is written there and the one human
-    // line comes back to be printed on this hook's stdout.
+    // line comes back to be printed on this hook's stdout. A planning
+    // dispatch never starts generation, so it never reaches `begin`.
     const changeNotices: string[] = [];
     try {
-      if (guardedDispatch) {
+      if (guardedDispatch && verdict.planning !== true) {
         for (const mentioned of verdict.mentioned) {
           changeNotices.push(
             ...beginCodeGeneration(projectDir, {
-              unit:
-                mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
+              unit: planningTargetOf(mentioned),
             }),
           );
         }
-      } else if (blockedMutation === null) {
+      } else if (!guardedDispatch && blockedMutation === null) {
         const state = readFileSync(stateFilePath(projectDir), "utf-8");
         const marker = readActiveDirectiveMarker(projectDir, state);
         if (marker?.version === 2 && marker.kind === "run-stage") {
@@ -939,6 +1289,8 @@ export async function run(input: string): Promise<number> {
   process.stderr.write(
     `${authorityFailure
       ? authorityBlockReason(authorityFailure)
+      : refusal
+      ? refusal
       : blockedMutation
       ? mutationBlockReason(
           blockedMutation.target,
@@ -951,6 +1303,45 @@ export async function run(input: string): Promise<number> {
       : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}\n`,
   );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
+}
+
+/** The targets the active directive plans: its unit (or stage-level), or a swarm batch's units. */
+function directivePlanningTargets(
+  marker: { kind?: string; unit?: string; units?: string[] },
+): PlanningTarget[] {
+  if (marker.kind === "run-stage") return [marker.unit?.trim() || null];
+  if (marker.kind === "invoke-swarm") {
+    return (marker.units ?? [])
+      .map((unit) => unit.trim())
+      .filter((unit) => unit.length > 0);
+  }
+  return [];
+}
+
+/**
+ * The first mutation target that is one of the two authored plan files inside
+ * `recordDir`, or null. Paths are already resolved absolute.
+ */
+function planFileWrite(targets: string[], recordDir: string): string | null {
+  return (
+    targets.find(
+      (candidate) =>
+        dirname(candidate) === recordDir && PLAN_AUTHORED_FILES.has(basename(candidate)),
+    ) ?? null
+  );
+}
+
+/** True once the target's questions file records a non-blank `[Approval Fingerprint]` tag. */
+function approvalFingerprintRecorded(projectDir: string, unit: PlanningTarget): boolean {
+  try {
+    const questions = readFileSync(
+      join(codeGenerationRecordDir(projectDir, unit), "code-generation-questions.md"),
+      "utf-8",
+    );
+    return questionsFileApprovalFingerprint(questions) !== null;
+  } catch {
+    return false;
+  }
 }
 
 if (import.meta.main) {

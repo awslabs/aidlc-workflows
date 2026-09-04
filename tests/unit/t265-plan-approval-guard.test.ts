@@ -31,6 +31,7 @@ import { join, relative } from "node:path";
 import {
   evaluatePlanApprovalDispatch,
   blockReason,
+  promptPlanningMarkers,
   promptStageMarkers,
   promptUnitMarkers,
   questionsFileApproved,
@@ -52,7 +53,10 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   acquireAuditLock,
+  parsePlanningDispatchRecord,
+  planningDispatchPath,
   readAllAuditShards,
+  readPlanningDispatchWindow,
   releaseAuditLock,
   toPosix,
   writeActiveDirectiveMarker,
@@ -389,6 +393,144 @@ describe("t265a plan-approval decision table", () => {
     expect(reason).toContain("Steps 2-3");
     expect(reason).toContain("code-generation-plan.md");
   });
+
+  // --- Planning dispatch (the developer agent authors the plan) --------------
+
+  test("a planning dispatch is admitted without approval evidence when the directive planned its target", () => {
+    const v = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      "AIDLC-PLANNING: todo-core\nWrite the plan and unit-test instructions for todo-core",
+      { ...CTX, units: [BARE], planningTargets: ["todo-core"] },
+    );
+    expect(v.block).toBe(false);
+    expect(v.planning).toBe(true);
+    expect(v.mentioned).toEqual(["todo-core"]);
+    // No evidence at all is fine: a workflow with no plan yet is exactly when
+    // planning happens.
+    const noUnits = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      "AIDLC-PLANNING: todo-core",
+      { ...CTX, units: [], planningTargets: ["todo-core"] },
+    );
+    expect(noUnits.block).toBe(false);
+    expect(noUnits.planning).toBe(true);
+  });
+
+  test("the stage-level planning form maps to the zero-Unit target", () => {
+    const v = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      "AIDLC-PLANNING: code-generation\nPlan the stage-level implementation",
+      { ...CTX, units: [], planningTargets: [null] },
+    );
+    expect(v.block).toBe(false);
+    expect(v.mentioned).toEqual(["stage:code-generation"]);
+    const unitDirective = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      "AIDLC-PLANNING: Code Generation",
+      { ...CTX, units: [], planningTargets: ["todo-core"] },
+    );
+    expect(unitDirective.block).toBe(true);
+    expect(unitDirective.planning).toBe(true);
+  });
+
+  test("a planning dispatch that also carries generation markers is refused", () => {
+    for (const generation of [
+      "AIDLC-UNIT: todo-core",
+      "AIDLC-STAGE: code-generation",
+      `AIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}`,
+    ]) {
+      const v = evaluatePlanApprovalDispatch(
+        "Task",
+        "aidlc-developer-agent",
+        `AIDLC-PLANNING: todo-core\n${generation}\nPlan and implement`,
+        { ...CTX, units: [APPROVED], planningTargets: ["todo-core"] },
+      );
+      expect(v.block, generation).toBe(true);
+      expect(v.planning).toBe(true);
+      expect(v.mixedMarkers).toBe(true);
+    }
+  });
+
+  test("the rendered Testing Contract block in a planning brief is content, not a generation marker", () => {
+    // The stage tells the conductor to paste `aidlc-testing-posture.ts render`
+    // output into the planning brief. Its JSON carries contract_sha256 as a
+    // field, never as an `AIDLC-TESTING-CONTRACT:` line, so the planning
+    // dispatch stays admissible.
+    const block =
+      "## Testing Contract\n\n```json\n{\n  \"version\": 1,\n  \"methodology\": \"tdd\",\n" +
+      `  "contract_sha256": "${CONTRACT_HASH}"\n}\n\`\`\`\n`;
+    const v = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      `AIDLC-PLANNING: todo-core\n\n${block}\nPlan todo-core against this contract.`,
+      { ...CTX, units: [BARE], planningTargets: ["todo-core"] },
+    );
+    expect(v.block).toBe(false);
+    expect(v.planning).toBe(true);
+    expect(v.mixedMarkers).toBeUndefined();
+  });
+
+  test("an ambiguous or unplanned planning target is refused", () => {
+    const two = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      "AIDLC-PLANNING: todo-core\nAIDLC-PLANNING: auth",
+      { ...CTX, units: [], planningTargets: ["todo-core", "auth"] },
+    );
+    expect(two.block).toBe(true);
+    expect(two.mentioned).toEqual(["todo-core", "auth"]);
+    const unplanned = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      "AIDLC-PLANNING: payments",
+      { ...CTX, units: [], planningTargets: ["todo-core"] },
+    );
+    expect(unplanned.block).toBe(true);
+    expect(unplanned.mentioned).toEqual(["payments"]);
+    const noDirectiveTargets = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      "AIDLC-PLANNING: todo-core",
+      { ...CTX, units: [] },
+    );
+    expect(noDirectiveTargets.block).toBe(true);
+  });
+
+  test("the generation decision is unchanged by the planning branch", () => {
+    // The same generation prompts, with planningTargets present, keep their verdicts.
+    const ctx = { ...CTX, planningTargets: ["todo-core"] };
+    expect(
+      evaluatePlanApprovalDispatch(
+        "Task",
+        "aidlc-developer-agent",
+        `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nImplement`,
+        { ...ctx, units: [APPROVED] },
+      ).block,
+    ).toBe(false);
+    const unapproved = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      "AIDLC-UNIT: todo-core\nImplement",
+      { ...ctx, units: [PLANNED_ONLY] },
+    );
+    expect(unapproved.block).toBe(true);
+    expect(unapproved.planning).toBeUndefined();
+  });
+
+  test("planning markers are explicit, line-scoped, de-duplicated, and stage-normalized", () => {
+    expect(promptPlanningMarkers("AIDLC-PLANNING: auth\nplan the author module")).toEqual(["auth"]);
+    expect(promptPlanningMarkers("mention AIDLC-PLANNING: auth in prose")).toEqual([]);
+    expect(
+      promptPlanningMarkers("AIDLC-PLANNING:\nAIDLC-PLANNING: auth\nAIDLC-PLANNING: auth"),
+    ).toEqual(["auth"]);
+    expect(promptPlanningMarkers("AIDLC-PLANNING: Code Generation")).toEqual([
+      "stage:code-generation",
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -416,6 +558,10 @@ function scratchProject(): string {
   cpSync(
     join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts"),
     join(dir, ".claude", "hooks", "aidlc-record-human-turn.ts"),
+  );
+  cpSync(
+    join(AIDLC_SRC, "hooks", "aidlc-log-subagent.ts"),
+    join(dir, ".claude", "hooks", "aidlc-log-subagent.ts"),
   );
   for (const t of [
     "aidlc-lib.ts",
@@ -1583,6 +1729,395 @@ describe("t265b hook lifecycle", () => {
       expect(shard).toContain("todo-core");
     } finally {
       rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // --- Planning dispatch: the developer agent authors the plan ------------------
+
+  const PLANNING = (unit: string | null, extra: Record<string, unknown> = {}) => ({
+    hook_event_name: "PreToolUse",
+    tool_name: "Task",
+    session_id: "plan-session",
+    tool_input: {
+      subagent_type: "aidlc-developer-agent",
+      prompt:
+        `AIDLC-PLANNING: ${unit ?? "code-generation"}\n` +
+        "Write code-generation-plan.md and unit-test-instructions.md for this target.",
+    },
+    ...extra,
+  });
+
+  const AS = (agentType: string | null, payload: Record<string, unknown>) => ({
+    ...payload,
+    ...(agentType === null ? {} : { agent_type: agentType }),
+  });
+
+  const stopHook = (proj: string, payload: Record<string, unknown>) =>
+    spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-log-subagent.ts")], {
+      input: JSON.stringify(payload),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+      encoding: "utf-8",
+    });
+
+  test("a planning dispatch is admitted without any approval evidence and does not start generation", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation", "todo-core");
+      // No plan, no instructions, no questions file: the generation dispatch is
+      // refused, the planning dispatch is admitted.
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(2);
+      const admitted = runHook(proj, PLANNING("todo-core"));
+      expect(admitted.code, admitted.stderr).toBe(0);
+      // Admission opens the window: the record names the session and target.
+      const record = parsePlanningDispatchRecord(readFileSync(planningDispatchPath(proj), "utf-8"));
+      expect(record).not.toBeNull();
+      expect(record?.target).toBe("todo-core");
+      expect(record?.sessionId).toBe("plan-session");
+      expect(record?.agent).toBe("aidlc-developer-agent");
+      // Nothing started: no approval, no receipt, no generation.
+      const approval = evaluateCodeGenerationApproval(proj, { unit: "todo-core" });
+      expect(approval.ok).toBe(false);
+      expect(approval.receiptValid).toBe(false);
+      expect(existsSync(join(proj, "aidlc", ".aidlc-sessions", "plan-approval"))).toBe(false);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a planning dispatch mixed with generation markers, or naming an unplanned target, is refused", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      const mixed = runHook(proj, {
+        ...PLANNING("todo-core"),
+        tool_input: {
+          subagent_type: "aidlc-developer-agent",
+          prompt:
+            `AIDLC-PLANNING: todo-core\nAIDLC-UNIT: todo-core\n` +
+            `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\nPlan and build`,
+        },
+      });
+      expect(mixed.code).toBe(2);
+      expect(mixed.stderr).toContain("cannot carry generation markers");
+      expect(existsSync(planningDispatchPath(proj))).toBe(false);
+      // The directive plans todo-core; a brief planning another unit is refused.
+      const unplanned = runHook(proj, PLANNING("auth"));
+      expect(unplanned.code).toBe(2);
+      expect(unplanned.stderr).toContain("does not plan that target");
+      expect(unplanned.stderr).toContain("todo-core");
+      expect(existsSync(planningDispatchPath(proj))).toBe(false);
+      // An admitted planning dispatch, even with approval current, starts nothing:
+      // the receipt stays approved (begin would have moved it to generation).
+      expect(runHook(proj, PLANNING("todo-core")).code).toBe(0);
+      expect(evaluateCodeGenerationApproval(proj, { unit: "todo-core" }).ok).toBe(true);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("while planning is live, writes are confined to the planned record dir and the plan files to the developer", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation", "todo-core");
+      expect(runHook(proj, PLANNING("todo-core")).code).toBe(0);
+      const recordDir = codeGenerationRecordDir(proj, "todo-core");
+      const plan = join(recordDir, "code-generation-plan.md");
+      const instructions = join(recordDir, "unit-test-instructions.md");
+      const diary = join(recordDir, "memory.md");
+      const questions = join(recordDir, "code-generation-questions.md");
+      const developer = "aidlc-developer-agent";
+
+      // The planning worker writes the plan, the instructions, and the diary.
+      expect(runHook(proj, AS(developer, WRITE(plan))).code).toBe(0);
+      expect(runHook(proj, AS(developer, WRITE(instructions))).code).toBe(0);
+      expect(runHook(proj, AS(developer, WRITE(diary))).code).toBe(0);
+      expect(
+        runHook(proj, AS(developer, BASH("bun .claude/tools/aidlc-testing-posture.ts render"))).code,
+      ).toBe(0);
+      // The workspace, a sibling target, and an opaque shell are refused for everyone.
+      const workspace = runHook(proj, AS(developer, WRITE(join(proj, "src", "todo.ts"))));
+      expect(workspace.code).toBe(2);
+      expect(workspace.stderr).toContain("Planning for unit todo-core cannot modify");
+      expect(runHook(proj, AS(null, WRITE(join(proj, "src", "todo.ts")))).code).toBe(2);
+      expect(
+        runHook(
+          proj,
+          AS(developer, WRITE(join(codeGenerationRecordDir(proj, "auth"), "code-generation-plan.md"))),
+        ).code,
+      ).toBe(2);
+      expect(runHook(proj, AS(developer, BASH("printf code > src/todo.ts"))).code).toBe(2);
+      expect(runHook(proj, AS(developer, BASH("bun -e 'await Bun.write(\"x\", \"y\")'"))).code).toBe(2);
+      // The record itself is outside the planned dir: the worker cannot remove it.
+      expect(runHook(proj, AS(developer, WRITE(planningDispatchPath(proj)))).code).toBe(2);
+      // The conductor keeps the questions file and diary, but not the two plan files.
+      expect(runHook(proj, AS(null, WRITE(questions))).code).toBe(0);
+      expect(runHook(proj, AS(null, WRITE(diary))).code).toBe(0);
+      const conductorPlan = runHook(proj, AS(null, WRITE(plan)));
+      expect(conductorPlan.code).toBe(2);
+      expect(conductorPlan.stderr).toContain("The conductor cannot edit");
+      expect(conductorPlan.stderr).toContain("planning dispatch for it is still running");
+      // Another agent is not the plan's author either.
+      expect(runHook(proj, AS("aidlc-architecture-reviewer-agent", WRITE(instructions))).code).toBe(2);
+      // A second planning dispatch waits for the first.
+      const busy = runHook(proj, PLANNING("todo-core"));
+      expect(busy.code).toBe(2);
+      expect(busy.stderr).toContain("is still running");
+
+      // The dispatch returns: the SubagentStop hook closes the window for its session.
+      expect(
+        stopHook(proj, {
+          hook_event_name: "SubagentStop",
+          session_id: "other-session",
+          agent_type: developer,
+        }).status,
+      ).toBe(0);
+      expect(existsSync(planningDispatchPath(proj))).toBe(true);
+      expect(
+        stopHook(proj, {
+          hook_event_name: "SubagentStop",
+          session_id: "plan-session",
+          agent_type: "aidlc-quality-agent",
+        }).status,
+      ).toBe(0);
+      expect(existsSync(planningDispatchPath(proj))).toBe(true);
+      expect(
+        stopHook(proj, {
+          hook_event_name: "SubagentStop",
+          session_id: "plan-session",
+          agent_type: developer,
+        }).status,
+      ).toBe(0);
+      expect(existsSync(planningDispatchPath(proj))).toBe(false);
+      // Closed window: the ordering rules judge writes again (no approval yet).
+      expect(runHook(proj, AS(developer, WRITE(join(proj, "src", "todo.ts")))).code).toBe(2);
+      expect(runHook(proj, AS(developer, WRITE(plan))).code).toBe(0);
+      expect(runHook(proj, PLANNING("todo-core")).code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("a generation dispatch waits for a live planning dispatch to return", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(0);
+      // A reviewer repair re-dispatches the planner after approval; while it
+      // runs, the plan it may change is not handed to a generation worker.
+      expect(runHook(proj, PLANNING("todo-core")).code).toBe(0);
+      const waiting = runHook(proj, DISPATCH(proj, "Implement todo-core"));
+      expect(waiting.code).toBe(2);
+      expect(waiting.stderr).toContain("is still running");
+      expect(
+        stopHook(proj, {
+          hook_event_name: "SubagentStop",
+          session_id: "plan-session",
+          agent_type: "aidlc-developer-agent",
+        }).status,
+      ).toBe(0);
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a stale or malformed planning record is janitored or fails closed", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation", "todo-core");
+      expect(runHook(proj, PLANNING("todo-core")).code).toBe(0);
+      const recordPath = planningDispatchPath(proj);
+      const record = parsePlanningDispatchRecord(readFileSync(recordPath, "utf-8"));
+      writeFileSync(
+        recordPath,
+        `${JSON.stringify({ ...record, startedAtMs: Date.now() - 2 * 60 * 60 * 1000 })}\n`,
+      );
+      expect(readPlanningDispatchWindow(proj).record).toBeNull();
+      expect(existsSync(recordPath)).toBe(false);
+      expect(runHook(proj, PLANNING("todo-core")).code).toBe(0);
+      writeFileSync(recordPath, "{not json\n");
+      const malformedWrite = runHook(proj, AS(null, WRITE(join(proj, "src", "x.ts"))));
+      expect(malformedWrite.code).toBe(2);
+      expect(malformedWrite.stderr).toContain("planning dispatch record");
+      expect(runHook(proj, PLANNING("todo-core")).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("once a fingerprint is recorded only the developer agent may write the plan or instructions", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      // The developer planned; no fingerprint yet: the conductor's writes to the
+      // plan are refused by prose only, and the guard allows them.
+      seedUnit(proj, "todo-core", { plan: true });
+      const recordDir = codeGenerationRecordDir(proj, "todo-core");
+      const plan = join(recordDir, "code-generation-plan.md");
+      const instructions = join(recordDir, "unit-test-instructions.md");
+      const questions = join(recordDir, "code-generation-questions.md");
+      expect(runHook(proj, AS(null, WRITE(plan))).code).toBe(0);
+      // The fingerprint is recorded (Plan Approval presented, unanswered).
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const conductorPlan = runHook(proj, AS(null, WRITE(plan)));
+      expect(conductorPlan.code).toBe(2);
+      expect(conductorPlan.stderr).toContain("The conductor cannot edit");
+      expect(conductorPlan.stderr).toContain("Approval Fingerprint");
+      expect(conductorPlan.stderr).toContain("AIDLC-PLANNING");
+      expect(runHook(proj, AS(null, WRITE(instructions))).code).toBe(2);
+      expect(runHook(proj, AS(null, { ...WRITE(instructions), tool_name: "Edit" })).code).toBe(2);
+      expect(
+        runHook(proj, AS(null, BASH(`printf step >> ${JSON.stringify(plan)}`))).code,
+      ).toBe(2);
+      // The questions file, the diary, and the evidence files stay writable.
+      expect(runHook(proj, AS(null, WRITE(questions))).code).toBe(0);
+      expect(runHook(proj, AS(null, WRITE(join(recordDir, "memory.md")))).code).toBe(0);
+      expect(runHook(proj, AS(null, WRITE(join(recordDir, "code-summary.md")))).code).toBe(0);
+      // The developer agent's writes are the planning and its revision.
+      expect(runHook(proj, AS("aidlc-developer-agent", WRITE(plan))).code).toBe(0);
+      expect(runHook(proj, AS("aidlc-developer-agent", WRITE(instructions))).code).toBe(0);
+      // Another agent is not the plan's author.
+      expect(runHook(proj, AS("aidlc-quality-agent", WRITE(plan))).code).toBe(2);
+      // After Request Changes the fingerprint still stands: the revision is a
+      // planning dispatch, not a conductor edit.
+      seedUnit(proj, "todo-core", { plan: true, answer: "B. Request Changes" });
+      expect(runHook(proj, AS(null, WRITE(plan))).code).toBe(2);
+      expect(runHook(proj, PLANNING("todo-core")).code).toBe(0);
+      expect(runHook(proj, AS("aidlc-developer-agent", WRITE(plan))).code).toBe(0);
+      // A blocked conductor write leaves a PLAN_APPROVAL_BLOCKED row.
+      writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+      const auditDir = join(proj, RECORD_REL, "audit");
+      mkdirSync(auditDir, { recursive: true });
+      const host =
+        hostname()
+          .toLowerCase()
+          .replace(/[^a-z0-9-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 48) || "host";
+      const shardPath = join(auditDir, `${host}-${FIXTURE_CLONE_ID}.md`);
+      writeFileSync(shardPath, "# AI-DLC Audit Log\n", "utf-8");
+      expect(runHook(proj, AS(null, WRITE(plan))).code).toBe(2);
+      expect(readFileSync(shardPath, "utf-8")).toContain("PLAN_APPROVAL_BLOCKED");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("a Kiro IDE payload declares its identity unavailable and is not judged by the authorship rule", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const plan = join(codeGenerationRecordDir(proj, "todo-core"), "code-generation-plan.md");
+      // The same write is refused for the main session and allowed when the
+      // harness says it cannot name the writer: the ordering rules still run.
+      expect(runHook(proj, AS(null, WRITE(plan))).code).toBe(2);
+      expect(runHook(proj, { ...WRITE(plan), agent_identity_unavailable: true }).code).toBe(0);
+      expect(
+        runHook(proj, { ...WRITE(join(proj, "src", "todo.ts")), agent_identity_unavailable: true }).code,
+      ).toBe(2);
+      // The Kiro IDE adapter is the one forward that declares it.
+      const adapter = readFileSync(
+        join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"),
+        "utf-8",
+      );
+      expect(adapter).toContain("agent_identity_unavailable: true");
+      const stage = readFileSync(
+        join(REPO_ROOT, "core", "aidlc-common", "stages", "construction", "code-generation.md"),
+        "utf-8",
+      );
+      expect(stage).toContain("Kiro IDE");
+      expect(stage).toContain("this rule holds there by this prose");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("an autonomous batch plans its units by dispatch and keeps their record dirs writable", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj, { autonomy: "autonomous" });
+      const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+      writeActiveDirectiveMarker(proj, {
+        kind: "invoke-swarm",
+        stage: "code-generation",
+        units: ["todo-core", "auth"],
+        state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+      });
+      // A unit outside the batch is not plannable; a batch unit is.
+      expect(runHook(proj, PLANNING("payments")).code).toBe(2);
+      expect(runHook(proj, PLANNING("auth")).code).toBe(0);
+      const authDir = codeGenerationRecordDir(proj, "auth");
+      expect(runHook(proj, AS("aidlc-developer-agent", WRITE(join(authDir, "code-generation-plan.md")))).code).toBe(0);
+      expect(runHook(proj, AS("aidlc-developer-agent", WRITE(join(proj, "src", "auth.ts")))).code).toBe(2);
+      expect(
+        stopHook(proj, {
+          hook_event_name: "SubagentStop",
+          session_id: "plan-session",
+          agent_type: "aidlc-developer-agent",
+        }).status,
+      ).toBe(0);
+      // The conductor writes each batch unit's questions file; the workspace waits for prepare.
+      expect(runHook(proj, AS(null, WRITE(join(authDir, "code-generation-questions.md")))).code).toBe(0);
+      expect(
+        runHook(proj, AS(null, WRITE(join(codeGenerationRecordDir(proj, "todo-core"), "memory.md")))).code,
+      ).toBe(0);
+      const workspace = runHook(proj, AS(null, WRITE(join(proj, "src", "auth.ts"))));
+      expect(workspace.code).toBe(2);
+      expect(workspace.stderr).toContain("invoke-swarm");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("Change Control does not change planning admission, and admission writes no ledger row", () => {
+    const outcomes = (["strict", "relaxed"] as const).map((mode) => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        writeFileSync(
+          statePath,
+          readFileSync(statePath, "utf-8").replace(
+            "- **Scope**: poc\n",
+            `- **Scope**: poc\n- **Change Control**: ${mode}\n`,
+          ),
+          "utf-8",
+        );
+        seedActiveDirective(proj, "code-generation", "todo-core");
+        writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+        const auditDir = join(proj, RECORD_REL, "audit");
+        mkdirSync(auditDir, { recursive: true });
+        const host =
+          hostname()
+            .toLowerCase()
+            .replace(/[^a-z0-9-]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 48) || "host";
+        writeFileSync(join(auditDir, `${host}-${FIXTURE_CLONE_ID}.md`), "# AI-DLC Audit Log\n", "utf-8");
+        const admitted = runHook(proj, PLANNING("todo-core"));
+        const refusedGeneration = runHook(proj, DISPATCH(proj, "Implement todo-core"));
+        return {
+          admitted: { code: admitted.code, stderr: admitted.stderr },
+          refused: { code: refusedGeneration.code, stderr: refusedGeneration.stderr.replaceAll(proj, "<proj>") },
+          shards: readAllAuditShards(proj),
+        };
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+    expect(outcomes[0].admitted).toEqual({ code: 0, stderr: "" });
+    expect(outcomes[1].admitted).toEqual({ code: 0, stderr: "" });
+    expect(outcomes[0].refused.code).toBe(2);
+    expect(outcomes[1].refused).toEqual(outcomes[0].refused);
+    for (const outcome of outcomes) {
+      expect(outcome.shards).not.toContain("CHANGE_ACCEPTED");
+      expect(outcome.shards).not.toContain("CHANGE_CONTROL_SET");
     }
   });
 });

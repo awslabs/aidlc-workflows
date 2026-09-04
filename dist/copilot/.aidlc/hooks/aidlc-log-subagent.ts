@@ -2,12 +2,19 @@
 // Replaces the previous free-form `## Subagent Completed` markdown write with
 // a canonical audit event.
 //
+// Also closes the Code Generation planning window: when the finishing agent is
+// the developer agent, the planning dispatch record that the plan-approval
+// guard wrote on admission (`<record>/.aidlc-planning-dispatch.json`) is
+// removed for this session, so the workspace confinement ends with the
+// dispatch. Advisory: a removal failure never changes this hook's exit.
+//
 // Receives JSON on stdin with subagent info. No-op unless a workflow is running.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   type ClaudeCodeHookInput,
+  completePlanningDispatch,
   completeSubagentInflight,
   errorMessage,
   getField,
@@ -20,6 +27,10 @@ import {
   stateFilePathForSelection,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+
+// The one agent whose return closes a planning window. Adapters that report
+// several roles on one completion join them with commas (Kiro CLI batches).
+const PLANNING_AGENT = "aidlc-developer-agent";
 
 export async function run(input: string): Promise<number> {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -51,6 +62,18 @@ export async function run(input: string): Promise<number> {
     completionError = errorMessage(error);
   }
 
+  let planningReleaseError = "";
+  const finishedAgents = (parsed.agent_type ?? "")
+    .split(",")
+    .map((role) => role.trim());
+  if (finishedAgents.includes(PLANNING_AGENT)) {
+    try {
+      completePlanningDispatch(projectDir, rawSessionId);
+    } catch (error) {
+      planningReleaseError = errorMessage(error);
+    }
+  }
+
   let stateContent: string;
   try {
     const selection = resolveWorkflowSelection(projectDir, {
@@ -75,6 +98,13 @@ export async function run(input: string): Promise<number> {
       projectDir,
       "log-subagent",
       `could not update background-subagent in-flight ledger: ${completionError}`,
+    );
+  }
+  if (planningReleaseError) {
+    recordHookDrop(
+      projectDir,
+      "log-subagent",
+      `planning dispatch record not released: ${planningReleaseError}`,
     );
   }
 
