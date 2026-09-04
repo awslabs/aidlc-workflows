@@ -965,7 +965,7 @@ describe("t271 review iteration ceiling", () => {
     };
     expect(requestOutput.requestId).toMatch(/^review:[0-9a-f]{32}$/);
     expect(requestOutput.reviewFile).toMatch(
-      /\/\.aidlc-reviews\/requirements-analysis\/stage-level\/[0-9a-f]{16}\/1\.review\.md$/,
+      /\/\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.review\.md$/,
     );
     const requested = auditBlocks(proj, "REVIEW_REQUESTED")[0];
     const requestFingerprint = auditBlockField(
@@ -982,7 +982,7 @@ describe("t271 review iteration ceiling", () => {
     expect(completedRun.status, completedRun.stderr).toBe(0);
     const completedOutput = JSON.parse(completedRun.stdout) as { reviewRecord: string };
     expect(completedOutput.reviewRecord).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage-level\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     // The draft was consumed into the record; the artifact was never written.
     expect(existsSync(join(proj, requestOutput.reviewFile))).toBe(false);
@@ -2194,7 +2194,7 @@ describe("t271 review iteration ceiling", () => {
         "Artifact Fingerprint":
           auditBlockField(requested, "Artifact Fingerprint") ?? "",
         // Request Id intentionally omitted: the row cannot pair with the request.
-        "Review Record": ".aidlc-reviews/requirements-analysis/stage-level/0123456789abcdef/1.json",
+        "Review Record": ".aidlc-reviews/requirements-analysis/stage/0123456789abcdef/1.json",
         // Review Record Digest intentionally omitted: a half-named record is no record.
       },
       proj,
@@ -2419,7 +2419,7 @@ describe("t271 review iteration ceiling", () => {
     const completion = auditBlocks(proj, "REVIEW_COMPLETED")[0];
     expect(auditBlockField(completion, "Request Id")).toBe(requestId);
     expect(auditBlockField(completion, "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage-level\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     expect(auditBlockField(completion, "Review Appendix Artifact")).toBe(
       snapshot.reviewArtifact,
@@ -2697,7 +2697,7 @@ describe("t271 review iteration ceiling", () => {
       requestedSnapshot.fingerprint,
     );
     expect(auditBlockField(completed, "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage-level\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     expect(auditBlockField(completed, "Review Record Digest")).toMatch(
       /^sha256:[0-9a-f]{64}$/,
@@ -2804,7 +2804,7 @@ describe("t271 review iteration ceiling", () => {
     const completions = auditBlocks(proj, "REVIEW_COMPLETED");
     expect(completions).toHaveLength(2);
     expect(auditBlockField(completions[1], "Review Record")).toMatch(
-      /^\.aidlc-reviews\/requirements-analysis\/stage-level\/[0-9a-f]{16}\/1\.json$/,
+      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
     );
     // Two attempts, two records slots: the reset attempt's record does not
     // overwrite anything attempt 1 could have written.

@@ -33,10 +33,13 @@ import {
   checkSummaryConfirmationEvidence,
   clearSummaryAuthorization,
   isSummaryAuthorizationId,
+  isReviewRecordRelativePath,
   loadStageGraphAll,
   readAllAuditShards,
   readAuditShardEvents,
   readSummaryAuthorization,
+  reviewDraftRelativePath,
+  reviewRecordRelativePath,
   SUMMARY_AUTHORIZATION_FIELD,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryAttemptFloors,
@@ -45,6 +48,7 @@ import {
   summaryAuthorizationRecordPath,
   summaryConfirmationContentHash,
   summaryScopeForRecordPath,
+  summaryAuthorizationRelativePath,
   writeSummaryAuthorization,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -477,28 +481,100 @@ describe("t332 summary authorization id", () => {
 });
 
 describe("t332 authorization scope resolution", () => {
-  const stageSlugs = new Set(["functional-design", "build-and-test", "requirements-analysis"]);
+  const stageGraph = loadStageGraphAll();
 
   test("record paths map to stage-level or per-Unit scopes", () => {
-    expect(summaryScopeForRecordPath("inception/requirements-analysis/requirements.md", stageSlugs)).toEqual({
+    expect(summaryScopeForRecordPath("inception/requirements-analysis/requirements.md", stageGraph)).toEqual({
       stage: "requirements-analysis",
       unit: null,
     });
-    expect(summaryScopeForRecordPath("construction/api/functional-design/entities.md", stageSlugs)).toEqual({
+    expect(summaryScopeForRecordPath("construction/api/functional-design/entities.md", stageGraph)).toEqual({
       stage: "functional-design",
       unit: "api",
     });
-    expect(summaryScopeForRecordPath("construction/build-and-test/report.md", stageSlugs)).toEqual({
+    expect(summaryScopeForRecordPath("construction/build-and-test/report.md", stageGraph)).toEqual({
       stage: "build-and-test",
       unit: null,
     });
     // A stage-level Construction output nested one level deeper is still stage-level.
-    expect(summaryScopeForRecordPath("construction/build-and-test/logs/run.md", stageSlugs)).toEqual({
+    expect(summaryScopeForRecordPath("construction/build-and-test/logs/run.md", stageGraph)).toEqual({
       stage: "build-and-test",
       unit: null,
     });
-    expect(summaryScopeForRecordPath("audit/host-clone.md", stageSlugs)).toBeNull();
-    expect(summaryScopeForRecordPath("aidlc-state.md", stageSlugs)).toBeNull();
+    expect(summaryScopeForRecordPath("audit/host-clone.md", stageGraph)).toBeNull();
+    expect(summaryScopeForRecordPath(
+      "construction/build-and-test/functional-design/entities.md",
+      stageGraph,
+    )).toEqual({
+      stage: "functional-design",
+      unit: "build-and-test",
+    });
+    expect(summaryScopeForRecordPath("aidlc-state.md", stageGraph)).toBeNull();
+  });
+
+  test("stage and Unit scopes use distinct explicit store paths", () => {
+    expect(summaryAuthorizationRelativePath("functional-design", null)).toBe(
+      ".aidlc-summary-authorization/functional-design/stage.json",
+    );
+    expect(summaryAuthorizationRelativePath("functional-design", "stage-level")).toBe(
+      ".aidlc-summary-authorization/functional-design/units/stage-level.json",
+    );
+    expect(reviewRecordRelativePath("functional-design", undefined, "0123456789abcdef", 1)).toBe(
+      ".aidlc-reviews/functional-design/stage/0123456789abcdef/1.json",
+    );
+    expect(reviewRecordRelativePath("functional-design", "stage-level", "0123456789abcdef", 1)).toBe(
+      ".aidlc-reviews/functional-design/units/stage-level/0123456789abcdef/1.json",
+    );
+    expect(reviewDraftRelativePath("functional-design", "Unit.Name_1", "0123456789abcdef", 2)).toBe(
+      ".aidlc-reviews/functional-design/units/Unit.Name_1/0123456789abcdef/2.review.md",
+    );
+    for (const path of [
+      ".aidlc-reviews/functional-design/stage/0123456789abcdef/1.json",
+      ".aidlc-reviews/functional-design/units/stage-level/0123456789abcdef/1.json",
+      ".aidlc-reviews/functional-design/units/Unit.Name_1/0123456789abcdef/2.json",
+    ]) {
+      expect(isReviewRecordRelativePath(path), path).toBe(true);
+    }
+    for (const path of [
+      ".aidlc-reviews/functional-design/stage-level/0123456789abcdef/1.json",
+      ".aidlc-reviews/functional-design/units/0123456789abcdef/1.json",
+      ".aidlc-reviews/functional-design/stage/extra/0123456789abcdef/1.json",
+      ".aidlc-reviews/functional-design/units/unit/0123456789abcdef/1.review.md",
+    ]) {
+      expect(isReviewRecordRelativePath(path), path).toBe(false);
+    }
+  });
+
+  test("the write hook stamps a Unit whose name is also a stage slug", () => {
+    const proj = project();
+    const unit = "build-and-test";
+    const stage = "functional-design";
+    const id = "9".repeat(64);
+    writeSummaryAuthorization(proj, {
+      version: 1,
+      id,
+      stage,
+      unit,
+      workflow: null,
+      attempt: "unstarted",
+      questions_file: `construction/${unit}/${stage}/${stage}-questions.md`,
+      questions_sha256: "a".repeat(64),
+      choice: "Looks correct",
+      recorded_at: "2026-09-04T00:00:00Z",
+    });
+    const artifact = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      stage,
+      "entities.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Entities\n");
+    recordArtifactWriteViaHook(proj, artifact);
+    expect(
+      auditBlockField(artifactWrites(proj).at(-1)!.block, SUMMARY_AUTHORIZATION_FIELD),
+    ).toBe(id);
   });
 
   test("a per-Unit write prefers its Unit's authorization and falls back only to an isolated run's stage-level one", () => {
@@ -519,29 +595,29 @@ describe("t332 authorization scope resolution", () => {
     writeSummaryAuthorization(proj, stageLevel);
     expect(existsSync(summaryAuthorizationRecordPath(record, "functional-design", null))).toBe(true);
     const path = "construction/api/functional-design/entities.md";
-    expect(activeSummaryAuthorizationForRecordPath(proj, path, stageSlugs)?.id).toBe(stageLevel.id);
+    expect(activeSummaryAuthorizationForRecordPath(proj, path, stageGraph)?.id).toBe(stageLevel.id);
     writeSummaryAuthorization(proj, { ...stageLevel, id: "2".repeat(64), unit: "api", workflow: null });
-    expect(activeSummaryAuthorizationForRecordPath(proj, path, stageSlugs)?.id).toBe("2".repeat(64));
+    expect(activeSummaryAuthorizationForRecordPath(proj, path, stageGraph)?.id).toBe("2".repeat(64));
     // A main-workflow stage-level confirmation (no isolated workflow) never
     // authorizes a Unit's outputs: the Unit owes its own confirmation.
     writeSummaryAuthorization(proj, { ...stageLevel, id: "3".repeat(64), workflow: null });
     expect(
-      activeSummaryAuthorizationForRecordPath(proj, "construction/web/functional-design/entities.md", stageSlugs),
+      activeSummaryAuthorizationForRecordPath(proj, "construction/web/functional-design/entities.md", stageGraph),
     ).toBeNull();
-    expect(activeSummaryAuthorizationForRecordPath(proj, path, stageSlugs)?.id).toBe("2".repeat(64));
+    expect(activeSummaryAuthorizationForRecordPath(proj, path, stageGraph)?.id).toBe("2".repeat(64));
     // Nor does another stage's isolated run.
     writeSummaryAuthorization(proj, { ...stageLevel, id: "4".repeat(64), workflow: "single-stage:build-and-test" });
     expect(
-      activeSummaryAuthorizationForRecordPath(proj, "construction/web/functional-design/entities.md", stageSlugs),
+      activeSummaryAuthorizationForRecordPath(proj, "construction/web/functional-design/entities.md", stageGraph),
     ).toBeNull();
     // A stage-level path reads the stage-level record whatever its workflow.
     expect(
-      activeSummaryAuthorizationForRecordPath(proj, "construction/functional-design/overview.md", stageSlugs)?.id,
+      activeSummaryAuthorizationForRecordPath(proj, "construction/functional-design/overview.md", stageGraph)?.id,
     ).toBe("4".repeat(64));
     clearSummaryAuthorization(proj, "functional-design", null);
     clearSummaryAuthorization(proj, "functional-design", "api");
-    expect(activeSummaryAuthorizationForRecordPath(proj, path, stageSlugs)).toBeNull();
-    expect(activeSummaryAuthorizationForRecordPath(proj, "audit/x.md", stageSlugs)).toBeNull();
+    expect(activeSummaryAuthorizationForRecordPath(proj, path, stageGraph)).toBeNull();
+    expect(activeSummaryAuthorizationForRecordPath(proj, "audit/x.md", stageGraph)).toBeNull();
   });
 
   test("a symlinked registry directory is refused: nothing is written, read, or removed through it", () => {
@@ -580,7 +656,7 @@ describe("t332 authorization scope resolution", () => {
       choice: "Looks correct",
       recorded_at: "2026-09-02T10:00:00Z",
     });
-    writeFileSync(join(outside, STAGE, "stage-level.json"), planted);
+    writeFileSync(join(outside, STAGE, "stage.json"), planted);
     expect(readSummaryAuthorization(proj, STAGE, null)).toBeNull();
     writeArtifact(proj, artifact);
     expect(auditBlockField(artifactWrites(proj)[0].block, SUMMARY_AUTHORIZATION_FIELD)).toBeNull();
@@ -601,8 +677,8 @@ describe("t332 authorization scope resolution", () => {
       }),
     ).toThrow(/is a symlink/);
     expect(() => clearSummaryAuthorization(proj, STAGE, null)).toThrow(/is a symlink/);
-    expect(readFileSync(join(outside, STAGE, "stage-level.json"), "utf-8")).toBe(planted);
-    expect(readdirSync(join(outside, STAGE))).toEqual(["stage-level.json"]);
+    expect(readFileSync(join(outside, STAGE, "stage.json"), "utf-8")).toBe(planted);
+    expect(readdirSync(join(outside, STAGE))).toEqual(["stage.json"]);
   });
 
   test("a registry write failure refuses before the receipt, and the same decision recovers without a new human turn", () => {

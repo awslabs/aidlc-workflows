@@ -312,7 +312,7 @@ describe("t321 the freeze stays on through a source-recovery review", () => {
       reviewFile: string;
     };
     expect(requestId).toMatch(/^review:[0-9a-f]{32}$/);
-    expect(reviewFile).toContain("/.aidlc-reviews/code-generation/beta/");
+    expect(reviewFile).toContain("/.aidlc-reviews/code-generation/units/beta/");
     const recoveryReceipts = freshReviewReceipts(
       proj,
       readFileSync(seededStateFile(proj), "utf-8"),
@@ -370,7 +370,7 @@ describe("t321 the freeze stays on through a source-recovery review", () => {
     writeReviewFile(proj, reviewFile, "aidlc-architecture-reviewer-agent", 2);
     const verdict = runLog(proj, [...recoveryArgs, "--verdict", "READY"]);
     expect(verdict.status, verdict.out).toBe(0);
-    expect(verdict.stdout).toContain('"reviewRecord":".aidlc-reviews/code-generation/beta/');
+    expect(verdict.stdout).toContain('"reviewRecord":".aidlc-reviews/code-generation/units/beta/');
     expect(readFileSync(betaPlan).equals(betaPlanBytes)).toBe(true);
     expect(runHook(proj, betaPlan).status).toBe(2);
   });

@@ -7683,15 +7683,17 @@ export function isSummaryAuthorizationId(value: string | null): value is string 
   return value !== null && SUMMARY_AUTHORIZATION_ID_RE.test(value);
 }
 
-/** The record-relative slot of one scope's active authorization: `.aidlc-summary-authorization/<stage>/<unit or stage-level>.json`. */
+/** The record-relative slot of one scope's active authorization. */
 export function summaryAuthorizationRelativePath(stage: string, unit: string | null): string {
   const unitProblem = unit === null ? null : validateUnitName(unit);
   if (unitProblem !== null) throw new Error(unitProblem);
   if (!/^[a-z0-9][a-z0-9-]*$/.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
-  return `${SUMMARY_AUTHORIZATION_DIR}/${stage}/${unit ?? "stage-level"}.json`;
+  return unit === null
+    ? `${SUMMARY_AUTHORIZATION_DIR}/${stage}/stage.json`
+    : `${SUMMARY_AUTHORIZATION_DIR}/${stage}/units/${unit}.json`;
 }
 
-/** The active authorization for one scope: `<record>/.aidlc-summary-authorization/<stage>/<unit or stage-level>.json`. */
+/** The active authorization for one scope under `<record>/.aidlc-summary-authorization/`. */
 export function summaryAuthorizationRecordPath(
   recordRoot: string,
   stage: string,
@@ -7799,9 +7801,9 @@ export function readSummaryAuthorization(
 export function activeSummaryAuthorizationForRecordPath(
   projectDir: string,
   relativePath: string,
-  stageSlugs: ReadonlySet<string>,
+  stages: ReadonlyArray<Pick<StageEntry, "slug" | "phase" | "for_each">>,
 ): SummaryAuthorization | null {
-  const scope = summaryScopeForRecordPath(relativePath, stageSlugs);
+  const scope = summaryScopeForRecordPath(relativePath, stages);
   if (scope === null) return null;
   if (scope.unit === null) return readSummaryAuthorization(projectDir, scope.stage, null);
   const perUnit = readSummaryAuthorization(projectDir, scope.stage, scope.unit);
@@ -7813,22 +7815,29 @@ export function activeSummaryAuthorizationForRecordPath(
 }
 
 /**
- * The summary scope a record-relative artifact path belongs to: per-Unit
- * Construction outputs live at `construction/<unit>/<stage>/...`, everything
- * else at `<phase>/<stage>/...`. A Construction path whose second segment is a
- * stage slug is stage-level; otherwise that segment is the Unit. Null for
- * paths that are not stage outputs.
+ * The summary scope a record-relative artifact path belongs to. Construction
+ * per-Unit outputs are recognized by the third segment naming a Construction
+ * stage whose graph entry declares `for_each: unit-of-work`; this is path-shape
+ * classification, so producesArtifactUnit cannot be reused because it requires
+ * a declared artifact filename and summary stamping also covers other outputs.
  */
 export function summaryScopeForRecordPath(
   relativePath: string,
-  stageSlugs: ReadonlySet<string>,
+  stages: ReadonlyArray<Pick<StageEntry, "slug" | "phase" | "for_each">>,
 ): { stage: string; unit: string | null } | null {
   const parts = relativePath.split("/");
   if (parts.length < 3) return null;
-  if (parts[0] === "construction" && parts.length >= 4 && !stageSlugs.has(parts[1])) {
-    return { stage: parts[2], unit: parts[1] };
+  if (parts[0] === "construction" && parts.length >= 4) {
+    const stage = stages.find(
+      (entry) =>
+        entry.slug === parts[2] &&
+        entry.phase === "construction" &&
+        entry.for_each === "unit-of-work",
+    );
+    if (stage !== undefined) return { stage: stage.slug, unit: parts[1] };
   }
-  return { stage: parts[1], unit: null };
+  const stage = stages.find((entry) => entry.slug === parts[1]);
+  return stage === undefined ? null : { stage: stage.slug, unit: null };
 }
 
 // Verify that every question-bearing iteration has a fresh human-backed
@@ -10355,14 +10364,18 @@ export function parseReviewSection(
 export function reviewAttemptId(floor: string): string {
   return createHash("sha256").update(floor.length === 0 ? "unstarted" : floor).digest("hex").slice(0, 16);
 }
-
 export function reviewRecordRelativePath(
   stage: string,
   unit: string | undefined,
   attemptId: string,
   iteration: number,
 ): string {
-  return `${REVIEW_RECORDS_DIR}/${stage}/${unit ?? "stage-level"}/${attemptId}/${iteration}.json`;
+  if (!REVIEW_RECORD_SEGMENT_RE.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
+  const unitProblem = unit === undefined ? null : validateUnitName(unit);
+  if (unitProblem !== null) throw new Error(unitProblem);
+  return unit === undefined
+    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${iteration}.json`
+    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${iteration}.json`;
 }
 
 /**
@@ -10376,20 +10389,31 @@ export function reviewDraftRelativePath(
   attemptId: string,
   iteration: number,
 ): string {
-  return `${REVIEW_RECORDS_DIR}/${stage}/${unit ?? "stage-level"}/${attemptId}/${iteration}.review.md`;
+  if (!REVIEW_RECORD_SEGMENT_RE.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
+  const unitProblem = unit === undefined ? null : validateUnitName(unit);
+  if (unitProblem !== null) throw new Error(unitProblem);
+  return unit === undefined
+    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${iteration}.review.md`
+    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${iteration}.review.md`;
 }
 
-/** Whether `path` has the exact shape a review record path takes: no escapes, no surprises. */
+/** Whether `path` has exactly one supported stage or Unit record shape. */
 export function isReviewRecordRelativePath(path: string): boolean {
   const parts = path.split("/");
-  return (
-    parts.length === 5 &&
-    parts[0] === REVIEW_RECORDS_DIR &&
-    REVIEW_RECORD_SEGMENT_RE.test(parts[1]) &&
-    REVIEW_RECORD_SEGMENT_RE.test(parts[2]) &&
-    /^[0-9a-f]{16}$/.test(parts[3]) &&
-    /^[1-9][0-9]*\.json$/.test(parts[4])
-  );
+  if (
+    parts[0] !== REVIEW_RECORDS_DIR ||
+    !REVIEW_RECORD_SEGMENT_RE.test(parts[1] ?? "")
+  ) return false;
+  if (parts[2] === "stage") {
+    return parts.length === 5 &&
+      /^[0-9a-f]{16}$/.test(parts[3]) &&
+      /^[1-9][0-9]*\.json$/.test(parts[4]);
+  }
+  return parts.length === 6 &&
+    parts[2] === "units" &&
+    REVIEW_RECORD_SEGMENT_RE.test(parts[3]) &&
+    /^[0-9a-f]{16}$/.test(parts[4]) &&
+    /^[1-9][0-9]*\.json$/.test(parts[5]);
 }
 
 /** Canonical bytes: fixed key order, two-space indent, one trailing newline. */

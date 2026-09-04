@@ -24,7 +24,6 @@ import {
   summaryAttemptIdentity,
   summaryAuthorizationId,
   removeRecordFileNoFollow,
-  SUMMARY_AUTHORIZATION_DIR,
   summaryAuthorizationRelativePath,
   summaryAuthorizationTargetOrThrow,
   writeRecordFileNoFollow,
@@ -833,7 +832,7 @@ function handleAnswer(args: string[]): void {
         } catch (restoreError) {
           rollback =
             ` The authorization record could not be restored either (${errorMessage(restoreError)}); ` +
-            `remove ${SUMMARY_AUTHORIZATION_DIR}/${authorization.stage}/${authorization.unit ?? "stage-level"}.json ` +
+            `remove ${summaryAuthorizationRelativePath(authorization.stage, authorization.unit)} ` +
             "under the intent record before retrying.";
         }
         error(`Audit emission failed: ${errorMessage(e)}.${rollback}`);

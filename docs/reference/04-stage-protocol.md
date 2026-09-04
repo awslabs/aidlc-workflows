@@ -1045,7 +1045,8 @@ omits the reviewer block entirely and the stage runs reviewless.
    review from the request's `reviewFile` (or `--review-file <path>`),
    validates it, proves the dispatched artifact bytes and request-time source
    identity are unchanged, and writes the review record
-   `<record>/.aidlc-reviews/<stage>/<unit or stage-level>/<attempt>/<iteration>.json`
+   `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` or
+   `<record>/.aidlc-reviews/<stage>/units/<unit>/<attempt>/<iteration>.json`
    (verdict, findings, reviewer, request id, artifact and source fingerprints,
    review text) in the same locked transaction as the `REVIEW_COMPLETED` row
    that names it and pins its digest. Only this command writes a record; a

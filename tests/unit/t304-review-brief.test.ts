@@ -197,7 +197,7 @@ function recordReviewViaRecordAndOpenGate(
   expect(completed.status, completed.out).toBe(0);
   const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
   expect(reviewRecord).toMatch(
-    /^\.aidlc-reviews\/requirements-analysis\/stage-level\/[0-9a-f]{16}\/1\.json$/,
+    /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
   );
   expect(existsSync(draft)).toBe(false);
   expect(
@@ -1078,7 +1078,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     };
     for (const forged of [
       { ...base, "Request Id": `review:${"f".repeat(32)}`, "Review Record": reviewRecord, "Review Record Digest": recordDigest },
-      { ...base, "Request Id": `review:${"f".repeat(32)}`, "Review Record": ".aidlc-reviews/requirements-analysis/stage-level/0123456789abcdef/1.json", "Review Record Digest": `sha256:${"0".repeat(64)}` },
+      { ...base, "Request Id": `review:${"f".repeat(32)}`, "Review Record": ".aidlc-reviews/requirements-analysis/stage/0123456789abcdef/1.json", "Review Record Digest": `sha256:${"0".repeat(64)}` },
       { ...base, "Request Id": `review:${"f".repeat(32)}` },
       { ...base },
     ]) {

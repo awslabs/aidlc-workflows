@@ -799,7 +799,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const review = auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED"));
     const recordPath = /\*\*Review Record\*\*: (\S+)/.exec(review)?.[1];
     const recordDigest = /\*\*Review Record Digest\*\*: (\S+)/.exec(review)?.[1];
-    expect(recordPath).toMatch(/^\.aidlc-reviews\/code-generation\/win\/[0-9a-f]{16}\/1\.json$/);
+    expect(recordPath).toMatch(/^\.aidlc-reviews\/code-generation\/units\/win\/[0-9a-f]{16}\/1\.json$/);
     expect(recordDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     const mainRecord = join(seededRecordDir(wtproj), recordPath as string);
     expect(existsSync(mainRecord)).toBe(true);

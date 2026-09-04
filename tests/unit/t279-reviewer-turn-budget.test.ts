@@ -262,7 +262,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
         /Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`.*validates it/s,
       );
       expect(labelled).toContain(
-        "writes the review record `<record>/.aidlc-reviews/<stage>/<unit or stage-level>/<attempt>/<iteration>.json`",
+        "writes the review record `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`)",
       );
       expect(labelled).toContain("The record is the review; only this command writes one");
       // Partial and duplicated reviews are named incomplete, not guessed at.
