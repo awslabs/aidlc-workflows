@@ -3,11 +3,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
-  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -22,6 +20,7 @@ import {
 
 const BUN = process.execPath;
 const projects: string[] = [];
+const WRITE_BOUNDARY_WITNESS = "write-failed:";
 
 const HARNESSES = [
   { name: "claude", dir: ".claude" },
@@ -237,6 +236,89 @@ function makeCopilotOwned(installed: InstalledProject): void {
     `${JSON.stringify(value, null, 2)}\n`,
     "utf-8",
   );
+}
+
+function replaceOnce(
+  source: string,
+  needle: string,
+  replacement: string,
+  label: string,
+): string {
+  const first = source.indexOf(needle);
+  if (first < 0 || source.indexOf(needle, first + needle.length) >= 0) {
+    throw new Error(`expected exactly one ${label}`);
+  }
+  return source.slice(0, first) + replacement +
+    source.slice(first + needle.length);
+}
+
+function injectWriteBoundaryFailure(
+  installed: InstalledProject,
+  witnessPath: string,
+): void {
+  // Create the failed descriptor inside the child. Passing a read-only parent
+  // descriptor as stdout makes Windows reject the spawn before this code runs.
+  let source = readFileSync(installed.tool, "utf-8");
+  source = replaceOnce(
+    source,
+    "  copyFileSync,\n",
+    "  closeSync,\n  copyFileSync,\n",
+    "copyFileSync import",
+  );
+  source = replaceOnce(
+    source,
+    "  mkdirSync,\n",
+    "  mkdirSync,\n  openSync,\n",
+    "mkdirSync import",
+  );
+  const serializedExpression = "$" + "{prepared.serialized}";
+  const write =
+    `  writeFileSync(1, \`${serializedExpression}\\n\`, "utf-8");`;
+  const injected = [
+    `  if (!existsSync(${JSON.stringify(witnessPath)})) {`,
+    `    const failedFd = openSync(${JSON.stringify(witnessPath)}, "w");`,
+    '    writeFileSync(failedFd, "write-attempted\\n", "utf-8");',
+    "    closeSync(failedFd);",
+    "    try {",
+    `      writeFileSync(failedFd, \`${serializedExpression}\\n\`, "utf-8");`,
+    "    } catch (error) {",
+    `      writeFileSync(${JSON.stringify(witnessPath)}, \`write-failed:\${errorMessage(error)}\\n\`, "utf-8");`,
+    "      throw error;",
+    "    }",
+    "  }",
+    write,
+  ].join("\n");
+  source = replaceOnce(source, write, injected, "stdout write boundary");
+  writeFileSync(installed.tool, source, "utf-8");
+}
+
+interface FailedChild {
+  exitCode: number;
+  stdout: string;
+}
+
+function assertWriteBoundaryFailure(
+  installed: InstalledProject,
+  before: string,
+  witnessPath: string,
+  failed: FailedChild,
+): void {
+  if (failed.exitCode === 0) {
+    throw new Error("child did not fail");
+  }
+  if (!existsSync(witnessPath)) {
+    throw new Error("child did not reach the directive write boundary");
+  }
+  const witness = readFileSync(witnessPath, "utf-8");
+  if (!witness.startsWith(WRITE_BOUNDARY_WITNESS)) {
+    throw new Error(`directive write did not fail: ${witness.trim()}`);
+  }
+  if (failed.stdout.length !== 0) {
+    throw new Error("failed directive unexpectedly reached stdout");
+  }
+  if (readFileSync(markerPath(installed), "utf-8") === before) {
+    throw new Error("cursor publication did not precede the failed write");
+  }
 }
 
 describe("t283 engine-owned continuation cursor", () => {
@@ -567,23 +649,45 @@ describe("t283 engine-owned continuation cursor", () => {
       const first = invoke(installed, "next").directive;
       const token = first.continue_token ?? "";
       const before = readFileSync(markerPath(installed), "utf-8");
-      const roFd = openSync(markerPath(installed), "r");
-      const failed = (() => {
-        try {
-          return Bun.spawnSync(command(installed, "continue", token), {
-            cwd: installed.dir,
-            stdout: roFd,
-            stderr: "pipe",
-          });
-        } finally {
-          closeSync(roFd);
-        }
-      })();
+      const witnessPath = join(installed.dir, "cursor-write-boundary.txt");
+      injectWriteBoundaryFailure(installed, witnessPath);
+      const failed = Bun.spawnSync(command(installed, "continue", token), {
+        cwd: installed.dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
 
-      expect(failed.exitCode).not.toBe(0);
-      expect(readFileSync(markerPath(installed), "utf-8")).not.toBe(before);
+      assertWriteBoundaryFailure(installed, before, witnessPath, {
+        exitCode: failed.exitCode,
+        stdout: failed.stdout.toString(),
+      });
       expect(isStale(invoke(installed, "continue", token).directive)).toBe(true);
       expect(invoke(installed, "next").directive.kind).toBe("load-steering");
     }
   }, 30000);
+
+  test("a failure before cursor child execution cannot satisfy the crash-boundary proof", () => {
+    const installed = project(HARNESSES[0]);
+    invoke(installed, "next");
+    const before = readFileSync(markerPath(installed), "utf-8");
+    const witnessPath = join(installed.dir, "cursor-write-boundary.txt");
+    // The launcher exits before it can start the cursor child under test.
+    const failedLauncher = Bun.spawnSync(
+      [BUN, "-e", "process.exit(17)"],
+      {
+        cwd: installed.dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+
+    expect(failedLauncher.exitCode).toBe(17);
+    expect(() =>
+      assertWriteBoundaryFailure(installed, before, witnessPath, {
+        exitCode: failedLauncher.exitCode,
+        stdout: failedLauncher.stdout.toString(),
+      })
+    ).toThrow("child did not reach the directive write boundary");
+    expect(readFileSync(markerPath(installed), "utf-8")).toBe(before);
+  });
 });
