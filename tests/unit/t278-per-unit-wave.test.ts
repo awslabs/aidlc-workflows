@@ -482,6 +482,8 @@ function reportRejected(proj: string, feedback: string) {
       "--result",
       "rejected",
       "--user-input",
+      "Request Changes",
+      "--reason",
       feedback,
       "--project-dir",
       proj,

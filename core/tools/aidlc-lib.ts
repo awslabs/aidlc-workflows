@@ -8918,6 +8918,7 @@ export interface PendingReviewProgress {
   state: "outstanding" | "retry-required" | "repair-required";
   iteration: number;
   recovery: boolean;
+  verificationFailed?: boolean;
 }
 
 export interface StaleReviewProgress {
@@ -10425,6 +10426,16 @@ export function reviewRecordDigest(bytes: string | Buffer): string {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+export function parseReviewRecordBytes(bytes: string | Buffer): ReviewRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString());
+  } catch {
+    return null;
+  }
+  return isReviewRecord(parsed) ? parsed : null;
+}
+
 function isReviewRecord(value: unknown): value is ReviewRecord {
   if (!isPlainObject(value)) return false;
   const r = value as Record<string, unknown>;
@@ -10484,13 +10495,59 @@ export function readReviewRecord(
     return null;
   }
   if (reviewRecordDigest(bytes) !== ref.digest) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(bytes.toString("utf-8"));
-  } catch {
-    return null;
+  return parseReviewRecordBytes(bytes);
+}
+
+/**
+ * Load the record named by a completion and bind its content back to that row.
+ * Null means the named record is unavailable or is not the review described by
+ * the completion. Callers distinguish a legacy recordless completion by first
+ * checking reviewRecordRefFromBlock().
+ */
+export function pairedReviewRecordForCompletion(
+  projectDir: string,
+  completionBlock: string,
+  reader: (
+    projectDir: string,
+    ref: { path: string; digest: string },
+  ) => ReviewRecord | null = readReviewRecord,
+): ReviewRecord | null {
+  const ref = reviewRecordRefFromBlock(completionBlock);
+  if (ref === null) return null;
+  const record = reader(projectDir, ref);
+  return record !== null && reviewRecordMatchesCompletion(record, completionBlock)
+    ? record
+    : null;
+}
+
+/**
+ * Whether a completion descends from `request` and carries the review form its
+ * request era requires. A request without an id predates record authority and
+ * may remain recordless. Requests with an id must name a valid review record;
+ * any record a legacy completion names must verify too.
+ */
+export function completionCarriesVerifiedReview(
+  projectDir: string,
+  request: ReviewRequestBinding,
+  completionBlock: string,
+  reader: (
+    projectDir: string,
+    ref: { path: string; digest: string },
+  ) => ReviewRecord | null = readReviewRecord,
+): boolean {
+  if (!reviewCompletionMatchesRequest(request, completionBlock)) return false;
+  const ref = reviewRecordRefFromBlock(completionBlock);
+  if (ref === null) {
+    const namesRecord =
+      auditBlockField(completionBlock, "Review Record") !== null ||
+      auditBlockField(completionBlock, "Review Record Digest") !== null;
+    return request.requestId === null && !namesRecord;
   }
-  return isReviewRecord(parsed) ? parsed : null;
+  return pairedReviewRecordForCompletion(
+    projectDir,
+    completionBlock,
+    reader,
+  ) !== null;
 }
 
 /**
@@ -10541,10 +10598,12 @@ export function latestReviewRecordRefs(
     }
     const request = pending.get(key);
     if (request === undefined) continue;
-    if (!reviewCompletionMatchesRequest(request, event.block)) continue;
+    if (!completionCarriesVerifiedReview(projectDir, request, event.block)) {
+      continue;
+    }
+    const ref = reviewRecordRefFromBlock(event.block);
     // The request is answered exactly once: a later row cannot reuse it.
     pending.delete(key);
-    const ref = reviewRecordRefFromBlock(event.block);
     refs.set(unit, ref === null ? null : { ...ref, completion: event.block });
   }
   return refs;
@@ -10656,17 +10715,25 @@ export function mergeReviewRecordsFromDelta(
       auditBlockField(block, "Review Record Digest") !== null;
     const key = scopeKey(block);
     const request = key === null ? undefined : pending.get(key);
-    const paired =
+    const completionMatches =
       request !== undefined && reviewCompletionMatchesRequest(request, block);
-    // A paired completion answers its request exactly once, whether or not it
-    // names a record, so a later row cannot ride the same request.
-    if (paired) pending.delete(key as string);
-    if (!namesRecord) continue;
-    if (ref === null || !paired) {
-      throw new Error(
-        "worktree audit delta carries a REVIEW_COMPLETED row that names a review record " +
-          "but does not descend from a REVIEW_REQUESTED row in the same delta; refusing to merge",
-      );
+    if (!completionMatches) {
+      if (namesRecord) {
+        throw new Error(
+          "worktree audit delta carries a REVIEW_COMPLETED row that names a review record " +
+            "but does not descend from a REVIEW_REQUESTED row in the same delta; refusing to merge",
+        );
+      }
+      continue;
+    }
+    if (ref === null) {
+      if (!completionCarriesVerifiedReview("", request, block, () => null)) {
+        throw new Error(
+          "worktree audit delta carries a record-era REVIEW_COMPLETED row without a verifiable review record; refusing to merge",
+        );
+      }
+      pending.delete(key as string);
+      continue;
     }
     const rel = ref.path;
     const sourceRoot = realpathSync(worktreeRecordRoot);
@@ -10684,17 +10751,17 @@ export function mergeReviewRecordsFromDelta(
         `review record ${ref.path} in the worktree does not match the digest its REVIEW_COMPLETED row pinned`,
       );
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(bytes.toString("utf-8"));
-    } catch {
-      parsed = null;
-    }
-    if (!isReviewRecord(parsed) || !reviewRecordMatchesCompletion(parsed, block)) {
+    if (!completionCarriesVerifiedReview(
+      "",
+      request,
+      block,
+      () => parseReviewRecordBytes(bytes),
+    )) {
       throw new Error(
         `review record ${ref.path} is not the review its REVIEW_COMPLETED row describes; refusing to merge`,
       );
     }
+    pending.delete(key as string);
     mkdirSync(mainRecordRoot, { recursive: true });
     const mainRoot = realpathSync(mainRecordRoot);
     const destination = assertNoSymlinkInChainOrThrow(mainRoot, rel);
@@ -11437,6 +11504,7 @@ const REVIEW_ACCOUNTING_EVENTS = new Set([
 // per-unit floor because the forked audit inherits the main workflow's prior
 // rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
 export function reviewAttemptAccounting(
+  projectDir: string,
   attemptView: AttemptView,
   stateContent: string,
   stage: { slug: string; for_each?: string; workspace_requires?: boolean },
@@ -11705,7 +11773,11 @@ export function reviewAttemptAccounting(
       const pending = pendingRequests.get(iteration);
       if (
         pending?.binding &&
-        reviewCompletionMatchesRequest(pending.binding, entry.block)
+        completionCarriesVerifiedReview(
+          projectDir,
+          pending.binding,
+          entry.block,
+        )
       ) {
         pendingIterations.delete(iteration);
         pendingRequests.delete(iteration);
@@ -11876,6 +11948,7 @@ export interface WorktreeReviewAttemptProjection {
 }
 
 export function worktreeReviewAttemptProjection(
+  projectDir: string,
   rows: ReadonlyArray<AuditShardEvent>,
   options: {
     boltSlug: string;
@@ -11884,6 +11957,10 @@ export function worktreeReviewAttemptProjection(
     reviewer: string;
     reviewClass: Exclude<ReviewClass, "none">;
     maxIterations: number;
+    recordReader?: (
+      projectDir: string,
+      ref: { path: string; digest: string },
+    ) => ReviewRecord | null;
   },
 ): WorktreeReviewAttemptProjection {
   const relevant = new Set([
@@ -11974,7 +12051,12 @@ export function worktreeReviewAttemptProjection(
       (request.timestamp === event.timestamp &&
         request.shard !== event.shard) ||
       request.binding === null ||
-      !reviewCompletionMatchesRequest(request.binding, event.block)
+      !completionCarriesVerifiedReview(
+        projectDir,
+        request.binding,
+        event.block,
+        options.recordReader,
+      )
     ) {
       continue;
     }
@@ -12034,6 +12116,7 @@ export function candidateReviewCoverageProjection(
     reviewer: string | undefined;
     artifactPrefix: string;
     expectedFingerprint: string;
+    completionRecord?: (block: string) => ReviewRecord | null;
   },
 ): boolean {
   const events = sortAttemptEvents(rows);
@@ -12063,7 +12146,7 @@ export function candidateReviewCoverageProjection(
     return false;
   }
 
-  const pending = new Set<string>();
+  const pending = new Map<string, ReviewRequestBinding>();
   let ready = false;
   for (const event of events) {
     if (
@@ -12102,10 +12185,21 @@ export function candidateReviewCoverageProjection(
     const iteration = auditBlockField(event.block, "Iteration");
     if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
     if (event.event === "REVIEW_REQUESTED") {
-      pending.add(iteration);
+      const binding = reviewRequestBindingFromBlock(event.block);
+      if (binding !== null) pending.set(iteration, binding);
       continue;
     }
-    if (!pending.delete(iteration)) continue;
+    const request = pending.get(iteration);
+    if (
+      request === undefined ||
+      !completionCarriesVerifiedReview(
+        "",
+        request,
+        event.block,
+        (_projectDir, _ref) => options.completionRecord?.(event.block) ?? null,
+      )
+    ) continue;
+    pending.delete(iteration);
     ready =
       auditBlockField(event.block, "Verdict") === "READY" &&
       auditBlockField(event.block, "Artifact Fingerprint") ===
@@ -12270,6 +12364,7 @@ export function freshReviewReceipts(
       binding: ReviewRequestBinding | null;
       timestamp: string;
       shard: string;
+      verificationFailed?: boolean;
     }
   >();
   const modernUnitReceipts = new Map<
@@ -12533,9 +12628,14 @@ export function freshReviewReceipts(
     if (
       !request ||
       (request.timestamp === e.timestamp && request.shard !== e.shard) ||
-      !request.binding ||
-      !reviewCompletionMatchesRequest(request.binding, e.block)
+      !request.binding
     ) {
+      continue;
+    }
+    if (!completionCarriesVerifiedReview(projectDir, request.binding, e.block)) {
+      if (reviewCompletionMatchesRequest(request.binding, e.block)) {
+        request.verificationFailed = true;
+      }
       continue;
     }
     pendingRequests.delete(requestKey);
@@ -12672,6 +12772,7 @@ export function freshReviewReceipts(
       state: "retry-required",
       iteration: request.iteration,
       recovery: request.recovery,
+      ...(request.verificationFailed ? { verificationFailed: true } : {}),
     };
     if (request.unit) {
       if (!request.recovery) unitVerdicts.delete(request.unit);
@@ -19940,6 +20041,7 @@ export function guardAttemptState(
     options.accounting ??
     (reviewable
       ? reviewAttemptAccounting(
+          projectDir,
           attemptView,
           stateContent,
           stage,

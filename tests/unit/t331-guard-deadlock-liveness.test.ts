@@ -1219,6 +1219,7 @@ describe("AttemptView projections and refusal streaks", () => {
       openBoltUnits: new Set(["alpha"]),
     };
     const accounting = reviewAttemptAccounting(
+      "",
       view,
       state("-"),
       { slug: "functional-design", for_each: "unit-of-work" },
@@ -1232,6 +1233,7 @@ describe("AttemptView projections and refusal streaks", () => {
 
   test("worktree review projection owns the Bolt boundary event set", () => {
     const projection = worktreeReviewAttemptProjection(
+      "",
       [
         event(
           "BOLT_STARTED",
@@ -1310,6 +1312,7 @@ describe("AttemptView projections and refusal streaks", () => {
     };
     const teamState = `${state("-")}- **Unit Ownership**: team\n`;
     const accounting = reviewAttemptAccounting(
+      "",
       view,
       teamState,
       { slug: "functional-design", for_each: "unit-of-work" },
@@ -1362,6 +1365,10 @@ describe("AttemptView projections and refusal streaks", () => {
         "Attempt Generation": "1",
         Reviewer: "reviewer",
         Iteration: "1",
+        "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+        "Review Appendix Artifact":
+          "construction/alpha/functional-design/entities.md",
+        "Review Appendix Offset": "0",
       },
       "a.md",
       0,
@@ -1376,7 +1383,10 @@ describe("AttemptView projections and refusal streaks", () => {
         Reviewer: "reviewer",
         Iteration: "1",
         Verdict: "READY",
-        "Artifact Fingerprint": "sha256:expected",
+        "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+        "Review Appendix Artifact":
+          "construction/alpha/functional-design/entities.md",
+        "Review Appendix Offset": "0",
       },
       "a.md",
       0,
@@ -1389,7 +1399,7 @@ describe("AttemptView projections and refusal streaks", () => {
         stage: "functional-design",
         reviewer: "reviewer",
         artifactPrefix: "construction/alpha/functional-design/",
-        expectedFingerprint: "sha256:expected",
+        expectedFingerprint: `sha256:${"a".repeat(64)}`,
       }),
     ).toBe(true);
     expect(
@@ -1414,7 +1424,7 @@ describe("AttemptView projections and refusal streaks", () => {
           stage: "functional-design",
           reviewer: "reviewer",
           artifactPrefix: "construction/alpha/functional-design/",
-          expectedFingerprint: "sha256:expected",
+          expectedFingerprint: `sha256:${"a".repeat(64)}`,
         },
       ),
     ).toBe(false);

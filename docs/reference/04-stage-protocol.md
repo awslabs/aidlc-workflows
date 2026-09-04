@@ -1102,9 +1102,9 @@ and the redispatch context render them when no record exists for the scope, and
 the Plan Approval projection still strips one from the plan. A reviewer that
 still appends one is tolerated for this release cycle only (deprecated): the
 logger accepts the section as the verdict when it provably postdates the
-request, records no review record for it, and the embedded form is removed in
-the next minor release. The protocol writes no new one; the next review for
-that scope writes a record and the old section stays as inert content.
+request, copies that validated section into the review record, and removes the
+embedded input form in the next minor release. The protocol writes no new
+embedded section; the old section stays as inert content.
 
 Human finding dispositions never rewrite the terminally reviewed artifact.
 `GATE_APPROVED` atomically records `Accepted risk` for each current New or

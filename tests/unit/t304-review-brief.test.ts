@@ -160,8 +160,12 @@ function recordReviewAndOpenGate(proj: string, artifact: string): void {
     "--iteration",
     "1",
   ];
-  expect(run(LOG, base, proj).status).toBe(0);
-  writeFileSync(artifact, `${requestedBody}${reviewerAppendix}`, "utf-8");
+  const requested = run(LOG, base, proj);
+  expect(requested.status, requested.out).toBe(0);
+  const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+  const draft = join(proj, reviewFile);
+  mkdirSync(dirname(draft), { recursive: true });
+  writeFileSync(draft, reviewerAppendix.replace(/^## Review\s*/, ""), "utf-8");
   expect(run(LOG, [...base, "--verdict", "READY"], proj).status).toBe(0);
   expect(
     run(STATE, ["gate-start", "requirements-analysis"], proj).status,
@@ -1089,6 +1093,56 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     // what the artifact says, which here is nothing.
     writeFileSync(recordPath, readFileSync(recordPath, "utf-8").replace("R-02", "R-09"), "utf-8");
     expect(readReviewArtifactContexts(proj, stage)).toHaveLength(0);
+  });
+
+  test("an empty incomplete-review record leaves room for the explicit gate fallback finding", () => {
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nReviewed requirements.\n", "utf-8");
+    const request = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    const requested = run(LOG, request, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const retried = run(LOG, [...request, "--retry-pending"], proj);
+    expect(retried.status, retried.out).toBe(0);
+    const completed = run(LOG, [...request, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+    const recordPath = join(seededRecordDir(proj), reviewRecord);
+    expect(existsSync(recordPath)).toBe(true);
+    expect(JSON.parse(readFileSync(recordPath, "utf-8"))).toMatchObject({
+      verdict: "NOT-READY",
+      body: "",
+      findings: [],
+    });
+
+    const stage = findStageBySlug("requirements-analysis")!;
+    expect(readReviewArtifactContexts(proj, stage)).toHaveLength(0);
+    const fallbackFinding = "review did not complete within its turn budget";
+    const brief = run(
+      REVIEW_BRIEF,
+      [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--why",
+        "first",
+        "--fallback-finding",
+        fallbackFinding,
+      ],
+      proj,
+    );
+    expect(brief.status, brief.out).toBe(0);
+    expect(brief.stdout).toContain(fallbackFinding);
+    expect(brief.stdout).not.toContain(
+      "| - | - | - | No findings | No action required | Resolved |",
+    );
   });
 
   test("a record replaces a legacy embedded review for the same scope at the gate", () => {

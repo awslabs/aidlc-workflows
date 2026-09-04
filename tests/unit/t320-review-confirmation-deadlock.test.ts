@@ -2,8 +2,8 @@
 // subcommand:aidlc-log:review, hook:aidlc-review-freeze
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltSlugForUnit,
@@ -164,30 +164,40 @@ function writeArtifact(
 }
 
 function review(proj: string, verdict?: "READY" | "NOT-READY") {
+  const args = [
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+  ];
   if (verdict) {
-    appendFileSync(
-      requirementsPaths(proj).artifact,
-      `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+    const slot = reviewSlots.get(proj);
+    if (slot === undefined) throw new Error("review request did not open a slot");
+    mkdirSync(dirname(join(proj, slot)), { recursive: true });
+    writeFileSync(
+      join(proj, slot),
+      `**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
       "utf-8",
     );
   }
-  return run(
+  const result = run(
     LOG,
-    [
-      "review",
-      "--stage",
-      "requirements-analysis",
-      "--reviewer",
-      "aidlc-product-lead-agent",
-      "--iteration",
-      "1",
-      ...(verdict ? ["--verdict", verdict] : []),
-    ],
+    [...args, ...(verdict ? ["--verdict", verdict] : [])],
     proj,
     {},
     ["AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD"],
   );
+  if (!verdict && result.status === 0) {
+    const { reviewFile } = JSON.parse(result.stdout) as { reviewFile: string };
+    reviewSlots.set(proj, reviewFile);
+  }
+  return result;
 }
+
+const reviewSlots = new Map<string, string>();
 
 function runHook(
   proj: string,

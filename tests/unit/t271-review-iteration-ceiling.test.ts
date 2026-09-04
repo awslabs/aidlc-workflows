@@ -7,7 +7,8 @@
 // function:reviewRecordRelativePath, function:reviewDraftRelativePath,
 // function:isReviewRecordRelativePath, function:readReviewRecord,
 // function:latestReviewRecordRefs, function:mergeReviewRecordsFromDelta,
-// function:reviewRecordMatchesCompletion
+// function:reviewRecordMatchesCompletion, function:pairedReviewRecordForCompletion,
+// function:completionCarriesVerifiedReview
 //
 // t271 — engine-enforced review iteration ceiling (aidlc-log review).
 //
@@ -72,6 +73,7 @@ import {
   serializeReviewRecord,
   toPosix,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readReviewArtifactContexts } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 
 const LOG_TOOL = join(
   import.meta.dir,
@@ -85,6 +87,7 @@ const LOG_TOOL = join(
 );
 const AUDIT_TOOL = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "aidlc-audit.ts");
 const STAGE_GRAPH = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "data", "stage-graph.json");
+const STATE_TOOL = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "aidlc-state.ts");
 
 function runReview(
   proj: string,
@@ -197,6 +200,25 @@ function runAudit(proj: string, args: string[]) {
   const res = spawnSync(process.execPath, [AUDIT_TOOL, ...args], {
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+  });
+  return {
+    status: res.status ?? -1,
+    stdout: res.stdout ?? "",
+    stderr: res.stderr ?? "",
+  };
+}
+
+function runState(proj: string, args: string[]) {
+  const res = spawnSync(process.execPath, [STATE_TOOL, ...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    },
   });
   return {
     status: res.status ?? -1,
@@ -1023,7 +1045,184 @@ describe("t271 review iteration ceiling", () => {
     expect(stale.stageStale).toBe(true);
   });
 
-  test("the deprecated embedded form is accepted only when the section provably postdates the request", () => {
+  test("a changed or missing named review record cannot authorize approval", () => {
+    for (const damage of ["changed", "missing"] as const) {
+      const proj = seedProject("feature");
+      writeReviewedArtifact(
+        proj,
+        "requirements-analysis",
+        "reviewed requirements\n",
+      );
+      const request = [
+        "--stage", "requirements-analysis",
+        "--reviewer", "aidlc-product-lead-agent",
+        "--iteration", "1",
+      ];
+      const requested = runReview(proj, request);
+      expect(requested.status, requested.stderr).toBe(0);
+      const requestOutput = JSON.parse(requested.stdout) as { reviewFile: string };
+      mkdirSync(dirname(join(proj, requestOutput.reviewFile)), { recursive: true });
+      writeFileSync(
+        join(proj, requestOutput.reviewFile),
+        reviewAppendix(
+          "aidlc-product-lead-agent",
+          1,
+          "READY",
+          "| ID | Severity | Location | Finding | Required action | Status |\n" +
+            "|---|---|---|---|---|---|\n" +
+            "| R-01 | High | requirements.md | Missing case | Add it | New |",
+        ).trimStart(),
+        "utf-8",
+      );
+      const completed = runReview(proj, [...request, "--verdict", "READY"], {
+        AIDLC_TEST_NO_REVIEW_FILE: "1",
+      });
+      expect(completed.status, completed.stderr).toBe(0);
+      const recordRef = JSON.parse(completed.stdout) as { reviewRecord: string };
+      const recordPath = join(seededRecordDir(proj), recordRef.reviewRecord);
+      if (damage === "changed") {
+        appendFileSync(recordPath, " ", "utf-8");
+      } else {
+        unlinkSync(recordPath);
+      }
+
+      const stage = resolveStage("requirements-analysis");
+      if (!stage) throw new Error("requirements-analysis missing from stage graph");
+      const receipts = freshReviewReceipts(
+        proj,
+        readFileSync(seededStateFile(proj), "utf-8"),
+        stage,
+        { reviewClass: "advisory" },
+      );
+      expect(receipts.stageVerdict).toBeNull();
+      expect(receipts.stagePending).toEqual({
+        state: "retry-required",
+        iteration: 1,
+        recovery: false,
+        verificationFailed: true,
+      });
+      expect(latestReviewRecordRefs(proj, stage).has("")).toBe(false);
+      expect(readReviewArtifactContexts(proj, stage)).toHaveLength(0);
+
+      const statePath = seededStateFile(proj);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace(
+          "- [-] requirements-analysis — EXECUTE",
+          "- [?] requirements-analysis — EXECUTE",
+        ),
+      );
+      const approval = runState(proj, ["approve", "requirements-analysis"]);
+      expect(approval.status).not.toBe(0);
+      expect(`${approval.stdout}${approval.stderr}`).toContain(
+        "the recorded review could not be verified and the review must be run again",
+      );
+      expect(`${approval.stdout}${approval.stderr}`).toContain("--retry-pending");
+      const refusal = JSON.parse(`${approval.stdout}${approval.stderr}`) as {
+        error: string;
+      };
+      expect(refusal.error).toContain('"ask_type":"guard-recovery"');
+      expect(refusal.error).toContain('"executableNow":true');
+    }
+  });
+
+  test("a pre-appendix legacy pair still carries its verdict while a recordless modern completion does not", () => {
+    const legacyProj = seedProject("feature");
+    writeReviewedArtifact(
+      legacyProj,
+      "requirements-analysis",
+      "legacy reviewed requirements\n",
+    );
+    const legacyStage = resolveStage("requirements-analysis");
+    if (!legacyStage) throw new Error("requirements-analysis missing from stage graph");
+    const legacyFingerprint = reviewArtifactFingerprint(legacyProj, legacyStage);
+    if (legacyFingerprint === null) throw new Error("requirements artifact missing");
+    const legacyFields = {
+      Stage: "requirements-analysis",
+      Reviewer: "aidlc-product-lead-agent",
+      Iteration: "1",
+      "Artifact Fingerprint": legacyFingerprint,
+    };
+    appendAuditEntry("REVIEW_REQUESTED", legacyFields, legacyProj);
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      { ...legacyFields, Verdict: "READY" },
+      legacyProj,
+    );
+    const legacyReceipts = freshReviewReceipts(
+      legacyProj,
+      readFileSync(seededStateFile(legacyProj), "utf-8"),
+      legacyStage,
+      { reviewClass: "advisory" },
+    );
+    expect(legacyReceipts.stageVerdict).toBe("READY");
+    expect(legacyReceipts.stagePending).toBeNull();
+
+    const proj = seedProject("feature");
+    writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "reviewed requirements\n",
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const requested = runReview(proj, request);
+    expect(requested.status, requested.stderr).toBe(0);
+    const requestOutput = JSON.parse(requested.stdout) as { requestId: string };
+    const requestBlock = auditBlocks(proj, "REVIEW_REQUESTED")[0];
+    const fingerprint = auditBlockField(requestBlock, "Artifact Fingerprint") as string;
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+        Iteration: "1",
+        Verdict: "READY",
+        "Request Fingerprint": fingerprint,
+        "Artifact Fingerprint": fingerprint,
+        "Request Id": requestOutput.requestId,
+      },
+      proj,
+    );
+
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis missing from stage graph");
+    const receipts = freshReviewReceipts(
+      proj,
+      readFileSync(seededStateFile(proj), "utf-8"),
+      stage,
+      { reviewClass: "advisory" },
+    );
+    expect(receipts.stageVerdict).toBeNull();
+    expect(receipts.stagePending).toEqual({
+      state: "retry-required",
+      iteration: 1,
+      recovery: false,
+      verificationFailed: true,
+    });
+    expect(latestReviewRecordRefs(proj, stage).has("")).toBe(false);
+    expect(readReviewArtifactContexts(proj, stage)).toHaveLength(0);
+
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        "- [-] requirements-analysis — EXECUTE",
+        "- [?] requirements-analysis — EXECUTE",
+      ),
+    );
+    const approval = runState(proj, ["approve", "requirements-analysis"]);
+    expect(approval.status).not.toBe(0);
+    expect(`${approval.stdout}${approval.stderr}`).toContain(
+      "the recorded review could not be verified and the review must be run again",
+    );
+    expect(`${approval.stdout}${approval.stderr}`).toContain("--retry-pending");
+  });
+
+  test("a tolerated embedded completion is copied into its named record", () => {
     const proj = seedProject("feature");
     const artifact = writeReviewedArtifact(
       proj,
@@ -1043,9 +1242,15 @@ describe("t271 review iteration ceiling", () => {
       "Artifact Fingerprint",
     );
 
+    const reviewFinding = "Copy the appendix finding into the record.";
+    const findings = [
+      "| ID | Severity | Location | Finding | Required action | Status |",
+      "|---|---|---|---|---|---|",
+      `| R-01 | Major | requirements.md > Scope | ${reviewFinding} | Clarify scope | New |`,
+    ].join("\n");
     appendFileSync(
       artifact,
-      reviewAppendix("aidlc-product-lead-agent", 1, "READY"),
+      reviewAppendix("aidlc-product-lead-agent", 1, "READY", findings),
       "utf-8",
     );
     // Both a review file and an appended section: the artifact must carry the
@@ -1063,9 +1268,11 @@ describe("t271 review iteration ceiling", () => {
     expect(embedded.status, embedded.stderr).toBe(0);
     const completed = auditBlocks(proj, "REVIEW_COMPLETED")[0];
     expect(auditBlockField(completed, "Request Fingerprint")).toBe(requestFingerprint);
-    // The receipt binds the full post-review artifact and names no record.
+    // The tolerated appendix is copied into the universal completion record.
     expect(auditBlockField(completed, "Artifact Fingerprint")).not.toBe(requestFingerprint);
-    expect(auditBlockField(completed, "Review Record")).toBeNull();
+    expect(auditBlockField(completed, "Review Record")).toMatch(
+      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+    );
     const stage = resolveStage("requirements-analysis");
     if (!stage) throw new Error("requirements-analysis missing from stage graph");
     const receipts = freshReviewReceipts(
@@ -1075,7 +1282,13 @@ describe("t271 review iteration ceiling", () => {
       { reviewClass: "advisory" },
     );
     expect(receipts.stageVerdict).toBe("READY");
-    expect(latestReviewRecordRefs(proj, stage).get("")).toBeNull();
+    expect(latestReviewRecordRefs(proj, stage).get("")).toMatchObject({
+      path: auditBlockField(completed, "Review Record"),
+    });
+    expect(readReviewArtifactContexts(proj, stage)).toMatchObject([{
+      verdict: "READY",
+      findings: [{ id: "R-01", finding: reviewFinding, status: "New" }],
+    }]);
   });
 
   test("literal Review examples cannot become the existing reviewer appendix", () => {
@@ -1402,7 +1615,7 @@ describe("t271 review iteration ceiling", () => {
     expect(readFileSync(artifact, "utf-8")).toBe("reviewed requirements\n");
   });
 
-  test("a retried incomplete review records the NOT-READY fallback without a review", () => {
+  test("a retried incomplete review records the NOT-READY fallback with an empty record", () => {
     const proj = seedProject("feature");
     writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
     const request = [
@@ -1429,7 +1642,15 @@ describe("t271 review iteration ceiling", () => {
     expect(fallback.status, fallback.stderr).toBe(0);
     const completed = auditBlocks(proj, "REVIEW_COMPLETED")[0];
     expect(auditBlockField(completed, "Verdict")).toBe("NOT-READY");
-    expect(auditBlockField(completed, "Review Record")).toBeNull();
+    const recordPath = auditBlockField(completed, "Review Record");
+    expect(recordPath).toMatch(
+      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+    );
+    const record = JSON.parse(
+      readFileSync(join(seededRecordDir(proj), recordPath as string), "utf-8"),
+    ) as ReviewRecord;
+    expect(record.body).toBe("");
+    expect(record.findings).toEqual([]);
   });
 
   test("only one owned canonical Review section may occupy the appended suffix", () => {
@@ -1786,7 +2007,9 @@ describe("t271 review iteration ceiling", () => {
       AIDLC_TEST_EMBEDDED: "1",
     });
     expect(completed.status, completed.stderr).toBe(0);
-    expect(auditBlockField(auditBlocks(proj, "REVIEW_COMPLETED")[0], "Review Record")).toBeNull();
+    expect(auditBlockField(auditBlocks(proj, "REVIEW_COMPLETED")[0], "Review Record")).toMatch(
+      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+    );
   });
 
   test("review_artifact, not produces order, names the plugin, kind-filtered, and no-DAG reviewed artifact", () => {
@@ -2008,6 +2231,9 @@ describe("t271 review iteration ceiling", () => {
       Reviewer: "aidlc-product-lead-agent",
       Iteration: "1",
       "Artifact Fingerprint": fingerprint,
+      "Review Appendix Artifact":
+        "inception/requirements-analysis/requirements.md",
+      "Review Appendix Offset": "0",
     };
     appendAuditEntry("REVIEW_REQUESTED", identity, proj);
     appendAuditEntry(
@@ -2495,8 +2721,8 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "1",
     ];
 
-    // Attempt 1, the deprecated embedded form: request -> reviewer appends ->
-    // READY receipt, so the artifact now carries attempt 1's section.
+    // Attempt 1, the deprecated embedded input form: request -> reviewer appends ->
+    // READY receipt and a universal review record, while the artifact retains the section.
     expect(runReview(proj, request).status).toBe(0);
     expect(
       runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_EMBEDDED: "1" }).status,
@@ -2509,7 +2735,9 @@ describe("t271 review iteration ceiling", () => {
       auditBlocks(proj, "REVIEW_COMPLETED")[0],
       "Review Record",
     );
-    expect(attemptOneRecord).toBeNull();
+    expect(attemptOneRecord).toMatch(
+      /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.json$/,
+    );
 
     // Attempt reset: ordinals restart at 1 while the attempt-1 section is
     // still present in the artifact.
@@ -2688,20 +2916,30 @@ describe("t271 review iteration ceiling", () => {
       expect(existsSync(mainCopy), name).toBe(false);
     }
     // A legacy embedded completion names no record and carries nothing, and it
-    // still answers its request: a later row naming a record cannot ride the
-    // same request.
-    const embeddedCompletion = completion().replace(
+    // A modern request cannot be answered without its named record. A legacy
+    // request remains recordless, and its completion still consumes that request.
+    const recordlessCompletion = completion().replace(
       `**Review Record**: ${path}\n**Review Record Digest**: ${digest}\n`,
       "",
     );
-    expect(
-      mergeReviewRecordsFromDelta(request() + embeddedCompletion, worktreeRoot, mainRoot),
-    ).toEqual({ copied: [], present: [] });
     expect(() =>
-      mergeReviewRecordsFromDelta(request() + embeddedCompletion + completion(), worktreeRoot, mainRoot),
-    ).toThrow(/does not descend from a REVIEW_REQUESTED row/);
-    expect(existsSync(mainCopy)).toBe(false);
-
+      mergeReviewRecordsFromDelta(request() + recordlessCompletion, worktreeRoot, mainRoot),
+    ).toThrow(/record-era REVIEW_COMPLETED row without a verifiable review record/);
+    const legacyRequest = request({
+      "Review Appendix Artifact": "construction/alpha/code-generation/code-generation-plan.md",
+      "Review Appendix Offset": "0",
+    }).replace(`**Request Id**: ${requestId}\n`, "");
+    const legacyCompletion = recordlessCompletion
+      .replace(`**Request Id**: ${requestId}\n`, "")
+      .replace(
+        `**Artifact Fingerprint**: ${artifactFingerprint}\n`,
+        `**Artifact Fingerprint**: ${artifactFingerprint}\n` +
+          "**Review Appendix Artifact**: construction/alpha/code-generation/code-generation-plan.md\n" +
+          "**Review Appendix Offset**: 0\n",
+      );
+    expect(
+      mergeReviewRecordsFromDelta(legacyRequest + legacyCompletion, worktreeRoot, mainRoot),
+    ).toEqual({ copied: [], present: [] });
     // A genuine record from another scope, named with its true digest by a
     // paired row, is still not the review of that row.
     const otherRecord = serializeReviewRecord({ ...record, unit: "beta" });

@@ -527,9 +527,13 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
   if ((requested.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
   }
-  appendFileSync(
-    artifact,
-    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+  const { reviewFile } = JSON.parse(requested.stdout ?? "{}") as {
+    reviewFile: string;
+  };
+  mkdirSync(dirname(join(p, reviewFile)), { recursive: true });
+  writeFileSync(
+    join(p, reviewFile),
+    `**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
     "utf-8",
   );
   const completed = spawnSync(BUN, [...args, "--verdict", verdict], {

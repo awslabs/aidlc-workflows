@@ -156,7 +156,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    ordinal. If the retried attempt is ALSO incomplete, stop retrying: record the
    terminal receipt with `--verdict NOT-READY` and no review file; the logger
    accepts a missing review only for this retried NOT-READY fallback, and
-   writes no record for it. Proceed as that NOT-READY verdict directs for the
+   writes an empty review record for it. Proceed as that NOT-READY verdict directs for the
    effective review class - on `advisory` it is terminal (present the gate using
    the required Review brief below, with
    `--fallback-finding "review did not complete within its turn budget"` so the
@@ -175,10 +175,9 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    reviewer that still appends one is tolerated for this release cycle only:
    the logger accepts the section as the verdict when it provably postdates the
    request (the bytes before it are exactly the requested bytes and the request
-   saw no section), records no review record for it, and the embedded form is
-   removed in the next minor release. Do not write one; the next review for
-   that scope writes a record, and any old section stays where it is as inert
-   content.
+   saw no section), copies that validated section into the review record, and the
+   embedded input form is removed in the next minor release. Do not write an
+   embedded section; the old section stays where it is as inert content.
 
    The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses declared `produces[]`/`optional_produces[]` writes (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
    If a write still invalidates the receipt, what happens next is decided by

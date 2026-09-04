@@ -31,13 +31,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   cleanupTestProject,
@@ -139,11 +138,13 @@ function recordReview(
     "--iteration",
     String(iteration),
   ];
-  expect(run(LOG_TOOL, base, p, TEST_ENV).status).toBe(0);
-  appendFileSync(
-    join(dir, "requirements.md"),
-    "\n## Review\n\n" +
-      `**Verdict:** ${verdict}\n` +
+  const requested = run(LOG_TOOL, base, p, TEST_ENV);
+  expect(requested.status).toBe(0);
+  const { reviewFile } = JSON.parse(requested.out) as { reviewFile: string };
+  mkdirSync(dirname(join(p, reviewFile)), { recursive: true });
+  writeFileSync(
+    join(p, reviewFile),
+    `**Verdict:** ${verdict}\n` +
       `**Reviewer:** ${reviewer}\n` +
       `**Iteration:** ${iteration}\n\n` +
       "### Findings\n\nNo blocking findings.\n",

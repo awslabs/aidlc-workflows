@@ -19,14 +19,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -246,10 +245,13 @@ function recordReadyReview(
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
-  appendFileSync(
-    artifact,
-    "\n## Review\n\n" +
-      "**Verdict:** READY\n" +
+  const { reviewFile } = JSON.parse(request.stdout ?? "{}") as {
+    reviewFile: string;
+  };
+  mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
+  writeFileSync(
+    join(proj, reviewFile),
+    "**Verdict:** READY\n" +
       `**Reviewer:** ${reviewer}\n` +
       `**Iteration:** ${iteration}\n\n` +
       "### Findings\n\nNo blocking findings.\n",

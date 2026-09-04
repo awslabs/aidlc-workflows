@@ -58,10 +58,13 @@ import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltSlugForUnit,
+  auditBlockField,
   gitCommitSourceListing,
   readAllAuditShards,
   sourceBaselineAuditFields,
   reviewArtifactFingerprint,
+  reviewRecordDigest,
+  type ReviewRecord,
   resolveStage,
   shapeSourceSnapshotIndex,
   workspaceSourceFingerprint,
@@ -311,8 +314,8 @@ function seedTwoUnitDag(proj: string): void {
   );
 }
 
-// Strip the stamped Source Fingerprint field from every audit shard - the
-// exact shape of a pre-upgrade (legacy) REVIEW_COMPLETED row.
+// Rewrite the request/completion pair into the genuine pre-record appendix
+// shape: no request id, no named record, and an explicit appendix boundary.
 function stripFingerprintFields(proj: string): void {
   const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
   for (const intent of readdirSync(intentsDir)) {
@@ -321,11 +324,42 @@ function stripFingerprintFields(proj: string): void {
     for (const f of readdirSync(auditDirPath)) {
       if (!f.endsWith(".md")) continue;
       const p = join(auditDirPath, f);
-      const body = readFileSync(p, "utf-8");
-      if (!body.includes("**Source Fingerprint**: ")) continue;
-      writeFileSync(p, body.replace(/^\*\*Source Fingerprint\*\*: .*\r?\n/gm, ""), "utf-8");
+      const blocks = readFileSync(p, "utf-8").split(/\n---\n/).map((block) => {
+        if (!/\*\*Event\*\*: REVIEW_(?:REQUESTED|COMPLETED)/.test(block)) {
+          return block;
+        }
+        const stripped = block.replace(
+          /^\*\*(?:Source Fingerprint|Request Source Fingerprint|Request Id|Review Record|Review Record Digest)\*\*: .*\r?\n/gm,
+          "",
+        );
+        return `${stripped.trimEnd()}\n` +
+          "**Review Appendix Artifact**: construction/code-generation/code-generation-plan.md\n" +
+          "**Review Appendix Offset**: 0\n";
+      });
+      writeFileSync(p, blocks.join("\n---\n"), "utf-8");
     }
   }
+}
+
+function rewriteRecordedSourceBinding(proj: string, value: string): void {
+  const shard = seededAuditShard(proj);
+  let audit = readFileSync(shard, "utf-8");
+  const completion = audit
+    .split(/\n---\n/)
+    .find((block) => auditBlockField(block, "Event") === "REVIEW_COMPLETED");
+  if (completion === undefined) throw new Error("missing review completion");
+  const relativeRecord = auditBlockField(completion, "Review Record");
+  if (relativeRecord === null) throw new Error("missing review record path");
+  const path = join(seededRecordDir(proj), relativeRecord);
+  const record = JSON.parse(readFileSync(path, "utf-8")) as ReviewRecord;
+  record.source_fingerprint = value;
+  const bytes = `${JSON.stringify(record, null, 2)}\n`;
+  writeFileSync(path, bytes, "utf-8");
+  audit = audit.replace(
+    /^\*\*Review Record Digest\*\*: .*$/m,
+    `**Review Record Digest**: ${reviewRecordDigest(bytes)}`,
+  );
+  writeFileSync(shard, audit, "utf-8");
 }
 
 // Seed the minimum an intent registry needs for intentRepos() to resolve a
@@ -2005,6 +2039,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
   test("a newly stamped unbindable receipt remains fail-closed while Git is still unavailable", () => {
     recordReview(proj);
     const shard = seededAuditShard(proj);
+    rewriteRecordedSourceBinding(proj, "unbindable");
     writeFileSync(
       shard,
       readFileSync(shard, "utf-8")

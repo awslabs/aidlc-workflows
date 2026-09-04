@@ -335,6 +335,9 @@ function forgeUnitReceipt(proj: string, unit: string): void {
     Unit: unit,
     Iteration: "1",
     "Artifact Fingerprint": fingerprint,
+    "Review Appendix Artifact":
+      `construction/${unit}/${STAGE}/functional-spec.md`,
+    "Review Appendix Offset": "0",
   };
   appendAuditEntry("REVIEW_REQUESTED", fields, proj);
   appendAuditEntry(
@@ -858,6 +861,9 @@ describe("t328 no-DAG per-unit review continuity", () => {
       Unit: "alpha",
       Iteration: "1",
       "Artifact Fingerprint": fingerprint,
+      "Review Appendix Artifact":
+        `construction/alpha/${STAGE}/functional-spec.md`,
+      "Review Appendix Offset": "0",
     };
     const timestamp = "2026-08-25T02:00:00Z";
     const auditDir = seededAuditDir(proj);
