@@ -32,6 +32,13 @@ journey skips cleanly until its runtime, credentials, and explicit live-gate
 variable are present. For the cross-platform invariance story and the Windows
 substrate, see the runbook below.
 
+An all-skipped file is reported as `SKIP`, not `PASS`. Optional skips remain
+non-blocking, but when that file's own live-gate variable is explicitly `1`,
+the runner reports `UNMET`, lists it separately in the summary, and returns a
+nonzero result so requested live coverage cannot pass without executing a test.
+The same `UNMET` rule applies when a requested live file registers zero
+testcases; ordinary empty suites remain `PASS`.
+
 ## Cross-Platform
 
 The suite runs on macOS, Linux, and Windows through the native Bun runner (`bun tests/run-tests.ts`). `bash tests/run-tests.sh` remains as a POSIX compatibility wrapper for existing POSIX commands. The Windows runbook in `tests/harness/windows/` provisions a disposable Windows Server 2022 SSM host, syncs the committed git tree, installs dependencies, and runs `bun tests/run-tests.ts --all --debug` with live TUI enabled. Portability conventions used throughout the suite:
