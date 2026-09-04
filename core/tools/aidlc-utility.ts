@@ -24,7 +24,12 @@ import {
   win32 as winPath,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import {
+  appendAuditEntries,
+  appendAuditEntry,
+  appendAuditEntryUnlocked,
+  type AuditEntryInput,
+} from "./aidlc-audit.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
@@ -64,6 +69,7 @@ import {
   auditBlockField,
   auditFilePath,
   auditShards,
+  assertChangeControlLedgerWritable,
   CHANGE_CONTROL_FIELD,
   CHANGE_CONTROL_VALUES,
   changeControlMemoryStrictRefusal,
@@ -7149,7 +7155,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   const newScopeDef = scopeMapping[newScope];
   if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
 
-  let content = readStateFile(projectDir, flags.intent, flags.space);
+  const contentBefore = readStateFile(projectDir, flags.intent, flags.space);
+  const before = resolveChangeControl(projectDir, contentBefore);
+  let content = contentBefore;
   // AUTONOMY GUARD (the recompose guard's twin, same rationale): scope-change
   // flips stage EXECUTE/SKIP suffixes exactly like recompose does, so an
   // unattended autonomous Construction run must not have its plan re-shaped
@@ -7268,13 +7276,10 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     : (newScopeDef.testStrategy ?? effectiveDepth);
   content = setField(content, "Test Strategy", effectiveTestStrategy);
   // A Change Control line the scope supplied follows the new scope; a value
-  // the human set (or a memory layer holds) stays theirs.
-  const scopeSuppliedChangeControl = (() => {
-    const previous = parseChangeControlStateLine(getField(content, CHANGE_CONTROL_FIELD));
-    return previous?.source.startsWith("scope ") ? previous.value : null;
-  })();
+  // the human set, a legacy intent with no line, or a memory override stays.
+  const scopeSuppliedChangeControl = before.intent?.source.startsWith("scope ") === true;
   const scopeChangeControl = newScopeDef.changeControl ?? "strict";
-  if (scopeSuppliedChangeControl !== null) {
+  if (scopeSuppliedChangeControl) {
     content = setField(
       content,
       CHANGE_CONTROL_FIELD,
@@ -7313,9 +7318,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   // Update Last Updated timestamp
   content = setField(content, "Last Updated", isoTimestamp());
 
-  writeStateFile(projectDir, content, flags.intent, flags.space);
-
-  // Append SCOPE_CHANGED audit event
+  const after = resolveChangeControl(projectDir, content);
+  // Build every audit row before mutation. The batch lands in one append
+  // before the state write under the same lock, so append failure leaves both untouched.
   const oldScopeDef = scopeMapping[oldScope];
   const oldExecuteCount = oldScopeDef
     ? graph.filter(s => (oldScopeDef.stages[s.slug] || "SKIP") === "EXECUTE").length
@@ -7329,33 +7334,45 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   const gates = gridCostSummary(
     adjustedMapping as Record<string, "EXECUTE" | "SKIP">,
   ).gates;
-
-  appendAuditEvent(projectDir, "SCOPE_CHANGED", {
-    "Old Scope": oldScope,
-    "New Scope": newScope,
-    "Stage Count Delta": deltaStr,
-    "Stages in Scope": String(executeStages.length),
-    "Approval Gates": String(gates),
-    Depth: effectiveDepth,
-  });
+  const auditEntries: AuditEntryInput[] = [{
+    eventType: "SCOPE_CHANGED",
+    fields: {
+      "Old Scope": oldScope,
+      "New Scope": newScope,
+      "Stage Count Delta": deltaStr,
+      "Stages in Scope": String(executeStages.length),
+      "Approval Gates": String(gates),
+      Depth: effectiveDepth,
+    },
+  }];
   if (reviewUpdate.changed) {
-    appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
-      "Old Override": reviewUpdate.oldReview || "none set",
-      "New Override":
-        reviewUpdate.storedReview || "cleared (stage defaults apply)",
+    auditEntries.push({
+      eventType: "REVIEW_CLASS_CHANGED",
+      fields: {
+        "Old Override": reviewUpdate.oldReview || "none set",
+        "New Override": reviewUpdate.storedReview || "cleared (stage defaults apply)",
+      },
     });
   }
-  if (
-    scopeSuppliedChangeControl !== null &&
-    scopeSuppliedChangeControl !== scopeChangeControl
-  ) {
-    recordChangeControlSet(
-      projectDir,
-      scopeSuppliedChangeControl,
-      scopeChangeControl,
-      `scope ${newScope}`,
-    );
+  if (before.value !== after.value) {
+    auditEntries.push({
+      eventType: "CHANGE_CONTROL_SET",
+      fields: {
+        "Old Value": before.value,
+        "New Value": after.value,
+        Source: `scope ${newScope}`,
+      },
+    });
   }
+  withAuditLock(projectDir, () => {
+    try {
+      if (before.value !== after.value) assertChangeControlLedgerWritable();
+      appendAuditEntries(auditEntries, projectDir, flags.intent, flags.space);
+    } catch (error) {
+      throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
+    }
+    writeStateFile(projectDir, content, flags.intent, flags.space);
+  }, flags.intent, flags.space);
 
   process.stdout.write(
     `Scope changed: ${oldScope} → ${newScope}

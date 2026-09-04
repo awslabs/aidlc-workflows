@@ -51,10 +51,10 @@ afterEach(() => {
   while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
 });
 
-function run(tool: string, args: string[], proj: string) {
+function run(tool: string, args: string[], proj: string, env: Record<string, string> = {}) {
   const result = Bun.spawnSync({
     cmd: [BUN, tool, ...args, "--project-dir", proj],
-    env: { ...process.env },
+    env: { ...process.env, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -456,6 +456,65 @@ describe("t333 (4) the verb, the flag, and the status line", () => {
       "relaxed (set by you)",
     );
     expect(changeControlRows(kept.proj)).toHaveLength(0);
+  });
+
+  test("a scope change commits its state and audit rows together", () => {
+    const moved = project("enterprise");
+    const beforeFault = readFileSync(moved.state, "utf-8");
+    const failed = run(
+      UTILITY,
+      ["scope-change", "--scope", "classic"],
+      moved.proj,
+      { AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT: "t333" },
+    );
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toContain("Cannot record the scope change");
+    expect(failed.stderr).toContain("injected ledger fault: t333");
+    expect(readFileSync(moved.state, "utf-8")).toBe(beforeFault);
+    expect(readAuditShardEvents(moved.proj).filter((row) => row.event === "SCOPE_CHANGED")).toHaveLength(0);
+    expect(changeControlRows(moved.proj)).toHaveLength(0);
+
+    const changed = run(UTILITY, ["scope-change", "--scope", "classic"], moved.proj);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(moved.state, "utf-8"), "Scope")).toBe("classic");
+    const scopeRows = readAuditShardEvents(moved.proj).filter((row) => row.event === "SCOPE_CHANGED");
+    expect(scopeRows).toHaveLength(1);
+    const rows = changeControlRows(moved.proj);
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
+    expect(auditBlockField(rows[0].block, "New Value")).toBe("relaxed");
+    expect(auditBlockField(rows[0].block, "Source")).toBe("scope classic");
+  });
+
+  test("a lineless legacy intent stays strict across a scope change without a change row", () => {
+    const legacy = project("enterprise");
+    const withoutLine = readFileSync(legacy.state, "utf-8").replace(
+      /^- \*\*Change Control\*\*:.*\n/m,
+      "",
+    );
+    writeFileSync(legacy.state, withoutLine);
+    const changed = run(UTILITY, ["scope-change", "--scope", "classic"], legacy.proj);
+    expect(changed.status, changed.stderr).toBe(0);
+    const after = readFileSync(legacy.state, "utf-8");
+    expect(getField(after, "Scope")).toBe("classic");
+    expect(getField(after, CHANGE_CONTROL_FIELD)).toBeNull();
+    expect(resolveChangeControl(legacy.proj).value).toBe("strict");
+    expect(changeControlRows(legacy.proj)).toHaveLength(0);
+  });
+
+  test("scope-change refuses an invalid state line without writing state or audit", () => {
+    const invalid = project("enterprise");
+    writeFileSync(
+      invalid.state,
+      setField(readFileSync(invalid.state, "utf-8"), CHANGE_CONTROL_FIELD, "stricct (set by you)"),
+    );
+    const before = readFileSync(invalid.state, "utf-8");
+    const refused = run(UTILITY, ["scope-change", "--scope", "classic"], invalid.proj);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(`Invalid Change Control \\"stricct (set by you)\\" in ${invalid.state}`);
+    expect(readFileSync(invalid.state, "utf-8")).toBe(before);
+    expect(readAuditShardEvents(invalid.proj).filter((row) => row.event === "SCOPE_CHANGED")).toHaveLength(0);
+    expect(changeControlRows(invalid.proj)).toHaveLength(0);
   });
 });
 

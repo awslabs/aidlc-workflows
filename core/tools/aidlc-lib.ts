@@ -26489,6 +26489,12 @@ export function changeControlMemoryStrictRefusal(
 // breaks the lib <-> audit cycle exactly as emitError does. Callers hold the
 // intent's audit lock (taken with the reentrant withAuditLock) around the
 // read-then-append, so the dedupe check and the row are one step.
+/** Fail the Change Control append seam before any related state is persisted. */
+export function assertChangeControlLedgerWritable(): void {
+  const fault = process.env.AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT?.trim();
+  if (fault) throw new Error(`injected ledger fault: ${fault}`);
+}
+
 function changeControlLedgerAppend(
   projectDir: string,
   event: "CHANGE_ACCEPTED" | "CHANGE_CONTROL_SET",
@@ -26503,8 +26509,7 @@ function changeControlLedgerAppend(
   // AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT makes every Change Control append
   // fail, so the fail-closed contract is pinned without depending on
   // filesystem permissions or on who runs the suite.
-  const fault = process.env.AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT?.trim();
-  if (fault) throw new Error(`injected ledger fault: ${fault}`);
+  assertChangeControlLedgerWritable();
   const audit = require("./aidlc-audit.ts") as {
     appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
   };
