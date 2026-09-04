@@ -517,9 +517,15 @@ function createIsolatedGitConfig(): string {
   }
 
   for (const [key, value] of entries) {
+    // Git for Windows applies MSYS path conversion to argv values that look
+    // POSIX-rooted. Disable it only while copying safe.directory verbatim.
+    const env =
+      key === "safe.directory"
+        ? { ...process.env, MSYS2_ARG_CONV_EXCL: "*" }
+        : process.env;
     const result = spawnSync("git", ["config", "--file", configPath, "--add", key, value], {
       cwd: tmpdir(),
-      env: process.env,
+      env,
       encoding: "utf8",
     });
     if (result.status !== 0) {

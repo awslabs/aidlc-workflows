@@ -75,7 +75,14 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -99,6 +106,9 @@ interface RunResult {
  */
 function run(args: string[], envOverrides: Record<string, string | undefined> = {}): RunResult {
   const env = { ...process.env };
+  // A selector for this outer meta-test must not silently filter the nested
+  // runner's planted fixtures. Individual calls can still opt in explicitly.
+  delete env.BUN_OPTIONS;
   for (const [key, value] of Object.entries(envOverrides)) {
     if (value === undefined) {
       delete env[key];
@@ -540,15 +550,23 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(r.out).not.toContain("=== DONE t-tui-preflight.serial.test.ts (SKIP) ===");
   }, PER_TEST_TIMEOUT);
 
-  test("isolated git config preserves safe.directory and disables signing", () => {
+  test("isolated git config preserves exact safe.directory values without leaking MSYS exclusions", () => {
     const plant = join(TESTS_ROOT, "integration", "tZZ-git-config-t05.test.ts");
     const fixtureDir = mkdtempSync(join(tmpdir(), "aidlc-t05-git-config-"));
     const inheritedGlobalConfig = join(fixtureDir, "global.gitconfig");
     const inheritedSystemConfig = join(fixtureDir, "system.gitconfig");
-    const globalSafeDirectory = "/aidlc/t05-global-safe-directory";
     const systemSafeDirectory = "/aidlc/t05-system-safe-directory";
-    const countSafeDirectory = "/aidlc/t05-count-safe-directory";
-    const parametersSafeDirectory = "/aidlc/t05-parameters-safe-directory";
+    const globalSafeDirectory = "C:/Program Files/AIDLC/t05 global workspace";
+    const countSafeDirectory = "/aidlc/t05 command workspace/*";
+    const parametersSafeDirectory = "*";
+    const safeDirectories = [
+      systemSafeDirectory,
+      globalSafeDirectory,
+      countSafeDirectory,
+      parametersSafeDirectory,
+    ];
+    const gitTrace = join(fixtureDir, "git-trace.json");
+    const inheritedMsysExclusion = "caller-owned-prefix";
     writeFileSync(
       inheritedGlobalConfig,
       [
@@ -581,11 +599,8 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
         "}",
         "",
         'test("git config is isolated without losing protected safety entries", () => {',
-        '  const safeDirectories = config("--get-all", "safe.directory").split(/\\r?\\n/);',
-        `  expect(safeDirectories).toContain(${JSON.stringify(globalSafeDirectory)});`,
-        `  expect(safeDirectories).toContain(${JSON.stringify(systemSafeDirectory)});`,
-        `  expect(safeDirectories).toContain(${JSON.stringify(countSafeDirectory)});`,
-        `  expect(safeDirectories).toContain(${JSON.stringify(parametersSafeDirectory)});`,
+        '  const actualSafeDirectories = config("--get-all", "safe.directory").split(/\\r?\\n/).sort();',
+        `  expect(actualSafeDirectories).toEqual(${JSON.stringify([...safeDirectories].sort())});`,
         '  expect(config("--get", "commit.gpgsign")).toBe("false");',
         '  expect(config("--get", "tag.gpgsign")).toBe("false");',
         '  expect(process.env.GIT_CONFIG_GLOBAL).not.toBe("/dev/null");',
@@ -593,6 +608,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
         '  expect(process.env.GIT_CONFIG_GLOBAL).toMatch(/\\.gitconfig-aidlc-tests-[0-9]+$/);',
         "  expect(process.env.GIT_CONFIG_COUNT).toBeUndefined();",
         "  expect(process.env.GIT_CONFIG_PARAMETERS).toBeUndefined();",
+        `  expect(process.env.MSYS2_ARG_CONV_EXCL).toBe(${JSON.stringify(inheritedMsysExclusion)});`,
         "});",
         "",
       ].join("\n"),
@@ -614,10 +630,71 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
           GIT_CONFIG_PARAMETERS:
             `'safe.directory'='${parametersSafeDirectory}' ` +
             "'commit.gpgsign'='true'",
+          GIT_TRACE2_EVENT: gitTrace,
+          GIT_TRACE2_ENV_VARS: "MSYS2_ARG_CONV_EXCL",
+          MSYS2_ARG_CONV_EXCL: inheritedMsysExclusion,
         },
       );
       expect(r.status).toBe(0);
       expect(r.out).toContain("=== START tZZ-git-config-t05.test.ts ===");
+
+      const traceEvents = readFileSync(gitTrace, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as {
+          event: string;
+          sid: string;
+          argv?: string[];
+          param?: string;
+          value?: string;
+        });
+      const starts = traceEvents.filter(
+        (event): event is typeof event & { argv: string[] } =>
+          event.event === "start" && Array.isArray(event.argv),
+      );
+      const exclusionFor = (sid: string): string | undefined =>
+        traceEvents.find(
+          (event) =>
+            event.sid === sid &&
+            event.event === "def_param" &&
+            event.param === "MSYS2_ARG_CONV_EXCL",
+        )?.value;
+      const configArgs = (event: (typeof starts)[number]): string[] =>
+        event.argv.slice(1);
+      const isolatedWrites = starts.filter((event) => {
+        const args = configArgs(event);
+        return args[0] === "config" && args[1] === "--file" && args[3] === "--add";
+      });
+      const safeDirectoryWrites = isolatedWrites.filter(
+        (event) => configArgs(event)[4] === "safe.directory",
+      );
+
+      expect(safeDirectoryWrites.map((event) => configArgs(event)[5]).sort()).toEqual(
+        [...safeDirectories].sort(),
+      );
+      for (const event of safeDirectoryWrites) {
+        expect(configArgs(event)).toEqual([
+          "config",
+          "--file",
+          expect.stringMatching(/\.gitconfig-aidlc-tests-[0-9]+$/),
+          "--add",
+          "safe.directory",
+          configArgs(event)[5],
+        ]);
+        expect(exclusionFor(event.sid)).toBe("*");
+      }
+
+      const signingWrite = isolatedWrites.find(
+        (event) => configArgs(event)[4] === "commit.gpgsign",
+      );
+      expect(signingWrite).toBeDefined();
+      expect(exclusionFor(signingWrite!.sid)).toBe(inheritedMsysExclusion);
+
+      const downstreamRead = starts.find((event) =>
+        configArgs(event).join("\0").endsWith("config\0--get\0commit.gpgsign"),
+      );
+      expect(downstreamRead).toBeDefined();
+      expect(exclusionFor(downstreamRead!.sid)).toBe(inheritedMsysExclusion);
     } finally {
       rmSync(plant, { force: true });
       rmSync(fixtureDir, { recursive: true, force: true });
