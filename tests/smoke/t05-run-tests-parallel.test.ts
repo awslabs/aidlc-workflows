@@ -75,7 +75,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -157,6 +157,35 @@ afterAll(() => {
 const PER_TEST_TIMEOUT = 120000;
 
 describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel.sh, plan 14 + MR8)", () => {
+  test("preserves a caller-selected bun ahead of the home install", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t05-pinned-bun-"));
+    const binDir = join(dir, "bin");
+    const fakeBun = join(binDir, "bun");
+    mkdirSync(binDir);
+    writeFileSync(
+      fakeBun,
+      [
+        "#!/bin/bash",
+        "printf 'PINNED_BUN_SELECTED\\n'",
+        'exec "$AIDLC_T05_REAL_BUN" "$@"',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    chmodSync(fakeBun, 0o755);
+    try {
+      const r = run(["--help"], {
+        AIDLC_T05_REAL_BUN: process.execPath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      });
+      expect(r.status).toBe(0);
+      expect(r.out).toContain("PINNED_BUN_SELECTED");
+      expect(r.out).toContain("Usage: bash tests/run-tests.sh");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, PER_TEST_TIMEOUT);
+
   // --- 1. Invalid --parallel values exit 2 with the error message ----------
   // .sh looped `for bad in 0 -1 abc` asserting rc==2 AND the error grep. Each
   // value is its own distinct behavioural assertion -> three test()s.
