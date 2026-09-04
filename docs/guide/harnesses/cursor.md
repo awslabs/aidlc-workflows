@@ -102,7 +102,12 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   a follow-up nudge instead (the same posture as opencode). Its host
   `loop_limit` is 10 rather than Cursor's default 5, which covers the core's
   autonomous no-progress cap of 8. The forwarding loop in the conductor skill
-  is the real discipline.
+  is the real discipline. Cursor background agents are excluded from this
+  follow-up path: their stops remain silent, so an ancillary background review
+  cannot reset or consume the foreground conversation's steering continuation.
+  Their PreToolUse boundary also denies workflow lifecycle and routing commands,
+  including nested-shell, variable-indirection, and Bun eval/print forms;
+  read-only utilities remain available.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted. Pre-compaction validation also fires
   (`preCompact`).

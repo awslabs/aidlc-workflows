@@ -334,6 +334,18 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 8. **Pending -> block and inject:** For any other (pending) directive - `run-stage`, `dispatch-subagent`, `invoke-swarm`, `present-gate`, `ask`, `print`, `error` - it prints `{"decision":"block","reason":<on-task continuation>}`, so the same session resumes with the next move injected. The injected `reason` also names `aidlc-orchestrate park` as the clean-pause alternative, so a conductor that wants to stop a long workflow parks rather than advancing.
 9. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn.
 
+Cursor applies one harness-local authority check before this shared hook:
+`is_background_agent: true` stops are silent and never invoke the core loop.
+The same operation identity is denied workflow lifecycle and routing commands
+at PreToolUse through the recursive classifier's strict background mode,
+including nested shells, command substitution, variable indirection, and
+uninspectable dynamic execution such as Bun eval/print. Background reviews
+therefore cannot issue a fresh `next`, consume a continuation, or reset the
+foreground conversation's single-use steering cursor; read-only utilities
+remain available. The ordinary delegated-agent mode keeps benign Bun eval/print
+validation available and continues to block only identified lifecycle/routing
+commands.
+
 **Copilot delivered-directive path.** Copilot's PostToolUse adapter records only
 bounded routing and continuation metadata for a successfully delivered
 `next`, `continue`, `report`, or `park` result. On Stop, the shared hook may use

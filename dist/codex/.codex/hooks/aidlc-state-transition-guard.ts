@@ -226,7 +226,11 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
 }
 
 export function delegatedLifecycleCommand(command: string): string | null {
-  return delegatedLifecycleCommandAtDepth(command, 0);
+  return delegatedLifecycleCommandAtDepth(command, 0, false);
+}
+
+export function backgroundLifecycleCommand(command: string): string | null {
+  return delegatedLifecycleCommandAtDepth(command, 0, true);
 }
 
 function shellWords(input: string): string[] {
@@ -679,10 +683,11 @@ function executableArgv(segment: string): string[] {
   return words.slice(cursor);
 }
 
-function bunScriptInvocation(argv: string[]): {
-  script: string;
-  args: string[];
-} | null {
+type BunInvocation =
+  | { kind: "script"; script: string; args: string[] }
+  | { kind: "dynamic" };
+
+function bunScriptInvocation(argv: string[]): BunInvocation | null {
   const valueOptions = new Set([
     "-C",
     "--cwd",
@@ -703,18 +708,26 @@ function bunScriptInvocation(argv: string[]): {
         cursor++;
         return true;
       }
-      if (evalOptions.has(option)) return false;
+      if (
+        evalOptions.has(option) ||
+        /^--(?:eval|print)=/.test(option) ||
+        /^-[ep].+/.test(option)
+      ) {
+        return false;
+      }
       cursor += valueOptions.has(option) && !option.includes("=") ? 2 : 1;
     }
     return true;
   };
-  if (!skipOptions()) return null;
+  if (!skipOptions()) return { kind: "dynamic" };
   if (argv[cursor] === "run") {
     cursor++;
-    if (!skipOptions()) return null;
+    if (!skipOptions()) return { kind: "dynamic" };
   }
   const script = commandBasename(argv[cursor]);
-  return script ? { script, args: argv.slice(cursor + 1) } : null;
+  return script
+    ? { kind: "script", script, args: argv.slice(cursor + 1) }
+    : null;
 }
 
 function withoutProjectDir(args: string[]): string[] {
@@ -725,6 +738,27 @@ function withoutProjectDir(args: string[]): string[] {
       continue;
     }
     out.push(args[i]);
+  }
+  return out;
+}
+
+function withoutOrchestrateGlobals(args: string[]): string[] {
+  const out: string[] = [];
+  let literalArgs = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") {
+      literalArgs = true;
+      out.push(arg);
+    } else if (
+      !literalArgs &&
+      (arg === "--project-dir" || arg === "--aidlc-attempt-id") &&
+      i + 1 < args.length
+    ) {
+      i++;
+    } else {
+      out.push(arg);
+    }
   }
   return out;
 }
@@ -807,13 +841,21 @@ function variableReference(word: string): string | null {
     null;
 }
 
-function delegatedLifecycleCommandAtDepth(command: string, depth: number): string | null {
+function delegatedLifecycleCommandAtDepth(
+  command: string,
+  depth: number,
+  failClosedOnBunEval: boolean,
+): string | null {
   if (depth > 8) return "nested shell command beyond guard inspection limit";
   const heredocBodies = heredocSubstitutionBodies(command);
   const source = maskHeredocBodies(command);
   const substitutions = executableSubstitutions(source);
   for (const body of [...heredocBodies, ...substitutions.bodies]) {
-    const nested = delegatedLifecycleCommandAtDepth(body, depth + 1);
+    const nested = delegatedLifecycleCommandAtDepth(
+      body,
+      depth + 1,
+      failClosedOnBunEval,
+    );
     if (nested !== null) return nested;
   }
 
@@ -855,7 +897,11 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
       const evalArgs = argv.slice(1);
       if (evalArgs[0] === "--") evalArgs.shift();
       const evalCommand = evalArgs.join(" ");
-      const nested = delegatedLifecycleCommandAtDepth(evalCommand, depth + 1);
+      const nested = delegatedLifecycleCommandAtDepth(
+        evalCommand,
+        depth + 1,
+        failClosedOnBunEval,
+      );
       if (
         nested === "dynamic executable beyond guard inspection" ||
         nested === "dynamic shell command beyond guard inspection"
@@ -890,7 +936,11 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
           if (nestedCommand.includes("$")) {
             return "dynamic shell command beyond guard inspection";
           }
-          const nested = delegatedLifecycleCommandAtDepth(nestedCommand, depth + 1);
+          const nested = delegatedLifecycleCommandAtDepth(
+            nestedCommand,
+            depth + 1,
+            failClosedOnBunEval,
+          );
           if (nested !== null) return nested;
           break;
         }
@@ -904,13 +954,21 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
     if (/^bun(?:\.exe)?$/.test(executable)) {
       const invocation = bunScriptInvocation(argv);
       if (!invocation) continue;
+      if (invocation.kind === "dynamic") {
+        if (failClosedOnBunEval) {
+          return "bun eval/print beyond guard inspection";
+        }
+        continue;
+      }
       script = invocation.script;
       args = invocation.args;
     }
     const authored = script.match(/^aidlc-(orchestrate|state|jump|utility)\.ts$/);
     if (authored) {
       const tool = authored[1];
-      const positional = withoutProjectDir(args);
+      const positional = tool === "orchestrate"
+        ? withoutOrchestrateGlobals(args)
+        : withoutProjectDir(args);
       const verb = positional[0] ?? "";
       if (
         (tool === "orchestrate" && ["next", "continue", "report", "park"].includes(verb)) ||

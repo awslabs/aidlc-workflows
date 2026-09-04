@@ -70,6 +70,14 @@ const PAYLOADS = JSON.parse(
   readFileSync(join(import.meta.dir, "..", "fixtures", "cursor-hook-payloads", "payloads.json"), "utf-8"),
 ) as Record<string, Record<string, unknown>>;
 
+type CursorEngineDirective = {
+  kind: string;
+  part?: number;
+  parts?: number;
+  continue_token?: string;
+  message?: string;
+};
+
 const scratch: string[] = [];
 
 setDefaultTimeout(20_000);
@@ -196,6 +204,112 @@ function runAdapter(
     },
   );
   return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? 0 };
+}
+
+async function runAdapterAsync(
+  projectDir: string,
+  target: string,
+  stdin: string,
+  options: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  } = {},
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    AIDLC_PROJECT_DIR: projectDir,
+    AIDLC_HARNESS_DIR: ".cursor",
+    ...options.env,
+  };
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete env[key];
+  }
+  const proc = Bun.spawn(
+    [process.execPath, join(projectDir, ".cursor", "hooks", "aidlc-cursor-adapter.ts"), target],
+    {
+      cwd: options.cwd ?? projectDir,
+      stdin: Buffer.from(stdin, "utf-8"),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: env as NodeJS.ProcessEnv,
+    },
+  );
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { stdout, stderr, code };
+}
+
+function invokeCursorEngine(
+  projectDir: string,
+  subcommand: "next" | "continue",
+  args: string[] = [],
+): CursorEngineDirective {
+  const result = spawnSync(
+    "bun",
+    [
+      join(projectDir, ".cursor", "tools", "aidlc-orchestrate.ts"),
+      subcommand,
+      ...args,
+      "--project-dir",
+      projectDir,
+    ],
+    {
+      cwd: projectDir,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: projectDir,
+        AIDLC_HARNESS_DIR: ".cursor",
+      },
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout.trim()) as CursorEngineDirective;
+}
+
+async function invokeCursorEngineAsync(
+  projectDir: string,
+  subcommand: "next" | "continue",
+  args: string[] = [],
+): Promise<CursorEngineDirective> {
+  const proc = Bun.spawn(
+    [
+      process.execPath,
+      join(projectDir, ".cursor", "tools", "aidlc-orchestrate.ts"),
+      subcommand,
+      ...args,
+      "--project-dir",
+      projectDir,
+    ],
+    {
+      cwd: projectDir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: projectDir,
+        AIDLC_HARNESS_DIR: ".cursor",
+      },
+    },
+  );
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  expect(code, stderr).toBe(0);
+  return JSON.parse(stdout.trim()) as CursorEngineDirective;
+}
+
+function launchBarrier(): { wait: Promise<void>; release: () => void } {
+  let release = () => {};
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { wait, release };
 }
 
 /** Cursor failClosed preToolUse requires permission JSON on allow, not silence. */
@@ -909,6 +1023,226 @@ describe("t276 cursor adapter payload conversion", () => {
     const human = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj));
     expect(human.code).toBe(0);
     expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
+  });
+
+  test("19b: concurrent background review retries cannot reset the foreground steering cursor", async () => {
+    const proj = installedProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, "state-brownfield-feature.md");
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      Array.from(
+        { length: 360 },
+        (_, i) => `## Background review ${i}\n\n${"x".repeat(320)}\n\n`,
+      ).join(""),
+      "utf-8",
+    );
+
+    const first = invokeCursorEngine(proj, "next");
+    expect(first.kind).toBe("load-steering");
+    expect(first.parts ?? 0).toBeGreaterThan(4);
+    const second = invokeCursorEngine(proj, "continue", [first.continue_token ?? ""]);
+    expect(second.kind).toBe("load-steering");
+    expect(second.part).toBe(2);
+
+    const markerPath = join(seededRecordDir(proj), ".aidlc-active-directive.json");
+    const backgroundStop = payload("stop", proj, {
+      conversation_id: "cursor-background-review",
+      session_id: "cursor-background-review",
+      is_background_agent: true,
+    });
+    const backgroundCommand = (command: string) =>
+      payload("preToolUseShell", proj, {
+        conversation_id: "cursor-background-review",
+        session_id: "cursor-background-review",
+        is_background_agent: true,
+        tool_input: { command, cwd: proj, timeout: 30000 },
+      });
+    const assertDenied = (result: { stdout: string; code: number }) => {
+      expect(result.code).toBe(0);
+      const denial = JSON.parse(result.stdout) as {
+        permission?: string;
+        agent_message?: string;
+      };
+      expect(denial.permission).toBe("deny");
+      expect(denial.agent_message).toContain("background agents do not own");
+    };
+    const assertMarker = (directive: CursorEngineDirective) => {
+      const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as {
+        part?: number;
+        continue_token?: string;
+      };
+      expect(marker.part).toBe(directive.part);
+      expect(marker.continue_token).toBe(directive.continue_token);
+    };
+
+    const firstOverlap = launchBarrier();
+    const foregroundThird = firstOverlap.wait.then(() =>
+      invokeCursorEngineAsync(proj, "continue", [second.continue_token ?? ""])
+    );
+    const backgroundStopFirst = firstOverlap.wait.then(() =>
+      runAdapterAsync(proj, "stop", backgroundStop, {
+        env: { CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "8" },
+      })
+    );
+    const backgroundContinueFirst = firstOverlap.wait.then(() =>
+      runAdapterAsync(
+        proj,
+        "guards",
+        backgroundCommand(
+          `env AIDLC_REVIEW=1 bun .cursor/tools/aidlc-orchestrate.ts ` +
+            `--project-dir "${proj}" ` +
+            `continue "${second.continue_token ?? ""}"`,
+        ),
+      )
+    );
+    const backgroundContinueAdjacent = firstOverlap.wait.then(() =>
+      runAdapterAsync(
+        proj,
+        "guards",
+        backgroundCommand(
+          `bun .cursor/tools/aidlc-orchestrate.ts continue ` +
+            `"${second.continue_token ?? ""}"`,
+        ),
+      )
+    );
+    const nestedContinue =
+      `bun .cursor/tools/aidlc-orchestrate.ts --project-dir "${proj}" ` +
+      `continue "${second.continue_token ?? ""}"`;
+    const backgroundContinueNested = firstOverlap.wait.then(() =>
+      runAdapterAsync(
+        proj,
+        "guards",
+        backgroundCommand(`sh -c ${JSON.stringify(nestedContinue)}`),
+      )
+    );
+    const backgroundDynamicNested = firstOverlap.wait.then(() =>
+      runAdapterAsync(
+        proj,
+        "guards",
+        backgroundCommand('sh -c "$unresolved_background_command"'),
+      )
+    );
+    const evalBody =
+      `Bun.spawnSync(["bun",".cursor/tools/aidlc-orchestrate.ts","next",` +
+      `"--project-dir",process.cwd()])`;
+    const backgroundBunEval = firstOverlap.wait.then(() =>
+      runAdapterAsync(
+        proj,
+        "guards",
+        backgroundCommand(`bun -e ${JSON.stringify(evalBody)}`),
+      )
+    );
+    firstOverlap.release();
+    const [
+      third,
+      stoppedFirst,
+      deniedFirst,
+      deniedAdjacent,
+      deniedNested,
+      deniedDynamic,
+      deniedBunEval,
+    ] = await Promise.all([
+      foregroundThird,
+      backgroundStopFirst,
+      backgroundContinueFirst,
+      backgroundContinueAdjacent,
+      backgroundContinueNested,
+      backgroundDynamicNested,
+      backgroundBunEval,
+    ]);
+    expect(third.kind).toBe("load-steering");
+    expect(third.part).toBe(3);
+    expect(stoppedFirst.code).toBe(0);
+    expect(stoppedFirst.stdout.trim()).toBe("");
+    assertDenied(deniedFirst);
+    assertDenied(deniedAdjacent);
+    assertDenied(deniedNested);
+    assertDenied(deniedDynamic);
+    assertDenied(deniedBunEval);
+    assertMarker(third);
+
+    const retryOverlap = launchBarrier();
+    const foregroundFourth = retryOverlap.wait.then(() =>
+      invokeCursorEngineAsync(proj, "continue", [third.continue_token ?? ""])
+    );
+    const backgroundStopRetry = retryOverlap.wait.then(() =>
+      runAdapterAsync(proj, "stop", backgroundStop, {
+        env: { CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "8" },
+      })
+    );
+    const backgroundNextRetry = retryOverlap.wait.then(() =>
+      runAdapterAsync(
+        proj,
+        "guards",
+        backgroundCommand(
+          `command bun .cursor/tools/aidlc-orchestrate.ts ` +
+            `--aidlc-attempt-id background-retry ` +
+            `--project-dir "${proj}" next`,
+        ),
+      )
+    );
+    const nestedNext =
+      `bun .cursor/tools/aidlc-orchestrate.ts ` +
+      `--aidlc-attempt-id background-variable-retry ` +
+      `--project-dir "${proj}" next`;
+    const backgroundVariableRetry = retryOverlap.wait.then(() =>
+      runAdapterAsync(
+        proj,
+        "guards",
+        backgroundCommand(
+          `background_command=${JSON.stringify(nestedNext)}; ` +
+            'sh -c "$background_command"',
+        ),
+      )
+    );
+    const printBody =
+      `Bun.spawnSync(["bun",".cursor/tools/aidlc-orchestrate.ts","continue",` +
+      `${JSON.stringify(third.continue_token ?? "")},"--project-dir",process.cwd()])`;
+    const backgroundBunPrintRetry = retryOverlap.wait.then(() =>
+      runAdapterAsync(
+        proj,
+        "guards",
+        backgroundCommand(`bun --print ${JSON.stringify(printBody)}`),
+      )
+    );
+    retryOverlap.release();
+    const [
+      fourth,
+      stoppedRetry,
+      deniedRetry,
+      deniedVariableRetry,
+      deniedBunPrintRetry,
+    ] = await Promise.all([
+      foregroundFourth,
+      backgroundStopRetry,
+      backgroundNextRetry,
+      backgroundVariableRetry,
+      backgroundBunPrintRetry,
+    ]);
+    expect(fourth.kind).toBe("load-steering");
+    expect(fourth.part).toBe(4);
+    expect(stoppedRetry.code).toBe(0);
+    expect(stoppedRetry.stdout.trim()).toBe("");
+    assertDenied(deniedRetry);
+    assertDenied(deniedVariableRetry);
+    assertDenied(deniedBunPrintRetry);
+    assertMarker(fourth);
+
+    const replay = invokeCursorEngine(proj, "continue", [second.continue_token ?? ""]);
+    expect(replay.kind).toBe("error");
+    expect(replay.message).toContain("no longer current");
+
+    const readOnly = runAdapter(
+      proj,
+      "guards",
+      backgroundCommand(
+        `background_read=${JSON.stringify(
+          "bun .cursor/tools/aidlc-utility.ts version",
+        )}; sh -c "$background_read"`,
+      ),
+    );
+    expectAllowJson(readOnly);
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

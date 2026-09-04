@@ -731,6 +731,34 @@ export async function run(
     return reviewFreezeCommandModule;
   }
 
+  interface StateTransitionCommandModule {
+    backgroundLifecycleCommand?: (command: string) => string | null;
+  }
+
+  let stateTransitionCommandModule: Promise<StateTransitionCommandModule> | null =
+    null;
+  function loadStateTransitionCommandModule(): Promise<StateTransitionCommandModule> {
+    stateTransitionCommandModule ??= import(
+      join(HOOKS_DIR, "aidlc-state-transition-guard.ts")
+    ) as Promise<StateTransitionCommandModule>;
+    return stateTransitionCommandModule;
+  }
+
+  async function backgroundWorkflowCommand(): Promise<string | null> {
+    if (cursor.is_background_agent !== true || toolName !== "Bash") return null;
+    const command = cursor.tool_input?.command;
+    if (typeof command !== "string") return null;
+    try {
+      const module = await loadStateTransitionCommandModule();
+      if (typeof module.backgroundLifecycleCommand !== "function") {
+        return "workflow command classification unavailable";
+      }
+      return module.backgroundLifecycleCommand(command);
+    } catch {
+      return "workflow command classification unavailable";
+    }
+  }
+
   let reviewFreezeTargetsCache: string[] | null | undefined;
   async function reviewFreezeTargets(): Promise<string[] | null> {
     if (reviewFreezeTargetsCache !== undefined) {
@@ -2905,6 +2933,17 @@ export async function run(
       // Cursor's {"permission":"deny","agent_message"} stdout JSON
       // (live-verified: the deny blocks the call and relays the reason).
       // Allow paths write {"permission":"allow"} — required under failClosed.
+      const backgroundCommand = await backgroundWorkflowCommand();
+      if (backgroundCommand !== null) {
+        process.stdout.write(`${JSON.stringify({
+          permission: "deny",
+          agent_message:
+            `Cursor background agents do not own the active AI-DLC workflow continuation ` +
+            `and cannot run ${backgroundCommand}. Complete the requested background review ` +
+            "without changing workflow lifecycle or routing; leave that to the foreground conversation.",
+        })}\n`);
+        return 0;
+      }
       if (toolName === "Task") {
         const parentAgent = activeSubagent();
         if (parentAgent) {
@@ -3052,6 +3091,11 @@ export async function run(
     }
 
     case "stop": {
+      // Background agents are ancillary operations, not workflow conductors.
+      // Entering the core Stop loop here can run a fresh `next`, reset the
+      // shared single-use steering cursor, and invalidate the foreground
+      // conversation's already-issued successor.
+      if (cursor.is_background_agent === true) return 0;
       // Cursor's stop hook CANNOT block (no decision channel). The core stop
       // hook's {"decision":"block","reason"} converts to a followup_message —
       // the forwarding-loop nudge is ADVISORY on this harness (the opencode
