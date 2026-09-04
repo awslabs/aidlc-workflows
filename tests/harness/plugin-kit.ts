@@ -119,6 +119,7 @@ export interface ComposedPluginFixture {
   projectDir: string;
   pluginBuilt: string;
   dropLogs: string;
+  composeStatus: number;
   composeStdout: string;
   composeStderr: string;
 }
@@ -179,6 +180,7 @@ export function composePluginFixture(
     projectDir,
     pluginBuilt,
     dropLogs: readPluginDropLogs(projectDir),
+    composeStatus: compose.status,
     composeStdout: compose.stdout,
     composeStderr: compose.stderr,
   };

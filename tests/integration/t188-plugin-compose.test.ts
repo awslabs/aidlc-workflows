@@ -19,7 +19,7 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, posix, resolve, win32 } from "node:path";
 import {
   acquireAuditLock,
   auditLockDir,
@@ -99,6 +99,41 @@ function hookDrops(projectDir: string): string {
     }
   }
   return drops;
+}
+
+interface HookDrop {
+  severity: "advisory" | "degraded";
+  reason: string;
+}
+
+function canonicalLogPath(path: string): string {
+  return win32.normalize(path).split(win32.sep).join(posix.sep);
+}
+
+function parseHookDrops(raw: string): HookDrop[] {
+  return raw
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const match = line.match(
+        /^(?<timestamp>[^\t]+)\t\[(?<severity>advisory|degraded)\] (?<reason>.+)$/,
+      );
+      if (!match?.groups || Number.isNaN(Date.parse(match.groups.timestamp))) {
+        throw new Error(`invalid plugin compose drop record: ${line}`);
+      }
+      return {
+        severity: match.groups.severity as HookDrop["severity"],
+        reason: match.groups.reason.replace(
+          /"([^"\r\n]*[\\/][^"\r\n]*)"/g,
+          (_quoted, path: string) => `"${canonicalLogPath(path)}"`,
+        ),
+      };
+    });
+}
+
+function comparablePath(path: string): string {
+  const absolute = resolve(path);
+  return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
 describe("t188 plugin compose — emit + compose the contribution seam", () => {
@@ -434,19 +469,58 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const built = pluginBuilds.get("cursor")!;
     const cursorProject = join(tmp, "cursor-compose-installed-aidlc");
     const binDir = join(tmp, "cursor-fake-bin");
+    const capturePath = join(tmp, "cursor-installed-aidlc-capture.json");
     mkdirSync(binDir, { recursive: true });
     const aidlc = join(binDir, "aidlc");
     writeFileSync(
       aidlc,
       [
-        "#!/bin/sh",
-        `exec ${JSON.stringify(BUN)} ${JSON.stringify(
+        "#!/usr/bin/env bun",
+        'import { spawnSync } from "node:child_process";',
+        'import { appendFileSync } from "node:fs";',
+        "",
+        "const capturePath = process.env.AIDLC_T188_CAPTURE_PATH;",
+        'if (!capturePath) throw new Error("AIDLC_T188_CAPTURE_PATH is required");',
+        `const child = spawnSync(${JSON.stringify(BUN)}, [${JSON.stringify(
           join(cursorProject, ".cursor", "tools", "aidlc.ts"),
-        )} "$@"`,
+        )}, ...process.argv.slice(2)], {`,
+        "  cwd: process.cwd(),",
+        "  env: process.env,",
+        '  encoding: "utf-8",',
+        '  stdio: ["ignore", "pipe", "pipe"],',
+        "});",
+        "const capture = {",
+        "  argv: process.argv.slice(2),",
+        "  env: {",
+        "    AIDLC_HARNESS_DIR: process.env.AIDLC_HARNESS_DIR ?? null,",
+        "    AIDLC_PLUGIN_ROOT: process.env.AIDLC_PLUGIN_ROOT ?? null,",
+        "    AIDLC_PROJECT_DIR: process.env.AIDLC_PROJECT_DIR ?? null,",
+        "  },",
+        "  status: child.status,",
+        "  signal: child.signal ?? null,",
+        '  stdout: child.stdout ?? "",',
+        '  stderr: child.stderr ?? "",',
+        "  error: child.error?.message ?? null,",
+        "};",
+        'appendFileSync(capturePath, JSON.stringify(capture) + "\\n");',
+        "if (capture.stdout) process.stdout.write(capture.stdout);",
+        "if (capture.stderr) process.stderr.write(capture.stderr);",
+        "process.exit(child.status ?? 1);",
         "",
       ].join("\n"),
     );
     chmodSync(aidlc, 0o755);
+    if (process.platform === "win32") {
+      writeFileSync(
+        join(binDir, "aidlc.cmd"),
+        [
+          "@echo off",
+          `${JSON.stringify(BUN)} ${JSON.stringify(aidlc)} %*`,
+          "exit /b %ERRORLEVEL%",
+          "",
+        ].join("\r\n"),
+      );
+    }
     const composed = composePluginFixture({
       plugin: PLUGIN,
       harness: "cursor",
@@ -454,9 +528,37 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       pluginBuilt: built,
       env: {
         PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        AIDLC_T188_CAPTURE_PATH: capturePath,
       },
     });
-    expect(composed.composeStdout).toContain("plugin sync complete: 1 plugin(s)");
+    expect(composed.composeStatus, composed.composeStderr).toBe(0);
+    expect(composed.composeStderr).toBe("");
+    const invocationLines = readFileSync(capturePath, "utf-8")
+      .trim()
+      .split(/\r?\n/);
+    expect(invocationLines).toHaveLength(1);
+    const invocation = JSON.parse(invocationLines[0]) as {
+      argv?: unknown;
+      env?: Record<string, unknown>;
+      status?: unknown;
+      signal?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+      error?: unknown;
+    };
+    expect(invocation.argv).toEqual(["plugin", "sync"]);
+    expect(invocation.status).toBe(0);
+    expect(invocation.signal).toBeNull();
+    expect(invocation.stdout).toBe("plugin sync complete: 1 plugin(s)\n");
+    expect(invocation.stderr).toBe("");
+    expect(invocation.error).toBeNull();
+    expect(invocation.env?.AIDLC_HARNESS_DIR).toBe(".cursor");
+    expect(comparablePath(String(invocation.env?.AIDLC_PLUGIN_ROOT ?? ""))).toBe(
+      comparablePath(built),
+    );
+    expect(comparablePath(String(invocation.env?.AIDLC_PROJECT_DIR ?? ""))).toBe(
+      comparablePath(cursorProject),
+    );
     const cursorGraph = JSON.parse(
       readFileSync(join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
     ) as GraphStage[];
@@ -1791,6 +1893,34 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   });
 
   // --- Silent-failure seams (round-4): each must DROP-LOG, never silently no-op ---
+  test("drop records canonicalize native relative paths before exact comparisons", () => {
+    const timestamp = "2026-08-25T00:00:00.000Z";
+    expect(
+      parseHookDrops(
+        [
+          `${timestamp}\t[degraded] knowledge "test-pro-metrics-agent\\methodology.md" collides`,
+          `${timestamp}\t[degraded] plugin "syn-agent-name" agents file "agents\\x-unique-file.md" declares name collision`,
+          `${timestamp}\t[degraded] plugin "syn-stale" stage file "construction\\syn-stale-stage.md" not composed`,
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        severity: "degraded",
+        reason: 'knowledge "test-pro-metrics-agent/methodology.md" collides',
+      },
+      {
+        severity: "degraded",
+        reason:
+          'plugin "syn-agent-name" agents file "agents/x-unique-file.md" declares name collision',
+      },
+      {
+        severity: "degraded",
+        reason:
+          'plugin "syn-stale" stage file "construction/syn-stale-stage.md" not composed',
+      },
+    ]);
+  });
+
   function prepareSyntheticPlugin(
     proj: string,
     name: string,
@@ -3126,10 +3256,23 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(readFileSync(agentPath, "utf-8")).toBe(seededAgent);
     expect(readFileSync(knowledgePath, "utf-8")).toBe(seededKnowledge);
 
-    const drops = hookDrops(collideProj);
-    expect(drops).toContain(`scopes "test-pro-validation.md" collides`);
-    expect(drops).toContain(`agents "test-pro-metrics-agent.md" collides`);
-    expect(drops).toContain(`knowledge "test-pro-metrics-agent/methodology.md" collides`);
+    expect(parseHookDrops(hookDrops(collideProj))).toEqual([
+      {
+        severity: "degraded",
+        reason:
+          'scopes "test-pro-validation.md" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path',
+      },
+      {
+        severity: "degraded",
+        reason:
+          'agents "test-pro-metrics-agent.md" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path',
+      },
+      {
+        severity: "degraded",
+        reason:
+          'knowledge "test-pro-metrics-agent/methodology.md" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path',
+      },
+    ]);
   });
 
   test("agent frontmatter name collision is dropped before copy and install remains usable", () => {
@@ -3151,11 +3294,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     });
 
     expect(existsSync(join(proj, ".claude", "agents", "x-unique-file.md"))).toBe(false);
-    expect(drops).toContain("[degraded]");
-    expect(drops).toContain('plugin "syn-agent-name"');
-    expect(drops).toContain("agents/x-unique-file.md");
-    expect(drops).toContain("aidlc-quality-agent");
-    expect(drops).toContain("aidlc-quality-agent.md");
+    expect(parseHookDrops(drops)).toEqual([
+      {
+        severity: "degraded",
+        reason:
+          'plugin "syn-agent-name" agents file "agents/x-unique-file.md" declares name "aidlc-quality-agent", colliding with installed file ".claude/agents/aidlc-quality-agent.md"; not copied',
+      },
+    ]);
 
     const compile = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-graph.ts"), "compile"], {
       cwd: proj,
@@ -3345,8 +3490,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // The bad stage never landed, the drop names the file + the schema error,
     // and the install's graph still compiles (self-heal probe unaffected).
     expect(existsSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "syn-stale-stage.md"))).toBe(false);
-    expect(drops).toContain('stage file "construction/syn-stale-stage.md" not composed');
-    expect(drops).toContain("bundle: was renamed");
+    expect(parseHookDrops(drops)).toEqual([
+      {
+        severity: "degraded",
+        reason:
+          'plugin "syn-stale" stage file "construction/syn-stale-stage.md" not composed: bundle: was renamed; write plugin: for ownership - fix the plugin\'s stage file and re-run compose',
+      },
+    ]);
     const compile = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-graph.ts"), "compile"], {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
     });
