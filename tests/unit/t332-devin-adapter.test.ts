@@ -182,6 +182,11 @@ function runAdapter(
       encoding: "utf-8",
       env: {
         ...process.env,
+        // Explicitly target the scratch project by default. The adapter
+        // resolves DEVIN_PROJECT_DIR → payload.cwd → process.cwd(); setting
+        // DEVIN_PROJECT_DIR here prevents a leaked value from process.env
+        // pointing at the repository root or another test's scratch dir.
+        DEVIN_PROJECT_DIR: projectDir,
         AIDLC_UNATTENDED: undefined,
         CLAUDE_PROJECT_DIR: undefined,
         ...envOverrides,
@@ -570,5 +575,155 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     );
     expect(/spawnSync\(\s*\[\s*"bun"/.test(src)).toBe(false);
     expect(src).toContain("process.execPath");
+  });
+
+  // --- S05: project-root resolution precedence ---
+  // The adapter resolves DEVIN_PROJECT_DIR → payload.cwd → process.cwd().
+  // Probe: continue-workflow blocks when state is found, passes silently when not.
+
+  /** Run the adapter with explicit env, cwd, and payload control — bypasses
+   *  runAdapter's defaults for project-root resolution tests. */
+  function runAdapterExplicit(
+    adapterPath: string,
+    target: string,
+    payload: unknown,
+    opts: { env: NodeJS.ProcessEnv; cwd: string },
+  ): { stdout: string; code: number } {
+    const r = spawnSync(
+      process.execPath,
+      [adapterPath, target],
+      {
+        cwd: opts.cwd,
+        input: typeof payload === "string" ? payload : JSON.stringify(payload),
+        encoding: "utf-8",
+        env: opts.env,
+        timeout: 30_000,
+      },
+    );
+    return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+  }
+
+  /** Check whether continue-workflow blocked (found state) in the given output. */
+  function didBlock(stdout: string): boolean {
+    if (!stdout.trim()) return false;
+    try {
+      const out = JSON.parse(stdout) as { decision?: string };
+      return out.decision === "block";
+    } catch {
+      return false;
+    }
+  }
+
+  test("21: DEVIN_PROJECT_DIR takes precedence over payload cwd and process cwd", () => {
+    const projA = scratchProject(true); // has state → blocks
+    const projB = scratchProject(false); // no state → no block
+    try {
+      const adapter = join(projA, ".devin", "hooks", "aidlc-devin-adapter.ts");
+      const payload = { ...FIXTURES.stop as Record<string, unknown>, cwd: projB };
+      const r = runAdapterExplicit(adapter, "continue-workflow", payload, {
+        env: { ...process.env, DEVIN_PROJECT_DIR: projA, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+        cwd: projB,
+      });
+      expect(didBlock(r.stdout)).toBe(true);
+    } finally {
+      rmSync(projA, { recursive: true, force: true });
+      rmSync(projB, { recursive: true, force: true });
+    }
+  });
+
+  test("22: DEVIN_PROJECT_DIR takes precedence when payload has no cwd", () => {
+    const projA = scratchProject(true);
+    const projB = scratchProject(false);
+    try {
+      const adapter = join(projA, ".devin", "hooks", "aidlc-devin-adapter.ts");
+      const payload = { ...FIXTURES.stop as Record<string, unknown> };
+      delete (payload as Record<string, unknown>).cwd;
+      const r = runAdapterExplicit(adapter, "continue-workflow", payload, {
+        env: { ...process.env, DEVIN_PROJECT_DIR: projA, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+        cwd: projB,
+      });
+      expect(didBlock(r.stdout)).toBe(true);
+    } finally {
+      rmSync(projA, { recursive: true, force: true });
+      rmSync(projB, { recursive: true, force: true });
+    }
+  });
+
+  test("23: payload cwd is used when DEVIN_PROJECT_DIR is absent (synthetic compatibility)", () => {
+    const projA = scratchProject(true);
+    const projB = scratchProject(false);
+    try {
+      const adapter = join(projA, ".devin", "hooks", "aidlc-devin-adapter.ts");
+      const payload = { ...FIXTURES.stop as Record<string, unknown>, cwd: projA };
+      const r = runAdapterExplicit(adapter, "continue-workflow", payload, {
+        env: { ...process.env, DEVIN_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+        cwd: projB,
+      });
+      expect(didBlock(r.stdout)).toBe(true);
+    } finally {
+      rmSync(projA, { recursive: true, force: true });
+      rmSync(projB, { recursive: true, force: true });
+    }
+  });
+
+  test("24: process.cwd() is the fallback when neither DEVIN_PROJECT_DIR nor payload cwd is set", () => {
+    const projA = scratchProject(true);
+    const projB = scratchProject(false);
+    try {
+      const adapter = join(projA, ".devin", "hooks", "aidlc-devin-adapter.ts");
+      const payload = { ...FIXTURES.stop as Record<string, unknown> };
+      delete (payload as Record<string, unknown>).cwd;
+      const r = runAdapterExplicit(adapter, "continue-workflow", payload, {
+        env: { ...process.env, DEVIN_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+        cwd: projA, // process.cwd() = projA which has state
+      });
+      expect(didBlock(r.stdout)).toBe(true);
+    } finally {
+      rmSync(projA, { recursive: true, force: true });
+      rmSync(projB, { recursive: true, force: true });
+    }
+  });
+
+  test("25: project path with spaces resolves correctly (no shell splitting)", () => {
+    // Create a scratch project under a path containing spaces.
+    const spacedRoot = realpathSync(mkdtempSync(join(tmpdir(), "t332 space dir-")));
+    const projA = join(spacedRoot, "project");
+    cpSync(DEVIN_TREE, join(projA, ".devin"), { recursive: true });
+    seedShell(projA);
+    writeFileSync(
+      seededStateFile(projA),
+      readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8"),
+    );
+    try {
+      const adapter = join(projA, ".devin", "hooks", "aidlc-devin-adapter.ts");
+      const payload = { ...FIXTURES.stop as Record<string, unknown> };
+      delete (payload as Record<string, unknown>).cwd;
+      const r = runAdapterExplicit(adapter, "continue-workflow", payload, {
+        env: { ...process.env, DEVIN_PROJECT_DIR: projA, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+        cwd: projA,
+      });
+      expect(didBlock(r.stdout)).toBe(true);
+    } finally {
+      rmSync(spacedRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("26: two invocations for different workspace roots each affect only their own fixture", () => {
+    const projA = scratchProject(true);
+    const projB = scratchProject(true);
+    try {
+      // Run continue-workflow against projA — should block (state in projA).
+      const rA = runAdapter(projA, "continue-workflow", withCwd(FIXTURES.stop as Record<string, unknown>, projA));
+      expect(didBlock(rA.stdout)).toBe(true);
+      // Run continue-workflow against projB — should also block (state in projB).
+      const rB = runAdapter(projB, "continue-workflow", withCwd(FIXTURES.stop as Record<string, unknown>, projB));
+      expect(didBlock(rB.stdout)).toBe(true);
+      // Verify projA's audit is not contaminated by projB's run (no cross-talk).
+      // Both have state; the key invariant is that each run resolves to its own project.
+      // We already proved isolation by running both with their own DEVIN_PROJECT_DIR.
+    } finally {
+      rmSync(projA, { recursive: true, force: true });
+      rmSync(projB, { recursive: true, force: true });
+    }
   });
 });

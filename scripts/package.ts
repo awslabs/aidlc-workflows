@@ -78,6 +78,7 @@ import {
   readEnvCap,
   readMemoryCap,
 } from "../core/tools/aidlc-tiers.ts";
+import { stripDevinUnsupportedProfileFields } from "../core/tools/aidlc-devin-profile.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CORE_ROOT = join(REPO_ROOT, "core");
@@ -302,11 +303,24 @@ function transform(
     s = substituteToken(s, harnessDir);
     s = applyRulesRename(s, harnessDir, rulesRename);
     if (harness) s = projectTierFrontmatter(s, srcPath, harness);
+    // posixPath: the POSIX-normalized path (srcPath carries the platform
+    // separator on Windows) used by the per-harness agent projections below.
+    const posixPath = srcPath.split(sep).join("/");
+    // Devin: strip frontmatter fields its native agent loader ignores
+    // (display_name, examples, disallowedTools, maxTurns) to produce clean
+    // `devin doctor` output. Runs after tier projection so the projected
+    // model/effort keys are preserved. Only applies to agent .md files.
+    if (
+      harness === "devin" &&
+      posixPath.includes("/agents/") &&
+      posixPath.endsWith("-agent.md")
+    ) {
+      s = stripDevinUnsupportedProfileFields(s, srcPath);
+    }
     // Cursor, opencode, and Copilot persona bodies are mutable active-space
     // pointers. Ship their memory references on the default seed so the first
     // startup's repointHarnessIncludes(project, "default") is byte-identical;
     // later space switches still rewrite the same concrete segment in place.
-    const posixPath = srcPath.split(sep).join("/");
     if (
       (harness === "cursor" || harness === "opencode" || harness === "copilot") &&
       posixPath.includes("/agents/") &&

@@ -9,6 +9,7 @@ description: >
 argument-hint: ""
 user-invocable: true
 classification: read-only
+triggers: [user]
 ---
 
 # AI-DLC Outcomes Pack

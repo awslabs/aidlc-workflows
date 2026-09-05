@@ -1,13 +1,8 @@
 ---
 name: aidlc-compliance-agent
-display_name: Compliance Agent
-examples:
-  - data-governance.md
-  - audit-requirements.md
 description: >
   GRC analyst and regulatory specialist responsible for compliance mapping, data classification, and risk assessment.
   Support-only agent for Feasibility & Constraint Analysis and cross-cutting compliance validation.
-disallowedTools: Task
 ---
 <!-- aidlc-delegated-knowledge-preflight -->
 **Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.devin/knowledge/aidlc-shared/`, `.devin/knowledge/aidlc-compliance-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-compliance-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.

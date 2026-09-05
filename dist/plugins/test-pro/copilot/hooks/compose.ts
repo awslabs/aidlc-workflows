@@ -766,6 +766,53 @@ function projectCursorNativeAgent({ file, content }: CopyContext): string {
   return content.replace(m[0], () => `---\n${fm}\n---\n`);
 }
 
+/** Devin: strip frontmatter fields the native agent loader ignores
+ *  (display_name, examples, disallowedTools, maxTurns). Inlined here (not
+ *  dynamically imported from the installed helper) because copyTreeNoClobber's
+ *  transform is synchronous. Matches core/tools/aidlc-devin-profile.ts
+ *  byte-for-byte in behavior; if that helper changes, update this too. */
+const DEVIN_UNSUPPORTED_PROFILE_FIELDS: ReadonlySet<string> = new Set([
+  "display_name",
+  "examples",
+  "disallowedTools",
+  "maxTurns",
+]);
+
+function projectDevinNativeAgent({ file, content }: CopyContext): string {
+  const bom = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+  const hasBom = bom !== content;
+  const m = bom.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!m) {
+    throw new Error(
+      `${file}: plugin agent has no closed frontmatter block for Devin projection.`,
+    );
+  }
+  const fmBlock = m[0];
+  const fmContent = m[1];
+  const lines = fmContent.split(/\r?\n/);
+  const result: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    const keyMatch = line.match(/^(\w[\w-]*):/);
+    if (keyMatch && DEVIN_UNSUPPORTED_PROFILE_FIELDS.has(keyMatch[1])) {
+      i++;
+      while (i < lines.length && /^\s/.test(lines[i]!)) i++;
+      continue;
+    }
+    result.push(line);
+    i++;
+  }
+  while (result.length > 0 && result[result.length - 1]!.trim() === "") {
+    result.pop();
+  }
+  const newFm = result.join("\n");
+  if (newFm === fmContent) return content;
+  const newBlock = `---\n${newFm}\n---\n`;
+  const replaced = bom.replace(fmBlock, () => newBlock);
+  return hasBom ? `\uFEFF${replaced}` : replaced;
+}
+
 function disallowedToolsValues(content: string): string[] {
   return [
     ...frontmatter(content).matchAll(/^disallowedTools:\s*(.*?)\s*$/gm),
@@ -1857,7 +1904,9 @@ try {
           ? projectCursorNativeAgent
           : HARNESS_LEAF === ".kiro"
             ? projectKiroNativeAgent
-            : undefined,
+            : HARNESS_LEAF === ".devin"
+              ? projectDevinNativeAgent
+              : undefined,
       HARNESS_LEAF === ".kiro" ? migrateExistingKiroAgent : undefined,
     ) || changed;
     if (IS_OPENCODE) {

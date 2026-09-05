@@ -9,6 +9,7 @@ description: >
   stops. The main workflow's Current Stage is never touched.
 argument-hint: ""
 user-invocable: true
+triggers: [user]
 ---
 
 # AI-DLC Stage Runner — market-research

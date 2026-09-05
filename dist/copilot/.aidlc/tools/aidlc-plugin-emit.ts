@@ -35,6 +35,7 @@ import {
   walkPluginFiles,
 } from "./aidlc-plugin-validate.ts";
 import { runWithOwnerStampedLock } from "./aidlc-lib.ts";
+import { stripDevinUnsupportedProfileFields } from "./aidlc-devin-profile.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 
@@ -449,6 +450,13 @@ function copyPluginContent(
         );
         if (target.kind === "cursor") {
           projected = projectCursorPluginAgent(projected, file);
+        }
+        // Devin: strip unsupported frontmatter fields (display_name, examples,
+        // disallowedTools, maxTurns) the same way the main packager does for
+        // core agents. Plugin agents get the same projection so `devin doctor`
+        // stays clean on a plugin-composed install.
+        if (target.harnessLeaf === ".devin") {
+          projected = stripDevinUnsupportedProfileFields(projected, file);
         }
         content = Buffer.from(projected, "utf-8");
       }

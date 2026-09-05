@@ -21158,13 +21158,18 @@ function parseAgentFrontmatter(path: string): AgentMetadata {
 
   const missing: string[] = [];
   if (!slug) missing.push("name");
-  if (!display_name) missing.push("display_name");
+  // display_name is required for every harness EXCEPT Devin: the Devin
+  // projection strips it (CFG005 ignored field). On Devin, fall back to the
+  // slug so the compiler tolerates the stripped dist without changing the
+  // authored core contract (which still requires display_name — enforced by
+  // t04 on the authored core agents).
+  if (!display_name && harnessDir() !== ".devin") missing.push("display_name");
   if (missing.length > 0) {
     throw new Error(
       `Agent file ${path} missing required frontmatter: ${missing.join(", ")}`
     );
   }
-  return { slug, display_name, examples };
+  return { slug, display_name: display_name || slug, examples };
 }
 
 export function frontmatterBlock(body: string): string | null {

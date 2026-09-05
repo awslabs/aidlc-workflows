@@ -91,6 +91,25 @@ const manifest: HarnessManifest = {
   // the only harness that ships an emit.ts today.)
   emit: null,
 
+  // Devin-native runner frontmatter: generated stage/init/scope/composition
+  // runners are user-only (triggers: [user]). Devin's skill loader activates
+  // a skill only when its triggers frontmatter matches the invocation context;
+  // without an explicit triggers line the runner would not be invocable via
+  // its /aidlc-<stage> slash command. This is a Devin-only addition — the
+  // shared runner-gen reads it from harness.json and injects it into every
+  // generated runner SKILL.md.
+  runnerFrontmatterAdditions: ["triggers: [user]"],
+
+  // Devin-native standalone skill triggers: aidlc-knowledge and aidlc-outcomes-pack
+  // are user-invocable skills that need an explicit triggers: [user] line for
+  // Devin's skill loader. The read-only session skills (aidlc-replay,
+  // aidlc-session-cost) already carry triggers in their authored frontmatter
+  // via the user-invocable: true field which Devin maps to user triggers.
+  frontmatterAdditions: [
+    { file: "skills/aidlc-knowledge/SKILL.md", lines: ["triggers: [user]"] },
+    { file: "skills/aidlc-outcomes-pack/SKILL.md", lines: ["triggers: [user]"] },
+  ],
+
   // plugin omitted → the packager derives the default `.devin-plugin` +
   // kind:"store" projection (Devin's native plugin format), per manifest-types.
 };

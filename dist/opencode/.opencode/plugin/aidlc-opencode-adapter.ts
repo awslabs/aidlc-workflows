@@ -146,6 +146,8 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "tools/aidlc-artifact-vocabulary.ts",
     "tools/aidlc-audit.ts",
     "tools/aidlc-bolt.ts",
+    "tools/aidlc-devin-profile.ts",
+    "tools/aidlc-devin-version.ts",
     "tools/aidlc-directive.ts",
     "tools/aidlc-doctor-bundle.ts",
     "tools/aidlc-documentkb-schema.ts",

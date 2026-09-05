@@ -9,6 +9,7 @@ description: >
   composer even when a stock scope would match.
 argument-hint: "[description | --report <path> | --new-scope]"
 user-invocable: true
+triggers: [user]
 ---
 
 # AI-DLC - compose a workflow plan

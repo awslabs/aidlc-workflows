@@ -1,12 +1,8 @@
 ---
 name: test-pro-metrics-agent
-display_name: Test Pro Metrics Agent
 plugin: test-pro
-examples:
-  - methodology.md
 description: >
   Testing metrics specialist responsible for coverage interpretation, defect trends, and release-quality evidence.
-disallowedTools: Task
 model: sonnet
 ---
 <!-- aidlc-delegated-knowledge-preflight -->

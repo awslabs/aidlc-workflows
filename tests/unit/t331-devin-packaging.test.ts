@@ -122,6 +122,9 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     // aidlc-statusline is NOT referenced (Devin has no statusline config).
     expect(raw).not.toContain("aidlc-statusline");
 
+    // fold-usage is NOT registered on any event (S05: removed inert registrations).
+    expect(raw).not.toContain("fold-usage");
+
     // PreToolUse has a reviewer-scope target.
     const pre = wiring.PreToolUse ?? [];
     expect(
@@ -130,18 +133,44 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       ),
     ).toBe(true);
 
-    // PostToolUse has the expected targets with the expected matchers.
+    // PostToolUse has the expected targets. Matchers are regexes on tool_name;
+    // assert behavior (compile + match/nonmatch) rather than one historical spelling.
     const post = wiring.PostToolUse ?? [];
     const findTarget = (target: string) =>
       post.find((g) => g.hooks.some((h) => h.command.endsWith(target)));
     const audit = findTarget("audit-and-sensors");
-    expect(audit?.matcher).toBe("edit|write|apply_patch");
+    expect(audit).toBeDefined();
     const sync = findTarget("sync-workflow-state");
-    expect(sync?.matcher).toBe("todo_write");
+    expect(sync).toBeDefined();
     const log = findTarget("log-subagent");
-    expect(log?.matcher).toBe("run_subagent");
+    expect(log).toBeDefined();
     const rebuild = findTarget("rebuild-stage-graph");
-    expect(rebuild?.matcher).toBe("exec");
+    expect(rebuild).toBeDefined();
+    const humanTurn = findTarget("record-human-turn");
+    expect(humanTurn).toBeDefined();
+
+    // Compile each named matcher and verify intended matches and nonmatches.
+    const re = (m?: string) => new RegExp(m ?? "");
+    expect(re(audit?.matcher).test("edit")).toBe(true);
+    expect(re(audit?.matcher).test("write")).toBe(true);
+    expect(re(audit?.matcher).test("apply_patch")).toBe(true);
+    expect(re(audit?.matcher).test("read")).toBe(false);
+    expect(re(sync?.matcher).test("todo_write")).toBe(true);
+    expect(re(sync?.matcher).test("exec")).toBe(false);
+    expect(re(log?.matcher).test("run_subagent")).toBe(true);
+    expect(re(log?.matcher).test("read_subagent")).toBe(false);
+    expect(re(humanTurn?.matcher).test("ask_user_question")).toBe(true);
+    expect(re(humanTurn?.matcher).test("exec")).toBe(false);
+    expect(re(rebuild?.matcher).test("exec")).toBe(true);
+    expect(re(rebuild?.matcher).test("get_output")).toBe(false);
+
+    // PreToolUse deliver-stage-rules matcher is anchored to run_subagent only.
+    const deliver = pre.find((g) =>
+      g.hooks.some((h) => h.command.endsWith("deliver-stage-rules")),
+    );
+    expect(deliver).toBeDefined();
+    expect(re(deliver?.matcher).test("run_subagent")).toBe(true);
+    expect(re(deliver?.matcher).test("read_subagent")).toBe(false);
   });
 
   test("4: config.json shape — permissions, read_config_from, no inference keys", () => {
@@ -191,10 +220,22 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     }
   });
 
-  test("6: rules/aidlc.md — no @-import, mentions the memory dir", () => {
+  test("6: rules/aidlc.md — no @-import, mentions the memory dir, has always_on trigger", () => {
     const stub = readFileSync(join(ENGINE, "rules", "aidlc.md"), "utf-8");
     expect(stub).not.toMatch(/^@/m);
+    // S03: the pointer names the active-space memory dir AND the default seed.
+    expect(stub).toContain("aidlc/spaces/<active-space>/memory/");
     expect(stub).toContain("aidlc/spaces/default/memory/");
+    // S03: explicit always_on trigger frontmatter (Devin loads rules with this).
+    expect(stub).toMatch(/^trigger:\s*always_on/m);
+    // S03: the pointer is NOT an import — it names the dir but does not claim
+    // to pull memory contents into ambient context.
+    expect(stub).toContain("pointer");
+    // S03: mentions the active-space cursor and default seed.
+    expect(stub).toContain("aidlc/active-space");
+    expect(stub).toContain("default");
+    // S11: no overstated guarantees.
+    expect(stub).not.toMatch(/identical on every harness/i);
   });
 
   test("7: AGENTS.md — no @-import directives, mentions /aidlc --status, no Claude references", () => {
@@ -203,6 +244,28 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(agents).toContain("/aidlc --status");
     expect(agents).not.toContain("companyAnnouncements");
     expect(agents).not.toContain("CLAUDE.md");
+  });
+
+  // S11: onboarding reduction — Devin AGENTS.md must be <= 12KiB (12288 bytes)
+  // UTF-8, with no duplicate DocumentKB prose and no overstated guarantees.
+  test("7b: AGENTS.md onboarding size <= 12KiB (12288 bytes) UTF-8", () => {
+    const agents = readFileSync(join(DEVIN_ROOT, "AGENTS.md"));
+    expect(agents.length).toBeLessThanOrEqual(12288);
+  });
+
+  test("7c: AGENTS.md has no duplicate DocumentKB section", () => {
+    const agents = readFileSync(join(DEVIN_ROOT, "AGENTS.md"), "utf-8");
+    // The DocumentKB bullet should appear exactly once (was duplicated before S11).
+    const count = (agents.match(/Document knowledge \(DocumentKB\)/g) ?? []).length;
+    expect(count).toBe(1);
+  });
+
+  test("7d: AGENTS.md does not overstate guarantees (no 'identical on every harness' in onboarding)", () => {
+    // The runbook flagged overstatement. The compressed onboarding should not
+    // claim the method is "identical on every harness" (it is layered and
+    // space-specific). This phrase was removed in S11.
+    const agents = readFileSync(join(DEVIN_ROOT, "AGENTS.md"), "utf-8");
+    expect(agents).not.toMatch(/identical on every harness/i);
   });
 
   test("8: harness.json identity — name === devin, harnessDir === .devin", () => {
@@ -252,5 +315,121 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     expect(skill).not.toContain(".claude");
     expect(skill).toMatch(/^triggers:/m);
     expect(skill).toContain("Harness notes (Devin CLI)");
+  });
+
+  // S04: Devin persona frontmatter projection — strip display_name, examples,
+  // disallowedTools, maxTurns from Devin agent .md files. Other harnesses keep
+  // these fields. The authored core/agents/*.md files are unchanged.
+  test("11: Devin agents strip unsupported frontmatter fields (display_name, examples, disallowedTools, maxTurns)", () => {
+    const agentsDir = join(ENGINE, "agents");
+    expect(existsSync(agentsDir)).toBe(true);
+    const agentFiles = readdirSync(agentsDir).filter(
+      (f) => f.endsWith("-agent.md") && f !== "aidlc.md",
+    );
+    expect(agentFiles.length).toBeGreaterThanOrEqual(14);
+    for (const f of agentFiles) {
+      const body = readFileSync(join(agentsDir, f), "utf-8");
+      const m = body.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      expect(m, `${f}: no frontmatter block`).not.toBeNull();
+      const fm = m![1];
+      // Stripped fields must be absent from the frontmatter block.
+      expect(fm, `${f}: display_name still in Devin frontmatter`).not.toMatch(/^display_name:/m);
+      expect(fm, `${f}: examples still in Devin frontmatter`).not.toMatch(/^examples:/m);
+      expect(fm, `${f}: disallowedTools still in Devin frontmatter`).not.toMatch(/^disallowedTools:/m);
+      expect(fm, `${f}: maxTurns still in Devin frontmatter`).not.toMatch(/^maxTurns:/m);
+      // Preserved fields must remain.
+      expect(fm, `${f}: name stripped`).toMatch(/^name:\s*aidlc-/m);
+      expect(fm, `${f}: description stripped`).toMatch(/^description:/m);
+      // Body must still carry the persona content (not just frontmatter).
+      expect(body.length).toBeGreaterThan(200);
+    }
+  });
+
+  test("12: Claude agents retain unsupported-by-Devin fields (no projection leakage)", () => {
+    const claudeAgents = join(CLAUDE_SRC, "agents");
+    expect(existsSync(claudeAgents)).toBe(true);
+    const productAgent = readFileSync(join(claudeAgents, "aidlc-product-agent.md"), "utf-8");
+    const fm = productAgent.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
+    expect(fm).toMatch(/^display_name:\s*Product Agent/m);
+    expect(fm).toMatch(/^examples:/m);
+    expect(fm).toMatch(/^disallowedTools:\s*Task/m);
+    // The architecture-reviewer has maxTurns in core; Claude keeps it.
+    const reviewer = readFileSync(join(claudeAgents, "aidlc-architecture-reviewer-agent.md"), "utf-8");
+    const reviewerFm = reviewer.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
+    expect(reviewerFm).toMatch(/^maxTurns:\s*60/m);
+  });
+
+  test("13: Devin agent body content unchanged by projection (examples text in body survives)", () => {
+    // The developer agent body mentions "error-handling" (an examples entry)
+    // in prose — the strip only removes the frontmatter examples: block, not
+    // body prose. Verify body content is intact.
+    const dev = readFileSync(join(ENGINE, "agents", "aidlc-developer-agent.md"), "utf-8");
+    // The body should still contain the persona heading and core responsibilities.
+    expect(dev).toContain("# Developer Agent");
+    // The frontmatter examples list (db-conventions.md, error-handling.md) is
+    // stripped from frontmatter but those words may appear in body prose.
+    // The key invariant: no examples: KEY in frontmatter.
+    const fm = dev.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
+    expect(fm).not.toMatch(/^examples:/m);
+  });
+
+  // S03: invocation and rule activation — generated runners carry triggers: [user],
+  // standalone skills (knowledge, outcomes-pack) carry triggers: [user], and the
+  // rules stub has trigger: always_on. Read-only skills (replay, session-cost)
+  // are NOT modified — they keep their existing user-invocable: true field.
+  test("14: generated stage runners carry triggers: [user] (Devin invocation metadata)", () => {
+    const skillsDir = join(ENGINE, "skills");
+    expect(existsSync(skillsDir)).toBe(true);
+    // Sample a few generated runners.
+    const runners = ["aidlc-domain-design", "aidlc-code-generation", "aidlc-init", "aidlc-feature"];
+    for (const r of runners) {
+      const path = join(skillsDir, r, "SKILL.md");
+      expect(existsSync(path), `${r}/SKILL.md missing`).toBe(true);
+      const body = readFileSync(path, "utf-8");
+      const fm = body.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
+      expect(fm, `${r}: no triggers: [user] in frontmatter`).toMatch(/^triggers:\s*\[user\]/m);
+    }
+  });
+
+  test("15: standalone skills (knowledge, outcomes-pack) carry triggers: [user]", () => {
+    for (const skill of ["aidlc-knowledge", "aidlc-outcomes-pack"]) {
+      const path = join(ENGINE, "skills", skill, "SKILL.md");
+      const body = readFileSync(path, "utf-8");
+      const fm = body.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
+      expect(fm, `${skill}: no triggers: [user]`).toMatch(/^triggers:\s*\[user\]/m);
+    }
+  });
+
+  test("16: read-only skills (replay, session-cost) do NOT carry triggers: (preserved as-is)", () => {
+    // Row 5: preserve current triggers for read-only aidlc-replay and
+    // aidlc-session-cost. They use user-invocable: true, not triggers:.
+    for (const skill of ["aidlc-replay", "aidlc-session-cost"]) {
+      const path = join(ENGINE, "skills", skill, "SKILL.md");
+      const body = readFileSync(path, "utf-8");
+      const fm = body.match(/^---\r?\n([\s\S]*?)\r?\n---/)![1];
+      expect(fm, `${skill}: should NOT have triggers: (row 5 preserves existing)`).not.toMatch(/^triggers:/m);
+      expect(fm, `${skill}: user-invocable: true should be present`).toMatch(/^user-invocable:\s*true/m);
+    }
+  });
+
+  test("17: harness.json carries runnerFrontmatterAdditions with triggers: [user]", () => {
+    const harnessJson = JSON.parse(
+      readFileSync(join(ENGINE, "tools", "data", "harness.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    const additions = harnessJson.runnerFrontmatterAdditions;
+    expect(Array.isArray(additions)).toBe(true);
+    expect((additions as string[]).some((l) => l.includes("triggers"))).toBe(true);
+  });
+
+  test("18: rules/aidlc.md is a pointer, not an import (no memory file contents inlined)", () => {
+    const stub = readFileSync(join(ENGINE, "rules", "aidlc.md"), "utf-8");
+    // The pointer names the directory but does not inline org.md/team.md content.
+    // It should NOT contain the actual memory file headings (those live in the
+    // memory files themselves, loaded by the engine at runtime).
+    expect(stub).not.toContain("# Organization");
+    expect(stub).not.toContain("# Team Practices");
+    // It SHOULD explain that the engine resolves memory at runtime.
+    expect(stub).toContain("engine");
+    expect(stub.toLowerCase()).toContain("resolver");
   });
 });

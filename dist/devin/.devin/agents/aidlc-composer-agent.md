@@ -1,6 +1,5 @@
 ---
 name: aidlc-composer-agent
-display_name: Composer Agent
 description: >
   Adaptive workflow composer. Estimates implementation entropy (intent
   ambiguity, codebase structural uncertainty, verification entropy, risk,
@@ -11,7 +10,6 @@ description: >
   indexed; only falls back to bounded workspace analysis when CodeKB is absent
   or not ready.
   Dispatched by the /aidlc orchestrator; never invoked directly by a stage.
-disallowedTools: Task
 ---
 <!-- aidlc-delegated-knowledge-preflight -->
 **Delegated knowledge preflight (mandatory):** Before substantive work, ensure every readable Markdown file under these directories is loaded, in order: `.devin/knowledge/aidlc-shared/`, `.devin/knowledge/aidlc-composer-agent/`, `aidlc/spaces/<active-space>/knowledge/aidlc-shared/`, then `aidlc/spaces/<active-space>/knowledge/aidlc-composer-agent/`. A native resource preload satisfies this requirement; otherwise read the files now. The dispatch brief supplies rules and artifact paths separately.

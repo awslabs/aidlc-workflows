@@ -10,6 +10,7 @@ description: >
 argument-hint: "[onboard <path> | list | show <id> | sync]"
 user-invocable: true
 classification: read-write
+triggers: [user]
 ---
 
 # AI-DLC Document Knowledge

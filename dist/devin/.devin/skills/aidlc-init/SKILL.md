@@ -8,6 +8,7 @@ description: >
   packaging over that move. Pass `--scope <name>` to seed the initial scope, or a freeform description of what to build.
 argument-hint: "[--scope <name>] [description]"
 user-invocable: true
+triggers: [user]
 ---
 
 # AI-DLC - start a workflow (create the first intent)

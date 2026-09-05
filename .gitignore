@@ -36,6 +36,18 @@ tests/logs/
 /.aidlc/
 /aidlc/spaces/*/intents/.aidlc-*
 
+# AIDLC Express workflow runtime artifacts (generated when running AIDLC
+# in this repo for implementation tracking — not framework source).
+/aidlc-state.md
+/aidlc-audit/
+/aidlc-artifacts/
+/aidlc/spaces/*/aidlc-state.md
+/aidlc/spaces/*/audit/
+/aidlc/spaces/*/artifacts/
+
+# PR #996 implementation runbook working artifacts (Express flow tracking)
+/.aidlc-impl/
+
 # Local scratch — explainers, throwaway HTML, etc. (claude writes explainers here)
 tmp/
 

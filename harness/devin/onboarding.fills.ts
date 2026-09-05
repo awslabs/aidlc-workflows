@@ -37,7 +37,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     sections_before_resumption: `## AI-DLC Method (auto-loaded)
 
-The AI-DLC method — the layered practice files (\`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) — is authored once at the workspace root under \`aidlc/spaces/<active-space>/memory/\` and pulled into Devin's ambient context by \`{{HARNESS_DIR}}/rules/aidlc.md\` (auto-loaded on session start, NOT an \`@\`-import chain). The shipped shell starts on \`default\`; switching spaces repoints the stub at \`aidlc/active-space\` to the selected space. Edit the active space's memory files — they are the single hand-editable source of truth, identical on every harness. (AI-DLC's own stage resolver reads the same tree directly, so each stage is method-correct without this ambient pointer.)
+The AI-DLC method — the layered practice files (\`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) — is authored once at the workspace root under \`aidlc/spaces/<active-space>/memory/\` and pulled into Devin's ambient context by \`{{HARNESS_DIR}}/rules/aidlc.md\` (auto-loaded on session start, NOT an \`@\`-import chain). The shipped shell starts on \`default\`; switching spaces repoints the stub at \`aidlc/active-space\` to the selected space. Edit the active space's memory files — they are the single hand-editable source of truth. (AI-DLC's own stage resolver reads the same tree directly, so each stage is method-correct without this ambient pointer.)
 `,
 
     sections_after_resumption: "",

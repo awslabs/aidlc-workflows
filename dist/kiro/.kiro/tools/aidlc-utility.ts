@@ -51,6 +51,7 @@ import {
 } from "./aidlc-graph.ts";
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
+import { checkDevinVersion, DEVIN_MIN_VERSION_STRING } from "./aidlc-devin-version.ts";
 import {
   type cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
@@ -2724,35 +2725,36 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         fix: `copy from \`${from}\``,
       });
     }
-    // Minimum Devin CLI version pin: v3000.3 introduced the dedicated
-    // mcp_config.json files and the modern .devin/ config layout this port
-    // relies on (hooks.v1.json as the whole-hooks-object file, project
-    // config limited to permissions/read_config_from/hooks). Older versions
-    // store MCP servers under the main config's mcpServers key and use a
-    // different hooks file shape — the wiring would silently no-op.
-    const MIN_DEVIN = [3000, 3, 0] as const;
-    const devinBin = Bun.which("devin");
-    const devinVer = devinBin
-      ? Bun.spawnSync([devinBin, "--version"], { stdout: "pipe", stderr: "ignore" })
-      : null;
-    const devinVerText = (devinVer?.stdout?.toString() ?? "").trim();
-    const devinVerMatch = devinVerText.match(/(\d+)\.(\d+)\.(\d+)/);
-    if (!devinVerMatch) {
+    // Minimum Devin CLI version pin: 3000.5.20 is the floor for the features
+    // AIDLC relies on (hooks.v1.json, triggers frontmatter, run_subagent,
+    // ask_user_question with multi_select). Discovery is PATH-first with
+    // cross-platform Desktop fallback (macOS .app, Linux share/opt, Windows
+    // LocalAppData/ProgramFiles). Desktop execution is NOT verified —
+    // discovery only. See core/tools/aidlc-devin-version.ts for the full
+    // discovery/exec/parse logic and the injectable test seams.
+    const devinVerResult = checkDevinVersion();
+    results.push({
+      pass: devinVerResult.pass,
+      label: devinVerResult.label,
+      fix: devinVerResult.fix || undefined,
+    });
+    // Desktop discovery advisory (advisory pass-with-label): if the Desktop
+    // binary was discovered, note that Desktop execution is separately
+    // unverified. If neither PATH nor Desktop found the binary, the main
+    // check above already failed.
+    if (devinVerResult.source === "Desktop") {
       results.push({
-        pass: false,
-        label: "devin CLI on PATH",
-        fix: "install Devin CLI >= 3000.3.0 (https://devin.ai)",
+        pass: true,
+        label:
+          `Desktop binary discovered at ${devinVerResult.binaryPath} — Desktop execution is separately unverified (discovery only)`,
       });
-    } else {
-      const v = [Number(devinVerMatch[1]), Number(devinVerMatch[2]), Number(devinVerMatch[3])];
-      const ok =
-        v[0] > MIN_DEVIN[0] ||
-        (v[0] === MIN_DEVIN[0] &&
-          (v[1] > MIN_DEVIN[1] || (v[1] === MIN_DEVIN[1] && v[2] >= MIN_DEVIN[2])));
+    } else if (!devinVerResult.pass && !devinVerResult.binaryPath) {
+      // Neither PATH nor Desktop found the binary — add a Desktop discovery
+      // advisory so the user knows Desktop was checked.
       results.push({
-        pass: ok,
-        label: `devin CLI version ${devinVerMatch[0]} >= 3000.3.0 (modern .devin/ config layout: hooks.v1.json + dedicated mcp_config.json)`,
-        fix: "upgrade Devin CLI to 3000.3.0 or later",
+        pass: true,
+        label:
+          `Desktop discovery: no Devin Desktop installation found (checked OS-appropriate paths); PATH lookup also failed`,
       });
     }
     // Hook approval reminder (advisory pass-with-label): Devin CLI prompts to
