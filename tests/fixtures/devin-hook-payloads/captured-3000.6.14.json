@@ -1,0 +1,577 @@
+{
+  "$schema": "captured-devin-hook-payloads/v1",
+  "cliVersion": "3000.6.14",
+  "captureDate": "2026-09-05",
+  "classification": "captured",
+  "sanitization": "Real Devin CLI 3000.6.14 hook stdin captured via a capture-only .devin/hooks.v1.json logger on Linux/WSL2. Only paths, session/prompt/tool-use/agent identifiers, shell ids, and verbose prompt text were replaced with placeholders. Property names, nesting, booleans, missing-vs-null distinctions, response status, and correlation relationships are preserved exactly. No secrets, no real document content, no unredacted user prompts.",
+  "placeholderLegend": {
+    "<session>": "real session_id is a short human-readable slug (e.g. 'bramble-scorpion'), NOT a UUID",
+    "<prompt-id>": "real prompt_id is a UUID v4, rotated per user prompt; ABSENT on SessionStart (fires before first prompt)",
+    "<tool-use-id-parent>": "parent/conductor tool_use_id format: 'chatcmpl-tool-<hex>'",
+    "<tool-use-id-child>": "subagent tool_use_id format: 'functions.<tool>:<n>' (observed on subagent-issued reads/greps/globs)",
+    "<project-root>": "absolute path of the capture fixture project root",
+    "<agent-id>": "8-char hex subagent identifier (e.g. '7f4c7180'), embedded in run_subagent/read_subagent output strings and read_subagent tool_input",
+    "<shell-id>": "short hex shell id embedded in exec PostToolUse output"
+  },
+  "C01": {
+    "scenario": "Session start, then an ordinary human prompt (devin -p, minimal reply).",
+    "events": [
+      {
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "session_id": "<session>"
+      },
+      {
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "<prompt: minimal reply request>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ]
+  },
+  "C10": {
+    "scenario": "End the fixture session normally (devin -p exits after replying).",
+    "events": [
+      {
+        "hook_event_name": "SessionEnd",
+        "reason": "other",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "notes": [
+      "SessionEnd DOES fire on 3000.6.14 (the 3000.5.20 changelog fix).",
+      "reason observed value is 'other' for a normal -p exit.",
+      "No cwd, no transcript_path on SessionEnd.",
+      "prompt_id IS present on SessionEnd (the session saw at least one user prompt)."
+    ]
+  },
+  "C02_read": {
+    "scenario": "Harmless read of a sentinel file.",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/src/sentinel.txt", "limit": 1 },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/src/sentinel.txt", "limit": 1 },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "<file-view path=\"<project-root>/src/sentinel.txt\" start_line=\"1\" end_line=\"1\" total_lines=\"4\">\n  1|# Sentinel\n</file-view>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "read tool_input: {file_path, limit?}. limit is OPTIONAL (omitted in another capture).",
+      "tool_response is an OBJECT {success:boolean, output:string, error:string|null} — NOT a bare string.",
+      "tool_input is echoed verbatim in PostToolUse.",
+      "tool_use_id correlates Pre and Post."
+    ]
+  },
+  "C02_glob": {
+    "scenario": "Harmless glob for *.txt files.",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "glob",
+        "tool_input": { "pattern": "**/*.txt", "path": "<project-root>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "glob",
+        "tool_input": { "pattern": "**/*.txt", "path": "<project-root>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "<project-root>/src/sentinel.txt",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "glob tool_input: {pattern, path?}. path is the search root; OPTIONAL (omitted in subagent-issued glob, see C09)."
+    ]
+  },
+  "C02_grep": {
+    "scenario": "Harmless content grep (no glob filter).",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "grep",
+        "tool_input": { "pattern": "searchable", "path": "<project-root>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "grep",
+        "tool_input": { "pattern": "searchable", "path": "<project-root>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Found <n> match(es) for pattern 'searchable' in <project-root>:\n-- <matches summary>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "grep tool_input: {pattern, path?, glob_pattern?}. path is OPTIONAL (defaults to project root).",
+      "A grep content 'pattern' is NOT a file path; the core path checker must not scan it."
+    ]
+  },
+  "C02_grep_globPattern": {
+    "scenario": "Content grep WITH a glob_pattern file filter (issued by a subagent — see C09 for identity).",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "grep",
+        "tool_input": { "pattern": "searchable", "glob_pattern": "*.md" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "grep",
+        "tool_input": { "pattern": "searchable", "glob_pattern": "*.md" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "No matches found for pattern 'searchable' in <project-root>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "CONFIRMED: Devin grep exposes the content-search file filter as 'glob_pattern' (NOT 'glob'). The core reviewer-scope path checker inspects 'glob'; normalization is required for S07.",
+      "When glob_pattern is set and path is omitted, the search root defaults to the project root (visible in the output string)."
+    ]
+  },
+  "C02_notebookRead": {
+    "scenario": "Harmless notebook_read of a .ipynb sentinel.",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "notebook_read",
+        "tool_input": { "notebook_path": "<project-root>/src/probe.ipynb" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "notebook_read",
+        "tool_input": { "notebook_path": "<project-root>/src/probe.ipynb" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "<cell 0><cell_type>code</cell_type><language>python</language>print(1)</cell 0>\n",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "notebook_read tool_input: {notebook_path}. The core reviewer-scope checker must forward 'notebook_path' (NOT 'file_path')."
+    ]
+  },
+  "C02_exec": {
+    "scenario": "Harmless exec of an echo command.",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "exec",
+        "tool_input": { "command": "echo capture-exec-probe" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "exec",
+        "tool_input": { "command": "echo capture-exec-probe" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Output from command in shell <shell-id>:\ncapture-exec-probe\n\n\nExit code: 0",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "exec tool_input: {command, ...}. Additional fields (shell_id, timeout, workdir, env, tty) observed in the tool schema are optional and not present in this minimal call."
+    ]
+  },
+  "C03_write": {
+    "scenario": "Harmless write of a new sentinel file (auto-approved via --permission-mode accept-edits).",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "write",
+        "tool_input": { "file_path": "<project-root>/src/captured.txt", "content": "capture-probe\n" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "write",
+        "tool_input": { "file_path": "<project-root>/src/captured.txt", "content": "capture-probe\n" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "File created successfully at: <project-root>/src/captured.txt",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "write tool_input: {file_path, content}.",
+      "A rejected write (default --permission-mode auto in -p headless) fires PreToolUse but NO PostToolUse — the tool is rejected before execution. See C03_rejectedWrite."
+    ]
+  },
+  "C03_edit": {
+    "scenario": "Harmless edit of an existing sentinel file.",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "edit",
+        "tool_input": { "file_path": "<project-root>/src/notes.md", "old_string": "# Notes", "new_string": "# Captured Notes" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "edit",
+        "tool_input": { "file_path": "<project-root>/src/notes.md", "old_string": "# Notes", "new_string": "# Captured Notes" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "The file <project-root>/src/notes.md has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n  1|# Captured Notes\n  2|A harmless notebook-style markdown file.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "edit tool_input: {file_path, old_string, new_string}."
+    ]
+  },
+  "C03_rejectedWrite": {
+    "scenario": "A write rejected by the default 'auto' permission mode in headless -p (no human to confirm).",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "write",
+        "tool_input": { "file_path": "<project-root>/src/captured.txt", "content": "capture-probe\n" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "ONLY PreToolUse fires for a rejected tool; NO PostToolUse. The agent sees a stderr warning 'rejected a tool call that requires confirmation'.",
+      "Implication for S08: a failed/canceled ask_user_question likewise fires PreToolUse but NOT PostToolUse (see C07_cancel). A PostToolUse response must NOT be mined from a tool that never executed."
+    ]
+  },
+  "C04_foregroundSubagent": {
+    "scenario": "Foreground run_subagent dispatch with a profile; subagent does a read; parent waits and reports.",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "profile": "subagent_explore", "task": "<prompt: read sentinel and report first line>", "title": "Read sentinel.txt first line" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/src/sentinel.txt", "limit": 1 },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read",
+        "tool_input": { "file_path": "<project-root>/src/sentinel.txt", "limit": 1 },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "<file-view path=\"<project-root>/src/sentinel.txt\" start_line=\"1\" end_line=\"1\" total_lines=\"4\">\n  1|# Sentinel\n</file-view>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "profile": "subagent_explore", "task": "<prompt: read sentinel and report first line>", "title": "Read sentinel.txt first line" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent agent_id=<agent-id> completed successfully:\n\n<subagent report text>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "run_subagent tool_input (foreground): {profile, task, title?}. NO is_background field when foreground (field ABSENT, not false).",
+      "The child subagent's tool calls (read/glob/grep) fire as separate PreToolUse/PostToolUse events sharing the PARENT session_id and prompt_id. There is NO child session_id, NO profile, NO agent_type, NO agent_id field on the child tool events.",
+      "The child's agent_id appears ONLY embedded inside the parent's run_subagent PostToolUse output STRING ('Subagent agent_id=<agent-id> completed successfully:'). It is NOT a structured field.",
+      "Child tool_use_id uses a different format ('functions.<tool>:<n>') than parent ('chatcmpl-tool-<hex>'), but this is not a documented identity contract."
+    ]
+  },
+  "C05_backgroundLaunch": {
+    "scenario": "Background run_subagent dispatch (is_background:true); parent launches and stops without waiting.",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "Read sentinel file", "task": "<prompt: read sentinel and report first line>", "profile": "subagent_general", "is_background": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "Read sentinel file", "task": "<prompt: read sentinel and report first line>", "profile": "subagent_general", "is_background": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Background subagent started with agent_id=<agent-id>. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "run_subagent tool_input (background): {profile, task, title?, is_background:true}. is_background is a BOOLEAN.",
+      "The launch acknowledgment is a PostToolUse with success:true; the agent_id is embedded in the output string ('Background subagent started with agent_id=<agent-id>.').",
+      "There is NO dedicated launch-acknowledgment event separate from PostToolUse; the launch IS the PostToolUse.",
+      "The background subagent's own tool calls may fire as hook events (sharing parent session_id) BEFORE the parent stops, but there is no completion hook when the subagent finishes asynchronously."
+    ]
+  },
+  "C05_backgroundCompletion": {
+    "scenario": "Background subagent terminal completion observed via read_subagent (block:true).",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "is_background": true, "profile": "subagent_general", "task": "<prompt: read sentinel and report first line>", "title": "Read sentinel.txt first line" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "is_background": true, "profile": "subagent_general", "task": "<prompt: read sentinel and report first line>", "title": "Read sentinel.txt first line" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Background subagent started with agent_id=<agent-id>. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified with a <subagent_completion_notification> when it completes.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>", "block": true, "timeout": 600 },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>", "block": true, "timeout": 600 },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent <agent-id> completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "read_subagent tool_input: {agent_id, block?, timeout?}. agent_id is the ONLY reliable correlation key to the launch.",
+      "Terminal completion is observable ONLY via read_subagent PostToolUse (success:true + 'completed' in output). There is NO dedicated completion hook event.",
+      "The async <subagent_completion_notification> is delivered to the AGENT'S CONTEXT, not as a hook event. If the parent relies on the notification instead of calling read_subagent, there is NO hook-observable completion.",
+      "This is the S09 STOP-gate evidence: a ledger incremented on background launch cannot be reliably cleared by a hook on completion."
+    ]
+  },
+  "C06_repeatedRead": {
+    "scenario": "read_subagent called twice on the same completed background subagent (first blocking, second non-blocking).",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>", "block": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>", "block": true },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent <agent-id> completed. Its full report is delivered in the <subagent_completion_notification> message; you do not need to read it again.",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "read_subagent",
+        "tool_input": { "agent_id": "<agent-id>" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent <agent-id> completed successfully:\n\n<subagent report text>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "A REPEATED read_subagent on an already-completed subagent returns success:true AGAIN and re-serves the report. It is indistinguishable from the first terminal completion by hook payload alone.",
+      "Implication for S09: treating every read_subagent PostToolUse with success:true as a completion would DOUBLE-DECREMENT the ledger. A deduplication key (agent_id + observed-completion) is required, but in-memory sets do not survive separate adapter subprocess invocations.",
+      "The first (block:true) and second (no block) reads have DIFFERENT tool_use_ids but the SAME agent_id."
+    ]
+  },
+  "C07_cancel": {
+    "scenario": "ask_user_question in headless -p mode: the question is canceled before a human can answer (no interactive TTY).",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "ask_user_question",
+        "tool_input": {
+          "questions": [
+            {
+              "question": "Pick a color",
+              "header": "Color",
+              "options": [
+                { "label": "red", "description": "The color red" },
+                { "label": "blue", "description": "The color blue" }
+              ]
+            }
+          ]
+        },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "ask_user_question tool_input.questions[]: {question, header, options[]}. Each option: {label, description?}.",
+      "NO 'id' field on questions in this capture; NO 'multi_select' field when unset (field ABSENT, not false). The neutral spec field 'multiSelect' maps to native 'multi_select' (per S08).",
+      "A canceled question fires PreToolUse but NOT PostToolUse — the tool never completes. The agent is told 'It looks like you canceled the question.'",
+      "BLOCKED (C07 answered / C08 answered variants): headless -p cannot produce a human-answered PostToolUse. The answered output envelope was NOT captured. See capture-provenance.json BLOCKED rows."
+    ]
+  },
+  "C09_reviewerIdentity": {
+    "scenario": "A subagent dispatched with profile 'subagent_explore' performs a grep with glob_pattern. Probes whether any hook field identifies the dispatched reviewer profile on the child's tool calls.",
+    "events": [
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "<title>", "task": "<prompt: grep for searchable in md files>", "profile": "subagent_explore" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "grep",
+        "tool_input": { "pattern": "searchable", "glob_pattern": "*.md" },
+        "tool_use_id": "<tool-use-id-child>",
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "grep",
+        "tool_input": { "pattern": "searchable", "glob_pattern": "*.md" },
+        "tool_use_id": "<tool-use-id-child>",
+        "tool_response": {
+          "success": true,
+          "output": "No matches found for pattern 'searchable' in <project-root>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      },
+      {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "run_subagent",
+        "tool_input": { "title": "<title>", "task": "<prompt: grep for searchable in md files>", "profile": "subagent_explore" },
+        "tool_use_id": "<tool-use-id-parent>",
+        "tool_response": {
+          "success": true,
+          "output": "Subagent agent_id=<agent-id> completed successfully:\n\n<subagent report text>",
+          "error": null
+        },
+        "session_id": "<session>",
+        "prompt_id": "<prompt-id>"
+      }
+    ],
+    "fieldObservations": [
+      "ESTABLISHED (negative result): the subagent's grep PreToolUse/PostToolUse carry NO profile, NO agent_type, NO agent_id field. They share the parent's session_id and prompt_id.",
+      "The ONLY hook-provided association to the dispatching profile is the parent's run_subagent tool_input.profile and the agent_id embedded in the run_subagent PostToolUse output string.",
+      "Once the subagent is running, its individual read/grep/glob/edit/write tool calls CANNOT be attributed to the reviewer profile from hook payload alone.",
+      "This is the S07 STOP-gate evidence: reliable reviewer identity is NOT available on child tool calls. The adapter's devin.agent_type/devin.agent_id assumptions are NOT backed by real payloads."
+    ]
+  }
+}

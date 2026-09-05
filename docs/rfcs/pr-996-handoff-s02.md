@@ -157,3 +157,45 @@ bun test tests/unit/t333-devin-profile.test.ts tests/unit/t334-devin-version.tes
   until C01–C10 are captured.
 - **PR comment posted:** https://github.com/awslabs/aidlc-workflows/pull/996#issuecomment-5554324537
   — tejasavora was notified of the landed layer and the S02 stop-gate.
+
+## S02 result (2026-09-05)
+
+```text
+Step: S02
+Status: PASS (C01–C06, C09, C10 captured); BLOCKED (C07/C08 answered envelopes)
+Authored files changed: none (fixture-only step)
+Generated files regenerated: no (no shared-source edits)
+Red test: N/A (capture step, no behavioral test added)
+Green tests: bun scripts/package.ts --check → all 8 harnesses OK;
+  bun test t331 t332 → 50 pass / 0 fail;
+  bun test t333 t334 → 27 pass / 0 fail
+Native/live evidence: C01, C02 (read/glob/grep/glob_pattern/notebook_read/exec),
+  C03 (edit/write + rejectedWrite), C04 (foreground subagent), C05 (background
+  launch + completion via read_subagent), C06 (repeated read), C09 (reviewer
+  identity — negative result), C10 (SessionEnd). C07/C08 cancel-only.
+Remaining blockers:
+  - S07 BLOCKED: no hook-provided identity on child tool calls (agent_type/
+    agent_id absent from real payloads). Owner decision required.
+  - S08 BLOCKED: C07/C08 answered ask_user_question PostToolUse not capturable
+    in headless -p (no interactive TTY). Needs interactive UI capture session.
+  - S09 BLOCKED: no dedicated completion hook; read_subagent success:true is
+    the only terminal signal and is indistinguishable from a repeated read.
+    Owner-approved persistent lifecycle design required.
+  - S06 PARTIAL: dispatch field mapping captured (profile/task/is_background/
+    title); the is_background→run_in_background ledger part is gated on S09.
+Next permitted step: S06 (non-ledger parts only) — profile→subagent_type,
+  task→prompt, deliver-stage-rules `task` reverse projection. S07/S08/S09
+  remain STOP-gated pending owner decisions above.
+```
+
+Artifacts added (all under `tests/fixtures/devin-hook-payloads/`):
+- `captured-3000.6.14.json` — sanitized live captures keyed by case ID
+- `capture-provenance.json` — per-case metadata, BLOCKED rows, key contract findings
+- `s02-stop-gate-contract.md` — the STOP-gate contract table S06–S09 must satisfy
+
+Key contract findings that diverge from the synthetic `payloads.json` (which is
+retained, not relabeled): `session_id` is a slug (not UUID); the per-turn id is
+`prompt_id` (not `turn_id`); `cwd`/`transcript_path` are absent; `tool_response`
+is always `{success,output,error}` (not a bare string); `agent_type`/`agent_id`
+are absent as top-level fields; Devin grep uses `glob_pattern` (not `glob`);
+notebook tools use `notebook_path` (not `file_path`).
