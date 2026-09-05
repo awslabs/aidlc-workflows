@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 924,
+    "total": 929,
     "enumeratedByClass": {
-      "function": 623,
+      "function": 628,
       "audit": 93,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 377,
+      "function": 379,
       "audit": 51,
       "scope": 11,
       "stage": 11,
@@ -1315,6 +1315,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:assertChangeControlLedgerWritable",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:assertNoSymlinkInChainOrThrow",
       "minMechanism": "none",
       "coveredBy": [
@@ -2096,6 +2103,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:completionCarriesVerifiedReview",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4150,6 +4169,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:pairedReviewRecordForCompletion",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseArgs",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4292,6 +4323,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseReviewRecordBytes",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -5919,6 +5957,13 @@
     {
       "unitClass": "function",
       "unitId": "function:scopesDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:selectedGuardRecoveryRemedyAction",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

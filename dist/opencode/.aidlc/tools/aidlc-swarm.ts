@@ -396,6 +396,7 @@ function reviewerReceiptError(
   const creationModern = creationBaseCommit !== null || creationBaseListing !== null;
 
   const reviewAttempt = worktreeReviewAttemptProjection(
+    wt,
     readAuditShardEvents(wt),
     {
       boltSlug,

@@ -4258,6 +4258,11 @@ interface ActiveDirectiveResume {
   issuing_session: string; issuing_intent_uuid: string | null; action?: ResumeAction;
 }
 
+export interface ActiveDirectiveGuardRemedy {
+  op: GuardRemedyOp;
+  action: string;
+}
+
 // The human's answer to a guard-recovery ask, kept on the ask marker so the
 // selection survives the engine re-issuing the same ask and so the later Request
 // Changes feedback can be bound to the human's own words. Both hashes are over
@@ -4265,6 +4270,7 @@ interface ActiveDirectiveResume {
 export interface ActiveDirectiveGuardRecoveryResponse {
   status: "awaiting-feedback" | "ready";
   selection_sha256: string;
+  selected_op?: GuardRemedyOp | null;
   feedback_sha256?: string;
 }
 
@@ -4282,6 +4288,7 @@ export interface ActiveDirectiveMarker {
   cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
   ask_type?: string;
+  remedies?: ActiveDirectiveGuardRemedy[];
   guard_recovery_response?: ActiveDirectiveGuardRecoveryResponse;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
@@ -4893,6 +4900,25 @@ function activeDirectiveContext(target: ActiveDirectiveTarget, stateContent: str
   };
 }
 
+function isGuardRemedyOp(value: unknown): value is GuardRemedyOp {
+  return typeof value === "string" &&
+    GUARD_REMEDY_OPS.includes(value as GuardRemedyOp);
+}
+
+function validActiveDirectiveGuardRemedies(
+  value: unknown,
+): value is ActiveDirectiveGuardRemedy[] {
+  return Array.isArray(value) && value.every((remedy) => {
+    if (!isPlainObject(remedy)) return false;
+    const keys = Object.keys(remedy).sort();
+    return keys.length === 2 &&
+      keys[0] === "action" &&
+      keys[1] === "op" &&
+      isGuardRemedyOp(remedy.op) &&
+      typeof remedy.action === "string";
+  });
+}
+
 function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | null {
   if (!isPlainObject(parsed)) return null;
   const stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
@@ -4930,6 +4956,12 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
             validateUnitName(unit.trim()) !== null,
         )
       )) ||
+    ("remedies" in parsed &&
+      (
+        parsed.kind !== "ask" ||
+        parsed.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+        !validActiveDirectiveGuardRemedies(parsed.remedies)
+      )) ||
     ("cursor_harness" in parsed &&
       (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
     ("ask_type" in parsed &&
@@ -4939,6 +4971,19 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
         parsed.kind !== "ask" ||
         parsed.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
         !guardRecovery ||
+        Object.keys(guardRecovery).some((key) =>
+          !["status", "selection_sha256", "selected_op", "feedback_sha256"].includes(key)
+        ) ||
+        ("selected_op" in guardRecovery &&
+          guardRecovery.selected_op !== null &&
+          !isGuardRemedyOp(guardRecovery.selected_op)) ||
+        (isGuardRemedyOp(guardRecovery.selected_op) &&
+          (
+            !validActiveDirectiveGuardRemedies(parsed.remedies) ||
+            !parsed.remedies.some(
+              (remedy) => remedy.op === guardRecovery.selected_op,
+            )
+          )) ||
         !["awaiting-feedback", "ready"].includes(String(guardRecovery.status)) ||
         !/^[0-9a-f]{64}$/.test(String(guardRecovery.selection_sha256 ?? "")) ||
         (
@@ -5206,6 +5251,7 @@ export function writeActiveDirectiveMarker(
     rules_bundle?: string;
     directive_sha256?: string;
     ask_type?: string;
+    remedies?: ActiveDirectiveGuardRemedy[];
   },
   invocation?: {
     attemptId?: string;
@@ -5221,6 +5267,9 @@ export function writeActiveDirectiveMarker(
   }
   if (marker.unit !== undefined && marker.unit.trim().length === 0) {
     throw new Error("Invalid active-directive unit: empty");
+  }
+  if (marker.remedies !== undefined && !validActiveDirectiveGuardRemedies(marker.remedies)) {
+    throw new Error("Invalid active-directive guard remedies");
   }
   if (!/^[0-9a-f]{64}$/.test(marker.state_sha256)) {
     throw new Error("Invalid active-directive state digest");
@@ -5508,6 +5557,11 @@ export function writeActiveDirectiveMarker(
       ...(marker.kind === "ask" && marker.ask_type
         ? { ask_type: marker.ask_type }
         : { ask_type: undefined }),
+      ...(marker.kind === "ask" &&
+          marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+          marker.remedies !== undefined
+        ? { remedies: marker.remedies }
+        : { remedies: undefined }),
       // A fresh publication is a fresh question. The guard-recovery ask that is
       // re-issued for an unchanged state never reaches this write (the caller
       // retains the issued marker), so clearing here cannot discard a selection.
@@ -5629,6 +5683,34 @@ export function normalizeGuardRecoveryText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function resolveGuardRecoverySelection(
+  remedies: readonly ActiveDirectiveGuardRemedy[] | undefined,
+  responseText: string,
+): GuardRemedyOp | null {
+  if (remedies === undefined || remedies.length === 0) return null;
+  const normalized = normalizeGuardRecoveryText(responseText);
+  const matchedOps = new Set<GuardRemedyOp>();
+  remedies.forEach((remedy) => {
+    if (
+      normalized === normalizeGuardRecoveryText(remedy.action) ||
+      normalized === remedy.op ||
+      (remedy.op === "request-changes" &&
+        isRequestChangesChoice(responseText))
+    ) {
+      matchedOps.add(remedy.op);
+    }
+  });
+  const numeric = /^([1-9]\d*)[.)]?$/.exec(normalized);
+  if (numeric !== null) {
+    const index = Number(numeric[1]) - 1;
+    const remedy = remedies[index];
+    if (remedy !== undefined) matchedOps.add(remedy.op);
+  }
+  return matchedOps.size === 1
+    ? (matchedOps.values().next().value ?? null)
+    : null;
+}
+
 function guardRecoveryTextSha256(text: string): string | null {
   const normalized = normalizeGuardRecoveryText(text);
   return normalized.length === 0 ? null : contentSha256(normalized);
@@ -5689,6 +5771,10 @@ export function consumeSharedDirectiveAsk(
         guard_recovery_response: {
           status: "awaiting-feedback",
           selection_sha256: responseSha256,
+          selected_op: resolveGuardRecoverySelection(
+            marker.remedies,
+            humanResponseText,
+          ),
         },
       },
       result: true,
@@ -5698,6 +5784,7 @@ export function consumeSharedDirectiveAsk(
 
 export type GuardRecoveryFeedbackStatus =
   | "not-applicable"
+  | "other-remedy"
   | "awaiting-feedback"
   | "mismatch"
   | "match";
@@ -5734,6 +5821,9 @@ export function guardRecoveryFeedbackStatus(
   ) {
     return "not-applicable";
   }
+  if (marker.guard_recovery_response.selected_op !== "request-changes") {
+    return "other-remedy";
+  }
   if (marker.guard_recovery_response.status !== "ready") {
     return "awaiting-feedback";
   }
@@ -5741,6 +5831,33 @@ export function guardRecoveryFeedbackStatus(
       guardRecoveryTextSha256(feedback)
     ? "match"
     : "mismatch";
+}
+
+export function selectedGuardRecoveryRemedyAction(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+  unit: string | undefined,
+): string | null {
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  const sameGate = isTeamUnitOwnership(stateContent)
+    ? (marker?.unit ?? undefined) === unit
+    : unit === undefined;
+  if (
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.stage !== stage ||
+    !sameGate
+  ) {
+    return null;
+  }
+  const selectedOp = marker.guard_recovery_response?.selected_op;
+  if (selectedOp === undefined || selectedOp === null) return null;
+  const matches = (marker.remedies ?? []).filter(
+    (remedy) => remedy.op === selectedOp,
+  );
+  return matches.length === 1 ? matches[0].action : null;
 }
 
 // The issued guard-recovery ask marker for exactly this ask and state, if one
@@ -7683,15 +7800,17 @@ export function isSummaryAuthorizationId(value: string | null): value is string 
   return value !== null && SUMMARY_AUTHORIZATION_ID_RE.test(value);
 }
 
-/** The record-relative slot of one scope's active authorization: `.aidlc-summary-authorization/<stage>/<unit or stage-level>.json`. */
+/** The record-relative slot of one scope's active authorization. */
 export function summaryAuthorizationRelativePath(stage: string, unit: string | null): string {
   const unitProblem = unit === null ? null : validateUnitName(unit);
   if (unitProblem !== null) throw new Error(unitProblem);
   if (!/^[a-z0-9][a-z0-9-]*$/.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
-  return `${SUMMARY_AUTHORIZATION_DIR}/${stage}/${unit ?? "stage-level"}.json`;
+  return unit === null
+    ? `${SUMMARY_AUTHORIZATION_DIR}/${stage}/stage.json`
+    : `${SUMMARY_AUTHORIZATION_DIR}/${stage}/units/${unit}.json`;
 }
 
-/** The active authorization for one scope: `<record>/.aidlc-summary-authorization/<stage>/<unit or stage-level>.json`. */
+/** The active authorization for one scope under `<record>/.aidlc-summary-authorization/`. */
 export function summaryAuthorizationRecordPath(
   recordRoot: string,
   stage: string,
@@ -7799,9 +7918,9 @@ export function readSummaryAuthorization(
 export function activeSummaryAuthorizationForRecordPath(
   projectDir: string,
   relativePath: string,
-  stageSlugs: ReadonlySet<string>,
+  stages: ReadonlyArray<Pick<StageEntry, "slug" | "phase" | "for_each">>,
 ): SummaryAuthorization | null {
-  const scope = summaryScopeForRecordPath(relativePath, stageSlugs);
+  const scope = summaryScopeForRecordPath(relativePath, stages);
   if (scope === null) return null;
   if (scope.unit === null) return readSummaryAuthorization(projectDir, scope.stage, null);
   const perUnit = readSummaryAuthorization(projectDir, scope.stage, scope.unit);
@@ -7813,22 +7932,29 @@ export function activeSummaryAuthorizationForRecordPath(
 }
 
 /**
- * The summary scope a record-relative artifact path belongs to: per-Unit
- * Construction outputs live at `construction/<unit>/<stage>/...`, everything
- * else at `<phase>/<stage>/...`. A Construction path whose second segment is a
- * stage slug is stage-level; otherwise that segment is the Unit. Null for
- * paths that are not stage outputs.
+ * The summary scope a record-relative artifact path belongs to. Construction
+ * per-Unit outputs are recognized by the third segment naming a Construction
+ * stage whose graph entry declares `for_each: unit-of-work`; this is path-shape
+ * classification, so producesArtifactUnit cannot be reused because it requires
+ * a declared artifact filename and summary stamping also covers other outputs.
  */
 export function summaryScopeForRecordPath(
   relativePath: string,
-  stageSlugs: ReadonlySet<string>,
+  stages: ReadonlyArray<Pick<StageEntry, "slug" | "phase" | "for_each">>,
 ): { stage: string; unit: string | null } | null {
   const parts = relativePath.split("/");
   if (parts.length < 3) return null;
-  if (parts[0] === "construction" && parts.length >= 4 && !stageSlugs.has(parts[1])) {
-    return { stage: parts[2], unit: parts[1] };
+  if (parts[0] === "construction" && parts.length >= 4) {
+    const stage = stages.find(
+      (entry) =>
+        entry.slug === parts[2] &&
+        entry.phase === "construction" &&
+        entry.for_each === "unit-of-work",
+    );
+    if (stage !== undefined) return { stage: stage.slug, unit: parts[1] };
   }
-  return { stage: parts[1], unit: null };
+  const stage = stages.find((entry) => entry.slug === parts[1]);
+  return stage === undefined ? null : { stage: stage.slug, unit: null };
 }
 
 // Verify that every question-bearing iteration has a fresh human-backed
@@ -8918,6 +9044,7 @@ export interface PendingReviewProgress {
   state: "outstanding" | "retry-required" | "repair-required";
   iteration: number;
   recovery: boolean;
+  verificationFailed?: boolean;
 }
 
 export interface StaleReviewProgress {
@@ -10354,14 +10481,18 @@ export function parseReviewSection(
 export function reviewAttemptId(floor: string): string {
   return createHash("sha256").update(floor.length === 0 ? "unstarted" : floor).digest("hex").slice(0, 16);
 }
-
 export function reviewRecordRelativePath(
   stage: string,
   unit: string | undefined,
   attemptId: string,
   iteration: number,
 ): string {
-  return `${REVIEW_RECORDS_DIR}/${stage}/${unit ?? "stage-level"}/${attemptId}/${iteration}.json`;
+  if (!REVIEW_RECORD_SEGMENT_RE.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
+  const unitProblem = unit === undefined ? null : validateUnitName(unit);
+  if (unitProblem !== null) throw new Error(unitProblem);
+  return unit === undefined
+    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${iteration}.json`
+    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${iteration}.json`;
 }
 
 /**
@@ -10375,20 +10506,31 @@ export function reviewDraftRelativePath(
   attemptId: string,
   iteration: number,
 ): string {
-  return `${REVIEW_RECORDS_DIR}/${stage}/${unit ?? "stage-level"}/${attemptId}/${iteration}.review.md`;
+  if (!REVIEW_RECORD_SEGMENT_RE.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
+  const unitProblem = unit === undefined ? null : validateUnitName(unit);
+  if (unitProblem !== null) throw new Error(unitProblem);
+  return unit === undefined
+    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${iteration}.review.md`
+    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${iteration}.review.md`;
 }
 
-/** Whether `path` has the exact shape a review record path takes: no escapes, no surprises. */
+/** Whether `path` has exactly one supported stage or Unit record shape. */
 export function isReviewRecordRelativePath(path: string): boolean {
   const parts = path.split("/");
-  return (
-    parts.length === 5 &&
-    parts[0] === REVIEW_RECORDS_DIR &&
-    REVIEW_RECORD_SEGMENT_RE.test(parts[1]) &&
-    REVIEW_RECORD_SEGMENT_RE.test(parts[2]) &&
-    /^[0-9a-f]{16}$/.test(parts[3]) &&
-    /^[1-9][0-9]*\.json$/.test(parts[4])
-  );
+  if (
+    parts[0] !== REVIEW_RECORDS_DIR ||
+    !REVIEW_RECORD_SEGMENT_RE.test(parts[1] ?? "")
+  ) return false;
+  if (parts[2] === "stage") {
+    return parts.length === 5 &&
+      /^[0-9a-f]{16}$/.test(parts[3]) &&
+      /^[1-9][0-9]*\.json$/.test(parts[4]);
+  }
+  return parts.length === 6 &&
+    parts[2] === "units" &&
+    REVIEW_RECORD_SEGMENT_RE.test(parts[3]) &&
+    /^[0-9a-f]{16}$/.test(parts[4]) &&
+    /^[1-9][0-9]*\.json$/.test(parts[5]);
 }
 
 /** Canonical bytes: fixed key order, two-space indent, one trailing newline. */
@@ -10423,6 +10565,16 @@ export function serializeReviewRecord(record: ReviewRecord): string {
 
 export function reviewRecordDigest(bytes: string | Buffer): string {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+export function parseReviewRecordBytes(bytes: string | Buffer): ReviewRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString());
+  } catch {
+    return null;
+  }
+  return isReviewRecord(parsed) ? parsed : null;
 }
 
 function isReviewRecord(value: unknown): value is ReviewRecord {
@@ -10484,13 +10636,59 @@ export function readReviewRecord(
     return null;
   }
   if (reviewRecordDigest(bytes) !== ref.digest) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(bytes.toString("utf-8"));
-  } catch {
-    return null;
+  return parseReviewRecordBytes(bytes);
+}
+
+/**
+ * Load the record named by a completion and bind its content back to that row.
+ * Null means the named record is unavailable or is not the review described by
+ * the completion. Callers distinguish a legacy recordless completion by first
+ * checking reviewRecordRefFromBlock().
+ */
+export function pairedReviewRecordForCompletion(
+  projectDir: string,
+  completionBlock: string,
+  reader: (
+    projectDir: string,
+    ref: { path: string; digest: string },
+  ) => ReviewRecord | null = readReviewRecord,
+): ReviewRecord | null {
+  const ref = reviewRecordRefFromBlock(completionBlock);
+  if (ref === null) return null;
+  const record = reader(projectDir, ref);
+  return record !== null && reviewRecordMatchesCompletion(record, completionBlock)
+    ? record
+    : null;
+}
+
+/**
+ * Whether a completion descends from `request` and carries the review form its
+ * request era requires. A request without an id predates record authority and
+ * may remain recordless. Requests with an id must name a valid review record;
+ * any record a legacy completion names must verify too.
+ */
+export function completionCarriesVerifiedReview(
+  projectDir: string,
+  request: ReviewRequestBinding,
+  completionBlock: string,
+  reader: (
+    projectDir: string,
+    ref: { path: string; digest: string },
+  ) => ReviewRecord | null = readReviewRecord,
+): boolean {
+  if (!reviewCompletionMatchesRequest(request, completionBlock)) return false;
+  const ref = reviewRecordRefFromBlock(completionBlock);
+  if (ref === null) {
+    const namesRecord =
+      auditBlockField(completionBlock, "Review Record") !== null ||
+      auditBlockField(completionBlock, "Review Record Digest") !== null;
+    return request.requestId === null && !namesRecord;
   }
-  return isReviewRecord(parsed) ? parsed : null;
+  return pairedReviewRecordForCompletion(
+    projectDir,
+    completionBlock,
+    reader,
+  ) !== null;
 }
 
 /**
@@ -10541,10 +10739,12 @@ export function latestReviewRecordRefs(
     }
     const request = pending.get(key);
     if (request === undefined) continue;
-    if (!reviewCompletionMatchesRequest(request, event.block)) continue;
+    if (!completionCarriesVerifiedReview(projectDir, request, event.block)) {
+      continue;
+    }
+    const ref = reviewRecordRefFromBlock(event.block);
     // The request is answered exactly once: a later row cannot reuse it.
     pending.delete(key);
-    const ref = reviewRecordRefFromBlock(event.block);
     refs.set(unit, ref === null ? null : { ...ref, completion: event.block });
   }
   return refs;
@@ -10656,17 +10856,25 @@ export function mergeReviewRecordsFromDelta(
       auditBlockField(block, "Review Record Digest") !== null;
     const key = scopeKey(block);
     const request = key === null ? undefined : pending.get(key);
-    const paired =
+    const completionMatches =
       request !== undefined && reviewCompletionMatchesRequest(request, block);
-    // A paired completion answers its request exactly once, whether or not it
-    // names a record, so a later row cannot ride the same request.
-    if (paired) pending.delete(key as string);
-    if (!namesRecord) continue;
-    if (ref === null || !paired) {
-      throw new Error(
-        "worktree audit delta carries a REVIEW_COMPLETED row that names a review record " +
-          "but does not descend from a REVIEW_REQUESTED row in the same delta; refusing to merge",
-      );
+    if (!completionMatches) {
+      if (namesRecord) {
+        throw new Error(
+          "worktree audit delta carries a REVIEW_COMPLETED row that names a review record " +
+            "but does not descend from a REVIEW_REQUESTED row in the same delta; refusing to merge",
+        );
+      }
+      continue;
+    }
+    if (ref === null) {
+      if (!completionCarriesVerifiedReview("", request, block, () => null)) {
+        throw new Error(
+          "worktree audit delta carries a record-era REVIEW_COMPLETED row without a verifiable review record; refusing to merge",
+        );
+      }
+      pending.delete(key as string);
+      continue;
     }
     const rel = ref.path;
     const sourceRoot = realpathSync(worktreeRecordRoot);
@@ -10684,17 +10892,17 @@ export function mergeReviewRecordsFromDelta(
         `review record ${ref.path} in the worktree does not match the digest its REVIEW_COMPLETED row pinned`,
       );
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(bytes.toString("utf-8"));
-    } catch {
-      parsed = null;
-    }
-    if (!isReviewRecord(parsed) || !reviewRecordMatchesCompletion(parsed, block)) {
+    if (!completionCarriesVerifiedReview(
+      "",
+      request,
+      block,
+      () => parseReviewRecordBytes(bytes),
+    )) {
       throw new Error(
         `review record ${ref.path} is not the review its REVIEW_COMPLETED row describes; refusing to merge`,
       );
     }
+    pending.delete(key as string);
     mkdirSync(mainRecordRoot, { recursive: true });
     const mainRoot = realpathSync(mainRecordRoot);
     const destination = assertNoSymlinkInChainOrThrow(mainRoot, rel);
@@ -11437,6 +11645,7 @@ const REVIEW_ACCOUNTING_EVENTS = new Set([
 // per-unit floor because the forked audit inherits the main workflow's prior
 // rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
 export function reviewAttemptAccounting(
+  projectDir: string,
   attemptView: AttemptView,
   stateContent: string,
   stage: { slug: string; for_each?: string; workspace_requires?: boolean },
@@ -11705,7 +11914,11 @@ export function reviewAttemptAccounting(
       const pending = pendingRequests.get(iteration);
       if (
         pending?.binding &&
-        reviewCompletionMatchesRequest(pending.binding, entry.block)
+        completionCarriesVerifiedReview(
+          projectDir,
+          pending.binding,
+          entry.block,
+        )
       ) {
         pendingIterations.delete(iteration);
         pendingRequests.delete(iteration);
@@ -11876,6 +12089,7 @@ export interface WorktreeReviewAttemptProjection {
 }
 
 export function worktreeReviewAttemptProjection(
+  projectDir: string,
   rows: ReadonlyArray<AuditShardEvent>,
   options: {
     boltSlug: string;
@@ -11884,6 +12098,10 @@ export function worktreeReviewAttemptProjection(
     reviewer: string;
     reviewClass: Exclude<ReviewClass, "none">;
     maxIterations: number;
+    recordReader?: (
+      projectDir: string,
+      ref: { path: string; digest: string },
+    ) => ReviewRecord | null;
   },
 ): WorktreeReviewAttemptProjection {
   const relevant = new Set([
@@ -11974,7 +12192,12 @@ export function worktreeReviewAttemptProjection(
       (request.timestamp === event.timestamp &&
         request.shard !== event.shard) ||
       request.binding === null ||
-      !reviewCompletionMatchesRequest(request.binding, event.block)
+      !completionCarriesVerifiedReview(
+        projectDir,
+        request.binding,
+        event.block,
+        options.recordReader,
+      )
     ) {
       continue;
     }
@@ -12034,6 +12257,7 @@ export function candidateReviewCoverageProjection(
     reviewer: string | undefined;
     artifactPrefix: string;
     expectedFingerprint: string;
+    completionRecord?: (block: string) => ReviewRecord | null;
   },
 ): boolean {
   const events = sortAttemptEvents(rows);
@@ -12063,7 +12287,7 @@ export function candidateReviewCoverageProjection(
     return false;
   }
 
-  const pending = new Set<string>();
+  const pending = new Map<string, ReviewRequestBinding>();
   let ready = false;
   for (const event of events) {
     if (
@@ -12102,10 +12326,21 @@ export function candidateReviewCoverageProjection(
     const iteration = auditBlockField(event.block, "Iteration");
     if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
     if (event.event === "REVIEW_REQUESTED") {
-      pending.add(iteration);
+      const binding = reviewRequestBindingFromBlock(event.block);
+      if (binding !== null) pending.set(iteration, binding);
       continue;
     }
-    if (!pending.delete(iteration)) continue;
+    const request = pending.get(iteration);
+    if (
+      request === undefined ||
+      !completionCarriesVerifiedReview(
+        "",
+        request,
+        event.block,
+        (_projectDir, _ref) => options.completionRecord?.(event.block) ?? null,
+      )
+    ) continue;
+    pending.delete(iteration);
     ready =
       auditBlockField(event.block, "Verdict") === "READY" &&
       auditBlockField(event.block, "Artifact Fingerprint") ===
@@ -12270,6 +12505,7 @@ export function freshReviewReceipts(
       binding: ReviewRequestBinding | null;
       timestamp: string;
       shard: string;
+      verificationFailed?: boolean;
     }
   >();
   const modernUnitReceipts = new Map<
@@ -12533,9 +12769,14 @@ export function freshReviewReceipts(
     if (
       !request ||
       (request.timestamp === e.timestamp && request.shard !== e.shard) ||
-      !request.binding ||
-      !reviewCompletionMatchesRequest(request.binding, e.block)
+      !request.binding
     ) {
+      continue;
+    }
+    if (!completionCarriesVerifiedReview(projectDir, request.binding, e.block)) {
+      if (reviewCompletionMatchesRequest(request.binding, e.block)) {
+        request.verificationFailed = true;
+      }
       continue;
     }
     pendingRequests.delete(requestKey);
@@ -12672,6 +12913,7 @@ export function freshReviewReceipts(
       state: "retry-required",
       iteration: request.iteration,
       recovery: request.recovery,
+      ...(request.verificationFailed ? { verificationFailed: true } : {}),
     };
     if (request.unit) {
       if (!request.recovery) unitVerdicts.delete(request.unit);
@@ -19649,10 +19891,8 @@ function lifecycleResetRemedies(
         action:
           `Ask "What should change?" for stage "${reportStage}"${unitContext} ` +
           "and end the turn. After the human answers, submit Request Changes with " +
-          "their exact text unchanged as the report reason" +
-          (input.humanAuthority.freshTurn
-            ? "."
-            : "; that unlocks revision and a fresh review."),
+          "their exact text unchanged as the report reason; that unlocks revision " +
+          "and a fresh review.",
         requiresHuman: true,
         executableNow: true,
       },
@@ -19682,7 +19922,7 @@ function lifecycleResetRemedies(
       action:
         input.attempt.sourceCoverage === "unbindable"
           ? "This stage is already approved; repair .aidlc-source-paths.json or the " +
-            "workspace source boundary so it can be fingerprinted, or jump back with " +
+            "workspace source boundary so the application source can be checked, or jump back with " +
             `/aidlc --stage ${input.stage} to redo it.`
           : "This stage is already approved; restore the reviewed source state, or " +
             `jump back with /aidlc --stage ${input.stage} to redo it.`,
@@ -19786,7 +20026,7 @@ export function evaluateGuardRefusal(
         op: "repair-source-boundary",
         action:
           "Repair .aidlc-source-paths.json or the workspace source boundary so " +
-          "the application source can be fingerprinted, then request a fresh review.",
+          "the application source can be checked, then request a fresh review.",
         requiresHuman: false,
         executableNow: state !== "completed",
       });
@@ -19820,7 +20060,7 @@ export function evaluateGuardRefusal(
       remedies.push({
         op: "start-recovery-review",
         action:
-          "Start the one stale-receipt recovery review against the current " +
+          "Start the one stale-review recovery review against the current " +
           "artifact and source state.",
         requiresHuman: false,
         executableNow: input.attempt.summaryCoverage === "current" && openForWork,
@@ -19940,6 +20180,7 @@ export function guardAttemptState(
     options.accounting ??
     (reviewable
       ? reviewAttemptAccounting(
+          projectDir,
           attemptView,
           stateContent,
           stage,
@@ -26036,11 +26277,15 @@ export interface ChangeControlMemoryDeclaration {
 export interface ChangeControlResolution {
   value: ChangeControl;
   /** Where the value came from, worded for humans: `scope classic`,
-   *  `project.md`, or `you`. */
+   *  `project.md`, `you`, or `not set`. */
   source: string;
   scopeDefault: ChangeControl;
-  /** The intent's own state line, when it carries one. */
+  /** The intent's own valid state line, when it carries one. */
   intent: { value: ChangeControl; source: string } | null;
+  /** The state-derived value before memory is applied: the line, else strict. */
+  stateValue: ChangeControl;
+  /** The field text exactly as stored, including invalid text; null when absent. */
+  rawStateValue: string | null;
   /** The first memory layer declaring strict, when one does. */
   memoryStrict: ChangeControlMemoryDeclaration | null;
 }
@@ -26104,8 +26349,9 @@ function changeControlSourceFromLabel(label: string): string {
   return from ? from[1].trim() : label || "you";
 }
 
-/** The label rendered after the value: `from scope classic`, `from project.md`, `set by you`. */
+/** The label rendered after the value: `from scope classic`, `from project.md`, `set by you`, `not set`. */
 export function changeControlSourceLabel(source: string): string {
+  if (source === "not set") return source;
   return source === "you" ? "set by you" : `from ${source}`;
 }
 
@@ -26167,14 +26413,16 @@ export function scopeChangeControlDefault(scope: string | null | undefined): Cha
 }
 
 /**
- * Resolved value = the intent's own line if present, else the scope default.
- * Then, if ANY memory layer declares strict, the resolved value is strict and
- * that file is the source. Memory `relaxed` or an absent section has no effect.
- * Pure: reads state and memory, writes nothing.
+ * Resolved value = the intent's own valid line if present, else strict. Then,
+ * if ANY memory layer declares strict, the resolved value is strict and that
+ * file is the source. Memory `relaxed` or an absent section has no effect. A
+ * malformed state line is a validation error unless the repair command opts
+ * into reading it tolerantly. Pure: reads state and memory, writes nothing.
  */
 export function resolveChangeControl(
   projectDir: string,
   stateContent?: string | null,
+  options: { tolerateInvalidState?: boolean } = {},
 ): ChangeControlResolution {
   let state = stateContent ?? null;
   if (state === null) {
@@ -26186,7 +26434,17 @@ export function resolveChangeControl(
   }
   const scope = getField(state, "Scope");
   const scopeDefault = scopeChangeControlDefault(scope);
-  const intent = parseChangeControlStateLine(getField(state, CHANGE_CONTROL_FIELD));
+  const rawStateValue = getField(state, CHANGE_CONTROL_FIELD);
+  const intent = parseChangeControlStateLine(rawStateValue);
+  if (rawStateValue !== null && intent === null && !options.tolerateInvalidState) {
+    throw new Error(
+      `Invalid Change Control "${rawStateValue}" in ${stateFilePath(projectDir)} ` +
+        `(field: ${CHANGE_CONTROL_FIELD}). Expected one of: ${CHANGE_CONTROL_VALUES.join(", ")}. ` +
+        "Run /aidlc --change-control strict or /aidlc --change-control relaxed to repair it.",
+    );
+  }
+  const stateValue = intent?.value ?? "strict";
+  const stateSource = intent?.source ?? "not set";
   const memoryStrict =
     memoryChangeControlDeclarations(projectDir).find(
       (declaration) => declaration.value === "strict",
@@ -26197,17 +26455,18 @@ export function resolveChangeControl(
       source: `${memoryStrict.layer}.md`,
       scopeDefault,
       intent,
+      stateValue,
+      rawStateValue,
       memoryStrict,
     };
   }
-  if (intent !== null) {
-    return { value: intent.value, source: intent.source, scopeDefault, intent, memoryStrict: null };
-  }
   return {
-    value: scopeDefault,
-    source: `scope ${(scope ?? "").trim().toLowerCase() || "unknown"}`,
+    value: stateValue,
+    source: stateSource,
     scopeDefault,
-    intent: null,
+    intent,
+    stateValue,
+    rawStateValue,
     memoryStrict: null,
   };
 }
@@ -26230,6 +26489,12 @@ export function changeControlMemoryStrictRefusal(
 // breaks the lib <-> audit cycle exactly as emitError does. Callers hold the
 // intent's audit lock (taken with the reentrant withAuditLock) around the
 // read-then-append, so the dedupe check and the row are one step.
+/** Fail the Change Control append seam before any related state is persisted. */
+export function assertChangeControlLedgerWritable(): void {
+  const fault = process.env.AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT?.trim();
+  if (fault) throw new Error(`injected ledger fault: ${fault}`);
+}
+
 function changeControlLedgerAppend(
   projectDir: string,
   event: "CHANGE_ACCEPTED" | "CHANGE_CONTROL_SET",
@@ -26244,8 +26509,7 @@ function changeControlLedgerAppend(
   // AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT makes every Change Control append
   // fail, so the fail-closed contract is pinned without depending on
   // filesystem permissions or on who runs the suite.
-  const fault = process.env.AIDLC_TEST_CHANGE_CONTROL_LEDGER_FAULT?.trim();
-  if (fault) throw new Error(`injected ledger fault: ${fault}`);
+  assertChangeControlLedgerWritable();
   const audit = require("./aidlc-audit.ts") as {
     appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
   };
@@ -26371,8 +26635,8 @@ export function recordAcceptedChanges(
  * Resolve the setting at a governed checkpoint and, when a memory edit moved
  * the effective value for this running intent since it was last recorded,
  * write one CHANGE_CONTROL_SET row naming that source. The previous effective
- * value is the newest CHANGE_CONTROL_SET row, else the intent's own line, else
- * the scope default.
+ * value is the newest CHANGE_CONTROL_SET row, else the state-derived value
+ * (the intent's line when valid, otherwise strict).
  */
 export function governedChangeControl(
   projectDir: string,
@@ -26391,7 +26655,7 @@ export function governedChangeControl(
       previous = parseChangeControl(auditBlockField(row.block, "New Value")) ?? previous;
     }
     if (previous === null) {
-      previous = resolution.intent?.value ?? resolution.scopeDefault;
+      previous = resolution.stateValue;
     }
     if (previous !== resolution.value) {
       appendChangeControlSetRow(projectDir, {
@@ -26409,7 +26673,7 @@ export function governedChangeControl(
  */
 export function recordChangeControlSet(
   projectDir: string,
-  oldValue: ChangeControl | null,
+  oldValue: string | null,
   newValue: ChangeControl,
   source: string,
 ): void {

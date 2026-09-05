@@ -143,7 +143,6 @@ import {
   gridCostSummary,
   hasAnyUnitClaimRefs,
   installedHarnessName,
-  isRequestChangesChoice,
   intentRepos,
   inspectContinuationCursor,
   isPluginEnabled,
@@ -304,6 +303,7 @@ interface PreparedEmission {
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
     rules_bundle?: string; directive_sha256?: string;
     ask_type?: string;
+    remedies?: Array<Pick<GuardRemedy, "op" | "action">>;
   };
 }
 
@@ -464,6 +464,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
       stage: transported.stage,
       ask_type: GUARD_RECOVERY_ASK_TYPE,
       ...(typeof transported.unit === "string" ? { unit: transported.unit } : {}),
+      remedies: transported.remedies.map(({ op, action }) => ({ op, action })),
       state_sha256: stateDigest(askState),
     };
   }
@@ -609,7 +610,15 @@ function guardRecoveryAskMarkerIsCurrent(
     marker.stage,
     marker.unit,
   );
-  return current !== null && current.state_sha256 === marker.state_sha256;
+  return current !== null &&
+    current.state_sha256 === marker.state_sha256 &&
+    current.remedies !== undefined &&
+    marker.remedies !== undefined &&
+    current.remedies.length === marker.remedies.length &&
+    current.remedies.every((remedy, index) =>
+      remedy.op === marker.remedies?.[index]?.op &&
+      remedy.action === marker.remedies[index]?.action
+    );
 }
 
 
@@ -8433,6 +8442,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
       const status = unitGateStatus(pd, slug, unit, gateScope);
+      const protectedTeamHumanGate =
+        stageCheckbox.state !== "completed" &&
+        readAutonomyMode(stateContent) !== "autonomous" &&
+        process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
       const sequence: string[][] = [];
       if (flags.result === "awaiting-approval") {
         if (status === "awaiting-approval") {
@@ -8443,25 +8456,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(["gate-start", slug, "--unit", unit]);
       } else if (flags.result === "rejected") {
-        if (
-          process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1" &&
-          !isRequestChangesChoice(flags.userInput)
-        ) {
-          emit(errorDirective(
-            `report --result rejected for unit "${unit}" of "${slug}" received reply ` +
-              `${formatReceivedReply(flags.userInput)} which did not match the offered ` +
-              'choice "Request Changes".',
-          ));
-          return;
-        }
-        const feedback = (flags.reason ?? flags.userInput)?.trim();
-        if (!feedback) {
-          emit(errorDirective(
-            `report --result rejected for unit "${unit}" of "${slug}" requires nonblank --user-input or --reason feedback.`,
-          ));
-          return;
-        }
-        const rejectArgs = ["reject", slug, "--feedback", feedback, "--unit", unit];
+        const feedback = flags.reason !== undefined
+          ? flags.reason.trim()
+          : protectedTeamHumanGate
+          ? undefined
+          : flags.userInput?.trim();
+        const rejectArgs = ["reject", slug, "--unit", unit];
+        if (feedback) rejectArgs.push("--feedback", feedback);
         if (flags.userInput) {
           rejectArgs.push("--user-input", flags.userInput);
         }
@@ -8584,24 +8585,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
   }
 
-  if (protectedHumanGate && flags.result === "rejected") {
-    if (!isRequestChangesChoice(flags.userInput)) {
-      emit(errorDirective(
-        `report --result rejected for "${slug}" received reply ` +
-          `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
-          "the held gate. Re-present the original held gate with every " +
-          "offered choice and wait for the human to choose one.",
-      ));
-      return;
-    }
-    if (!flags.reason?.trim()) {
-      emit(errorDirective(
-        `report --result rejected for "${slug}" requires nonblank revision feedback in ` +
-          "--reason, separate from --user-input \"Request Changes\".",
-      ));
-      return;
-    }
-  }
 
   if (
     protectedHumanGate &&
@@ -8685,14 +8668,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ));
         return;
       }
-      const feedback = flags.reason?.trim() ?? flags.userInput?.trim();
-      if (!feedback) {
-        emit(errorDirective(
-          `report --result rejected for "${slug}" requires nonblank revision feedback.`,
-        ));
-        return;
-      }
-      subArgs = ["reject", slug, "--feedback", feedback];
+      const feedback = flags.reason !== undefined
+        ? flags.reason.trim()
+        : protectedHumanGate
+        ? undefined
+        : flags.userInput?.trim();
+      subArgs = ["reject", slug];
+      if (feedback) subArgs.push("--feedback", feedback);
       if (flags.userInput) subArgs.push("--user-input", flags.userInput);
       for (const finding of flags.rejectFindings ?? []) {
         subArgs.push("--reject-finding", finding);

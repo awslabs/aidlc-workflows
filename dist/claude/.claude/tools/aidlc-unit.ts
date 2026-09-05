@@ -49,7 +49,12 @@ import {
   readStateFile,
   readUnitGateRhythm,
   readUnitScopeStamp,
+  parseReviewRecordBytes,
+  pairedReviewRecordForCompletion,
   relativeRecordDir,
+  REVIEW_RECORDS_DIR,
+  reviewRecordDigest,
+  type ReviewRecord,
   requireLiveClaimForTeamUnit,
   resolveProjectDir,
   resolveReviewClass,
@@ -1065,6 +1070,14 @@ function candidateReviewerReady(
     stage,
     unitKind,
   );
+  const completionRecord = (block: string): ReviewRecord | null =>
+    pairedReviewRecordForCompletion(projectDir, block, (_projectDir, ref) => {
+      const path = `${recordPrefix}/${ref.path}`;
+      if (!gitPathExistsAt(projectDir, oid, path)) return null;
+      const bytes = gitTextAt(projectDir, oid, path);
+      if (reviewRecordDigest(bytes) !== ref.digest) return null;
+      return parseReviewRecordBytes(bytes);
+    });
   const artifactPrefix = `construction/${unit}/${stage.slug}/`;
   return candidateReviewCoverageProjection(events, {
     unit,
@@ -1073,6 +1086,7 @@ function candidateReviewerReady(
     reviewer: stage.reviewer,
     artifactPrefix,
     expectedFingerprint,
+    completionRecord,
   });
 }
 
@@ -1307,6 +1321,7 @@ function candidateBoundary(
     .filter(Boolean);
   const unitRoot = `${recordPrefix}/construction/${unit}/`;
   const constructionRoot = `${recordPrefix}/construction/`;
+  const reviewUnitMarker = `/${REVIEW_RECORDS_DIR}/`;
   const unitRootKey = unitRoot.toLowerCase();
   const constructionRootKey = constructionRoot.toLowerCase();
   const recordPrefixKey = `${recordPrefix}/`.toLowerCase();
@@ -1314,6 +1329,15 @@ function candidateBoundary(
   for (const path of changedPaths) {
     if (isEngineMergeMetadata(projectDir, path, recordPrefix)) continue;
     const pathKey = path.toLowerCase();
+    const reviewMarkerIndex = path.indexOf(reviewUnitMarker);
+    if (reviewMarkerIndex !== -1) {
+      const reviewParts = path.slice(reviewMarkerIndex + reviewUnitMarker.length).split("/");
+      if (
+        reviewParts.length === 5 &&
+        reviewParts[1] === "units" &&
+        reviewParts[2] === unit
+      ) continue;
+    }
     if (pathKey.startsWith(unitRootKey)) continue;
     if (changedAudit.includes(path)) continue;
     if (

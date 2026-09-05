@@ -25,6 +25,7 @@ import {
   isoTimestamp,
   mergeReviewRecordsFromDelta,
   parseFieldArgs,
+  holdsAuditLock,
   redactProjectDirPrefix,
   relativeRecordDir,
   readRegularFileNoFollowOrThrow,
@@ -835,10 +836,7 @@ export function appendAuditEntries(
   }
   for (const entry of entries) validateAuditEntry(entry);
 
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
-    throw new Error("Failed to acquire audit lock after retries");
-  }
-  try {
+  const append = (): { appended: true; events: string[]; timestamps: string[] } => {
     const timestamps = entries.map(() => isoTimestamp());
     const payload = entries
       .map((entry, index) =>
@@ -854,6 +852,17 @@ export function appendAuditEntries(
       events: entries.map((entry) => entry.eventType),
       timestamps,
     };
+  };
+
+  // A caller may hold the same lock across this batch and its related state
+  // write. In that transaction the validated one-write batch is already
+  // serialized; attempting the non-reentrant acquisition would deadlock.
+  if (holdsAuditLock(projectDir, intent, space)) return append();
+  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+    throw new Error("Failed to acquire audit lock after retries");
+  }
+  try {
+    return append();
   } finally {
     releaseAuditLock(projectDir, intent, space);
   }

@@ -14,11 +14,10 @@ import {
   extractMarkdownSection,
   findStageBySlug,
   latestReviewRecordRefs,
+  pairedReviewRecordForCompletion,
   parseReviewSection,
   readAuditShardEvents,
-  readReviewRecord,
   readUnitSourceSnapshot,
-  reviewRecordMatchesCompletion,
   recordDir,
   resolveAuditProjectPath,
   resolveProjectDir,
@@ -117,20 +116,23 @@ export function readReviewArtifactContexts(
     const scopeUnit = unit ?? entryUnit(entry.logicalPath, stage.slug);
     const ref = records.get(scopeUnit ?? "");
     if (!ref) continue;
-    const record = readReviewRecord(projectDir, ref);
-    // The record must be the review its paired row describes, for this scope:
-    // a genuine record from another stage, Unit, or iteration that a row
-    // happened to name is not this review.
+    const record = pairedReviewRecordForCompletion(
+      projectDir,
+      ref.completion,
+    );
     if (
       record === null ||
       record.stage !== stage.slug ||
-      (record.unit ?? "") !== (scopeUnit ?? "") ||
-      !reviewRecordMatchesCompletion(record, ref.completion)
+      (record.unit ?? "") !== (scopeUnit ?? "")
     ) {
       continue;
     }
-    const artifact = workspaceArtifactPath(projectDir, entry);
     recordScopes.add(scopeUnit ?? "");
+    // A retried incomplete review has terminal verdict authority but no review
+    // content to render. Leave the scope context-free so the gate can supply
+    // its explicit fallback finding instead of claiming there were no findings.
+    if (record.body.length === 0) continue;
+    const artifact = workspaceArtifactPath(projectDir, entry);
     contexts.push({
       artifact,
       ...(scopeUnit ? { unit: scopeUnit } : {}),

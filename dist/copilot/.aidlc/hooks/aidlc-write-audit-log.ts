@@ -11,6 +11,7 @@ import { isAbsolute, join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   auditFilePath,
+  type StageEntry,
   type ClaudeCodeHookInput,
   codekbDir,
   docsRoot,
@@ -181,10 +182,10 @@ const fields: Record<string, string> = {
   File: auditFileValue,
   Context: context,
 };
-let stageSlugs: ReadonlySet<string> = new Set();
+let stages: StageEntry[] = [];
 if (underRecord && fileNorm.length > recordRoot.length) {
   try {
-    stageSlugs = new Set(loadStageGraphAll().map((stage) => stage.slug));
+    stages = loadStageGraphAll();
   } catch (e) {
     hookDebug(projectDir, "write-audit-log", "stage graph unreadable", { error: errorMessage(e) });
   }
@@ -196,7 +197,7 @@ try {
       const authorization = activeSummaryAuthorizationForRecordPath(
         projectDir,
         fileNorm.slice(recordRoot.length + 1),
-        stageSlugs,
+        stages,
       );
       if (authorization !== null) fields[SUMMARY_AUTHORIZATION_FIELD] = authorization.id;
     }

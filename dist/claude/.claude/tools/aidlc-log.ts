@@ -24,7 +24,6 @@ import {
   summaryAttemptIdentity,
   summaryAuthorizationId,
   removeRecordFileNoFollow,
-  SUMMARY_AUTHORIZATION_DIR,
   summaryAuthorizationRelativePath,
   summaryAuthorizationTargetOrThrow,
   writeRecordFileNoFollow,
@@ -833,7 +832,7 @@ function handleAnswer(args: string[]): void {
         } catch (restoreError) {
           rollback =
             ` The authorization record could not be restored either (${errorMessage(restoreError)}); ` +
-            `remove ${SUMMARY_AUTHORIZATION_DIR}/${authorization.stage}/${authorization.unit ?? "stage-level"}.json ` +
+            `remove ${summaryAuthorizationRelativePath(authorization.stage, authorization.unit)} ` +
             "under the intent record before retrying.";
         }
         error(`Audit emission failed: ${errorMessage(e)}.${rollback}`);
@@ -1334,6 +1333,7 @@ function handleReview(args: string[]): void {
       node.for_each === "unit-of-work" ? resolveBoltDag(pd, intent, space) : null;
     const attemptWindow = reviewAttemptWindow(pd, state, node);
     const attempt = reviewAttemptAccounting(
+      pd,
       attemptWindow,
       state,
       node,
@@ -2086,9 +2086,9 @@ function handleReview(args: string[]): void {
       const slot = reviewSlot(attempt.floor, iteration);
       const legacy = requestBinding.legacyAppendix;
 
-      // Deprecated migration path: a reviewer that still appends `## Review` to
-      // the artifact (see reviewAppendedAfterRequest). Read, never written to,
-      // and it leaves no record.
+      // Deprecated input path: a reviewer that still appends `## Review` to
+      // the artifact (see reviewAppendedAfterRequest). Read, never written to;
+      // the validated section is copied into the completion's review record.
       const appendedAfterRequest = reviewAppendedAfterRequest(requestBinding, snapshot);
 
       // The reviewer writes a review, never the artifact: the bytes the reviewer
@@ -2256,61 +2256,67 @@ function handleReview(args: string[]): void {
         }
       }
 
-      // The record is the review. Written here and only here, in the same
-      // transaction as the row that names it, so the row's digest is the only
-      // authority over its bytes. A legacy embedded review leaves no record; its
-      // section stays readable where the reviewer left it.
-      if (body !== null) {
-        const artifactKey = snapshot.reviewArtifact;
-        let findings: ReturnType<typeof parseReviewSection>["findings"];
+      // Every record-era completion writes the review record named by its row.
+      // A review-file completion stores its validated body, the tolerated
+      // appended form stores the validated appendix, and the bounded incomplete
+      // NOT-READY fallback stores an empty body with no findings.
+      const artifactKey = snapshot.reviewArtifact;
+      const recordBody = incompleteFallback ? Buffer.alloc(0) : reviewBytes;
+      let findings: ReturnType<typeof parseReviewSection>["findings"] = [];
+      if (!incompleteFallback) {
         try {
-          findings = parseReviewSection(body.toString("utf-8"), artifactKey, flags.unit).findings;
+          findings = parseReviewSection(
+            recordBody.toString("utf-8"),
+            artifactKey,
+            flags.unit,
+          ).findings;
         } catch (parseError) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": ${errorMessage(parseError)}.`,
           );
         }
-        const record: ReviewRecord = {
-          version: 1,
-          stage: flags.stage,
-          unit: flags.unit ?? null,
-          workflow: fields.Workflow ?? null,
-          attempt: reviewAttemptId(attempt.floor),
-          iteration,
-          reviewer: flags.reviewer,
-          verdict: verdict as ReviewVerdict,
-          request_id: requestBinding.requestId,
-          request_challenge: legacy?.challenge ?? null,
-          artifact_fingerprint: snapshot.fingerprint,
-          source_fingerprint: sourceFingerprint,
-          unit_source_fingerprint: unitFingerprint,
-          findings: findings.map((finding) => ({
-            id: finding.id,
-            severity: finding.severity,
-            location: finding.location,
-            finding: finding.finding,
-            required_action: finding.requiredAction,
-            status: finding.status,
-          })),
-          body: body.toString("utf-8"),
-          recorded_at: isoTimestamp(),
-        };
-        const serialized = serializeReviewRecord(record);
-        // The record is written through no symlinked component: a redirected
-        // `.aidlc-reviews` refuses the completion instead of writing the
-        // review outside the intent record.
-        try {
-          writeRecordFileNoFollow(recordDir(pd) as string, slot.recordRelative, serialized);
-        } catch (e) {
-          refuseReview(
-            `Cannot record the verdict for "${flags.stage}": the review record ` +
-              `${slot.recordRelative} cannot be written (${errorMessage(e)}).`,
-          );
-        }
-        fields["Review Record"] = slot.recordRelative;
-        fields["Review Record Digest"] = reviewRecordDigest(serialized);
-        recordPath = slot.recordRelative;
       }
+      const record: ReviewRecord = {
+        version: 1,
+        stage: flags.stage,
+        unit: flags.unit ?? null,
+        workflow: fields.Workflow ?? null,
+        attempt: reviewAttemptId(attempt.floor),
+        iteration,
+        reviewer: flags.reviewer,
+        verdict: verdict as ReviewVerdict,
+        request_id: requestBinding.requestId,
+        request_challenge: legacy?.challenge ?? null,
+        artifact_fingerprint: snapshot.fingerprint,
+        source_fingerprint: sourceFingerprint,
+        unit_source_fingerprint: unitFingerprint,
+        findings: findings.map((finding) => ({
+          id: finding.id,
+          severity: finding.severity,
+          location: finding.location,
+          finding: finding.finding,
+          required_action: finding.requiredAction,
+          status: finding.status,
+        })),
+        body: recordBody.toString("utf-8"),
+        recorded_at: isoTimestamp(),
+      };
+      const serialized = serializeReviewRecord(record);
+      try {
+        writeRecordFileNoFollow(
+          recordDir(pd) as string,
+          slot.recordRelative,
+          serialized,
+        );
+      } catch (e) {
+        refuseReview(
+          `Cannot record the verdict for "${flags.stage}": the review record ` +
+            `${slot.recordRelative} cannot be written (${errorMessage(e)}).`,
+        );
+      }
+      fields["Review Record"] = slot.recordRelative;
+      fields["Review Record Digest"] = reviewRecordDigest(serialized);
+      recordPath = slot.recordRelative;
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
       // The draft was the reviewer's input; the record now holds it. The
       // chain was verified when the draft was read, so this cannot redirect.

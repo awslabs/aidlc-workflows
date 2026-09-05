@@ -66,6 +66,7 @@ import {
   freshReviewReceipts,
   getField,
   guardRecoveryFeedbackStatus,
+  selectedGuardRecoveryRemedyAction,
   type GuardAttemptState,
   type StageEntry,
   type GuardRefusal,
@@ -3619,6 +3620,38 @@ function verifyReviewerPrecondition(
   const pendingRecoveryUnits = Array.from(receipts.unitPending)
     .filter(([, pending]) => pending.recovery)
     .map(([unit]) => unit);
+  const verificationFailedUnits = Array.from(receipts.unitPending)
+    .filter(([, pending]) => pending.verificationFailed === true)
+    .map(([unit]) => unit);
+  if (
+    receipts.stagePending?.verificationFailed === true ||
+    verificationFailedUnits.length > 0
+  ) {
+    const unit = verificationFailedUnits.length === 1
+      ? verificationFailedUnits[0]
+      : undefined;
+    const scope = verificationFailedUnits.length > 0
+      ? ` for Unit${verificationFailedUnits.length === 1 ? "" : "s"} ${verificationFailedUnits.join(", ")}`
+      : "";
+    const iteration = unit === undefined
+      ? receipts.stagePending?.iteration ?? 1
+      : receipts.unitPending.get(unit)?.iteration ?? 1;
+    const unitFlag = unit === undefined ? "" : ` --unit ${unit}`;
+    const message =
+      `${reviewerPreconditionPrefix(stage.slug, action)} because the recorded review${scope} ` +
+      "could not be verified and the review must be run again. Retry the pending " +
+      `request with \`aidlc-log.ts review --stage ${stage.slug}${unitFlag} --reviewer ` +
+      `${reviewer} --iteration ${iteration} --retry-pending\`, then record the verdict ` +
+      "with the same command plus `--verdict <READY|NOT-READY>`.";
+    refuseStateGuard(pd, content, stage, {
+      code: "REVIEW_EVIDENCE_MISSING",
+      blockedAction: action,
+      invariant: "A recorded review remains available and matches its completion.",
+      userMessage: message,
+      receipts,
+      unit,
+    });
+  }
   if (receipts.stagePending?.recovery || pendingRecoveryUnits.length > 0) {
     const scope =
       pendingRecoveryUnits.length > 0
@@ -4127,6 +4160,22 @@ function reviewerPreconditionError(
   action: ReviewerPreconditionAction = "complete",
 ): never {
   const slug = stage.slug;
+  const pending = receipts.stagePending;
+  if (pending?.state === "retry-required") {
+    const message =
+      `${reviewerPreconditionPrefix(slug, action)} because the review request is still ` +
+      "waiting for a verifiable recorded result. Run " +
+      `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
+      `${pending.iteration} --retry-pending\`, then record the verdict with the same ` +
+      "command plus `--verdict <READY|NOT-READY>`.";
+    refuseStateGuard(pd, content, stage, {
+      code: "REVIEW_EVIDENCE_MISSING",
+      blockedAction: action,
+      invariant: "A pending review request receives a verifiable recorded result.",
+      userMessage: message,
+      receipts,
+    });
+  }
   if (action === "present-approval-gate") {
     const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
@@ -5663,10 +5712,38 @@ function handleReject(args: string[]): void {
   if (!teamGate) {
     validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
   }
+  const feedbackStatus = guardRecoveryFeedbackStatus(
+    pd,
+    content,
+    slug,
+    teamGate?.unit,
+    feedback ?? "",
+  );
+  if (feedbackStatus === "other-remedy") {
+    const selectedAction = selectedGuardRecoveryRemedyAction(
+      pd,
+      content,
+      slug,
+      teamGate?.unit,
+    );
+    error(
+      `Refusing to reject "${slug}": the recovery-question choice was not Request Changes.` +
+        (selectedAction ? ` The selected action was "${selectedAction}".` : "") +
+        " Carry out that action, or re-present the recovery question and wait for the human to choose Request Changes.",
+    );
+  }
+  if (feedbackStatus === "awaiting-feedback") {
+    error(
+      `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
+        `feedback. Ask "What should change?", end the turn, and wait for the ` +
+        "human's separate response before retrying.",
+    );
+  }
   const autonomousDecision =
     !teamGate && isAutonomousConstructionDecision(content, stage.phase);
   if (
     !autonomousDecision &&
+    feedbackStatus === "not-applicable" &&
     !humanPresenceGuardDisabled() &&
     !isRequestChangesChoice(decision)
   ) {
@@ -5691,20 +5768,6 @@ function handleReject(args: string[]): void {
       `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
         "cancellation boilerplate. Re-present the original held gate with every offered choice " +
         "and wait for the human to choose one.",
-    );
-  }
-  const feedbackStatus = guardRecoveryFeedbackStatus(
-    pd,
-    content,
-    slug,
-    teamGate?.unit,
-    feedback,
-  );
-  if (feedbackStatus === "awaiting-feedback") {
-    error(
-      `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
-        `feedback. Ask "What should change?", end the turn, and wait for the ` +
-        "human's separate response before retrying.",
     );
   }
   if (feedbackStatus === "mismatch") {
