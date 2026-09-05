@@ -198,6 +198,7 @@ describe("t332 review UI daemon HTTP API", () => {
     expect(await state.json()).toMatchObject({
       space: "default",
       intent: "review-fixture-12345678",
+      current_stage: "requirements-analysis",
       stage_status: "[?]",
       revision_count: 0,
       current: {
@@ -226,6 +227,8 @@ describe("t332 review UI daemon HTTP API", () => {
     expect(JSON.parse(statusBody)).toMatchObject({ running: true, server: { url: info.url } });
     expect(statusBody).not.toContain(info.token);
 
+    // Default mode: humans get the stable origin (the daemon trusts a typed
+    // navigation); a curl-style fetch of it carries no Fetch Metadata and is refused.
     const openCommand = Bun.spawnSync({
       cmd: [process.execPath, DAEMON, "open", "--project-dir", project],
       cwd: ROOT,
@@ -234,9 +237,7 @@ describe("t332 review UI daemon HTTP API", () => {
       stderr: "pipe",
     });
     expect(openCommand.exitCode, openCommand.stderr.toString()).toBe(0);
-    const cliOpenUrl = openCommand.stdout.toString().trim();
-    expect(cliOpenUrl).toMatch(/^http:\/\/localhost:\d+\/open\/[0-9a-f]{32}$/);
-    expect((await fetch(cliOpenUrl, { redirect: "manual" })).status).toBe(302);
+    expect(openCommand.stdout.toString().trim()).toBe(info.url);
 
     const humanStatusCommand = Bun.spawnSync({
       cmd: [process.execPath, DAEMON, "status", "--project-dir", project],
@@ -246,13 +247,74 @@ describe("t332 review UI daemon HTTP API", () => {
       stderr: "pipe",
     });
     expect(humanStatusCommand.exitCode, humanStatusCommand.stderr.toString()).toBe(0);
-    expect(humanStatusCommand.stdout.toString()).toMatch(
+    expect(humanStatusCommand.stdout.toString()).toBe(`Review UI: running (pid ${info.pid})\n${info.url}\n`);
+
+    // Strict mode: the CLI mints a single-use link instead, and the daemon
+    // honours it regardless of its own mode.
+    const strictOpen = Bun.spawnSync({
+      cmd: [process.execPath, DAEMON, "open", "--project-dir", project],
+      cwd: ROOT,
+      env: { ...cliEnv, AIDLC_REVIEW_STRICT: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(strictOpen.exitCode, strictOpen.stderr.toString()).toBe(0);
+    const cliOpenUrl = strictOpen.stdout.toString().trim();
+    expect(cliOpenUrl).toMatch(/^http:\/\/localhost:\d+\/open\/[0-9a-f]{32}$/);
+    expect((await fetch(cliOpenUrl, { redirect: "manual" })).status).toBe(302);
+    const strictStatus = Bun.spawnSync({
+      cmd: [process.execPath, DAEMON, "status", "--project-dir", project],
+      cwd: ROOT,
+      env: { ...cliEnv, AIDLC_REVIEW_STRICT: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(strictStatus.stdout.toString()).toMatch(
       /Review UI: running \(pid \d+\)\nhttp:\/\/localhost:\d+\/open\/[0-9a-f]{32}/,
     );
     expect(info.url).not.toContain(info.token);
     const unauthenticatedShell = await fetch(`${base}/`);
     expect(unauthenticatedShell.status).toBe(403);
-    expect(await unauthenticatedShell.text()).toContain("aidlc-review-ui.ts open");
+    const noSessionBody = await unauthenticatedShell.text();
+    // Bare-origin visit: guidance names the no-session case and the harness
+    // command only — an unauthenticated page discloses neither a placeholder
+    // nor a filesystem path.
+    expect(noSessionBody).toContain("This browser has no review session yet");
+    expect(noSessionBody).not.toContain("expired or was already used");
+    expect(noSessionBody).toContain("/aidlc --status");
+    expect(noSessionBody).not.toContain("harnessDir");
+    expect(noSessionBody).not.toContain(ROOT);
+
+    // Browser-navigation trust: the browser's own Fetch Metadata for a typed
+    // URL / bookmark / reload opens the shell and sets the cookie — no link.
+    const navigation = {
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "document",
+      Host: new URL(base).host,
+    };
+    const typed = await fetch(`${base}/`, { headers: navigation });
+    expect(typed.status).toBe(200);
+    expect(typed.headers.get("set-cookie")).toContain(`aidlc_review=${info.token}`);
+    expect(typed.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(typed.headers.get("content-security-policy")).toContain("script-src 'self'");
+    const spelledLoopback = await fetch(`${base}/`, { headers: { ...navigation, Host: `127.0.0.1:${info.port}` } });
+    expect(spelledLoopback.status).toBe(200);
+    // A page on another site cannot forge these: its navigations are
+    // `cross-site`; a DNS-rebinding attempt carries a foreign Host; a fetch()
+    // is not a document navigation; no metadata at all fails closed.
+    for (const headers of [
+      { ...navigation, "Sec-Fetch-Site": "cross-site" },
+      { ...navigation, Host: `evil.example:${info.port}` },
+      { ...navigation, "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty" },
+      { Host: new URL(base).host },
+    ]) {
+      const refused = await fetch(`${base}/`, { headers });
+      expect(refused.status, JSON.stringify(headers)).toBe(403);
+      expect(refused.headers.get("set-cookie")).toBeNull();
+    }
+    // Only the app shell is reachable this way; the API still needs the session.
+    expect((await fetch(`${base}/api/state`, { headers: navigation })).status).toBe(401);
 
     const openUrl = mintReviewUiOpenUrl(project, {
       ...process.env,
@@ -268,7 +330,11 @@ describe("t332 review UI daemon HTTP API", () => {
     expect(setCookie).toContain("HttpOnly");
     expect(setCookie).toContain("SameSite=Strict");
     expect(setCookie).toContain("Max-Age=43200");
-    expect((await fetch(openUrl!, { redirect: "manual" })).status).toBe(403);
+    const consumed = await fetch(openUrl!, { redirect: "manual" });
+    expect(consumed.status).toBe(403);
+    const consumedBody = await consumed.text();
+    expect(consumedBody).toContain("This review link expired or was already used");
+    expect(consumedBody).not.toContain("no review session yet");
 
     const concurrentUrl = mintReviewUiOpenUrl(project, {
       ...process.env,
@@ -285,8 +351,14 @@ describe("t332 review UI daemon HTTP API", () => {
     const cookie = setCookie.split(";", 1)[0];
     const cookieState = await fetch(`${base}/api/state`, { headers: { Cookie: cookie } });
     expect(cookieState.status).toBe(200);
+    // Sliding session: a cookie-authenticated response re-issues the cookie with
+    // a fresh Max-Age; header-authenticated tooling never receives one.
+    expect(cookieState.headers.get("set-cookie")).toContain(`aidlc_review=${info.token}`);
+    expect(cookieState.headers.get("set-cookie")).toContain("Max-Age=43200");
+    expect((await authorized("/api/state")).headers.get("set-cookie")).toBeNull();
     const authenticatedShell = await fetch(`${base}/`, { headers: { Cookie: cookie } });
     expect(authenticatedShell.status).toBe(200);
+    expect(authenticatedShell.headers.get("set-cookie")).toContain("HttpOnly");
 
     const artifactPath = "aidlc/spaces/default/intents/review-fixture-12345678/inception/requirements-analysis/requirements.md";
     const artifact = await authorized(`/api/artifact?path=${encodeURIComponent(artifactPath)}`);
@@ -416,6 +488,63 @@ describe("t332 review UI daemon HTTP API", () => {
     );
     expect(escaped.status).toBe(403);
     expect(statSync(infoPath).mode & 0o777).toBe(0o600);
+  });
+
+  test("AIDLC_REVIEW_STRICT=1 refuses browser-navigation trust; links still work", async () => {
+    const strictProject = mkdtempSync(join(tmpdir(), "aidlc-t332-strict-"));
+    const strictHome = mkdtempSync(join(tmpdir(), "aidlc-t332-strict-home-"));
+    const env = {
+      ...process.env,
+      AIDLC_REVIEW_HOME: strictHome,
+      AIDLC_REVIEW_PORT: "0",
+      AIDLC_REVIEW_HOST: "127.0.0.1",
+      AIDLC_REVIEW_OPEN: "0",
+      AIDLC_REVIEW_STRICT: "1",
+    };
+    const strictInfoPath = serverInfoPath(strictProject, env);
+    const strictDaemon = Bun.spawn([process.execPath, DAEMON, "serve", "--project-dir", strictProject], {
+      cwd: ROOT,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      let strictInfo: ServerInfo | null = null;
+      const deadline = Date.now() + 10_000;
+      while (!strictInfo && Date.now() < deadline) {
+        if (existsSync(strictInfoPath)) {
+          try {
+            const parsed = JSON.parse(readFileSync(strictInfoPath, "utf-8")) as ServerInfo;
+            if (parsed.port > 0 && parsed.token) strictInfo = parsed;
+          } catch {
+            // Atomic creation can race the first read.
+          }
+        }
+        if (!strictInfo) await Bun.sleep(20);
+      }
+      expect(strictInfo).not.toBeNull();
+      const strictBase = strictInfo!.url.replace(/\/$/, "");
+      const typed = await fetch(`${strictBase}/`, {
+        headers: {
+          "Sec-Fetch-Site": "none",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Dest": "document",
+          Host: new URL(strictBase).host,
+        },
+      });
+      expect(typed.status).toBe(403);
+      expect(typed.headers.get("set-cookie")).toBeNull();
+      const link = mintReviewUiOpenUrl(strictProject, env);
+      expect(link).toMatch(/\/open\/[0-9a-f]{32}$/);
+      expect((await fetch(link!, { redirect: "manual" })).status).toBe(302);
+    } finally {
+      strictDaemon.kill("SIGTERM");
+      const deadline = Date.now() + 5_000;
+      while (strictDaemon.exitCode === null && Date.now() < deadline) await Bun.sleep(20);
+      if (strictDaemon.exitCode === null) strictDaemon.kill("SIGKILL");
+      rmSync(strictProject, { recursive: true, force: true });
+      rmSync(strictHome, { recursive: true, force: true });
+    }
   });
 
   test("SIGTERM removes owner-only discovery state", async () => {

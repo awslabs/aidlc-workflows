@@ -9,9 +9,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
+  type FSWatcher,
   readFileSync,
   readdirSync,
   realpathSync,
+  watch,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -1154,6 +1156,72 @@ function handleAnswersApply(args: string[]): void {
       questions_file: questions.relative,
     }));
   });
+}
+
+// --- Subcommand: answers-wait ---
+// Usage: aidlc-log answers-wait --stage <slug> --questions-file <path>
+//   [--unit <unit>] [--timeout <seconds>] [--project-dir <path>]
+//
+// The universal "continue when the human clicks Save" seam: blocks until an
+// unconsumed browser submission exists for the questions file, then prints
+// {ready: true, files, questions_file} and exits 0 so the conductor runs
+// answers-apply and carries on — no `done` from the human. On timeout it
+// prints {ready: false} and exits 3 (not an error) so the conductor simply
+// waits again; the default sits under the 10-minute ceiling most harness shell
+// tools impose per call. Read-only: mints nothing, consumes nothing, and
+// tolerates a stage whose .review-ui/ directory does not exist yet.
+const ANSWERS_WAIT_DEFAULT_SECONDS = 540;
+const ANSWERS_WAIT_POLL_MS = 1_000;
+
+async function handleAnswersWait(args: string[]): Promise<void> {
+  const { flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  if (!flags["questions-file"]) error("Missing --questions-file <path>");
+  const timeoutSeconds = flags.timeout === undefined ? ANSWERS_WAIT_DEFAULT_SECONDS : Number(flags.timeout);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0) error("--timeout must be a non-negative number of seconds");
+  const pd = resolveActiveProjectDir(projectDir);
+  if (flags.unit) validateLiveUnitScope(pd, flags.unit);
+  const questions = projectQuestionsFile(pd, flags["questions-file"]);
+  const stageDir = dirname(questions.absolute);
+
+  const ready = (): string[] =>
+    pendingAnswerSubmissions(stageDir)
+      .filter((item) => resolve(pd, item.submission.questions_file) === questions.absolute)
+      .map((item) => item.file);
+
+  let files = ready();
+  if (files.length === 0 && timeoutSeconds > 0) {
+    const { promise, resolve: settle } = Promise.withResolvers<string[]>();
+    let watcher: FSWatcher | null = null;
+    const finish = (found: string[]): void => {
+      clearInterval(poll);
+      clearTimeout(deadline);
+      watcher?.close();
+      settle(found);
+    };
+    const recheck = (): void => {
+      const found = ready();
+      if (found.length > 0) finish(found);
+    };
+    // Polling is the guarantee; the watcher only makes the wake-up prompt.
+    const poll = setInterval(recheck, ANSWERS_WAIT_POLL_MS);
+    const deadline = setTimeout(() => finish([]), timeoutSeconds * 1000);
+    try {
+      watcher = watch(stageDir, { recursive: true }, recheck);
+      watcher.on("error", () => {});
+    } catch {
+      // No recursive watch on this filesystem; polling alone carries the wait.
+    }
+    files = await promise;
+  }
+
+  console.log(JSON.stringify({
+    ready: files.length > 0,
+    files,
+    questions_file: questions.relative,
+    waited_seconds: files.length > 0 ? undefined : timeoutSeconds,
+  }));
+  if (files.length === 0) process.exitCode = 3;
 }
 
 // --- Subcommand: link ---
@@ -2645,6 +2713,9 @@ export function main(argv: string[]): void {
       case "answers-apply":
         handleAnswersApply(filteredArgs.slice(1));
         break;
+      case "answers-wait":
+        handleAnswersWait(filteredArgs.slice(1)).catch((e) => error(errorMessage(e)));
+        break;
       case "link":
         handleLink(filteredArgs.slice(1));
         break;
@@ -2652,7 +2723,7 @@ export function main(argv: string[]): void {
         handleReview(filteredArgs.slice(1));
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers-apply, link, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers-apply, answers-wait, link, review`);
     }
   } catch (e) {
     error(errorMessage(e));

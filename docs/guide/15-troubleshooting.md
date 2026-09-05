@@ -27,7 +27,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Statusline not appearing | Verify `bun` is on PATH and `settings.json` `statusLine.command` references `aidlc-statusline.ts` |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
-| Browser link expired or already used | Run `/aidlc --status` for a fresh single-use Review UI link |
+| Browser link expired or already used | Open the bare `http://localhost:<port>/` address, or run `/aidlc --status` (prints a fresh single-use link under `AIDLC_REVIEW_STRICT=1`) |
 | Review UI unavailable over SSH | Set a fixed loopback port and forward it with `ssh -L`; set `AIDLC_REVIEW_OPEN=0` remotely |
 | Browser answers say questions changed | Reload the Questions view and save again against the current file |
 
@@ -86,6 +86,10 @@ The check reads the on-disk managed-settings **file** (`/etc/claude-code/managed
 
 ## Review UI Issues
 
+### "Review UI access required" when opening `http://localhost:<port>/`
+
+By default the bare address opens directly: the daemon trusts a browser's own top-level navigation and starts the session on arrival. You see this page only when (a) `AIDLC_REVIEW_STRICT=1` is set — then only a single-use `/open/<nonce>` link opens the UI; run `/aidlc --status` or `/aidlc --doctor` for one — or (b) the browser sends no Fetch Metadata (Safari before 16.4, `curl`), which also falls back to the link. If an open tab shows "Your review session ended", it already tried to sign itself back in with a reload and could not; run `/aidlc --status` and open the printed URL.
+
 ### Link expired or already used
 
 Review links are intentionally single-use and expire after 30 minutes. Run `/aidlc --status` to mint a fresh link. Do not append a token or copy one from `~/.aidlc/review-ui/`; the token is private and the printed link should contain only `/open/<nonce>`.
@@ -98,7 +102,7 @@ Confirm that the harness was launched with `AIDLC_REVIEW_UI=1`. Session start no
 bun <harnessDir>/tools/aidlc-review-ui.ts serve --project-dir "$PWD"
 ```
 
-Use `/aidlc --doctor` to inspect the flag and daemon liveness. Runtime details are under `~/.aidlc/review-ui/<project-id>/server.log`; do not expose `server.json`, which contains the bearer token.
+Use `/aidlc --doctor` to inspect the flag and daemon liveness; when the daemon is alive the `review-ui` row prints the address to open. Runtime details are under `~/.aidlc/review-ui/<project-id>/server.log`; do not expose `server.json`, which contains the bearer token.
 
 ### Remote browser cannot connect
 
@@ -120,7 +124,7 @@ Expected behavior: **Send feedback** writes a feedback file but does not decide 
 
 ### Browser answers were refused as stale
 
-The questions file changed after the form loaded. Reload the Questions view, review the current options, and save again. After a successful save, return to the terminal and send **done** so `answers-apply` can update the canonical questions file.
+The questions file changed after the form loaded. Reload the Questions view, review the current options, and save again. After a successful save the agent continues on its own; if it does not within a minute (a harness whose Stop hook cannot hold the turn, or a wait that expired after 20 minutes), send **done** and it applies the saved answers.
 
 For the full operating model, see [Review in the Browser](18-review-in-the-browser.md).
 

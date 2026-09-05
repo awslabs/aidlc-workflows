@@ -14,15 +14,17 @@ AI-DLC provides three standard ways to interact with agents during stages, plus 
 
 ## Question Flow
 
-When a stage gathers your input, the agent presents three standard interaction modes. When the [Review UI](18-review-in-the-browser.md) is available, it also offers **Guide me in the browser**. You choose which mode works best for the current stage.
+When a stage gathers your input, the agent presents three standard interaction modes. When the [Review UI](18-review-in-the-browser.md) is available, it also offers **Guide me in the browser** — listed first and marked recommended, so it is the preselected default. You choose which mode works best for the current stage.
 
 ```
 ▸ Choose interaction mode:
-  (1) Guide Me — agent asks structured questions
-  (2) Edit File — write directly to the artifact
-  (3) Chat — freeform discussion
-  (4) Guide me in the browser — read trade-offs and answer beside the explainer (Review UI only)
+  (1) Guide me in the browser — read trade-offs and answer beside the explainer (recommended; Review UI only)
+  (2) Guide Me — agent asks structured questions
+  (3) Edit File — write directly to the artifact
+  (4) Chat — freeform discussion
 ```
+
+Without the Review UI the menu is the three terminal modes in the order Guide Me, Edit File, Chat.
 
 ### Guide Me
 
@@ -42,7 +44,7 @@ The agent creates (or opens) the questions file and you edit it directly. Best w
 
 ### Guide me in the browser
 
-With `AIDLC_REVIEW_UI=1`, the agent can write an HTML explainer with trade-offs and recommendations and show it beside the browser questions form. Save there, return to the terminal, and send **done**; AI-DLC applies the submission to the canonical questions file before the ordinary consolidated-summary confirmation. See [Review in the Browser](18-review-in-the-browser.md#guide-me-in-the-browser).
+With `AIDLC_REVIEW_UI=1`, the agent can write an HTML explainer with trade-offs and recommendations and show it beside the browser questions form. Save there and the agent continues on its own (the Stop hook holds its turn for your click on Claude Code; other harnesses wait on `answers-wait`); AI-DLC applies the submission to the canonical questions file before the ordinary consolidated-summary confirmation. See [Review in the Browser](18-review-in-the-browser.md#guide-me-in-the-browser).
 
 ### Chat
 

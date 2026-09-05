@@ -62,7 +62,7 @@ describe("guide protocol module directive derivation", () => {
     }, env);
 
     const directive = runOrchestrateNext(ORCHESTRATE, project, [], { env }).directive;
-    expect(directive?.review_ui).toEqual({ origin: "http://127.0.0.1:43156/" });
+    expect(directive?.review_ui).toEqual({ origin: "http://127.0.0.1:43156/", url: "http://127.0.0.1:43156/" });
     expect(directive?.protocol_modules).toContain("guide");
   });
 

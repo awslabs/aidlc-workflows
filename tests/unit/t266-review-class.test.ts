@@ -225,6 +225,7 @@ describe("t266 review class", () => {
       );
     }
     expect(read("core/scopes/aidlc-express.md")).toContain("review_cap: none");
+    expect(read("core/scopes/aidlc-express.md")).toContain("learnings: off");
   });
 
   // --- 3. resolution --------------------------------------------------------

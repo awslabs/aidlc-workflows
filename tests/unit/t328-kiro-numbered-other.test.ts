@@ -122,8 +122,9 @@ describe("t328 Kiro numbered Other rendering contract", () => {
         "**Kiro numbered-question preflight (non-negotiable):**",
       );
       expect(body, rel).toContain(
-        "`1. Guide me`, `2. I'll edit the file`, `3. Chat`, `4. Other`",
+        "`1. Guide me (Recommended)`, `2. I'll edit the file`, `3. Chat`, `4. Other`",
       );
+      expect(body, rel).toContain("`2. Guide me`, `3. I'll edit the file`, `4. Chat`, `5. Other`");
       expect(body, rel).toContain(
         "A prose tip or sentence mentioning Other does\nnot count",
       );
@@ -137,8 +138,19 @@ describe("t328 Kiro numbered Other rendering contract", () => {
       "On a numbered-prose harness that gives five visible lines",
     );
     expect(CORE_PROTOCOL).toContain(
-      "without `review_ui`, retain the existing\nthree semantic options plus Other",
+      "Without `review_ui`, omit it and retain the existing\nthree semantic options in the order **Guide me**, **I'll edit the file**,\n**Chat**, with **Guide me (Recommended)** first",
     );
+    // With a live review daemon the browser round is the harness default:
+    // listed first and marked recommended in the label itself.
+    expect(CORE_PROTOCOL).toContain("- label: Guide me in the browser (Recommended)");
+    expect(CORE_PROTOCOL.indexOf("- label: Guide me in the browser (Recommended)")).toBeLessThan(
+      CORE_PROTOCOL.indexOf("- label: Guide me\n"),
+    );
+    // The always-recommend rule and its presentation-only boundary.
+    expect(CORE_PROTOCOL).toContain("**Every structured question carries a recommendation.**");
+    expect(CORE_PROTOCOL).toContain("NEVER write `(Recommended)` or `(Toss-up)` into an `[Answer]:` tag");
+    expect(CORE_PROTOCOL).toContain("- label: Approve (Recommended)");
+    expect(CORE_PROTOCOL).toContain("- label: Looks correct (Recommended)");
   });
 
   test("a streaming three-option prefix is not accepted as the completed mode list", () => {

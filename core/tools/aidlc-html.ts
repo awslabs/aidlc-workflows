@@ -510,10 +510,26 @@ export function checkHtmlArtifact(
 	return { ok: findings.length === 0, findings };
 }
 
-function guideQuestionOptions(markdown: string): Map<string, Set<string>> {
+export interface GuideQuestion {
+	id: string;
+	title: string;
+	/** Letter → option text, in file order. */
+	options: Map<string, string>;
+	/** Option-looking lines the parser had to ignore (`- A. …`, `1. …`, indented letters). */
+	rejectedOptionLines: string[];
+}
+
+/**
+ * The questions file is authoritative for every guide check and for the review
+ * UI's form, and all of them read options the same way: a bare `A. text` line
+ * starting at column 0 under a `## Q<n>` heading. Anything else — a Markdown
+ * bullet (`- A. text`), a numbered item, an indented letter — is prose to the
+ * parsers, which is why a question can end up with zero options.
+ */
+export function parseGuideQuestions(markdown: string): GuideQuestion[] {
 	const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
-	const questions = new Map<string, Set<string>>();
-	let current: Set<string> | null = null;
+	const questions: GuideQuestion[] = [];
+	let current: GuideQuestion | null = null;
 	let inFence = false;
 	for (const line of lines) {
 		if (/^\s{0,3}(?:```|~~~)/.test(line)) {
@@ -521,19 +537,30 @@ function guideQuestionOptions(markdown: string): Map<string, Set<string>> {
 			continue;
 		}
 		if (inFence) continue;
-		const heading = /^\s{0,3}##[ \t]+Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?[ \t]*#*[ \t]*$/.exec(line);
+		const heading = /^\s{0,3}##[ \t]+(Q([1-9][0-9]*)(?:[.:][ \t]*(.*?))?)[ \t]*#*[ \t]*$/.exec(line);
 		if (heading) {
-			const id = `Q${heading[1]}`;
-			if (!questions.has(id)) questions.set(id, new Set());
-			current = questions.get(id)!;
+			const id = `Q${heading[2]}`;
+			current = questions.find((question) => question.id === id) ?? null;
+			if (!current) {
+				current = { id, title: (heading[3] ?? "").trim() || id, options: new Map(), rejectedOptionLines: [] };
+				questions.push(current);
+			}
 			continue;
 		}
 		if (/^\s{0,3}##(?:[ \t]|$)/.test(line)) {
 			current = null;
 			continue;
 		}
-		const option = /^\s*([A-Z])\.\s+/.exec(line);
-		if (current && option) current.add(option[1]);
+		if (!current) continue;
+		const option = /^([A-Z])\.\s+(.*?)\s*$/.exec(line);
+		if (option) {
+			current.options.set(option[1], option[2]);
+			continue;
+		}
+		// A line that was clearly meant as an option but will never parse as one.
+		if (/^\s*(?:[-*+]\s+)?(?:[A-Z]|[0-9]+)[.)]\s+\S/.test(line) && !/^\[Answer\]:/.test(line)) {
+			current.rejectedOptionLines.push(line.trim());
+		}
 	}
 	return questions;
 }
@@ -545,8 +572,26 @@ export function checkGuideArtifact(
 	identity: HtmlArtifactIdentity = {},
 ): HtmlArtifactCheck {
 	const base = checkHtmlArtifact(html, identity);
-	const findings = [...base.findings];
-	const questions = guideQuestionOptions(questionsMarkdown);
+	const findings = base.findings.map((finding) =>
+		finding === 'body must begin with <section data-aidlc="summary">'
+			? 'body must begin with <section data-aidlc="summary"> holding one paragraph on what this round decides (run `aidlc-html.ts scaffold --guide <questions.md>` for a skeleton that already passes)'
+			: finding,
+	);
+	const parsed = parseGuideQuestions(questionsMarkdown);
+	const questions = new Map(parsed.map((question) => [question.id, new Set(question.options.keys())]));
+	// A question with no parsable options makes every recommendation for it
+	// "not an option" — say what is actually wrong, once, instead.
+	const unparsable = new Set<string>();
+	for (const question of parsed) {
+		if (question.options.size > 0) continue;
+		unparsable.add(question.id);
+		const sample = question.rejectedOptionLines[0];
+		findings.push(
+			`${question.id} has no parsable options in the questions file` +
+				(sample ? ` (saw "${sample}")` : "") +
+				': options must be bare lines "A. text" starting at column 0 — no "- " bullet, no numbering, no indent. Fix the questions file, then re-check.',
+		);
+	}
 	const root = parseHtml(html);
 	const guideSections = elements(root.children).filter(
 		(node) => node.tag === "section" && "data-aidlc-question" in node.attrs,
@@ -567,6 +612,32 @@ export function checkGuideArtifact(
 		else if (count > 1) findings.push(`guide has ${count} sections for question "${id}"`);
 	}
 
+	// Unfilled prose is not a finished guide. The review UI shows a browser round
+	// only once this check passes, so an untouched scaffold paragraph (or a table
+	// row with empty cells) must fail here rather than reach the human half-done.
+	// `elements()` flattens every descendant; the walk below wants direct children
+	// so headings pair with the paragraphs beneath them and cells are counted once.
+	const direct = (node: HtmlElement | HtmlRoot): HtmlElement[] =>
+		node.children.filter((child): child is HtmlElement => child.type === "element");
+	const summary = elements(root.children).find(
+		(node) => node.tag === "section" && node.attrs["data-aidlc"] === "summary",
+	);
+	if (summary && !textContent(summary).trim()) findings.push("summary section is empty: say what this round decides");
+	for (const section of guideSections) {
+		const id = section.attrs["data-aidlc-question"];
+		let heading = "";
+		for (const child of direct(section)) {
+			if (child.tag === "h3") heading = textContent(child).trim();
+			else if (child.tag === "p" && !textContent(child).trim()) {
+				findings.push(`${id} has an empty paragraph${heading ? ` under "${heading}"` : ""}`);
+			} else if (child.tag === "table") {
+				const emptyCells = elements(child.children)
+					.filter((cell) => cell.tag === "td" && !textContent(cell).trim()).length;
+				if (emptyCells > 0) findings.push(`${id} trade-off table has ${emptyCells} empty cell${emptyCells === 1 ? "" : "s"}`);
+			}
+		}
+	}
+
 	const visit = (nodes: readonly HtmlNode[], questionId: string | null): void => {
 		for (const node of nodes) {
 			if (node.type === "text") continue;
@@ -577,8 +648,10 @@ export function checkGuideArtifact(
 				const letter = node.attrs["data-aidlc-recommend"];
 				if (!sectionId) {
 					findings.push(`recommendation "${letter}" is outside a question section`);
-				} else if (!questions.get(sectionId)?.has(letter)) {
-					findings.push(`recommendation "${letter}" is not an option for ${sectionId}`);
+				} else if (!letter) {
+					findings.push(`${sectionId} recommendation is empty: set data-aidlc-recommend to one of ${[...(questions.get(sectionId) ?? [])].join(", ") || "its options"}`);
+				} else if (!unparsable.has(sectionId) && !questions.get(sectionId)?.has(letter)) {
+					findings.push(`recommendation "${letter}" is not an option for ${sectionId} (offered: ${[...(questions.get(sectionId) ?? [])].join(", ")})`);
 				}
 			}
 			visit(node.children, sectionId);
@@ -659,10 +732,87 @@ export function exportSelfContained(path: string): string {
 	return selfContainedMarkdownExport(markdown, mermaid);
 }
 
+function escapeHtml(value: string): string {
+	return value
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;");
+}
+
+export type GuideDepth = "minimal" | "standard";
+
+/**
+ * A guide skeleton that already satisfies `check --guide`: head identity, the
+ * summary section, one section per question with the real option letters and
+ * text in the trade-off rows, and an empty `data-aidlc-recommend` to fill.
+ * The conductor writes prose into it instead of reconstructing the contract
+ * from memory — the format round-trip that used to cost a hundred seconds.
+ * `minimal` keeps only "Why now" and the recommendation per question.
+ */
+export function scaffoldGuide(
+	questionsMarkdown: string,
+	stage: string,
+	depth: GuideDepth = "standard",
+): string {
+	const questions = parseGuideQuestions(questionsMarkdown);
+	const sections = questions.map((question) => {
+		const options = [...question.options.entries()];
+		const rows = options
+			.map(([letter, text]) => `        <tr><th scope="row">${letter}. ${escapeHtml(text)}</th><td></td><td></td><td></td></tr>`)
+			.join("\n");
+		const tradeoffs = depth === "minimal"
+			? ""
+			: `
+  <h3>Trade-offs</h3>
+  <table>
+    <thead><tr><th>Option</th><th>You get</th><th>You give up</th><th>Cost / risk</th></tr></thead>
+    <tbody>
+${rows}
+    </tbody>
+  </table>`;
+		const related = depth === "minimal"
+			? ""
+			: `
+  <h3>Related decisions</h3>
+  <p>None found</p>`;
+		return `<section data-aidlc-question="${question.id}" id="${question.id}">
+  <h2>${escapeHtml(question.title)}</h2>
+  <h3>Why now</h3>
+  <p></p>${tradeoffs}
+  <h3>Recommendation</h3>
+  <p data-aidlc-recommend=""></p>${related}
+</section>`;
+	});
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="aidlc-artifact" content="${escapeHtml(stage)}-questions-guide">
+<meta name="aidlc-stage" content="${escapeHtml(stage)}">
+<title>${escapeHtml(stage)} — question guide</title>
+<style>
+body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:.4rem .6rem;text-align:left;vertical-align:top}
+th[scope=row]{white-space:nowrap}h2{margin-top:2.5rem}
+</style>
+</head>
+<body>
+<section data-aidlc="summary">
+  <p></p>
+</section>
+${sections.join("\n")}
+</body>
+</html>
+`;
+}
+
 const USAGE = `Usage:
   bun aidlc-html.ts text <file>
   bun aidlc-html.ts check <file> [--name <name>] [--stage <slug>]
   bun aidlc-html.ts check --guide <file> --questions <md>
+  bun aidlc-html.ts scaffold --guide <questions.md> [--out <file>] [--depth minimal|standard] [--stage <slug>]
   bun aidlc-html.ts export <file> [--out <path>]`;
 
 function usage(): number {
@@ -672,8 +822,9 @@ function usage(): number {
 
 function cli(argv: string[]): number {
 	const [command, first, ...rest] = argv;
-	if (!command || !first || !["text", "check", "export"].includes(command)) return usage();
-	const guideMode = command === "check" && first === "--guide";
+	if (!command || !first || !["text", "check", "export", "scaffold"].includes(command)) return usage();
+	const guideMode = (command === "check" || command === "scaffold") && first === "--guide";
+	if (command === "scaffold" && !guideMode) return usage();
 	const path = guideMode ? rest[0] : first;
 	const args = guideMode ? rest.slice(1) : rest;
 	if (!path || !existsSync(path)) {
@@ -686,6 +837,17 @@ function cli(argv: string[]): number {
 		const value = args[index + 1];
 		if (!flag?.startsWith("--") || value === undefined) return usage();
 		flags[flag.slice(2)] = value;
+	}
+	if (command === "scaffold") {
+		if (Object.keys(flags).some((flag) => !["out", "depth", "stage"].includes(flag))) return usage();
+		const depth = flags.depth ?? "standard";
+		if (depth !== "minimal" && depth !== "standard") return usage();
+		// `<slug>-questions.md` names its stage; --stage overrides for odd layouts.
+		const stage = flags.stage ?? basename(path).replace(/-questions\.md$/i, "");
+		const html = scaffoldGuide(readFileSync(path, "utf-8"), stage, depth);
+		if (flags.out) writeFileSync(flags.out, html, "utf-8");
+		else process.stdout.write(html);
+		return 0;
 	}
 	if (command === "text") {
 		if (args.length > 0) return usage();

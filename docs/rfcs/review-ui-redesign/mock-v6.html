@@ -1,0 +1,456 @@
+<!--
+UX HYPOTHESIS
+Hypothesis: A lead running several intents and agents reviews faster when the primary navigation is an inbox of moments that need human attention, rather than a document or workflow tree.
+Who it's for: Engineering leads and multi-intent operators supervising several concurrent AI-DLC runs.
+What it optimizes: Rapid triage, cross-intent awareness, keyboard navigation, and acting on the next human-blocked moment.
+What it sacrifices: Maximum reading width, deep single-intent workflow context, and a calm single-document frame.
+The moment it's best at: Returning to a busy workspace and clearing gates, question rounds, and sensor findings in priority order.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>v6 · AI-DLC Review — Workflow sidebar</title>
+<style>
+:root{--ink:#1a202c;--muted:#8792a2;--faint:#b6bfcc;--line:#eef2f7;--line2:#dfe5ed;--panel:#f7f9fc;--accent:#2d7ff9;--soft:#edf4ff;--amber:#f59e0b;--amber-soft:rgba(245,158,11,.15);--violet:#7c3aed;--violet-soft:#f4efff;--rose:#e11d48;--rose-soft:#fff0f3;--green:#16a34a;--green-soft:#eefbf2;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:"SFMono-Regular",Consolas,monospace}
+*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{color:var(--ink);background:#fff;font:15px/1.55 var(--font)}button,input{font:inherit;color:inherit}button{border:0;background:none;cursor:pointer}.top{height:54px;display:grid;grid-template-columns:320px minmax(0,1fr) auto auto;align-items:center;border-bottom:1px solid var(--line2);background:#fff;position:relative;z-index:5}.brand{height:54px;padding:0 18px;display:flex;align-items:center;gap:10px;border-right:1px solid var(--line2);font-weight:720;letter-spacing:-.01em}.brandmark{width:26px;height:26px;border-radius:8px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:12px}.search{width:min(460px,80%);height:34px;margin-left:22px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);display:flex;align-items:center;gap:9px;padding:0 11px;color:var(--muted);font-size:13px}.search b{font-size:18px;font-weight:400;line-height:1}.filter{height:34px;border:1px solid var(--line2);border-radius:8px;padding:0 12px;font-size:13px;background:#fff}.live{padding:0 18px 0 13px;color:var(--muted);font-size:12px;white-space:nowrap}.live:before{content:"";display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%;background:var(--green)}
+.search input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--ink);font-size:13px}.search input::placeholder{color:var(--muted)}
+.screen{height:calc(100vh - 54px);display:none;min-height:0}.review-screen,.question-screen,.editing-screen{grid-template-columns:320px minmax(0,1fr)}body[data-show="review"] .review-screen,body[data-show="collapsed"] .review-screen,body[data-show="questions"] .question-screen{display:grid}.inbox{min-height:0;border-right:1px solid var(--line2);background:var(--panel);display:flex;flex-direction:column}.inbox-head{height:58px;display:flex;align-items:center;padding:0 14px 0 18px;border-bottom:1px solid var(--line)}.inbox-head h1{font-size:17px;margin:0}.countall{margin-left:8px;padding:1px 7px;border-radius:99px;color:var(--accent);background:var(--soft);font-size:11px;font-weight:700}.collapse{margin-left:auto;width:28px;height:28px;border:1px solid var(--line2);border-radius:7px;background:#fff;color:var(--muted)}.queue{overflow:auto;padding:8px 8px 44px}.group-title{height:30px;padding:9px 8px 5px;color:#657185;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:750}.item{position:relative;width:100%;text-align:left;border:1px solid transparent;border-radius:9px;padding:9px 10px 9px 32px;margin:2px 0;background:transparent}.item:hover{background:#fff}.item.selected{background:#fff;border-color:#d7e6ff;box-shadow:0 1px 2px rgba(26,32,44,.04)}.item .dot{position:absolute;left:12px;top:15px;width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--soft)}.item .dot.amber{background:var(--amber);box-shadow:0 0 0 3px #fff7e8}.item .dot.rose{background:var(--rose);box-shadow:0 0 0 3px var(--rose-soft)}.item .dot.live-dot{background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}.item .dot.done{background:#aab4c2;box-shadow:none}.item .slug{display:block;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.item .stage{display:block;margin-top:1px;font-size:13px;font-weight:680;line-height:1.3}.item .state{display:block;margin-top:2px;color:#657185;font-size:11px;line-height:1.35}.item.selected .state{color:var(--accent)}.kbdhint{position:absolute;left:0;bottom:0;width:320px;height:36px;border-top:1px solid var(--line2);background:rgba(247,249,252,.96);display:flex;align-items:center;gap:11px;padding:0 16px;color:var(--muted);font-size:10px}.kbd{display:inline-flex;justify-content:center;min-width:18px;padding:1px 5px;border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;background:#fff;color:#657185;font:10px var(--mono)}
+.right{min-width:0;min-height:0;display:grid;grid-template-rows:62px minmax(0,1fr);background:#fff}.intentbar{display:flex;align-items:center;gap:10px;padding:0 18px;border-bottom:1px solid var(--line2);min-width:0}.intent-title{min-width:0}.intent-title strong{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.intent-title small{display:block;color:var(--muted);font-size:11px}.chips{display:flex;gap:5px;margin-left:7px}.chip{padding:2px 7px;border:1px solid var(--line2);border-radius:99px;background:#fff;color:#657185;font-size:10px;white-space:nowrap}.phase{color:var(--accent);border-color:#cfe0ff;background:var(--soft)}.stage-status{margin-left:auto;border-left:1px solid var(--line2);padding-left:15px;text-align:right;white-space:nowrap}.stage-status b{display:block;font-size:12px;color:var(--accent)}.stage-status small{color:var(--muted);font-size:10px}.workarea{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 310px}.artifact{min-width:0;min-height:0;display:grid;grid-template-rows:40px minmax(0,1fr) 54px}
+.review-screen .artifact{grid-template-rows:40px 34px minmax(0,1fr) 54px}.doc-toolbar{height:40px;padding:0 12px;display:flex;align-items:center;gap:2px;border-bottom:1px solid var(--line);background:#fff}.tool{height:27px;min-width:27px;border-radius:5px;padding:0 6px;font-size:12px}.tool:hover{background:var(--panel)}.tool.file{color:var(--muted);min-width:120px;text-align:left}.tool-sep{width:1px;height:17px;margin:0 5px;background:var(--line2)}.tool-right{margin-left:auto;color:var(--muted);font-size:10px}.docscroll{min-height:0;overflow:auto;background:#fff}.doc{max-width:760px;margin:0 auto;padding:24px 55px 80px}.docmeta{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:11px}.docmeta .filename{font-family:var(--mono);color:#586476}.doc h1{margin:11px 0 13px;font-size:28px;line-height:1.2;letter-spacing:-.025em}.doc h2{margin:24px 0 9px;font-size:18px}.doc p{margin:8px 0;line-height:1.65}.doc ul{padding-left:20px}.anchor{position:relative}.bubble{position:absolute;left:-39px;top:2px;width:23px;height:23px;border-radius:50%;display:grid;place-items:center;color:#9a6500;background:#fff7dd;border:1px solid #ffd78b;font-size:10px;font-weight:750}.bubble.good{color:#117c37;background:var(--green-soft);border-color:#bfe8cb}.bubble.rose{color:#b30e35;background:var(--rose-soft);border-color:#ffc5d2}.bubble.violet{color:#6430b6;background:var(--violet-soft);border-color:#ddceff}.mark-comment{background:var(--amber-soft);border-bottom:2px solid var(--amber)}.mark-good{border-bottom:2px solid var(--green)}.mark-delete{text-decoration:line-through;text-decoration-color:var(--rose);text-decoration-thickness:2px;background:var(--rose-soft)}.mark-edit{background:var(--violet-soft);border-bottom:2px solid var(--violet)}.doc table,.explain table{width:100%;border-collapse:collapse;font-size:12px}.doc th,.doc td,.explain th,.explain td{padding:7px;border:1px solid var(--line2);text-align:left;vertical-align:top}.decision{border-top:1px solid var(--line2);background:#fff;display:flex;align-items:center;gap:7px;padding:0 12px;box-shadow:0 -4px 12px rgba(26,32,44,.035)}.decision .summary{font-size:11px;color:var(--muted)}.decision .summary b{color:var(--ink)}.spacer{flex:1}.btn{height:31px;padding:0 10px;border:1px solid var(--line2);border-radius:7px;background:#fff;font-size:11px;font-weight:650;white-space:nowrap}.btn.warn{border-color:#f4bdc9;color:#a81034}.btn.primary{border-color:var(--accent);background:var(--accent);color:#fff}.threads{min-height:0;border-left:1px solid var(--line2);background:var(--panel);display:flex;flex-direction:column}.threads header{padding:12px;border-bottom:1px solid var(--line2)}.threads h2{display:inline;margin:0;font-size:15px}.threads header small{margin-left:7px;color:var(--muted)}.filters{display:flex;gap:4px;margin-top:7px}.filterchip{border-radius:99px;padding:2px 7px;background:#fff;border:1px solid var(--line2);color:var(--muted);font-size:9px}.filterchip.on{color:var(--accent);border-color:#cfe0ff;background:var(--soft)}.threadlist{min-height:0;overflow:auto;padding:8px}.thread{border:1px solid var(--line2);border-left:3px solid var(--amber);border-radius:8px;background:#fff;padding:8px 9px;margin-bottom:7px;font-size:10.5px;line-height:1.38;box-shadow:0 1px 2px rgba(26,32,44,.035)}.thread.good{border-left-color:var(--green)}.thread.rose{border-left-color:var(--rose)}.thread.violet{border-left-color:var(--violet)}.thread .quote{margin:0 0 5px;padding-left:7px;border-left:2px solid var(--line2);color:#657185;font-style:italic}.who{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:9px}.who b{color:var(--ink);font-size:10px}.avatar{width:17px;height:17px;border-radius:50%;display:grid;place-items:center;background:#e6ebf2;color:#526070;font-size:8px;font-weight:800}.avatar.agent{background:var(--ink);color:#fff}.kindtag{margin-left:auto;padding:1px 5px;border-radius:99px;background:var(--panel);color:#657185}.thread .text{margin:6px 0}.reply{margin:6px 0 3px 8px;padding:6px;border-left:2px solid var(--line2);background:var(--panel);border-radius:0 5px 5px 0}.status{display:flex;align-items:center;gap:4px;margin-top:5px;color:var(--muted);font-size:9px}.status .pending{color:#a76b00}.status .ok{color:var(--green)}.status button{margin-left:auto;color:var(--accent);font-size:9px}.diff{margin:6px 0;font:9.5px/1.5 var(--mono)}.del{color:#a10e34;background:var(--rose-soft);text-decoration:line-through}.ins{color:#117a35;background:var(--green-soft)}
+/* Question round keeps triage context while swapping the action pane. */
+.question-pane{min-height:0;display:grid;grid-template-rows:minmax(0,1fr) 52px}
+.qscroll{min-height:0;overflow:auto;background:#fff}
+.qcol{max-width:820px;margin:0 auto;padding:28px 40px 60px}
+.qintro{margin-bottom:26px}.qintro h1{font-size:24px;line-height:1.2;margin:0 0 6px;letter-spacing:-.01em}.qintro p{margin:0;color:var(--muted);font-size:13px}
+.qblock{margin:0 0 34px;padding:0 0 30px;border-bottom:1px solid var(--line2)}
+.qblock:last-of-type{border-bottom:0}
+.qnum{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:0 0 6px}
+.qblock h2{font-size:18px;margin:0 0 14px;letter-spacing:-.01em}
+.explain{padding:16px 18px 6px;border:1px solid var(--line2);border-radius:10px;background:#fbfcfe;margin-bottom:14px}
+.why{margin:0 0 4px;color:#586476;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-weight:800}
+.why + p,.explain p{margin:0 0 12px;font-size:13.5px;line-height:1.55}
+.explain table{width:100%;border-collapse:collapse;margin:0 0 14px;font-size:12.5px;line-height:1.4}
+.explain th{text-align:left;color:var(--muted);font-weight:600;padding:5px 8px 6px 0;border-bottom:1px solid var(--line2)}
+.explain td{padding:6px 8px 6px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.explain tr:last-child td{border-bottom:0}
+.explain tr.rec td{background:var(--soft)}
+.explain tr.rec td:first-child{border-radius:6px 0 0 6px}.explain tr.rec td:last-child{border-radius:0 6px 6px 0}
+.recommend{margin:0 0 14px;padding:10px 12px;border-left:3px solid var(--accent);border-radius:0 6px 6px 0;background:var(--soft);font-size:13.5px;line-height:1.5}
+.related{margin:0 0 12px;font-size:13px;color:var(--muted)}
+.related a{color:var(--accent);text-decoration:none}
+.qcard{padding:12px 14px;border:1px solid var(--line2);border-radius:10px;background:#fff}
+.qcard.current{border-color:#a9caff;box-shadow:0 0 0 3px var(--soft)}
+.qcard h3{margin:0 0 10px;font-size:14px}
+.options{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
+.option{min-height:34px;border:1px solid var(--line);border-radius:7px;padding:6px 10px;display:flex;align-items:center;gap:8px;font-size:13.5px;line-height:1.3}
+.option.rec{background:var(--soft);border-color:#cfe0ff}
+.option input{width:15px;height:15px;margin:0;accent-color:var(--accent)}
+.rectag{margin-left:auto;padding:1px 7px;border-radius:99px;background:#fff;color:var(--accent);font-size:10.5px;font-weight:700}
+.note{margin-top:10px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.note input{flex:1;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;font-size:12.5px}
+.explain figure{margin:0 0 14px;padding:14px 14px 10px;border:1px solid var(--line2);border-radius:8px;background:#fff}
+.explain figure svg{display:block;width:100%;height:auto;font:12px/1.2 var(--font)}
+.explain figcaption{margin-top:8px;font-size:11.5px;color:var(--muted)}
+.dg .box{fill:#fff;stroke:#c9d2de;stroke-width:1.2;rx:6}
+.dg .box.rec{stroke:var(--accent);stroke-width:1.6}
+.dg .box.soft{fill:var(--soft);stroke:#cfe0ff}
+.dg .box.dim{fill:#fbfcfe;stroke:#dfe5ee;stroke-dasharray:4 3}
+.dg .lbl{fill:#1a202c;font-size:12px}
+.dg .lbl.b{font-weight:700}
+.dg .sub{fill:#8792a2;font-size:10.5px}
+.dg .acc{fill:var(--accent);font-size:10.5px;font-weight:700}
+.dg .ln{stroke:#8792a2;stroke-width:1.2;fill:none;marker-end:url(#arr)}
+.dg .ln.dash{stroke-dasharray:4 3}
+.dg .lane{fill:none;stroke:#eef2f7}
+.dg .tag{fill:#fff;stroke:#e11d48;stroke-width:1}
+.dg .tagt{fill:#e11d48;font-size:10px;font-weight:700}
+.dg .ok{fill:#16a34a;font-size:10px;font-weight:700}
+.savebar{border-top:1px solid var(--line2);display:flex;align-items:center;gap:10px;padding:0 14px;background:#fff}.progress{display:flex;gap:3px}.progress i{width:22px;height:4px;border-radius:99px;background:var(--accent)}.savebar .summary{color:var(--muted);font-size:12px}
+/* Editing is still an inbox item; the file's toolbar belongs only to the document column. */
+.editing-block{position:relative;margin:14px -10px 0;padding:18px 12px 12px;border-left:3px solid var(--violet);border-radius:0 8px 8px 0;background:linear-gradient(90deg,var(--violet-soft),#fff 82%)}.editing-block .tag{position:absolute;top:-10px;right:8px;padding:2px 8px;border:1px solid #d7c3ff;border-radius:99px;background:#fff;color:#6332ad;font-size:9px;font-weight:750}.source{font:13px/1.7 var(--mono);white-space:normal}.mk{color:var(--muted);font-size:11px}.edit-actions{display:flex;align-items:center;gap:7px;margin-top:9px}.edit-actions small{margin-left:3px;color:var(--muted);font-size:9px}.violet-btn{height:29px;padding:0 9px;border-radius:6px;background:var(--violet);color:#fff;font-size:10px;font-weight:700}.pending-card{border-style:dashed!important}
+/* 56px collapsed inbox: unread dots preserve queue shape without stealing reading width. */
+.inbox-strip{display:none;min-height:0;border-right:1px solid var(--line2);background:var(--panel);flex-direction:column;align-items:center}.strip-toggle{width:30px;height:30px;margin-top:14px;border:1px solid var(--line2);border-radius:7px;background:#fff;color:var(--muted)}.strip-rule{width:25px;height:1px;background:var(--line2);margin:13px 0 6px}.strip-dot{position:relative;width:10px;height:10px;margin:9px 0;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--soft)}.strip-dot.amber{background:var(--amber);box-shadow:0 0 0 4px #fff7e8}.strip-dot.rose{background:var(--rose);box-shadow:0 0 0 4px var(--rose-soft)}.strip-dot.live-dot{background:var(--green);box-shadow:0 0 0 4px var(--green-soft)}.strip-dot.done{width:7px;height:7px;background:#aab4c2;box-shadow:none}.strip-dot.selected:after{content:"";position:absolute;left:-10px;top:-7px;width:3px;height:24px;border-radius:2px;background:var(--accent)}body[data-show="collapsed"] .top{grid-template-columns:56px minmax(0,1fr) auto auto}body[data-show="collapsed"] .brand{padding:0;justify-content:center}body[data-show="collapsed"] .brand span:last-child{display:none}body[data-show="collapsed"] .review-screen{grid-template-columns:56px minmax(0,1fr)}body[data-show="collapsed"] .review-screen .inbox{display:none}body[data-show="collapsed"] .review-screen .inbox-strip{display:flex}
+
+/* one mode: reading, commenting and editing are the same act */
+.fmt-row{display:flex;align-items:center;gap:2px;padding:0 10px;height:34px;border-bottom:1px solid var(--line);background:#fff;font-size:12px}
+.fmt-row .tool{color:var(--ink);white-space:nowrap}
+.fmt-row .ctx{margin-left:auto;color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;padding-left:8px}
+.fmt-row .ctx{display:inline-block}.fmt-row .ctx b{color:var(--violet);display:inline}
+p.anchor.editing{position:relative;border-left:3px solid var(--violet);margin-left:-15px;padding-left:12px;border-radius:0 6px 6px 0;background:linear-gradient(90deg,var(--violet-soft),#fff 55%)}
+p.anchor.editing .mk{color:var(--muted);font-family:var(--mono);font-size:.85em}
+p.anchor.editing .del{background:var(--rose-soft);color:#9f1239;text-decoration:line-through}
+p.anchor.editing .ins{background:var(--green-soft);color:#166534}
+p.anchor.editing .caret{display:inline-block;width:1.5px;height:1em;background:var(--violet);vertical-align:-2px;margin-left:1px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+p.anchor.editing .etag{position:absolute;right:-6px;top:-11px;font-size:9.5px;font-weight:750;color:var(--violet);background:#fff;border:1px solid #d7c3ff;border-radius:99px;padding:1px 7px}
+.thread .reason{margin:6px 0 0;font-size:12px;color:var(--ink)}
+
+/* ---- v6 sidebar: workspace › intent, then every stage with its questions and artifacts ---- */
+.side{min-height:0;border-right:1px solid var(--line2);background:var(--panel);display:flex;flex-direction:column;position:relative}
+.side-tabs{display:flex;gap:2px;padding:10px 12px 0 14px;border-bottom:1px solid var(--line2);background:var(--panel)}
+.side-tabs button{padding:6px 10px 9px;font-size:12.5px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;display:flex;align-items:center;gap:6px}
+.side-tabs button.on{color:var(--ink);font-weight:600;border-bottom-color:var(--ink)}
+.side-tabs .n{font-size:10.5px;font-weight:700;color:#fff;background:var(--accent);border-radius:99px;padding:0 6px;line-height:16px}
+.side-tabs .collapse{margin-left:auto;margin-bottom:6px;width:26px;height:26px;border:1px solid var(--line2);border-radius:7px;background:#fff;color:var(--muted);padding:0;justify-content:center}
+.ctx{padding:12px 14px 12px;border-bottom:1px solid var(--line2);background:#fff;display:flex;flex-direction:column;gap:6px;position:relative}
+.sel{display:grid;grid-template-columns:1fr auto;grid-template-areas:"lbl caret" "val caret" "meta caret";text-align:left;border:1px solid var(--line2);border-radius:8px;padding:6px 10px;background:#fff}
+.sel:hover{border-color:#b9c6d8}
+.sel small{grid-area:lbl;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+.sel span{grid-area:val;font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sel em{grid-area:meta;font-style:normal;font-size:11px;color:var(--muted)}
+.sel i{grid-area:caret;align-self:center;color:var(--muted);font-style:normal;font-size:12px;padding-left:8px}
+.sel.ws{grid-template-areas:"lbl caret" "val caret";padding:4px 10px}
+.sel.ws span{font-size:12.5px;font-weight:500}
+.sel.open{border-color:var(--accent);box-shadow:0 0 0 3px var(--soft)}
+.pop{position:absolute;left:14px;right:14px;top:106px;z-index:6;background:#fff;border:1px solid var(--line2);border-radius:10px;box-shadow:0 14px 40px rgba(26,32,44,.16);padding:6px;display:none}
+body[data-show="switcher"] .pop{display:block}
+.pop .ph{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700;padding:6px 8px 4px}
+.pop .row{display:grid;grid-template-columns:10px 1fr auto;gap:8px;align-items:center;padding:7px 8px;border-radius:7px;font-size:12.5px}
+.pop .row:hover,.pop .row.on{background:var(--panel)}
+.pop .row .d{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.pop .row .d.need{background:var(--accent)}.pop .row .d.run{background:var(--green)}.pop .row .d.amber{background:var(--amber)}
+.pop .row b{font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pop .row small{display:block;color:var(--muted);font-size:11px}
+.pop .row .st{font-size:11px;color:var(--muted);white-space:nowrap}
+.pop .row .st.need{color:var(--accent);font-weight:600}
+.pop hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+.pop .new{color:var(--accent);font-weight:600;padding:7px 8px;font-size:12.5px}
+.tree{min-height:0;overflow:auto;padding:8px 8px 8px 8px}
+.tree .phase{display:flex;align-items:center;gap:8px;padding:12px 8px 4px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.tree .phase .cnt{margin-left:auto;font-weight:500;letter-spacing:0}
+.tree .phase.now{color:var(--accent)}
+.stg{border-radius:8px}
+.stg summary{list-style:none;display:grid;grid-template-columns:18px 1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:13px}
+.stg summary::-webkit-details-marker{display:none}
+.stg summary:hover{background:#eef2f7}
+.stg .g{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:10px}
+.stg.done .g{background:var(--green-soft);color:var(--green)}
+.stg.now .g{background:var(--accent);color:#fff;box-shadow:0 0 0 3px var(--soft);font-size:8px}
+.stg.todo .g{border:1.5px solid var(--line2)}
+.stg.skip .g{border:1.5px dashed var(--line2)}
+.stg.cond .g{border:1.5px solid var(--faint);color:var(--muted);font-size:9px}
+.stg .nm{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stg.now .nm{font-weight:650}
+.stg.todo .nm,.stg.cond .nm{color:var(--muted)}
+.stg.skip .nm{color:var(--faint);text-decoration:line-through}
+.stg .st{font-size:11px;color:var(--muted);white-space:nowrap}
+.stg.now .st{color:var(--accent);font-weight:600}
+.stg.done .st{color:var(--green)}
+.stg[open] summary{background:#fff;border-radius:8px 8px 0 0;border:1px solid var(--line2);border-bottom:0}
+.stg .kids{background:#fff;border:1px solid var(--line2);border-top:0;border-radius:0 0 8px 8px;padding:4px 6px 6px;margin-bottom:6px}
+.kid{display:grid;grid-template-columns:18px 1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;font-size:12.5px;position:relative}
+.kid:hover{background:var(--panel)}
+.kid.on{background:var(--soft)}
+.kid.on:before{content:"";position:absolute;left:-6px;top:6px;bottom:6px;width:3px;border-radius:2px;background:var(--accent)}
+.kid .ic{width:16px;height:16px;display:grid;place-items:center;color:var(--muted);font-size:11px}
+.kid .ic svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.kid.q .ic{color:var(--amber)}
+.kid .ic.done{color:var(--green)}
+.kid .lb{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kid .lb code{font:11.5px var(--mono);background:none;padding:0}
+.kid .mt{font-size:11px;color:var(--muted);white-space:nowrap}
+.kid .mt b{color:var(--ink);font-weight:600}
+.kid .mt .pill{background:var(--accent);color:#fff;border-radius:99px;padding:0 6px;font-weight:700;font-size:10px}
+.kid.hint{color:var(--faint);font-size:11.5px;grid-template-columns:18px 1fr}
+.side-foot{margin-top:auto;padding:10px 14px;border-top:1px solid var(--line2);display:flex;gap:14px;font-size:11.5px;color:var(--muted);background:var(--panel)}
+.side-foot a{color:var(--muted);text-decoration:none}.side-foot a:hover{color:var(--ink)}
+.side-foot .dot{width:6px;height:6px;border-radius:50%;background:var(--green);align-self:center}
+body[data-show="switcher"] .review-screen{display:grid}
+body[data-show="switcher"] .nav-switcher{color:var(--ink);background:var(--panel)}
+.mocknav{position:fixed;z-index:20;left:50%;bottom:10px;transform:translateX(-50%);padding:4px;display:flex;gap:2px;border:1px solid var(--line2);border-radius:10px;background:rgba(255,255,255,.96);box-shadow:0 8px 24px rgba(26,32,44,.14)}.mocknav button{padding:5px 9px;border-radius:6px;color:var(--muted);font-size:10px}.mocknav button:hover{background:var(--panel);color:var(--ink)}body[data-show="review"] .nav-review,body[data-show="questions"] .nav-questions,body[data-show="collapsed"] .nav-collapsed{background:var(--ink);color:#fff}
+@media(max-width:1100px){.chips{display:none}.workarea{grid-template-columns:minmax(0,1fr) 280px}.top{grid-template-columns:280px 1fr auto}.live{display:none}.review-screen,.question-screen,.editing-screen{grid-template-columns:280px 1fr}.kbdhint{width:280px}}
+</style>
+</head>
+<body data-show="review">
+<header class="top">
+  <div class="brand"><span class="brandmark">A</span><span>AI-DLC Review</span></div>
+  <label class="search" role="search"><b>⌕</b><input aria-label="Search inbox" placeholder="Search intents, stages, findings…"><span class="kbd">/</span></label>
+  <button class="filter">Filter: all intents ▾</button>
+  <span class="live">Live</span>
+</header>
+
+<!-- REVIEW and COLLAPSED share one selected inbox moment. -->
+<main class="screen review-screen">
+  <aside class="side" aria-label="Workflow">
+    <div class="side-tabs"><button>Inbox <span class="n">3</span></button><button class="on">Workflow</button><button class="collapse" title="Collapse sidebar" onclick="showScreen('collapsed')">‹</button></div>
+    <div class="ctx">
+      <button class="sel ws"><small>Workspace</small><span>default</span><i>▾</i></button>
+      <button class="sel intent" onclick="showScreen(document.body.dataset.show==='switcher'?'review':'switcher')"><small>Intent</small><span>260904-todo-app</span><em>express · Minimal · Inception · 2 / 7 stages</em><i>▾</i></button>
+      <div class="pop" role="listbox" aria-label="Intents in default">
+        <div class="ph">Needs you</div>
+        <div class="row on"><span class="d need"></span><span><b>260904-todo-app</b><small>Requirements Analysis · r1</small></span><span class="st need">awaiting review</span></div>
+        <div class="row"><span class="d amber"></span><span><b>260903-billing-api</b><small>Domain Design</small></span><span class="st need">4 questions</span></div>
+        <div class="row"><span class="d amber"></span><span><b>260902-onboarding</b><small>Build and Test</small></span><span class="st need">2 failing checks</span></div>
+        <div class="ph">In progress</div>
+        <div class="row"><span class="d run"></span><span><b>260904-inventory-sync</b><small>Code Generation · unit-2</small></span><span class="st">writing…</span></div>
+        <div class="row"><span class="d run"></span><span><b>260901-support-router</b><small>Requirements Analysis</small></span><span class="st">revising…</span></div>
+        <div class="ph">Done</div>
+        <div class="row"><span class="d"></span><span><b>260831-export-service</b><small>complete</small></span><span class="st">yesterday</span></div>
+        <hr><div class="new">+ New intent…</div>
+      </div>
+    </div>
+    <div class="tree">
+      <div class="phase">Initialization <span class="cnt">3 / 3</span></div>
+      <details class="stg done"><summary><span class="g">✓</span><span class="nm">Workspace Scaffold</span><span class="st">done · 09:10</span></summary><div class="kids"><div class="kid f "><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></span><span class="lb"><code>aidlc/</code> workspace shell</span><span class="mt">scaffold</span></div></div></details>
+      <details class="stg done"><summary><span class="g">✓</span><span class="nm">Workspace Detection</span><span class="st">done · 09:10</span></summary><div class="kids"><div class="kid f "><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></span><span class="lb"><code>workspace-report.md</code></span><span class="mt">greenfield · Bun</span></div></div></details>
+      <details class="stg done"><summary><span class="g">✓</span><span class="nm">State Init</span><span class="st">done · 09:11</span></summary><div class="kids"><div class="kid f "><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></span><span class="lb"><code>aidlc-state.md</code></span><span class="mt">express · Minimal</span></div></div></details>
+
+      <div class="phase now">Inception <span class="cnt">0 / 1</span></div>
+      <details class="stg skip"><summary><span class="g"></span><span class="nm">Reverse Engineering</span><span class="st">skipped · greenfield</span></summary><div class="kids"><div class="kid hint"><span class="ic"></span><span class="lb">No existing code to analyse — nothing produced.</span></div></div></details>
+      <details class="stg now" open><summary><span class="g">●</span><span class="nm">Requirements Analysis</span><span class="st">awaiting review · r1</span></summary><div class="kids">
+        <div class="kid q "><span class="ic done"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 1-1 1.7"/><path d="M12 17h.01"/></svg></span><span class="lb">Questions</span><span class="mt"><b>4 / 4</b> answered</span></div>
+        <div class="kid f on "><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></span><span class="lb"><code>requirements.md</code></span><span class="mt"><b>r1</b> · 4 threads</span></div>
+        <div class="kid m "><span class="ic"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg></span><span class="lb"><code>memory.md</code></span><span class="mt">diary</span></div>
+      </div></details>
+
+      <div class="phase">Construction <span class="cnt">0 / 2</span></div>
+      <details class="stg todo"><summary><span class="g"></span><span class="nm">Code Generation</span><span class="st">next</span></summary><div class="kids"><div class="kid hint"><span class="ic"></span><span class="lb">Will ask its questions, then produce a plan and code.</span></div></div></details>
+      <details class="stg todo"><summary><span class="g"></span><span class="nm">Build and Test</span><span class="st"></span></summary><div class="kids"><div class="kid hint"><span class="ic"></span><span class="lb">Produces a build &amp; test report.</span></div></div></details>
+
+      <div class="phase">Operation <span class="cnt">0 / 3</span></div>
+      <details class="stg cond"><summary><span class="g">?</span><span class="nm">Deployment Pipeline</span><span class="st">if deploying</span></summary></details>
+      <details class="stg cond"><summary><span class="g">?</span><span class="nm">Deployment Execution</span><span class="st">if deploying</span></summary></details>
+      <details class="stg cond"><summary><span class="g">?</span><span class="nm">Observability Setup</span><span class="st">if deploying</span></summary></details>
+    </div>
+    <div class="side-foot"><span class="dot"></span><span>Agent idle</span><a href="#">All files</a><a href="#">Audit log</a></div>
+  </aside>
+  <aside class="inbox-strip" aria-label="Collapsed sidebar">
+    <button class="strip-toggle" title="Expand sidebar" onclick="showScreen('review')">›</button><div class="strip-rule"></div>
+    <span class="strip-dot selected" title="Requirements Analysis · awaiting your review"></span>
+    <span class="strip-dot amber" title="Domain Design · 5 questions"></span>
+    <span class="strip-dot rose" title="Build and Test · 2 failing checks"></span>
+    <div class="strip-rule"></div><span class="strip-dot live-dot"></span><span class="strip-dot live-dot"></span>
+    <div class="strip-rule"></div><span class="strip-dot done"></span><span class="strip-dot done"></span><span class="strip-dot done"></span><span class="strip-dot done"></span>
+  </aside>
+  <section class="right">
+    <header class="intentbar">
+      <div class="intent-title"><strong>260904-todo-app · Requirements Analysis</strong><small>default · 2 / 7 stages · Product Agent</small></div>
+      <div class="chips"><span class="chip">scope: express</span><span class="chip">depth: Minimal</span><span class="chip phase">Inception</span><span class="chip">stage 2 / 7</span></div>
+      <div class="stage-status"><b>Awaiting your review · r1</b><small>requirements.md · revised 2 min ago</small></div>
+    </header>
+    <div class="workarea">
+      <section class="artifact">
+        <nav class="doc-toolbar" aria-label="Document controls"><button class="tool">File</button><button class="tool">Edit</button><button class="tool">View</button><button class="tool">Comment</button><button class="tool">Review</button><span class="tool-sep"></span><button class="tool file">requirements.md ▾</button><span class="tool-right">Markdown · agent-owned · r0&nbsp; | &nbsp;<b style="color:var(--ink)">r1</b>&nbsp; | &nbsp;Diff</span></nav>
+        <nav class="fmt-row" aria-label="Formatting"><button class="tool file">Paragraph ▾</button><span class="tool-sep"></span><button class="tool"><b>B</b></button><button class="tool"><i>I</i></button><button class="tool"><s>S</s></button><button class="tool" title="Code">&lt;&gt;</button><span class="tool-sep"></span><button class="tool" title="Bulleted list">• list</button><button class="tool" title="Numbered list">1.</button><button class="tool" title="Task list">☑</button><button class="tool" title="Quote">❝</button><span class="tool-sep"></span><button class="tool" title="Link">🔗</button><button class="tool" title="Table">▦</button><button class="tool" title="Diagram">⧉</button><span class="ctx">Editing <b>FR2</b> · a suggestion — the file is untouched until you decide</span></nav>
+        <div class="docscroll">
+          <article class="doc">
+            <div class="docmeta"><span class="filename">requirements.md</span><span>Product Agent · revision 1</span><span>4 / 4 questions answered</span><span>Type anywhere — changes are suggestions until you decide</span></div>
+            <h1>Requirements — To-Do Application</h1>
+            <p>A single-user web application for capturing, completing, and deleting tasks. Tasks persist in the browser's local storage; there is no server, account, or synchronisation. The scope is intentionally minimal: one list, no projects or tags.</p>
+            <h2>Functional requirements</h2>
+            <p class="anchor"><span class="bubble good">1</span><strong>FR1 — Add a task.</strong> <span class="mark-good">The user can add a task by typing a title and pressing Enter.</span> Titles are trimmed; an empty title is ignored without an error message.</p>
+            <p class="anchor editing"><span class="bubble violet">2</span><span class="etag">Suggestion · pending</span><span class="mk">**</span><strong>FR2 — Complete a task.</strong><span class="mk">**</span> The user can mark a task complete and uncomplete it. <span class="del">Completed tasks move to the bottom of the list and render with a strike-through.</span> <span class="ins">Completed tasks stay in place and render with a strike-through; list order never changes.<span class="caret"></span></span></p>
+            <p class="anchor"><span class="bubble rose">3</span><strong>FR3 — Delete a task.</strong> Each task has a delete control. <span class="mark-delete">Deletion asks for confirmation.</span> Deleted tasks are removed immediately from storage.</p>
+            <p class="anchor"><span class="bubble violet">4</span><strong>FR4 — Persistence.</strong> The list is saved to <code>localStorage</code> on every change and restored on load. <span class="mark-edit">If storage is unavailable the app shows an error and refuses to start.</span></p>
+            <h2>Non-functional requirements</h2>
+            <p><strong>NFR1 — Performance.</strong> Adding, completing, or deleting a task reflects in the UI within 100 ms for lists up to 500 tasks.</p>
+            <p><strong>NFR2 — Accessibility.</strong> All controls are keyboard-operable and labelled; colour is never the only signal for completion.</p>
+            <h2>Out of scope</h2><ul><li>Accounts, sign-in, or multi-device sync</li><li>Due dates, reminders, tags, or projects</li><li>Any backend or database</li></ul>
+            <h2>Traceability</h2><table><thead><tr><th>Answer</th><th>Requirement</th></tr></thead><tbody><tr><td>Q1 · Web app</td><td>Scope, NFR2</td></tr><tr><td>Q2 · Local storage</td><td>FR4</td></tr><tr><td>Q3 · Single user</td><td>Out of scope</td></tr><tr><td>Q4 · Core only</td><td>FR1–FR3</td></tr></tbody></table>
+          </article>
+        </div>
+        <footer class="decision"><span class="summary"><b>1</b> suggestion pending · <b>1</b> open · <b>2</b> settled</span><span class="spacer"></span><button class="btn">Add general note</button><button class="btn warn">Request changes <span class="kbd">R</span></button><button class="btn primary">Approve <span class="kbd">A</span></button></footer>
+      </section>
+      <aside class="threads" aria-label="Threads">
+        <header><h2>Threads</h2><small>4</small><div class="filters"><span class="filterchip on">Open 3</span><span class="filterchip">Resolved 1</span><span class="filterchip">Agent replies</span><span class="filterchip">r0</span></div></header>
+        <div class="threadlist">
+          <article class="thread good"><p class="quote">“The user can add a task by typing a title and pressing Enter.”</p><div class="who"><span class="avatar">Y</span><b>You</b><span>r0</span><span class="kindtag">Looks good</span></div><div class="status"><span class="ok">Resolved</span><span>· kept in r1</span></div></article>
+          <article class="thread violet pending-card"><p class="quote">“Completed tasks move to the bottom of the list…”</p><div class="who"><span class="avatar">Y</span><b>You</b><span>just now</span><span class="kindtag">Suggested edit</span></div><div class="diff"><span class="del">move to the bottom of the list and</span> <span class="ins">stay in place and</span> render with a strike-through<span class="ins">; list order never changes</span></div><p class="reason">Moving items is disorienting on a small list — keep order stable and just strike them through.</p><div class="status"><span class="pending">Pending</span><span>· sends with your decision</span><button>Discard</button></div></article>
+          <article class="thread rose"><p class="quote">“Deletion asks for confirmation.”</p><div class="who"><span class="avatar">Y</span><b>You</b><span>r0</span><span class="kindtag">Delete</span></div><p class="text">No confirm dialog — undo is friendlier and we said "core only".</p><div class="reply"><div class="who"><span class="avatar agent">A</span><b>Product Agent</b><span>r1</span></div><p class="text">Kept the confirmation: without undo, an accidental delete is unrecoverable. Happy to remove if you'd rather add undo to scope.</p></div><div class="status"><span>Open</span><button>Reply · Resolve</button></div></article>
+          <article class="thread violet"><p class="quote">“If storage is unavailable the app shows an error and refuses to start.”</p><div class="who"><span class="avatar">Y</span><b>You</b><span>r0</span><span class="kindtag">Suggested edit</span></div><div class="diff"><span class="del">refuses to start</span> → <span class="ins">runs in memory for the session and warns that nothing will be saved</span></div><div class="reply"><div class="who"><span class="avatar agent">A</span><b>Product Agent</b></div><p class="text">Applied.</p></div><div class="status"><span class="ok">Addressed in r1</span><button>View change</button></div></article>
+        </div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<!-- QUESTIONS: selecting the to-do app swaps only the right-side action pane. -->
+<main class="screen question-screen">
+  <aside class="side" aria-label="Workflow">
+    <div class="side-tabs"><button>Inbox <span class="n">3</span></button><button class="on">Workflow</button><button class="collapse" title="Collapse sidebar" onclick="showScreen('collapsed')">‹</button></div>
+    <div class="ctx">
+      <button class="sel ws"><small>Workspace</small><span>default</span><i>▾</i></button>
+      <button class="sel intent" onclick="showScreen(document.body.dataset.show==='switcher'?'review':'switcher')"><small>Intent</small><span>260904-todo-app</span><em>express · Minimal · Inception · 2 / 7 stages</em><i>▾</i></button>
+      <div class="pop" role="listbox" aria-label="Intents in default">
+        <div class="ph">Needs you</div>
+        <div class="row on"><span class="d need"></span><span><b>260904-todo-app</b><small>Requirements Analysis · r1</small></span><span class="st need">awaiting review</span></div>
+        <div class="row"><span class="d amber"></span><span><b>260903-the to-do app</b><small>Domain Design</small></span><span class="st need">4 questions</span></div>
+        <div class="row"><span class="d amber"></span><span><b>260902-onboarding</b><small>Build and Test</small></span><span class="st need">2 failing checks</span></div>
+        <div class="ph">In progress</div>
+        <div class="row"><span class="d run"></span><span><b>260904-inventory-sync</b><small>Code Generation · unit-2</small></span><span class="st">writing…</span></div>
+        <div class="row"><span class="d run"></span><span><b>260901-support-router</b><small>Requirements Analysis</small></span><span class="st">revising…</span></div>
+        <div class="ph">Done</div>
+        <div class="row"><span class="d"></span><span><b>260831-export-service</b><small>complete</small></span><span class="st">yesterday</span></div>
+        <hr><div class="new">+ New intent…</div>
+      </div>
+    </div>
+    <div class="tree">
+      <div class="phase">Initialization <span class="cnt">3 / 3</span></div>
+      <details class="stg done"><summary><span class="g">✓</span><span class="nm">Workspace Scaffold</span><span class="st">done · 09:10</span></summary><div class="kids"><div class="kid f "><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></span><span class="lb"><code>aidlc/</code> workspace shell</span><span class="mt">scaffold</span></div></div></details>
+      <details class="stg done"><summary><span class="g">✓</span><span class="nm">Workspace Detection</span><span class="st">done · 09:10</span></summary><div class="kids"><div class="kid f "><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></span><span class="lb"><code>workspace-report.md</code></span><span class="mt">greenfield · Bun</span></div></div></details>
+      <details class="stg done"><summary><span class="g">✓</span><span class="nm">State Init</span><span class="st">done · 09:11</span></summary><div class="kids"><div class="kid f "><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></span><span class="lb"><code>aidlc-state.md</code></span><span class="mt">express · Minimal</span></div></div></details>
+
+      <div class="phase now">Inception <span class="cnt">0 / 1</span></div>
+      <details class="stg skip"><summary><span class="g"></span><span class="nm">Reverse Engineering</span><span class="st">skipped · greenfield</span></summary><div class="kids"><div class="kid hint"><span class="ic"></span><span class="lb">No existing code to analyse — nothing produced.</span></div></div></details>
+      <details class="stg now" open><summary><span class="g">●</span><span class="nm">Requirements Analysis</span><span class="st">4 questions</span></summary><div class="kids">
+        <div class="kid q on "><span class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 1-1 1.7"/><path d="M12 17h.01"/></svg></span><span class="lb">Questions</span><span class="mt"><span class="pill">4 open</span></span></div>
+        <div class="kid f hint"><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></span><span class="lb"><code>requirements.md</code> · written after your answers</span></div>
+        <div class="kid m "><span class="ic"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg></span><span class="lb"><code>memory.md</code></span><span class="mt">diary</span></div>
+      </div></details>
+
+      <div class="phase">Construction <span class="cnt">0 / 2</span></div>
+      <details class="stg todo"><summary><span class="g"></span><span class="nm">Code Generation</span><span class="st">next</span></summary><div class="kids"><div class="kid hint"><span class="ic"></span><span class="lb">Will ask its questions, then produce a plan and code.</span></div></div></details>
+      <details class="stg todo"><summary><span class="g"></span><span class="nm">Build and Test</span><span class="st"></span></summary><div class="kids"><div class="kid hint"><span class="ic"></span><span class="lb">Produces a build &amp; test report.</span></div></div></details>
+
+      <div class="phase">Operation <span class="cnt">0 / 3</span></div>
+      <details class="stg cond"><summary><span class="g">?</span><span class="nm">Deployment Pipeline</span><span class="st">if deploying</span></summary></details>
+      <details class="stg cond"><summary><span class="g">?</span><span class="nm">Deployment Execution</span><span class="st">if deploying</span></summary></details>
+      <details class="stg cond"><summary><span class="g">?</span><span class="nm">Observability Setup</span><span class="st">if deploying</span></summary></details>
+    </div>
+    <div class="side-foot"><span class="dot"></span><span>Agent idle</span><a href="#">All files</a><a href="#">Audit log</a></div>
+  </aside>
+  <section class="right">
+    <header class="intentbar"><div class="intent-title"><strong>260904-todo-app · Requirements Analysis</strong><small>default · 2 / 7 stages · Product Agent</small></div><div class="chips"><span class="chip">scope: express</span><span class="chip">depth: Minimal</span><span class="chip phase">Inception</span><span class="chip">stage 2 / 7</span></div><div class="stage-status"><b>4 questions for you</b><small>question round · recommendation ready</small></div></header>
+    <section class="question-pane">
+      <div class="qscroll">
+        <section class="qcol">
+          <div class="qintro"><h1>Requirements Analysis · questions before the requirements</h1><p>Four decisions in this round. Read the reasoning, then answer — recommendations are pre-selected; you can also edit the questions file in the terminal.</p></div>
+          <section class="qblock">
+            <p class="qnum">Question 1 of 4</p>
+            <h2>Which platform should the to-do app run on?</h2>
+            <div class="explain">
+              <div class="why">Why now</div><p>This is the first fork in the road: a browser app needs no install and no backend, a CLI needs neither UI nor storage design, a mobile app needs a store pipeline. Every later stage — code generation, build and test, deployment — reads this answer.</p>
+              <figure><svg class="dg" viewBox="0 0 760 190" role="img" aria-label="Three deployment shapes"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8792a2"/></marker></defs>
+<!-- Web app -->
+<rect class="box rec" x="8" y="8" width="236" height="174"/>
+<text class="acc" x="20" y="28">RECOMMENDED</text><text class="lbl b" x="20" y="48">Web app</text>
+<rect class="box soft" x="20" y="64" width="212" height="44"/><text class="lbl" x="32" y="82">Browser tab</text><text class="sub" x="32" y="98">HTML · JS · one page</text>
+<rect class="box" x="20" y="130" width="212" height="40"/><text class="lbl" x="32" y="148">localStorage</text><text class="sub" x="32" y="163">on this machine · no server</text>
+<path class="ln" d="M126 108 V128"/>
+<!-- CLI -->
+<rect class="box" x="262" y="8" width="236" height="174"/>
+<text class="sub" x="274" y="28">ALTERNATIVE</text><text class="lbl b" x="274" y="48">Command-line tool</text>
+<rect class="box" x="274" y="64" width="212" height="44"/><text class="lbl" x="286" y="82">Terminal</text><text class="sub" x="286" y="98">add / done / rm subcommands</text>
+<rect class="box" x="274" y="130" width="212" height="40"/><text class="lbl" x="286" y="148">~/.todo.json</text><text class="sub" x="286" y="163">plain file · no UI</text>
+<path class="ln" d="M380 108 V128"/>
+<!-- Mobile -->
+<rect class="box" x="516" y="8" width="236" height="174"/>
+<text class="sub" x="528" y="28">ALTERNATIVE</text><text class="lbl b" x="528" y="48">Mobile app</text>
+<rect class="box" x="528" y="64" width="98" height="44"/><text class="lbl" x="540" y="82">iOS</text><text class="sub" x="540" y="98">Swift</text>
+<rect class="box" x="642" y="64" width="98" height="44"/><text class="lbl" x="654" y="82">Android</text><text class="sub" x="654" y="98">Kotlin</text>
+<rect class="box dim" x="528" y="130" width="212" height="40"/><text class="lbl" x="540" y="148">Store review pipeline</text><text class="sub" x="540" y="163">two builds · signing · weeks</text>
+<path class="ln" d="M577 108 V128"/><path class="ln" d="M691 108 V128"/>
+</svg><figcaption>Figure 1 · What each platform drags in. Only the web app needs one runtime and no pipeline.</figcaption></figure>
+              <div class="why">Trade-offs</div>
+              <table><thead><tr><th>Option</th><th>You get</th><th>You give up</th><th>Cost / risk</th></tr></thead><tbody><tr class="rec"><td>Web app</td><td>Runs anywhere, fastest to a usable build</td><td>Offline is only as good as the browser</td><td>Low</td></tr><tr class=""><td>CLI</td><td>Tiny surface, trivial testing</td><td>No visual list, awkward for most people</td><td>Low</td></tr><tr class=""><td>Desktop</td><td>Native feel</td><td>Packaging per OS</td><td>Medium</td></tr><tr class=""><td>Mobile</td><td>Always at hand</td><td>Store review, two platforms</td><td>High</td></tr></tbody></table>
+              <div class="recommend"><b>Recommendation: Web app.</b> For a lightweight express build it is the shortest path to something you can click on, and it keeps storage (Q2) and users (Q3) simple.</div>
+              <div class="why">Related decisions</div><p class="related">None yet — this is the first question round of the intent.</p>
+            </div>
+            <article class="qcard current">
+              <h3>Your answer</h3>
+              <div class="options"><label class="option rec"><input type="radio" name="todo-q1" checked>Web app <span class="rectag">Recommended</span></label><label class="option"><input type="radio" name="todo-q1">CLI</label><label class="option"><input type="radio" name="todo-q1">Desktop</label><label class="option"><input type="radio" name="todo-q1">Mobile</label><label class="option"><input type="radio" name="todo-q1">Other (please specify)</label></div>
+              <div class="note"><span>Note for the agent</span><input placeholder="Anything the recommendation missed? (optional)"></div>
+            </article>
+          </section>
+          <section class="qblock">
+            <p class="qnum">Question 2 of 4</p>
+            <h2>Where should data be stored?</h2>
+            <div class="explain">
+              <div class="why">Why now</div><p>Storage decides whether a backend exists at all. With no server there is nothing to deploy, secure, or pay for; with one, Q3 (users) and the Operation stages become real work.</p>
+              <figure><svg class="dg" viewBox="0 0 760 150" role="img" aria-label="Data flow with and without a backend"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8792a2"/></marker></defs>
+<rect class="lane" x="8" y="8" width="360" height="134" rx="8"/><text class="acc" x="20" y="28">RECOMMENDED · Browser only</text>
+<rect class="box soft" x="20" y="46" width="130" height="44"/><text class="lbl" x="32" y="64">To-do UI</text><text class="sub" x="32" y="80">in the browser</text>
+<rect class="box" x="226" y="46" width="130" height="44"/><text class="lbl" x="238" y="64">localStorage</text><text class="sub" x="238" y="80">≈5 MB · same origin</text>
+<path class="ln" d="M150 62 H224"/><path class="ln" d="M224 76 H152"/>
+<text class="sub" x="20" y="126">Nothing to deploy · nothing to secure · works offline</text>
+<rect class="lane" x="392" y="8" width="360" height="134" rx="8"/><text class="sub" x="404" y="28">ALTERNATIVE · Small server + DB</text>
+<rect class="box" x="404" y="46" width="96" height="44"/><text class="lbl" x="416" y="64">To-do UI</text>
+<rect class="box" x="524" y="46" width="96" height="44"/><text class="lbl" x="536" y="64">API</text><text class="sub" x="536" y="80">auth · schema</text>
+<rect class="box" x="644" y="46" width="96" height="44"/><text class="lbl" x="656" y="64">Database</text><text class="sub" x="656" y="80">backups</text>
+<path class="ln" d="M500 68 H522"/><path class="ln" d="M620 68 H642"/>
+<rect class="tag" x="404" y="108" width="212" height="22" rx="11"/><text class="tagt" x="416" y="123">+ Deployment Pipeline, Execution, Observability</text>
+</svg><figcaption>Figure 2 · The backend option turns the three conditional Operation stages into required work.</figcaption></figure>
+              <div class="why">Trade-offs</div>
+              <table><thead><tr><th>Option</th><th>You get</th><th>You give up</th><th>Cost / risk</th></tr></thead><tbody><tr class="rec"><td>Browser only</td><td>No backend, nothing to operate</td><td>Sync across devices; data lives on one machine</td><td>Low</td></tr><tr class=""><td>Small server + DB</td><td>Durable, shareable data</td><td>A deployable service, schema, backups</td><td>Medium</td></tr><tr class=""><td>Hosted backend</td><td>Durable with little ops</td><td>Vendor coupling, account setup</td><td>Medium</td></tr></tbody></table>
+              <div class="recommend"><b>Recommendation: Browser only.</b> Nothing to deploy or operate; multi-device sync is out of scope for this intent.</div>
+              <div class="why">Related decisions</div><p class="related">Follows from <a href="#">Q1 · Web app</a>: a browser client can persist locally without a service.</p>
+            </div>
+            <article class="qcard">
+              <h3>Your answer</h3>
+              <div class="options"><label class="option rec"><input type="radio" name="todo-q2" checked>Browser only <span class="rectag">Recommended</span></label><label class="option"><input type="radio" name="todo-q2">Small server + DB</label><label class="option"><input type="radio" name="todo-q2">Hosted backend</label><label class="option"><input type="radio" name="todo-q2">Other (please specify)</label></div>
+              <div class="note"><span>Note for the agent</span><input placeholder="Anything the recommendation missed? (optional)"></div>
+            </article>
+          </section>
+          <section class="qblock">
+            <p class="qnum">Question 3 of 4</p>
+            <h2>Who uses it?</h2>
+            <div class="explain">
+              <div class="why">Why now</div><p>Users determine whether accounts and sharing exist. Accounts imply identity, a backend, and privacy obligations that would contradict a no-server answer to Q2.</p>
+              <figure><svg class="dg" viewBox="0 0 760 130" role="img" aria-label="Single user versus accounts"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8792a2"/></marker></defs>
+<rect class="lane" x="8" y="8" width="300" height="114" rx="8"/><text class="acc" x="20" y="28">RECOMMENDED · Single user, no login</text>
+<circle cx="52" cy="76" r="16" fill="#edf4ff" stroke="#cfe0ff"/><text class="lbl" x="45" y="80">You</text>
+<rect class="box soft" x="110" y="54" width="170" height="44"/><text class="lbl" x="122" y="72">One list</text><text class="sub" x="122" y="88">on one device</text>
+<path class="ln" d="M70 76 H108"/>
+<rect class="lane" x="332" y="8" width="420" height="114" rx="8"/><text class="sub" x="344" y="28">ALTERNATIVE · Several users with accounts</text>
+<circle cx="372" cy="60" r="12" fill="#f7f9fc" stroke="#dfe5ee"/><circle cx="372" cy="92" r="12" fill="#f7f9fc" stroke="#dfe5ee"/>
+<rect class="box" x="412" y="54" width="90" height="44"/><text class="lbl" x="424" y="72">Sign-in</text><text class="sub" x="424" y="88">identity</text>
+<rect class="box" x="526" y="54" width="90" height="44"/><text class="lbl" x="538" y="72">Backend</text><text class="sub" x="538" y="88">per-user data</text>
+<rect class="box dim" x="640" y="54" width="100" height="44"/><text class="lbl" x="652" y="72">Privacy</text><text class="sub" x="652" y="88">review · retention</text>
+<path class="ln" d="M384 62 H410"/><path class="ln" d="M384 90 H410"/><path class="ln" d="M502 76 H524"/><path class="ln dash" d="M616 76 H638"/>
+</svg><figcaption>Figure 3 · Accounts pull in identity, a backend, and a privacy review — and contradict Q2.</figcaption></figure>
+              <div class="why">Trade-offs</div>
+              <table><thead><tr><th>Option</th><th>You get</th><th>You give up</th><th>Cost / risk</th></tr></thead><tbody><tr class="rec"><td>Single user, no login</td><td>No identity, no accounts, no sharing surface</td><td>Collaboration</td><td>Low</td></tr><tr class=""><td>Several users with accounts</td><td>Shared data, per-user views</td><td>Auth, backend, privacy review</td><td>High</td></tr></tbody></table>
+              <div class="recommend"><b>Recommendation: Single user, no login.</b> Consistent with Q2; sharing can be a later intent.</div>
+              <div class="why">Related decisions</div><p class="related">Depends on <a href="#">Q2 · Browser only</a>; changing this reopens storage.</p>
+            </div>
+            <article class="qcard">
+              <h3>Your answer</h3>
+              <div class="options"><label class="option rec"><input type="radio" name="todo-q3" checked>Single user, no login <span class="rectag">Recommended</span></label><label class="option"><input type="radio" name="todo-q3">Several users with accounts</label><label class="option"><input type="radio" name="todo-q3">Other (please specify)</label></div>
+              <div class="note"><span>Note for the agent</span><input placeholder="Anything the recommendation missed? (optional)"></div>
+            </article>
+          </section>
+          <section class="qblock">
+            <p class="qnum">Question 4 of 4</p>
+            <h2>Which features are in the first cut?</h2>
+            <div class="explain">
+              <div class="why">Why now</div><p>Everything not listed here is explicitly deferred. Each addition brings a data model and a UI surface; the first cut should prove the loop end to end.</p>
+              <figure><svg class="dg" viewBox="0 0 760 150" role="img" aria-label="Core loop and deferred features"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8792a2"/></marker></defs>
+<rect class="lane" x="8" y="8" width="420" height="134" rx="8"/><text class="acc" x="20" y="28">RECOMMENDED · Core only — the loop</text>
+<rect class="box soft" x="20" y="60" width="84" height="40"/><text class="lbl" x="32" y="84">Add</text>
+<rect class="box soft" x="132" y="60" width="84" height="40"/><text class="lbl" x="144" y="84">Complete</text>
+<rect class="box soft" x="244" y="60" width="84" height="40"/><text class="lbl" x="256" y="84">Delete</text>
+<rect class="box" x="356" y="60" width="60" height="40"/><text class="lbl" x="364" y="84">Persist</text>
+<path class="ln" d="M104 80 H130"/><path class="ln" d="M216 80 H242"/><path class="ln" d="M328 80 H354"/>
+<path class="ln dash" d="M386 100 V118 H62 V102"/>
+<text class="ok" x="20" y="130">✓ FR1–FR4 · NFR1–NFR2 cover exactly this</text>
+<rect class="lane" x="452" y="8" width="300" height="134" rx="8"/><text class="sub" x="464" y="28">DEFERRED · later intents</text>
+<rect class="box dim" x="464" y="46" width="276" height="38"/><text class="lbl" x="476" y="62">Due dates &amp; reminders</text><text class="sub" x="476" y="77">date model · notifications</text>
+<rect class="box dim" x="464" y="96" width="276" height="38"/><text class="lbl" x="476" y="112">Projects &amp; tags</text><text class="sub" x="476" y="127">two models · filters</text>
+</svg><figcaption>Figure 4 · The first cut proves the loop end to end; each deferred feature is its own data model and UI surface.</figcaption></figure>
+              <div class="why">Trade-offs</div>
+              <table><thead><tr><th>Option</th><th>You get</th><th>You give up</th><th>Cost / risk</th></tr></thead><tbody><tr class="rec"><td>Core only</td><td>A working add / complete / delete loop soonest</td><td>Reminders, structure</td><td>Low</td></tr><tr class=""><td>Core + due dates</td><td>Time awareness</td><td>Date handling, notifications</td><td>Medium</td></tr><tr class=""><td>Core + projects and tags</td><td>Organisation</td><td>Two more models and filters</td><td>Medium</td></tr></tbody></table>
+              <div class="recommend"><b>Recommendation: Core only.</b> A working loop before any embellishment; due dates and tags each fit a second intent.</div>
+              <div class="why">Related decisions</div><p class="related">Scope of <a href="#">Requirements Analysis</a>; feeds Units Generation when the scope has one.</p>
+            </div>
+            <article class="qcard">
+              <h3>Your answer</h3>
+              <div class="options"><label class="option rec"><input type="radio" name="todo-q4" checked>Core only <span class="rectag">Recommended</span></label><label class="option"><input type="radio" name="todo-q4">Core + due dates</label><label class="option"><input type="radio" name="todo-q4">Core + projects and tags</label><label class="option"><input type="radio" name="todo-q4">Other (please specify)</label></div>
+              <div class="note"><span>Note for the agent</span><input placeholder="Anything the recommendation missed? (optional)"></div>
+            </article>
+          </section>
+        </section>
+      </div>
+      <footer class="savebar"><span class="progress"><i></i><i></i><i></i><i></i></span><span class="summary">4 of 4 answered · all on the recommendation</span><span class="spacer"></span><button class="btn primary">Save answers — the agent continues</button></footer>
+    </section>
+  </section>
+</main>
+
+
+<nav class="mocknav" aria-label="Mock screens"><button class="nav-review" onclick="showScreen('review')">review</button><button class="nav-switcher" onclick="showScreen('switcher')">intent switcher</button><button class="nav-questions" onclick="showScreen('questions')">questions</button><button class="nav-collapsed" onclick="showScreen('collapsed')">collapsed</button></nav>
+<script>
+function showScreen(id){document.body.dataset.show=id}
+</script>
+</body>
+</html>

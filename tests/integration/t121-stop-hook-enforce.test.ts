@@ -108,6 +108,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { reviewUiProjectId, writeServerInfo } from "../../dist/claude/.claude/tools/aidlc-review-ui-shared.ts";
 
 const BUN = process.execPath; // the bun running this test (mirrors t104)
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -1518,6 +1519,126 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       "",
       "code-generation",
     );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
+  // --- (f-browser) "Guide me in the browser": hold the turn for Save, then block ---
+  //
+  // The browser round is positively signalled by <slug>-questions-guide.html
+  // beside the blank questions file plus a live review-UI daemon. Then the hook
+  // waits for the daemon's answers-NNN.json and BLOCKS with the apply command,
+  // so the conductor resumes without the human typing `done`. No guide, no
+  // daemon, or expiry → the plain pending-question allow, exactly as before.
+  const BROWSER_QUESTIONS = "# Questions\n\n## Q1\nWhich URL scheme?\n[Answer]:\n";
+
+  function seedBrowserRound(
+    proj: string,
+    opts: { guide?: boolean; daemon?: boolean; submission?: boolean } = {},
+  ): { env: Record<string, string>; reviewDir: string; questionsFile: string } {
+    seedInProgressWithQuestions(proj, { questions: BROWSER_QUESTIONS });
+    const stageDir = join(seededRecordDir(proj), "inception", "requirements-analysis");
+    if (opts.guide !== false) {
+      writeFileSync(join(stageDir, "requirements-analysis-questions-guide.html"), "<!doctype html><title>Guide</title>", "utf-8");
+    }
+    const reviewHome = mkdtempSync(join(tmpdir(), "aidlc-t121-review-"));
+    const env: Record<string, string> = { AIDLC_REVIEW_UI: "1", AIDLC_REVIEW_HOME: reviewHome };
+    if (opts.daemon !== false) {
+      const now = new Date().toISOString();
+      writeServerInfo({
+        version: 1,
+        pid: process.pid,
+        host: "127.0.0.1",
+        port: 43121,
+        url: "http://127.0.0.1:43121/",
+        token: "t121-token",
+        project_dir: proj,
+        project_id: reviewUiProjectId(proj),
+        started_at: now,
+        heartbeat_at: now,
+        idle_minutes: 240,
+      }, { ...process.env, AIDLC_REVIEW_HOME: reviewHome });
+    }
+    const reviewDir = join(stageDir, ".review-ui");
+    if (opts.submission) writeBrowserSubmission(reviewDir);
+    return {
+      env,
+      reviewDir,
+      questionsFile: `aidlc/spaces/default/intents/${seededRecordDir(proj).split("/").pop()}/inception/requirements-analysis/requirements-analysis-questions.md`,
+    };
+  }
+
+  function writeBrowserSubmission(reviewDir: string): void {
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(reviewDir, "answers-001.json"),
+      `${JSON.stringify({ version: 1, questions_file: "x", source_sha256: "y", created: "2026-09-04T00:00:00Z", answers: [{ id: "Q1", labels: ["A"] }] })}\n`,
+      "utf-8",
+    );
+  }
+
+  test("(f-browser) saved browser answers BLOCK the stop with the apply command — no `done` needed", () => {
+    const proj = makeProject();
+    const { env, questionsFile } = seedBrowserRound(proj, { submission: true });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, env);
+    expect(r.rc).toBe(0);
+    const decision = JSON.parse(r.out) as { decision: string; reason: string };
+    expect(decision.decision).toBe("block");
+    expect(decision.reason).toContain(`aidlc-log.ts answers-apply --stage requirements-analysis --questions-file ${questionsFile}`);
+    expect(decision.reason).toContain("Do not ask the human to type done");
+  }, 30000);
+
+  test("(f-browser) the hook holds the turn until the submission lands, then blocks", async () => {
+    const proj = makeProject();
+    const { env, reviewDir } = seedBrowserRound(proj, { submission: false });
+    const child = Bun.spawn([BUN, HOOK_TS], {
+      cwd: proj,
+      env: {
+        ...(process.env as Record<string, string>),
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_HARNESS_DIR: ".claude",
+        MOCK_KIND: "run-stage",
+        MOCK_UNIT: "",
+        MOCK_STAGE: "requirements-analysis",
+        MOCK_MARKER_PATH: join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "",
+        AIDLC_REVIEW_WAIT_SECONDS: "20",
+        ...env,
+      },
+      stdin: new Blob(['{"stop_hook_active":false}']),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    // Real subprocess against a real directory watcher: the Save must land
+    // after the hook is already waiting, so this is a genuine wall-clock gap.
+    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+    expect(child.exitCode).toBeNull();
+    writeBrowserSubmission(reviewDir);
+    expect(await child.exited).toBe(0);
+    const decision = JSON.parse((await new Response(child.stdout).text()).trim()) as { decision: string };
+    expect(decision.decision).toBe("block");
+  }, 40000);
+
+  test("(f-browser) expiry falls back to the plain allow (the `done` flow)", () => {
+    const proj = makeProject();
+    const { env } = seedBrowserRound(proj, { submission: false });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, { ...env, AIDLC_REVIEW_WAIT_SECONDS: "0" });
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
+  test("(f-browser) a terminal question round (no guide) is never held, even with a stray submission", () => {
+    const proj = makeProject();
+    const { env } = seedBrowserRound(proj, { guide: false, submission: true });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, env);
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
+  test("(f-browser) no live daemon means nobody can click Save: plain allow", () => {
+    const proj = makeProject();
+    const { env } = seedBrowserRound(proj, { daemon: false, submission: true });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, env);
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
   }, 30000);

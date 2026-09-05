@@ -18,6 +18,16 @@ const ROOT = join(import.meta.dir, "..", "..");
 const DAEMON = join(ROOT, "core", "tools", "aidlc-review-ui.ts");
 const TOKEN_HEADER = "X-AIDLC-Token";
 const INTENT = "questions-fixture-12345678";
+const VALID_GUIDE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="aidlc-artifact" content="requirements-analysis-questions-guide">
+<meta name="aidlc-stage" content="requirements-analysis">
+<title>Requirements questions guide</title></head><body>
+<section data-aidlc="summary"><p>This round decides deployment and controls.</p></section>
+<section data-aidlc-question="Q1" id="Q1"><h2>Which deployment model?</h2><h3>Why now</h3><p>Infrastructure depends on it.</p><h3>Recommendation</h3><p data-aidlc-recommend="B">Global fits.</p></section>
+<section data-aidlc-question="Q2" id="Q2"><h2>Which controls?</h2><h3>Why now</h3><p>Compliance depends on it.</p><h3>Recommendation</h3><p data-aidlc-recommend="A">Encryption first.</p></section>
+</body></html>
+`;
 
 let temp = "";
 let project = "";
@@ -130,10 +140,9 @@ beforeAll(async () => {
       "",
     ].join("\n"),
   );
-  writeFileSync(
-    join(stagePath, "requirements-analysis-questions-guide.html"),
-    "<!doctype html><title>Requirements questions guide</title>\n",
-  );
+  // A complete explainer: the daemon publishes a guide (and marks the round
+  // ready) only once it passes the guide check, so the fixture must pass it.
+  writeFileSync(join(stagePath, "requirements-analysis-questions-guide.html"), VALID_GUIDE);
   writeFileSync(join(stagePath, "other.md"), "# Not the current questions file\n");
   writeFileSync(
     graphPath,
@@ -209,13 +218,31 @@ describe("t351 review UI questions routes", () => {
     const state = await authorized("/api/state");
     expect(state.status).toBe(200);
     expect(await state.json()).toMatchObject({
+      // A question round runs before any gate publishes a pointer; the header
+      // still needs the stage, so the payload names it from the state file.
+      current: null,
+      current_stage: "requirements-analysis",
       questions: {
         file: questionsFile,
         guide: projectRelative(join(stagePath, "requirements-analysis-questions-guide.html")),
+        ready: true,
+        preparing: false,
         stage: "requirements-analysis",
         stage_dir: projectRelative(stagePath),
       },
     });
+
+    // A half-written explainer is never published: while the guide file fails
+    // its check (here: an unfilled scaffold recommendation) the round reports
+    // `preparing` with no guide, so the tab neither steers nor renders a form.
+    const guidePath = join(stagePath, "requirements-analysis-questions-guide.html");
+    writeFileSync(guidePath, VALID_GUIDE.replace('data-aidlc-recommend="B"', 'data-aidlc-recommend=""'));
+    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: true });
+    // No explainer at all is a terminal round: presentable, not a browser round.
+    rmSync(guidePath);
+    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: false });
+    writeFileSync(guidePath, VALID_GUIDE);
+    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ ready: true, preparing: false });
 
     const questionsResponse = await authorized(`/api/questions?path=${encodeURIComponent(questionsFile)}`);
     expect(questionsResponse.status).toBe(200);
@@ -316,6 +343,16 @@ describe("t351 review UI questions routes", () => {
       ],
     });
     expect(diskSubmission.created).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    // The Save click is a trusted human act: the daemon records the presence
+    // row answers-apply demands, so no terminal keystroke is needed afterwards.
+    const auditDir = join(project, "aidlc", "spaces", "default", "intents", INTENT, "audit");
+    const auditText = Array.from(new Bun.Glob("*.md").scanSync(auditDir))
+      .map((file) => readFileSync(join(auditDir, file), "utf-8"))
+      .join("\n");
+    expect(auditText.match(/\*\*Event\*\*: HUMAN_TURN/g)).toHaveLength(1);
+    expect(auditText).toContain("**Mode**: browser");
+    expect(auditText).toContain("**Source**: review-ui");
+    expect(auditText).toContain("**Submission**: answers-001.json");
 
     writeFileSync(questionsPath, `${readFileSync(questionsPath, "utf-8")}<!-- changed -->\n`);
     const stale = await authorized("/api/answers", {

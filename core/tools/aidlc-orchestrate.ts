@@ -253,6 +253,7 @@ import {
   pendingFeedback,
   readCurrentPointer,
   reviewUiEnabled,
+  reviewUiStrict,
   sha256Hex,
 } from "./aidlc-review-ui-shared.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
@@ -416,9 +417,14 @@ function prepareEmission(directive: Directive): PreparedEmission {
       const recordPrefix = engineRelativeRecordDir(engineProjectDir);
       const record = recordPrefix ? join(engineProjectDir, ...recordPrefix.split("/")) : null;
       const open = record ? readCurrentPointer(record)?.open : null;
+      // By default the origin itself opens (the daemon trusts a typed
+      // navigation), so it is always the URL to print; strict mode prints a
+      // stored single-use link only while it is still fresh.
       const reviewUi = {
         origin,
-        ...(openLinkIsFresh(open, engineProjectDir) ? { url: open.url } : {}),
+        ...(reviewUiStrict()
+          ? (openLinkIsFresh(open, engineProjectDir) ? { url: open.url } : {})
+          : { url: origin }),
       };
       transported = {
         ...transported,
@@ -3082,11 +3088,19 @@ function selectShippedInlineKnowledge(
   });
 }
 
+// Shipped shared knowledge that only applies to one project type. A greenfield
+// workflow has no existing code for the brownfield safeguards to protect, so the
+// conductor should not spend a read (and its context) on them at every stage.
+const PROJECT_TYPE_ONLY_SHARED_KNOWLEDGE: Readonly<Record<string, "brownfield" | "greenfield">> = {
+  "brownfield.md": "brownfield",
+};
+
 function inlineContextEntries(
   node: GraphStage,
   codekbCtx?: CodekbCtx,
   warnings: string[] = [],
   depth: string | null = null,
+  projectType: "brownfield" | "greenfield" | null = null,
 ): InlineContextEntry[] {
   const agents = inlineAgentsFor(node);
   if (agents.length === 0) return [];
@@ -3137,7 +3151,12 @@ function inlineContextEntries(
       depth,
       harnessRoot,
       pluginOwners,
-    ).map((f) => ({ ...f, agent: null })),
+    )
+      .filter((f) => {
+        const only = PROJECT_TYPE_ONLY_SHARED_KNOWLEDGE[toPosix(relative(join(harnessRoot, "knowledge", "aidlc-shared"), f.abs))];
+        return only === undefined || projectType === null || only === projectType;
+      })
+      .map((f) => ({ ...f, agent: null })),
   );
   for (const agent of agents) {
     entries.push(
@@ -3196,9 +3215,10 @@ function inlineContextRoster(
   node: GraphStage,
   codekbCtx?: CodekbCtx,
   depth: string | null = null,
+  projectType: "brownfield" | "greenfield" | null = null,
 ): { paths: string[]; warnings: string[] } {
   const warnings: string[] = [];
-  const allPaths = inlineContextEntries(node, codekbCtx, warnings, depth).map((e) => e.rel);
+  const allPaths = inlineContextEntries(node, codekbCtx, warnings, depth, projectType).map((e) => e.rel);
   const paths: string[] = [];
   for (const path of allPaths) {
     const candidate = [...paths, path];
@@ -3304,7 +3324,7 @@ function buildRunStageDirective(
   const depth = stateContent
     ? getField(stateContent, "Depth")
     : loadScopeMetadata()[scope]?.depth ?? null;
-  const inlineContext = inlineContextRoster(node, codekbCtx, depth);
+  const inlineContext = inlineContextRoster(node, codekbCtx, depth, projectType);
   const ruleEntries = codekbCtx
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
     : null;
@@ -3382,6 +3402,10 @@ function buildRunStageDirective(
         reviewClass === "advisory" ? 1 : node.reviewer_max_iterations ?? 2;
     }
   }
+  // Learnings ritual — the scope may switch the §13 turn off (`learnings: off`),
+  // the way review_cap switches reviewers off. Emitted only as `false`; a scope
+  // that says nothing keeps the ritual, so existing directives are byte-stable.
+  if (loadScopeMetadata()[scope]?.learnings === "off") directive.learnings = false;
   const protocolModules: ProtocolModule[] = [];
   if (directive.reviewer && directive.review_class) {
     protocolModules.push("reviewer");

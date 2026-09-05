@@ -27,13 +27,17 @@ import {
   docsRoot,
   findStageBySlug,
   getField,
+  humanTurnMintAllowed,
   isPerUnitStage,
+  markHumanTurn,
   parseCheckboxes,
   readStateFile,
   recordDir,
+  spacesRoot,
   stageDir,
   stateFilePath,
 } from "./aidlc-lib.ts";
+import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   ANSWERS_PREFIX,
   answersFileName,
@@ -47,13 +51,14 @@ import {
   feedbackFileName,
   HEARTBEAT_INTERVAL_MS,
   consumeReviewUiOpenNonce,
-  mintReviewUiOpenUrl,
   nextSequence,
   readCurrentPointer,
   readManifest,
   readServerInfo,
   removeServerInfo,
+  reviewUiHumanUrl,
   reviewUiProjectId,
+  reviewUiStrict,
   serverInfoLooksAlive,
   sha256Hex,
   stageReviewUiDir,
@@ -78,11 +83,18 @@ import {
   type FeedbackRequest,
   type ReviewAnnotation,
 } from "./aidlc-review-ui-render.ts";
+import { checkGuideArtifact } from "./aidlc-html.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_ANSWERS_BODY_BYTES = 256 * 1024;
 const WATCH_DEBOUNCE_MS = 150;
+// Browser session cookie: renewed on every cookie-authenticated request so an
+// in-use tab never lapses; invalid the moment the daemon restarts (new token).
+const SESSION_COOKIE_MAX_AGE_S = 12 * 60 * 60;
+// At a gate, a tab that reloaded or reconnected within this window still counts
+// as present; only a genuinely absent browser triggers auto-open.
+const AUTO_OPEN_GRACE_MS = 10_000;
 // Artifact documents (HTML and rendered Markdown) run in an opaque-origin
 // sandbox with every network direction closed; `'self'` admits only the
 // daemon's own asset route (mermaid) for scripts.
@@ -104,8 +116,17 @@ Options:
   --help                            Show this help
 `;
 
-function forbiddenPage(): Response {
-  const html = '<!doctype html><html><head><meta charset="utf-8"><title>Review UI access required</title></head><body><main><h1>Review UI access required</h1><p>This review link expired or was already used.</p><p>Run <code>bun &lt;harnessDir&gt;/tools/aidlc-review-ui.ts open</code> for a fresh one.</p></main></body></html>';
+/**
+ * Shown only when the first hop could not be trusted: strict mode, a browser
+ * without Fetch Metadata, or a consumed link. A human who typed the URL and a
+ * human whose link was consumed need different guidance. The page is
+ * unauthenticated, so it names only the harness command — never a filesystem path.
+ */
+function forbiddenPage(reason: "no-session" | "link-consumed"): Response {
+  const lead = reason === "no-session"
+    ? "This browser has no review session yet, and this address cannot start one here (strict mode, or a browser without Fetch Metadata); you need a single-use link."
+    : "This review link expired or was already used.";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Review UI access required</title></head><body><main><h1>Review UI access required</h1><p>${lead}</p><p>Run <code>/aidlc --status</code> in your harness for a fresh link.</p></main></body></html>`;
   return new Response(html, {
     status: 403,
     headers: {
@@ -215,6 +236,49 @@ function authenticated(request: Request, token: string): boolean {
   return request.headers.get("X-AIDLC-Token") === token || cookieToken(request) === token;
 }
 
+/** Set-Cookie value for the browser session; used on the nonce exchange and on every renewal. */
+function sessionCookie(token: string): string {
+  return `aidlc_review=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_COOKIE_MAX_AGE_S}`;
+}
+
+/** Re-issue the session cookie on a cookie-authenticated response (sliding renewal). */
+function withSessionCookie(response: Response, token: string): Response {
+  const headers = new Headers(response.headers);
+  headers.append("Set-Cookie", sessionCookie(token));
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+/**
+ * First-hop trust without a link: the browser itself vouches for a
+ * user-initiated top-level navigation. `Sec-Fetch-Site: none` (typed URL,
+ * bookmark, reload, `open` from the terminal) or `same-origin` cannot be forged
+ * by a page on another site — its navigations arrive as `cross-site` — and a
+ * DNS-rebinding attempt arrives with a foreign `Host`. Browsers without Fetch
+ * Metadata fail closed to the nonce-link path. Non-browser local processes can
+ * forge these headers, but they are the same user and already hold the files.
+ */
+function browserNavigationTrusted(request: Request, allowedHosts: ReadonlySet<string>): boolean {
+  const site = request.headers.get("sec-fetch-site");
+  if (site !== "none" && site !== "same-origin") return false;
+  if (request.headers.get("sec-fetch-mode") !== "navigate") return false;
+  if (request.headers.get("sec-fetch-dest") !== "document") return false;
+  const host = request.headers.get("host")?.toLowerCase();
+  return host !== undefined && allowedHosts.has(host);
+}
+
+function appShellResponse(): Response {
+  const index = join(ASSET_ROOT, "index.html");
+  if (!existsSync(index)) throw new HttpError(404, "app shell not found");
+  return new Response(Bun.file(index), {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": APP_CSP,
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+    },
+  });
+}
+
 function mimeType(path: string): string {
   const mimeByExtension: Record<string, string> = {
     ".css": "text/css; charset=utf-8",
@@ -298,7 +362,12 @@ function stateContext(projectDir: string): StateContext {
 
 interface QuestionsTarget {
   file: string;
+  /** The explainer, published only once it passes the guide check. */
   guide: string | null;
+  /** Browser round complete: explainer present and valid. */
+  ready: boolean;
+  /** A guide file exists but does not pass yet — the agent is still writing it. */
+  preparing: boolean;
   stage: string;
   stage_dir: string;
   questionsPath: string;
@@ -336,19 +405,34 @@ function currentQuestionsTarget(projectDir: string, context = stateContext(proje
     return null;
   }
 
+  // The explainer decides how the round reaches the human. A browser round is
+  // never shown half-built: while a guide file exists but fails the guide check
+  // (unfilled scaffold, empty recommendations, sections out of step with the
+  // questions), the round is "preparing" — the tab must not steer, open, or
+  // render the form yet. Only a passing guide makes the round `ready`, and only
+  // then is it published as the guide. No guide file at all is a terminal round.
   const guideFile = `${stageRelative}/${stage.slug}-questions-guide.html`;
   let guide: string | null = null;
+  let preparing = false;
   try {
     const guidePath = resolveProjectAidlcPath(projectDir, guideFile);
     regularFile(guidePath);
-    guide = guideFile;
+    const verdict = checkGuideArtifact(
+      readFileSync(guidePath, "utf-8"),
+      readFileSync(questionsPath, "utf-8"),
+      { name: `${stage.slug}-questions-guide`, stage: stage.slug },
+    );
+    if (verdict.ok) guide = guideFile;
+    else preparing = true;
   } catch (error) {
     if (error instanceof PathConfinementError) throw error;
-    // The explainer is optional while the questions file is being prepared.
+    // No explainer: a terminal round, or one not started yet.
   }
   return {
     file,
     guide,
+    ready: guide !== null,
+    preparing,
     stage: stage.slug,
     stage_dir: stageRelative,
     questionsPath,
@@ -375,6 +459,9 @@ function statePayload(projectDir: string): Record<string, unknown> {
     record_dir: posixRelative(projectDir, context.record),
     current: context.current,
     manifest: context.manifest,
+    // The workflow's own notion of the stage, so the header can name it during
+    // question rounds and authoring — before any gate has published a pointer.
+    current_stage: currentStage,
     stage_status: stageMarker(context.state, currentStage),
     revision_count: revision !== null && Number.isInteger(revision) ? revision : null,
     html_artifacts: context.formats.html.size > 0,
@@ -383,6 +470,8 @@ function statePayload(projectDir: string): Record<string, unknown> {
       : {
           file: questions.file,
           guide: questions.guide,
+          ready: questions.ready,
+          preparing: questions.preparing,
           stage: questions.stage,
           stage_dir: questions.stage_dir,
         },
@@ -810,6 +899,25 @@ async function answersResponse(projectDir: string, request: Request): Promise<Re
     } finally {
       closeSync(descriptor);
     }
+    // The click is a human act observed by a trusted seam — the same standing
+    // as a prompt submit or an answered widget — so record the presence the
+    // interview gate demands, and the conversational marker the Stop hook
+    // reads. Fail-open: the submission is already on disk; a mint failure must
+    // not turn a saved answer into an error for the human.
+    try {
+      if (humanTurnMintAllowed()) {
+        appendAuditEntry(
+          "HUMAN_TURN",
+          { Mode: "browser", Source: "review-ui", Submission: file },
+          projectDir,
+          activeIntent(projectDir, activeSpace(projectDir)) ?? undefined,
+          activeSpace(projectDir),
+        );
+      }
+      markHumanTurn(projectDir);
+    } catch (error) {
+      process.stderr.write(`Review UI: human-turn mint failed after ${file}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
     return json({ file });
   }
 }
@@ -877,7 +985,10 @@ async function serve(projectDir: string): Promise<void> {
   let wsClients = 0;
   let lastStateChange = Date.now();
   let lastReviewState: string | null = null;
-  let opened = false;
+  let lastClientSeenAt = 0;
+  const strict = reviewUiStrict();
+  // Hosts a trusted navigation may carry; filled once the port is known.
+  const allowedHosts = new Set<string>();
   let stopped = false;
   let debounce: ReturnType<typeof setTimeout> | null = null;
   const watchers: FSWatcher[] = [];
@@ -900,63 +1011,68 @@ async function serve(projectDir: string): Promise<void> {
 
       const openMatch = /^\/open\/([^/]+)$/.exec(url.pathname);
       if (request.method === "GET" && openMatch) {
-        if (!consumeReviewUiOpenNonce(projectDir, openMatch[1])) return forbiddenPage();
+        if (!consumeReviewUiOpenNonce(projectDir, openMatch[1])) return forbiddenPage("link-consumed");
         return new Response(null, {
           status: 302,
           headers: {
             Location: "/",
             "Cache-Control": "no-store",
-            "Set-Cookie": `aidlc_review=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`,
+            "Set-Cookie": sessionCookie(token),
           },
         });
       }
-      if (url.pathname === "/" && !authenticated(request, token)) return forbiddenPage();
+      if (url.pathname === "/" && !authenticated(request, token)) {
+        if (!strict && request.method === "GET" && browserNavigationTrusted(request, allowedHosts)) {
+          lastClientSeenAt = Date.now();
+          return withSessionCookie(appShellResponse(), token);
+        }
+        return forbiddenPage("no-session");
+      }
       if (url.pathname !== "/" && !authenticated(request, token)) {
         return errorResponse(401, "unauthorized");
       }
+      lastClientSeenAt = Date.now();
+      // Cookie sessions renew on activity (sliding window) so an in-use tab
+      // never lapses mid-review; the token check still bounds every session
+      // to this daemon's lifetime. Tooling authenticating via header gets no cookie.
+      const viaCookie = cookieToken(request) === token;
 
-      try {
-        if (url.pathname === "/" && request.method === "GET") {
-          const index = join(ASSET_ROOT, "index.html");
-          if (!existsSync(index)) throw new HttpError(404, "app shell not found");
-          return new Response(Bun.file(index), {
-            headers: {
-              "Content-Type": "text/html; charset=utf-8",
-              "Content-Security-Policy": APP_CSP,
-              "X-Content-Type-Options": "nosniff",
-              "Referrer-Policy": "no-referrer",
-            },
-          });
+      const response = await (async (): Promise<Response> => {
+        try {
+          if (url.pathname === "/" && request.method === "GET") return appShellResponse();
+          if (request.method === "GET" && url.pathname === "/api/state") return json(statePayload(projectDir));
+          if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir));
+          if (request.method === "GET" && url.pathname === "/api/artifact") return artifactResponse(projectDir, url);
+          if (request.method === "GET" && url.pathname === "/api/raw") return rawResponse(projectDir, url);
+          if (request.method === "GET" && url.pathname === "/api/questions") return questionsResponse(projectDir, url);
+          if (request.method === "POST" && url.pathname === "/api/feedback") return await feedbackResponse(projectDir, request);
+          if (request.method === "GET" && url.pathname === "/api/snapshots") return snapshotsResponse(projectDir, url);
+          if (request.method === "POST" && url.pathname === "/api/answers") return await answersResponse(projectDir, request);
+          if (request.method === "GET" && url.pathname === "/api/snapshot") return snapshotResponse(projectDir, url);
+          if (request.method === "GET" && url.pathname === "/api/diff") return diffResponse(projectDir, url);
+          if (request.method === "GET" && url.pathname === "/api/export") return exportResponse(projectDir, url);
+          return errorResponse(404, "not found");
+        } catch (error) {
+          if (error instanceof PathConfinementError) return errorResponse(403, "path escapes aidlc root");
+          if (error instanceof HttpError) return errorResponse(error.status, error.message);
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ENOENT" || code === "ENOTDIR") return errorResponse(404, "not found");
+          process.stderr.write(`Review UI request failed: ${error instanceof Error ? error.message : String(error)}\n`);
+          return errorResponse(500, "internal error");
         }
-        if (request.method === "GET" && url.pathname === "/api/state") return json(statePayload(projectDir));
-        if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir));
-        if (request.method === "GET" && url.pathname === "/api/artifact") return artifactResponse(projectDir, url);
-        if (request.method === "GET" && url.pathname === "/api/raw") return rawResponse(projectDir, url);
-        if (request.method === "GET" && url.pathname === "/api/questions") return questionsResponse(projectDir, url);
-        if (request.method === "POST" && url.pathname === "/api/feedback") return await feedbackResponse(projectDir, request);
-        if (request.method === "GET" && url.pathname === "/api/snapshots") return snapshotsResponse(projectDir, url);
-        if (request.method === "POST" && url.pathname === "/api/answers") return await answersResponse(projectDir, request);
-        if (request.method === "GET" && url.pathname === "/api/snapshot") return snapshotResponse(projectDir, url);
-        if (request.method === "GET" && url.pathname === "/api/diff") return diffResponse(projectDir, url);
-        if (request.method === "GET" && url.pathname === "/api/export") return exportResponse(projectDir, url);
-        return errorResponse(404, "not found");
-      } catch (error) {
-        if (error instanceof PathConfinementError) return errorResponse(403, "path escapes aidlc root");
-        if (error instanceof HttpError) return errorResponse(error.status, error.message);
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code === "ENOENT" || code === "ENOTDIR") return errorResponse(404, "not found");
-        process.stderr.write(`Review UI request failed: ${error instanceof Error ? error.message : String(error)}\n`);
-        return errorResponse(500, "internal error");
-      }
+      })();
+      return viaCookie ? withSessionCookie(response, token) : response;
     },
     websocket: {
       open(ws) {
         wsClients++;
+        lastClientSeenAt = Date.now();
         ws.subscribe("state");
       },
       close(ws) {
         ws.unsubscribe("state");
         wsClients = Math.max(0, wsClients - 1);
+        lastClientSeenAt = Date.now();
       },
       message() {
         // The M1 socket is server-push only.
@@ -966,6 +1082,12 @@ async function serve(projectDir: string): Promise<void> {
 
   baseOrigin = `http://${urlHost(bindHost)}:${server.port}`;
   const daemonOrigin = `${baseOrigin}/`;
+  // A trusted navigation must name this daemon: the advertised host plus the
+  // literal loopback spellings a human may type for it.
+  allowedHosts.add(`${urlHost(bindHost)}:${server.port}`.toLowerCase());
+  if (bindHost === "127.0.0.1" || bindHost === "::1" || bindHost === "localhost") {
+    for (const spelling of ["localhost", "127.0.0.1", "[::1]"]) allowedHosts.add(`${spelling}:${server.port}`);
+  }
   const started = new Date().toISOString();
   currentInfo = {
     version: 1,
@@ -981,24 +1103,42 @@ async function serve(projectDir: string): Promise<void> {
     idle_minutes: idleMinutes,
   };
   writeServerInfo(currentInfo);
-  openUrl = mintReviewUiOpenUrl(projectDir) ?? daemonOrigin;
+  openUrl = reviewUiHumanUrl(projectDir) ?? daemonOrigin;
   process.stdout.write(`Review UI: ${openUrl}\n`);
 
+  // Two moments need the human's eyes: a gate opening, and a browser question
+  // round beginning (the guide explainer landing beside the questions file).
+  let lastGuideFile: string | null = null;
   const observeState = (): void => {
     lastStateChange = Date.now();
-    const state = stateContext(projectDir).current?.state ?? null;
+    const context = stateContext(projectDir);
+    const state = context.current?.state ?? null;
+    // `guide` is published only once the explainer passes its check, so this
+    // transition is "the round is ready for the human", never "a file appeared".
+    let guideFile: string | null = null;
+    try {
+      guideFile = currentQuestionsTarget(projectDir, context)?.guide ?? null;
+    } catch {
+      // A confinement error here is a malformed record, not a reason to stop publishing.
+    }
+    const gateOpened = state === "awaiting-approval" && lastReviewState !== "awaiting-approval";
+    const roundOpened = guideFile !== null && guideFile !== lastGuideFile;
+    // If no browser is looking (no live socket and no authenticated traffic
+    // within the grace window — which covers a tab reload or a transient
+    // reconnect), open one so the human never has to copy a link. A connected
+    // tab is steered by the state push instead; never a second tab.
     if (
-      !opened &&
-      state === "awaiting-approval" &&
-      lastReviewState !== "awaiting-approval" &&
+      (gateOpened || roundOpened) &&
+      wsClients === 0 &&
+      Date.now() - lastClientSeenAt > AUTO_OPEN_GRACE_MS &&
       process.env[ENV_REVIEW_OPEN] !== "0" &&
       !process.env.SSH_CONNECTION
     ) {
-      opened = true;
-      const transitionUrl = mintReviewUiOpenUrl(projectDir);
+      const transitionUrl = reviewUiHumanUrl(projectDir);
       if (transitionUrl) openBrowser(transitionUrl);
     }
     lastReviewState = state;
+    lastGuideFile = guideFile;
     server.publish("state", JSON.stringify({ type: "state" }));
   };
 
@@ -1007,11 +1147,21 @@ async function serve(projectDir: string): Promise<void> {
     debounce = setTimeout(observeState, WATCH_DEBOUNCE_MS);
   };
 
+  // Watch the whole spaces root, not just the record that existed at startup:
+  // intents created later, `active-intent` switches, and their state files all
+  // live under it, so the tab keeps following the workflow without a daemon
+  // restart. Fall back to the initial record + state file when the shell has
+  // no spaces root yet.
   const initial = stateContext(projectDir);
   const watchTargets = new Set<string>();
-  if (existsSync(initial.record)) watchTargets.add(initial.record);
-  const statePath = stateFilePath(projectDir, initial.intent ?? undefined, initial.space);
-  if (existsSync(statePath)) watchTargets.add(statePath);
+  const spaces = spacesRoot(projectDir);
+  if (existsSync(spaces)) {
+    watchTargets.add(spaces);
+  } else {
+    if (existsSync(initial.record)) watchTargets.add(initial.record);
+    const statePath = stateFilePath(projectDir, initial.intent ?? undefined, initial.space);
+    if (existsSync(statePath)) watchTargets.add(statePath);
+  }
   for (const target of watchTargets) {
     try {
       watchers.push(watch(target, { recursive: statSync(target).isDirectory() }, onWatch));
@@ -1073,7 +1223,7 @@ function status(projectDir: string, asJson: boolean): void {
     process.stdout.write("Review UI: stopped\n");
     return;
   }
-  const openUrl = mintReviewUiOpenUrl(projectDir) ?? info.url;
+  const openUrl = reviewUiHumanUrl(projectDir) ?? info.url;
   process.stdout.write(`Review UI: running (pid ${info.pid})\n${openUrl}\n`);
 }
 
@@ -1089,7 +1239,7 @@ function stop(projectDir: string): void {
 }
 
 function open(projectDir: string): void {
-  const url = mintReviewUiOpenUrl(projectDir);
+  const url = reviewUiHumanUrl(projectDir);
   if (!url) {
     process.stderr.write("Review UI is not running\n");
     process.exitCode = 1;

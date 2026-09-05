@@ -34,10 +34,29 @@ conductor presents the terminal gate
 - `aidlc-review-ui.ts` serves one project, reads workflow state through
   `aidlc-lib.ts`, renders artifacts, and writes append-only feedback or answer
   submissions. It never advances state, approves a gate, rejects a gate, or
-  edits a questions file.
+  edits a questions file. A saved answers submission is a human act observed by
+  framework code, so alongside `answers-NNN.json` the daemon appends a
+  `HUMAN_TURN` row (`Mode: browser`, `Source: review-ui`, `Submission: <file>`)
+  under the audit lock — the same standing as the `UserPromptSubmit` seam — and
+  touches the human-turn marker. `AIDLC_UNATTENDED=1` withholds the row exactly
+  as it does for prompts.
 - `aidlc-log.ts answers-apply` is the only browser-answer path that mutates
   `*-questions.md`. It runs under the audit lock and the same human-turn
-  discipline as the ordinary `answer` command.
+  discipline as the ordinary `answer` command; the daemon's `HUMAN_TURN` row
+  satisfies that discipline, so no terminal keystroke is required after Save.
+- `aidlc-log.ts answers-wait` is the read-only "continue when Save happens"
+  seam for harnesses whose Stop hook cannot hold a turn: it blocks until an
+  unconsumed submission exists for the questions file (exit 0) or its timeout
+  passes (exit 3), and mints nothing.
+- The Claude Code Stop hook (`aidlc-continue-workflow.ts`) holds the conductor's
+  turn during a browser question round (blank `[Answer]:` tag, a
+  `<slug>-questions-guide.html` beside it, a live daemon) until a submission
+  lands, then answers `{"decision":"block"}` with the `answers-apply` command,
+  so the conductor resumes without a human prompt. The wait is bounded by
+  `AIDLC_REVIEW_WAIT_SECONDS` (default 1200; `settings.json` grants the hook
+  1500) and expires to the plain allow. Off by default on other harnesses, whose
+  hook timeouts are seconds; `AIDLC_REVIEW_WAIT_SECONDS` opts one in after its
+  timeout has been raised.
 
 The browser is deliberately **not a decision authority**. Its Approve / Request
 Changes value is a `decision_hint` for the feedback file. A human still answers
@@ -264,11 +283,11 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 
 | Method and route | Authentication | Response / effect |
 |---|---|---|
-| `GET /open/<nonce>` | Single-use nonce | Consume nonce, set `aidlc_review=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`, then 302 to `/`; invalid/used/expired is a 403 page |
-| `GET /` | Cookie | Browser app shell; unauthenticated requests receive the same 403 page |
+| `GET /open/<nonce>` | Single-use nonce | Consume nonce, set `aidlc_review=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`, then 302 to `/`; invalid/used/expired is a 403 page naming the consumed-link case |
+| `GET /` | Cookie, or a trusted browser navigation | Browser app shell. Without a cookie, a user-initiated top-level navigation (Fetch Metadata `Sec-Fetch-Site: none`/`same-origin`, `navigate`, `document`, matching `Host`) is served and sets the cookie — unless `AIDLC_REVIEW_STRICT=1`; anything else receives a 403 page naming the no-session case. Every cookie-authenticated response re-issues the cookie (sliding 12 h window) |
 | `GET /assets/<file>` | None | Static app asset with fixed MIME type |
 | `GET /api/health` | None | `{ok, project_id, pid, version}` |
-| `GET /api/state` | Cookie/header | Active project, space, intent, record, current pointer, manifest, stage marker, revision, HTML setting, and `questions` pointer |
+| `GET /api/state` | Cookie/header | Active project, space, intent, record, current pointer, manifest, `current_stage` (the workflow's stage even before a gate has published a pointer), stage marker, revision, HTML setting, and the `questions` pointer with its readiness: `guide` is published only once the explainer passes `checkGuideArtifact`; `ready: true` then; `preparing: true` while a guide file exists but fails (an unfilled scaffold, empty prose or recommendations); neither for a terminal round. The app steers, auto-opens, badges, and renders the form only on `ready`; while `preparing` it shows a holding message |
 | `GET /api/tree` | Cookie/header | Recursive record entries `{path,type,size,mtime}` for reviewable files only: `aidlc-state.md`, `project-description.json`, `audit/`, and every dot-directory (`.review-ui/`, `.aidlc-sensors/`, …) are omitted |
 | `GET /api/artifact?path=` | Cookie/header | Markdown `{path,format:"md",source,raw_url,sha256,mtime}` or HTML `{path,format:"html",raw_url,sha256,mtime}`; the app never receives rendered HTML. Paths outside the active record or naming a hidden file are 403 |
 | `GET /api/raw?path=` | Cookie/header | A full HTML document for the artifact sandbox: HTML artifacts verbatim, Markdown rendered server-side inside `<article data-aidlc="markdown">` (Mermaid loaded from `/assets/vendor/`); the trusted bridge is injected and the artifact CSP applied. Other extensions are 404, hidden files 403 |
@@ -333,29 +352,68 @@ source lines by matching the reported selection against the artifact source.
 The daemon creates a random 256-bit bearer token on each start. The token exists
 only in the private `server.json` record and the browser's `HttpOnly` cookie; it
 is never placed in a printed URL, HTML, JavaScript, directive, or audit row.
+Every API route and the WebSocket require it (cookie, or `X-AIDLC-Token` for
+tooling and tests); WebSocket upgrades also require the exact daemon origin.
 
-Only mutating callers mint an open link:
+### First hop: browser-navigation trust (default)
 
-1. every `aidlc-orchestrate report` result,
-2. `/aidlc --status`, and
-3. the daemon's own `open` and auto-open paths.
+The bare origin (`http://localhost:<port>/`) opens directly. For an
+unauthenticated `GET /` the daemon trusts the browser's own Fetch Metadata for a
+user-initiated top-level navigation — `Sec-Fetch-Site: none` (typed URL,
+bookmark, reload, `open` from the terminal) or `same-origin`, with
+`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, and a `Host` naming this
+daemon (the advertised host or a literal loopback spelling with the bound port).
+It serves the app shell and sets the session cookie on that response. A page on
+another site cannot produce those headers: its navigations arrive as
+`cross-site`, a `fetch()` is not a document navigation, and a DNS-rebinding
+attempt carries a foreign `Host` — all answer the 403 page. Requests without
+Fetch Metadata (browsers older than Safari 16.4, `curl`) fail closed to the
+link path below. A non-browser process on the same machine could forge the
+headers, but it runs as the same user and can already read the project files;
+the token still protects every write and every API read from cross-site pages.
 
+Consequently the URL to print is the origin itself: `/aidlc --status`,
+`/aidlc --doctor`, the gate's `**Browser:**` line, the daemon's `open`/auto-open,
+and `directive.review_ui.url` all name it, and no nonce is minted.
+
+### First hop: single-use links (`AIDLC_REVIEW_STRICT=1`)
+
+On shared multi-user hosts set `AIDLC_REVIEW_STRICT=1` in the harness
+environment (the daemon and the CLI both read it). The bare origin then never
+opens; a browser first has to follow a single-use `/open/<nonce>` link (30 min)
+that exchanges the nonce for the cookie. Only human-invoked or mutating callers
+mint one — every `aidlc-orchestrate report` result, `/aidlc --status`,
+`/aidlc --doctor`, and the daemon's own `open` and auto-open paths.
 `orchestrate next`, directive replay, Stop-hook probes, and session-start are
-read-only and do not mint. A directive reads the stored pointer and emits:
+read-only and do not mint; a directive prints the stored link only while it is
+fresh and unused. `/open/<nonce>` links keep working in the default mode too.
+
+### Session lifetime
+
+The cookie carries a 12 h `Max-Age` that every cookie-authenticated response
+renews, so a tab in use never lapses; a tab idle for 12 h does. The token is
+regenerated on every daemon start, which invalidates every earlier cookie — the
+daemon's lifetime (bounded by the idle exit) is the absolute session bound. On a
+401 the app reloads itself once: that reload is a trusted navigation, so the tab
+is back with a fresh cookie and no human action. If the reload still lands
+signed out (strict mode, or no Fetch Metadata) the app shows a `/aidlc --status`
+prompt instead of looping; when the daemon is unreachable it shows a
+daemon-stopped notice.
+
+### Directive shape
 
 ```json
 {
   "review_ui": {
     "origin": "http://localhost:4765/",
-    "url": "http://localhost:4765/open/<nonce>"
+    "url": "http://localhost:4765/"
   }
 }
 ```
 
-`origin` is present whenever the daemon is alive. `url` is optional and appears
-only while its stored link is fresh and unused. `X-AIDLC-Token` is the tooling
-and test authentication path; browsers use the cookie. WebSocket upgrades also
-require the exact daemon origin.
+`origin` is present whenever the daemon is alive. By default `url` equals
+`origin`; in strict mode `url` is `http://localhost:4765/open/<nonce>` and is
+present only while that stored link is fresh and unused.
 
 The supported deployment uses the default loopback bind. A non-loopback
 `AIDLC_REVIEW_HOST` is outside the supported LAN-sharing posture; remote use is
@@ -509,7 +567,8 @@ The dependency-free HTML utility is both importable and executable:
 |---|---|
 | `bun <harnessDir>/tools/aidlc-html.ts text <file>` | Print Markdown verbatim or deterministic Markdown projected from HTML (headings, paragraphs, lists, tables, code, links, images, SVG labels); omit scripts/styles/templates/head |
 | `bun <harnessDir>/tools/aidlc-html.ts check <file> [--name <artifact>] [--stage <slug>]` | Validate the document metadata, leading summary, offline references, prohibited embeds/forms, and terminal review section; findings one per line, exit 1 on failure |
-| `bun <harnessDir>/tools/aidlc-html.ts check --guide <file> --questions <md>` | Apply the base HTML checks plus the questions-explainer contract: matching ordered `Q<n>` sections, IDs, trade-off table, and one valid recommendation per answerable question |
+| `bun <harnessDir>/tools/aidlc-html.ts check --guide <file> --questions <md>` | Apply the base HTML checks plus the questions-explainer contract: matching ordered `Q<n>` sections, IDs, and one valid recommendation per answerable question. Findings are actionable: a question whose options the parser cannot read is reported once (`Q1 has no parsable options … options must be bare lines "A. text"…`) instead of once per recommendation; an out-of-range letter names the offered letters; an empty `data-aidlc-recommend` is called out; the summary finding points at the scaffold |
+| `bun <harnessDir>/tools/aidlc-html.ts scaffold --guide <questions.md> [--out <file>] [--depth minimal\|standard] [--stage <slug>]` | Emit a guide skeleton that already satisfies `check --guide`: head identity (stage from the `<slug>-questions.md` filename), the summary section, and one section per `Q<n>` with the real option letters and texts in the trade-off rows and an empty `data-aidlc-recommend` to fill. `--depth minimal` keeps only **Why now** and **Recommendation** per question |
 | `bun <harnessDir>/tools/aidlc-html.ts export <file> [--out <path>]` | Render Markdown or inline authored HTML's sibling assets into a self-contained HTML document |
 
 `readArtifactText(path)` is the shared deterministic projection used by the
@@ -526,6 +585,20 @@ directory and applies `checkHtmlArtifact`. It passes with reason
 new failure mode. Findings name the file and violated rule.
 
 ## HTML questions explainer contract
+
+The questions file's option lines are the contract every reader shares — the
+guide check, the browser form (`parseQuestionsMarkdown`), and `answers-apply`:
+a bare `<LETTER>. <text>` line at column 0 under a `## Q<n>. <title>` heading.
+A Markdown bullet (`- A. …`), a numbered item, or an indented letter is prose to
+all three. The conductor starts from `aidlc-html.ts scaffold --guide` so the
+structure is right before any prose is written, and the daemon publishes the
+round to the browser only once the guide passes the check — the human never
+sees an unfilled scaffold, a form without its recommendations, or prose
+arriving underneath them. `check --guide` therefore also fails on empty
+paragraphs, an empty summary, empty trade-off cells, and empty
+`data-aidlc-recommend` values. At Minimal depth a question
+section carries only **Why now** and **Recommendation**; Standard and
+Comprehensive add the trade-off table and **Related decisions**.
 
 `<slug>-questions-guide.html` satisfies the base HTML artifact contract and uses
 metadata artifact name `<slug>-questions-guide` and stage `<slug>`. Its body
@@ -562,6 +635,19 @@ bun <harnessDir>/tools/aidlc-log.ts answers-apply \
 It is flag-independent: submissions can be applied whenever they exist, even if
 the current process does not have `AIDLC_REVIEW_UI=1`.
 
+The companion wait is:
+
+```bash
+bun <harnessDir>/tools/aidlc-log.ts answers-wait \
+  --stage <slug> --questions-file <path> [--unit <unit>] [--timeout <seconds>] [--project-dir <path>]
+```
+
+It prints `{ready: true, files, questions_file}` and exits 0 as soon as an
+unconsumed submission for that questions file exists (a directory watcher wakes
+it; a 1 s poll is the guarantee), or `{ready: false, …, waited_seconds}` with
+exit 3 after `--timeout` (default 540 s, under the 10-minute ceiling most shell
+tools impose) so the caller simply waits again. It consumes and mints nothing.
+
 Under the audit lock it:
 
 1. finds unconsumed `answers-*.json` files in sequence order; later submissions
@@ -592,8 +678,10 @@ Boolean variables use the exact string `"1"` unless a row says otherwise.
 | `AIDLC_REVIEW_UI` | unset | `1` enables daemon startup, review publication, directive field, browser gate line, and feedback/questions UI; unset preserves legacy behavior |
 | `AIDLC_REVIEW_PORT` | `0` | TCP port; `0` asks the OS for an ephemeral port |
 | `AIDLC_REVIEW_HOST` | `127.0.0.1` | Bind host; keep the default loopback address for the supported security posture |
-| `AIDLC_REVIEW_OPEN` | enabled | `0` disables automatic browser launch at the first observed awaiting-approval transition |
+| `AIDLC_REVIEW_OPEN` | enabled | `0` disables automatic browser launch. Otherwise the daemon opens a browser when a gate opens (transition into awaiting-approval) or a browser question round begins (the `<slug>-questions-guide.html` explainer lands) and no review tab is present (no live WebSocket and no authenticated request within the last 10 s); never over `SSH_CONNECTION`. A connected tab is never duplicated: the state push steers it — to Questions when a new round appears and nothing of the human's is in flight there, to the review artifact at a gate — and its title carries a `(1)` badge while something awaits them |
 | `AIDLC_REVIEW_IDLE_MINUTES` | `240` | Exit after this many minutes with no WebSocket client and no observed state change |
+| `AIDLC_REVIEW_STRICT` | unset | `1` disables browser-navigation trust for `GET /`: the bare origin never opens and every printed URL is a single-use `/open/<nonce>` link. For shared multi-user hosts. Set it in the harness environment so the daemon and the CLI agree |
+| `AIDLC_REVIEW_WAIT_SECONDS` | `1200` on Claude Code, `0` elsewhere | How long the Stop hook holds a browser question round waiting for the human's Save before falling back to the plain release. Must stay below the hook's own timeout (`settings.json` grants 1500 s on Claude Code). `0` disables the hold |
 | `AIDLC_REVIEW_HOME` | `~/.aidlc/review-ui` | Override private daemon discovery/log/nonce root; primarily useful for tests and isolated installations |
 | `AIDLC_HTML_ARTIFACTS` | unset | `1` seeds new intents with `HTML Artifacts: on`; the state field, not the environment, controls the intent thereafter |
 

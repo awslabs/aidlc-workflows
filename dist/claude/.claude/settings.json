@@ -189,7 +189,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-continue-workflow.ts\""
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-continue-workflow.ts\"",
+            "timeout": 1500
           }
         ]
       }

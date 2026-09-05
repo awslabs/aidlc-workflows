@@ -155,11 +155,16 @@ prompt: "[Stage Name] complete. How would you like to proceed?"
 header: Approval
 multiSelect: false
 options:
-  - label: Approve
-    description: Continue to [next stage]
+  - label: Approve (Recommended)
+    description: Continue to [next stage] — [one line of evidence: reviewer READY / sensors clean / what was verified]
   - label: Request Changes
     description: Provide revision feedback
 ```
+
+The `(Recommended)` marker follows the evidence, not the template: when the
+reviewer verdict is NOT-READY, a blocking sensor fired, or you know of an
+unresolved defect, list **Request Changes (Recommended)** first with the finding
+in its description and **Approve** second. Record the undecorated choice.
 
 **Naming the next stage:** render `[next stage]` verbatim from the run-stage
 directive's `next_stage` field (e.g. `Continue to NFR Requirements`). When
@@ -175,8 +180,8 @@ prompt: "[Stage Name] complete. How to proceed?"
 header: Approval
 multiSelect: false
 options:
-  - label: Approve
-    description: Continue to [next stage]
+  - label: Approve (Recommended)
+    description: Continue to [next stage] — [evidence]
   - label: Request Changes
     description: Provide revision feedback
   - label: Add [Skipped Stage]
@@ -203,7 +208,8 @@ offered choice, and re-present the same structured question with every valid
 choice. Then end the turn and wait. Never silently repeat a checkpoint prompt
 after an unmatched reply.
 The deterministic report/state guards enforce the same boundary. Forward the
-exact selected label in `--user-input`; never substitute a paraphrase or
+exact selected label in `--user-input` with only the presentation marker
+removed (`Approve (Recommended)` → `Approve`); never substitute a paraphrase or
 feedback prose. A refusal instructs you to re-render the original held gate
 with every option it offered because conditional choices are not reconstructible
 from a fixed fallback list.
@@ -216,13 +222,14 @@ prompt: "[Stage Name] — this is revision cycle [N]. How would you like to proc
 header: Approval
 multiSelect: false
 options:
-  - label: Approve
-    description: Continue to [next stage]
+  - label: Approve (Recommended)
+    description: Continue to [next stage] — [evidence]
   - label: Request Changes
     description: Provide further revision feedback
   - label: Accept as-is
     description: Archive current version and move on
 ```
+(Same evidence rule: **Request Changes (Recommended)** first when the evidence says so.)
 
 If "Accept as-is" selected: log the decision in `<record>/audit/<host>-<clone>.md` ("User accepted stage output as-is after [N] revision cycles"), mark stage complete, and proceed. This overrides the NO EMERGENT BEHAVIOR RULE for Construction stages only when the revision threshold is reached.
 
@@ -249,7 +256,7 @@ Every stage ends with this 5-part structure:
 
 ### Part 0: Enter the approval gate (mandatory: the held gate is recorded before the human answers it)
 Entering the gate:
-1. Render Parts 1-2 (announcement, summary), then run the §13 learnings ritual as its own human turn — END YOUR TURN at its question. Its logged `QUESTION_ANSWERED` row must precede the gate's `STAGE_AWAITING_APPROVAL` (§13 step 3 is the contract; the gate is never opened in the same message as the learnings question).
+1. Render Parts 1-2 (announcement, summary), then — unless `directive.learnings` is `false` — run the §13 learnings ritual as its own human turn — END YOUR TURN at its question. Its logged `QUESTION_ANSWERED` row must precede the gate's `STAGE_AWAITING_APPROVAL` (§13 step 3 is the contract; the gate is never opened in the same message as the learnings question).
 2. After the learnings answer is logged: `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval` marks `[-]` -> `[?]` and emits `STAGE_AWAITING_APPROVAL`. `/aidlc --status` now truthfully shows the held gate. These are internal bookkeeping steps: run them, never narrate them. This step is bookkeeping the user has no stake in: **SAY:** nothing for it, not that a gate is being opened, not that anything is being recorded. Go from the learnings answer straight into the question below.
    - If the report instead refuses because a blocking gate sensor found issues or could not produce a verified pass, the approval gate is NOT open. In interactive mode, run `bun .claude/tools/aidlc-log.ts decision --stage <slug> --decision "Blocking gate sensor failure" --options "Fix findings,Override blocking sensors"` and present those two options as a separate structured question. END YOUR TURN.
    - **Fix findings**: after the human selects it, record `aidlc-log.ts answer --stage <slug> --details "Fix findings"`, fix the named findings or evaluation failure, then retry the ordinary report with no override.
@@ -291,7 +298,8 @@ question.
 ```
 When `directive.review_ui` is present, print a `**Browser:**` line immediately
 after `**Review:**`: `**Browser:** <directive.review_ui.url>` when `url` is
-present (copy it verbatim; it is a single-use link), otherwise
+present (copy it verbatim — normally the daemon's origin, which opens directly;
+under `AIDLC_REVIEW_STRICT=1` a single-use link), otherwise
 `**Browser:** <directive.review_ui.origin> — run /aidlc --status for a fresh link`.
 When `directive.review_ui` is absent, print nothing extra.
 Then present the structured approval question as defined above.
@@ -337,6 +345,25 @@ When a stage needs to ask the user questions:
   the sole exception: its two semantic options are intentionally unlettered.
 - Leave all `[Answer]:` tags blank
 
+**Exact line shape — the tools parse this file, not a human.** Each question is
+an H2 `## Q<n>. <title>`; each option is a bare line `<LETTER>. <text>` starting
+at column 0 — no `- ` bullet, no numbering, no indent, one option per line; the
+tag is a bare `[Answer]:` line. `- A. text`, `1. text`, or an indented letter is
+prose to every parser (the guide check, the browser form, `answers-apply`), and a
+question with no parsable options fails the guide check for every recommendation.
+
+```markdown
+## Q1. Which deployment model?
+
+One line of context: what depends on this answer.
+
+A. Regional — one region, simplest operations
+B. Global — multi-region, higher cost
+X. Other (please specify)
+
+[Answer]:
+```
+
 For multi-select questions (where user may choose more than one option), add "(select all that apply)" to the question text. The user writes multiple letters: `[Answer]: A, B, E`
 
 ### Depth-aware question generation
@@ -375,25 +402,39 @@ Stage files list **topic areas and example questions** — they are guidance, no
 - **Give each question one line of context** — why it is being asked or what depends on the answer — when the reason is not obvious from the prompt itself. "We found two conflicting retention values in the requirements (30 days vs 90 days); which governs?" beats "What is the retention period?".
 - **Prefer a concrete phrasing over an abstract one.** Ask about the actual decision in the user's domain terms, not the framework's internal vocabulary. If you would need to explain the question when asked to rephrase it, phrase it that clear way the first time.
 
+**Every structured question carries a recommendation.** A menu that makes the human
+work out which option you would pick is a defect: you have read the record, the
+stage inputs, and the prior answers, so say what you recommend and why.
+- Order the options so the recommended one is FIRST (the harness default: preselected in a widget, `1.` in numbered prose) and append the literal marker `(Recommended)` to its label — in the label, not only in prose. Put the one-line reasoning in that option's description (the line beneath it in numbered prose).
+- Genuine toss-up (rare): mark the first option `(Toss-up)` instead and explain why neither wins.
+- This applies to every structured question you present: the interaction-mode menu below, every file-backed question (the option keeps its letter — `B. Global (Recommended)` — and the questions file itself is not edited), the consolidated-summary confirmation (`Looks correct (Recommended)` when the summary is faithful to the answers), and approval gates (recommend from evidence: `Approve (Recommended)` when the reviewer verdict is READY or no reviewer is declared and no blocking sensor fired; otherwise `Request Changes (Recommended)` with the finding in its description). In browser guide mode the recommendation is the guide's `data-aidlc-recommend` letter — the same letter.
+- The marker is presentation only. NEVER write `(Recommended)` or `(Toss-up)` into an `[Answer]:` tag, a questions file, an audit row, `--details`, `--user-input`, or a `report` argument: record the undecorated option exactly as offered.
+- Exception: the Code Generation **Plan Approval** choice is a protected, exact-label challenge (`Approve Plan` / `Request Changes`). Do not decorate those two labels; put the recommendation in the prompt text instead.
+
 **Step 2: Offer the user a choice of interaction mode:**
 ```question
 prompt: "I've created [N] questions at `[file path]`. How would you like to answer them?"
 header: Questions
 multiSelect: false
 options:
+  - label: Guide me in the browser (Recommended)
+    description: Read an explainer with trade-offs and answer in the browser — a recommendation per question, and I continue the moment you save
   - label: Guide me
     description: Walk through each question interactively here
   - label: I'll edit the file
     description: I'll fill in the answers in the file directly
   - label: Chat
     description: Discuss freely — I'll extract decisions from our conversation
-  - label: Guide me in the browser
-    description: Read an explainer with trade-offs and answer in the browser
 ```
 
-Include **Guide me in the browser** ONLY when `directive.review_ui` is present.
-On a numbered-prose harness that gives five visible lines: the four semantic
-options above, then the final Other; without `review_ui`, retain the existing
+Include **Guide me in the browser** ONLY when `directive.review_ui` is present,
+and then it is the first, recommended option: the explainer carries trade-offs
+and a recommendation per question, the address opens directly, and Save resumes
+you without a keystroke. Without `review_ui`, omit it and retain the existing
+three semantic options in the order **Guide me**, **I'll edit the file**,
+**Chat**, with **Guide me (Recommended)** first (the guided pass is the safest
+terminal default). On a numbered-prose harness that gives five visible lines:
+the four semantic options above, then the final Other; without `review_ui`, the
 three semantic options plus Other.
 
 Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Question interaction log format.
@@ -418,11 +459,12 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
   header: Confirm
   multiSelect: false
   options:
-    - label: Looks correct
-      description: Generate the artifact from these answers
+    - label: Looks correct (Recommended)
+      description: Generate the artifact from these answers — the summary restates each recorded answer verbatim
     - label: Request changes
       description: Revise one or more answers before generation
   ```
+  (Record the undecorated `Looks correct`; the marker never enters the file or the audit.)
   Before presenting it, append or update a dedicated **Consolidated Summary Confirmation**
   entry in `<slug>-questions.md` with this prompt, both options **without
   file-letter prefixes**, and a blank `[Answer]:` tag:
@@ -484,8 +526,9 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
   pre-generation confirmation.
 
 **Step 3d: If "Guide me in the browser":**
-- Load `stage-protocol-guide.md`, write and check `<stage-dir>/<slug>-questions-guide.html`, then say: "Open the review UI (`**Browser:** <review_ui.url>` or origin fallback) → Questions. When you have saved your answers there, send **done**." END TURN.
-- On done run `bun .claude/tools/aidlc-log.ts answers-apply --stage <slug> --questions-file <path> [--unit <unit>]`, then continue exactly as Step 3b: read the file, present the consolidated summary, and run the same **Looks correct / Request changes** checkpoint.
+- Load `stage-protocol-guide.md`; run `bun .claude/tools/aidlc-html.ts scaffold --guide <stage-dir>/<slug>-questions.md --out <stage-dir>/<slug>-questions-guide.html` (add `--depth minimal` at Minimal depth), fill the scaffold's prose and every `data-aidlc-recommend`, run the module's check, then say: "Open the review UI (`**Browser:** <review_ui.url>` or origin fallback) → Questions and save your answers there; I'll continue as soon as they land." On Claude Code: END TURN — the Stop hook holds the turn until the human clicks **Save**, then resumes you with the apply command; the human types nothing.
+- On every other harness the Stop seam cannot hold a turn. There, before ending the turn, run `bun .claude/tools/aidlc-log.ts answers-wait --stage <slug> --questions-file <path> [--unit <unit>]`: it blocks until the answers are saved (exit 0) or nine minutes pass (exit 3 — call it again). Ask for a shell-tool timeout of at least ten minutes when you invoke it.
+- Once the answers have landed, run `bun .claude/tools/aidlc-log.ts answers-apply --stage <slug> --questions-file <path> [--unit <unit>]`, then continue exactly as Step 3b: read the file, present the consolidated summary, and run the same **Looks correct / Request changes** checkpoint. A human who types **done** anyway is simply early; apply and continue the same way.
 
 **Step 3c: If "Chat" (freeform mode):**
 - Engage in open-ended conversation about the stage's topic
@@ -1081,7 +1124,7 @@ Reviewer dispatch, receipts, read scope, terminal ordering, and the NOT-READY lo
 Load it when the directive names a reviewer with an effective review class other than `none` (the engine lists it in `directive.protocol_modules`).
 ## 13. Learnings Ritual
 
-MANDATORY: Every stage that reaches a human approval gate runs the learnings-capture step **between the completion message (§2) and the approval gate (§1)**. The auto-proceeding bootstrap initialization stages and isolated `single: true` runs have no workflow approval gate and bypass this ritual; unfinished per-unit iterations defer it until the stage's one final gate. Per Fowler's harness model: "when issues recur, feedforward and feedback controls should be improved." This ritual is the human learning loop — surface what's worth remembering, write it into the harness where the next runner will pick it up automatically.
+MANDATORY: Every stage that reaches a human approval gate runs the learnings-capture step **between the completion message (§2) and the approval gate (§1)** — unless the directive carries `learnings: false`, which the engine emits when the active scope declares `learnings: off` (the lightweight scopes opt out of the extra turn). Then skip steps 2–6 entirely: no `surface`, no "Anything to add?" question, no `persist`; go from the completion message straight to the gate. Still keep the per-stage `memory.md` diary (step 1) — it is the stage's own record and costs nothing. The auto-proceeding bootstrap initialization stages and isolated `single: true` runs have no workflow approval gate and bypass this ritual; unfinished per-unit iterations defer it until the stage's one final gate. Per Fowler's harness model: "when issues recur, feedforward and feedback controls should be improved." This ritual is the human learning loop — surface what's worth remembering, write it into the harness where the next runner will pick it up automatically.
 
 The ritual is **tool-as-actor**: a deterministic tool (`aidlc-learnings.ts`) detects, surfaces, routes, and writes; the orchestrator-LLM renders the structured question and runs the admission conflict-check; the user decides keep / heading / scope. Detection, surfacing, routing, and writing are all deterministic; judgement is the user's.
 

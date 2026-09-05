@@ -8,6 +8,7 @@ description: "Lightest run: requirements to deploy, no design pass, no reviewers
 skeleton: off
 runner: true
 review_cap: none
+learnings: off
 ---
 
 # express scope
@@ -20,7 +21,10 @@ pass or reviewer dispatch.
 
 Requirements Analysis establishes the contract, Code Generation implements
 it, Build and Test verifies it, and the Operation tail can deploy and observe
-the result. Reviewers are disabled by `review_cap: none`. Minimal testing still
+the result. Reviewers are disabled by `review_cap: none`, and the learnings
+ritual is off (`learnings: off`): each gate is one turn — the completion
+message and the approval question — with no "Anything to add for next time?"
+stop in between. The per-stage `memory.md` diary is still kept. Minimal testing still
 requires requirement-driven unit tests with a happy-path floor per component.
 
 The swarm path is structurally unreachable because `express` skips Units

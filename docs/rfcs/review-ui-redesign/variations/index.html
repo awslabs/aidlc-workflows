@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-DLC Review UI — variations gallery</title>
+<style>
+:root{--ink:#1a202c;--muted:#8792a2;--line:#eef2f7;--panel:#f7f9fc;--accent:#2d7ff9}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.6 -apple-system,system-ui,"Helvetica Neue",Inter,"Segoe UI",Helvetica,Arial,sans-serif;color:var(--ink);background:#fff}
+header{padding:40px 48px 8px;max-width:1240px;margin:0 auto}
+h1{font-size:28px;margin:0 0 6px;letter-spacing:-.01em}
+.lead{color:var(--muted);margin:0 0 8px;font-size:15px;max-width:800px}
+nav.toc{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;margin:16px 0 0}
+nav.toc a{color:var(--accent);text-decoration:none}
+main{max-width:1240px;margin:0 auto;padding:8px 48px 80px}
+section{border-top:1px solid var(--line);padding:32px 0}
+.head{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start;margin-bottom:16px}
+h2{font-size:20px;margin:0 0 4px}
+h2 small{color:var(--muted);font-weight:500;font-size:13px;margin-left:8px}
+.hyp{margin:0 0 10px;font-size:15px}
+dl{display:grid;grid-template-columns:110px 1fr;gap:4px 12px;margin:0;font-size:13px}
+dt{color:var(--muted)}
+dd{margin:0}
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.shots figure{margin:0}
+.shots img{width:100%;border:1px solid var(--line);border-radius:8px;display:block;background:var(--panel)}
+.shots figcaption{font-size:12px;color:var(--muted);margin-top:4px}
+.open{font-size:13px;margin-top:8px}
+.open a{color:var(--accent);text-decoration:none;margin-right:12px}
+.tag{display:inline-block;font-size:11px;border:1px solid var(--line);border-radius:999px;padding:0 7px;color:var(--muted);margin-left:6px;vertical-align:middle}
+</style>
+</head>
+<body>
+<header>
+  <h1>Review UI — ten ways to review an agent's work</h1>
+  <p class="lead">Each variation tests one hypothesis about how a human best reads, annotates, answers, and decides on an artifact an AI agent wrote. Same content everywhere (the to-do app requirements at r1, four threads, four questions with explainers, FR2 in suggest-edit mode) so only the experience differs. Every one keeps the terminal complete: comments become <code>feedback-NNN.md</code>, answers <code>answers-NNN.json</code>, decisions converge on the same gate.</p>
+  <nav class="toc" id="toc"></nav>
+</header>
+<main id="main"></main>
+<script>
+const V = [
+  { id:'v05-reader', title:'Reader', tag:'zero chrome',
+    hyp:'A reviewer reads best with nothing on screen but the document; everything else is one keystroke away and appears only when summoned.',
+    best:'Solo reviewer, one artifact, wants to read.', opt:'Attention, calm, reading speed.', sac:'Discoverability; workflow context is hidden behind ⌘K.',
+    screens:['review','comments','palette','questions','editing'] },
+  { id:'v06-timeline', title:'Timeline', tag:'review as a story',
+    hyp:'People reason about an evolving artifact in time — what the agent did, what I said, what it answered — so the right column is a chronological ledger, not a list of anchors.',
+    best:'Returning to a revised gate; reconstructing why the text now says what it says.', opt:'Causality, accountability, confidence every remark was answered.', sac:'At-a-glance scanning of threads; document width.',
+    screens:['review','history','editing','questions'] },
+  { id:'v07-diff-first', title:'Diff-first', tag:'re-review',
+    hyp:'On any revision after the first, the reviewer only needs what changed and what happened to their remarks; the whole document is a fallback.',
+    best:'r1+ gates after the agent responded to feedback.', opt:'Re-review speed, traceability of each remark.', sac:'A calm first read; surrounding context in the default view.',
+    screens:['changes','full','editing','questions'] },
+  { id:'v08-guided', title:'Guided', tag:'one thing at a time',
+    hyp:'Reviewers miss things in walls of text; a guided pass — one section, thread, or question per card with Next/Back — finds more and feels faster.',
+    best:'Short-to-medium artifacts with several threads; first-time reviewers.', opt:'Completeness, focus, keyboard flow, visible progress.', sac:'Free scanning and cross-section comparison.',
+    screens:['item','summary','question','questions','editing','hover-rail'] },
+  { id:'v09-workbench', title:'Workbench', tag:'IDE-dense',
+    hyp:'Engineers reviewing many artifacts want everything visible and keyboard-first: tabs, panes, a status bar, a log.',
+    best:'Power users living in the tool all day.', opt:'Density, parallel context, keyboard reach.', sac:'Calm; onboarding; small screens.',
+    screens:['review','questions','drawer-audit','editing'] },
+  { id:'v10-inbox', title:'Inbox', tag:'multi-intent',
+    hyp:'A lead runs several intents at once; the unit of work is “a thing that needs me” (a gate, a question round, a finding), not a document.',
+    best:'Leads clearing gates across concurrent intents.', opt:'Triage, cross-intent awareness, acting on the next blocked moment.', sac:'Reading width; deep single-intent context.',
+    screens:['review','questions','editing','collapsed'] },
+  { id:'v11-margin', title:'Margin notes', tag:'Docs / Medium',
+    hyp:'Spatial proximity beats a list — a comment sits beside the line it is about, so there is no separate comments panel.',
+    best:'Linear review of a dense revision with anchored replies.', opt:'Anchor-to-feedback comprehension, reading continuity.', sac:'A compact global thread index; narrow displays. (Mock simplification: rows stretch to card height; a build would float cards and nudge.)',
+    screens:['review','suggesting','questions','rail-expanded'] },
+  { id:'v12-conversation', title:'Conversation', tag:'talk to the agent',
+    hyp:'Many humans prefer talking to marking up; the pane beside the document is a chat with the agent where quoted spans are messages.',
+    best:'Discussion-heavy reviews; people who think out loud.', opt:'Nuance, back-and-forth, low ceremony.', sac:'Precision of anchors; scanning what was decided.',
+    screens:['review','revising','questions','editing'] },
+  { id:'v13-paper', title:'Paper', tag:'calm long-form',
+    hyp:'Long artifacts are best reviewed like a printed draft: a sheet with wide margins, serif type, highlighter and pen marks, and a stamp to decide.',
+    best:'Long design and requirements documents read end-to-end.', opt:'Reading comfort, low arousal, finality of the decision.', sac:'Density; power features; live-updating feel.',
+    screens:['review','questions','editing'] },
+  { id:'v14-mobile', title:'Mobile companion', tag:'away from the desk',
+    hyp:'The agent takes minutes between gates and the human is often not at the terminal; a phone-sized remote lets them read, comment, answer, and approve in the gap — the terminal stays the authority.',
+    best:'Gates and question rounds that arrive while you are away.', opt:'One thumb-sized action per moment.', sac:'Wide comparison, long-form editing comfort.',
+    screens:['frames','editing','questions'] },
+];
+const toc = document.getElementById('toc'), main = document.getElementById('main');
+for (const v of V) {
+  const a = document.createElement('a'); a.href = '#' + v.id; a.textContent = v.title; toc.appendChild(a);
+  const s = document.createElement('section'); s.id = v.id;
+  s.innerHTML = `
+    <div class="head">
+      <div>
+        <h2>${v.title}<span class="tag">${v.tag}</span><small>${v.id}.html</small></h2>
+        <p class="hyp">${v.hyp}</p>
+        <div class="open"><a href="${v.id}.html">Open the mock →</a></div>
+      </div>
+      <dl><dt>Best for</dt><dd>${v.best}</dd><dt>Optimizes</dt><dd>${v.opt}</dd><dt>Sacrifices</dt><dd>${v.sac}</dd></dl>
+    </div>
+    <div class="shots">${v.screens.map(sc => `<figure><a href="shots/${v.id}--${sc}.webp"><img loading="lazy" src="shots/${v.id}--${sc}.webp" alt="${v.title} — ${sc}"></a><figcaption>${sc}</figcaption></figure>`).join('')}</div>`;
+  main.appendChild(s);
+}
+</script>
+</body>
+</html>

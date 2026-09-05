@@ -1,0 +1,257 @@
+<!--
+UX HYPOTHESIS
+Hypothesis: Engineers reviewing many artifacts can decide faster when the record, open files, comments, agent activity, and approval controls remain simultaneously visible in a keyboard-first workbench.
+Who it is for: Power users and engineers who review several related artifacts or revisions in one sitting.
+What it optimizes: Context retention, fast cross-file navigation, auditability, and keyboard-oriented throughput.
+What it sacrifices: Calm reading space, first-use simplicity, and generous whitespace.
+Best moment: A revision gate with several open threads, supporting files, and recent agent activity to reconcile.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-DLC Review — Workbench</title>
+<style>
+:root{
+  --ink:#1a202c;--muted:#8792a2;--faint:#b6bfcc;--line:#eef2f7;--line2:#dfe5ee;
+  --panel:#f7f9fc;--accent:#2d7ff9;--accent-soft:#edf4ff;--comment:#f59e0b;
+  --comment-soft:rgba(245,158,11,.15);--change:#7c3aed;--change-soft:rgba(124,58,237,.12);
+  --delete:#e11d48;--delete-soft:rgba(225,29,72,.12);--good:#16a34a;--good-soft:rgba(22,163,74,.12);
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{margin:0;color:var(--ink);background:#fff;font:12px/1.42 var(--font)}
+button,input{font:inherit;color:inherit}button{border:0;background:none;cursor:pointer}svg{display:block}
+.app{height:100vh;display:grid;grid-template-columns:44px 260px minmax(0,1fr) 320px;grid-template-rows:minmax(0,1fr) 22px;background:#fff}
+.activity{grid-column:1;grid-row:1;background:#f3f6fa;border-right:1px solid var(--line2);display:flex;flex-direction:column;align-items:center;padding:6px 0;gap:4px}
+.brand{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;background:var(--accent);color:#fff;font-weight:800;margin:0 0 5px}
+.act{width:36px;height:38px;display:grid;place-items:center;color:var(--muted);position:relative;border-radius:4px}
+.act:hover,.act.on{color:var(--ink);background:#fff}.act.on:before{content:"";position:absolute;left:-4px;top:5px;bottom:5px;width:2px;background:var(--accent)}
+.act svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.activity .push{margin-top:auto}
+.explorer{grid-column:2;grid-row:1;background:var(--panel);border-right:1px solid var(--line2);min-height:0;overflow:auto}
+.pane-title{height:30px;display:flex;align-items:center;padding:0 7px 0 12px;font-size:11px;letter-spacing:.06em;color:#5f6b7a;font-weight:700;border-bottom:1px solid var(--line)}
+.pane-title strong{flex:1}.collapse{width:24px;height:22px;border-radius:4px;color:var(--muted);font-size:15px;display:grid;place-items:center}.collapse:hover{background:#e9eef5;color:var(--ink)}
+.root{height:28px;display:flex;align-items:center;gap:6px;padding:0 9px;font-weight:700;border-bottom:1px solid var(--line)}
+.chev{width:12px;color:var(--muted);font-size:10px}.folder{color:#708096}.tree-group{border-bottom:1px solid var(--line);padding:3px 0 6px}
+.tree-head{height:27px;display:flex;align-items:center;gap:5px;padding:0 9px;font-size:11px;font-weight:700;letter-spacing:.03em;color:#5f6b7a}
+.tree-row{min-height:25px;display:flex;align-items:center;gap:6px;padding:3px 8px 3px 24px;color:#435064;white-space:nowrap}.tree-row:hover{background:#eef3f9}.tree-row.on{background:var(--accent-soft);color:#185fca}.tree-row.indent{padding-left:38px}.tree-row.deep{padding-left:52px}.tree-row .name{min-width:0;overflow:hidden;line-height:1.15;white-space:normal}.tree-row .meta{margin-left:auto;color:var(--muted);font-size:10px}.tree-row.current{font-weight:650;color:var(--ink)}
+.file-ico{width:13px;text-align:center;font:10px var(--mono);color:#65758b}.dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:0 0 auto}.dot.good{background:var(--good)}.dot.warn{background:var(--comment)}.dot.skip{background:transparent;border:1px solid var(--faint)}
+.workspace{grid-column:3;grid-row:1;min-width:0;min-height:0;display:grid;grid-template-rows:28px 34px 23px 0 minmax(0,1fr) 160px;background:#fff}
+body[data-show="editing"] .workspace{grid-template-rows:28px 34px 23px 34px minmax(0,1fr) 160px}
+body[data-show="questions"] .workspace{grid-template-rows:28px 34px 23px 0 minmax(0,1fr) 28px}
+.menu{display:flex;align-items:center;gap:2px;padding:0 7px;border-bottom:1px solid var(--line);background:#fff}.menu button{padding:4px 7px;border-radius:4px;font-size:12px}.menu button:hover{background:var(--panel)}.menu .menu-spacer{flex:1}.menu .hint{color:var(--muted);font-size:11px;padding-right:6px}
+.tabs{min-width:0;display:flex;align-items:stretch;border-bottom:1px solid var(--line2);background:#f8fafc;overflow:hidden}.tab{flex:0 1 auto;min-width:74px;max-width:195px;padding:0 10px;display:flex;align-items:center;gap:6px;border-right:1px solid var(--line2);color:#667386;white-space:nowrap;overflow:hidden}.tab span{min-width:0;max-height:16px;line-height:1.15;white-space:normal;overflow:hidden}.tab.active{background:#fff;color:var(--ink);box-shadow:inset 0 2px var(--accent)}.qtab.active{box-shadow:inset 0 2px var(--comment)}.dirty{color:var(--comment);font-size:10px}.tab-close{margin-left:auto;color:var(--faint)}
+.tab-actions{margin-left:auto;display:flex;align-items:center;gap:5px;padding:3px 5px 3px 8px;background:#fff;border-left:1px solid var(--line2);white-space:nowrap}.state-summary{font-size:10.5px;color:var(--muted)}.action{height:25px;padding:0 9px;border:1px solid var(--line2);border-radius:5px;background:#fff;font-weight:650;font-size:11px}.action.warn{border-color:#fed7aa;color:#9a3412;background:#fff7ed}.action.primary{border-color:var(--accent);color:#fff;background:var(--accent)}.q-actions{display:none;color:var(--good);font-weight:650;font-size:11px;padding:0 8px}
+body[data-show="questions"] .review-actions{display:none}body[data-show="questions"] .q-actions{display:flex;align-items:center}
+.crumbs{display:flex;align-items:center;gap:5px;padding:0 10px;border-bottom:1px solid var(--line);color:var(--muted);font-size:11px;white-space:nowrap}.crumbs b{color:#4a586b;font-weight:600}.crumbs .right{margin-left:auto}.key{font:10px var(--mono);border:1px solid var(--line2);border-bottom-color:#cbd4df;background:#fff;border-radius:3px;padding:0 4px;color:#67758a}.crumb-file-questions{display:none}body[data-show="questions"] .crumb-file-review{display:none}body[data-show="questions"] .crumb-file-questions{display:inline}
+.formatbar{overflow:hidden;display:flex;align-items:center;gap:2px;padding:0 8px;border-bottom:1px solid var(--line2);background:#fbfcfe}.formatbar button{min-width:25px;height:25px;border-radius:4px;display:grid;place-items:center}.formatbar button:hover{background:var(--accent-soft)}.formatbar .sep{height:17px;border-left:1px solid var(--line2);margin:0 4px}.formatbar .mode{margin-left:auto;color:#5b21b6;font-weight:650;padding-right:6px}
+.content{min-width:0;min-height:0;position:relative;background:#fff}.view{display:none;height:100%}
+body[data-show="review"] .view-review,body[data-show="drawer-audit"] .view-review{display:block}
+body[data-show="editing"] .view-editing{display:block}body[data-show="questions"] .view-questions{display:grid}
+.docscroll{height:100%;overflow:auto}.doc{max-width:760px;margin:0 auto;padding:25px 52px 80px;font-size:15px;line-height:1.58}.docmeta{display:flex;align-items:center;gap:9px;margin-bottom:12px;color:var(--muted);font-size:11px}.docmeta .mono{font:11px var(--mono);color:var(--ink);background:var(--panel);padding:2px 5px;border-radius:4px}.live-dot{width:7px;height:7px;border-radius:50%;background:var(--good)}
+.doc h1{font-size:28px;line-height:1.18;letter-spacing:-.35px;margin:0 0 13px}.doc h2{font-size:18px;line-height:1.3;margin:24px 0 7px}.doc p{margin:0 0 10px}.doc ul{margin:0 0 12px;padding-left:22px}.doc li{margin:1px 0}.doc code{font:13px var(--mono);background:var(--panel);padding:1px 4px;border-radius:3px}.doc table{border-collapse:collapse;width:100%;font-size:12px;line-height:1.35}.doc th,.doc td{border:1px solid var(--line2);padding:5px 7px;text-align:left}.doc th{background:var(--panel)}
+.block{position:relative}.bubble{position:absolute;left:-35px;top:2px;min-width:22px;height:18px;padding:0 5px;border-radius:9px;display:grid;place-items:center;color:#fff;background:var(--comment);font:bold 10px var(--font)}.bubble.good{background:var(--good)}.bubble.delete{background:var(--delete)}.bubble.change{background:var(--change)}.mark-comment{background:var(--comment-soft);border-bottom:2px solid var(--comment)}.mark-good{background:var(--good-soft);border-bottom:2px solid var(--good)}.mark-delete{background:var(--delete-soft);text-decoration:line-through;text-decoration-color:var(--delete)}.mark-change{background:var(--change-soft);border-bottom:2px solid var(--change)}
+.questions{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr) 43px;min-width:0;min-height:0}.questions-list,.explainer{min-height:0;overflow:hidden;padding:9px 11px 7px}.questions-list{border-right:1px solid var(--line2);background:#fff}.subpane-head{height:24px;display:flex;align-items:center;gap:7px;margin-bottom:5px}.subpane-head h2{font-size:14px;margin:0}.subpane-head .summary{color:var(--muted);font-size:10.5px}.subpane-head .collapse{margin-left:auto}
+.qcard{border:1px solid var(--line2);border-radius:6px;padding:6px 8px;margin-bottom:5px;box-shadow:0 1px 2px rgba(26,32,44,.03)}.qcard.current{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-soft)}.qcard h3{font-size:11.5px;line-height:1.25;margin:0 0 4px}.option{min-height:18px;display:flex;align-items:center;gap:5px;padding:1px 4px;border-radius:3px;font-size:10.8px;line-height:1.25}.option.recommended{background:var(--accent-soft);color:#174f9e}.option input{width:12px;height:12px;margin:0;accent-color:var(--accent)}.rec-tag{margin-left:auto;border:1px solid #b8d3fa;border-radius:8px;padding:0 5px;font-size:9px;font-weight:700;color:#185fca}.other{color:var(--muted);font-style:italic}.explainer{padding:10px 13px 8px;background:#fbfcfe}.explainer h2{font-size:15px;margin:0}.why{margin:7px 0 2px;text-transform:uppercase;letter-spacing:.07em;font-size:9.5px;font-weight:800;color:#5f6b7a}.explainer p{font-size:11.2px;line-height:1.42;margin:0 0 5px}.trade{width:100%;border-collapse:collapse;table-layout:fixed;font-size:9.6px;line-height:1.26}.trade th,.trade td{border:1px solid var(--line2);padding:3px 4px;vertical-align:top;text-align:left;overflow-wrap:anywhere}.trade th{background:#f1f5f9;font-size:9px}.trade th:nth-child(1){width:17%}.trade th:nth-child(2){width:27%}.trade th:nth-child(3){width:37%}.trade th:nth-child(4){width:19%}.recommendation{margin-top:6px;padding:6px 7px;border-left:3px solid var(--accent);background:var(--accent-soft);font-size:10.8px;line-height:1.35}.savebar{grid-column:1/3;display:flex;align-items:center;gap:8px;padding:0 10px;border-top:1px solid var(--line2);background:#fff}.progress{display:flex;gap:2px}.progress i{width:21px;height:4px;background:var(--good);border-radius:3px}.savebar .summary{color:var(--muted);font-size:11px}.savebar .action{margin-left:auto}
+.edit-doc{max-width:760px;padding-top:20px}.source-edit{position:relative;margin:8px -12px 0;padding:11px 12px 8px 15px;border-left:3px solid var(--change);border-radius:0 6px 6px 0;background:linear-gradient(90deg,var(--change-soft),rgba(124,58,237,.025) 70%);font-size:15px;line-height:1.65}.source-edit .tag{position:absolute;right:8px;top:-10px;border:1px solid var(--change);border-radius:9px;padding:1px 7px;background:#fff;color:#5b21b6;font:bold 10px var(--font)}.md{font:12px var(--mono);color:var(--muted)}.old{background:var(--delete-soft);color:#9f1239;text-decoration:line-through;text-decoration-thickness:1.5px}.new{background:var(--good-soft);color:#166534;text-decoration:none}.edit-actions{display:flex;align-items:center;gap:6px;margin-top:7px;font-size:11px;color:var(--muted)}.edit-actions .keep{background:var(--change);color:#fff;border-radius:5px;padding:4px 9px;font-weight:650}.edit-actions .discard{border:1px solid var(--line2);background:#fff;border-radius:5px;padding:3px 8px}.edit-note{margin-left:auto}
+.drawer{min-height:0;border-top:1px solid var(--line2);background:#fbfcfe;overflow:hidden}.drawer-tabs{height:28px;display:flex;align-items:center;border-bottom:1px solid var(--line);background:#fff;padding:0 5px}.drawer-tab{height:28px;padding:0 11px;color:var(--muted);position:relative}.drawer-tab.active{color:var(--ink);font-weight:650}.drawer-tab.active:after{content:"";position:absolute;left:8px;right:8px;bottom:0;height:2px;background:var(--accent)}.drawer-tabs .collapse{margin-left:auto}.drawer-content{height:131px;overflow:auto;padding:6px 10px;font:11px/1.45 var(--mono)}.logline{display:grid;grid-template-columns:63px 72px 1fr;gap:7px;padding:2px 0}.time{color:var(--muted)}.level{font-weight:700}.level.done{color:var(--good)}.level.idle{color:var(--accent)}.agent-panel{display:block}.audit-panel{display:none}.audit-grid{width:100%;border-collapse:collapse;font:10.5px/1.15 var(--mono)}.audit-grid th,.audit-grid td{text-align:left;border-bottom:1px solid var(--line);padding:1px 5px}.audit-grid th{color:var(--muted);font-weight:500}.audit-grid .ok{color:var(--good)}
+body[data-show="drawer-audit"] .agent-panel{display:none}body[data-show="drawer-audit"] .audit-panel{display:block}body[data-show="drawer-audit"] .drawer-tab.agent{color:var(--muted);font-weight:400}body[data-show="drawer-audit"] .drawer-tab.agent:after{display:none}body[data-show="drawer-audit"] .drawer-tab.audit{color:var(--ink);font-weight:650}body[data-show="drawer-audit"] .drawer-tab.audit:after{content:"";position:absolute;left:8px;right:8px;bottom:0;height:2px;background:var(--accent)}
+.comments{grid-column:4;grid-row:1;min-height:0;border-left:1px solid var(--line2);background:var(--panel);display:flex;flex-direction:column}.comments-head{background:#fff;border-bottom:1px solid var(--line2);padding:0 8px 7px}.comments-head .titleline{height:32px;display:flex;align-items:center;gap:7px}.comments-head h2{font-size:13px;margin:0}.comments-head .count{color:var(--muted);font-size:10.5px}.comments-head .collapse{margin-left:auto}.filters{display:flex;gap:4px}.chip{padding:2px 6px;border:1px solid var(--line2);background:#fff;border-radius:9px;color:var(--muted);font-size:10px}.chip.on{border-color:#b8d3fa;background:var(--accent-soft);color:#185fca}.note-btn{margin-left:auto;color:var(--accent);font-weight:650;font-size:10.5px}.threadlist{overflow:auto;padding:7px 7px 56px;display:flex;flex-direction:column;gap:6px}.thread{background:#fff;border:1px solid var(--line);border-left:3px solid var(--comment);border-radius:5px;padding:6px 7px;box-shadow:0 1px 2px rgba(26,32,44,.03)}.thread.good{border-left-color:var(--good)}.thread.delete{border-left-color:var(--delete)}.thread.change{border-left-color:var(--change)}.thread.pending{border-top-style:dashed;border-right-style:dashed;border-bottom-style:dashed}.quote{font-size:10.5px;font-style:italic;color:#6f7c8f;white-space:normal;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;margin:0 0 4px;border-left:2px solid currentColor;padding-left:5px}.who{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:10px}.avatar{width:16px;height:16px;border-radius:50%;background:#a8b4c4;color:#fff;display:grid;place-items:center;font-size:8px;font-weight:800}.avatar.agent{background:var(--accent)}.who b{color:var(--ink)}.kind{margin-left:auto;border-radius:8px;padding:1px 5px;font-size:9px;font-weight:750;background:var(--comment-soft);color:#9a5b00}.good .kind{background:var(--good-soft);color:#166534}.delete .kind{background:var(--delete-soft);color:#9f1239}.change .kind{background:var(--change-soft);color:#5b21b6}.thread-text{font-size:11px;line-height:1.35;margin:4px 0}.reply{margin:5px 0 0 10px;border-left:2px solid var(--line2);padding-left:6px}.statusline{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:9.8px;margin-top:4px}.statusline .ok{color:#166534;font-weight:700}.statusline .pending-label{color:#9a5b00;font-weight:700}.statusline button{color:var(--accent);padding:0}.mini-diff{font:10px/1.35 var(--mono);background:var(--panel);padding:4px 5px;margin-top:4px;border-radius:4px}.mini-diff .old{display:block}.mini-diff .new{display:block}.edit-thread{display:none}body[data-show="editing"] .edit-thread{display:block}body[data-show="editing"] .fr2-comment{display:none}
+.statusbar{grid-column:1/5;grid-row:2;background:#f0f4f9;border-top:1px solid #d8e0ea;display:flex;align-items:center;padding:0 8px;color:#516074;font-size:10.5px}.statusbar .status-accent{color:#185fca;font-weight:700}.statusbar .sep{color:#a8b3c2;margin:0 6px}.statusbar .right{margin-left:auto}.statusbar .terminal{font-family:var(--mono)}
+.screen-nav{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:20;display:flex;gap:3px;padding:3px;background:rgba(26,32,44,.88);border-radius:6px;box-shadow:0 4px 14px rgba(26,32,44,.22)}.screen-nav button{color:#fff;font-size:10px;padding:3px 7px;border-radius:3px;opacity:.68}.screen-nav button:hover{opacity:1;background:rgba(255,255,255,.14)}
+body[data-show="review"] #screen-review,body[data-show="questions"] #screen-questions,body[data-show="editing"] #screen-editing,body[data-show="drawer-audit"] #screen-drawer-audit{opacity:1;background:var(--accent)}
+body[data-show="questions"] .tab-req{background:#f8fafc;color:#667386;box-shadow:none}body[data-show="questions"] .qtab{background:#fff;color:var(--ink);box-shadow:inset 0 2px var(--comment)}
+body[data-show="editing"] .tab-req{box-shadow:inset 0 2px var(--change)}body[data-show="questions"] .drawer-content{display:none}
+</style>
+</head>
+<body data-show="review">
+<div class="app">
+  <nav class="activity" aria-label="Workbench activity">
+    <div class="brand">A</div>
+    <button class="act on" title="Explorer" aria-label="Explorer"><svg viewBox="0 0 24 24"><path d="M3 5h7l2 2h9v12H3z"/><path d="M3 9h18"/></svg></button>
+    <button class="act" title="Stages" aria-label="Stages"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><path d="M8 6h10M8 18h10M6 8v8"/></svg></button>
+    <button class="act" title="Search" aria-label="Search"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg></button>
+    <button class="act" title="Comments" aria-label="Comments"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H9l-5 4z"/></svg></button>
+    <button class="act" title="Audit" aria-label="Audit"><svg viewBox="0 0 24 24"><path d="M7 3h10v4H7zM5 5H3v16h18V5h-2M7 12h10M7 16h7"/></svg></button>
+    <span class="push"></span>
+    <button class="act" title="Keyboard shortcuts" aria-label="Keyboard shortcuts"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 10h2M10 10h2M14 10h2M18 10h1M6 14h7M15 14h4"/></svg></button>
+  </nav>
+
+  <aside class="explorer" aria-label="Explorer">
+    <header class="pane-title"><strong>EXPLORER</strong><button class="collapse" title="Collapse Explorer">‹</button></header>
+    <div class="root"><span class="chev">⌄</span><span class="folder">▰</span><span>260904-todo-app</span></div>
+    <section class="tree-group">
+      <div class="tree-head"><span class="chev">⌄</span>CURRENT STAGE <span style="margin-left:auto;color:var(--comment)">r1</span></div>
+      <div class="tree-row current"><span class="file-ico">M↓</span><span class="name">requirements.md</span><span class="meta">4</span></div>
+      <div class="tree-row"><span class="file-ico">?↓</span><span class="name">requirements-analysis-questions.md</span><span class="meta">4/4</span></div>
+      <div class="tree-row"><span class="file-ico">M↓</span><span class="name">memory.md</span></div>
+      <div class="tree-row"><span class="file-ico">D↕</span><span class="name">Diff r0→r1</span></div>
+    </section>
+    <section class="tree-group">
+      <div class="tree-head"><span class="chev">⌄</span>STAGES <span style="margin-left:auto;color:var(--muted)">2 / 7</span></div>
+      <div class="tree-row"><span class="chev">⌄</span><span class="name">Initialization</span><span class="meta">3/3</span></div>
+      <div class="tree-row indent"><span class="dot good"></span><span class="name">Workspace Scaffold</span><span class="meta">✓</span></div>
+      <div class="tree-row indent"><span class="dot good"></span><span class="name">Workspace Detection</span><span class="meta">✓</span></div>
+      <div class="tree-row indent"><span class="dot good"></span><span class="name">State Init</span><span class="meta">✓</span></div>
+      <div class="tree-row"><span class="chev">⌄</span><span class="name">Inception</span></div>
+      <div class="tree-row indent"><span class="dot skip"></span><span class="name">Reverse Engineering</span><span class="meta">skipped · greenfield</span></div>
+      <div class="tree-row indent current on"><span class="dot warn"></span><span class="name">Requirements Analysis</span><span class="meta">awaiting review</span></div>
+      <div class="tree-row"><span class="chev">›</span><span class="name">Construction</span><span class="meta">0/2</span></div>
+      <div class="tree-row indent"><span class="dot"></span><span class="name">Code Generation</span></div>
+      <div class="tree-row indent"><span class="dot"></span><span class="name">Build and Test</span></div>
+      <div class="tree-row"><span class="chev">›</span><span class="name">Operation</span><span class="meta">conditional</span></div>
+      <div class="tree-row indent"><span class="dot skip"></span><span class="name">Deployment Pipeline</span><span class="meta">?</span></div>
+      <div class="tree-row indent"><span class="dot skip"></span><span class="name">Deployment Execution</span><span class="meta">?</span></div>
+      <div class="tree-row indent"><span class="dot skip"></span><span class="name">Observability Setup</span><span class="meta">?</span></div>
+    </section>
+    <section class="tree-group">
+      <div class="tree-head"><span class="chev">›</span>RECORD <span style="margin-left:auto;color:var(--muted)">default · express · Minimal</span></div>
+    </section>
+  </aside>
+
+  <main class="workspace">
+    <nav class="menu" aria-label="Application menu">
+      <button>File</button><button>Edit</button><button>View</button><button>Comment</button><button>Review</button><button>Help</button>
+      <span class="menu-spacer"></span><span class="hint">agent-owned files · browser mirrors the record</span>
+    </nav>
+    <div class="tabs" role="tablist" aria-label="Open artifacts">
+      <button class="tab tab-req active"><span>requirements.md</span><b class="dirty">●</b><b class="tab-close">×</b></button>
+      <button class="tab qtab"><span>requirements-analysis-questions.md</span><b class="tab-close">×</b></button>
+      <button class="tab"><span>memory.md</span><b class="tab-close">×</b></button>
+      <button class="tab"><span>Diff r0→r1</span><b class="tab-close">×</b></button>
+      <div class="tab-actions">
+        <div class="review-actions"><span class="state-summary">3 open · 1 edit · 1 resolved</span> <button class="action" title="Add general note">＋ Note</button> <button class="action warn">Request changes</button> <button class="action primary">Approve</button></div>
+        <div class="q-actions">● 4/4 answered</div>
+      </div>
+    </div>
+    <div class="crumbs"><span>default</span><span>›</span><span>260904-todo-app</span><span>›</span><b>Inception</b><span>›</span><b>Requirements Analysis</b><span>›</span><b class="crumb-file-review">requirements.md</b><b class="crumb-file-questions">requirements-analysis-questions.md</b><span class="right">Product Agent · r1 · <span style="color:var(--good)">idle</span> · <span class="key">⌘K</span> commands</span></div>
+    <div class="formatbar" role="toolbar" aria-label="Markdown formatting toolbar">
+      <button title="Bold"><b>B</b></button><button title="Italic"><i>I</i></button><button title="Strike"><s>S</s></button><button title="Code"><span style="font-family:var(--mono)">&lt;/&gt;</span></button><span class="sep"></span>
+      <button title="Bullet list">•≡</button><button title="Numbered list">1.</button><button title="Task list">☑</button><button title="Quote">❯</button><span class="sep"></span><button title="Link">↗</button><button title="Table">▦</button><span class="mode">Suggest edits · Markdown</span>
+    </div>
+
+    <section class="content">
+      <div class="view view-review docscroll">
+        <article class="doc">
+          <div class="docmeta"><span class="mono">requirements.md</span><span>Product Agent</span><span>revision r1</span><span class="live-dot"></span><span>revised 2 min ago · agent idle</span></div>
+          <h1>Requirements — To-Do Application</h1>
+          <p>A single-user web application for capturing, completing, and deleting tasks. Tasks persist in the browser's local storage; there is no server, account, or synchronisation. The scope is intentionally minimal: one list, no projects or tags.</p>
+          <h2>Functional requirements</h2>
+          <div class="block"><span class="bubble good">1</span><p><strong>FR1 — Add a task.</strong> <span class="mark-good">The user can add a task by typing a title and pressing Enter.</span> Titles are trimmed; an empty title is ignored without an error message.</p></div>
+          <div class="block"><span class="bubble">2</span><p><strong>FR2 — Complete a task.</strong> The user can mark a task complete and uncomplete it. <span class="mark-comment">Completed tasks move to the bottom of the list</span> and render with a strike-through.</p></div>
+          <div class="block"><span class="bubble delete">3</span><p><strong>FR3 — Delete a task.</strong> Each task has a delete control. <span class="mark-delete">Deletion asks for confirmation.</span> Deleted tasks are removed immediately from storage.</p></div>
+          <div class="block"><span class="bubble change">4</span><p><strong>FR4 — Persistence.</strong> The list is saved to <code>localStorage</code> on every change and restored on load. <span class="mark-change">If storage is unavailable the app shows an error and refuses to start.</span></p></div>
+          <h2>Non-functional requirements</h2>
+          <p><strong>NFR1 — Performance.</strong> Adding, completing, or deleting a task reflects in the UI within 100 ms for lists up to 500 tasks.</p>
+          <p><strong>NFR2 — Accessibility.</strong> All controls are keyboard-operable and labelled; colour is never the only signal for completion.</p>
+          <h2>Out of scope</h2>
+          <ul><li>Accounts, sign-in, or multi-device sync</li><li>Due dates, reminders, tags, or projects</li><li>Any backend or database</li></ul>
+          <h2>Traceability</h2>
+          <table><thead><tr><th>Answer</th><th>Requirement</th></tr></thead><tbody><tr><td>Q1 · Web app</td><td>Scope, NFR2</td></tr><tr><td>Q2 · Local storage</td><td>FR4</td></tr><tr><td>Q3 · Single user</td><td>Out of scope</td></tr><tr><td>Q4 · Core only</td><td>FR1–FR3</td></tr></tbody></table>
+        </article>
+      </div>
+
+      <div class="view view-editing docscroll">
+        <article class="doc edit-doc">
+          <div class="docmeta"><span class="mono">requirements.md</span><span>Suggest edits</span><span>Product Agent · r1</span><span style="color:var(--change)">1 pending edit</span></div>
+          <h1>Requirements — To-Do Application</h1>
+          <p>A single-user web application for capturing, completing, and deleting tasks. Tasks persist in the browser's local storage; there is no server, account, or synchronisation. The scope is intentionally minimal: one list, no projects or tags.</p>
+          <h2>Functional requirements</h2>
+          <p><strong>FR1 — Add a task.</strong> The user can add a task by typing a title and pressing Enter. Titles are trimmed; an empty title is ignored without an error message.</p>
+          <div class="source-edit" contenteditable="true" spellcheck="false"><span class="tag">PENDING SUGGESTION</span><span class="md">**</span><strong>FR2 — Complete a task.</strong><span class="md">**</span> The user can mark a task complete and uncomplete it. <span class="old">Completed tasks move to the bottom of the list and render with a strike-through.</span> <span class="new">Completed tasks stay in place and render with a strike-through; list order never changes.</span></div>
+          <div class="edit-actions"><button class="keep">Keep suggestion</button><button class="discard">Discard</button><span class="edit-note">Markdown source · visible character diff · <span class="key">⌘↵</span> keep</span></div>
+          <p><strong>FR3 — Delete a task.</strong> Each task has a delete control. Deletion asks for confirmation. Deleted tasks are removed immediately from storage.</p>
+          <p><strong>FR4 — Persistence.</strong> The list is saved to <code>localStorage</code> on every change and restored on load. If storage is unavailable the app shows an error and refuses to start.</p>
+        </article>
+      </div>
+
+      <div class="view view-questions questions">
+        <section class="questions-list">
+          <header class="subpane-head"><h2>Questions</h2><span class="summary">4 of 4 answered · recommendation selected</span><button class="collapse" title="Collapse questions">‹</button></header>
+          <div class="qcard current"><h3>1 · What platform should the to-do app run on?</h3>
+            <label class="option recommended"><input type="radio" name="q1" checked>Web app that runs in the browser <span class="rec-tag">Recommended</span></label>
+            <label class="option"><input type="radio" name="q1">Command-line tool</label><label class="option"><input type="radio" name="q1">Desktop application</label><label class="option"><input type="radio" name="q1">Mobile app (iOS / Android)</label><label class="option"><input type="radio" name="q1">Other (please specify) <span class="other">describe →</span></label>
+          </div>
+          <div class="qcard"><h3>2 · Where should tasks be stored?</h3>
+            <label class="option recommended"><input type="radio" name="q2" checked>Browser only (local storage) <span class="rec-tag">Recommended</span></label><label class="option"><input type="radio" name="q2">A small server with a database</label><label class="option"><input type="radio" name="q2">Hosted backend</label><label class="option"><input type="radio" name="q2">Other (please specify) <span class="other">describe →</span></label>
+          </div>
+          <div class="qcard"><h3>3 · Who uses it?</h3>
+            <label class="option recommended"><input type="radio" name="q3" checked>Single user, no login <span class="rec-tag">Recommended</span></label><label class="option"><input type="radio" name="q3">Several users, each with an account</label><label class="option"><input type="radio" name="q3">Other (please specify) <span class="other">describe →</span></label>
+          </div>
+          <div class="qcard"><h3>4 · Which features are in the first version?</h3>
+            <label class="option recommended"><input type="radio" name="q4" checked>Core only: add, complete, delete <span class="rec-tag">Recommended</span></label><label class="option"><input type="radio" name="q4">Core + due dates</label><label class="option"><input type="radio" name="q4">Core + projects and tags</label><label class="option"><input type="radio" name="q4">Other (please specify) <span class="other">describe →</span></label>
+          </div>
+        </section>
+        <aside class="explainer">
+          <header class="subpane-head"><h2>1 · Platform</h2><span class="summary">explainer</span><button class="collapse" title="Collapse explainer">›</button></header>
+          <div class="why">Why now</div>
+          <p>This is the first fork in the road: a browser app needs no install and no backend, a CLI needs neither UI nor storage design, a mobile app needs a store pipeline. Every later stage — code generation, build and test, deployment — reads this answer.</p>
+          <div class="why">Trade-offs</div>
+          <table class="trade"><thead><tr><th>Option</th><th>You get</th><th>You give up</th><th>Cost / risk</th></tr></thead><tbody>
+            <tr><td>Web app</td><td>Runs anywhere, fastest to a usable build</td><td>Offline is only as good as the browser</td><td>Low</td></tr>
+            <tr><td>CLI</td><td>Tiny surface, trivial testing</td><td>No visual list, awkward for most people</td><td>Low</td></tr>
+            <tr><td>Desktop</td><td>Native feel</td><td>Packaging per OS</td><td>Medium</td></tr>
+            <tr><td>Mobile</td><td>Always at hand</td><td>Store review, two platforms</td><td>High</td></tr>
+          </tbody></table>
+          <div class="why">Recommendation</div>
+          <div class="recommendation"><b>Recommendation: Web app.</b> For a lightweight express build it is the shortest path to something you can click on, and it keeps storage (Q2) and users (Q3) simple.</div>
+          <div class="why">Related decisions</div>
+          <p>None yet — this is the first question round of the intent.</p>
+        </aside>
+        <footer class="savebar"><span class="progress"><i></i><i></i><i></i><i></i></span><span class="summary">4 of 4 answered · all on the recommendation · writes answers-NNN.json; terminal path remains complete</span><button class="action primary">Save answers — the agent continues</button></footer>
+      </div>
+    </section>
+
+    <section class="drawer" aria-label="Bottom drawer">
+      <div class="drawer-tabs"><button class="drawer-tab agent active" onclick="showScreen('review')">Agent</button><button class="drawer-tab audit" onclick="showScreen('drawer-audit')">Audit</button><button class="drawer-tab">Sensors</button><button class="collapse" title="Collapse bottom drawer">⌄</button></div>
+      <div class="drawer-content agent-panel">
+        <div class="logline"><span class="time">10:42:13</span><span class="level done">APPLIED</span><span>revised requirements.md</span></div>
+        <div class="logline"><span class="time">10:42:13</span><span class="level done">THREADS</span><span>addressed 3 remarks</span></div>
+        <div class="logline"><span class="time">10:42:14</span><span class="level idle">STATUS</span><span>idle</span></div>
+      </div>
+      <div class="drawer-content audit-panel">
+        <table class="audit-grid"><thead><tr><th>time</th><th>event</th><th>actor</th><th>artifact / detail</th><th>result</th></tr></thead><tbody>
+          <tr><td>10:42:14</td><td>gate.opened</td><td>conductor</td><td>Requirements Analysis · r1</td><td class="ok">awaiting review</td></tr>
+          <tr><td>10:42:13</td><td>artifact.revised</td><td>Product Agent</td><td>requirements.md · r0→r1</td><td class="ok">recorded</td></tr>
+          <tr><td>10:42:12</td><td>feedback.applied</td><td>Product Agent</td><td>remark 004 · FR4</td><td class="ok">applied</td></tr>
+          <tr><td>10:42:11</td><td>feedback.answered</td><td>Product Agent</td><td>remark 003 · FR3</td><td>kept with reason</td></tr>
+          <tr><td>10:42:10</td><td>feedback.read</td><td>Product Agent</td><td>feedback-001.md · 3 remarks</td><td class="ok">complete</td></tr>
+          <tr><td>10:39:02</td><td>answers.applied</td><td>conductor</td><td>answers-001.json · 4/4</td><td class="ok">complete</td></tr>
+        </tbody></table>
+      </div>
+    </section>
+  </main>
+
+  <aside class="comments" aria-label="Comments pane">
+    <header class="comments-head">
+      <div class="titleline"><h2>COMMENTS</h2><span class="count">4 threads</span><button class="collapse" title="Collapse Comments">›</button></div>
+      <div class="filters"><button class="chip on">Open 3</button><button class="chip">Resolved 1</button><button class="chip">Agent replies</button><button class="note-btn">＋ Add general note</button></div>
+    </header>
+    <div class="threadlist">
+      <article class="thread change pending edit-thread">
+        <p class="quote">FR2 — Complete a task.</p><div class="who"><span class="avatar">P</span><b>You</b><span>just now</span><span class="kind">Suggested edit</span></div>
+        <div class="mini-diff"><span class="old">Completed tasks move to the bottom of the list and render with a strike-through.</span><span class="new">Completed tasks stay in place and render with a strike-through; list order never changes.</span></div>
+        <div class="statusline"><span class="pending-label">Pending</span><span>· sends with your decision</span><button>Edit</button><button>Remove</button></div>
+      </article>
+      <article class="thread good"><p class="quote">The user can add a task by typing a title and pressing Enter.</p><div class="who"><span class="avatar">P</span><b>You</b><span>r0</span><span class="kind">Looks good</span></div><div class="statusline"><span class="ok">Resolved</span><span>· kept in r1</span></div></article>
+      <article class="thread pending fr2-comment"><p class="quote">Completed tasks move to the bottom of the list</p><div class="who"><span class="avatar">P</span><b>You</b><span>just now</span><span class="kind">Comment</span></div><p class="thread-text">Do they? I'd rather keep list order stable and just strike them through — moving items is disorienting on a small list.</p><div class="statusline"><span class="pending-label">Pending</span><span>· not yet sent · sends with your decision</span><button>Edit</button><button>Remove</button></div></article>
+      <article class="thread delete"><p class="quote">Deletion asks for confirmation.</p><div class="who"><span class="avatar">P</span><b>You</b><span>r0</span><span class="kind">Delete</span></div><p class="thread-text">No confirm dialog — undo is friendlier and we said "core only".</p><div class="reply"><div class="who"><span class="avatar agent">A</span><b>Product Agent</b><span>r1</span></div><p class="thread-text">Kept the confirmation: without undo, an accidental delete is unrecoverable. Happy to remove if you'd rather add undo to scope.</p></div><div class="statusline"><span>Open</span><button>Reply</button><button>Resolve</button></div></article>
+      <article class="thread change"><p class="quote">If storage is unavailable the app shows an error and refuses to start.</p><div class="who"><span class="avatar">P</span><b>You</b><span>r0</span><span class="kind">Suggested edit</span></div><div class="mini-diff"><span class="old">refuses to start</span><span class="new">runs in memory for the session and warns that nothing will be saved</span></div><div class="reply"><div class="who"><span class="avatar agent">A</span><b>Product Agent</b><span>r1</span></div><p class="thread-text">Applied.</p></div><div class="statusline"><span class="ok">Addressed in r1</span><button>View change</button><button>Resolve</button></div></article>
+    </div>
+  </aside>
+
+  <footer class="statusbar"><span class="status-accent">express</span><span class="sep">·</span><span>Inception</span><span class="sep">·</span><span>Requirements Analysis</span><span class="sep">·</span><span>r1</span><span class="sep">·</span><span>3 open</span><span class="right terminal">daemon 2.7.3 <span class="sep">·</span> localhost:4765</span></footer>
+</div>
+
+<nav class="screen-nav" aria-label="Mock screens">
+  <button id="screen-review" onclick="showScreen('review')">review</button>
+  <button id="screen-questions" onclick="showScreen('questions')">questions</button>
+  <button id="screen-editing" onclick="showScreen('editing')">editing</button>
+  <button id="screen-drawer-audit" onclick="showScreen('drawer-audit')">drawer-audit</button>
+</nav>
+<script>function showScreen(id){document.body.dataset.show=id}</script>
+</body>
+</html>

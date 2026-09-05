@@ -1,0 +1,914 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-DLC Review — redesign mock v4 (column-scoped menus, collapsible sidebar)</title>
+<style>
+:root{
+  --ink:#1a202c; --muted:#8792a2; --faint:#b6bfcc; --line:#eef2f7; --line-strong:#dfe5ee;
+  --panel:#f7f9fc; --page:#fff; --accent:#2d7ff9; --accent-soft:#edf4ff;
+  --comment:#f59e0b; --comment-soft:rgba(245,158,11,.15);
+  --change:#7c3aed; --change-soft:rgba(124,58,237,.12);
+  --delete:#e11d48; --delete-soft:rgba(225,29,72,.12);
+  --good:#16a34a; --good-soft:rgba(22,163,74,.12);
+  --font:-apple-system,"system-ui","Helvetica Neue",Inter,"Segoe UI",Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font:14px/1.6 var(--font);color:var(--ink);background:var(--page)}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+a{color:var(--accent);text-decoration:none}
+
+/* ---- shell ---- */
+.shell{display:grid;grid-template-rows:48px 1fr;height:100vh}
+.top{display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid var(--line);background:#fff}
+.mark{width:24px;height:24px;border-radius:6px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;display:grid;place-items:center}
+.crumb{display:flex;align-items:center;gap:8px;font-weight:600}
+.crumb .dim{color:var(--muted);font-weight:500}
+.crumb .sep{color:var(--faint)}
+.pill{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--comment-soft);color:#9a5b00}
+.pill.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--comment);margin-right:6px;vertical-align:1px}
+.pill.ok{background:var(--good-soft);color:#166534}
+.top .spacer{flex:1}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:8px;overflow:hidden;font-size:13px}
+.seg button{padding:4px 10px;color:var(--muted)}
+.seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.iconbtn{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--muted)}
+.iconbtn:hover{background:var(--panel);color:var(--ink)}
+.conn{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.conn::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--good)}
+
+.body{display:grid;grid-template-columns:56px 1fr 320px;min-height:0}
+.rail{border-right:1px solid var(--line);background:#fff;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px}
+.rail button{width:40px;height:40px;border-radius:10px;color:var(--muted);position:relative;display:grid;place-items:center}
+.rail button.on{background:var(--accent-soft);color:var(--accent)}
+.rail .badge{position:absolute;top:4px;right:4px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;border-radius:999px;padding:0 5px;line-height:16px}
+.rail svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+/* ---- document ---- */
+.docwrap{overflow:auto;position:relative}
+.doc{max-width:860px;margin:0 auto;padding:40px 88px 160px}
+.docmeta{display:flex;gap:14px;align-items:center;color:var(--muted);font-size:12px;margin-bottom:22px}
+.docmeta .file{font-family:var(--mono);color:var(--ink);background:var(--panel);padding:2px 6px;border-radius:5px}
+.agentline{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+.agentline .dot{width:8px;height:8px;border-radius:50%;background:var(--good)}
+h1{font-size:30px;line-height:1.2;font-weight:700;letter-spacing:-.3px;margin:0 0 18px}
+h2{font-size:20px;line-height:1.3;font-weight:700;margin:36px 0 10px;letter-spacing:-.2px}
+h3{font-size:16px;font-weight:600;margin:24px 0 8px}
+p,li{font-size:15px;line-height:1.65}
+p{margin:0 0 12px}
+ul,ol{padding-left:24px;margin:0 0 12px}
+li{margin:2px 0}
+table{border-collapse:collapse;width:100%;margin:8px 0 16px;font-size:14px}
+th,td{border:1px solid var(--line-strong);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--panel);font-weight:600}
+code{font-family:var(--mono);font-size:.92em;background:var(--panel);padding:1px 5px;border-radius:4px}
+hr{border:0;border-top:1px solid var(--line);margin:28px 0}
+
+.line{position:relative}
+.gutter{position:absolute;left:-58px;top:2px;display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+.bubble{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:#fff;border-radius:999px;padding:1px 6px 1px 5px;background:var(--comment)}
+.bubble.change{background:var(--change)} .bubble.delete{background:var(--delete)} .bubble.good{background:var(--good)}
+.bubble svg{width:11px;height:11px;fill:none;stroke:#fff;stroke-width:2}
+.mark-c{background:var(--comment-soft);border-bottom:2px solid var(--comment);border-radius:2px}
+.mark-x{background:var(--change-soft);border-bottom:2px solid var(--change);border-radius:2px}
+.mark-d{background:var(--delete-soft);text-decoration:line-through;text-decoration-color:var(--delete);border-radius:2px}
+.mark-g{background:var(--good-soft);border-bottom:2px solid var(--good);border-radius:2px}
+.mark-c.active{outline:2px solid var(--comment);outline-offset:1px}
+.addhint{position:absolute;right:-44px;top:0;width:28px;height:28px;border-radius:8px;border:1px solid var(--line-strong);background:#fff;color:var(--muted);display:grid;place-items:center;box-shadow:0 2px 8px rgba(26,32,44,.06)}
+.addhint svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2}
+
+/* inline composer (appears on selection) */
+.composer{position:relative;margin:6px 0 14px;background:#fff;border:1px solid var(--line-strong);border-radius:10px;box-shadow:0 8px 24px rgba(26,32,44,.10);padding:10px 12px;font-size:13px}
+.composer .kinds{display:flex;gap:6px;margin-bottom:8px}
+.kind{padding:3px 9px;border-radius:999px;border:1px solid var(--line-strong);color:var(--muted);font-size:12px;font-weight:600}
+.kind.on{border-color:var(--comment);background:var(--comment-soft);color:#9a5b00}
+.composer textarea{width:100%;border:0;resize:none;font:inherit;line-height:1.5;outline:none;min-height:44px}
+.composer .foot{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px}
+.composer .primary{background:var(--accent);color:#fff;border-radius:7px;padding:5px 12px;font-weight:600}
+
+/* diff inline */
+.ins{background:var(--good-soft);text-decoration:none;color:#166534}
+.del{background:var(--delete-soft);text-decoration:line-through;color:#9f1239}
+
+/* ---- threads ---- */
+.threads{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.threads header{padding:14px 16px 10px;display:flex;flex-direction:column;gap:10px;background:#fff;border-bottom:1px solid var(--line)}
+.threads header .row{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}
+.threads header h2{margin:0;font-size:15px;flex:1}
+.threads header .count{color:var(--muted);font-weight:500;font-size:12px}
+.filters{display:flex;gap:6px;flex-wrap:wrap}
+.chip{padding:2px 9px;border-radius:999px;border:1px solid var(--line-strong);font-size:12px;color:var(--muted);background:#fff}
+.chip.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
+.tlist{overflow:auto;padding:12px 12px 120px;display:flex;flex-direction:column;gap:10px}
+.card{background:#fff;border-radius:10px;border-left:3px solid var(--comment);padding:10px 12px 10px 12px;box-shadow:0 1px 2px rgba(26,32,44,.04)}
+.card.change{border-left-color:var(--change)} .card.delete{border-left-color:var(--delete)} .card.good{border-left-color:var(--good)}
+.card.pending{border-style:dashed;border-left-style:solid}
+.card .quote{font-style:italic;color:var(--muted);font-size:12px;border-left:2px solid var(--comment);padding-left:8px;margin:0 0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card.change .quote{border-left-color:var(--change)} .card.delete .quote{border-left-color:var(--delete)} .card.good .quote{border-left-color:var(--good)}
+.card .who{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:4px}
+.avatar{width:20px;height:20px;border-radius:50%;background:#cbd5e1;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff}
+.avatar.agent{background:var(--accent)}
+.card .who b{color:var(--ink);font-weight:600}
+.card .kindtag{margin-left:auto;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--comment-soft);color:#9a5b00}
+.card.change .kindtag{background:var(--change-soft);color:#5b21b6} .card.delete .kindtag{background:var(--delete-soft);color:#9f1239} .card.good .kindtag{background:var(--good-soft);color:#166534}
+.card .text{font-size:13px;margin:0 0 6px}
+.card .reply{margin:8px 0 0 12px;padding-left:10px;border-left:2px solid var(--line)}
+.card .status{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);margin-top:6px}
+.card .status .ok{color:#166534;font-weight:600}
+.card .status .pend{color:#9a5b00;font-weight:600}
+.card .status button{white-space:nowrap;color:var(--accent);font-weight:600}
+.card .diff{font-family:var(--mono);font-size:12px;background:var(--panel);border-radius:6px;padding:6px 8px;margin:4px 0 6px;line-height:1.5}
+
+/* ---- decision bar ---- */
+.decision{position:absolute;left:56px;right:320px;bottom:0;background:rgba(255,255,255,.96);backdrop-filter:blur(6px);border-top:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:14px}
+.decision .summary{color:var(--muted);font-size:13px;white-space:nowrap}
+.decision .summary b{color:var(--ink)}
+.decision .spacer{flex:1}
+.btn{border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px;border:1px solid var(--line-strong);background:#fff;white-space:nowrap}
+.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn.warn{background:#fff7ed;color:#9a3412;border-color:#fed7aa}
+.btn kbd{font:11px var(--mono);opacity:.7;margin-left:6px}
+
+/* ---- questions screen ---- */
+.qwrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0;overflow:auto;position:relative}
+.qcol{padding:40px 48px 160px;max-width:720px;justify-self:end;width:100%}
+.explainer{border-left:1px solid var(--line);padding:40px 56px 160px;max-width:720px;width:100%;background:#fff}
+.qintro{color:var(--muted);font-size:13px;margin-bottom:22px}
+.q{border:1px solid var(--line-strong);border-radius:12px;padding:16px 18px;margin-bottom:16px;background:#fff}
+.q.current{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.q h3{margin:0 0 4px;font-size:16px}
+.q .ctx{color:var(--muted);font-size:13px;margin:0 0 12px}
+.opt{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px;font-size:14px}
+.opt input{margin:0}
+.opt.rec{border-color:var(--accent);background:var(--accent-soft)}
+.opt .rectag{margin-left:auto;font-size:11px;font-weight:700;color:var(--accent);background:#fff;border:1px solid var(--accent);border-radius:999px;padding:0 7px}
+.opt .other{margin-left:auto;font-size:12px;color:var(--muted)}
+.q .note{margin-top:8px;font-size:12px;color:var(--muted)}
+.q .note input{width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font:inherit;font-size:13px;margin-top:4px}
+.explainer h2{margin-top:0}
+.explainer .why{color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin:20px 0 6px}
+.explainer .rec{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 12px;border-radius:0 8px 8px 0;margin-top:8px}
+.explainer .rec b{color:var(--accent)}
+.savebar{position:absolute;left:56px;right:0;bottom:0;background:rgba(255,255,255,.96);backdrop-filter:blur(6px);border-top:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:14px}
+.progress{display:flex;gap:4px;align-items:center}
+.progress i{width:26px;height:6px;border-radius:3px;background:var(--line-strong)}
+.progress i.done{background:var(--accent)}
+
+
+/* ---- menu bar + toolbar (Bunsho: title row, menu row, tool row) ---- */
+.shell{grid-template-rows:44px 1fr}
+.menubar{display:flex;align-items:center;gap:2px;padding:0 12px;border-bottom:1px solid var(--line);background:#fff;font-size:13px}
+.menubar button{padding:2px 8px;border-radius:5px;color:var(--ink)}
+.menubar button:hover,.menubar button.open{background:var(--panel)}
+.menubar .right{margin-left:auto;display:flex;gap:10px;color:var(--muted);font-size:12px;align-items:center}
+.toolbar{display:flex;align-items:center;gap:2px;padding:0 12px;border-bottom:1px solid var(--line);background:#fff}
+.toolbar .tb{height:28px;min-width:28px;padding:0 6px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;gap:4px;color:var(--ink);font-size:13px}
+.toolbar .tb:hover{background:var(--panel)}
+.toolbar .tb.on{background:var(--accent-soft);color:var(--accent)}
+.toolbar .tb[disabled]{color:var(--faint);cursor:default}
+.toolbar .tb svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.toolbar .sep{width:1px;height:18px;background:var(--line-strong);margin:0 6px}
+.toolbar .block{border:1px solid var(--line-strong);border-radius:6px;padding:0 8px;height:28px;display:inline-flex;align-items:center;gap:6px;font-size:13px;min-width:120px;justify-content:space-between}
+.toolbar .mode{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.toolbar .mode .seg button{padding:3px 10px}
+.menu[hidden]{display:none}
+.menu{position:absolute;top:72px;left:56px;background:#fff;border:1px solid var(--line-strong);border-radius:10px;box-shadow:0 12px 32px rgba(26,32,44,.14);padding:6px;min-width:260px;z-index:5;font-size:13px}
+.menu div{display:flex;justify-content:space-between;padding:6px 10px;border-radius:6px}
+.menu div:hover{background:var(--panel)}
+.menu kbd{font:11px var(--mono);color:var(--muted)}
+.menu hr{margin:6px 0;border:0;border-top:1px solid var(--line)}
+.menu .dim{color:var(--faint)}
+
+/* hover affordance on any block */
+.line:hover .hoveradd{opacity:1}
+.hoveradd{position:absolute;right:-44px;top:0;width:28px;height:28px;border-radius:8px;border:1px solid var(--line-strong);background:#fff;color:var(--muted);display:grid;place-items:center;opacity:0;transition:opacity .12s}
+.hoveradd svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2}
+
+/* suggest-edit mode: the block becomes markdown source with visible markers */
+.editing{position:relative;border-left:3px solid var(--change);margin-left:-16px;padding-left:13px;background:linear-gradient(90deg,var(--change-soft),transparent 60%);border-radius:0 8px 8px 0}
+.editing .src{font:15px/1.65 var(--font);white-space:pre-wrap;outline:none;caret-color:var(--change)}
+.editing .src .mk{color:var(--muted);font-family:var(--mono);font-size:.85em}
+.editing .src b{font-weight:700}
+.editing .src .del{background:var(--delete-soft);color:#9f1239;text-decoration:line-through}
+.editing .src .ins{background:var(--good-soft);color:#166534}
+.editing .tag{position:absolute;right:8px;top:-10px;font-size:11px;font-weight:700;color:#5b21b6;background:#fff;border:1px solid var(--change);border-radius:999px;padding:0 8px}
+.editbar{margin:8px 0 14px;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}
+.editbar button{white-space:nowrap}
+.editbar .primary{background:var(--change);color:#fff;border-radius:7px;padding:5px 12px;font-weight:600;font-size:13px}
+.editbar .ghost{border:1px solid var(--line-strong);border-radius:7px;padding:4px 10px;font-size:13px}
+.editbar .ghost:hover{background:var(--panel)}
+
+/* popover comment style (Bunsho "Style: Popover") */
+.popover{position:absolute;right:-330px;top:-8px;width:300px;background:#fff;border:1px solid var(--line-strong);border-radius:10px;box-shadow:0 12px 32px rgba(26,32,44,.14);padding:10px 12px;font-size:13px;z-index:4}
+.popover::before{content:"";position:absolute;left:-7px;top:16px;width:12px;height:12px;background:#fff;border-left:1px solid var(--line-strong);border-bottom:1px solid var(--line-strong);transform:rotate(45deg)}
+body[data-show="edit"] [data-screen="edit"]{display:grid}
+
+
+/* ---- workflow sidebar (replaces the icon rail): intent, stages, current stage, record ---- */
+.body{grid-template-columns:280px 1fr 320px}
+.wf{border-right:1px solid var(--line);background:#fff;display:flex;flex-direction:column;min-height:0;overflow:auto;font-size:13px}
+.wf section{padding:12px 14px;border-bottom:1px solid var(--line)}
+.wf h3{margin:0 0 8px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
+.wf h3 .r{margin-left:auto;font-weight:500;letter-spacing:0;text-transform:none;font-size:11px}
+.wf-intent{display:flex;align-items:center;gap:8px;border:1px solid var(--line-strong);border-radius:8px;padding:6px 8px;background:#fff}
+.wf-intent .ico{width:22px;height:22px;border-radius:6px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:11px;font-weight:700}
+.wf-intent .txt{display:flex;flex-direction:column;line-height:1.2;min-width:0}
+.wf-intent .txt b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wf-intent .txt span{font-size:11px;color:var(--muted)}
+.wf-intent .caret{margin-left:auto;color:var(--muted)}
+.wf-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.wf-meta span{font-size:11px;border:1px solid var(--line-strong);border-radius:999px;padding:1px 7px;color:var(--muted)}
+.wf-meta span b{color:var(--ink);font-weight:600}
+.wf-progress{height:4px;border-radius:2px;background:var(--line);margin:10px 0 2px;overflow:hidden}
+.wf-progress i{display:block;height:100%;width:29%;background:var(--accent)}
+.wf-phase{margin-top:10px}
+.wf-phase:first-of-type{margin-top:0}
+.wf-phase .ph{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);padding:2px 0}
+.wf-phase .ph .n{margin-left:auto;font-weight:500;letter-spacing:0}
+.wf-phase .ph.done{color:var(--good)}
+.wf-phase .ph.now{color:var(--accent)}
+.wf-stage{display:flex;align-items:center;gap:8px;padding:4px 6px 4px 4px;border-radius:6px;color:var(--ink);white-space:nowrap}
+.wf-stage .nm{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.wf-stage:hover{background:var(--panel)}
+.wf-stage .st{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:10px;flex:none}
+.wf-stage .st.done{background:var(--good-soft);color:var(--good)}
+.wf-stage .st.now{background:var(--accent);color:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
+.wf-stage .st.todo{border:1.5px solid var(--line-strong);color:transparent}
+.wf-stage .st.skip{border:1.5px dashed var(--line-strong);color:transparent}
+.wf-stage .st.cond{border:1.5px solid var(--faint);color:var(--muted);font-size:9px}
+.wf-stage.now{background:var(--accent-soft);font-weight:600}
+.wf-stage.dim{color:var(--muted)}
+.wf-stage .sub{margin-left:auto;font-size:11px;color:var(--muted);font-weight:500;white-space:nowrap}
+.wf-stage.now .sub{color:var(--accent)}
+.wf-art{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+.wf-art .nm{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.wf-art:hover{background:var(--panel)}
+.wf-art.on{background:var(--panel);font-weight:600}
+.wf-art .k{width:8px;height:8px;border-radius:2px;flex:none;background:var(--faint)}
+.wf-art .k.kdoc{background:var(--accent)}
+.wf-art .k.kq{background:var(--comment)}
+.wf-art .k.kmem{background:var(--muted)}
+.wf-art .b{margin-left:auto;font:11px var(--font);color:var(--muted)}
+.wf-art .b.hot{background:var(--accent);color:#fff;border-radius:999px;padding:0 6px;font-weight:700}
+.wf-tree{font-family:var(--mono);font-size:11.5px;color:var(--muted);line-height:1.7}
+.wf-tree .d{color:var(--ink)}
+.wf-tree .in{padding-left:14px}
+.wf-tree .cur{color:var(--accent);font-weight:600}
+.wf .foot{margin-top:auto;padding:10px 14px;font-size:11px;color:var(--muted);border-top:1px solid var(--line);display:flex;gap:8px;align-items:center}
+.wf .foot .dot{width:6px;height:6px;border-radius:50%;background:var(--good)}
+
+
+/* ---- v4: chrome scoped to the document column ---- */
+.dochead{position:sticky;top:0;z-index:3;background:#fff;border-bottom:1px solid var(--line)}
+.dochead .menubar{border-bottom:1px solid var(--line);height:30px}
+.dochead .toolbar{border-bottom:0;height:38px}
+.dochead .menu{top:30px;left:14px}
+.qhead{grid-column:1/-1}
+.qhead .menubar{border-bottom:0}
+.docwrap .decision{z-index:4}
+
+/* ---- v4: collapsible sidebar ---- */
+.wf-head{position:relative}
+.wf-collapse{position:absolute;right:8px;top:8px;width:22px;height:22px;border-radius:6px;color:var(--muted);font-size:14px;line-height:1;display:grid;place-items:center}
+.wf-collapse:hover{background:var(--panel);color:var(--ink)}
+.wf-head .wf-intent{margin-right:26px}
+.wf-sec{border-bottom:1px solid var(--line)}
+.wf-sec summary{list-style:none;cursor:pointer;padding:12px 14px 10px;display:block}
+.wf-sec summary::-webkit-details-marker{display:none}
+.wf-sec summary h3{margin:0}
+.wf-sec summary h3:before{content:"▾";display:inline-block;width:12px;color:var(--faint);font-size:10px;transition:transform .12s}
+.wf-sec:not([open]) summary h3:before{transform:rotate(-90deg)}
+.wf-sec > :not(summary){margin:0 14px 12px}
+.wf-sec .wf-tree,.wf-sec .wf-phase,.wf-sec .wf-art{margin-left:14px;margin-right:14px}
+.wf-sec .wf-phase{margin-top:10px}
+.wf-sec > .wf-phase:nth-of-type(2){margin-top:0}
+.wf-sec .wf-art{margin-bottom:0}
+.wf-sec .wf-art:last-child{margin-bottom:12px}
+.wf-sec .wf-tree{margin-bottom:12px}
+.wf-rail{display:none}
+.body.collapsed{grid-template-columns:48px 1fr 320px}
+.body.qbody.rail{grid-template-columns:48px 1fr !important}
+.body.collapsed .wf > :not(.wf-rail){display:none}
+.body.collapsed .wf-rail{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 0}
+.wf-rail button{width:34px;height:34px;border-radius:9px;color:var(--muted);display:grid;place-items:center}
+.wf-rail button:hover{background:var(--panel);color:var(--ink)}
+.wf-rail button.on{background:var(--accent-soft);color:var(--accent)}
+.wf-rail svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.wf-rail button:first-child{font-size:14px;margin-bottom:6px}
+
+/* screen toggle for the mock */
+[data-screen]{display:none}
+body[data-show="review"] [data-screen="review"]{display:grid}
+body[data-show="questions"] [data-screen="questions"]{display:grid}
+body[data-show="edit"] [data-screen="edit"]{display:grid}
+.mocknav{position:fixed;left:50%;transform:translateX(-50%);bottom:10px;z-index:9;display:flex;gap:6px}
+.mocknav button{font-size:11px;padding:4px 8px;border-radius:6px;background:#1a202c;color:#fff;opacity:.6}
+</style>
+</head>
+<body data-show="review">
+
+<!-- ============ SCREEN 1: REVIEW ============ -->
+<div class="shell" data-screen="review">
+  <header class="top">
+    <div class="mark">A</div>
+    <div class="crumb"><span class="dim">default</span><span class="sep">›</span><span class="dim">260904-todo-app</span><span class="sep">›</span><span>Requirements Analysis</span><span class="pill live">Awaiting your review · r1</span></div>
+    <div class="spacer"></div>
+    <div class="seg"><button>r0</button><button class="on">r1</button><button>Diff</button></div>
+    <button class="iconbtn" title="Export" aria-label="Export">⤓</button>
+    <span class="conn">Live</span>
+  </header>
+  <div class="body">
+    <aside class="wf" aria-label="Workflow">
+      <div class="wf-rail">
+        <button title="Expand sidebar" onclick="this.closest('.body').classList.toggle('collapsed')">»</button>
+        <button title="Stages · Requirements Analysis" class="on"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v6M12 15v6"/></svg></button>
+        <button title="Documents"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></button>
+        <button title="Questions"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 1-1 1.7"/><path d="M12 17h.01"/></svg></button>
+        <button title="Record"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg></button>
+      </div>
+      <section class="wf-head">
+        <button class="wf-collapse" title="Collapse sidebar" onclick="this.closest('.body').classList.toggle('collapsed')">«</button>
+        <div class="wf-intent" role="button" aria-haspopup="listbox" title="Switch intent">
+          <span class="ico">T</span>
+          <span class="txt"><b>260904-todo-app</b><span>default space · 1 of 2 intents</span></span>
+          <span class="caret">▾</span>
+        </div>
+        <div class="wf-meta"><span>scope <b>express</b></span><span>depth <b>Minimal</b></span><span>phase <b>Inception</b></span><span>2 / 7 stages</span></div>
+        <div class="wf-progress"><i></i></div>
+      </section>
+      <details class="wf-sec" open>
+        <summary><h3>Stages <span class="r">express scope</span></h3></summary>
+        <div class="wf-phase"><div class="ph done">Initialization <span class="n">3 / 3</span></div>
+          <div class="wf-stage dim"><span class="st done">✓</span><span class="nm">Workspace Scaffold</span></div>
+          <div class="wf-stage dim"><span class="st done">✓</span><span class="nm">Workspace Detection</span></div>
+          <div class="wf-stage dim"><span class="st done">✓</span><span class="nm">State Init</span></div>
+        </div>
+        <div class="wf-phase"><div class="ph now">Inception <span class="n">0 / 1</span></div>
+          <div class="wf-stage dim"><span class="st skip"></span><span class="nm">Reverse Engineering</span><span class="sub">skipped</span></div>
+          <div class="wf-stage now"><span class="st now">●</span><span class="nm">Requirements Analysis</span><span class="sub">awaiting review</span></div>
+        </div>
+        <div class="wf-phase"><div class="ph">Construction <span class="n">0 / 2</span></div>
+          <div class="wf-stage"><span class="st todo"></span><span class="nm">Code Generation</span></div>
+          <div class="wf-stage"><span class="st todo"></span><span class="nm">Build and Test</span></div>
+        </div>
+        <div class="wf-phase"><div class="ph">Operation <span class="n">0 / 3</span></div>
+          <div class="wf-stage dim"><span class="st cond">?</span><span class="nm">Deployment Pipeline</span></div>
+          <div class="wf-stage dim"><span class="st cond">?</span><span class="nm">Deployment Execution</span></div>
+          <div class="wf-stage dim"><span class="st cond">?</span><span class="nm">Observability Setup</span></div>
+        </div>
+      </details>
+      <details class="wf-sec" open>
+        <summary><h3>Requirements Analysis <span class="r">Product Agent · r1</span></h3></summary>
+        <div class="wf-art on"><span class="k kdoc"></span><span class="nm">requirements.md</span><span class="b">4 threads</span></div>
+        <div class="wf-art"><span class="k kq"></span><span class="nm">requirements-analysis-questions.md</span><span class="b">4/4</span></div>
+        <div class="wf-art"><span class="k kmem"></span><span class="nm">memory.md</span><span class="b">diary</span></div>
+      </details>
+      <details class="wf-sec">
+        <summary><h3>Record <span class="r">aidlc/spaces/default/…</span></h3></summary>
+        <div class="wf-tree">
+          <div class="d">▾ 260904-todo-app/</div>
+          <div class="in d">▾ inception/</div>
+          <div class="in"><div class="in cur">▾ requirements-analysis/</div></div>
+          <div class="in"><div class="in"><div class="in">requirements.md</div></div></div>
+          <div class="in"><div class="in"><div class="in">requirements-analysis-questions.md</div></div></div>
+          <div class="in"><div class="in"><div class="in">requirements-analysis-questions-guide.html</div></div></div>
+          <div class="in"><div class="in"><div class="in">memory.md</div></div></div>
+          <div class="in d">▸ audit/</div>
+          <div class="in">aidlc-state.md</div>
+        </div>
+      </details>
+      <div class="foot"><span class="dot"></span>Agent idle · daemon 2.7.3 · localhost:4765</div>
+    </aside>
+
+    <div class="docwrap">
+    <div class="dochead">
+  <nav class="menubar" aria-label="Menu">
+    <button>File</button><button onclick="const m=this.closest('.shell').querySelector('.menu'); m.hidden=!m.hidden; this.classList.toggle('open',!m.hidden)">Edit</button><button>View</button><button>Comment</button><button>Review</button><button>Help</button>
+    <div class="right"><div class="mode">Mode <span class="seg"><button class="on">Review</button><button>Suggest edits</button><button>Source</button></span></div></div>
+  </nav>
+  <div class="toolbar" role="toolbar" aria-label="Formatting">
+    <button class="tb" title="Undo" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+    <button class="tb" title="Redo" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+    <span class="sep"></span>
+    <button class="block" aria-haspopup="listbox"><span>Paragraph</span><span style="color:var(--muted)">▾</span></button>
+    <span class="sep"></span>
+    <button class="tb" title="Bold ⌘B"><b>B</b></button>
+    <button class="tb" title="Italic ⌘I"><i>I</i></button>
+    <button class="tb" title="Strikethrough"><s>S</s></button>
+    <button class="tb" title="Inline code"><svg viewBox="0 0 24 24"><path d="m8 8-4 4 4 4M16 8l4 4-4 4"/></svg></button>
+    <span class="sep"></span>
+    <button class="tb" title="Bulleted list"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg></button>
+    <button class="tb" title="Numbered list"><svg viewBox="0 0 24 24"><path d="M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M4 14h2l-2 2.5V18h2"/></svg></button>
+    <button class="tb" title="Task list"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m4.5 8 1.5 1.5L8.5 6.5M11 8h10M11 16h10"/><rect x="3" y="13" width="6" height="6" rx="1"/></svg></button>
+    <button class="tb" title="Quote"><svg viewBox="0 0 24 24"><path d="M6 17h4V9H5v4h5M14 17h4V9h-5v4h5"/></svg></button>
+    <span class="sep"></span>
+    <button class="tb" title="Link ⌘K"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 1 0-5.7l2.3-2.3a4 4 0 0 1 5.7 5.7L17 12.7"/><path d="M14 10a4 4 0 0 1 0 5.7l-2.3 2.3a4 4 0 0 1-5.7-5.7L7 11.3"/></svg></button>
+    <button class="tb" title="Table"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M3 10h18M9 5v14M15 5v14"/></svg></button>
+    <button class="tb" title="Image"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="m3 16 5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg></button>
+    <button class="tb" title="Mermaid diagram"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="5" rx="1"/><rect x="14" y="15" width="7" height="5" rx="1"/><path d="M6.5 9v4h11v2"/></svg></button>
+    <span class="sep"></span>
+    <button class="tb" title="Comment on selection · C"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/></svg></button>
+  </div>
+  <div class="menu" role="menu" aria-label="Edit menu" hidden>
+    <div><span>Undo</span><kbd>⌘Z</kbd></div>
+    <div><span>Redo</span><kbd>⇧⌘Z</kbd></div>
+    <hr>
+    <div><span>Suggest edit to selection</span><kbd>E</kbd></div>
+    <div><span>Suggest edits mode</span><kbd>⇧E</kbd></div>
+    <div><span>View Markdown source</span><kbd>⇧S</kbd></div>
+    <hr>
+    <div><span>Find in document</span><kbd>⌘F</kbd></div>
+    <div><span>Copy as Markdown</span><kbd>⇧⌘C</kbd></div>
+    <hr>
+    <div class="dim"><span>Edit the file directly</span><span>agent-owned</span></div>
+  </div>
+    </div>
+      <article class="doc">
+        <div class="docmeta">
+          <span class="file">requirements.md</span>
+          <span>Product Agent · revision 1</span>
+          <span class="agentline"><span class="dot"></span>Agent idle — revised 2 min ago, addressing 3 comments</span>
+        </div>
+        <h1>Requirements — To-Do Application</h1>
+        <p>A single-user web application for capturing, completing, and deleting tasks. Tasks persist in the browser's local storage; there is no server, account, or synchronisation. The scope is intentionally minimal: one list, no projects or tags.</p>
+
+        <h2>Functional requirements</h2>
+        <div class="line">
+          <div class="gutter"><span class="bubble good"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>1</span></div>
+          <div class="hoveradd" title="Comment on this paragraph"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div>
+          <p><strong>FR1 — Add a task.</strong> <span class="mark-g">The user can add a task by typing a title and pressing Enter.</span> Titles are trimmed; an empty title is ignored without an error message.</p>
+        </div>
+        <div class="line">
+          <div class="gutter"><span class="bubble">2</span></div>
+          <p><strong>FR2 — Complete a task.</strong> The user can mark a task complete and uncomplete it. <span class="mark-c active">Completed tasks move to the bottom of the list</span> and render with a strike-through.</p>
+          <div class="addhint" title="Comment on selection"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div>
+          <div class="composer">
+            <div class="kinds"><span class="kind on">Comment</span><span class="kind">Suggest edit</span><span class="kind">Delete</span><span class="kind">Looks good</span></div>
+            <textarea>Do they? I'd rather keep list order stable and just strike them through — moving items is disorienting on a small list.</textarea>
+            <div class="foot"><span>Posts when you send your decision · <kbd>⌘↵</kbd></span><button class="primary">Add comment</button></div>
+          </div>
+        </div>
+        <div class="line">
+          <div class="gutter"><span class="bubble delete">3</span></div>
+          <p><strong>FR3 — Delete a task.</strong> Each task has a delete control. <span class="mark-d">Deletion asks for confirmation.</span> Deleted tasks are removed immediately from storage.</p>
+        </div>
+        <div class="line">
+          <div class="gutter"><span class="bubble change">4</span></div>
+          <p><strong>FR4 — Persistence.</strong> The list is saved to <code>localStorage</code> on every change and restored on load. <span class="mark-x">If storage is unavailable the app shows an error and refuses to start.</span></p>
+        </div>
+
+        <h2>Non-functional requirements</h2>
+        <p><strong>NFR1 — Performance.</strong> Adding, completing, or deleting a task reflects in the UI within 100 ms for lists up to 500 tasks.</p>
+        <p><strong>NFR2 — Accessibility.</strong> All controls are keyboard-operable and labelled; colour is never the only signal for completion.</p>
+
+        <h2>Out of scope</h2>
+        <ul>
+          <li>Accounts, sign-in, or multi-device sync</li>
+          <li>Due dates, reminders, tags, or projects</li>
+          <li>Any backend or database</li>
+        </ul>
+
+        <h2>Traceability</h2>
+        <table>
+          <thead><tr><th>Answer</th><th>Requirement</th></tr></thead>
+          <tbody>
+            <tr><td>Q1 · Web app</td><td>Scope, NFR2</td></tr>
+            <tr><td>Q2 · Local storage</td><td>FR4</td></tr>
+            <tr><td>Q3 · Single user</td><td>Out of scope</td></tr>
+            <tr><td>Q4 · Core only</td><td>FR1–FR3</td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <div class="decision">
+        <span class="summary"><b>3 open</b> comments · <b>1</b> suggested edit · 1 resolved</span>
+        <span class="spacer"></span>
+        <button class="btn">Add general note</button>
+        <button class="btn warn">Request changes <kbd>R</kbd></button>
+        <button class="btn primary">Approve <kbd>A</kbd></button>
+      </div>
+    </div>
+
+    <aside class="threads" aria-label="Comments">
+      <header>
+        <div class="row"><h2>Comments</h2><span class="count">4 threads</span></div>
+        <div class="filters"><span class="chip on">Open 3</span><span class="chip">Resolved 1</span><span class="chip">Agent replies</span><span class="chip">r0</span></div>
+      </header>
+      <div class="tlist">
+        <div class="card good">
+          <p class="quote">The user can add a task by typing a title and pressing Enter.</p>
+          <div class="who"><span class="avatar">P</span><b>You</b><span>r0</span><span class="kindtag">Looks good</span></div>
+          <div class="status"><span class="ok">Resolved</span><span>· kept in r1</span></div>
+        </div>
+        <div class="card">
+          <p class="quote">Completed tasks move to the bottom of the list</p>
+          <div class="who"><span class="avatar">P</span><b>You</b><span>just now</span><span class="kindtag">Comment</span></div>
+          <p class="text">Do they? I'd rather keep list order stable and just strike them through — moving items is disorienting on a small list.</p>
+          <div class="status"><span class="pend">Pending</span><span>· sends with your decision</span><button>Edit</button><button>Remove</button></div>
+        </div>
+        <div class="card delete">
+          <p class="quote">Deletion asks for confirmation.</p>
+          <div class="who"><span class="avatar">P</span><b>You</b><span>r0</span><span class="kindtag">Delete</span></div>
+          <p class="text">No confirm dialog — undo is friendlier and we said "core only".</p>
+          <div class="reply">
+            <div class="who"><span class="avatar agent">A</span><b>Product Agent</b><span>r1</span></div>
+            <p class="text">Kept the confirmation: without undo, an accidental delete is unrecoverable. Happy to remove if you'd rather add undo to scope.</p>
+          </div>
+          <div class="status"><span>Open</span><button>Reply</button><button>Resolve</button></div>
+        </div>
+        <div class="card change">
+          <p class="quote">If storage is unavailable the app shows an error and refuses to start.</p>
+          <div class="who"><span class="avatar">P</span><b>You</b><span>r0</span><span class="kindtag">Suggested edit</span></div>
+          <div class="diff"><span class="del">refuses to start</span> <span class="ins">runs in memory for the session and warns that nothing will be saved</span></div>
+          <div class="reply">
+            <div class="who"><span class="avatar agent">A</span><b>Product Agent</b><span>r1</span></div>
+            <p class="text">Applied. FR4 now reads as suggested; NFR1 unchanged.</p>
+          </div>
+          <div class="status"><span class="ok">Addressed in r1</span><button>View change</button><button>Resolve</button></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ============ SCREEN 3: EDITING (suggest-edit mode) ============ -->
+<div class="shell" data-screen="edit">
+  <header class="top">
+    <div class="mark">A</div>
+    <div class="crumb"><span class="dim">default</span><span class="sep">›</span><span class="dim">260904-todo-app</span><span class="sep">›</span><span>Requirements Analysis</span><span class="pill live">Suggesting edits · 1 block changed</span></div>
+    <div class="spacer"></div>
+    <div class="seg"><button>r0</button><button class="on">r1</button><button>Diff</button></div>
+    <button class="iconbtn" title="Export" aria-label="Export">⤓</button>
+    <span class="conn">Live</span>
+  </header>
+  <div class="body">
+    <aside class="wf" aria-label="Workflow">
+      <div class="wf-rail">
+        <button title="Expand sidebar" onclick="this.closest('.body').classList.toggle('collapsed')">»</button>
+        <button title="Stages · Requirements Analysis" class="on"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v6M12 15v6"/></svg></button>
+        <button title="Documents"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></button>
+        <button title="Questions"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 1-1 1.7"/><path d="M12 17h.01"/></svg></button>
+        <button title="Record"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg></button>
+      </div>
+      <section class="wf-head">
+        <button class="wf-collapse" title="Collapse sidebar" onclick="this.closest('.body').classList.toggle('collapsed')">«</button>
+        <div class="wf-intent" role="button" aria-haspopup="listbox" title="Switch intent">
+          <span class="ico">T</span>
+          <span class="txt"><b>260904-todo-app</b><span>default space · 1 of 2 intents</span></span>
+          <span class="caret">▾</span>
+        </div>
+        <div class="wf-meta"><span>scope <b>express</b></span><span>depth <b>Minimal</b></span><span>phase <b>Inception</b></span><span>2 / 7 stages</span></div>
+        <div class="wf-progress"><i></i></div>
+      </section>
+      <details class="wf-sec" open>
+        <summary><h3>Stages <span class="r">express scope</span></h3></summary>
+        <div class="wf-phase"><div class="ph done">Initialization <span class="n">3 / 3</span></div>
+          <div class="wf-stage dim"><span class="st done">✓</span><span class="nm">Workspace Scaffold</span></div>
+          <div class="wf-stage dim"><span class="st done">✓</span><span class="nm">Workspace Detection</span></div>
+          <div class="wf-stage dim"><span class="st done">✓</span><span class="nm">State Init</span></div>
+        </div>
+        <div class="wf-phase"><div class="ph now">Inception <span class="n">0 / 1</span></div>
+          <div class="wf-stage dim"><span class="st skip"></span><span class="nm">Reverse Engineering</span><span class="sub">skipped</span></div>
+          <div class="wf-stage now"><span class="st now">●</span><span class="nm">Requirements Analysis</span><span class="sub">awaiting review</span></div>
+        </div>
+        <div class="wf-phase"><div class="ph">Construction <span class="n">0 / 2</span></div>
+          <div class="wf-stage"><span class="st todo"></span><span class="nm">Code Generation</span></div>
+          <div class="wf-stage"><span class="st todo"></span><span class="nm">Build and Test</span></div>
+        </div>
+        <div class="wf-phase"><div class="ph">Operation <span class="n">0 / 3</span></div>
+          <div class="wf-stage dim"><span class="st cond">?</span><span class="nm">Deployment Pipeline</span></div>
+          <div class="wf-stage dim"><span class="st cond">?</span><span class="nm">Deployment Execution</span></div>
+          <div class="wf-stage dim"><span class="st cond">?</span><span class="nm">Observability Setup</span></div>
+        </div>
+      </details>
+      <details class="wf-sec" open>
+        <summary><h3>Requirements Analysis <span class="r">Product Agent · r1</span></h3></summary>
+        <div class="wf-art on"><span class="k kdoc"></span><span class="nm">requirements.md</span><span class="b">4 threads</span></div>
+        <div class="wf-art"><span class="k kq"></span><span class="nm">requirements-analysis-questions.md</span><span class="b">4/4</span></div>
+        <div class="wf-art"><span class="k kmem"></span><span class="nm">memory.md</span><span class="b">diary</span></div>
+      </details>
+      <details class="wf-sec">
+        <summary><h3>Record <span class="r">aidlc/spaces/default/…</span></h3></summary>
+        <div class="wf-tree">
+          <div class="d">▾ 260904-todo-app/</div>
+          <div class="in d">▾ inception/</div>
+          <div class="in"><div class="in cur">▾ requirements-analysis/</div></div>
+          <div class="in"><div class="in"><div class="in">requirements.md</div></div></div>
+          <div class="in"><div class="in"><div class="in">requirements-analysis-questions.md</div></div></div>
+          <div class="in"><div class="in"><div class="in">requirements-analysis-questions-guide.html</div></div></div>
+          <div class="in"><div class="in"><div class="in">memory.md</div></div></div>
+          <div class="in d">▸ audit/</div>
+          <div class="in">aidlc-state.md</div>
+        </div>
+      </details>
+      <div class="foot"><span class="dot"></span>Agent idle · daemon 2.7.3 · localhost:4765</div>
+    </aside>
+
+    <div class="docwrap">
+    <div class="dochead">
+  <nav class="menubar" aria-label="Menu">
+    <button>File</button><button onclick="const m=this.closest('.shell').querySelector('.menu'); m.hidden=!m.hidden; this.classList.toggle('open',!m.hidden)">Edit</button><button>View</button><button>Comment</button><button>Review</button><button>Help</button>
+    <div class="right"><div class="mode">Mode <span class="seg"><button>Review</button><button class="on">Suggest edits</button><button>Source</button></span></div></div>
+  </nav>
+  <div class="toolbar" role="toolbar" aria-label="Formatting">
+    <button class="tb" title="Undo" aria-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+    <button class="tb" title="Redo" aria-label="Redo"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+    <span class="sep"></span>
+    <button class="block" aria-haspopup="listbox"><span>Paragraph</span><span style="color:var(--muted)">▾</span></button>
+    <span class="sep"></span>
+    <button class="tb" title="Bold ⌘B"><b>B</b></button>
+    <button class="tb" title="Italic ⌘I"><i>I</i></button>
+    <button class="tb" title="Strikethrough"><s>S</s></button>
+    <button class="tb" title="Inline code"><svg viewBox="0 0 24 24"><path d="m8 8-4 4 4 4M16 8l4 4-4 4"/></svg></button>
+    <span class="sep"></span>
+    <button class="tb" title="Bulleted list"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg></button>
+    <button class="tb" title="Numbered list"><svg viewBox="0 0 24 24"><path d="M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M4 14h2l-2 2.5V18h2"/></svg></button>
+    <button class="tb" title="Task list"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m4.5 8 1.5 1.5L8.5 6.5M11 8h10M11 16h10"/><rect x="3" y="13" width="6" height="6" rx="1"/></svg></button>
+    <button class="tb" title="Quote"><svg viewBox="0 0 24 24"><path d="M6 17h4V9H5v4h5M14 17h4V9h-5v4h5"/></svg></button>
+    <span class="sep"></span>
+    <button class="tb" title="Link ⌘K"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 1 0-5.7l2.3-2.3a4 4 0 0 1 5.7 5.7L17 12.7"/><path d="M14 10a4 4 0 0 1 0 5.7l-2.3 2.3a4 4 0 0 1-5.7-5.7L7 11.3"/></svg></button>
+    <button class="tb" title="Table"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M3 10h18M9 5v14M15 5v14"/></svg></button>
+    <button class="tb" title="Image"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="m3 16 5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg></button>
+    <button class="tb" title="Mermaid diagram"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="5" rx="1"/><rect x="14" y="15" width="7" height="5" rx="1"/><path d="M6.5 9v4h11v2"/></svg></button>
+    <span class="sep"></span>
+    <button class="tb" title="Comment on selection · C"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/></svg></button>
+  </div>
+  <div class="menu" role="menu" aria-label="Edit menu" hidden>
+    <div><span>Undo</span><kbd>⌘Z</kbd></div>
+    <div><span>Redo</span><kbd>⇧⌘Z</kbd></div>
+    <hr>
+    <div><span>Suggest edit to selection</span><kbd>E</kbd></div>
+    <div><span>Suggest edits mode</span><kbd>⇧E</kbd></div>
+    <div><span>View Markdown source</span><kbd>⇧S</kbd></div>
+    <hr>
+    <div><span>Find in document</span><kbd>⌘F</kbd></div>
+    <div><span>Copy as Markdown</span><kbd>⇧⌘C</kbd></div>
+    <hr>
+    <div class="dim"><span>Edit the file directly</span><span>agent-owned</span></div>
+  </div>
+    </div>
+      <article class="doc">
+        <div class="docmeta">
+          <span class="file">requirements.md</span>
+          <span>Product Agent · revision 1</span>
+          <span class="agentline"><span class="dot"></span>Agent idle — revised 2 min ago, addressing 3 comments</span>
+        </div>
+        <h1>Requirements — To-Do Application</h1>
+        <p>A single-user web application for capturing, completing, and deleting tasks. Tasks persist in the browser's local storage; there is no server, account, or synchronisation. The scope is intentionally minimal: one list, no projects or tags.</p>
+
+        <h2>Functional requirements</h2>
+        <div class="line">
+          <div class="gutter"><span class="bubble good"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>1</span></div>
+          <div class="hoveradd" title="Comment on this paragraph"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div>
+          <p><strong>FR1 — Add a task.</strong> <span class="mark-g">The user can add a task by typing a title and pressing Enter.</span> Titles are trimmed; an empty title is ignored without an error message.</p>
+        </div>
+        <div class="line">
+          <div class="gutter"><span class="bubble change">2</span></div>
+          <div class="editing">
+            <span class="tag">Suggested edit · Markdown</span>
+            <div class="src" contenteditable="true" spellcheck="false"><span class="mk">**</span><b>FR2 — Complete a task.</b><span class="mk">**</span> The user can mark a task complete and uncomplete it. <span class="del">Completed tasks move to the bottom of the list and render with a strike-through.</span><span class="ins">Completed tasks stay in place and render with a strike-through; list order never changes.</span></div>
+          </div>
+          <div class="editbar">
+            <button class="primary">Keep suggestion</button>
+            <button class="ghost">Discard</button>
+            <span>Toolbar or Markdown (<code>**bold**</code> <code>_italic_</code> <code>`code`</code> <code>- list</code>) · the block shows its source while you edit and renders when you leave it</span>
+          </div>
+        </div>
+        <div class="line">
+          <div class="gutter"><span class="bubble delete">3</span></div>
+          <p><strong>FR3 — Delete a task.</strong> Each task has a delete control. <span class="mark-d">Deletion asks for confirmation.</span> Deleted tasks are removed immediately from storage.</p>
+        </div>
+        <div class="line">
+          <div class="gutter"><span class="bubble change">4</span></div>
+          <p><strong>FR4 — Persistence.</strong> The list is saved to <code>localStorage</code> on every change and restored on load. <span class="mark-x">If storage is unavailable the app shows an error and refuses to start.</span></p>
+        </div>
+
+        <h2>Non-functional requirements</h2>
+        <p><strong>NFR1 — Performance.</strong> Adding, completing, or deleting a task reflects in the UI within 100 ms for lists up to 500 tasks.</p>
+        <p><strong>NFR2 — Accessibility.</strong> All controls are keyboard-operable and labelled; colour is never the only signal for completion.</p>
+
+        <h2>Out of scope</h2>
+        <ul>
+          <li>Accounts, sign-in, or multi-device sync</li>
+          <li>Due dates, reminders, tags, or projects</li>
+          <li>Any backend or database</li>
+        </ul>
+
+        <h2>Traceability</h2>
+        <table>
+          <thead><tr><th>Answer</th><th>Requirement</th></tr></thead>
+          <tbody>
+            <tr><td>Q1 · Web app</td><td>Scope, NFR2</td></tr>
+            <tr><td>Q2 · Local storage</td><td>FR4</td></tr>
+            <tr><td>Q3 · Single user</td><td>Out of scope</td></tr>
+            <tr><td>Q4 · Core only</td><td>FR1–FR3</td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <div class="decision">
+        <span class="summary"><b>3 open</b> comments · <b>1</b> suggested edit · 1 resolved</span>
+        <span class="spacer"></span>
+        <button class="btn">Add general note</button>
+        <button class="btn warn">Request changes <kbd>R</kbd></button>
+        <button class="btn primary">Approve <kbd>A</kbd></button>
+      </div>
+    </div>
+
+    <aside class="threads" aria-label="Comments">
+      <header>
+        <div class="row"><h2>Comments</h2><span class="count">4 threads</span></div>
+        <div class="filters"><span class="chip on">Open 3</span><span class="chip">Resolved 1</span><span class="chip">Agent replies</span><span class="chip">r0</span></div>
+      </header>
+      <div class="tlist">
+        <div class="card good">
+          <p class="quote">The user can add a task by typing a title and pressing Enter.</p>
+          <div class="who"><span class="avatar">P</span><b>You</b><span>r0</span><span class="kindtag">Looks good</span></div>
+          <div class="status"><span class="ok">Resolved</span><span>· kept in r1</span></div>
+        </div>
+        <div class="card change pending">
+          <p class="quote">Completed tasks move to the bottom of the list and render with…</p>
+          <div class="who"><span class="avatar">P</span><b>You</b><span>editing</span><span class="kindtag">Suggested edit</span></div>
+          <div class="diff"><span class="del">move to the bottom of the list and</span> <span class="ins">stay in place and</span> render with a strike-through<span class="ins">; list order never changes</span></div>
+          <div class="status"><span class="pend">Pending</span><span>· sends with your decision</span><button>Add reason</button></div>
+        </div>
+        <div class="card delete">
+          <p class="quote">Deletion asks for confirmation.</p>
+          <div class="who"><span class="avatar">P</span><b>You</b><span>r0</span><span class="kindtag">Delete</span></div>
+          <p class="text">No confirm dialog — undo is friendlier and we said "core only".</p>
+          <div class="reply">
+            <div class="who"><span class="avatar agent">A</span><b>Product Agent</b><span>r1</span></div>
+            <p class="text">Kept the confirmation: without undo, an accidental delete is unrecoverable. Happy to remove if you'd rather add undo to scope.</p>
+          </div>
+          <div class="status"><span>Open</span><button>Reply</button><button>Resolve</button></div>
+        </div>
+        <div class="card change">
+          <p class="quote">If storage is unavailable the app shows an error and refuses to start.</p>
+          <div class="who"><span class="avatar">P</span><b>You</b><span>r0</span><span class="kindtag">Suggested edit</span></div>
+          <div class="diff"><span class="del">refuses to start</span> <span class="ins">runs in memory for the session and warns that nothing will be saved</span></div>
+          <div class="reply">
+            <div class="who"><span class="avatar agent">A</span><b>Product Agent</b><span>r1</span></div>
+            <p class="text">Applied. FR4 now reads as suggested; NFR1 unchanged.</p>
+          </div>
+          <div class="status"><span class="ok">Addressed in r1</span><button>View change</button><button>Resolve</button></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ============ SCREEN 2: QUESTIONS ============ -->
+<div class="shell" data-screen="questions">
+  <header class="top">
+    <div class="mark">A</div>
+    <div class="crumb"><span class="dim">default</span><span class="sep">›</span><span class="dim">260904-todo-app</span><span class="sep">›</span><span>Requirements Analysis</span><span class="pill live">4 questions for you</span></div>
+    <div class="spacer"></div>
+    <span class="conn">Live</span>
+  </header>
+  <div class="body qbody" style="grid-template-columns:280px 1fr">
+    <aside class="wf" aria-label="Workflow">
+      <div class="wf-rail">
+        <button title="Expand sidebar" onclick="this.closest('.body').classList.toggle('collapsed')">»</button>
+        <button title="Stages · Requirements Analysis" class="on"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v6M12 15v6"/></svg></button>
+        <button title="Documents"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></button>
+        <button title="Questions"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 1-1 1.7"/><path d="M12 17h.01"/></svg></button>
+        <button title="Record"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg></button>
+      </div>
+      <section class="wf-head">
+        <button class="wf-collapse" title="Collapse sidebar" onclick="this.closest('.body').classList.toggle('collapsed')">«</button>
+        <div class="wf-intent" role="button" aria-haspopup="listbox" title="Switch intent">
+          <span class="ico">T</span>
+          <span class="txt"><b>260904-todo-app</b><span>default space · 1 of 2 intents</span></span>
+          <span class="caret">▾</span>
+        </div>
+        <div class="wf-meta"><span>scope <b>express</b></span><span>depth <b>Minimal</b></span><span>phase <b>Inception</b></span><span>2 / 7 stages</span></div>
+        <div class="wf-progress"><i></i></div>
+      </section>
+      <details class="wf-sec" open>
+        <summary><h3>Stages <span class="r">express scope</span></h3></summary>
+        <div class="wf-phase"><div class="ph done">Initialization <span class="n">3 / 3</span></div>
+          <div class="wf-stage dim"><span class="st done">✓</span><span class="nm">Workspace Scaffold</span></div>
+          <div class="wf-stage dim"><span class="st done">✓</span><span class="nm">Workspace Detection</span></div>
+          <div class="wf-stage dim"><span class="st done">✓</span><span class="nm">State Init</span></div>
+        </div>
+        <div class="wf-phase"><div class="ph now">Inception <span class="n">0 / 1</span></div>
+          <div class="wf-stage dim"><span class="st skip"></span><span class="nm">Reverse Engineering</span><span class="sub">skipped</span></div>
+          <div class="wf-stage now"><span class="st now">●</span><span class="nm">Requirements Analysis</span><span class="sub">4 questions</span></div>
+        </div>
+        <div class="wf-phase"><div class="ph">Construction <span class="n">0 / 2</span></div>
+          <div class="wf-stage"><span class="st todo"></span><span class="nm">Code Generation</span></div>
+          <div class="wf-stage"><span class="st todo"></span><span class="nm">Build and Test</span></div>
+        </div>
+        <div class="wf-phase"><div class="ph">Operation <span class="n">0 / 3</span></div>
+          <div class="wf-stage dim"><span class="st cond">?</span><span class="nm">Deployment Pipeline</span></div>
+          <div class="wf-stage dim"><span class="st cond">?</span><span class="nm">Deployment Execution</span></div>
+          <div class="wf-stage dim"><span class="st cond">?</span><span class="nm">Observability Setup</span></div>
+        </div>
+      </details>
+      <details class="wf-sec" open>
+        <summary><h3>Requirements Analysis <span class="r">Product Agent · r1</span></h3></summary>
+        <div class="wf-art"><span class="k kdoc"></span><span class="nm">requirements.md</span><span class="b">writing…</span></div>
+        <div class="wf-art on"><span class="k kq"></span><span class="nm">requirements-analysis-questions.md</span><span class="b hot">4 open</span></div>
+        <div class="wf-art"><span class="k kmem"></span><span class="nm">memory.md</span><span class="b">diary</span></div>
+      </details>
+      <details class="wf-sec" open>
+        <summary><h3>Record <span class="r">aidlc/spaces/default/…</span></h3></summary>
+        <div class="wf-tree">
+          <div class="d">▾ 260904-todo-app/</div>
+          <div class="in d">▾ inception/</div>
+          <div class="in"><div class="in cur">▾ requirements-analysis/</div></div>
+          <div class="in"><div class="in"><div class="in">requirements.md</div></div></div>
+          <div class="in"><div class="in"><div class="in">requirements-analysis-questions.md</div></div></div>
+          <div class="in"><div class="in"><div class="in">requirements-analysis-questions-guide.html</div></div></div>
+          <div class="in"><div class="in"><div class="in">memory.md</div></div></div>
+          <div class="in d">▸ audit/</div>
+          <div class="in">aidlc-state.md</div>
+        </div>
+      </details>
+      <div class="foot"><span class="dot"></span>Agent idle · daemon 2.7.3 · localhost:4765</div>
+    </aside>
+    <div class="qwrap">
+    <div class="dochead qhead">
+  <nav class="menubar" aria-label="Menu">
+    <button>File</button><button>View</button><button>Questions</button><button>Help</button>
+    <div class="right"><span>Answers save to requirements-analysis-questions.md</span><span>·</span><span>⌘/ shortcuts</span></div>
+  </nav>
+    </div>
+      <section class="qcol">
+        <h1 style="font-size:24px">Before I write the requirements</h1>
+        <p class="qintro">Four decisions shape everything downstream. Each comes with a recommendation — accept it or pick your own. Saving hands the answers straight back to the agent.</p>
+
+        <div class="q current">
+          <h3>1 · What platform should the to-do app run on?</h3>
+          <p class="ctx">Decides the whole shape of the build — frontend, backend, or terminal.</p>
+          <label class="opt rec"><input type="radio" name="q1" checked> Web app that runs in the browser <span class="rectag">Recommended</span></label>
+          <label class="opt"><input type="radio" name="q1"> Command-line tool</label>
+          <label class="opt"><input type="radio" name="q1"> Desktop application</label>
+          <label class="opt"><input type="radio" name="q1"> Mobile app (iOS / Android)</label>
+          <label class="opt"><input type="radio" name="q1"> Other <span class="other">describe →</span></label>
+          <div class="note">Note for the agent (optional)<input placeholder="Anything the recommendation missed?"></div>
+        </div>
+
+        <div class="q">
+          <h3>2 · Where should tasks be stored?</h3>
+          <p class="ctx">Sets whether there is a backend at all.</p>
+          <label class="opt rec"><input type="radio" name="q2" checked> Browser only (local storage) <span class="rectag">Recommended</span></label>
+          <label class="opt"><input type="radio" name="q2"> A small server with a database</label>
+          <label class="opt"><input type="radio" name="q2"> Cloud sync (accounts required)</label>
+          <label class="opt"><input type="radio" name="q2"> Other <span class="other">describe →</span></label>
+        </div>
+
+        <div class="q">
+          <h3>3 · Who uses it?</h3>
+          <p class="ctx">Accounts and sharing add a login flow and a backend.</p>
+          <label class="opt rec"><input type="radio" name="q3" checked> Single user, no login <span class="rectag">Recommended</span></label>
+          <label class="opt"><input type="radio" name="q3"> Several users, each with an account</label>
+          <label class="opt"><input type="radio" name="q3"> Other <span class="other">describe →</span></label>
+        </div>
+
+        <div class="q">
+          <h3>4 · Which features are in the first version?</h3>
+          <p class="ctx">Everything not listed is out of scope for this run.</p>
+          <label class="opt rec"><input type="radio" name="q4" checked> Core only: add, complete, delete <span class="rectag">Recommended</span></label>
+          <label class="opt"><input type="radio" name="q4"> Core + due dates and reminders</label>
+          <label class="opt"><input type="radio" name="q4"> Core + tags and filtering</label>
+          <label class="opt"><input type="radio" name="q4"> Other <span class="other">describe →</span></label>
+        </div>
+      </section>
+
+      <aside class="explainer">
+        <h2>1 · Platform</h2>
+        <div class="why">Why now</div>
+        <p>This is the first fork in the road: a browser app needs no install and no backend, a CLI needs neither UI nor storage design, a mobile app needs a store pipeline. Every later stage — code generation, build and test, deployment — reads this answer.</p>
+        <div class="why">Trade-offs</div>
+        <table>
+          <thead><tr><th>Option</th><th>You get</th><th>You give up</th><th>Cost / risk</th></tr></thead>
+          <tbody>
+            <tr><td>Web app</td><td>Runs anywhere, fastest to a usable build</td><td>Offline is only as good as the browser</td><td>Low</td></tr>
+            <tr><td>CLI</td><td>Tiny surface, trivial testing</td><td>No visual list, awkward for most people</td><td>Low</td></tr>
+            <tr><td>Desktop</td><td>Native feel</td><td>Packaging per OS</td><td>Medium</td></tr>
+            <tr><td>Mobile</td><td>Always at hand</td><td>Store review, two platforms</td><td>High</td></tr>
+          </tbody>
+        </table>
+        <div class="rec"><b>Recommendation: Web app.</b> For a lightweight express build it is the shortest path to something you can click on, and it keeps storage (Q2) and users (Q3) simple.</div>
+        <div class="why">Related decisions</div>
+        <p class="qintro" style="margin:0">None yet — this is the first question round of the intent.</p>
+      </aside>
+
+      <div class="savebar">
+        <span class="wf-progress"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i></span>
+        <span class="summary" style="color:var(--muted);font-size:13px">4 of 4 answered · all on the recommendation</span>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn primary">Save answers — the agent continues</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="mocknav"><button onclick="document.body.dataset.show='review'">review</button><button onclick="document.body.dataset.show='edit'">editing</button><button onclick="document.body.dataset.show='questions'">questions</button><button onclick="document.querySelectorAll('.body').forEach(b=>b.classList.toggle('collapsed'))">collapse sidebar</button></div>
+</body>
+</html>

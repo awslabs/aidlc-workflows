@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-DLC Review — v3 minimal</title>
+<style>
+:root{
+  --ink:#1a202c; --muted:#8792a2; --faint:#c3cad5; --line:#eef2f7; --line-2:#e3e8ef;
+  --panel:#f7f9fc; --accent:#2d7ff9; --accent-soft:#edf4ff;
+  --mark:rgba(245,158,11,.16); --mark-line:#f59e0b;
+  --font:-apple-system,system-ui,"Helvetica Neue",Inter,"Segoe UI",Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#fff;color:var(--ink);font:14px/1.6 var(--font);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+a{color:var(--accent);text-decoration:none}
+.shell{display:grid;grid-template-rows:44px 30px 1fr;height:100vh}
+
+/* title row */
+.top{display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--line)}
+.top .name{font-weight:600}
+.top .sep{color:var(--faint)}
+.top .dim{color:var(--muted)}
+.top .right{margin-left:auto;display:flex;align-items:center;gap:18px;font-size:13px}
+.top .quiet{color:var(--muted)}
+.top .link{color:var(--ink)}
+.top .link:hover{color:var(--accent)}
+.btn{background:var(--accent);color:#fff;border-radius:6px;padding:5px 12px;font-weight:600;font-size:13px}
+.btn:hover{filter:brightness(.96)}
+
+/* menu row */
+.menus{display:flex;align-items:center;gap:2px;padding:0 10px;border-bottom:1px solid var(--line);font-size:13px}
+.menus button{padding:2px 8px;border-radius:5px}
+.menus button:hover{background:var(--panel)}
+.menus .right{margin-left:auto;font-size:12px;color:var(--muted);display:flex;gap:14px;padding-right:6px}
+
+/* body */
+.body{display:grid;grid-template-columns:240px 1fr 300px;min-height:0}
+
+/* left: outline */
+.nav{border-right:1px solid var(--line);padding:22px 12px 20px 18px;overflow:auto;font-size:13px}
+.nav .intent{font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.nav .intent .c{color:var(--faint);font-size:11px}
+.nav .sub{color:var(--muted);font-size:12px;margin-bottom:22px}
+.nav .ph{font-size:11px;color:var(--muted);letter-spacing:.02em;margin:16px 0 4px}
+.nav .ph:first-of-type{margin-top:0}
+.nav .st{display:flex;align-items:center;gap:9px;padding:4px 0;color:var(--muted)}
+.nav .st .i{width:12px;text-align:center;font-size:11px;flex:none}
+.nav .st.done{color:var(--ink)}
+.nav .st.done .i{color:var(--muted)}
+.nav .st.now{color:var(--ink);font-weight:600}
+.nav .st.now .i{color:var(--accent);font-size:9px}
+.nav .st.skip{color:var(--faint);text-decoration:line-through}
+.nav .st.skip .i{text-decoration:none}
+.nav .files{margin:4px 0 0 21px;border-left:1px solid var(--line);padding-left:11px}
+.nav .f{display:flex;align-items:center;padding:3px 0;font-size:12.5px;color:var(--muted)}
+.nav .f.on{color:var(--ink)}
+.nav .f .n{margin-left:auto;font-size:11px;color:var(--faint)}
+.nav .f.on .n{color:var(--muted)}
+.nav .foot{margin-top:28px;padding-top:14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+.nav .foot a{color:var(--muted)}
+.nav .foot a:hover{color:var(--ink)}
+
+/* centre: document */
+.main{overflow:auto;position:relative}
+.doc{max-width:760px;margin:0 auto;padding:56px 72px 160px;position:relative}
+.doc .meta{color:var(--muted);font-size:12.5px;margin-bottom:34px;display:flex;gap:8px}
+.doc h1{font-size:28px;line-height:1.25;letter-spacing:-.01em;margin:0 0 20px;font-weight:700}
+.doc h2{font-size:17px;margin:34px 0 10px;letter-spacing:-.01em}
+.doc p{margin:0 0 14px;font-size:15px;line-height:1.7}
+.doc code{font:13px var(--mono);background:var(--panel);padding:1px 5px;border-radius:4px}
+.blk{position:relative}
+.mark{background:var(--mark);border-bottom:2px solid var(--mark-line);border-radius:2px 2px 0 0;cursor:pointer}
+.mark.focus{background:rgba(245,158,11,.3)}
+.mark.del{background:none;border:0;text-decoration:line-through;text-decoration-color:var(--muted);color:var(--muted)}
+.mark.sug{background:none;border-bottom:2px dotted var(--accent)}
+.bubble{position:absolute;right:-40px;top:2px;width:22px;height:22px;border-radius:50%;background:var(--mark-line);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center}
+.plus{position:absolute;right:-40px;top:2px;width:24px;height:24px;border-radius:50%;border:1px solid var(--line-2);background:#fff;color:var(--muted);display:grid;place-items:center;font-size:16px;line-height:1;box-shadow:0 1px 3px rgba(26,32,44,.08)}
+.sel{background:#bcd4ff66}
+.check{position:absolute;left:-30px;top:6px;color:var(--muted);font-size:12px}
+
+/* right: comments */
+.side{border-left:1px solid var(--line);background:var(--panel);overflow:auto;padding:22px 16px 40px;font-size:13px}
+.side .head{display:flex;align-items:baseline;gap:10px;margin-bottom:16px;color:var(--muted);font-size:12.5px;padding:0 2px}
+.side .head b{color:var(--ink);font-weight:600;font-size:14px}
+.side .head .tog{margin-left:auto}
+.side .head .tog span{cursor:pointer}
+.side .head .tog .on{color:var(--ink)}
+.card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px 14px 10px;margin-bottom:10px}
+.card.focus{border-color:var(--mark-line)}
+.card.draft{border-style:dashed}
+.card .q{color:var(--muted);font-style:italic;font-size:12px;margin:0 0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .who{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);margin-bottom:4px}
+.card .who b{color:var(--ink);font-weight:600}
+.card .who .av{width:18px;height:18px;border-radius:50%;background:var(--line-2);color:var(--ink);font-size:10px;font-weight:700;display:grid;place-items:center}
+.card .who .av.a{background:var(--accent);color:#fff}
+.card .who .kind{margin-left:auto}
+.card p{margin:0;font-size:13.5px;line-height:1.55}
+.card .reply{margin:10px 0 0 10px;padding-left:12px;border-left:2px solid var(--line-2)}
+.card .st{margin-top:10px;font-size:12px;color:var(--muted);display:flex;gap:12px}
+.card .st a{color:var(--muted)}
+.card .st a:hover{color:var(--accent)}
+.card .diff{font:12.5px/1.5 var(--mono);margin:4px 0 0}
+.card .diff s{color:var(--muted)}
+.card .diff ins{text-decoration:none;color:#166534;background:#ecfdf3}
+.card textarea{width:100%;border:0;background:none;font:inherit;font-size:13.5px;resize:none;outline:none;min-height:40px;padding:0;margin:2px 0 6px}
+.card .act{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--muted)}
+.card .act .kindsel{color:var(--ink)}
+.card .act .kindsel:after{content:" ▾";color:var(--muted)}
+.card .act .post{margin-left:auto;color:var(--accent);font-weight:600}
+
+/* questions screen */
+.qs{max-width:720px;margin:0 auto;padding:56px 72px 160px}
+.qs .meta{color:var(--muted);font-size:12.5px;margin-bottom:34px}
+.qs h1{font-size:28px;line-height:1.25;letter-spacing:-.01em;margin:0 0 12px}
+.qs .lead{font-size:15px;color:var(--muted);margin:0 0 40px;line-height:1.7}
+.q{margin:0 0 40px}
+.q h2{font-size:17px;margin:0 0 4px}
+.q .ctx{color:var(--muted);font-size:13.5px;margin:0 0 12px}
+.opt{display:flex;align-items:center;gap:10px;padding:7px 0;font-size:15px}
+.opt input{width:16px;height:16px;margin:0;accent-color:var(--accent)}
+.opt .rec{color:var(--muted);font-size:12px;margin-left:6px}
+.opt .other{color:var(--muted);font-size:13px;margin-left:auto}
+.why{margin:8px 0 0 26px;font-size:13.5px}
+.why summary{color:var(--muted);cursor:pointer;list-style:none;display:inline-flex;gap:6px;align-items:center}
+.why summary::-webkit-details-marker{display:none}
+.why summary:before{content:"›";display:inline-block;transition:transform .12s}
+.why[open] summary:before{transform:rotate(90deg)}
+.why .txt{margin-top:8px;color:var(--ink);line-height:1.65;border-left:2px solid var(--line-2);padding-left:14px}
+.why table{border-collapse:collapse;margin:8px 0;font-size:13px}
+.why th,.why td{text-align:left;padding:4px 14px 4px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.why th{color:var(--muted);font-weight:500}
+.qs .save{display:flex;align-items:center;gap:16px;margin-top:8px;padding-top:24px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+.qs .save .btn{margin-left:auto}
+
+/* mock toggle */
+[data-screen]{display:none}
+body[data-show="review"] [data-screen="review"]{display:grid}
+body[data-show="questions"] [data-screen="questions"]{display:grid}
+.mocknav{position:fixed;left:50%;transform:translateX(-50%);bottom:10px;z-index:9;display:flex;gap:4px}
+.mocknav button{font-size:11px;padding:3px 8px;border-radius:5px;background:#1a202c;color:#fff;opacity:.5}
+</style>
+</head>
+<body data-show="review">
+
+<!-- ================= REVIEW ================= -->
+<div class="shell" data-screen="review">
+  <header class="top">
+    <span class="dim">260904-todo-app</span><span class="sep">/</span><span class="name">Requirements</span>
+    <div class="right">
+      <span class="quiet">3 comments to send</span>
+      <button class="link">Request changes</button>
+      <button class="btn">Approve</button>
+    </div>
+  </header>
+  <nav class="menus">
+    <button>File</button><button>Edit</button><button>View</button><button>Comment</button><button>Review</button><button>Help</button>
+    <div class="right"><span>Revision 1</span><span>Saved by the agent</span></div>
+  </nav>
+  <div class="body">
+    <aside class="nav">
+      <div class="intent">To-Do Application <span class="c">▾</span></div>
+      <div class="sub">express · inception</div>
+
+      <div class="ph">Initialization</div>
+      <div class="st done"><span class="i">✓</span>Workspace</div>
+      <div class="ph">Inception</div>
+      <div class="st skip"><span class="i"></span>Reverse Engineering</div>
+      <div class="st now"><span class="i">●</span>Requirements Analysis</div>
+      <div class="files">
+        <div class="f on">requirements<span class="n">4</span></div>
+        <div class="f">questions<span class="n">4 / 4</span></div>
+        <div class="f">memory</div>
+      </div>
+      <div class="ph">Construction</div>
+      <div class="st"><span class="i"></span>Code Generation</div>
+      <div class="st"><span class="i"></span>Build and Test</div>
+      <div class="ph">Operation</div>
+      <div class="st"><span class="i"></span>Deployment</div>
+      <div class="st"><span class="i"></span>Observability</div>
+
+      <div class="foot"><a href="#">All files</a><a href="#">Audit log</a></div>
+    </aside>
+
+    <main class="main">
+      <article class="doc">
+        <div class="meta"><span>Product Agent</span><span>·</span><span>revised 2 min ago</span><span>·</span><span>waiting for your review</span></div>
+        <h1>Requirements — To-Do Application</h1>
+        <p>A single-user web application for capturing, completing, and deleting tasks. Tasks persist in the browser's local storage; there is no server, account, or synchronisation. The scope is intentionally minimal: one list, no projects or tags.</p>
+
+        <h2>Functional requirements</h2>
+        <div class="blk"><span class="check">✓</span>
+          <p><strong>FR1 — Add a task.</strong> The user can add a task by typing a title and pressing Enter. Titles are trimmed; an empty title is ignored without an error message.</p>
+        </div>
+        <div class="blk">
+          <p><strong>FR2 — Complete a task.</strong> The user can mark a task complete and uncomplete it. <span class="mark focus">Completed tasks move to the bottom of the list</span> and render with a strike-through.</p>
+          <span class="bubble">1</span>
+        </div>
+        <div class="blk">
+          <p><strong>FR3 — Delete a task.</strong> Each task has a delete control. <span class="mark del">Deletion asks for confirmation.</span> Deleted tasks are removed immediately from storage.</p>
+        </div>
+        <div class="blk">
+          <p><strong>FR4 — Persistence.</strong> The list is saved to <code>localStorage</code> on every change and restored on load. <span class="mark sug">If storage is unavailable the app shows an error and refuses to start.</span></p>
+        </div>
+
+        <h2>Non-functional requirements</h2>
+        <div class="blk">
+          <p><strong>NFR1 — Performance.</strong> Adding, completing, or deleting a task <span class="sel">reflects in the UI within 100 ms</span> for lists up to 500 tasks.</p>
+          <span class="plus">+</span>
+        </div>
+        <p><strong>NFR2 — Accessibility.</strong> All controls are keyboard-operable and labelled; colour is never the only signal for completion.</p>
+      </article>
+    </main>
+
+    <aside class="side">
+      <div class="head"><b>Comments</b><span>4</span><span class="tog"><span class="on">Open</span> · <span>Resolved</span></span></div>
+
+      <div class="card focus">
+        <p class="q">Completed tasks move to the bottom of the list</p>
+        <div class="who"><span class="av">P</span><b>You</b><span>just now</span></div>
+        <p>Do they? I'd rather keep list order stable and just strike them through — moving items is disorienting on a small list.</p>
+        <div class="st"><span>Sends with your decision</span><a href="#">Edit</a><a href="#">Delete</a></div>
+      </div>
+
+      <div class="card">
+        <p class="q">Deletion asks for confirmation.</p>
+        <div class="who"><span class="av">P</span><b>You</b><span>r0</span><span class="kind">Delete</span></div>
+        <p>No confirm dialog — undo is friendlier and we said "core only".</p>
+        <div class="reply">
+          <div class="who"><span class="av a">A</span><b>Product Agent</b><span>r1</span></div>
+          <p>Kept it: without undo, an accidental delete is unrecoverable. Happy to remove if you'd rather add undo to scope.</p>
+        </div>
+        <div class="st"><a href="#">Reply</a><a href="#">Resolve</a></div>
+      </div>
+
+      <div class="card">
+        <p class="q">If storage is unavailable the app shows an error…</p>
+        <div class="who"><span class="av">P</span><b>You</b><span>r0</span><span class="kind">Suggestion</span></div>
+        <p class="diff"><s>refuses to start</s> <ins>runs in memory for the session and warns that changes will not persist</ins></p>
+        <div class="reply">
+          <div class="who"><span class="av a">A</span><b>Product Agent</b><span>r1</span></div>
+          <p>Applied.</p>
+        </div>
+        <div class="st"><a href="#">Show change</a><a href="#">Resolve</a></div>
+      </div>
+
+      <div class="card draft">
+        <p class="q">reflects in the UI within 100 ms</p>
+        <textarea placeholder="Comment…"></textarea>
+        <div class="act"><button class="kindsel">Comment</button><button class="post">Post</button></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ================= QUESTIONS ================= -->
+<div class="shell" data-screen="questions">
+  <header class="top">
+    <span class="dim">260904-todo-app</span><span class="sep">/</span><span class="name">Questions</span>
+    <div class="right">
+      <span class="quiet">4 of 4 answered</span>
+      <button class="btn">Save answers</button>
+    </div>
+  </header>
+  <nav class="menus">
+    <button>File</button><button>Edit</button><button>View</button><button>Help</button>
+    <div class="right"><span>Requirements Analysis</span><span>Saves to the questions file</span></div>
+  </nav>
+  <div class="body" style="grid-template-columns:240px 1fr">
+    <aside class="nav">
+      <div class="intent">To-Do Application <span class="c">▾</span></div>
+      <div class="sub">express · inception</div>
+      <div class="ph">Initialization</div>
+      <div class="st done"><span class="i">✓</span>Workspace</div>
+      <div class="ph">Inception</div>
+      <div class="st skip"><span class="i"></span>Reverse Engineering</div>
+      <div class="st now"><span class="i">●</span>Requirements Analysis</div>
+      <div class="files">
+        <div class="f on">questions<span class="n">4 open</span></div>
+        <div class="f">requirements<span class="n">soon</span></div>
+      </div>
+      <div class="ph">Construction</div>
+      <div class="st"><span class="i"></span>Code Generation</div>
+      <div class="st"><span class="i"></span>Build and Test</div>
+      <div class="ph">Operation</div>
+      <div class="st"><span class="i"></span>Deployment</div>
+      <div class="st"><span class="i"></span>Observability</div>
+      <div class="foot"><a href="#">All files</a><a href="#">Audit log</a></div>
+    </aside>
+
+    <main class="main">
+      <section class="qs">
+        <div class="meta">Product Agent · before writing the requirements</div>
+        <h1>Four questions</h1>
+        <p class="lead">Each comes with the agent's recommendation already selected. Change any you disagree with, then save — the agent continues from your answers.</p>
+
+        <div class="q">
+          <h2>1 · What platform should the to-do app run on?</h2>
+          <p class="ctx">Decides the whole shape of the build.</p>
+          <label class="opt"><input type="radio" name="q1" checked>Web app that runs in the browser<span class="rec">Recommended</span></label>
+          <label class="opt"><input type="radio" name="q1">Command-line tool</label>
+          <label class="opt"><input type="radio" name="q1">Desktop application</label>
+          <label class="opt"><input type="radio" name="q1">Mobile app (iOS / Android)</label>
+          <label class="opt"><input type="radio" name="q1">Other<span class="other">describe →</span></label>
+          <details class="why" open>
+            <summary>Why the web app</summary>
+            <div class="txt">
+              It is the first fork in the road: a browser app needs no install and no backend; a CLI needs neither UI nor storage design; a mobile app needs a store pipeline. Every later stage reads this answer.
+              <table><tr><th>Option</th><th>You get</th><th>You give up</th></tr>
+                <tr><td>Web</td><td>Runs anywhere, fastest to something usable</td><td>Offline only as good as the browser</td></tr>
+                <tr><td>CLI</td><td>Tiny surface, trivial testing</td><td>No visual list, awkward for most people</td></tr>
+                <tr><td>Desktop</td><td>Native feel</td><td>Packaging per OS</td></tr>
+                <tr><td>Mobile</td><td>Always at hand</td><td>Store review, two platforms</td></tr></table>
+              For a lightweight express build the web app is the shortest path to something you can click on, and it keeps storage (Q2) and users (Q3) simple.
+            </div>
+          </details>
+        </div>
+
+        <div class="q">
+          <h2>2 · Where should tasks be stored?</h2>
+          <p class="ctx">Sets whether there is a backend at all.</p>
+          <label class="opt"><input type="radio" name="q2" checked>Browser only (local storage)<span class="rec">Recommended</span></label>
+          <label class="opt"><input type="radio" name="q2">A small server with a database</label>
+          <label class="opt"><input type="radio" name="q2">A hosted backend (e.g. Amplify / Firebase)</label>
+          <label class="opt"><input type="radio" name="q2">Other<span class="other">describe →</span></label>
+          <details class="why"><summary>Why local storage</summary><div class="txt">No backend means nothing to deploy, secure, or pay for. Sync across devices is out of scope for this intent.</div></details>
+        </div>
+
+        <div class="q">
+          <h2>3 · Who uses it?</h2>
+          <p class="ctx">Determines whether accounts and sharing exist.</p>
+          <label class="opt"><input type="radio" name="q3" checked>Single user, no login<span class="rec">Recommended</span></label>
+          <label class="opt"><input type="radio" name="q3">Several users with accounts</label>
+          <label class="opt"><input type="radio" name="q3">Other<span class="other">describe →</span></label>
+          <details class="why"><summary>Why single user</summary><div class="txt">Accounts imply a backend and contradict Q2. Sharing can be a later intent.</div></details>
+        </div>
+
+        <div class="q">
+          <h2>4 · Which features are in the first cut?</h2>
+          <p class="ctx">Everything else is explicitly deferred.</p>
+          <label class="opt"><input type="radio" name="q4" checked>Core only — add, complete, delete<span class="rec">Recommended</span></label>
+          <label class="opt"><input type="radio" name="q4">Core plus due dates and reminders</label>
+          <label class="opt"><input type="radio" name="q4">Core plus projects and tags</label>
+          <label class="opt"><input type="radio" name="q4">Other<span class="other">describe →</span></label>
+          <details class="why"><summary>Why core only</summary><div class="txt">A working loop end to end before any embellishment. Due dates and tags each add a data model and UI surface; they fit a second intent.</div></details>
+        </div>
+
+        <div class="save"><span>Your answers are written to the questions file; the agent picks them up and continues in the terminal.</span><button class="btn">Save answers</button></div>
+      </section>
+    </main>
+
+  </div>
+</div>
+
+<div class="mocknav"><button onclick="document.body.dataset.show='review'">review</button><button onclick="document.body.dataset.show='questions'">questions</button></div>
+</body>
+</html>

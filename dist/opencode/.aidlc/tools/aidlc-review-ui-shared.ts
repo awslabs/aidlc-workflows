@@ -43,6 +43,11 @@ export const ENV_REVIEW_HOST = "AIDLC_REVIEW_HOST";
 export const ENV_REVIEW_OPEN = "AIDLC_REVIEW_OPEN";
 export const ENV_REVIEW_IDLE_MINUTES = "AIDLC_REVIEW_IDLE_MINUTES";
 export const ENV_REVIEW_HOME = "AIDLC_REVIEW_HOME";
+/**
+ * `1` disables browser-navigation trust: the bare origin never opens and every
+ * printed URL is a single-use `/open/<nonce>` link. For shared multi-user hosts.
+ */
+export const ENV_REVIEW_STRICT = "AIDLC_REVIEW_STRICT";
 export const ENV_HTML_ARTIFACTS = "AIDLC_HTML_ARTIFACTS";
 
 export const DEFAULT_REVIEW_HOST = "127.0.0.1";
@@ -53,6 +58,10 @@ export const HEARTBEAT_STALE_MS = HEARTBEAT_INTERVAL_MS * 4;
 
 export function reviewUiEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[ENV_REVIEW_UI] === "1";
+}
+
+export function reviewUiStrict(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ENV_REVIEW_STRICT] === "1";
 }
 
 export function htmlArtifactsRequested(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -185,11 +194,15 @@ export interface OpenLink {
  * 0600 file in the daemon's private dir; the daemon consumes it (deletes it)
  * and answers with the HttpOnly session cookie. Printed links therefore never
  * carry the long-lived token, and a link copied out of a transcript dies after
- * one use or `ttlMs`. ONLY mutating callers mint (report, --status, the daemon
- * itself); read-only engine paths such as `orchestrate next` read the link
- * stored on `CurrentPointer.open` and print it only while `openLinkIsFresh`
- * (unexpired AND not yet consumed — a read-only file check). Returns null when
- * no live daemon serves the project.
+ * one use or `ttlMs`. Links are the STRICT-mode entry (`AIDLC_REVIEW_STRICT=1`)
+ * and the fallback for browsers without Fetch Metadata; by default the daemon
+ * trusts a user-initiated navigation to the bare origin and sets the cookie
+ * itself, so callers print `reviewUiHumanUrl` instead. ONLY human-invoked or
+ * mutating callers mint (report, --status, --doctor, the daemon itself);
+ * read-only engine paths such as `orchestrate next` read the link stored on
+ * `CurrentPointer.open` and print it only while `openLinkIsFresh` (unexpired AND
+ * not yet consumed — a read-only file check). Returns null when no live daemon
+ * serves the project.
  */
 export function mintReviewUiOpenLink(
   projectDir: string,
@@ -216,6 +229,21 @@ export function mintReviewUiOpenUrl(
   now: number = Date.now(),
 ): string | null {
   return mintReviewUiOpenLink(projectDir, env, ttlMs, now)?.url ?? null;
+}
+
+/**
+ * The URL a human should open: the stable origin (the daemon trusts the browser's
+ * own navigation signals and sets the cookie on arrival), or in strict mode a
+ * fresh single-use link. Null when no live daemon serves the project.
+ */
+export function reviewUiHumanUrl(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  now: number = Date.now(),
+): string | null {
+  if (reviewUiStrict(env)) return mintReviewUiOpenUrl(projectDir, env, OPEN_NONCE_TTL_MS, now);
+  const info = readServerInfo(projectDir, env);
+  return serverInfoLooksAlive(info, now) ? info.url : null;
 }
 
 /**

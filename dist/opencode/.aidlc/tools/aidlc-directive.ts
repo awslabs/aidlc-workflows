@@ -230,6 +230,11 @@ export interface RunStageDirective {
   // conductor - the engine omits the whole reviewer block instead. Absent
   // when reviewer is absent.
   review_class?: "adversarial" | "advisory";
+  // learnings — present only as `false`, when the active scope declares
+  // `learnings: off`: the conductor skips the §13 learnings ritual (surface,
+  // the "Anything to add?" turn, persist) and goes from the completion message
+  // straight to the gate. Absent = the ritual runs as the protocol mandates.
+  learnings?: false;
   // protocol_modules — optional deterministic hints naming conditional
   // protocol files the conductor reads before the stage body. The prose
   // triggers remain the compatibility fallback when this field is absent.
@@ -568,6 +573,7 @@ const RUN_STAGE_FIELDS = [
   "review_artifact",
   "reviewer_max_iterations",
   "review_class",
+  "learnings",
   "protocol_modules",
   "swarm_settled",
   "conductor_persona",
@@ -952,6 +958,11 @@ function checkRunStageShared(
   // stage; absent carries no name. So string OR null validates; any other
   // present value is rejected.
   checkOptionalNullableString(o, "next_stage", kind, errors);
+  // learnings: present only as `false` (the scope declared `learnings: off`);
+  // `true` is never emitted — absence means the ritual runs.
+  if ("learnings" in o && o.learnings !== false) {
+    errors.push(`${kind}: learnings must be false when present, got ${describe(o.learnings)}`);
+  }
   // reviewer fields — optional on a run-stage directive (present only when the
   // stage declares a reviewer). Mirror the stage-schema validator: reviewer is
   // an optional string, reviewer_max_iterations an optional positive integer.

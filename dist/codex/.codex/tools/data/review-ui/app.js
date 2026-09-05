@@ -62,6 +62,7 @@
     questionsStorageKey: null,
     guideFrame: null,
     guidePath: null,
+    submittedIds: [],
     guideBaseUrl: null,
     recommendations: new Map(),
     selectionAnchor: null,
@@ -89,8 +90,44 @@
     return `${url.pathname}${url.search}`;
   }
 
+  const PAUSED_RECONNECTING = "Live updates paused — reconnecting…";
+  const PAUSED_SESSION_RENEWING = "Review session renewed — reloading…";
+  const PAUSED_SESSION_ENDED =
+    "Your review session ended (the daemon restarted or the session expired). Run /aidlc --status in your harness and open the new link.";
+  const PAUSED_DAEMON_DOWN =
+    "Review daemon stopped — it restarts with your next AI-DLC session. Run /aidlc --doctor for the manual command.";
+  const REAUTH_STAMP_KEY = "aidlc-review-reauth-at";
+  const REAUTH_LOOP_WINDOW_MS = 15_000;
+
+  function showPaused(message) {
+    elements.pausedOverlay.textContent = message;
+    elements.pausedOverlay.classList.remove("connected");
+  }
+
+  /**
+   * The cookie no longer matches the daemon's token (it restarted, or the
+   * session lapsed). A top-level reload is a user-initiated navigation the
+   * daemon trusts, so it lands back in the app with a fresh cookie — no link
+   * needed. If we reloaded moments ago and are still signed out (strict mode,
+   * or a browser without Fetch Metadata), stop looping and say what to do.
+   */
+  function sessionLost() {
+    const last = Number(sessionStorage.getItem(REAUTH_STAMP_KEY) || 0);
+    if (Date.now() - last < REAUTH_LOOP_WINDOW_MS) {
+      showPaused(PAUSED_SESSION_ENDED);
+      return;
+    }
+    sessionStorage.setItem(REAUTH_STAMP_KEY, String(Date.now()));
+    showPaused(PAUSED_SESSION_RENEWING);
+    window.location.reload();
+  }
+
   async function requestJson(path, options) {
     const response = await fetch(path, options);
+    if (response.status === 401) {
+      sessionLost();
+      throw new Error("review session ended — renewing");
+    }
     if (!response.ok) {
       let detail = `${response.status} ${response.statusText}`;
       try {
@@ -483,6 +520,20 @@
   async function openQuestions(options = {}) {
     const pointer = model.state?.questions;
     if (!pointer?.file) return;
+    if (pointer.preparing) {
+      // The agent is still writing the explainer. Showing the form now would
+      // mean no recommendations and prose arriving underneath the human.
+      setQuestionsMode(true);
+      clearNotice();
+      model.questions = null;
+      model.guideFrame = null;
+      elements.questionsBanner.hidden = true;
+      elements.questionsContent.className = "questions-content loading";
+      elements.questionsContent.textContent = "Preparing your questions — the explainer with trade-offs and recommendations is being written. This view opens on its own when it is ready.";
+      elements.saveAnswersButton.disabled = true;
+      renderGuide(null);
+      return;
+    }
     const refreshing =
       Boolean(options.refresh) && model.questions?.path === pointer.file && model.view === "questions";
     setQuestionsMode(true);
@@ -503,6 +554,13 @@
         return;
       }
       const changed = refreshing && result.sha256 !== model.questions.sha256;
+      // The common reason the file changes right after a Save is answers-apply
+      // writing this tab's own submission back. That is success, not a warning.
+      const applied = changed && submittedAnswersApplied(result);
+      // Every later write to the file (answer timestamps, mode stamps, the
+      // consolidated-summary confirmation) is the agent moving on. Only a human
+      // who still holds UNSAVED choices needs to hear that the ground moved.
+      const staleDraft = changed && JSON.stringify(collectQuestionAnswers()) !== model.savedAnswers;
       model.questions = result;
       model.questionsStorageKey = questionsStorageKey(result);
       model.recommendations = new Map();
@@ -510,7 +568,13 @@
       elements.questionsBanner.hidden = true;
       renderQuestions(result);
       renderGuide(pointer);
-      if (changed) showNotice("Questions changed. Review the latest version before saving.", "info");
+      updateTitleBadge(model.state);
+      if (applied) {
+        model.submittedIds = [];
+        showNotice("Your answers were applied — the agent is continuing in the terminal.", "info");
+      } else if (staleDraft) {
+        showNotice("Questions changed while you had unsaved choices. Review the latest version before saving.", "info");
+      }
     } catch (error) {
       if (model.state?.questions?.file !== path) return;
       if (!refreshing) {
@@ -522,6 +586,15 @@
       }
       showNotice(`Could not load questions: ${error.message}`);
     }
+  }
+
+  // True when every question this tab submitted now carries a recorded answer:
+  // the file change we are looking at is answers-apply writing our own Save back.
+  function submittedAnswersApplied(result) {
+    const submitted = model.submittedIds || [];
+    if (!submitted.length) return false;
+    const answered = new Set((result.questions || []).filter((q) => q.answer !== null).map((q) => q.id));
+    return submitted.every((id) => answered.has(id));
   }
 
   async function saveQuestionAnswers(event) {
@@ -543,8 +616,9 @@
         }),
       });
       model.savedAnswers = JSON.stringify(answers);
+      model.submittedIds = answers.map((entry) => entry.id);
       if (model.questionsStorageKey) sessionStorage.removeItem(model.questionsStorageKey);
-      elements.questionsBanner.textContent = `Saved as ${basename(result.file)}. Return to the terminal and send **done**.`;
+      elements.questionsBanner.textContent = `Saved as ${basename(result.file)} — the agent is picking your answers up now.`;
       elements.questionsBanner.hidden = false;
     } catch (error) {
       showNotice(`Could not save answers: ${error.message}`);
@@ -552,6 +626,37 @@
       elements.saveAnswersButton.textContent = "Save answers";
       syncQuestionForm();
     }
+  }
+
+  // Nothing of the human's is in flight in this tab: no unsent annotations or
+  // notes, and the source editor is closed. Only then may a state push move them.
+  function tabIsIdle() {
+    return (
+      model.annotations.length === 0 &&
+      elements.generalNotes.value.trim() === "" &&
+      elements.editorPanel.hidden
+    );
+  }
+
+  // Every answerable question in the loaded round carries a recorded answer and
+  // the form holds no unsaved edits: the human is done here.
+  function questionsRoundFinished() {
+    const questions = model.questions?.questions || [];
+    if (!questions.length) return false;
+    const allAnswered = questions.every((q) => q.confirmation || q.answer !== null);
+    return allAnswered && JSON.stringify(collectQuestionAnswers()) === model.savedAnswers;
+  }
+
+  // A background tab cannot be focused from the server; the tab title is the
+  // one cue every browser shows. Badge it while something awaits the human.
+  const BASE_TITLE = "AI-DLC Review";
+  function updateTitleBadge(state) {
+    const loaded = model.questions?.path === state?.questions?.file ? model.questions.questions || [] : null;
+    // Badge only a browser round that is ready for the human and still unanswered.
+    const roundOpen =
+      Boolean(state?.questions?.ready) && !(loaded && loaded.length > 0 && loaded.every((q) => q.confirmation || q.answer !== null));
+    const awaiting = state?.current?.state === "awaiting-approval" || roundOpen;
+    document.title = awaiting ? `(1) ${BASE_TITLE}` : BASE_TITLE;
   }
 
   async function refreshState() {
@@ -566,8 +671,10 @@
         renderAnnotations();
       }
       const priorQuestionsFile = model.state?.questions?.file || null;
+      const priorReady = Boolean(model.state?.questions?.ready);
       model.state = nextState;
       renderState();
+      updateTitleBadge(nextState);
 
       if (!nextState.questions && model.view === "questions") {
         model.questions = null;
@@ -576,10 +683,29 @@
         setQuestionsMode(false);
         showNotice("Questions are no longer available. The current review state has changed.", "info");
       } else if (nextState.questions && model.view === "questions") {
-        await openQuestions({ refresh: priorQuestionsFile === nextState.questions.file });
-        return;
+        // The gate opened while the tab still shows a round the human already
+        // finished: move them to the artifact under review. Unsaved choices
+        // or an unanswered round keep the Questions view.
+        const gateOpened =
+          nextState.current?.state === "awaiting-approval" &&
+          model.state !== null &&
+          (nextState.manifest?.artifacts || []).some((item) => item.exists) &&
+          questionsRoundFinished() &&
+          tabIsIdle();
+        if (!gateOpened) {
+          await openQuestions({ refresh: priorQuestionsFile === nextState.questions.file });
+          return;
+        }
+        setQuestionsMode(false);
       } else if (nextState.questions) {
         refreshQuestionsBadge(nextState.questions);
+        // The round just became READY — explainer complete and checked — and
+        // nothing of the human's is in flight here: take them to it. A questions
+        // file appearing, or a half-written explainer, is not that moment.
+        if (nextState.questions.ready && !priorReady && tabIsIdle()) {
+          await openQuestions();
+          return;
+        }
       }
 
       const artifacts = nextState.manifest?.artifacts || [];
@@ -608,7 +734,9 @@
 
     const current = state?.current;
     const manifest = state?.manifest;
-    elements.stageName.textContent = current?.stage || manifest?.stage || "No stage";
+    // Before any gate has published a review pointer (question rounds,
+    // authoring), the workflow's own stage is still known — name it.
+    elements.stageName.textContent = current?.stage || manifest?.stage || state?.current_stage || "No stage";
 
     const statusLabels = {
       "awaiting-approval": "Awaiting approval",
@@ -617,7 +745,16 @@
       none: "Idle",
     };
     const status = current?.state || "none";
-    elements.stageStatus.textContent = [state?.stage_status, statusLabels[status]]
+    const noneLabel = state?.questions?.preparing
+      ? "Preparing questions"
+      : state?.questions?.ready
+        ? "Questions open"
+        : state?.questions
+          ? "Questions in the terminal"
+          : state?.current_stage
+            ? "In progress"
+            : "Idle";
+    elements.stageStatus.textContent = [state?.stage_status, status === "none" ? noneLabel : statusLabels[status]]
       .filter(Boolean)
       .join(" ");
     elements.stageStatus.dataset.state = status;
@@ -627,6 +764,14 @@
       elements.stageSummary.textContent = `${manifest.phase}${unit} · revision ${manifest.revision}`;
     } else if (status === "approved") {
       elements.stageSummary.textContent = "Approved; nothing is currently under review.";
+    } else if (state?.questions?.preparing) {
+      elements.stageSummary.textContent = "The agent is writing the explainer for this round. Questions opens on its own when it is ready.";
+    } else if (state?.questions?.ready) {
+      elements.stageSummary.textContent = "A question round is open — answer it under Questions. Artifacts appear here at the approval gate.";
+    } else if (state?.questions) {
+      elements.stageSummary.textContent = "A question round is being answered in the terminal. The form under Questions mirrors the file.";
+    } else if (state?.current_stage) {
+      elements.stageSummary.textContent = "The agent is working on this stage. Artifacts appear here at the approval gate.";
     } else {
       elements.stageSummary.textContent = "Nothing is under review.";
     }
@@ -1091,6 +1236,7 @@
     const socket = new WebSocket(`${scheme}//${window.location.host}/ws`);
     socket.addEventListener("open", () => {
       model.socketRetry = 0;
+      elements.pausedOverlay.textContent = PAUSED_RECONNECTING;
       elements.pausedOverlay.classList.add("connected");
     });
     socket.addEventListener("message", (event) => {
@@ -1101,9 +1247,18 @@
         // Ignore messages outside the daemon's tiny state-notification protocol.
       }
     });
-    const reconnect = () => {
-      elements.pausedOverlay.classList.remove("connected");
+    const reconnect = async () => {
       if (socket.readyState === WebSocket.OPEN) socket.close();
+      elements.pausedOverlay.classList.remove("connected");
+      // Tell the human why the socket dropped: a lapsed session (401) and a
+      // stopped daemon (network error) need different actions from them.
+      try {
+        const probe = await fetch("/api/state", { cache: "no-store" });
+        if (probe.status === 401) sessionLost();
+        else showPaused(PAUSED_RECONNECTING);
+      } catch {
+        showPaused(PAUSED_DAEMON_DOWN);
+      }
       const delay = Math.min(15_000, 500 * 2 ** model.socketRetry++);
       model.socketTimer = window.setTimeout(connectSocket, delay);
     };

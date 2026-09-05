@@ -1,0 +1,132 @@
+# Local development preferences (this repo, this worktree)
+
+## Worktrees - always use one for branch work
+
+- Never branch-work on the main checkout (branch `v2`, the de-facto main; PRs target v2
+  though GitHub's default is `main`). Main checkout = inspection and merging only.
+- `git worktree add .claude/worktrees/<slug> -b fix/issue-<N>-<topic> v2`, then
+  `EnterWorktree({path})` - re-roots cwd AND fixes LSP navigation (see below). One worktree
+  per branch; remove after merge.
+- `<slug>` = branch name minus the `feature/`/`fix/`/`spike/` prefix, verbatim, leading with
+  `issue-<N>-`/`pr-<N>-` when one exists. Bare topic slug only for untracked work.
+- If NOT re-rooted: prefix every Bash call with `cd <worktree-path> &&` (cwd persists; one
+  stray `cd` sends git writes to the wrong tree); `pwd && git branch --show-current` before
+  any git write; inspect sibling trees via `git -C`/paths, never `cd`.
+- Exception - AIDLC Construction (Bolt/swarm) creates sibling worktrees and hard-errors from
+  a nested session: run those from the main checkout. (Tests unaffected: temp fixtures.)
+
+**LSP in worktrees** (detail: memory `lsp-worktree-gitignore-filter.md`): empty
+goToDefinition/findReferences = the client drops results in gitignored paths
+(`.claude/worktrees` is ignored) - fixed by EnterWorktree/launching from the worktree, never
+by restarting. False "Cannot find name 'process'" spam = file outside a tsconfig include
+(fixed for `tests/` by `tests/tsconfig.json`, on PR #491 - copy into worktrees until merged;
+`dist/**` deliberately uncovered - ignore its spam). Authoritative signal: `bun run
+typecheck` (both tsconfigs; bare `tsc` misses one). `bun run check` adds biome lint.
+
+## Verify, never guess
+
+Any claim about how something here works - stage, file, scope, agent, orchestrator, flag,
+audit/artifact flow - gets verified against the repo on disk and cited `file:line` in the
+same turn, side-fixes and delegated results included. Prior conversation and plausible
+convention are not evidence. If something's absent, report the verified absence.
+
+## Sub-agents
+
+Default file sweeps, multi-file investigations, and test/log triage to sub-agents; keep the
+distilled answer (`file:line`, decision, diff), not the transcript. Omit `model` so they
+inherit the session model - do NOT pin `opus` (stale habit from when Opus was the ceiling).
+
+## Test runs - smallest tier that answers the question
+
+- Always `-P 8` (min 6) and `--debug` (streams output, writes traces to
+  `tests/logs/<stamp>/`). Iterate: `bash tests/run-tests.sh --debug -P 8`.
+- Default tier = smoke+unit+integration, NO e2e; e2e opt-in (`--e2e`/`--release`/`--all`).
+  Don't reach for `--release` to "be safe".
+- Targeted live check: `--filter "<regex>"` (filename match) + that test's live var.
+- Pre-merge gate: once before merge, always sliced (below) - monolithic `--release` runs
+  >1hr and gets reaped at ~60min.
+
+### Live gates - unset vars mean tests SILENTLY SKIP GREEN
+
+Per `run-tests.ts:260-262`, ONLY `AIDLC_TUI_LIVE` ever auto-defaults (under
+`--release`/`--all` + `--debug`; never on a `--filter` run). All others are never auto-set.
+A green tier whose var was unset exercised nothing; a skip (also from missing/unauthed CLI)
+is an unmet gate, not coverage. Always state which vars were set.
+
+Six gates (codex and kiro-ide are the forgotten ones):
+- Claude SDK (`tests/integration/t*.test.ts`) - no var; needs `claude` on PATH.
+- Claude TUI (`t-tui-*`, non-kiro) - `AIDLC_TUI_LIVE=1` (set explicitly anyway).
+- Kiro ACP (`t-acp-kiro-*`) - `AIDLC_KIRO_ACP_LIVE=1`.
+- Kiro TUI (`t-tui-kiro-*`) - `AIDLC_KIRO_TUI_LIVE=1`.
+- Codex exec (`t-exec-codex-*`) - `AIDLC_CODEX_EXEC_LIVE=1` (needs codex CLI + Bedrock
+  creds). Traces are `.log` + `summary.txt`, NOT ndjson.
+- Kiro IDE (`t-ide-kiro-*`) - `AIDLC_KIRO_IDE_LIVE=1` + `AIDLC_KIRO_IDE_SEED=<path>` +
+  macOS + Kiro.app; skips clean if any missing. Raw CDP from bun, not Playwright.
+
+### Sliced pre-merge gate
+
+Parallel subagents, one filtered slice each, backgrounded + polled (subagent Bash caps at
+10min; slices run 15-30min). Run from the worktree. Keep `.serial.` slices small (they don't
+parallelize; overpacked slices get reaped). Re-run a single red green-alone before calling
+it real - most reds are live-agent latency flakes. Live agents compare traces to intent
+(which tool ran, `$ARGUMENTS` forwarding, artifact locations) - a divergence is a finding
+even on green.
+
+1. `--smoke --unit`
+2. `--integration -P 8` (= Claude-SDK coverage)
+3. `--e2e --filter "^t[0-9]"` (deterministic e2e)
+4. `AIDLC_TUI_LIVE=1 --e2e --filter "t-tui-(?!kiro)"`
+5. `AIDLC_KIRO_ACP_LIVE=1 --e2e --filter "t-acp-kiro"`
+6. `AIDLC_TUI_LIVE=1 AIDLC_KIRO_TUI_LIVE=1 --e2e --filter "t-tui-kiro"`
+7. `AIDLC_CODEX_EXEC_LIVE=1 --e2e --filter "t-exec-codex"`
+8. `AIDLC_KIRO_IDE_LIVE=1 AIDLC_KIRO_IDE_SEED=<path> --e2e --filter "t-ide-kiro"`
+
+### Slice-evidence contract
+
+Every test run reports this 4-line block, verbatim, BEFORE any verdict - a verdict without
+it is rejected (re-run):
+
+```
+STAMP:    tests/logs/<full-stamp-dir>            # the literal dir the run wrote; `ls -d` it, do not paraphrase
+TRACES:   <abs path glob>  (<N> files)           # ndjson for sdk/tui/kiro-acp; for CODEX it's *.log + summary.txt/failures.txt (NO ndjson)
+SUMMARY:  <stamp>/summary.txt  +  failures.txt    # the run-tests.ts-written rollup; paste the Result: + Failed-files line
+RESULT:   <tier> . <P pass>/<F fail> . reds: <names or none> . live vars set: <list> . invariant grep hits: <N> (path-excluded)
+```
+
+Non-obvious facts the block depends on: a reaped run still wrote per-file results (report
+completed + never-resolved via `comm -23` of `=== START` vs `=== DONE`); invariant greps
+must exclude path lines (worktree slugs can contain the token); no stamp dir = report the
+command + exit code as the finding, not "GREEN". Capture slice stdout to
+`tmp/<slug>/slice-<n>.log` and echo `realpath` of log + stamp dir - the final message is all
+that survives.
+
+## Three concerns, three mechanisms
+
+Determinism -> tool (hook, bun subprocess, deterministic code). Knowledge -> LLM/agent.
+Judgement -> human (AskUser, gates, approvals).
+
+## Working areas
+
+- `tmp/` PRIVATE (gitignored): drafts, payloads, backups, one-shot scripts, notes. Never
+  committed. Create `./tmp/` if missing; no scratch elsewhere.
+- `wip/` PUBLIC (tracked): shared docs meant to be seen in the repo. Commits/pushes gated
+  as usual.
+- Durable private artefacts (plans, design/decision docs, anything a memory note points at)
+  go in the ROOT `tmp/<slug>/` from the start - a worktree's `tmp/` dies with
+  `git worktree remove`. From a worktree that's `../../../tmp/`. When unsure, durable.
+
+## GitHub
+
+Public `awslabs/aidlc-workflows`; use `gh` (authenticated). Global gates apply: push, PR
+create, merge each need explicit per-action go-ahead - prepare, show, wait.
+
+## Pre-push secret scan - before any push
+
+Public repo; pushed content is world-readable and cached even if force-removed. Read the
+full outgoing diff (`git diff @{push}..HEAD`, `--stat` for the list) - not just the last
+commit - for secrets/credentials, internal hostnames/URLs/IDs, PII, anything from `tmp/`.
+Any hit: stop and flag with `file:line` before the push ask. Clean: one line - "scan clean -
+N files, nothing sensitive".
+
+(Gitignored; loads into every worktree session from the checkout root. Mirrors the internal
+GitLab repo's copy with GitLab-specifics adapted for this public repo.)

@@ -21281,6 +21281,9 @@ interface ScopeMetadata {
    *  dispatch at all). Absent = adversarial (no cap). Resolution lives in
    *  resolveReviewClass. */
   reviewCap?: "adversarial" | "advisory" | "none";
+  /** `learnings: off` disables the §13 learnings ritual (the "Anything to add for
+   *  next time?" turn before every gate) for workflows on this scope. Absent = on. */
+  learnings?: "on" | "off";
   /** When true, this scope is the enabled plugin's freeform/default fallback
    *  (plugin-only installs where the core `classic` default is
    *  deselected). At most one enabled scope should set this. */
@@ -21391,6 +21394,15 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
         );
       }
       meta.reviewCap = reviewCap;
+    }
+    const learnings = scalarField(fm, "learnings");
+    if (learnings) {
+      if (learnings !== "on" && learnings !== "off") {
+        throw new Error(
+          `Scope file ${filePath} has invalid learnings value "${learnings}". Expected "on" or "off".`
+        );
+      }
+      meta.learnings = learnings;
     }
     out[name] = meta;
   }

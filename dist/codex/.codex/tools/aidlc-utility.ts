@@ -54,9 +54,9 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   htmlArtifactsRequested,
   liveReviewUiOrigin,
-  mintReviewUiOpenUrl,
   readServerInfo,
   reviewUiEnabled,
+  reviewUiHumanUrl,
   serverInfoLooksAlive,
 } from "./aidlc-review-ui-shared.ts";
 import {
@@ -1494,7 +1494,7 @@ function handleStatus(projectDir: string, flags: Record<string, string>): void {
     space: flags.space,
     intent: flags.intent,
   });
-  const reviewUiUrl = reviewUiEnabled() ? mintReviewUiOpenUrl(projectDir) : null;
+  const reviewUiUrl = reviewUiEnabled() ? reviewUiHumanUrl(projectDir) : null;
   const reviewUiLine = reviewUiUrl ? `Review UI: ${reviewUiUrl}\n` : "";
   const sp =
     selection.intent === null
@@ -2305,9 +2305,17 @@ async function handleDoctor(projectDir: string, flags: Record<string, string> = 
       }
     }
     if (reachable && origin) {
+      // Print the URL a human can actually open. By default that is the stable
+      // origin (the daemon trusts a typed navigation and sets the cookie itself);
+      // in strict mode it is a fresh single-use link, minted here like `--status`.
+      const openUrl = reviewUiHumanUrl(projectDir);
       results.push({
         pass: true,
-        label: `review-ui: alive at ${origin}`,
+        label: openUrl === null
+          ? `review-ui: alive at ${origin} — run /aidlc --status for a browser link`
+          : openUrl === origin
+            ? `review-ui: alive — open ${openUrl}`
+            : `review-ui: alive — open ${openUrl} (single-use link, 30 min; /aidlc --status mints another)`,
         id: "review-ui",
         severity: "info",
       });

@@ -1,11 +1,12 @@
 // covers: subcommand:aidlc-utility:status, subcommand:aidlc-utility:doctor
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  noncesDir,
   readServerInfo,
   writeServerInfo,
 } from "../../core/tools/aidlc-review-ui-shared.ts";
@@ -68,7 +69,7 @@ interface UtilityRun {
   stderr: string;
 }
 
-function runUtility(command: "status" | "doctor", enabled: boolean): UtilityRun {
+function runUtility(command: "status" | "doctor", enabled: boolean, strict = false): UtilityRun {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_STAGE_GRAPH: join(DIST_DATA, "stage-graph.json"),
@@ -78,6 +79,8 @@ function runUtility(command: "status" | "doctor", enabled: boolean): UtilityRun 
   };
   if (enabled) env.AIDLC_REVIEW_UI = "1";
   else delete env.AIDLC_REVIEW_UI;
+  if (strict) env.AIDLC_REVIEW_STRICT = "1";
+  else delete env.AIDLC_REVIEW_STRICT;
   const result = Bun.spawnSync({
     cmd: [BUN, UTILITY, command, "--project-dir", project],
     stdout: "pipe",
@@ -117,12 +120,17 @@ afterAll(async () => {
 });
 
 describe("t337 status and doctor review UI reporting", () => {
-  test("status prints a fresh one-time URL only while review UI is enabled", () => {
+  test("status prints the origin by default, a fresh one-time link in strict mode, nothing when disabled", () => {
     const info = readServerInfo(project, { ...process.env, AIDLC_REVIEW_HOME: reviewHome });
     expect(info).not.toBeNull();
     const enabled = runUtility("status", true);
     expect(enabled.status, enabled.stderr).toBe(0);
-    expect(enabled.stdout).toContain(`Review UI: ${info!.url}open/`);
+    expect(enabled.stdout).toContain(`Review UI: ${info!.url}\n`);
+    expect(enabled.stdout).not.toContain("/open/");
+
+    const strict = runUtility("status", true, true);
+    expect(strict.status, strict.stderr).toBe(0);
+    expect(strict.stdout).toContain(`Review UI: ${info!.url}open/`);
 
     const disabled = runUtility("status", false);
     expect(disabled.status, disabled.stderr).toBe(0);
@@ -148,7 +156,20 @@ describe("t337 status and doctor review UI reporting", () => {
     const aliveInfo = readServerInfo(project, { ...process.env, AIDLC_REVIEW_HOME: reviewHome });
     expect(aliveInfo).not.toBeNull();
     const alive = runUtility("doctor", true);
-    expect(alive.stdout).toContain(`✓  review-ui: alive at ${aliveInfo!.url}`);
+    // Default: the alive row prints the stable origin, which the daemon opens
+    // for a typed navigation — a URL the human can actually click.
+    const aliveRow = alive.stdout.split("\n").find((line) => line.includes("review-ui: alive"));
+    expect(aliveRow).toBe(`✓  review-ui: alive — open ${aliveInfo!.url}`);
+
+    // Strict mode: the row mints a fresh single-use link instead, and the
+    // nonce it names exists on disk.
+    const strictAlive = runUtility("doctor", true, true);
+    const strictRow = strictAlive.stdout.split("\n").find((line) => line.includes("review-ui: alive"));
+    expect(strictRow).toMatch(
+      new RegExp(`^✓  review-ui: alive — open ${aliveInfo!.url.replaceAll(".", "\\.")}open/[0-9a-f]{32} \\(single-use link, 30 min; /aidlc --status mints another\\)$`),
+    );
+    const minted = strictRow!.match(/open\/([0-9a-f]{32})/)![1];
+    expect(existsSync(join(noncesDir(project, { ...process.env, AIDLC_REVIEW_HOME: reviewHome }), minted))).toBe(true);
 
     const stale = {
       ...aliveInfo!,

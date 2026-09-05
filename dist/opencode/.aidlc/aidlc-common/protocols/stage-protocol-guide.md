@@ -2,9 +2,23 @@
 
 Load this module from `.aidlc/aidlc-common/protocols/stage-protocol-guide.md` when `directive.protocol_modules` lists `guide`. It governs only the explainer written for **Guide me in the browser**; the Markdown questions file remains authoritative.
 
+## Start from the scaffold
+
+Do not write the file from memory. Generate a skeleton that already satisfies the
+check, then fill in the prose:
+
+`bun .aidlc/tools/aidlc-html.ts scaffold --guide <stage-dir>/<slug>-questions.md --out <stage-dir>/<slug>-questions-guide.html [--depth minimal]`
+
+It writes the head identity, the summary section, and one section per `Q<n>`
+with the real option letters and texts already in place; every
+`data-aidlc-recommend=""` and every empty `<p>` is yours to complete. Pass
+`--depth minimal` when `aidlc-state.md` says **Depth**: Minimal. If the scaffold
+reports a question with no parsable options, the questions file is malformed
+(§3 exact line shape) — fix that file first; the browser form reads it the same way.
+
 ## File and identity
 
-Write one self-contained `<stage-dir>/<slug>-questions-guide.html` file. Follow the HTML artifact protocol's offline, safety, accessibility, and deterministic-source rules. The head MUST contain:
+The result is one self-contained `<stage-dir>/<slug>-questions-guide.html` file that follows the HTML artifact protocol's offline, safety, accessibility, and deterministic-source rules. The head MUST contain:
 
 ```html
 <meta name="aidlc-artifact" content="<slug>-questions-guide">
@@ -36,14 +50,20 @@ For every ordinary `Q<n>` H2 in `<slug>-questions.md`, in file order, write exac
 
 The `data-aidlc-question` and `id` values MUST equal the question id. Do not add, omit, merge, or reorder question sections. The Consolidated Summary Confirmation is not an ordinary question section and MUST NOT appear.
 
+**Depth sets the shape.** At **Minimal** depth (the `--depth minimal` scaffold) each
+section carries only **Why now** and **Recommendation** — two or three sentences
+each, no table, no related-decisions block; a Minimal round is a handful of
+essentials and the human wants the pick and the reason, not a matrix. At
+Standard and Comprehensive depth write the full shape above.
+
 ## Explanation content
 
-- Copy the question title faithfully into its `h2`.
+- Copy the question title faithfully into its `h2` (the scaffold already did).
 - Under **Why now**, name the concrete downstream work affected by the answer.
-- Under **Trade-offs**, include every offered option in a table with exactly these columns: **Option**, **You get**, **You give up**, **Cost / risk**.
+- Under **Trade-offs** (Standard/Comprehensive), fill every option row the scaffold laid out; the columns are exactly **Option**, **You get**, **You give up**, **Cost / risk**.
 - Under **Recommendation**, set `data-aidlc-recommend` to a real option letter offered by that question and explain why it fits the current project. Never invent a letter or recommend an unlisted answer.
-- Under **Related decisions**, quote relevant prior `[Answer]:` values or record content and cite project-relative file paths. Write `None found` when there is no grounded related decision.
-- An optional `<figure>` may clarify architecture or flow. Give it an accessible name and a useful `<figcaption>`; it never replaces the required prose or table.
+- Under **Related decisions** (Standard/Comprehensive), quote relevant prior `[Answer]:` values or record content and cite project-relative file paths. Leave the scaffold's `None found` when there is no grounded related decision.
+- An optional `<figure>` may clarify architecture or flow. Give it an accessible name and a useful `<figcaption>`; it never replaces the required prose.
 
 ## Required check
 
@@ -51,4 +71,11 @@ Before pointing the human to the browser, run:
 
 `bun .aidlc/tools/aidlc-html.ts check --guide <file> --questions <slug>-questions.md`
 
-Fix every finding. Do not present a guide that fails the base HTML artifact contract, lacks a question section, has an extra section, or recommends a letter absent from its question.
+Fix every finding. Do not present a guide that fails the base HTML artifact contract, lacks a question section, has an extra section, recommends a letter absent from its question, or still has empty prose.
+
+The review UI enforces the same check: it shows the human a browser round only
+once the guide passes, and until then the tab says "Preparing your questions".
+So the human never sees an unfilled scaffold or a form without recommendations —
+but it also means nothing appears in their browser until you have filled every
+paragraph and every `data-aidlc-recommend`. Write the whole explainer in ONE
+write after the scaffold, then check once.

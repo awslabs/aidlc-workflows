@@ -150,6 +150,15 @@ describe("t302 conditional protocol modules", () => {
     expect(modules).not.toContain("reviewer");
   });
 
+  test("express switches the learnings ritual off; other scopes leave the field absent", () => {
+    // `learnings: off` in the scope frontmatter reaches the conductor as a bare
+    // `learnings: false`; a scope that says nothing emits no field at all, so
+    // every pre-existing directive shape is byte-stable.
+    expect(directiveFor("requirements-analysis", "express").learnings).toBe(false);
+    expect("learnings" in directiveFor("requirements-analysis", "classic")).toBe(false);
+    expect("learnings" in directiveFor("requirements-analysis", "bugfix")).toBe(false);
+  });
+
   test("user-stories mob lists ensemble", () => {
     const modules = moduleList(directiveFor("user-stories", "classic"));
     expect(modules).toEqual(["reviewer", "ensemble"]);

@@ -27,23 +27,36 @@ bun <harnessDir>/tools/aidlc-review-ui.ts serve --project-dir "$PWD"
 
 ## Review an approval gate
 
-When a stage reaches an approval gate, the completion message includes one of
-these lines:
+When a stage reaches an approval gate, the completion message includes a line
+like:
+
+```text
+**Browser:** http://localhost:4765/
+```
+
+That address just opens — type it, bookmark it, or click it. The daemon
+recognises a browser's own navigation and starts your session on arrival; no
+token is printed anywhere. `/aidlc --status` and `/aidlc --doctor` print the
+same address. On a desktop you rarely need it: when a gate opens or a browser
+question round begins and no review tab is connected, the daemon opens one for
+you (`AIDLC_REVIEW_OPEN=0` disables this). An open tab is never duplicated — it
+follows the workflow live, switches to Questions or to the artifact under review
+on its own unless you are mid-annotation, shows a `(1)` in its title while
+something awaits you, and if the daemon restarts underneath it, signs itself
+back in with a reload.
+
+On a shared multi-user machine set `AIDLC_REVIEW_STRICT=1` before starting the
+harness. The bare address then never opens; gates, `--status`, and `--doctor`
+print single-use links instead:
 
 ```text
 **Browser:** http://localhost:4765/open/0123456789abcdef0123456789abcdef
 ```
 
-or, when the previous link was used or expired:
-
-```text
-**Browser:** http://localhost:4765/ — run /aidlc --status for a fresh link
-```
-
 A link under `/open/` is a single-use capability and expires after 30 minutes.
 Opening it exchanges the nonce for an `HttpOnly` browser cookie; the daemon's
 long-lived token is never printed. Run `/aidlc --status` whenever you need a
-fresh link.
+fresh one.
 
 The browser flow does not replace the gate:
 
@@ -85,26 +98,30 @@ browser tab's session storage.
 The browser never edits `*-questions.md`. **Save answers** writes a numbered
 `answers-NNN.json` submission against the current questions-file digest. If the
 file changed while the form was open, the save is refused; reload before trying
-again. After a successful save, return to the terminal and send **done**. The
-agent runs `aidlc-log.ts answers-apply`, which applies unconsumed submissions
-under the audit lock, writes `[Answer]:` and optional `[Note]:` lines, emits one
-human-turn-backed `QUESTION_ANSWERED` row in `Mode: browser`, and marks the
-submissions consumed. The ordinary consolidated summary and **Looks correct** /
-**Request changes** confirmation then continue in the terminal.
+again. A successful save is the end of your part: the daemon records the click
+as your human turn, and the agent picks the answers up on its own. On Claude Code
+the Stop hook holds the agent's turn while the form is open and resumes it the
+moment the submission lands; on other harnesses the agent waits on
+`aidlc-log.ts answers-wait`. Either way it then runs `aidlc-log.ts answers-apply`,
+which applies unconsumed submissions under the audit lock, writes `[Answer]:` and
+optional `[Note]:` lines, emits one human-turn-backed `QUESTION_ANSWERED` row in
+`Mode: browser`, and marks the submissions consumed. The ordinary consolidated
+summary and **Looks correct** / **Request changes** confirmation then continue in
+the terminal. Typing **done** is no longer required; it still works if you do.
 
 ### Guide me in the browser
 
-When the Review UI is available, the interaction-mode prompt also offers
-**Guide me in the browser** — “Read an explainer with trade-offs and answer in
-the browser.” Choose it when you want the form and an agent-authored explainer
-side by side.
+When the Review UI is available, the interaction-mode prompt offers **Guide me
+in the browser** — “Read an explainer with trade-offs and answer in the
+browser” — as its first, recommended option. It gives you the form and an
+agent-authored explainer side by side, and saving resumes the agent on its own.
 
 The agent writes `<stage>-questions-guide.html`, with a **Why now** section,
 option-by-option trade-offs, a recommendation, and related prior decisions for
 each question. In the Questions view, selecting a question scrolls the explainer
 to the matching section. A recommendation may preselect a still-unanswered
 option and is visibly marked as recommended; it never overwrites your selection.
-Save the form, return to the terminal, send **done**, and review the consolidated
+Save the form; the agent continues on its own and presents the consolidated
 summary as above.
 
 ## HTML stage artifacts

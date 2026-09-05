@@ -25,6 +25,7 @@ import {
   pendingFeedback,
   readConsumed,
   reviewUiEnabled,
+  reviewUiStrict,
   type ReviewManifest,
   type ReviewManifestArtifact,
   sha256Hex,
@@ -189,7 +190,7 @@ export function publishReviewManifest(
     state,
     stageDir,
     now,
-    mintReviewUiOpenLink(projectDir),
+    reviewUiStrict() ? mintReviewUiOpenLink(projectDir) : null,
   );
   atomicWriteJson(manifestPath(stageDir), manifest);
   atomicWriteJson(currentPointerPath(record), pointer);
@@ -219,7 +220,7 @@ export function publishReviewPointer(
     state,
     stageDir,
     new Date().toISOString(),
-    mintReviewUiOpenLink(projectDir),
+    reviewUiStrict() ? mintReviewUiOpenLink(projectDir) : null,
   );
   atomicWriteJson(currentPointerPath(record), pointer);
   return pointer;

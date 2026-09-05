@@ -120,8 +120,8 @@
 // open is the only safe failure mode for a hook that can otherwise trap a turn.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, type FSWatcher, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import {
   ActiveDirectiveLockContendedError,
   clearSessionIntentHandoff,
@@ -164,6 +164,15 @@ import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
+import {
+  ANSWERS_PREFIX,
+  readConsumed,
+  readServerInfo,
+  reviewUiEnabled,
+  serverInfoLooksAlive,
+  sha256Hex,
+  stageReviewUiDir,
+} from "../tools/aidlc-review-ui-shared.ts";
 import { questionsFileHasPendingPlanApproval } from "./aidlc-plan-approval-guard.ts";
 
 const HOOK_NAME = "continue-workflow";
@@ -591,6 +600,118 @@ function isPendingQuestionStop(
     // Unparseable / odd content — fall through to decideBlock (never trap).
     return false;
   }
+}
+
+// --- Tier-2 browser wait: hold the turn until the human clicks Save ------------
+//
+// "Guide me in the browser" ends the conductor's turn with the human answering
+// in the review UI. Without this, the saved answers sit on disk until the human
+// also types `done` in the terminal — a second, redundant act. Plannotator's
+// approach applies here unchanged: the hook process is the only thing that can
+// hold the session open, so it waits for the submission and then BLOCKS the
+// stop with the apply instruction; the conductor resumes on its own.
+//
+// Positive-confirmation only, and narrow on purpose:
+//   - the pending-question carve-out already fired for this stage ([-] cursor,
+//     unanswered `[Answer]:` tag);
+//   - `<slug>-questions-guide.html` sits beside the questions file — the
+//     artifact stage-protocol-guide.md writes ONLY in browser mode. A terminal
+//     question round has no guide, and blocking there would trap the human's
+//     typed answer;
+//   - the review UI is enabled and its daemon is alive, otherwise nobody can
+//     click Save and the wait would only delay the release.
+// The wait is bounded (AIDLC_REVIEW_WAIT_SECONDS, default 20 min; the Stop hook's
+// settings.json timeout must exceed it) and falls back to the plain allow on
+// expiry, i.e. exactly today's `done` flow. The submission the daemon writes is
+// paired with its own HUMAN_TURN row, so answers-apply passes without a
+// keystroke. Fail-open on every read error.
+const REVIEW_WAIT_DEFAULT_SECONDS = 20 * 60;
+const REVIEW_WAIT_POLL_MS = 1_000;
+
+interface BrowserQuestionRound {
+  slug: string;
+  stageDirPath: string;
+  questionsFile: string;
+}
+
+function browserQuestionRound(
+  projectDir: string,
+  stateContent: string,
+  activeStage?: string,
+  unit?: string,
+): BrowserQuestionRound | null {
+  if (!reviewUiEnabled()) return null;
+  if (!serverInfoLooksAlive(readServerInfo(projectDir))) return null;
+  try {
+    const slug = activeStage?.trim() || currentStageSlug(stateContent);
+    const phase = (getField(stateContent, "Lifecycle Phase") ?? "").toLowerCase();
+    if (slug.length === 0 || phase.length === 0) return null;
+    const stageDirPath =
+      phase === "construction" && unit
+        ? join(docsRoot(projectDir), phase, unit, slug)
+        : stageDir(projectDir, phase, slug);
+    const questionsPath = join(stageDirPath, `${slug}-questions.md`);
+    if (!existsSync(questionsPath) || !existsSync(join(stageDirPath, `${slug}-questions-guide.html`))) return null;
+    if (!/\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(questionsPath, "utf-8"))) return null;
+    return { slug, stageDirPath, questionsFile: relative(projectDir, questionsPath).split(sep).join("/") };
+  } catch {
+    return null;
+  }
+}
+
+// An answers-NNN.json the daemon wrote that answers-apply has not consumed yet.
+function hasUnconsumedBrowserAnswers(stageDirPath: string): boolean {
+  try {
+    const reviewDir = stageReviewUiDir(stageDirPath);
+    if (!existsSync(reviewDir)) return false;
+    const consumed = readConsumed(stageDirPath);
+    return readdirSync(reviewDir).some((file) => {
+      if (!file.startsWith(ANSWERS_PREFIX) || !file.endsWith(".json")) return false;
+      const sha256 = sha256Hex(readFileSync(join(reviewDir, file)));
+      return !consumed.entries.some((entry) => entry.file === file && entry.sha256 === sha256);
+    });
+  } catch {
+    return false;
+  }
+}
+
+// Only a harness whose Stop hook may run for minutes can hold the turn. Claude
+// Code's settings.json grants this hook 1500 s; Kiro CLI (30 s), Copilot (60 s)
+// and Codex would kill the wait long before a human finishes reading, so there
+// the wait is off unless AIDLC_REVIEW_WAIT_SECONDS opts in after their hook
+// timeouts have been raised to match. Zero disables it everywhere.
+function reviewWaitSeconds(): number {
+  const raw = process.env.AIDLC_REVIEW_WAIT_SECONDS;
+  if (raw === undefined) return harnessDir() === ".claude" ? REVIEW_WAIT_DEFAULT_SECONDS : 0;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : REVIEW_WAIT_DEFAULT_SECONDS;
+}
+
+// Resolves true as soon as a submission lands, false on expiry. Polling is the
+// guarantee; the directory watcher only shortens the wake-up.
+function waitForBrowserAnswers(stageDirPath: string, timeoutSeconds: number): Promise<boolean> {
+  if (hasUnconsumedBrowserAnswers(stageDirPath)) return Promise.resolve(true);
+  if (timeoutSeconds <= 0) return Promise.resolve(false);
+  const { promise, resolve: settle } = Promise.withResolvers<boolean>();
+  let watcher: FSWatcher | null = null;
+  const finish = (found: boolean): void => {
+    clearInterval(poll);
+    clearTimeout(deadline);
+    watcher?.close();
+    settle(found);
+  };
+  const recheck = (): void => {
+    if (hasUnconsumedBrowserAnswers(stageDirPath)) finish(true);
+  };
+  const poll = setInterval(recheck, REVIEW_WAIT_POLL_MS);
+  const deadline = setTimeout(() => finish(false), timeoutSeconds * 1000);
+  try {
+    watcher = watch(stageDirPath, { recursive: true }, recheck);
+    watcher.on("error", () => {});
+  } catch {
+    // Polling alone carries the wait where recursive watching is unavailable.
+  }
+  return promise;
 }
 
 // A structured non-gate question is logged before it is rendered and answered
@@ -1465,6 +1586,19 @@ if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
 // unit-major walk. Strictly gated and fail-open (see isPendingQuestionStop).
 if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
   const pendingStage = activeStage ?? currentStageSlug(stateContent);
+  // Browser round: hold the turn for the Save click, then hand the conductor
+  // the apply step. On expiry, fall through to the plain allow (the `done` flow).
+  const round = browserQuestionRound(projectDir, stateContent, activeStage, activeUnit);
+  if (round && (await waitForBrowserAnswers(round.stageDirPath, reviewWaitSeconds()))) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      `browser answers saved for ${round.slug}; blocking the stop so the conductor applies them (browser-wait)`,
+    );
+    return blockStop(
+      `The human saved answers in the review UI for ${round.slug}. Run \`bun ${harnessDir()}/tools/aidlc-log.ts answers-apply --stage ${round.slug} --questions-file ${round.questionsFile}${activeUnit ? ` --unit ${activeUnit}` : ""}\`, then continue the stage from the consolidated summary. Do not ask the human to type done.`,
+    );
+  }
   recordHookDrop(
     projectDir,
     HOOK_NAME,

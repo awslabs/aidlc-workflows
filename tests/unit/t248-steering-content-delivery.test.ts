@@ -861,6 +861,26 @@ describe("t248 deterministic steering delivery", () => {
     );
   });
 
+  test("brownfield safeguards ship only to brownfield workflows; greenfield drops them", () => {
+    // The stateless (--scope/--stage) roster above keeps brownfield.md because
+    // no Project Type is known yet. With a workflow on disk the field decides.
+    const brownfield = setupIntegrationProject({ withState: "state-mid-inception.md" });
+    const brownfieldPaths = drive(brownfield, []).final.inline_context_paths ?? [];
+    expect(brownfieldPaths).toContain(".claude/knowledge/aidlc-shared/brownfield.md");
+
+    const greenfield = setupIntegrationProject({ withState: "state-mid-inception.md" });
+    const statePath = seededStateFile(greenfield);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("- **Project Type**: Brownfield", "- **Project Type**: Greenfield"),
+    );
+    const greenfieldPaths = drive(greenfield, []).final.inline_context_paths ?? [];
+    expect(greenfieldPaths).not.toContain(".claude/knowledge/aidlc-shared/brownfield.md");
+    // Everything else in the Minimal roster is unchanged by project type.
+    expect(greenfieldPaths).toContain(".claude/knowledge/aidlc-shared/ai-dlc-principles.md");
+    expect(greenfieldPaths).toContain(".claude/knowledge/aidlc-product-agent/requirements-guide.md");
+  });
+
   test("Minimal routing retains recursively composed plugin knowledge that collides by basename", () => {
     const proj = project();
     const pluginRoot = mkdtempSync(

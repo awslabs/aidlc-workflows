@@ -186,3 +186,14 @@ As a user you mostly touch one horizontal slice at a time — running a workflow
 - [CLI Commands](12-cli-commands.md) — the doctor rule-drift and paired-coverage advisory rows
 - [Rule System](../reference/08-rule-system.md) · [Sensor System](../reference/07-sensor-system.md) · [Plane Architecture](../reference/02-plane-architecture.md) — the schema- and design-level reference
 - [Glossary](glossary.md) — terminology reference
+
+## Turning the loop off for a scope
+
+The learnings turn is on by default for every gated stage. A scope can opt out
+in its frontmatter with `learnings: off` (the shipped `express` scope does);
+workflows on that scope go from each stage's completion message straight to the
+approval gate, with no "Anything to add for next time?" stop. The per-stage
+`memory.md` diary is still written, so the record of interpretations and
+trade-offs survives — it just is not offered for promotion into `project.md` /
+`team.md` at the gate. Use it for the lightweight scopes where the gate cadence
+matters more than harvesting practices; switch it back on by removing the key.

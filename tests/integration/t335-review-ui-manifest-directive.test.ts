@@ -115,8 +115,28 @@ describe("review UI manifest and directive publication", () => {
     expect(readFileSync(join(review, "snapshots", "r1", "feasibility-assessment.md"), "utf-8")).toContain("revision one");
   }, 30_000);
 
-  test("run-stage and report output expose only a live stored open link", () => {
+  test("run-stage and report output name the origin as the URL to open by default", () => {
     const { project, env } = fixture();
+    server(project, env, new Date().toISOString());
+    // The daemon trusts a typed navigation to its origin, so the origin is the
+    // URL to print — on read-only `next` as well as on `report`, with no nonce minted.
+    const before = runOrchestrateNext(ORCHESTRATE, project, [], { env }).directive;
+    expect(before?.review_ui).toEqual({ origin: "http://127.0.0.1:43123/", url: "http://127.0.0.1:43123/" });
+
+    const opened = report(project, env, ["--stage", "feasibility", "--result", "awaiting-approval"]);
+    expect(opened.review_ui).toEqual({ origin: "http://127.0.0.1:43123/", url: "http://127.0.0.1:43123/" });
+    const pointer = JSON.parse(readFileSync(join(seededRecordDir(project), ".review-ui", "current.json"), "utf-8"));
+    expect(pointer.open).toBeNull();
+
+    const stale = { ...env };
+    server(project, stale, new Date(Date.now() - 10 * 60_000).toISOString());
+    const staleDirective = runOrchestrateNext(ORCHESTRATE, project, [], { env: stale }).directive;
+    expect(staleDirective?.review_ui).toBeUndefined();
+  }, 30_000);
+
+  test("strict mode exposes only a live stored single-use link", () => {
+    const { project, env: base } = fixture();
+    const env = { ...base, AIDLC_REVIEW_STRICT: "1" };
     server(project, env, new Date().toISOString());
     const before = runOrchestrateNext(ORCHESTRATE, project, [], { env }).directive;
     expect(before?.review_ui).toEqual({ origin: "http://127.0.0.1:43123/" });
@@ -126,10 +146,5 @@ describe("review UI manifest and directive publication", () => {
     expect((opened.review_ui as { url: string }).url).toMatch(/^http:\/\/127\.0\.0\.1:43123\/open\/[0-9a-f]{32}$/);
     const after = runOrchestrateNext(ORCHESTRATE, project, [], { env }).directive;
     expect((after?.review_ui as { url: string }).url).toBe((opened.review_ui as { url: string }).url);
-
-    const stale = { ...env };
-    server(project, stale, new Date(Date.now() - 10 * 60_000).toISOString());
-    const staleDirective = runOrchestrateNext(ORCHESTRATE, project, [], { env: stale }).directive;
-    expect(staleDirective?.review_ui).toBeUndefined();
   }, 30_000);
 });

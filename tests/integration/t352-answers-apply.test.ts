@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import {
@@ -208,5 +208,59 @@ describe("aidlc-log answers-apply", () => {
     expect(result.output).toContain("no new human reply has arrived");
     expect(readFileSync(questions, "utf-8")).toBe(QUESTIONS);
     expect(() => readFileSync(join(stageDir, ".review-ui", "consumed.json"), "utf-8")).toThrow();
+  });
+});
+
+describe("aidlc-log answers-wait", () => {
+  function wait(project: string, questions: string, timeout: string): Bun.Subprocess<"ignore", "pipe", "pipe"> {
+    return Bun.spawn({
+      cmd: [BUN, TOOL, "answers-wait", "--stage", "feasibility", "--questions-file", questions, "--timeout", timeout, "--project-dir", project],
+      env: process.env,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  }
+
+  test("returns immediately with the pending files when a submission already exists", async () => {
+    const { project, stageDir, questions, rel } = fixture();
+    submission(stageDir, "answers-001.json", rel, QUESTIONS, [{ id: "Q1", labels: ["A"] }]);
+    const child = wait(project, questions, "30");
+    expect(await child.exited).toBe(0);
+    expect(JSON.parse(await new Response(child.stdout).text())).toEqual({
+      ready: true,
+      files: ["answers-001.json"],
+      questions_file: rel,
+    });
+  });
+
+  test("blocks until the daemon-style submission lands, and never consumes it", async () => {
+    const { project, stageDir, questions, rel } = fixture();
+    const child = wait(project, questions, "30");
+    // Real subprocess against a real directory watcher: the write is the event
+    // under test, so it has to land after the waiter is running.
+    await new Promise<void>((resolve) => setTimeout(resolve, 300));
+    expect(child.exitCode).toBeNull();
+    submission(stageDir, "answers-001.json", rel, QUESTIONS, [{ id: "Q2", labels: ["B"] }]);
+    expect(await child.exited).toBe(0);
+    expect(JSON.parse(await new Response(child.stdout).text())).toEqual({
+      ready: true,
+      files: ["answers-001.json"],
+      questions_file: rel,
+    });
+    expect(existsSync(join(stageDir, ".review-ui", "consumed.json"))).toBe(false);
+    expect(readFileSync(questions, "utf-8")).toBe(QUESTIONS);
+  });
+
+  test("exits 3 with ready:false on timeout so the conductor simply waits again", async () => {
+    const { project, questions, rel } = fixture();
+    const child = wait(project, questions, "0");
+    expect(await child.exited).toBe(3);
+    expect(JSON.parse(await new Response(child.stdout).text())).toEqual({
+      ready: false,
+      files: [],
+      questions_file: rel,
+      waited_seconds: 0,
+    });
   });
 });
