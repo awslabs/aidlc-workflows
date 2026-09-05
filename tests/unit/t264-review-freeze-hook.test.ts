@@ -34,7 +34,6 @@ import {
 } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
