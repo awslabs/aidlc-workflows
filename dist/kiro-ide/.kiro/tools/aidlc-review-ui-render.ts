@@ -7,6 +7,8 @@ export type AnnotationKind = "comment" | "delete" | "looks-good" | "label" | "ed
 
 export interface ReviewAnnotation {
   artifact: string;
+  /** Stable identifier within the rendered feedback file (`a1`, `a2`, ...). */
+  id?: string;
   kind: AnnotationKind;
   heading_path: string[];
   selection?: string;
@@ -474,6 +476,57 @@ function headingSlug(value: string): string {
   return plain || "section";
 }
 
+export interface MarkdownBlock {
+  line_start: number;
+  line_end: number;
+  text: string;
+}
+
+/**
+ * Split source into top-level, blank-line-delimited Markdown blocks. Blank
+ * lines inside fenced code are content; runs outside fences are separators.
+ * The returned line range is one-based and inclusive in the original source.
+ */
+export function splitMarkdownBlocks(source: string): MarkdownBlock[] {
+  const normalized = source.replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  const blocks: MarkdownBlock[] = [];
+  let start = -1;
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  const append = (end: number): void => {
+    if (start < 0 || end < start) return;
+    blocks.push({
+      line_start: start + 1,
+      line_end: end + 1,
+      text: lines.slice(start, end + 1).join("\n"),
+    });
+    start = -1;
+  };
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (start < 0 && line.trim() !== "") start = index;
+    if (start < 0) continue;
+
+    const fenceLine = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence === null && fenceLine) {
+      fence = { marker: fenceLine[1][0] as "`" | "~", length: fenceLine[1].length };
+      continue;
+    }
+    if (
+      fence !== null &&
+      new RegExp(`^\\s{0,3}${fence.marker === "`" ? "`" : "~"}{${fence.length},}\\s*$`).test(line)
+    ) {
+      fence = null;
+      continue;
+    }
+    if (fence === null && line.trim() === "") append(index - 1);
+  }
+  if (start >= 0) append(lines.length - 1);
+  return blocks;
+}
+
 /**
  * Render Markdown with stable heading ids and native Mermaid fence recognition.
  * `Bun.markdown.html` is the complete renderer; `Bun.markdown.render` with
@@ -654,15 +707,18 @@ function quotedSelection(selection: string): string {
   return selection.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
 }
 
-function annotationHeading(annotation: ReviewAnnotation): string {
-  const names: Record<Exclude<AnnotationKind, "edit">, string> = {
+const REMARK_ID = /^a[1-9][0-9]*$/;
+
+function annotationHeading(annotation: ReviewAnnotation, id: string): string {
+  const names: Record<AnnotationKind, string> = {
     comment: "Comment",
     delete: "Delete",
     "looks-good": "Looks good",
     label: "Label",
+    edit: "Edit (unified diff)",
   };
-  if (annotation.kind === "edit") return "### Edit (unified diff)";
-  let heading = `### ${names[annotation.kind]}`;
+  let heading = `### ${names[annotation.kind]} · ${id}`;
+  if (annotation.kind === "edit") return heading;
   if (annotation.heading_path.length > 0) heading += ` — ${annotation.heading_path.join(" › ")}`;
   if (annotation.line_start !== undefined) {
     const end = annotation.line_end ?? annotation.line_start;
@@ -672,18 +728,47 @@ function annotationHeading(annotation: ReviewAnnotation): string {
   return heading;
 }
 
+function assignRemarkIds(annotations: readonly ReviewAnnotation[]): string[] {
+  const counts = new Map<string, number>();
+  for (const annotation of annotations) {
+    if (!annotation.id || !REMARK_ID.test(annotation.id)) continue;
+    counts.set(annotation.id, (counts.get(annotation.id) ?? 0) + 1);
+  }
+  const reserved = new Set(
+    [...counts].filter(([, count]) => count === 1).map(([id]) => id),
+  );
+  const used = new Set<string>();
+  let candidate = 1;
+  return annotations.map((annotation) => {
+    if (
+      annotation.id &&
+      REMARK_ID.test(annotation.id) &&
+      counts.get(annotation.id) === 1
+    ) {
+      used.add(annotation.id);
+      return annotation.id;
+    }
+    while (reserved.has(`a${candidate}`) || used.has(`a${candidate}`)) candidate++;
+    const id = `a${candidate++}`;
+    used.add(id);
+    return id;
+  });
+}
+
 export function renderFeedbackMarkdown(
   input: FeedbackRequest,
   options: { created?: string; sources?: Readonly<Record<string, string>> } = {},
 ): string {
   const created = options.created ?? new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  const sections = new Map<string, ReviewAnnotation[]>();
-  for (const annotation of input.annotations) {
+  const sections = new Map<string, Array<{ annotation: ReviewAnnotation; id: string }>>();
+  const ids = assignRemarkIds(input.annotations);
+  input.annotations.forEach((annotation, index) => {
     const artifact = basename(annotation.artifact);
+    const identified = { annotation, id: ids[index] };
     const existing = sections.get(artifact);
-    if (existing) existing.push(annotation);
-    else sections.set(artifact, [annotation]);
-  }
+    if (existing) existing.push(identified);
+    else sections.set(artifact, [identified]);
+  });
 
   const body: string[] = [
     `# Review feedback: ${input.stage} (revision ${input.revision})`,
@@ -691,8 +776,8 @@ export function renderFeedbackMarkdown(
   ];
   for (const [artifact, annotations] of sections) {
     body.push(`## ${artifact}`, "");
-    for (const annotation of annotations) {
-      body.push(annotationHeading(annotation));
+    for (const { annotation, id } of annotations) {
+      body.push(annotationHeading(annotation, id));
       if (annotation.kind === "edit") {
         const before = options.sources?.[artifact] ?? "";
         body.push(

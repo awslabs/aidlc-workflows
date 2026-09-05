@@ -12,12 +12,13 @@ Three components meet at files under the active intent:
 ```text
 session-start hook ── ensures ──> review daemon
                                      │ reads state/manifests/artifacts
-                                     │ writes feedback + answer submissions
+                                     │ writes feedback, answers, decisions
+                                     │ reads responses/history/workflow records
                                      ▼
                                   browser
                                      │
 engine report <── ingests files ─────┘
-   │ publishes current pointer, manifest, snapshots
+   │ publishes pointers, manifests, snapshots, responses
    │ emits audit rows and owns gate transition
    ▼
 conductor presents the terminal gate
@@ -27,15 +28,16 @@ conductor presents the terminal gate
   `AIDLC_REVIEW_UI=1`. It never mints an open link or adds a link to session
   context. Failure is swallowed and recorded as a hook drop, so Review UI
   availability cannot break the workflow.
-- `aidlc-orchestrate.ts report` is the mutating publication and feedback
+- `aidlc-orchestrate.ts report` is the mutating publication and review-input
   ingestion seam. `awaiting-approval` and `revised` publish the current review;
-  `approved` and `rejected` consume pending feedback with the terminal decision.
+  `approved` and `rejected` consume pending feedback and decisions with the
+  terminal decision.
   Read-only `next` and hook probes never mint capabilities.
 - `aidlc-review-ui.ts` serves one project, reads workflow state through
-  `aidlc-lib.ts`, renders artifacts, and writes append-only feedback or answer
-  submissions. It never advances state, approves a gate, rejects a gate, or
-  edits a questions file. A saved answers submission is a human act observed by
-  framework code, so alongside `answers-NNN.json` the daemon appends a
+  `aidlc-lib.ts`, renders artifacts, and writes append-only feedback, answer,
+  or decision submissions. It never advances state, approves a gate, rejects a
+  gate, or edits a questions file. A saved answer or decision is a human act
+  observed by framework code, so alongside the submission the daemon appends a
   `HUMAN_TURN` row (`Mode: browser`, `Source: review-ui`, `Submission: <file>`)
   under the audit lock — the same standing as the `UserPromptSubmit` seam — and
   touches the human-turn marker. `AIDLC_UNATTENDED=1` withholds the row exactly
@@ -49,18 +51,17 @@ conductor presents the terminal gate
   unconsumed submission exists for the questions file (exit 0) or its timeout
   passes (exit 3), and mints nothing.
 - The Claude Code Stop hook (`aidlc-continue-workflow.ts`) holds the conductor's
-  turn during a browser question round (blank `[Answer]:` tag, a
-  `<slug>-questions-guide.html` beside it, a live daemon) until a submission
-  lands, then answers `{"decision":"block"}` with the `answers-apply` command,
-  so the conductor resumes without a human prompt. The wait is bounded by
-  `AIDLC_REVIEW_WAIT_SECONDS` (default 1200; `settings.json` grants the hook
-  1500) and expires to the plain allow. Off by default on other harnesses, whose
-  hook timeouts are seconds; `AIDLC_REVIEW_WAIT_SECONDS` opts one in after its
-  timeout has been raised.
+  turn during a browser question round until an answer submission lands, then
+  supplies the `answers-apply` command. At an `awaiting-approval` browser gate,
+  it similarly holds until `decision-NNN.json` lands and supplies the exact
+  `report --result approved|rejected` command. A fresh terminal prompt releases
+  the gate hold. Both waits use `AIDLC_REVIEW_WAIT_SECONDS` (default 1200;
+  `settings.json` grants the hook 1500) and expire to the plain allow. Other
+  harnesses may use the read-only `answers-wait` or `decision-wait` commands.
 
-The browser is deliberately **not a decision authority**. Its Approve / Request
-Changes value is a `decision_hint` for the feedback file. A human still answers
-the actual terminal gate, and the engine records that outcome.
+The browser decision is an append-only pre-answer to the terminal-complete
+approval gate. It converges on the same `report` command; the daemon never
+changes workflow state itself.
 
 ## On-disk protocol
 
@@ -195,12 +196,12 @@ decision_hint: request-changes
 
 ## requirements.html
 
-### Comment — Functional requirements › FR3 (element: main > section:nth-of-type(2))
+### Comment · a1 — Functional requirements › FR3 (element: main > section:nth-of-type(2))
 > the export must finish within 5 minutes
 
 Make this 2 minutes; the SLA changed.
 
-### Edit (unified diff)
+### Edit (unified diff) · a2
 ```diff
 --- a/requirements.html
 +++ b/requirements.html
@@ -212,11 +213,13 @@ Make this 2 minutes; the SLA changed.
 Free text.
 ````
 
-Artifact sections use the artifact basename. Annotation headings are `Comment`,
-`Delete`, `Looks good`, `Label`, or `Edit`; they may carry a heading breadcrumb,
-approximate line range, and (for HTML) a CSS element path. Edit annotations
-contain the daemon-computed unified diff. `decision_hint` is `approve`,
-`request-changes`, or `none` and does not commit a decision.
+Artifact sections use the artifact basename. Remark headings are `Comment`,
+`Delete`, `Looks good`, `Label`, or `Edit (unified diff)`, followed by a stable
+id such as `· a1`; the UI calls `Edit (unified diff)` a **Suggestion**. A remark
+may also carry a heading breadcrumb, approximate line range, and (for HTML) a
+CSS element path. Suggestions contain the daemon-computed unified diff.
+`decision_hint` is `approve`, `request-changes`, or `none`; it accompanies the
+feedback but the separate decision submission is the browser gate pre-answer.
 
 #### `<stage-dir>/.review-ui/answers-NNN.json`
 
@@ -241,9 +244,52 @@ Single-select questions accept at most one label. `note` is discussion input,
 not an answer. The daemon validates the IDs, letters, cardinality, and current
 source digest before writing the file.
 
+#### `<stage-dir>/.review-ui/decision-NNN.json`
+
+Browser approval submission. The daemon accepts it only while the exact current
+pointer is `awaiting-approval`; stage, Unit, and revision mismatches return 409.
+
+```json
+{
+  "version": 1,
+  "stage": "requirements-analysis",
+  "unit": null,
+  "revision": 1,
+  "decision": "request-changes",
+  "notes": "Clarify the retention limit.",
+  "feedback_file": "feedback-002.md",
+  "created": "2026-09-05T10:05:00Z"
+}
+```
+`decision` is `approve` or `request-changes`; `notes` and `feedback_file` are
+nullable. `feedback_file` names the latest pending feedback file for the same
+stage, Unit, and revision when annotations or a general note produced one;
+otherwise it is null. `report` consumes the decision with result
+`decision-applied`; rejection uses nonblank `notes` when `--reason` is omitted.
+
+#### `<stage-dir>/.review-ui/responses-NNN.md`
+
+Record-first agent replies to browser remarks. A revised gate's completion
+message includes the same **Feedback addressed** list, and `report --result
+revised --responses <file>` copies the validated file here:
+
+```markdown
+# Feedback addressed: requirements-analysis (revision 0)
+
+- a1: applied — Reduced the export SLA to two minutes.
+- a2: kept — The existing retry bound is required by the deployment contract.
+- a3: answered — The regional exception is documented under Constraints.
+```
+
+The heading stage and current pre-revise revision must match the revised report. Each nonblank body
+line is exactly `- aN: applied|kept|answered — <nonblank text>`; remark ids are
+unique in the file and must exist in that stage and Unit's feedback files. The
+daemon projects entries as `{remark_id,status,text,revision,file}` so the
+Threads panel can join them to the original remarks.
+
 #### `<stage-dir>/.review-ui/consumed.json`
 
-Shared engine/log-tool receipt for feedback and answer submissions:
+Shared engine/log-tool receipt for feedback, answer, and decision submissions:
 
 ```json
 {
@@ -260,13 +306,20 @@ Shared engine/log-tool receipt for feedback and answer submissions:
       "sha256": "<digest>",
       "consumed_at": "2026-09-03T10:08:00.000Z",
       "result": "answers-applied"
+    },
+    {
+      "file": "decision-001.json",
+      "sha256": "<digest>",
+      "consumed_at": "2026-09-05T10:10:00.000Z",
+      "result": "decision-applied"
     }
   ]
 }
 ```
 
 Feedback results are `approved` or `rejected`; browser answers use
-`answers-applied`. Identity is the `(file, sha256)` pair.
+`answers-applied`; browser decisions use `decision-applied`. Identity is the
+`(file, sha256)` pair.
 
 The canonical `<stage-dir>/<slug>-questions.md` and optional
 `<stage-dir>/<slug>-questions-guide.html` remain ordinary stage artifacts, not
@@ -287,18 +340,41 @@ reject `..`, reject symlink escapes, and return 403 on confinement failure.
 | `GET /` | Cookie, or a trusted browser navigation | Browser app shell. Without a cookie, a user-initiated top-level navigation (Fetch Metadata `Sec-Fetch-Site: none`/`same-origin`, `navigate`, `document`, matching `Host`) is served and sets the cookie — unless `AIDLC_REVIEW_STRICT=1`; anything else receives a 403 page naming the no-session case. Every cookie-authenticated response re-issues the cookie (sliding 12 h window) |
 | `GET /assets/<file>` | None | Static app asset with fixed MIME type |
 | `GET /api/health` | None | `{ok, project_id, pid, version}` |
-| `GET /api/state` | Cookie/header | Active project, space, intent, record, current pointer, manifest, `current_stage` (the workflow's stage even before a gate has published a pointer), stage marker, revision, HTML setting, and the `questions` pointer with its readiness: `guide` is published only once the explainer passes `checkGuideArtifact`; `ready: true` then; `preparing: true` while a guide file exists but fails (an unfilled scaffold, empty prose or recommendations); neither for a terminal round. The app steers, auto-opens, badges, and renders the form only on `ready`; while `preparing` it shows a holding message |
-| `GET /api/tree` | Cookie/header | Recursive record entries `{path,type,size,mtime}` for reviewable files only: `aidlc-state.md`, `project-description.json`, `audit/`, and every dot-directory (`.review-ui/`, `.aidlc-sensors/`, …) are omitted |
-| `GET /api/artifact?path=` | Cookie/header | Markdown `{path,format:"md",source,raw_url,sha256,mtime}` or HTML `{path,format:"html",raw_url,sha256,mtime}`; the app never receives rendered HTML. Paths outside the active record or naming a hidden file are 403 |
-| `GET /api/raw?path=` | Cookie/header | A full HTML document for the artifact sandbox: HTML artifacts verbatim, Markdown rendered server-side inside `<article data-aidlc="markdown">` (Mermaid loaded from `/assets/vendor/`); the trusted bridge is injected and the artifact CSP applied. Other extensions are 404, hidden files 403 |
-| `POST /api/feedback` | Cookie/header | Validate current stage/unit/revision, write `feedback-NNN.md`, return `{file,path}` |
-| `GET /api/snapshots?stage_dir=` | Cookie/header | `{revisions:[0,1,...]}` |
-| `GET /api/snapshot?stage_dir=&revision=&file=` | Cookie/header | `{source}` from one saved revision |
-| `GET /api/diff?path=&from=&to=current\|<revision>` | Cookie/header | `{hunks,unified}` for manifest artifact revisions |
-| `GET /api/export?path=` | Cookie/header | Self-contained HTML attachment |
-| `GET /api/questions?path=` | Cookie/header | Parsed questions, answers, notes, confirmation flags, and source digest |
-| `POST /api/answers` | Cookie/header | Validate submission/digest, write `answers-NNN.json`, return `{file}`; stale digest is 409 `{error:"questions file changed; reload"}` |
-| `WS /ws` | Cookie plus exact own `Origin` | Server pushes `{type:"state"}` after debounced state, pointer, manifest, artifact, feedback, or answer changes |
+| `GET /api/state` | Cookie/header | Active project, space, intent, record, current pointer and manifest, current stage/status/revision, HTML setting, and live question pointer/readiness |
+| `GET /api/workflow?intent=<slug>&space=<name>` | Cookie/header | Selected workspace and intent projection: `{space,spaces,intent,intents,scope,depth,phase,stages_total,stages_done,phases,agent_status,daemon}`. Each intent has `{slug,status,scope,depth,phase,current_stage,needs,updated_at}`; phases contain scope status and stages with state, reason/condition, gate/revision, questions, artifacts, and memory. `intent` and `space` select a read-only record without changing the terminal cursor |
+| `GET /api/tree?intent=` | Cookie/header | Recursive selected-record entries `{path,type,size,mtime}` for reviewable files only: `aidlc-state.md`, `project-description.json`, `audit/`, and every dot-directory (`.review-ui/`, `.aidlc-sensors/`, …) are omitted |
+| `GET /api/artifact?path=&intent=` | Cookie/header | Markdown source metadata or HTML sandbox metadata. The rebuilt document view uses this route for authored HTML |
+| `GET /api/render?path=&intent=` | Cookie/header | Markdown `{path,format:"md",sha256,mtime,source,blocks:[{index,line_start,line_end,html}],headings:[{level,text,id,block}]}`. Blocks are rendered and sanitized server-side; the client inlines their `html` into the document surface |
+| `GET /api/raw?path=&intent=` | Cookie/header | Full artifact document for the sandbox path. Authored HTML stays authored; Markdown remains supported for compatibility. The trusted bridge and artifact CSP are applied |
+| `GET /api/history?stage_dir=&intent=` | Cookie/header | `{entries:[{kind:"revision"|"feedback"|"answers"|"decision"|"responses",revision?,file,at,by:"agent"|"you",summary,chars_delta?}]}` newest first |
+| `GET /api/responses?stage_dir=&intent=` | Cookie/header | `{entries:[{remark_id,status:"applied"|"kept"|"answered",text,revision,file}]}` from `responses-NNN.md` |
+| `GET /api/remarks?stage_dir=&intent=` | Cookie/header | `{entries:[{file,revision,decision_hint,created,consumed,remarks:[{id,kind,artifact,heading_path,quote,body,diff}]}]}` from numbered feedback files |
+| `POST /api/feedback` | Cookie/header | Validate active stage/unit/revision and annotation schema, write `feedback-NNN.md`, return `{file,path}` |
+| `GET /api/snapshots?stage_dir=&intent=` | Cookie/header | `{revisions:[0,1,...]}` |
+| `GET /api/snapshot?stage_dir=&revision=&file=&intent=` | Cookie/header | `{source}` from one saved revision |
+| `GET /api/diff?path=&from=&to=current\|<revision>&intent=` | Cookie/header | `{hunks,unified}` for selected manifest artifact revisions |
+| `GET /api/export?path=&intent=` | Cookie/header | Self-contained HTML attachment |
+| `GET /api/questions?path=&intent=` | Cookie/header | Parsed questions, answers, notes, confirmation flags, and source digest for the selected current question target |
+| `POST /api/answers` | Cookie/header | Active intent only. Validate submission/digest, write `answers-NNN.json`, return `{file}`; stale digest is 409 `{error:"questions file changed; reload"}` |
+| `POST /api/decision` | Cookie/header | Active intent only. Exact body `{stage,unit,revision,decision:"approve"|"request-changes",notes?}`; validate exact current target and `awaiting-approval`, write `decision-NNN.json`, append browser `HUMAN_TURN`, return `{file}`. Stale or closed gates return 409 |
+| `WS /ws` | Cookie plus exact own `Origin` | Server pushes `{type:"state"}` after watched record changes |
+
+The selected-record read routes — `/api/workflow`, `/api/tree`, `/api/artifact`,
+`/api/render`, `/api/raw`, `/api/questions`, `/api/history`, `/api/responses`,
+`/api/remarks`, `/api/snapshots`, `/api/snapshot`, `/api/diff`, and `/api/export`
+— accept optional `intent=`; workflow selection additionally accepts `space=`.
+`/api/state` always describes the active intent. The three write routes always
+target the active intent, so browsing a completed or inactive intent cannot
+write into it.
+
+Within `/api/workflow`, `phases` contains
+`{name,skipped_by_scope,skipped_count?,stages}`. A stage is
+`{slug,name,phase,state,reason?,condition?,decided_at?,revision?,gate?,questions?,artifacts,memory?}`,
+where `state` is `done|current|skipped|next|conditional|pending`, `gate` is
+`awaiting-approval|revising|approved|null`, questions are
+`{file,answered,total,open,guide}`, and artifacts are
+`{name,path,exists,format,kind,revision,threads,produces}`. `agent_status` is
+`idle|writing|revising|waiting`; `daemon` is `{version,port}`.
 
 `GET /api/state` adds
 `questions: {file, guide, stage, stage_dir} | null` whenever the state-derived
@@ -330,22 +406,58 @@ return null in M3. `GET /api/questions` returns:
 The consolidated-summary confirmation is represented with
 `confirmation: true` and is not answerable in the browser.
 
-Every artifact document — authored HTML and rendered Markdown alike — is served
-by `/api/raw` with CSP
+The rebuilt Markdown path uses `GET /api/render`: the server splits the source
+into top-level blocks, renders each block with `Bun.markdown`, removes blocked
+tags, event handlers, and unsafe URL values, and returns sanitized HTML plus
+source line bounds and heading metadata. The ES-module client inlines those
+blocks into the privileged document surface and retains the Markdown `source`
+only to create suggestions; it never writes the artifact.
+
+Authored HTML follows a different trust path. `GET /api/artifact` supplies its
+`raw_url`, `/api/raw` applies CSP
 `default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src
-'unsafe-inline' 'self'; font-src data:; frame-ancestors 'self'` and
-`X-Content-Type-Options: nosniff`, and the app embeds it in an iframe sandboxed
-with `allow-scripts` (no `allow-same-origin`). Rendered Markdown therefore never
-enters the privileged app document; the server-side sanitizer is defence in
-depth, not the trust boundary. The app shell itself is served with
+'unsafe-inline' 'self'; font-src data:; frame-ancestors 'self'`, and the app
+embeds it in an iframe sandboxed with `allow-scripts` and no
+`allow-same-origin`. The bridge emits `aidlc-anchor` only from trusted selection
+or Alt-click events. The parent accepts messages only from the current frame and
+validates the bounded selection, heading path, and CSS path. Thus authored HTML
+never executes in the app document.
+
+The app shell uses its own CSP:
 `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';
 frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'`.
-The bridge emits `aidlc-anchor` messages for trusted selection or Alt-click
-events and one `aidlc-guide` message containing schema-checked recommendations.
-The parent accepts only the current iframe's `event.source`; the artifact's
-opaque sandbox origin is not trusted. For Markdown anchors the app estimates
-source lines by matching the reported selection against the artifact source.
+
+### Front-end modules and store
+
+The browser is an ES-module app loaded by `<script type="module"
+src="/assets/app.js">`. The shell is divided by ownership around a toggleable
+workflow panel, central view, and one optional right slot:
+
+- `app.js` boots the modules, loads `/api/state` and `/api/workflow`, and turns
+  WebSocket invalidations into a refresh.
+- `api.js` owns authenticated JSON/text requests, URL construction, session
+  renewal, and the live socket.
+- `store.js` is the shared contract. It holds `state`, `workflow`, `view`, the
+  selected right `panel`, workflow-panel visibility, pending `annotations`, the
+  rendered `document`, current `selection`, agent `responses`, focused thread,
+  and connection state. `set`, `on`, and `emit` are the only module bus.
+- `shell.js` owns the **Inbox · Workflow · Search** rail, per-view header, Inbox,
+  and `⌘K` palette; `workflow.js` owns the intent popover, stage tree, panel
+  footer, all-files view, and stage overview.
+- `document.js` owns Markdown block rendering, gutter bubbles, selection `+`,
+  in-place suggestions, contextual Markdown toolbar, outline data, authored
+  HTML iframe, and read-only past artifacts.
+- `threads.js` owns pending and sent thread cards, decision submission, and
+  `/api/remarks` plus `/api/responses`; `history.js` owns the History/Diff and
+  Outline right-slot views; `questions.js` owns live and answered rounds.
+
+The persistent DOM regions are `#rail`, `#panel`, `#header`, `#main`, `#slot`,
+`#notice`, `#paused-overlay`, and `#search`. `store.view.kind` is `artifact`,
+`questions`, `overview`, `inbox`, or `empty`; `store.panel` is `threads`,
+`history`, `outline`, or null. Pending annotations are stored in
+`sessionStorage` under the current stage, Unit, and revision and leave the
+browser only when a decision posts them to `/api/feedback`.
 
 ## Authentication model
 
@@ -426,39 +538,30 @@ record-side files are absent. With it set:
 
 - `report --result awaiting-approval` publishes the manifest, snapshots, and an
   `awaiting-approval` pointer.
-- `report --result revised` publishes the revised manifest/snapshot and another
-  `awaiting-approval` pointer using the state's current Revision Count.
+- `report --result revised --responses <file>` validates the optional responses
+  heading, current revision, line grammar, unique remark ids, and that every id
+  exists in feedback for the same stage and Unit. After the `revise` transition
+  commits, it copies the file as `responses-NNN.md`, appends
+  `REVIEW_UI_RESPONSES` with `Stage`, optional `Unit`, `Revision`, `File`, and
+  `Remarks`, then publishes the revised manifest, snapshot, and
+  `awaiting-approval` pointer.
+- `POST /api/decision` writes an append-only browser pre-answer. The Stop hook
+  turns it into the ordinary `report` command; `report` consumes it only after
+  the transition commits, recording `decision-applied`. On rejection, decision
+  `notes` supply `--reason` when no terminal reason was provided.
 - `report --result rejected --reason <terminal text>` reads all pending feedback
   in sequence order and appends `## Browser review feedback` plus each filename
   and body verbatim to the rejection reason. It records `GATE_REJECTED`, then
   one `REVIEW_UI_FEEDBACK` row (`Stage`, optional `Unit`, `Revision`,
-  `Result: rejected`, `Files`, `Digest`), marks the files consumed, and writes a
-  `revising` pointer.
-- `report --result approved` emits the same audit event with
-  `Result: approved`, marks pending files consumed, and returns their combined
-  bodies as `approval_notes` in the report JSON. Those notes are downstream
-  guidance, not a request to revise the approved artifact.
+  `Result: rejected`, `Files`, `Digest`), marks feedback and the matching
+  decision consumed, and writes a `revising` pointer.
+- `report --result approved` emits the same feedback audit event with
+  `Result: approved`, marks pending feedback and the matching decision consumed,
+  and returns combined feedback bodies as `approval_notes`. Those notes are
+  downstream guidance, not a request to revise the approved artifact.
 
 Feedback bodies are not reinterpreted or normalized by the engine. The digest
 is SHA-256 over their concatenated bodies.
-
-## Directive and format contract
-
-Markdown entries preserve the historical directive bytes as bare path strings.
-HTML entries are explicit:
-
-```ts
-type ArtifactProduceEntry = string | { path: string; format: "html" };
-type ArtifactConsumeEntry = string | {
-  path: string;
-  format: "html";
-  text_command: string;
-};
-```
-
-For an HTML consume, `text_command` is
-`bun <harnessDir>/tools/aidlc-html.ts text <path>`. Agents use that deterministic
-projection unless markup inspection is necessary.
 
 `directive.protocol_modules` includes:
 
@@ -669,6 +772,46 @@ A stale submission exits 1 with
 the human to reload and save again.` Notes remain discussion input for follow-up
 analysis and never count as answers.
 
+## `decision-wait` and `decision-apply`
+
+```bash
+bun <harnessDir>/tools/aidlc-log.ts decision-wait \
+  --stage <slug> [--unit <unit>] [--timeout <seconds>] [--project-dir <path>]
+bun <harnessDir>/tools/aidlc-log.ts decision-apply \
+  --stage <slug> [--unit <unit>] [--project-dir <path>]
+```
+
+`decision-wait` is read-only: it prints `{ready:true,file}` and exits 0 for the
+first unconsumed matching decision, or `{ready:false,waited_seconds}` and exits
+3 on timeout (default 540 seconds). `decision-apply` is also read-only despite
+its name: it prints the first pending decision JSON without changing state or
+consumption. The conductor then runs the equivalent `report` command, which
+alone owns the gate transition and `decision-applied` receipt.
+
+## Stop hook browser holds
+
+The Claude Code Stop hook holds a browser question round only when Review UI is
+enabled, the daemon discovery record is alive, the current stage has both its
+canonical questions file and sibling guide HTML, and an ordinary answer is
+still blank. It watches for an unconsumed `answers-NNN.json`; on arrival it
+blocks the stop once with the exact `answers-apply` command. Read errors and
+timeout fail open to the ordinary terminal flow.
+
+The approval hold is similarly conservative: the state checkbox and
+`<record>/.review-ui/current.json` must both name the current stage at
+`awaiting-approval`, the pointer must have a stage directory, the daemon must be
+alive, and Review UI must be enabled. The hook waits for a matching unconsumed
+`decision-NNN.json`. A browser decision blocks the stop once with the exact
+`report --stage <slug> [--unit <unit>] --result approved|rejected --user-input
+...` command; a newer terminal human-turn marker releases the wait, and timeout
+falls back to the existing terminal gate.
+
+Both holds use `AIDLC_REVIEW_WAIT_SECONDS`: 1200 seconds by default on Claude
+Code and 0 elsewhere. `0` disables them. A harness that opts in must give its
+Stop hook a longer timeout; the shipped Claude Code setting grants 1500 seconds.
+Other harnesses can use the read-only `answers-wait` and `decision-wait`
+commands instead.
+
 ## Environment variables
 
 Boolean variables use the exact string `"1"` unless a row says otherwise.
@@ -678,10 +821,10 @@ Boolean variables use the exact string `"1"` unless a row says otherwise.
 | `AIDLC_REVIEW_UI` | unset | `1` enables daemon startup, review publication, directive field, browser gate line, and feedback/questions UI; unset preserves legacy behavior |
 | `AIDLC_REVIEW_PORT` | `0` | TCP port; `0` asks the OS for an ephemeral port |
 | `AIDLC_REVIEW_HOST` | `127.0.0.1` | Bind host; keep the default loopback address for the supported security posture |
-| `AIDLC_REVIEW_OPEN` | enabled | `0` disables automatic browser launch. Otherwise the daemon opens a browser when a gate opens (transition into awaiting-approval) or a browser question round begins (the `<slug>-questions-guide.html` explainer lands) and no review tab is present (no live WebSocket and no authenticated request within the last 10 s); never over `SSH_CONNECTION`. A connected tab is never duplicated: the state push steers it — to Questions when a new round appears and nothing of the human's is in flight there, to the review artifact at a gate — and its title carries a `(1)` badge while something awaits them |
+| `AIDLC_REVIEW_OPEN` | enabled | `0` disables automatic browser launch. Otherwise the daemon opens a browser when a gate opens (transition into awaiting-approval) or a browser question round begins (the `<slug>-questions-guide.html` explainer lands) and no review tab is present (no live WebSocket and no authenticated request within the last 10 s); never over `SSH_CONNECTION`. A connected tab is not duplicated; WebSocket `{type:"state"}` invalidations reload the state and workflow projections |
 | `AIDLC_REVIEW_IDLE_MINUTES` | `240` | Exit after this many minutes with no WebSocket client and no observed state change |
 | `AIDLC_REVIEW_STRICT` | unset | `1` disables browser-navigation trust for `GET /`: the bare origin never opens and every printed URL is a single-use `/open/<nonce>` link. For shared multi-user hosts. Set it in the harness environment so the daemon and the CLI agree |
-| `AIDLC_REVIEW_WAIT_SECONDS` | `1200` on Claude Code, `0` elsewhere | How long the Stop hook holds a browser question round waiting for the human's Save before falling back to the plain release. Must stay below the hook's own timeout (`settings.json` grants 1500 s on Claude Code). `0` disables the hold |
+| `AIDLC_REVIEW_WAIT_SECONDS` | `1200` on Claude Code, `0` elsewhere | How long the Stop hook holds a browser question round or an `awaiting-approval` browser gate waiting for `answers-NNN.json` or `decision-NNN.json`. A fresh terminal prompt releases the decision hold; timeout falls back to the ordinary terminal flow. Must stay below the hook's own timeout (`settings.json` grants 1500 s on Claude Code). `0` disables both holds |
 | `AIDLC_REVIEW_HOME` | `~/.aidlc/review-ui` | Override private daemon discovery/log/nonce root; primarily useful for tests and isolated installations |
 | `AIDLC_HTML_ARTIFACTS` | unset | `1` seeds new intents with `HTML Artifacts: on`; the state field, not the environment, controls the intent thereafter |
 
@@ -691,8 +834,8 @@ launcher failures.
 
 ## Non-goals and extension seams
 
-- The browser does not own the approval decision, write audit rows, or advance
-  workflow state.
+- The browser never advances workflow state itself. A decision submission is an
+  append-only pre-answer consumed by the ordinary terminal `report` seam.
 - The browser does not write `*-questions.md`; `answers-apply` is the only
   browser-answer mutation seam.
 - There is no supported LAN sharing mode, hosted collaboration server,

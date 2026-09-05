@@ -94,6 +94,8 @@ import {
 import {
   ANSWERS_PREFIX,
   type ConsumedEntry,
+  type DecisionFile,
+  pendingDecisions,
   readConsumed,
   sha256Hex,
   stageReviewUiDir,
@@ -1222,6 +1224,93 @@ async function handleAnswersWait(args: string[]): Promise<void> {
     waited_seconds: files.length > 0 ? undefined : timeoutSeconds,
   }));
   if (files.length === 0) process.exitCode = 3;
+}
+
+// --- Subcommands: decision-wait / decision-apply ------------------------------
+
+const DECISION_WAIT_DEFAULT_SECONDS = 540;
+const DECISION_WAIT_POLL_MS = 1_000;
+
+function browserDecisionStageDir(
+  pd: string,
+  stage: string,
+  unit?: string,
+): string {
+  const node = loadStageGraphAll().find((entry) => entry.slug === stage);
+  if (!node) error(`Unknown stage: ${stage}`);
+  const record = recordDir(pd);
+  if (!record) error("No active intent record found.");
+  return unit && node.phase === "construction"
+    ? join(record, node.phase, unit, stage)
+    : join(record, node.phase, stage);
+}
+
+function pendingBrowserDecisions(
+  stageDir: string,
+  stage: string,
+  unit?: string,
+): DecisionFile[] {
+  return pendingDecisions(stageDir).filter((item) =>
+    item.submission.stage === stage && item.submission.unit === (unit ?? null)
+  );
+}
+
+function handleDecisionApply(args: string[]): void {
+  const { flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  const pd = resolveActiveProjectDir(projectDir);
+  if (flags.unit) validateLiveUnitScope(pd, flags.unit);
+  const stageDir = browserDecisionStageDir(pd, flags.stage, flags.unit);
+  const decision = pendingBrowserDecisions(stageDir, flags.stage, flags.unit)[0];
+  if (!decision) error(`No pending browser decision for stage "${flags.stage}".`);
+  console.log(JSON.stringify(decision.submission));
+}
+
+async function handleDecisionWait(args: string[]): Promise<void> {
+  const { flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  const timeoutSeconds = flags.timeout === undefined
+    ? DECISION_WAIT_DEFAULT_SECONDS
+    : Number(flags.timeout);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0) {
+    error("--timeout must be a non-negative number of seconds");
+  }
+  const pd = resolveActiveProjectDir(projectDir);
+  if (flags.unit) validateLiveUnitScope(pd, flags.unit);
+  const stageDir = browserDecisionStageDir(pd, flags.stage, flags.unit);
+  const ready = () => pendingBrowserDecisions(stageDir, flags.stage, flags.unit)[0] ?? null;
+
+  let decision: DecisionFile | null = ready();
+  if (!decision && timeoutSeconds > 0) {
+    const { promise, resolve: settle } = Promise.withResolvers<DecisionFile | null>();
+    let watcher: FSWatcher | null = null;
+    const finish = (found: DecisionFile | null): void => {
+      clearInterval(poll);
+      clearTimeout(deadline);
+      watcher?.close();
+      settle(found);
+    };
+    const recheck = (): void => {
+      const found = ready();
+      if (found) finish(found);
+    };
+    const poll = setInterval(recheck, DECISION_WAIT_POLL_MS);
+    const deadline = setTimeout(() => finish(null), timeoutSeconds * 1000);
+    try {
+      watcher = watch(stageDir, { recursive: true }, recheck);
+      watcher.on("error", () => {});
+    } catch {
+      // Polling carries the wait before the review directory exists.
+    }
+    decision = await promise;
+  }
+
+  console.log(JSON.stringify(
+    decision
+      ? { ready: true, file: decision.file }
+      : { ready: false, waited_seconds: timeoutSeconds },
+  ));
+  if (!decision) process.exitCode = 3;
 }
 
 // --- Subcommand: link ---
@@ -2716,6 +2805,12 @@ export function main(argv: string[]): void {
       case "answers-wait":
         handleAnswersWait(filteredArgs.slice(1)).catch((e) => error(errorMessage(e)));
         break;
+      case "decision-apply":
+        handleDecisionApply(filteredArgs.slice(1));
+        break;
+      case "decision-wait":
+        handleDecisionWait(filteredArgs.slice(1)).catch((e) => error(errorMessage(e)));
+        break;
       case "link":
         handleLink(filteredArgs.slice(1));
         break;
@@ -2723,7 +2818,7 @@ export function main(argv: string[]): void {
         handleReview(filteredArgs.slice(1));
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers-apply, answers-wait, link, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers-apply, answers-wait, decision-apply, decision-wait, link, review`);
     }
   } catch (e) {
     error(errorMessage(e));

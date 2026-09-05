@@ -125,9 +125,9 @@ describe("t331 review UI render helpers", () => {
     expect(markdown).toContain("# Review feedback: requirements-analysis (revision 0)");
     expect(markdown).toContain("## requirements.md");
     expect(markdown).toContain(
-      "### Comment — Functional Requirements › FR3 (lines ~41-44)\n> the export must finish within 5 minutes",
+      "### Comment · a1 — Functional Requirements › FR3 (lines ~41-44)\n> the export must finish within 5 minutes",
     );
-    expect(markdown).toContain("### Edit (unified diff)\n```diff\n--- a/requirements.md");
+    expect(markdown).toContain("### Edit (unified diff) · a2\n```diff\n--- a/requirements.md");
     expect(markdown).toContain("-Old SLA\n+New SLA");
     expect(markdown).toContain("## General notes\n\nDouble-check the launch plan.");
   });

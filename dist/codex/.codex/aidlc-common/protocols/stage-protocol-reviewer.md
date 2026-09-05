@@ -306,6 +306,11 @@ the same lead-alone loop and iteration budget as at first entry; an
 `advisory` review re-runs as one fresh advisory pass (its findings ride the
 re-presented gate using the required Review brief with `Why now: Revision
 re-checked.`).
+The fresh reviewer receipt does not replace the Part 0 **Feedback addressed**
+list: the revised completion message and, when `directive.review_ui` is present,
+the `responses-NNN.md` file still account for every browser feedback remark
+before `report --result revised --responses <path>` re-enters the gate.
+
 
 > **Gate and completion precondition (enforced by the engine).** Every gate
 > opening (`gate-start` and `revise`) and completion path (`approve`, `advance`,

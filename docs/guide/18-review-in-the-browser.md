@@ -1,10 +1,11 @@
 # Review in the Browser
 
-The Review UI is an optional local browser surface for reading stage artifacts,
-leaving precise feedback, comparing revisions, exporting a copy, and answering a
-stage's questions. The terminal remains the workflow control surface: the
-browser prepares feedback or answers, while **Approve**, **Request Changes**, and
-other decisions still happen in the harness conversation.
+The Review UI is an optional local browser surface named **AI-DLC Workflows**.
+It mirrors the file-backed workflow: you can navigate intents and stages, answer
+questions, read artifacts, leave anchored feedback, compare revisions, and
+choose **Approve** or **Request changes**. Every browser act has the same
+terminal path and engine behavior; the terminal remains complete when the
+daemon is disabled or unavailable.
 
 ## Enable the Review UI
 
@@ -39,11 +40,8 @@ recognises a browser's own navigation and starts your session on arrival; no
 token is printed anywhere. `/aidlc --status` and `/aidlc --doctor` print the
 same address. On a desktop you rarely need it: when a gate opens or a browser
 question round begins and no review tab is connected, the daemon opens one for
-you (`AIDLC_REVIEW_OPEN=0` disables this). An open tab is never duplicated — it
-follows the workflow live, switches to Questions or to the artifact under review
-on its own unless you are mid-annotation, shows a `(1)` in its title while
-something awaits you, and if the daemon restarts underneath it, signs itself
-back in with a reload.
+you (`AIDLC_REVIEW_OPEN=0` disables this). An open tab follows watched workflow
+files over its live connection and shows the connection dot in the header.
 
 On a shared multi-user machine set `AIDLC_REVIEW_STRICT=1` before starting the
 harness. The bare address then never opens; gates, `--status`, and `--doctor`
@@ -58,71 +56,172 @@ Opening it exchanges the nonce for an `HttpOnly` browser cookie; the daemon's
 long-lived token is never printed. Run `/aidlc --status` whenever you need a
 fresh one.
 
-The browser flow does not replace the gate:
+### Find your place
 
-1. Open the **Browser** link and select the artifact under review.
-2. Select Markdown text and choose **Comment**, **Delete**, **Looks good**, or
-   **Label**. For HTML, select text or Alt-click a point, then confirm the anchor
-   before it becomes an annotation. Use the editor when the feedback is an exact
-   replacement.
-3. Add a general note or decision hint, then choose **Send feedback**. The UI
-   writes a numbered feedback file; it does not approve or reject the stage.
-4. Return to the terminal and answer **Approve** or **Request Changes** at the
-   existing gate. AI-DLC ingests pending browser feedback with that decision.
+The left rail has **Inbox**, **Workflow**, and **Search**. **Workflow** opens or
+hides the workflow panel; `⌘\` does the same. The panel starts with the active
+intent selector. Its popover groups the workspace's intents under **Needs
+you**, **In progress**, and **Done**, and shows the active scope, depth, phase,
+and stage count.
 
-On **Request Changes**, the agent receives the feedback body as part of the gate
-reason and revises the artifact. On **Approve**, the feedback is carried forward
-as non-blocking approval notes. Either path emits a `REVIEW_UI_FEEDBACK` audit
-row with the stage, revision, result, files, and digest, and records the consumed
-feedback files so they are not applied twice.
+The stage tree is grouped by phase. A stage row opens its overview; expanding
+the row reveals **Questions**, produced artifacts, and the stage memory when
+present. Current stages open by default, done stages stay folded, phase headings
+fold a whole phase, and **Collapse all** / **Expand all** folds or opens the
+tree. Skipped stages name the reason and show that nothing was produced;
+upcoming stages say what they will ask and produce. The footer shows the agent
+state and links to **All files** and the **Audit log**. Use the rail's Workflow
+icon to hide the panel for a wider document view.
 
-### Compare revisions and export
+The header keeps the current workspace, intent, phase, and stage path beside a
+file-name dropdown. The dropdown switches among the stage's questions,
+artifacts, memory, and overview even when the workflow panel is hidden. The
+state sentence explains why the item needs you; the dot reports the daemon
+connection. On an artifact, **Threads · History · Outline** select the one
+right-hand panel. At a live gate the same header carries **Request changes** and
+**Approve**.
 
-The daemon snapshots every existing declared artifact when a gate opens. The
-**Revisions** action compares any saved revision with the current artifact or a
-second saved revision and shows both structured hunks and a unified diff.
+The workflow panel is a browser projection of `aidlc-state.md`, the compiled
+stage graph, the audit ledger, and stage files. In the terminal, `/aidlc
+--status`, the ordinary gate, and the files under the active intent provide the
+same navigation and authority.
 
-**Export** downloads a self-contained HTML copy. Markdown is rendered with
-inline styling (and an inline Mermaid runtime when needed); authored HTML is
-exported with local sibling assets inlined where possible. The export does not
-need the review daemon to display later.
+### Read, comment, and suggest
+
+Markdown is a reading surface with comment bubbles in the left gutter. Clicking
+a bubble focuses its thread. Select text and one `+` appears at that line;
+choose it to open a dashed pending card in **Threads**. The card's kind selector
+is **Comment · Suggestion · Delete · Looks good**. Add the remark and choose
+**Post**; the pending card remains editable or removable and persists in that
+browser tab's session storage. It is not sent yet.
+
+There is no separate editing mode. At a live Markdown gate, type directly in a
+paragraph to create a **Suggestion**. While the paragraph has focus, its
+Markdown markers are visible and a contextual formatting row appears with
+**Paragraph ▾**, bold, italic, strike, code, lists, quote, link, table, and
+diagram controls. The eventual pending card shows the change; the artifact
+itself is untouched. Browser suggestions become `edit` remarks in
+`feedback-NNN.md`; the terminal equivalent is to describe the exact change in
+your **Request Changes** gate feedback.
+
+Authored HTML remains read-only in a sandbox. Selecting text or Alt-clicking a
+point opens the same pending **Comment** card, anchored by the bridge's selected
+text, heading path, and optional element path.
+
+### Decide
+
+Pending cards say that they send with your decision. **Approve** posts any
+pending annotations or general note to the next `feedback-NNN.md`, then always
+writes the decision to the next `decision-NNN.json`. **Request changes** first
+opens an optional note field; it uses the same conditional feedback write and
+always writes the decision file.
+
+A browser decision is an append-only pre-answer to the ordinary gate, not a
+second state machine: the
+Stop hook resumes the held conductor turn and supplies the matching
+`aidlc-orchestrate.ts report --result approved|rejected` command. `report`
+performs the transition and records both inputs as consumed.
+
+The terminal path is identical and remains available: answer **Approve** or
+**Request Changes** at the existing gate. `report` ingests any pending browser
+feedback with that decision; if no browser files exist, your terminal feedback
+is the complete input. A fresh terminal prompt releases a browser gate hold,
+and a timeout falls back to the ordinary terminal wait.
+
+On **Request changes**, the agent receives the feedback body as part of the gate
+reason and revises the artifact. On **Approve**, feedback is carried forward as
+non-blocking approval notes. Either path emits `REVIEW_UI_FEEDBACK` when there
+was browser feedback, and the decision receipt is consumed as
+`decision-applied`.
+
+### Threads, replies, history, and outline
+
+**Threads** shows the thread count, **Show resolved**, sorting by **In document
+order** or **Recent**, and an optional general note. Pending, open, addressed,
+and resolved cards carry their quote, kind, body or diff, and status. Clicking a
+gutter bubble focuses its card; clicking a card scrolls to and flashes its mark.
+
+After a revision, the agent's completion message includes **Feedback
+addressed**. The agent also records the same per-remark dispositions in
+`responses-NNN.md`; the browser joins them to stable remark ids and renders
+replies such as **Applied**, **Kept**, or **Answered**, with statuses such as
+**Addressed in r1**. The terminal message and record file are authoritative;
+the browser is their projection.
+
+**History** is the record timeline: saved revisions, feedback, answers,
+decisions, and responses appear newest first. Its **Compare** control opens a
+saved revision or **Diff** between the earlier snapshot and the current file.
+The equivalent terminal evidence is the numbered files and snapshots under the
+stage's `.review-ui/` directory.
+
+**Outline** lists the Markdown headings and pending-thread counts by section.
+Choose a heading to jump to it. It is derived from the same server-rendered
+Markdown blocks; the Markdown file remains the terminal source of truth.
+
+### Stage overview and completed stages
+
+Choose a stage name for its overview: **Asks first**, **Will produce**, **Builds
+on**, and **Then** explain its place in the compiled workflow. When a question
+round is live, the primary action opens it; when an artifact exists, the action
+opens that file.
+
+You can also expand a done stage and open its questions or artifacts. Completed
+artifacts show a read-only banner; their empty Threads panel explains that the
+live review is elsewhere, and the primary action returns to the current stage.
+Answered questions retain the same explainer-and-answer layout with the chosen
+options locked. To change a completed round, use **Reopen round (terminal)**;
+the browser never rewrites its canonical questions file.
+
+### Inbox and search
+
+**Inbox** groups every intent in the workspace by what needs you, what is in
+progress, and what is done. Choosing an intent opens its current item. The
+terminal equivalent is `/aidlc intent` plus `/aidlc --status` for the selected
+intent.
+
+Choose the rail's **Search or jump · ⌘K** control or press `⌘K` to search
+intents, stages, files, and actions.
+
+The palette can also hide or show **Workflow** and open **Threads** or
+**History**. It navigates only; it does not mutate workflow state.
 
 ## Answer questions in the browser
 
-When the active stage has a `*-questions.md` file, the sidebar shows
-**Questions**. The questions form presents each answerable `Q<n>` section as a
-radio group or checkbox group, supports **Other** text and a note, and shows the
-consolidated-summary confirmation read-only. Unsaved choices remain in that
-browser tab's session storage.
+When the current stage publishes a valid `*-questions-guide.html`, the workflow
+panel selects **Questions** and the header shows **Save answers — the agent
+continues**. Each question appears in one reading column: its agent-authored
+explainer — **Why now**, optional figure, trade-offs, **Recommendation**, and
+**Related decisions** — is immediately above its answer card. The recommended
+option is preselected and marked **Recommended**; multi-select, **Other** with
+**Describe your answer**, and an optional **Note for the agent** follow the
+question file's schema.
 
-The browser never edits `*-questions.md`. **Save answers** writes a numbered
-`answers-NNN.json` submission against the current questions-file digest. If the
-file changed while the form was open, the save is refused; reload before trying
-again. A successful save is the end of your part: the daemon records the click
-as your human turn, and the agent picks the answers up on its own. On Claude Code
-the Stop hook holds the agent's turn while the form is open and resumes it the
-moment the submission lands; on other harnesses the agent waits on
-`aidlc-log.ts answers-wait`. Either way it then runs `aidlc-log.ts answers-apply`,
-which applies unconsumed submissions under the audit lock, writes `[Answer]:` and
-optional `[Note]:` lines, emits one human-turn-backed `QUESTION_ANSWERED` row in
-`Mode: browser`, and marks the submissions consumed. The ordinary consolidated
-summary and **Looks correct** / **Request changes** confirmation then continue in
-the terminal. Typing **done** is no longer required; it still works if you do.
+The browser never edits `*-questions.md`. **Save answers — the agent continues**
+writes `answers-NNN.json` against the questions-file digest. If the file changed
+while the form was open, the save is refused with **Questions changed —
+reload**. On Claude Code the Stop hook holds the conductor's turn until the file
+lands; other harnesses can use `aidlc-log.ts answers-wait`. The conductor then
+runs `answers-apply`, the only browser path that writes `[Answer]:` and optional
+`[Note]:` lines into the canonical questions file. The terminal equivalents are
+**Guide Me**, **Edit File**, or **Chat**, all of which converge on that file.
+
+After apply, the answered view keeps each explainer visible and locks the chosen
+option with **Chosen · recommended** or **Chosen** and an **Answered** line. The
+header can open the stage artifact; changing an answer starts from **Reopen
+round (terminal)**. The consolidated-summary confirmation still happens in the
+terminal.
 
 ### Guide me in the browser
 
-When the Review UI is available, the interaction-mode prompt offers **Guide me
-in the browser** — “Read an explainer with trade-offs and answer in the
-browser” — as its first, recommended option. It gives you the form and an
-agent-authored explainer side by side, and saving resumes the agent on its own.
+With `AIDLC_REVIEW_UI=1`, the interaction-mode prompt can offer **Guide me in
+the browser** first. The agent writes `<slug>-questions-guide.html`; the daemon
+waits until it passes the guide checks before exposing the round, so an
+unfinished explainer is never shown. The recommendation remains present in the
+terminal question options too, and choosing another browser option always wins.
 
-The agent writes `<stage>-questions-guide.html`, with a **Why now** section,
-option-by-option trade-offs, a recommendation, and related prior decisions for
-each question. In the Questions view, selecting a question scrolls the explainer
-to the matching section. A recommendation may preselect a still-unanswered
-option and is visibly marked as recommended; it never overwrites your selection.
-Save the form; the agent continues on its own and presents the consolidated
-summary as above.
+Saving writes only the append-only answer submission described above. Without
+the daemon or guide, answer the same questions in the terminal and continue
+normally.
 
 ## HTML stage artifacts
 
@@ -191,22 +290,24 @@ undesirable.
 
 - The default server bind is loopback; there is no hosted service or supported
   LAN sharing mode.
-- Printed links contain a random, single-use, 30-minute nonce. The bearer token
-  stays in an owner-readable `server.json` file and an `HttpOnly`,
+- Printed strict-mode links contain a random, single-use, 30-minute nonce. The
+  bearer token stays in an owner-readable `server.json` file and an `HttpOnly`,
   `SameSite=Strict` cookie.
-- Project paths are confined beneath the project's `aidlc/` tree, reject `..`
-  and symlink escapes, and never expose the rest of the workspace through the
-  API.
-- Every artifact, Markdown or HTML, renders inside a sandboxed iframe with a
-  restrictive Content Security Policy; artifacts cannot fetch network
-  resources, embed browsing contexts, or submit forms, and nothing an artifact
-  contains ever runs in the review app's own document. Workflow state, the
-  audit ledger, and engine bookkeeping directories are never served.
+- Project paths are confined beneath the selected intent's record in the
+  project's `aidlc/` tree, reject `..` and symlink escapes, and do not expose
+  workflow state, audit shards, or dot-directories as reviewable files.
+- Markdown is split into blocks, rendered and sanitized on the server, and then
+  inlined into the Review UI's document surface. The app receives the source as
+  well so it can record suggestions, but the browser never writes the artifact.
+- Authored HTML artifacts are not inlined into the privileged app document.
+  They remain inside a sandboxed iframe with a restrictive Content Security
+  Policy; they cannot fetch network resources, embed browsing contexts, or
+  submit forms. The parent accepts bridge messages only from the current frame.
 - Daemon discovery, logs, and nonces live under `~/.aidlc/review-ui/` (or
   `AIDLC_REVIEW_HOME`). Project directories there are owner-only (`0700`), and
   token and nonce files are owner-readable only (`0600`). Record-side manifests,
-  snapshots, feedback, answers, and consumed receipts live under the active
-  intent's `.review-ui/` directories.
+  snapshots, feedback, answers, decisions, responses, and consumed receipts
+  live under the active intent's `.review-ui/` directories.
 
 For environment-variable details and implementation schemas, see
 [Review UI and HTML Artifacts](../reference/19-review-ui-and-html-artifacts.md).

@@ -30,6 +30,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Browser link expired or already used | Open the bare `http://localhost:<port>/` address, or run `/aidlc --status` (prints a fresh single-use link under `AIDLC_REVIEW_STRICT=1`) |
 | Review UI unavailable over SSH | Set a fixed loopback port and forward it with `ssh -L`; set `AIDLC_REVIEW_OPEN=0` remotely |
 | Browser answers say questions changed | Reload the Questions view and save again against the current file |
+| Browser decision saved but gate still waits | Answer the same terminal gate, or inspect the pre-answer with `aidlc-log.ts decision-wait` / `decision-apply` |
 
 ---
 
@@ -118,13 +119,24 @@ ssh -L 4765:127.0.0.1:4765 user@remote-host
 
 Then open the single-use Browser link locally. LAN binding is not a supported workaround.
 
-### Feedback was sent but the workflow did not advance
+### Browser decision was saved but the workflow did not advance
 
-Expected behavior: **Send feedback** writes a feedback file but does not decide the gate. Return to the terminal and answer **Approve** or **Request Changes**. The engine ingests the pending file with that terminal decision and emits `REVIEW_UI_FEEDBACK`.
+The browser writes pending remarks to `feedback-NNN.md` and the choice to
+`decision-NNN.json`; only the ordinary `aidlc-orchestrate.ts report` path changes
+workflow state. On Claude Code, a live Stop-hook hold resumes the conductor when
+the decision lands. If the hold was disabled, expired, or released by a fresh
+terminal prompt, answer **Approve** or **Request Changes** at the terminal gate,
+or use `aidlc-log.ts decision-wait` / `decision-apply` to inspect the pending
+pre-answer. The next matching `report` consumes it as `decision-applied`.
 
 ### Browser answers were refused as stale
 
-The questions file changed after the form loaded. Reload the Questions view, review the current options, and save again. After a successful save the agent continues on its own; if it does not within a minute (a harness whose Stop hook cannot hold the turn, or a wait that expired after 20 minutes), send **done** and it applies the saved answers.
+The questions file changed after the form loaded. Reload the Questions view,
+review the current options, and choose **Save answers — the agent continues**
+again. A successful save writes `answers-NNN.json`; if a harness cannot hold the
+turn or the hold expired, use `aidlc-log.ts answers-wait` followed by
+`answers-apply`. The canonical questions file and the terminal interaction modes
+remain the fallback.
 
 For the full operating model, see [Review in the Browser](18-review-in-the-browser.md).
 

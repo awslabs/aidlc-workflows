@@ -241,6 +241,9 @@ import {
   MARKDOWN_ONLY,
 } from "./aidlc-artifact-vocabulary.ts";
 import {
+  type PreparedReviewResponses,
+  persistReviewResponses,
+  prepareReviewResponses,
   ingestPendingFeedback,
   publishReviewManifest,
   publishReviewPointer,
@@ -251,6 +254,8 @@ import {
   liveReviewUiOrigin,
   openLinkIsFresh,
   pendingFeedback,
+  pendingDecisions,
+  type DecisionFile,
   readCurrentPointer,
   reviewUiEnabled,
   reviewUiStrict,
@@ -7047,7 +7052,7 @@ function pendingReviewFeedback(
   unit: string | null,
   recordPrefix: string | null,
   formats: ArtifactFormats,
-): { stageDir: string; files: string[] } | null {
+): { stageDir: string; files: string[]; decisions: DecisionFile[] } | null {
   if (!reviewUiEnabled()) return null;
   const publishNode = reviewPublishNode(
     projectDir,
@@ -7059,7 +7064,10 @@ function pendingReviewFeedback(
   const stageDir = reviewStageDir(projectDir, publishNode, unit);
   if (!stageDir) return null;
   const files = pendingFeedback(stageDir).map((item) => item.file);
-  return files.length > 0 ? { stageDir, files } : null;
+  const decisions = pendingDecisions(stageDir);
+  return files.length > 0 || decisions.length > 0
+    ? { stageDir, files, decisions }
+    : null;
 }
 
 function appendReviewFeedbackAudit(
@@ -7078,6 +7086,46 @@ function appendReviewFeedbackAudit(
     Result: result,
     Files: files.join(", "),
     Digest: digest,
+  }, projectDir);
+}
+
+function prepareReportedResponses(
+  projectDir: string,
+  node: GraphStage,
+  unit: string | null,
+  recordPrefix: string | null,
+  formats: ArtifactFormats,
+  sourcePath: string | undefined,
+  revision: number,
+): PreparedReviewResponses | null {
+  if (!sourcePath) return null;
+  if (!reviewUiEnabled()) {
+    throw new Error("report --responses requires AIDLC_REVIEW_UI=1.");
+  }
+  const stageDir = reviewStageDir(
+    projectDir,
+    reviewPublishNode(projectDir, node, unit, recordPrefix, formats),
+    unit,
+  );
+  if (!stageDir) {
+    throw new Error(`Could not resolve the review directory for stage "${node.slug}".`);
+  }
+  return prepareReviewResponses(stageDir, sourcePath, node.slug, unit, revision);
+}
+function persistReportedResponses(
+  projectDir: string,
+  stage: string,
+  unit: string | null,
+  revision: number,
+  plan: PreparedReviewResponses,
+): void {
+  const file = persistReviewResponses(plan);
+  appendAuditEntry("REVIEW_UI_RESPONSES", {
+    Stage: stage,
+    ...(unit ? { Unit: unit } : {}),
+    Revision: String(revision),
+    File: file,
+    Remarks: String(plan.parsed.entries.length),
   }, projectDir);
 }
 
@@ -7154,6 +7202,7 @@ interface ReportFlags {
   userInput?: string;
   reason?: string;
   rejectFindings?: string[];
+  responses?: string;
   skeletonStance?: string; // the classify round-trip's classified stance
   single?: boolean; // --single: complete the synthetic attempt opened by next --single, never the main pointer
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
@@ -7183,6 +7232,9 @@ function parseReportFlags(args: string[]): ReportFlags {
     } else if (a === "--reject-finding" && i + 1 < args.length) {
       flags.rejectFindings ??= [];
       flags.rejectFindings.push(args[i + 1]);
+      i++;
+    } else if (a === "--responses" && i + 1 < args.length) {
+      flags.responses = args[i + 1];
       i++;
     } else if (a === "--skeleton-stance" && i + 1 < args.length) {
       flags.skeletonStance = args[i + 1];
@@ -7862,6 +7914,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // and NEVER touches the main `Current Stage`. Resolves first, before the
   // main-workflow branches, so a single-stage commit can never fall through to a
   // state-mutating subcommand.
+
+  if (flags.responses !== undefined && flags.result !== "revised") {
+    emit(errorDirective("report --responses is valid only with --result revised."));
+    return;
+  }
   if (flags.single) {
     handleSingleReport(flags, projectDir);
     return;
@@ -7963,6 +8020,24 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const reviewUnit = flags.unit?.trim() || null;
   const reviewRecordPrefix = reviewUiEnabled() ? engineRelativeRecordDir(pd) : null;
   const revisionCount = reviewUiEnabled() ? reportRevisionCount(stateContent) : 0;
+  const pendingReviewInputs = flags.result === "approved" || flags.result === "rejected"
+    ? pendingReviewFeedback(
+        pd,
+        node,
+        reviewUnit,
+        reviewRecordPrefix,
+        formats,
+      )
+    : null;
+  const browserDecisionReason = pendingReviewInputs?.decisions
+    .findLast((item) =>
+      item.submission.stage === slug &&
+      item.submission.unit === reviewUnit &&
+      item.submission.revision === revisionCount &&
+      item.submission.decision === "request-changes" &&
+      Boolean(item.submission.notes?.trim())
+    )
+    ?.submission.notes?.trim();
   if (!stageCheckbox) {
     emit({
       kind: "error",
@@ -8080,6 +8155,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const status = unitGateStatus(pd, slug, unit, gateScope);
       const sequence: string[][] = [];
       let feedbackStageDir: string | null = null;
+      let responsePlan: PreparedReviewResponses | null = null;
       if (flags.result === "awaiting-approval") {
         if (status === "awaiting-approval") {
           emit(printDirective(
@@ -8089,26 +8165,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(["gate-start", slug, "--unit", unit]);
       } else if (flags.result === "rejected") {
-        let feedback = (flags.userInput ?? flags.reason)?.trim();
+        let feedback = flags.reason?.trim() ?? browserDecisionReason ?? flags.userInput?.trim();
         if (!feedback) {
           emit(errorDirective(
             `report --result rejected for unit "${unit}" of "${slug}" requires nonblank --user-input or --reason feedback.`,
           ));
           return;
         }
-        const pending = pendingReviewFeedback(
-          pd,
-          node,
-          unit,
-          reviewRecordPrefix,
-          formats,
-        );
+        const pending = pendingReviewInputs;
         if (pending) {
           feedbackStageDir = pending.stageDir;
           const bodies = pendingFeedback(pending.stageDir);
-          feedback += `\n\n## Browser review feedback\n\n${bodies.map((item) =>
-            `### ${item.file}\n\n${item.body}`
-          ).join("\n\n")}`;
+          if (bodies.length > 0) {
+            feedback += `\n\n## Browser review feedback\n\n${bodies.map((item) =>
+              `### ${item.file}\n\n${item.body}`
+            ).join("\n\n")}`;
+          }
         }
         const rejectArgs = ["reject", slug, "--feedback", feedback, "--unit", unit];
         for (const finding of flags.rejectFindings ?? []) {
@@ -8116,6 +8188,20 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(rejectArgs);
       } else if (flags.result === "revised") {
+        try {
+          responsePlan = prepareReportedResponses(
+            pd,
+            node,
+            unit,
+            reviewRecordPrefix,
+            formats,
+            flags.responses,
+            revisionCount,
+          );
+        } catch (error) {
+          emit(errorDirective(errorMessage(error)));
+          return;
+        }
         sequence.push(["revise", slug, "--unit", unit]);
       } else {
         if (
@@ -8151,6 +8237,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         committed.push(subArgs[0]);
       }
+      if (responsePlan) {
+        try {
+          persistReportedResponses(pd, slug, unit, revisionCount, responsePlan);
+        } catch (error) {
+          emit(errorDirective(errorMessage(error)));
+          return;
+        }
+      }
       let approvalNotes: string | undefined;
       if (
         reviewUiEnabled() &&
@@ -8177,8 +8271,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
               pending.map((item) => item.file),
               sha256Hex(pending.map((item) => item.body).join("")),
             );
-            ingestPendingFeedback(feedbackStageDir, "rejected");
           }
+          ingestPendingFeedback(feedbackStageDir, "rejected", {
+            stage: slug,
+            unit,
+            revision: revisionCount,
+          });
         }
         publishReviewPointer(
           pd,
@@ -8188,27 +8286,24 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           "revising",
         );
       } else if (reviewUiEnabled() && flags.result === "approved") {
-        const pending = pendingReviewFeedback(
-          pd,
-          node,
-          unit,
-          reviewRecordPrefix,
-          formats,
-        );
+        const pending = pendingReviewInputs;
         if (pending) {
           const files = pendingFeedback(pending.stageDir);
-          appendReviewFeedbackAudit(
-            pd,
-            slug,
-            unit,
-            revisionCount,
-            "approved",
-            files.map((item) => item.file),
-            sha256Hex(files.map((item) => item.body).join("")),
-          );
+          if (files.length > 0) {
+            appendReviewFeedbackAudit(
+              pd,
+              slug,
+              unit,
+              revisionCount,
+              "approved",
+              files.map((item) => item.file),
+              sha256Hex(files.map((item) => item.body).join("")),
+            );
+          }
           approvalNotes = ingestPendingFeedback(
             pending.stageDir,
             "approved",
+            { stage: slug, unit, revision: revisionCount },
           ).combinedBody;
         }
         publishReviewPointer(
@@ -8288,7 +8383,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    if (!flags.reason?.trim()) {
+    if (!flags.reason?.trim() && !browserDecisionReason) {
       emit(errorDirective(
         `report --result rejected for "${slug}" requires nonblank revision feedback in ` +
           "--reason, separate from --user-input \"Request Changes\".",
@@ -8349,6 +8444,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     let subArgs: string[];
     let feedbackStageDir: string | null = null;
     let revalidatingOpenGate = false;
+    let responsePlan: PreparedReviewResponses | null = null;
     if (flags.result === "awaiting-approval") {
       if (stageCheckbox.state === "awaiting-approval") {
         revalidatingOpenGate = true;
@@ -8380,26 +8476,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ));
         return;
       }
-      let feedback = flags.reason?.trim() ?? flags.userInput?.trim();
+      let feedback = flags.reason?.trim() ?? browserDecisionReason ?? flags.userInput?.trim();
       if (!feedback) {
         emit(errorDirective(
           `report --result rejected for "${slug}" requires nonblank revision feedback.`,
         ));
         return;
       }
-      const pending = pendingReviewFeedback(
-        pd,
-        node,
-        reviewUnit,
-        reviewRecordPrefix,
-        formats,
-      );
+      const pending = pendingReviewInputs;
       if (pending) {
         feedbackStageDir = pending.stageDir;
         const bodies = pendingFeedback(pending.stageDir);
-        feedback += `\n\n## Browser review feedback\n\n${bodies.map((item) =>
-          `### ${item.file}\n\n${item.body}`
-        ).join("\n\n")}`;
+        if (bodies.length > 0) {
+          feedback += `\n\n## Browser review feedback\n\n${bodies.map((item) =>
+            `### ${item.file}\n\n${item.body}`
+          ).join("\n\n")}`;
+        }
       }
       subArgs = ["reject", slug, "--feedback", feedback];
       if (flags.userInput) subArgs.push("--user-input", flags.userInput);
@@ -8411,6 +8503,20 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         emit(errorDirective(
           `Stage "${slug}" is ${stageCheckbox.state}; only a revising stage can re-enter its gate.`,
         ));
+        return;
+      }
+      try {
+        responsePlan = prepareReportedResponses(
+          pd,
+          node,
+          reviewUnit,
+          reviewRecordPrefix,
+          formats,
+          flags.responses,
+          revisionCount,
+        );
+      } catch (error) {
+        emit(errorDirective(errorMessage(error)));
         return;
       }
       subArgs = ["revise", slug];
@@ -8431,6 +8537,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
       ));
       return;
+    }
+    if (responsePlan) {
+      try {
+        persistReportedResponses(pd, slug, reviewUnit, revisionCount, responsePlan);
+      } catch (error) {
+        emit(errorDirective(errorMessage(error)));
+        return;
+      }
     }
     if (
       reviewUiEnabled() &&
@@ -8463,8 +8577,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
             pending.map((item) => item.file),
             sha256Hex(pending.map((item) => item.body).join("")),
           );
-          ingestPendingFeedback(feedbackStageDir, "rejected");
         }
+        ingestPendingFeedback(feedbackStageDir, "rejected", {
+          stage: slug,
+          unit: reviewUnit,
+          revision: revisionCount,
+        });
       }
       publishReviewPointer(
         pd,
@@ -8552,15 +8670,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 
   let approvalNotes: string | undefined;
   let approvedFeedbackStageDir: string | null = null;
-  if (flags.result === "approved" && reviewUiEnabled()) {
-    const pending = pendingReviewFeedback(
-      pd,
-      node,
-      reviewUnit,
-      reviewRecordPrefix,
-      formats,
-    );
-    if (pending) approvedFeedbackStageDir = pending.stageDir;
+  if (flags.result === "approved" && pendingReviewInputs) {
+    approvedFeedbackStageDir = pendingReviewInputs.stageDir;
   }
   if (stageCheckbox.state === "completed") {
     if (isFinal) {
@@ -8662,11 +8773,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           pending.map((item) => item.file),
           sha256Hex(pending.map((item) => item.body).join("")),
         );
-        approvalNotes = ingestPendingFeedback(
-          approvedFeedbackStageDir,
-          "approved",
-        ).combinedBody;
       }
+      approvalNotes = ingestPendingFeedback(
+        approvedFeedbackStageDir,
+        "approved",
+        { stage: slug, unit: reviewUnit, revision: revisionCount },
+      ).combinedBody;
     }
     publishReviewPointer(
       pd,

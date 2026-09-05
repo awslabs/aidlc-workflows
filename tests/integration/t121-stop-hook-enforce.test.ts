@@ -114,9 +114,7 @@ const BUN = process.execPath; // the bun running this test (mirrors t104)
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const HOOK_TS = join(
   REPO_ROOT,
-  "dist",
-  "claude",
-  ".claude",
+  "core",
   "hooks",
   "aidlc-continue-workflow.ts",
 );
@@ -1642,6 +1640,141 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
   }, 30000);
+
+  // --- (f-browser-gate) browser decision: hold the terminal-complete gate ---
+  function seedBrowserGate(
+    proj: string,
+    opts: { daemon?: boolean; decision?: "approve" | "request-changes" } = {},
+  ): { env: Record<string, string>; reviewDir: string } {
+    seedActiveWithCheckbox(proj, "?", "requirements-analysis");
+    const stageDir = join(seededRecordDir(proj), "inception", "requirements-analysis");
+    const reviewDir = join(stageDir, ".review-ui");
+    mkdirSync(join(seededRecordDir(proj), ".review-ui"), { recursive: true });
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(seededRecordDir(proj), ".review-ui", "current.json"),
+      `${JSON.stringify({
+        version: 1,
+        state: "awaiting-approval",
+        stage: "requirements-analysis",
+        unit: null,
+        stage_dir: `aidlc/spaces/default/intents/${seededRecordDir(proj).split("/").pop()}/inception/requirements-analysis`,
+        revision: 1,
+        updated_at: new Date().toISOString(),
+        open: null,
+      })}\n`,
+    );
+    const reviewHome = mkdtempSync(join(tmpdir(), "aidlc-t121-gate-"));
+    const env: Record<string, string> = {
+      AIDLC_REVIEW_UI: "1",
+      AIDLC_REVIEW_HOME: reviewHome,
+    };
+    if (opts.daemon !== false) {
+      const now = new Date().toISOString();
+      writeServerInfo({
+        version: 1,
+        pid: process.pid,
+        host: "127.0.0.1",
+        port: 43122,
+        url: "http://127.0.0.1:43122/",
+        token: "t121-gate-token",
+        project_dir: proj,
+        project_id: reviewUiProjectId(proj),
+        started_at: now,
+        heartbeat_at: now,
+        idle_minutes: 240,
+      }, { ...process.env, AIDLC_REVIEW_HOME: reviewHome });
+    }
+    if (opts.decision) writeBrowserDecision(reviewDir, opts.decision);
+    return { env, reviewDir };
+  }
+
+  function writeBrowserDecision(
+    reviewDir: string,
+    decision: "approve" | "request-changes",
+  ): void {
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(reviewDir, "decision-001.json"),
+      `${JSON.stringify({
+        version: 1,
+        stage: "requirements-analysis",
+        unit: null,
+        revision: 1,
+        decision,
+        notes: decision === "request-changes" ? "Tighten the SLA" : null,
+        feedback_file: null,
+        created: "2026-09-05T00:00:00Z",
+      })}\n`,
+    );
+  }
+
+  test("(f-browser-gate) a saved approval blocks with the exact report command", () => {
+    const proj = makeProject();
+    const { env } = seedBrowserGate(proj, { decision: "approve" });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, env);
+    expect(r.rc).toBe(0);
+    const blocked = JSON.parse(r.out) as { decision: string; reason: string };
+    expect(blocked.decision).toBe("block");
+    expect(blocked.reason).toContain("The human decided in the browser (decision-001.json)");
+    expect(blocked.reason).toContain('aidlc-orchestrate.ts report --stage requirements-analysis --result approved --user-input "Approve"');
+    expect(blocked.reason).toContain("Do not ask the human again");
+  }, 30_000);
+
+  test("(f-browser-gate) a saved rejection includes decision notes in the report command", () => {
+    const proj = makeProject();
+    const { env } = seedBrowserGate(proj, { decision: "request-changes" });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, env);
+    const blocked = JSON.parse(r.out) as { reason: string };
+    expect(blocked.reason).toContain('--result rejected --user-input "Request Changes" --reason "Tighten the SLA"');
+  }, 30_000);
+
+  test("(f-browser-gate) the hook holds until a decision file lands", async () => {
+    const proj = makeProject();
+    const { env, reviewDir } = seedBrowserGate(proj);
+    const child = Bun.spawn([BUN, HOOK_TS], {
+      cwd: proj,
+      env: {
+        ...(process.env as Record<string, string>),
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_HARNESS_DIR: ".claude",
+        MOCK_KIND: "run-stage",
+        MOCK_UNIT: "",
+        MOCK_STAGE: "requirements-analysis",
+        MOCK_MARKER_PATH: join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "",
+        AIDLC_REVIEW_WAIT_SECONDS: "20",
+        ...env,
+      },
+      stdin: new Blob(['{"stop_hook_active":false}']),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    // This integration case exercises the real filesystem watcher: the file
+    // must arrive after the separate hook process has entered its hold.
+    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+    expect(child.exitCode).toBeNull();
+    writeBrowserDecision(reviewDir, "approve");
+    expect(await child.exited).toBe(0);
+    const blocked = JSON.parse((await new Response(child.stdout).text()).trim()) as { decision: string };
+    expect(blocked.decision).toBe("block");
+  }, 40_000);
+
+  test("(f-browser-gate) timeout releases to the existing terminal gate", () => {
+    const proj = makeProject();
+    const { env } = seedBrowserGate(proj);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, { ...env, AIDLC_REVIEW_WAIT_SECONDS: "0" });
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30_000);
+
+  test("(f-browser-gate) no daemon releases to the existing terminal gate", () => {
+    const proj = makeProject();
+    const { env } = seedBrowserGate(proj, { daemon: false, decision: "approve" });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, env);
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30_000);
 
   test("(f) gated per-unit Construction finds the active unit's blank question", () => {
     const proj = makeProject();

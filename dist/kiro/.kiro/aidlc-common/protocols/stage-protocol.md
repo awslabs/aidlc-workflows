@@ -144,6 +144,14 @@ Every stage (except the 3 stages in the Initialization phase: workspace-scaffold
 
 When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped.
 
+When `directive.review_ui` is present and its daemon is alive, the same explicit
+choice may be made in the browser after the structured terminal gate is shown.
+The terminal question remains complete and authoritative: end the turn after
+presenting it, and the Stop hook holds that turn until either the browser
+decision lands or the human replies in the terminal. Never wait by omitting the
+terminal gate, and never ask the human again after the hook supplies a browser
+decision.
+
 ### NO EMERGENT BEHAVIOR RULE
 Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation. Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`).
 
@@ -262,10 +270,27 @@ Entering the gate:
    - **Fix findings**: after the human selects it, record `aidlc-log.ts answer --stage <slug> --details "Fix findings"`, fix the named findings or evaluation failure, then retry the ordinary report with no override.
    - **Override blocking sensors**: after the human selects it, record `aidlc-log.ts answer --stage <slug> --details "Override blocking sensors"`, then retry the same report with `--override-blocking-sensors --user-input "Override blocking sensors"`. The state tool requires the exact offered option, a `HUMAN_TURN`, and the matching decision/answer receipt; a bare flag fails. Never offer or attempt this option under `Construction Autonomy Mode: autonomous` — unattended runs halt loudly.
 3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Word it per the voice contract at the top of this file: what you produced, what to look at, what happens next.
+   When `directive.review_ui` is present, this turn still ends immediately after
+   presenting the gate. The human may decide in the browser or in the terminal;
+   the Stop hook holds the turn for the browser decision without changing the
+   terminal-complete flow.
 4. Based on the user response:
    - **Approve** → `bun .kiro/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
    - **Request Changes** → `bun .kiro/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"`. The selected decision and its feedback are separate fields; never put feedback in `--user-input`. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each finding the human explicitly rejects as inapplicable; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `bun .kiro/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
    - **Accept as-is** (after 3 rejection cycles) → same as Approve; include the exact offered label `--user-input "Accept as-is"`.
+
+
+After completing work requested at a rejected gate, the revised completion
+message MUST include a **Feedback addressed** list before the gate is
+re-presented. Include exactly one line for every feedback remark, preserving
+its `aN` id: `- a3: applied — <what changed>` or `- a4: kept — <reason it was
+kept>`. This list is mandatory in the terminal completion message, so terminal
+review remains complete without the browser. When `directive.review_ui` is
+present, write the same heading and list to the next unused
+`<stage-dir>/.review-ui/responses-NNN.md` as
+`# Feedback addressed: <stage> (revision N)`, then pass that path to
+`report --stage <slug> --result revised --responses <path>`. Without
+`directive.review_ui`, report the revision normally without `--responses`.
 
 ### Part 1: Announcement (mandatory)
 ```markdown
@@ -289,6 +314,10 @@ Structured bullet-point summary of what was produced:
   Ask me to change either one at any approval gate."
 
 ### Part 3: Review + Approval (mandatory)
+The browser line is an additional place to inspect and decide, not a replacement
+for the structured approval question. Say that the human may decide there, then
+end the turn after presenting the gate; the Stop hook holds it while the daemon
+is alive.
 When the directive carried a reviewer, present the Review brief required by
 `stage-protocol-reviewer.md` §12a before the artifact path and approval
 question.

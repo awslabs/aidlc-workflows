@@ -18,7 +18,7 @@ When a stage gathers your input, the agent presents three standard interaction m
 
 ```
 ▸ Choose interaction mode:
-  (1) Guide me in the browser — read trade-offs and answer beside the explainer (recommended; Review UI only)
+  (1) Guide me in the browser — read each explainer above its answer card (recommended; Review UI only)
   (2) Guide Me — agent asks structured questions
   (3) Edit File — write directly to the artifact
   (4) Chat — freeform discussion
@@ -44,7 +44,7 @@ The agent creates (or opens) the questions file and you edit it directly. Best w
 
 ### Guide me in the browser
 
-With `AIDLC_REVIEW_UI=1`, the agent can write an HTML explainer with trade-offs and recommendations and show it beside the browser questions form. Save there and the agent continues on its own (the Stop hook holds its turn for your click on Claude Code; other harnesses wait on `answers-wait`); AI-DLC applies the submission to the canonical questions file before the ordinary consolidated-summary confirmation. See [Review in the Browser](18-review-in-the-browser.md#guide-me-in-the-browser).
+With `AIDLC_REVIEW_UI=1`, the agent can write an HTML explainer with trade-offs and recommendations. The browser renders each question's explainer directly above its answer card; **Save answers — the agent continues** writes `answers-NNN.json`, and the Stop hook holds the conductor's turn for that click on Claude Code while other harnesses can wait on `answers-wait`. `answers-apply` then folds the submission into the canonical questions file before the ordinary consolidated-summary confirmation. The terminal modes remain complete and write the same file. See [Review in the Browser](18-review-in-the-browser.md#guide-me-in-the-browser).
 
 ### Chat
 
@@ -80,7 +80,7 @@ The default approval gate presents two options:
   `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
-When the Review UI is enabled, the completion summary also carries a single-use **Browser** link. Browser annotations become input to the same terminal decision; clicking **Send feedback** does not resolve the gate. See [Review in the Browser](18-review-in-the-browser.md#review-an-approval-gate).
+When the Review UI is enabled, the completion summary also carries a **Browser** link. The browser header offers **Request changes** and **Approve**: it writes any pending annotations to `feedback-NNN.md` and the choice to `decision-NNN.json`, then the Stop hook resumes the same `report` path as the terminal gate. You can always answer the existing terminal **Approve** / **Request Changes** question instead. See [Review in the Browser](18-review-in-the-browser.md#review-an-approval-gate).
 
 If your reply does not match a displayed choice, it is acknowledged and the
 valid choices are shown again; nothing is recorded and the gate remains open.

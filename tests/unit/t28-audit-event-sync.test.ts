@@ -74,8 +74,8 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // +DOCUMENT_INDEXED, +DOCUMENT_UPDATED, and +DOCUMENT_REMOVED (DocumentKB) take
 // it to 85; Unit ownership and gate-rhythm configuration take it to 87;
 // pinned Unit merge completion takes it to 88; PIPELINE_LINK_COMPLETED takes it
-// to 91; REVIEW_UI_FEEDBACK takes it to 92.
-const CANONICAL_COUNT = 92;
+// to 91; REVIEW_UI_FEEDBACK takes it to 92; REVIEW_UI_RESPONSES to 93.
+const CANONICAL_COUNT = 93;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

@@ -5,7 +5,21 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const ASSET_DIR = join(REPO_ROOT, "core", "tools", "data", "review-ui");
-const TEXT_ASSETS = ["index.html", "app.js", "app.css", "bridge.js", join("vendor", "MERMAID-LICENSE.txt")] as const;
+const TEXT_ASSETS = [
+  "index.html",
+  "app.js",
+  "app.css",
+  "api.js",
+  "store.js",
+  "shell.js",
+  "workflow.js",
+  "document.js",
+  "threads.js",
+  "history.js",
+  "questions.js",
+  "bridge.js",
+  join("vendor", "MERMAID-LICENSE.txt"),
+] as const;
 const MERMAID_BYTES = 3_572_661;
 const MERMAID_SHA256 = "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8";
 
@@ -16,27 +30,31 @@ function asset(name: (typeof TEXT_ASSETS)[number]): string {
 describe("t353 — review UI browser questions assets", () => {
   test("exposes the Questions view and answer controls", () => {
     const html = asset("index.html");
-    expect(html).toMatch(/id=["']questions-nav["']/);
-    expect(html).toMatch(/id=["']questions-button["'][^>]*>[\s\S]*?Questions/);
-    expect(html).toMatch(/id=["']questions-badge["']/);
+    expect(html).toMatch(/<script\s+type=["']module["']\s+src=["']\/assets\/app\.js["']/);
     expect(html).toMatch(/id=["']questions-view["']/);
     expect(html).toMatch(/<form\s+id=["']questions-form["']/);
-    expect(html).toMatch(/id=["']save-answers-button["'][^>]*>Save answers<\/button>/);
+    expect(html).toMatch(/id=["']questions-content["']/);
+    expect(html).toMatch(/id=["']save-answers-button["']/);
     expect(html).toMatch(/id=["']guide-content["'][^>]*>No explainer yet<\/div>/);
   });
 
   test("loads, recommends, and saves browser answers", () => {
-    const app = asset("app.js");
-    expect(app).toContain("/api/questions");
-    expect(app).toContain("/api/answers");
-    expect(app).toContain("aidlc-guide");
-    expect(app).toContain("Recommended");
-    expect(app).toContain("Return to the terminal and send **done**.");
+    const questions = asset("questions.js");
+    expect(questions).toContain("/api/questions");
+    expect(questions).toContain("/api/answers");
+    expect(questions).toContain("data-aidlc-recommend");
+    expect(questions).toContain("Recommended");
+    // Saving hands the round to the agent; the browser never asks for a terminal keystroke.
+    expect(questions).toContain("the agent is picking your answers up now.");
+    expect(questions).not.toContain("send **done**");
+    // The explainer sits above each answer card; the header carries the save action.
+    const shell = asset("shell.js");
+    expect(shell).toContain("Save answers — the agent continues");
 
-    const css = asset("app.css");
-    expect(css).toMatch(/\.questions-view\b/);
-    expect(css).toMatch(/\.questions-form-pane\b/);
-    expect(css).toMatch(/\.guide-pane\b/);
+    const css = asset("questions.css");
+    expect(css).toMatch(/\.qblock\b/);
+    expect(css).toMatch(/\.explain\b/);
+    expect(css).toMatch(/\.qcard\b/);
   });
 
   test("publishes bounded guide recommendations on document load", () => {

@@ -325,6 +325,7 @@ export const CONSUMED_FILENAME = "consumed.json";
 export const SNAPSHOTS_DIRNAME = "snapshots";
 export const FEEDBACK_PREFIX = "feedback-";
 export const ANSWERS_PREFIX = "answers-";
+export const DECISION_PREFIX = "decision-";
 
 export function stageReviewUiDir(stageDir: string): string {
   return join(stageDir, REVIEW_UI_DIRNAME);
@@ -426,12 +427,22 @@ export interface FeedbackFrontmatter {
   created: string;
   decision_hint: DecisionHint;
 }
+export type FeedbackRemarkKind = "comment" | "delete" | "looks-good" | "label" | "edit";
+
+export interface FeedbackRemark {
+  id: string;
+  kind: FeedbackRemarkKind;
+  /** Breadcrumb/location text following the annotation heading, if present. */
+  heading: string;
+  quote?: string;
+}
 
 export interface FeedbackFile {
   file: string;
   frontmatter: FeedbackFrontmatter;
   /** Markdown body after the frontmatter block. */
   body: string;
+  remarks: FeedbackRemark[];
   sha256: string;
 }
 
@@ -441,6 +452,10 @@ export function feedbackFileName(n: number): string {
 
 export function answersFileName(n: number): string {
   return `${ANSWERS_PREFIX}${String(n).padStart(3, "0")}.json`;
+}
+
+export function decisionFileName(n: number): string {
+  return `${DECISION_PREFIX}${String(n).padStart(3, "0")}.json`;
 }
 
 /** Next unused sequence number for `<prefix>NNN.<ext>` files in a dir (1-based). */
@@ -470,6 +485,42 @@ export function renderFeedbackFrontmatter(fm: FeedbackFrontmatter): string {
     "",
   ].join("\n");
 }
+const FEEDBACK_REMARK_HEADING =
+  /^### (Comment|Delete|Looks good|Label|Edit \(unified diff\)) · (a[1-9][0-9]*)(.*)$/;
+
+function feedbackRemarkKind(label: string): FeedbackRemarkKind {
+  if (label === "Looks good") return "looks-good";
+  if (label === "Edit (unified diff)") return "edit";
+  return label.toLowerCase() as Exclude<FeedbackRemarkKind, "looks-good" | "edit">;
+}
+
+function parseFeedbackRemarks(body: string): FeedbackRemark[] {
+  const lines = body.split(/\r?\n/);
+  const remarks: FeedbackRemark[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const match = FEEDBACK_REMARK_HEADING.exec(lines[index]);
+    if (!match) continue;
+    let location = match[3].trim();
+    if (location.startsWith("— ")) location = location.slice(2);
+    location = location
+      .replace(/ \(element: .+\)$/, "")
+      .replace(/ \(lines ~[0-9]+-[0-9]+\)$/, "");
+    const quoted: string[] = [];
+    let cursor = index + 1;
+    while (cursor < lines.length && !lines[cursor].trim()) cursor++;
+    while (cursor < lines.length && lines[cursor].startsWith(">")) {
+      quoted.push(lines[cursor].replace(/^> ?/, ""));
+      cursor++;
+    }
+    remarks.push({
+      id: match[2],
+      kind: feedbackRemarkKind(match[1]),
+      heading: location,
+      ...(quoted.length > 0 ? { quote: quoted.join("\n") } : {}),
+    });
+  }
+  return remarks;
+}
 
 export function parseFeedbackFile(file: string, text: string): FeedbackFile | null {
   const m = FRONTMATTER_RE.exec(text);
@@ -495,6 +546,7 @@ export function parseFeedbackFile(file: string, text: string): FeedbackFile | nu
       created: fields.created ?? "",
       decision_hint,
     },
+    remarks: parseFeedbackRemarks(text.slice(m[0].length)),
     body: text.slice(m[0].length),
     sha256: sha256Hex(text),
   };
@@ -516,7 +568,7 @@ export interface ConsumedEntry {
   file: string;
   sha256: string;
   consumed_at: string;
-  result: "approved" | "rejected" | "answers-applied";
+  result: "approved" | "rejected" | "answers-applied" | "decision-applied";
 }
 
 export interface ConsumedManifest {
@@ -537,6 +589,152 @@ export function pendingFeedback(stageDir: string): FeedbackFile[] {
   const consumed = readConsumed(stageDir);
   const seen = new Set(consumed.entries.map((e) => `${e.file}\u0000${e.sha256}`));
   return listFeedbackFiles(stageDir).filter((f) => !seen.has(`${f.file}\u0000${f.sha256}`));
+}
+
+// --- Feedback responses ------------------------------------------------------
+
+export const RESPONSES_PREFIX = "responses-";
+export type FeedbackResponseStatus = "applied" | "kept" | "answered";
+
+export interface FeedbackResponseEntry {
+  remark_id: string;
+  status: FeedbackResponseStatus;
+  text: string;
+}
+
+export interface ResponsesFile {
+  file: string;
+  stage: string;
+  revision: number;
+  entries: FeedbackResponseEntry[];
+  body: string;
+}
+
+const RESPONSES_HEADING = /^# Feedback addressed: (.+) \(revision ([0-9]+)\)$/;
+const RESPONSE_LINE = /^- (a[1-9][0-9]*): (applied|kept|answered) — (\S(?:.*\S)?)$/;
+
+export function responsesFileName(n: number): string {
+  return `${RESPONSES_PREFIX}${String(n).padStart(3, "0")}.md`;
+}
+
+export function parseResponsesFile(file: string, text: string): ResponsesFile | null {
+  const normalized = text.replaceAll("\r\n", "\n");
+  const lines = normalized.split("\n");
+  const heading = RESPONSES_HEADING.exec(lines[0] ?? "");
+  if (!heading) return null;
+  const entries: FeedbackResponseEntry[] = [];
+  const seen = new Set<string>();
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue;
+    const match = RESPONSE_LINE.exec(line);
+    if (!match || seen.has(match[1])) return null;
+    seen.add(match[1]);
+    entries.push({
+      remark_id: match[1],
+      status: match[2] as FeedbackResponseStatus,
+      text: match[3],
+    });
+  }
+  const revision = Number(heading[2]);
+  if (entries.length === 0 || !Number.isSafeInteger(revision)) return null;
+  return {
+    file,
+    stage: heading[1],
+    revision,
+    entries,
+    body: normalized,
+  };
+}
+
+export function listResponsesFiles(stageDir: string): ResponsesFile[] {
+  const dir = stageReviewUiDir(stageDir);
+  if (!existsSync(dir)) return [];
+  const out: ResponsesFile[] = [];
+  for (const entry of readdirSync(dir).sort()) {
+    if (!entry.startsWith(RESPONSES_PREFIX) || !entry.endsWith(".md")) continue;
+    const parsed = parseResponsesFile(entry, readFileSync(join(dir, entry), "utf-8"));
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
+// --- Decision submissions -----------------------------------------------------
+
+export type ReviewDecision = "approve" | "request-changes";
+
+export interface DecisionSubmission {
+  version: 1;
+  stage: string;
+  unit: string | null;
+  revision: number;
+  decision: ReviewDecision;
+  notes: string | null;
+  feedback_file: string | null;
+  created: string;
+}
+
+export interface DecisionFile {
+  file: string;
+  submission: DecisionSubmission;
+  sha256: string;
+}
+
+export function parseDecisionSubmission(value: unknown): DecisionSubmission | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.version !== 1 ||
+    typeof candidate.stage !== "string" ||
+    candidate.stage.length === 0 ||
+    (candidate.unit !== null && typeof candidate.unit !== "string") ||
+    !Number.isInteger(candidate.revision) ||
+    (candidate.revision as number) < 0 ||
+    (candidate.decision !== "approve" && candidate.decision !== "request-changes") ||
+    (candidate.notes !== null && typeof candidate.notes !== "string") ||
+    (candidate.feedback_file !== null && typeof candidate.feedback_file !== "string") ||
+    typeof candidate.created !== "string" ||
+    !Number.isFinite(Date.parse(candidate.created))
+  ) {
+    return null;
+  }
+  return {
+    version: 1,
+    stage: candidate.stage,
+    unit: candidate.unit,
+    revision: candidate.revision as number,
+    decision: candidate.decision,
+    notes: candidate.notes,
+    feedback_file: candidate.feedback_file,
+    created: candidate.created,
+  };
+}
+
+export function listDecisionFiles(stageDir: string): DecisionFile[] {
+  const dir = stageReviewUiDir(stageDir);
+  if (!existsSync(dir)) return [];
+  const out: DecisionFile[] = [];
+  for (const entry of readdirSync(dir).sort()) {
+    if (!entry.startsWith(DECISION_PREFIX) || !entry.endsWith(".json")) continue;
+    const source = readFileSync(join(dir, entry), "utf-8");
+    let value: unknown;
+    try {
+      value = JSON.parse(source);
+    } catch {
+      continue;
+    }
+    const submission = parseDecisionSubmission(value);
+    if (submission) out.push({ file: entry, submission, sha256: sha256Hex(source) });
+  }
+  return out;
+}
+
+/** Decision files whose (name, sha256) pair has not been applied by report. */
+export function pendingDecisions(stageDir: string): DecisionFile[] {
+  const consumed = readConsumed(stageDir);
+  const seen = new Set(consumed.entries.map((entry) => `${entry.file}\u0000${entry.sha256}`));
+  return listDecisionFiles(stageDir).filter(
+    (item) => !seen.has(`${item.file}\u0000${item.sha256}`),
+  );
 }
 
 // --- Small utilities -----------------------------------------------------------

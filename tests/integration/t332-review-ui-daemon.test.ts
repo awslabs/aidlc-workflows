@@ -460,7 +460,7 @@ describe("t332 review UI daemon HTTP API", () => {
     const feedbackText = readFileSync(join(project, feedbackBody.path), "utf-8");
     expect(feedbackText).toContain("aidlc_review_feedback: 1");
     expect(feedbackText).toContain("stage: requirements-analysis");
-    expect(feedbackText).toContain("### Comment — Requirements (lines ~3-3)");
+    expect(feedbackText).toContain("### Comment · a1 — Requirements (lines ~3-3)");
 
     const htmlPath = artifactPath.replace("requirements.md", "review.html");
     const raw = await authorized(`/api/raw?path=${encodeURIComponent(htmlPath)}`);

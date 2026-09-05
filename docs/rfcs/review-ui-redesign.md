@@ -1,6 +1,6 @@
 # RFC: Review UI redesign — a document you review, not a form you fill
 
-Status: proposal · Consolidated design: [`review-ui-redesign/mock-v10.html`](review-ui-redesign/mock-v10.html) (ten screens in journey order, toggle bottom-centre; every element audited in the table below) · Minimal reference: [`review-ui-redesign/mock-v3.html`](review-ui-redesign/mock-v3.html) · Exploration mocks: [`review-ui-redesign/mock.html`](review-ui-redesign/mock.html) (icon rail; **review** / **suggest edit** / **questions**; click **Edit** in the menu bar for a menu) · [`review-ui-redesign/mock-v2.html`](review-ui-redesign/mock-v2.html) (workflow sidebar with intents, stages, artifacts, record; **review** / **questions**)
+Status: implemented; this RFC is the design record · Consolidated design: [`review-ui-redesign/mock-v10.html`](review-ui-redesign/mock-v10.html) (ten screens in journey order, toggle bottom-centre; every element audited in the table below) · Minimal reference: [`review-ui-redesign/mock-v3.html`](review-ui-redesign/mock-v3.html) · Exploration mocks: [`review-ui-redesign/mock.html`](review-ui-redesign/mock.html) (icon rail; **review** / **suggest edit** / **questions**; click **Edit** in the menu bar for a menu) · [`review-ui-redesign/mock-v2.html`](review-ui-redesign/mock-v2.html) (workflow sidebar with intents, stages, artifacts, record; **review** / **questions**)
 
 ## Ten variations (gallery)
 

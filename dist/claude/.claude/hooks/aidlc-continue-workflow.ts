@@ -166,12 +166,15 @@ import {
 } from "../tools/aidlc-usage.ts";
 import {
   ANSWERS_PREFIX,
+  pendingDecisions,
   readConsumed,
+  readCurrentPointer,
   readServerInfo,
   reviewUiEnabled,
   serverInfoLooksAlive,
   sha256Hex,
   stageReviewUiDir,
+  type DecisionFile,
 } from "../tools/aidlc-review-ui-shared.ts";
 import { questionsFileHasPendingPlanApproval } from "./aidlc-plan-approval-guard.ts";
 
@@ -712,6 +715,124 @@ function waitForBrowserAnswers(stageDirPath: string, timeoutSeconds: number): Pr
     // Polling alone carries the wait where recursive watching is unavailable.
   }
   return promise;
+}
+
+// A browser approval gate uses the same bounded hold as browser questions. The
+// pointer is the positive gate signal: without an awaiting-approval pointer for
+// the current stage, no browser decision may hold the terminal turn.
+interface BrowserGateRound {
+  slug: string;
+  unit: string | null;
+  revision: number;
+  stageDirPath: string;
+}
+
+function browserGateRound(
+  projectDir: string,
+  stateContent: string,
+  activeStage?: string,
+  activeUnit?: string,
+): BrowserGateRound | null {
+  if (!reviewUiEnabled()) return null;
+  if (!serverInfoLooksAlive(readServerInfo(projectDir))) return null;
+  try {
+    const slug = activeStage?.trim() || currentStageSlug(stateContent);
+    if (slug.length === 0 || slug !== currentStageSlug(stateContent)) return null;
+    const gateStatus =
+      isTeamUnitOwnership(stateContent) && activeUnit
+        ? unitGateStatus(
+            projectDir,
+            slug,
+            activeUnit,
+            effectiveUnitGateRhythm(projectDir, stateContent),
+          )
+        : parseCheckboxes(stateContent).find((entry) => entry.slug === slug)?.state;
+    if (gateStatus !== "awaiting-approval") return null;
+    const pointer = readCurrentPointer(docsRoot(projectDir));
+    if (
+      pointer?.state !== "awaiting-approval" ||
+      pointer.stage !== slug ||
+      pointer.unit !== (activeUnit ?? null) ||
+      !pointer.stage_dir
+    ) {
+      return null;
+    }
+    const stageDirPath = join(projectDir, ...pointer.stage_dir.split("/"));
+    return { slug, unit: pointer.unit, revision: pointer.revision, stageDirPath };
+  } catch {
+    return null;
+  }
+}
+
+function currentBrowserDecision(round: BrowserGateRound): DecisionFile | null {
+  try {
+    return pendingDecisions(round.stageDirPath).find((item) =>
+      item.submission.stage === round.slug &&
+      item.submission.unit === round.unit &&
+      item.submission.revision === round.revision
+    ) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+type BrowserGateWait =
+  | { kind: "decision"; file: DecisionFile }
+  | { kind: "human-prompt" }
+  | { kind: "timeout" };
+
+function humanTurnMtime(projectDir: string): number | null {
+  try {
+    return statSync(join(docsRoot(projectDir), ".aidlc-human-turn")).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function waitForBrowserDecision(
+  projectDir: string,
+  round: BrowserGateRound,
+  timeoutSeconds: number,
+): Promise<BrowserGateWait> {
+  const immediate = currentBrowserDecision(round);
+  if (immediate) return Promise.resolve({ kind: "decision", file: immediate });
+  if (timeoutSeconds <= 0) return Promise.resolve({ kind: "timeout" });
+  const initialHumanTurn = humanTurnMtime(projectDir);
+  const { promise, resolve: settle } = Promise.withResolvers<BrowserGateWait>();
+  let watcher: FSWatcher | null = null;
+  let finished = false;
+  const finish = (result: BrowserGateWait): void => {
+    if (finished) return;
+    finished = true;
+    clearInterval(poll);
+    clearTimeout(deadline);
+    watcher?.close();
+    settle(result);
+  };
+  const recheck = (): void => {
+    const decision = currentBrowserDecision(round);
+    if (decision) {
+      finish({ kind: "decision", file: decision });
+      return;
+    }
+    const humanTurn = humanTurnMtime(projectDir);
+    if (humanTurn !== null && (initialHumanTurn === null || humanTurn > initialHumanTurn)) {
+      finish({ kind: "human-prompt" });
+    }
+  };
+  const poll = setInterval(recheck, REVIEW_WAIT_POLL_MS);
+  const deadline = setTimeout(() => finish({ kind: "timeout" }), timeoutSeconds * 1000);
+  try {
+    watcher = watch(round.stageDirPath, { recursive: true }, recheck);
+    watcher.on("error", () => {});
+  } catch {
+    // Polling alone carries the wait where recursive watching is unavailable.
+  }
+  return promise;
+}
+
+function doubleQuotedShellArgument(value: string): string {
+  return `"${value.replace(/([\\"$`])/g, "\\$1")}"`;
 }
 
 // A structured non-gate question is logged before it is rendered and answered
@@ -1560,6 +1681,34 @@ if (kind === "parked") {
 // can respond, rather than re-feeding the loop.
 if (kind === "ask") {
   return allowStop();
+}
+
+// Browser approval gate: the terminal-complete gate was already presented, and
+// an awaiting-approval pointer proves the browser may answer it. Hold this same
+// turn until a decision lands; a fresh terminal prompt or timeout releases the
+// existing human-wait path unchanged.
+const gateRound = browserGateRound(projectDir, stateContent, activeStage, activeUnit);
+if (gateRound) {
+  const result = await waitForBrowserDecision(
+    projectDir,
+    gateRound,
+    reviewWaitSeconds(),
+  );
+  if (result.kind === "decision") {
+    const { file, submission } = result.file;
+    const unitArg = gateRound.unit ? ` --unit ${gateRound.unit}` : "";
+    const command = submission.decision === "approve"
+      ? `bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --stage ${gateRound.slug}${unitArg} --result approved --user-input "Approve"`
+      : `bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --stage ${gateRound.slug}${unitArg} --result rejected --user-input "Request Changes" --reason ${doubleQuotedShellArgument(submission.notes ?? "See browser review feedback")}`;
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      `browser decision ${file} saved for ${gateRound.slug}; blocking the stop so the conductor reports it (browser-gate-wait)`,
+    );
+    return blockStop(
+      `The human decided in the browser (${file}): run \`${command}\`, then continue exactly as after a terminal decision. Do not ask the human again.`,
+    );
+  }
 }
 
 // Human-wait carve-out: the engine returns a pending directive, but the current

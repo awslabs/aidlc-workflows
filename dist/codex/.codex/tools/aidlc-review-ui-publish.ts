@@ -22,10 +22,18 @@ import {
   currentPointerPath,
   manifestPath,
   mintReviewUiOpenLink,
+  listFeedbackFiles,
+  nextSequence,
+  parseResponsesFile,
   pendingFeedback,
+  pendingDecisions,
   readConsumed,
   reviewUiEnabled,
   reviewUiStrict,
+  RESPONSES_PREFIX,
+  responsesFileName,
+  type ResponsesFile,
+  stageReviewUiDir,
   type ReviewManifest,
   type ReviewManifestArtifact,
   sha256Hex,
@@ -54,6 +62,14 @@ export interface FeedbackIngestion {
   files: string[];
   digest: string;
   combinedBody: string;
+}
+
+export interface PreparedReviewResponses {
+  source: Buffer;
+  sourcePath: string;
+  targetPath: string;
+  targetFile: string;
+  parsed: ResponsesFile;
 }
 
 function projectRelative(projectDir: string, absolute: string): string {
@@ -242,31 +258,124 @@ export function reviewStageDir(
 }
 
 /**
- * Consume every pending feedback file for the stage. Called by `report` ONLY
- * after the state transition that carried the feedback (GATE_REJECTED reason /
- * approval notes) has committed, so the failure mode is at-least-once: a crash
- * between the commit and this write re-ingests the same files on the next
- * report (a visible duplicate in the reason), never a silently lost round. The
- * inverse order would risk marking feedback consumed that no audit row holds.
- * `consumed.json` is written atomically (temp + rename) and keyed by
- * (file, sha256), so a rewritten feedback file is treated as new.
+ * Validate a revised-gate disposition list before the state transition. The
+ * returned immutable plan is persisted only after `revise` commits.
+ */
+export function prepareReviewResponses(
+  stageDir: string,
+  sourcePath: string,
+  stage: string,
+  unit: string | null,
+  revision: number,
+): PreparedReviewResponses {
+  let source: Buffer;
+  try {
+    source = readRegularFileNoFollowOrThrow(
+      sourcePath,
+      "review UI responses file",
+      1024 * 1024,
+    );
+  } catch (error) {
+    throw new Error(
+      `Could not read --responses file "${sourcePath}": ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const parsed = parseResponsesFile(basename(sourcePath), source.toString("utf-8"));
+  if (!parsed) {
+    throw new Error(
+      `Invalid --responses file "${sourcePath}": expected ` +
+        '`# Feedback addressed: <stage> (revision N)` and unique lines `- aN: applied|kept|answered — <text>`.',
+    );
+  }
+  if (parsed.stage !== stage) {
+    throw new Error(
+      `Invalid --responses file "${sourcePath}": heading stage "${parsed.stage}" does not match "${stage}".`,
+    );
+  }
+  if (parsed.revision !== revision) {
+    throw new Error(
+      `Invalid --responses file "${sourcePath}": revision ${parsed.revision} does not match current revision ${revision}.`,
+    );
+  }
+  const knownIds = new Set(
+    listFeedbackFiles(stageDir)
+      .filter((feedback) =>
+        feedback.frontmatter.stage === stage && feedback.frontmatter.unit === unit
+      )
+      .flatMap((feedback) => feedback.remarks.map((remark) => remark.id)),
+  );
+  const unknown = parsed.entries
+    .map((entry) => entry.remark_id)
+    .filter((id) => !knownIds.has(id));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Invalid --responses file "${sourcePath}": unknown feedback remark id${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}.`,
+    );
+  }
+
+  const sourceAbsolute = resolve(sourcePath);
+  const reviewDir = stageReviewUiDir(stageDir);
+  const sourceAlreadyPublished = dirname(sourceAbsolute) === resolve(reviewDir) &&
+    /^responses-[0-9]{3,}\.md$/.test(basename(sourceAbsolute));
+  const targetFile = sourceAlreadyPublished
+    ? basename(sourceAbsolute)
+    : responsesFileName(nextSequence(reviewDir, RESPONSES_PREFIX));
+  return {
+    source,
+    sourcePath: sourceAbsolute,
+    targetPath: join(reviewDir, targetFile),
+    targetFile,
+    parsed,
+  };
+}
+
+export function persistReviewResponses(plan: PreparedReviewResponses): string {
+  if (plan.sourcePath === plan.targetPath) return plan.targetFile;
+  mkdirSync(dirname(plan.targetPath), { recursive: true });
+  writeFileSync(plan.targetPath, plan.source, { flag: "wx" });
+  return plan.targetFile;
+}
+
+/**
+ * Consume pending browser feedback and decision files only after the lifecycle
+ * transition commits. This preserves the same at-least-once crash boundary for
+ * both record-side inputs.
  */
 export function ingestPendingFeedback(
   stageDir: string,
   result: "approved" | "rejected",
+  target?: { stage: string; unit: string | null; revision: number },
 ): FeedbackIngestion {
   if (!reviewUiEnabled()) return { files: [], digest: "", combinedBody: "" };
   const feedback = pendingFeedback(stageDir);
-  if (feedback.length === 0) return { files: [], digest: "", combinedBody: "" };
+  const decisions = pendingDecisions(stageDir).filter((item) =>
+    !target ||
+    (
+      item.submission.stage === target.stage &&
+      item.submission.unit === target.unit &&
+      item.submission.revision === target.revision
+    )
+  );
+  if (feedback.length === 0 && decisions.length === 0) {
+    return { files: [], digest: "", combinedBody: "" };
+  }
 
   const consumedAt = new Date().toISOString();
   const consumed = readConsumed(stageDir);
-  const entries: ConsumedEntry[] = feedback.map((item) => ({
-    file: item.file,
-    sha256: item.sha256,
-    consumed_at: consumedAt,
-    result,
-  }));
+  const entries: ConsumedEntry[] = [
+    ...feedback.map((item): ConsumedEntry => ({
+      file: item.file,
+      sha256: item.sha256,
+      consumed_at: consumedAt,
+      result,
+    })),
+    ...decisions.map((item): ConsumedEntry => ({
+      file: item.file,
+      sha256: item.sha256,
+      consumed_at: consumedAt,
+      result: "decision-applied",
+    })),
+  ];
   writeConsumed(stageDir, {
     version: 1,
     entries: [...consumed.entries, ...entries],

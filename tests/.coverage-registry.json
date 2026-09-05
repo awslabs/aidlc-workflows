@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 828,
+    "total": 832,
     "enumeratedByClass": {
       "function": 528,
-      "audit": 92,
+      "audit": 93,
       "scope": 11,
       "stage": 33,
       "hook": 18,
-      "subcommand": 139,
+      "subcommand": 142,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -486,6 +486,13 @@
     {
       "unitClass": "audit",
       "unitId": "REVIEW_UI_FEEDBACK",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEW_UI_RESPONSES",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -8246,6 +8253,13 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-log answers-wait",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-log decision",
       "minMechanism": "cli",
       "coveredBy": [
@@ -8255,6 +8269,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log decision-apply",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log decision-wait",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "subcommand",

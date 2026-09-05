@@ -895,6 +895,48 @@ Use `bun <harness-dir>/tools/<tool>.ts <subcommand>`, where `<harness-dir>` is
 `.claude` on Claude Code, `.kiro` on Kiro CLI and Kiro IDE, and `.codex` on
 Codex CLI.
 
+### `aidlc-log decision-wait` / `decision-apply` — inspect a browser gate pre-answer
+
+These direct tool commands support harnesses whose Stop hook cannot hold a
+browser approval gate:
+
+```bash
+bun <harness-dir>/tools/aidlc-log.ts decision-wait \
+  --stage <slug> [--unit <unit>] [--timeout <seconds>] [--project-dir <path>]
+bun <harness-dir>/tools/aidlc-log.ts decision-apply \
+  --stage <slug> [--unit <unit>] [--project-dir <path>]
+```
+
+`decision-wait` watches and polls for the first unconsumed matching
+`decision-NNN.json`. It prints `{ready:true,file}` and exits 0 when one exists;
+after the timeout (540 seconds by default) it prints
+`{ready:false,waited_seconds}` and exits 3. It writes and consumes nothing.
+`decision-apply` prints the first pending decision JSON and also does not mutate
+state or mark the file consumed. The conductor converts that value into the
+ordinary `aidlc-orchestrate.ts report --result approved|rejected` call; `report`
+alone owns the gate transition and `decision-applied` receipt. A person can
+always answer the same gate in the terminal instead.
+
+### `aidlc-orchestrate report --responses` — persist feedback dispositions
+
+On a revised browser-backed gate, the agent writes the same **Feedback
+addressed** list shown in its terminal completion message and reports it with:
+
+```bash
+bun <harness-dir>/tools/aidlc-orchestrate.ts report \
+  --stage <slug> [--unit <unit>] --result revised --responses <file>
+```
+
+The file must begin `# Feedback addressed: <slug> (revision N)` and contain
+unique nonblank lines `- aN: applied|kept|answered — <text>`. `report` rejects
+the flag with any result except `revised`, requires `AIDLC_REVIEW_UI=1`, checks
+the stage, current pre-revise revision, and every remark id against that stage and Unit's
+numbered feedback, then performs the `revise` transition. After it commits,
+`report` copies the list to `responses-NNN.md`, appends a
+`REVIEW_UI_RESPONSES` audit row (`Stage`, optional `Unit`, `Revision`, `File`,
+`Remarks`), and publishes the next review snapshot. Without browser feedback,
+omit `--responses`; the ordinary revised report is unchanged.
+
 ### `aidlc-utility codekb-path` - resolve the code knowledge directory
 
 This is a **direct utility invocation**, not an `/aidlc codekb-path` command:

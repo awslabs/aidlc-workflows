@@ -15,6 +15,7 @@ import {
   watch,
   writeFileSync,
   type FSWatcher,
+  type Stats,
 } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ArtifactFormats } from "./aidlc-artifact-vocabulary.ts";
@@ -24,7 +25,6 @@ import {
   artifactFormatsForProject,
   artifactFormatsFromState,
   CHECKBOX_MAP,
-  docsRoot,
   findStageBySlug,
   getField,
   humanTurnMintAllowed,
@@ -32,9 +32,9 @@ import {
   markHumanTurn,
   parseCheckboxes,
   readStateFile,
-  recordDir,
   spacesRoot,
   stageDir,
+  type StageEntry,
   stateFilePath,
 } from "./aidlc-lib.ts";
 import { appendAuditEntry } from "./aidlc-audit.ts";
@@ -54,6 +54,9 @@ import {
   nextSequence,
   readCurrentPointer,
   readManifest,
+  listDecisionFiles,
+  listFeedbackFiles,
+  listResponsesFiles,
   readServerInfo,
   removeServerInfo,
   reviewUiHumanUrl,
@@ -78,11 +81,14 @@ import {
   resolveProjectAidlcPath,
   sandboxedMarkdownDocument,
   selfContainedMarkdownExport,
+  splitMarkdownBlocks,
   validateQuestionAnswers,
   type AnswerSubmissionEntry,
   type FeedbackRequest,
   type ReviewAnnotation,
 } from "./aidlc-review-ui-render.ts";
+import { handleDecision } from "./aidlc-review-ui-decision.ts";
+import { reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
 import { checkGuideArtifact } from "./aidlc-html.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
@@ -335,10 +341,34 @@ interface StateContext {
   manifest: ReviewManifest | null;
 }
 
-function stateContext(projectDir: string): StateContext {
-  const space = activeSpace(projectDir);
-  const intent = activeIntent(projectDir, space);
-  const record = recordDir(projectDir, intent ?? undefined, space) ?? docsRoot(projectDir, intent ?? undefined, space);
+function selectionFromUrl(url: URL): { intent?: string; space?: string } {
+  const intent = url.searchParams.get("intent")?.trim();
+  const space = url.searchParams.get("space")?.trim();
+  return {
+    ...(intent ? { intent } : {}),
+    ...(space ? { space } : {}),
+  };
+}
+
+function pathWithinRecord(path: string, context: StateContext): string {
+  let recordReal: string;
+  try {
+    recordReal = realpathSync(context.record);
+  } catch {
+    throw new HttpError(404, "not found");
+  }
+  const relativePath = relative(recordReal, path);
+  if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+    throw new HttpError(403, "path is outside the selected intent");
+  }
+  return path;
+}
+function stateContext(
+  projectDir: string,
+  selectionOptions: { intent?: string | null; space?: string | null } = {},
+): StateContext {
+  const selection = workflowSelection(projectDir, selectionOptions);
+  const { space, intent, record } = selection;
   let state: string | null = null;
   try {
     state = readStateFile(projectDir, intent ?? undefined, space);
@@ -349,7 +379,12 @@ function stateContext(projectDir: string): StateContext {
   let manifest: ReviewManifest | null = null;
   if (current?.stage_dir) {
     try {
-      manifest = readManifest(resolveProjectAidlcPath(projectDir, current.stage_dir));
+      const stagePath = resolveProjectAidlcPath(projectDir, current.stage_dir);
+      const recordReal = realpathSync(record);
+      const stageRelative = relative(recordReal, stagePath);
+      if (stageRelative !== ".." && !stageRelative.startsWith(`..${sep}`)) {
+        manifest = readManifest(stagePath);
+      }
     } catch {
       manifest = null;
     }
@@ -378,7 +413,7 @@ function currentQuestionsTarget(projectDir: string, context = stateContext(proje
   const currentStage = context.state ? getField(context.state, "Current Stage") : null;
   if (!currentStage) return null;
 
-  let stage;
+  let stage: StageEntry | undefined;
   try {
     stage = findStageBySlug(currentStage);
   } catch {
@@ -478,17 +513,16 @@ function statePayload(projectDir: string): Record<string, unknown> {
   };
 }
 
-function treePayload(projectDir: string): { entries: Array<Record<string, unknown>> } {
-  const { record } = stateContext(projectDir);
+function treePayload(projectDir: string, url?: URL): { entries: Array<Record<string, unknown>> } {
+  const { record } = stateContext(projectDir, url ? selectionFromUrl(url) : {});
   const entries: Array<Record<string, unknown>> = [];
-  if (!existsSync(record)) return { entries };
 
   const visit = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) continue;
       const path = join(dir, entry.name);
       if (isReviewHiddenPath(posixRelative(record, path))) continue;
-      let stat;
+      let stat: Stats;
       try {
         stat = statSync(path);
       } catch {
@@ -510,21 +544,16 @@ function treePayload(projectDir: string): { entries: Array<Record<string, unknow
 }
 
 /**
- * Reviewer-visible file: confined to the active intent's record AND not one of
+ * Reviewer-visible file: confined to the selected intent's record AND not one of
  * the engine's bookkeeping files (state, audit, dot-dirs). Everything the UI
  * renders for a human goes through here.
  */
-function reviewableFile(projectDir: string, requested: string): string {
+function reviewableFile(projectDir: string, requested: string, url?: URL): string {
   const path = resolveProjectAidlcPath(projectDir, requested);
-  const { record } = stateContext(projectDir);
-  let recordReal = record;
-  try {
-    recordReal = realpathSync(record);
-  } catch {
-    throw new HttpError(404, "not found");
-  }
-  const relativeToRecord = posixRelative(recordReal, path);
-  if (relativeToRecord.startsWith("..") || isReviewHiddenPath(relativeToRecord)) {
+  const context = stateContext(projectDir, url ? selectionFromUrl(url) : {});
+  pathWithinRecord(path, context);
+  const relativeToRecord = posixRelative(realpathSync(context.record), path);
+  if (isReviewHiddenPath(relativeToRecord)) {
     throw new HttpError(403, "not a reviewable artifact");
   }
   regularFile(path);
@@ -542,7 +571,7 @@ function confinedPath(projectDir: string, url: URL, name = "path"): string {
 }
 
 function regularFile(path: string): void {
-  let stat;
+  let stat: Stats;
   try {
     stat = lstatSync(path);
   } catch {
@@ -551,8 +580,13 @@ function regularFile(path: string): void {
   if (!stat.isFile() || stat.isSymbolicLink()) throw new HttpError(404, "not found");
 }
 
-function requireCurrentQuestionsTarget(projectDir: string, requested: string, path: string): QuestionsTarget {
-  const target = currentQuestionsTarget(projectDir);
+function requireQuestionsTarget(
+  projectDir: string,
+  requested: string,
+  path: string,
+  context = stateContext(projectDir),
+): QuestionsTarget {
+  const target = currentQuestionsTarget(projectDir, context);
   if (target === null || requested !== target.file || path !== target.questionsPath) {
     throw new HttpError(409, "questions target no longer current");
   }
@@ -561,10 +595,9 @@ function requireCurrentQuestionsTarget(projectDir: string, requested: string, pa
 
 function questionsResponse(projectDir: string, url: URL): Response {
   const requested = queryPath(url);
-  const path = resolveProjectAidlcPath(projectDir, requested);
-  regularFile(path);
+  const path = reviewableFile(projectDir, requested, url);
   if (extname(path).toLowerCase() !== ".md") throw new HttpError(404, "not found");
-  const target = requireCurrentQuestionsTarget(projectDir, requested, path);
+  const target = requireQuestionsTarget(projectDir, requested, path, stateContext(projectDir, selectionFromUrl(url)));
   const source = readFileSync(path);
   return json({
     path: target.file,
@@ -576,10 +609,12 @@ function questionsResponse(projectDir: string, url: URL): Response {
 
 function artifactResponse(projectDir: string, url: URL): Response {
   const requested = queryPath(url);
-  const path = reviewableFile(projectDir, requested);
+  const path = reviewableFile(projectDir, requested, url);
   const stat = statSync(path);
   const extension = extname(path).toLowerCase();
   const source = readFileSync(path, "utf-8");
+  const selection = selectionFromUrl(url);
+  const rawUrl = new URLSearchParams({ path: requested, ...selection });
   // Both formats render inside the sandboxed iframe via /api/raw; the app only
   // ever receives Markdown SOURCE (for the editor and line estimates), never
   // rendered HTML to inject into its own privileged document.
@@ -588,7 +623,7 @@ function artifactResponse(projectDir: string, url: URL): Response {
       path: requested,
       format: "md",
       source,
-      raw_url: `/api/raw?path=${encodeURIComponent(requested)}`,
+      raw_url: `/api/raw?${rawUrl}`,
       sha256: sha256Hex(source),
       mtime: stat.mtimeMs,
     });
@@ -597,7 +632,7 @@ function artifactResponse(projectDir: string, url: URL): Response {
     return json({
       path: requested,
       format: "html",
-      raw_url: `/api/raw?path=${encodeURIComponent(requested)}`,
+      raw_url: `/api/raw?${rawUrl}`,
       sha256: sha256Hex(source),
       mtime: stat.mtimeMs,
     });
@@ -605,9 +640,68 @@ function artifactResponse(projectDir: string, url: URL): Response {
   throw new HttpError(404, "unsupported artifact");
 }
 
+function headingText(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .trim();
+}
+
+
+function headingIdBase(html: string): string {
+  const text = headingText(html);
+  const base = text
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/[\s-]+/g, "-");
+  return base || "section";
+}
+function renderResponse(projectDir: string, url: URL): Response {
+  const requested = queryPath(url);
+  const path = reviewableFile(projectDir, requested, url);
+  const extension = extname(path).toLowerCase();
+  if (extension !== ".md" && extension !== ".markdown") {
+    throw new HttpError(404, "not found");
+  }
+  const source = readFileSync(path, "utf-8");
+  const stat = statSync(path);
+  const headingCounts = new Map<string, number>();
+  const headings: Array<{ level: number; text: string; id: string; block: number }> = [];
+  const blocks = splitMarkdownBlocks(source).map((block, index) => {
+    let html = renderMarkdown(block.text);
+    html = html.replace(
+      /<h([1-6]) id="([^"]+)">([\s\S]*?)<\/h\1>/g,
+      (_match, levelText: string, _localId: string, children: string) => {
+        const baseId = headingIdBase(children);
+        const count = headingCounts.get(baseId) ?? 0;
+        headingCounts.set(baseId, count + 1);
+        const id = count === 0 ? baseId : `${baseId}-${count + 1}`;
+        headings.push({ level: Number(levelText), text: headingText(children), id, block: index });
+        return `<h${levelText} id="${id}">${children}</h${levelText}>`;
+      },
+    );
+    return { index, line_start: block.line_start, line_end: block.line_end, html };
+  });
+  return json({
+    path: requested,
+    format: "md",
+    sha256: sha256Hex(source),
+    mtime: stat.mtimeMs,
+    source,
+    blocks,
+    headings,
+  });
+}
+
 function rawResponse(projectDir: string, url: URL): Response {
   const requested = queryPath(url);
-  const path = reviewableFile(projectDir, requested);
+  const path = reviewableFile(projectDir, requested, url);
   const extension = extname(path).toLowerCase();
   let document: string;
   if (extension === ".html" || extension === ".htm") {
@@ -626,17 +720,19 @@ function rawResponse(projectDir: string, url: URL): Response {
   });
 }
 
-function currentStageContext(projectDir: string): {
+function selectedStageContext(projectDir: string, url?: URL): {
   current: CurrentPointer;
   manifest: ReviewManifest;
   stageDir: string;
+  context: StateContext;
 } {
-  const context = stateContext(projectDir);
+  const context = stateContext(projectDir, url ? selectionFromUrl(url) : {});
   if (!context.current?.stage_dir) throw new HttpError(409, "no current review");
   const stageDir = resolveProjectAidlcPath(projectDir, context.current.stage_dir);
+  pathWithinRecord(stageDir, context);
   const manifest = context.manifest ?? readManifest(stageDir);
   if (!manifest) throw new HttpError(409, "no current manifest");
-  return { current: context.current, manifest, stageDir };
+  return { current: context.current, manifest, stageDir, context };
 }
 
 function parseRevision(raw: string | null): number {
@@ -657,7 +753,8 @@ function snapshotFile(projectDir: string, stageRelative: string, revision: numbe
 
 function snapshotsResponse(projectDir: string, url: URL): Response {
   const stageRelative = queryPath(url, "stage_dir");
-  const stageDir = resolveProjectAidlcPath(projectDir, stageRelative);
+  const context = stateContext(projectDir, selectionFromUrl(url));
+  const stageDir = pathWithinRecord(resolveProjectAidlcPath(projectDir, stageRelative), context);
   const snapshots = join(stageDir, ".review-ui", "snapshots");
   if (!existsSync(snapshots)) return json({ revisions: [] });
   const revisions = readdirSync(snapshots, { withFileTypes: true })
@@ -669,7 +766,8 @@ function snapshotsResponse(projectDir: string, url: URL): Response {
 
 function snapshotResponse(projectDir: string, url: URL): Response {
   const stageRelative = queryPath(url, "stage_dir");
-  resolveProjectAidlcPath(projectDir, stageRelative);
+  const context = stateContext(projectDir, selectionFromUrl(url));
+  pathWithinRecord(resolveProjectAidlcPath(projectDir, stageRelative), context);
   const revision = parseRevision(url.searchParams.get("revision"));
   const path = snapshotFile(projectDir, stageRelative, revision, queryPath(url, "file"));
   regularFile(path);
@@ -678,12 +776,13 @@ function snapshotResponse(projectDir: string, url: URL): Response {
 
 function diffResponse(projectDir: string, url: URL): Response {
   const requested = queryPath(url);
-  const currentPath = resolveProjectAidlcPath(projectDir, requested);
-  regularFile(currentPath);
-  const { current, manifest } = currentStageContext(projectDir);
+  const context = stateContext(projectDir, selectionFromUrl(url));
+  const currentPath = reviewableFile(projectDir, requested, url);
+  const { current, manifest } = selectedStageContext(projectDir, url);
   const artifact = manifest.artifacts.find((entry) => entry.path === requested);
   if (!artifact) throw new HttpError(404, "artifact is not in the current manifest");
   if (!current.stage_dir) throw new HttpError(409, "no current review");
+  pathWithinRecord(resolveProjectAidlcPath(projectDir, current.stage_dir), context);
   const from = parseRevision(url.searchParams.get("from"));
   const toRaw = url.searchParams.get("to") ?? "current";
   const beforePath = snapshotFile(projectDir, current.stage_dir, from, basename(requested));
@@ -696,6 +795,126 @@ function diffResponse(projectDir: string, url: URL): Response {
     before: `a/${basename(requested)}@r${from}`,
     after: toRaw === "current" ? `b/${basename(requested)}@current` : `b/${basename(requested)}@r${toRaw}`,
   }));
+}
+
+function selectedStageDir(projectDir: string, url: URL): string {
+  const stageRelative = queryPath(url, "stage_dir");
+  const context = stateContext(projectDir, selectionFromUrl(url));
+  return pathWithinRecord(resolveProjectAidlcPath(projectDir, stageRelative), context);
+}
+
+function responsesResponse(projectDir: string, url: URL): Response {
+  const stageDir = selectedStageDir(projectDir, url);
+  const entries = listResponsesFiles(stageDir).flatMap((file) =>
+    file.entries.map((entry) => ({
+      ...entry,
+      revision: file.revision,
+      file: file.file,
+    })),
+  );
+  return json({ entries });
+}
+
+function fileMtimeIso(path: string): string {
+  try {
+    return statSync(path).mtime.toISOString();
+  } catch {
+    return new Date(0).toISOString();
+  }
+}
+
+function remarksResponse(projectDir: string, url: URL): Response {
+  return json({ entries: reviewUiRemarkFiles(selectedStageDir(projectDir, url)) });
+}
+
+function historyResponse(projectDir: string, url: URL): Response {
+  const stageDir = selectedStageDir(projectDir, url);
+  const reviewDir = join(stageDir, ".review-ui");
+  const entries: Array<{
+    kind: "revision" | "feedback" | "answers" | "decision" | "responses";
+    revision?: number;
+    file: string;
+    at: string;
+    by: "agent" | "you";
+    summary: string;
+    chars_delta?: number;
+  }> = [];
+
+  const snapshots = join(reviewDir, "snapshots");
+  if (existsSync(snapshots)) {
+    for (const entry of readdirSync(snapshots, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^r\d+$/.test(entry.name)) continue;
+      const revision = Number(entry.name.slice(1));
+      entries.push({
+        kind: "revision",
+        revision,
+        file: entry.name,
+        at: fileMtimeIso(join(snapshots, entry.name)),
+        by: "agent",
+        summary: `Revision ${revision} written`,
+      });
+    }
+  }
+  for (const feedback of listFeedbackFiles(stageDir)) {
+    const remarkCount = feedback.remarks.length > 0
+      ? feedback.remarks.length
+      : (feedback.body.match(/^###\s+/gm) ?? []).length;
+    entries.push({
+      kind: "feedback",
+      revision: feedback.frontmatter.revision,
+      file: feedback.file,
+      at: feedback.frontmatter.created || fileMtimeIso(join(reviewDir, feedback.file)),
+      by: "you",
+      summary: `${remarkCount} ${remarkCount === 1 ? "remark" : "remarks"} sent`,
+    });
+  }
+  for (const decision of listDecisionFiles(stageDir)) {
+    entries.push({
+      kind: "decision",
+      revision: decision.submission.revision,
+      file: decision.file,
+      at: decision.submission.created,
+      by: "you",
+      summary: decision.submission.decision === "approve" ? "Approved" : "Requested changes",
+    });
+  }
+  for (const responses of listResponsesFiles(stageDir)) {
+    entries.push({
+      kind: "responses",
+      revision: responses.revision,
+      file: responses.file,
+      at: fileMtimeIso(join(reviewDir, responses.file)),
+      by: "agent",
+      summary: `${responses.entries.length} ${responses.entries.length === 1 ? "remark" : "remarks"} addressed`,
+    });
+  }
+  let files: string[] = [];
+  try {
+    files = readdirSync(reviewDir);
+  } catch {
+    files = [];
+  }
+  for (const file of files.filter((name) => /^answers-\d{3,}\.json$/.test(name))) {
+    const path = join(reviewDir, file);
+    let created = fileMtimeIso(path);
+    let count = 0;
+    try {
+      const value = JSON.parse(readFileSync(path, "utf-8")) as { created?: unknown; answers?: unknown };
+      if (typeof value.created === "string" && Number.isFinite(Date.parse(value.created))) created = value.created;
+      if (Array.isArray(value.answers)) count = value.answers.length;
+    } catch {
+      // A malformed historical file stays visible by its filesystem timestamp.
+    }
+    entries.push({
+      kind: "answers",
+      file,
+      at: created,
+      by: "you",
+      summary: `${count} ${count === 1 ? "answer" : "answers"} saved`,
+    });
+  }
+  entries.sort((left, right) => right.at.localeCompare(left.at) || right.file.localeCompare(left.file));
+  return json({ entries });
 }
 
 function validFeedbackBody(value: unknown): value is FeedbackRequest {
@@ -720,6 +939,7 @@ function validFeedbackBody(value: unknown): value is FeedbackRequest {
     if (!raw || typeof raw !== "object") return false;
     const annotation = raw as Partial<ReviewAnnotation>;
     return typeof annotation.artifact === "string" &&
+      (annotation.id === undefined || typeof annotation.id === "string") &&
       kinds[String(annotation.kind)] === true &&
       Array.isArray(annotation.heading_path) &&
       annotation.heading_path.every((entry) => typeof entry === "string") &&
@@ -747,7 +967,7 @@ async function feedbackResponse(projectDir: string, request: Request): Promise<R
   }
   if (!validFeedbackBody(parsed)) throw new HttpError(400, "invalid feedback body");
 
-  const { current, manifest, stageDir } = currentStageContext(projectDir);
+  const { current, manifest, stageDir } = selectedStageContext(projectDir);
   if (
     parsed.stage !== current.stage ||
     parsed.unit !== current.unit ||
@@ -844,6 +1064,26 @@ function validAnswersEnvelope(value: unknown): value is Omit<AnswersRequest, "an
     Array.isArray(body.answers);
 }
 
+function appendHumanTurn(projectDir: string, file: string): void {
+  try {
+    const space = activeSpace(projectDir);
+    if (humanTurnMintAllowed()) {
+      appendAuditEntry(
+        "HUMAN_TURN",
+        { Mode: "browser", Source: "review-ui", Submission: file },
+        projectDir,
+        activeIntent(projectDir, space) ?? undefined,
+        space,
+      );
+    }
+    markHumanTurn(projectDir);
+  } catch (error) {
+    process.stderr.write(
+      `Review UI: human-turn mint failed after ${file}: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+  }
+}
+
 async function answersResponse(projectDir: string, request: Request): Promise<Response> {
   const bytes = await limitedRequestBytes(request, MAX_ANSWERS_BODY_BYTES);
   let body: unknown;
@@ -857,7 +1097,7 @@ async function answersResponse(projectDir: string, request: Request): Promise<Re
   const questionsPath = resolveProjectAidlcPath(projectDir, body.questions_file);
   regularFile(questionsPath);
   if (extname(questionsPath).toLowerCase() !== ".md") throw new HttpError(400, "invalid questions file");
-  const target = requireCurrentQuestionsTarget(projectDir, body.questions_file, questionsPath);
+  const target = requireQuestionsTarget(projectDir, body.questions_file, questionsPath);
   const source = readFileSync(questionsPath);
   const sourceSha256 = sha256Hex(source);
   if (body.source_sha256 !== sourceSha256) {
@@ -899,31 +1139,14 @@ async function answersResponse(projectDir: string, request: Request): Promise<Re
     } finally {
       closeSync(descriptor);
     }
-    // The click is a human act observed by a trusted seam — the same standing
-    // as a prompt submit or an answered widget — so record the presence the
-    // interview gate demands, and the conversational marker the Stop hook
-    // reads. Fail-open: the submission is already on disk; a mint failure must
-    // not turn a saved answer into an error for the human.
-    try {
-      if (humanTurnMintAllowed()) {
-        appendAuditEntry(
-          "HUMAN_TURN",
-          { Mode: "browser", Source: "review-ui", Submission: file },
-          projectDir,
-          activeIntent(projectDir, activeSpace(projectDir)) ?? undefined,
-          activeSpace(projectDir),
-        );
-      }
-      markHumanTurn(projectDir);
-    } catch (error) {
-      process.stderr.write(`Review UI: human-turn mint failed after ${file}: ${error instanceof Error ? error.message : String(error)}\n`);
-    }
+    appendHumanTurn(projectDir, file);
     return json({ file });
   }
 }
 
 function exportResponse(projectDir: string, url: URL): Response {
-  const path = confinedPath(projectDir, url);
+  const context = stateContext(projectDir, selectionFromUrl(url));
+  const path = pathWithinRecord(confinedPath(projectDir, url), context);
   regularFile(path);
   const extension = extname(path).toLowerCase();
   const source = readFileSync(path, "utf-8");
@@ -1041,13 +1264,31 @@ async function serve(projectDir: string): Promise<void> {
         try {
           if (url.pathname === "/" && request.method === "GET") return appShellResponse();
           if (request.method === "GET" && url.pathname === "/api/state") return json(statePayload(projectDir));
-          if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir));
+          if (request.method === "GET" && url.pathname === "/api/workflow") {
+            return json(workflowPayload(projectDir, {
+              ...selectionFromUrl(url),
+              version: AIDLC_VERSION,
+              port: server.port ?? port,
+            }));
+          }
+          if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir, url));
           if (request.method === "GET" && url.pathname === "/api/artifact") return artifactResponse(projectDir, url);
+          if (request.method === "GET" && url.pathname === "/api/render") return renderResponse(projectDir, url);
           if (request.method === "GET" && url.pathname === "/api/raw") return rawResponse(projectDir, url);
           if (request.method === "GET" && url.pathname === "/api/questions") return questionsResponse(projectDir, url);
+          if (request.method === "GET" && url.pathname === "/api/history") return historyResponse(projectDir, url);
+          if (request.method === "GET" && url.pathname === "/api/responses") return responsesResponse(projectDir, url);
+          if (request.method === "GET" && url.pathname === "/api/remarks") return remarksResponse(projectDir, url);
           if (request.method === "POST" && url.pathname === "/api/feedback") return await feedbackResponse(projectDir, request);
           if (request.method === "GET" && url.pathname === "/api/snapshots") return snapshotsResponse(projectDir, url);
           if (request.method === "POST" && url.pathname === "/api/answers") return await answersResponse(projectDir, request);
+          if (request.method === "POST" && url.pathname === "/api/decision") {
+            return await handleDecision(request, {
+              projectDir,
+              stateContext: stateContext(projectDir),
+              appendHumanTurn: (file) => appendHumanTurn(projectDir, file),
+            });
+          }
           if (request.method === "GET" && url.pathname === "/api/snapshot") return snapshotResponse(projectDir, url);
           if (request.method === "GET" && url.pathname === "/api/diff") return diffResponse(projectDir, url);
           if (request.method === "GET" && url.pathname === "/api/export") return exportResponse(projectDir, url);

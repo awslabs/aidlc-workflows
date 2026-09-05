@@ -1,0 +1,48 @@
+.history-panel, .outline-panel { min-height: 0; height: 100%; display: flex; flex-direction: column; }
+.side-panel-header { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
+.side-panel-header > div { display: flex; align-items: center; gap: 8px; }
+.side-panel-header h2 { flex: 1; margin: 0; font-size: 13.5px; }
+.side-panel-header > div > span { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-panel-close { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 5px; color: var(--muted); font-size: 15px; }
+.side-panel-close:hover { color: var(--ink); background: var(--line); }
+.history-compare { display: flex; align-items: center; gap: 8px; margin-top: 9px; color: var(--muted); font-size: 11px; }
+.history-segment { display: flex; gap: 2px; }
+.history-segment button { padding: 2px 8px; border-radius: 5px; color: var(--muted); font-size: 11px; }
+.history-segment button.on { background: var(--soft); color: var(--accent); font-weight: 650; }
+.history-body { min-height: 0; flex: 1; overflow: auto; }
+.history-list { padding: 10px; }
+.history-entry { width: 100%; margin-bottom: 8px; padding: 9px 11px; border: 1px solid var(--line2); border-radius: 8px; background: #fff; text-align: left; font-size: 12px; }
+.history-entry:not([disabled]):hover { border-color: #c9d5ff; }
+.history-entry[disabled] { cursor: default; }
+.history-entry.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--soft); }
+.history-entry-title, .history-entry-detail { display: flex; align-items: center; gap: 6px; }
+.history-entry-title time { margin-left: auto; color: var(--muted); font-size: 11px; }
+.history-entry-detail { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.history-delta { margin-left: auto; color: var(--green); font-weight: 650; }
+.history-entry-summary { display: block; margin-top: 6px; color: #4d5968; line-height: 1.35; }
+.history-entry-kind { display: inline-block; margin-top: 7px; padding: 1px 7px; border-radius: 5px; background: var(--soft); color: var(--accent); font-size: 9.5px; font-weight: 750; letter-spacing: 0.04em; text-transform: uppercase; }
+.history-entry-kind.answers { background: #fff7e8; color: #9a5b00; }
+.history-entry-kind.decision { background: var(--green-soft); color: var(--green); }
+.history-entry-kind.feedback { background: var(--violet-soft); color: var(--violet); }
+.history-entry-kind.responses { background: var(--panel); color: var(--ink); }
+.history-help { margin: 5px 4px; color: var(--muted); font-size: 11.5px; }
+.history-help button { color: var(--accent); }
+.history-diff { min-width: max-content; padding: 10px 0; background: #fff; font: 10.5px/1.5 var(--mono); }
+.history-diff > div { min-height: 16px; padding: 0 10px; white-space: pre; }
+.history-diff .diff-hunk { margin: 5px 0; background: var(--soft); color: var(--accent); }
+.history-diff .diff-add { background: var(--green-soft); color: #166534; }
+.history-diff .diff-delete { background: var(--rose-soft); color: #9f1239; }
+.snapshot-fallback { height: 100%; display: flex; flex-direction: column; padding: 10px; }
+.snapshot-fallback > p { display: flex; align-items: center; margin: 0 0 8px; font-size: 11.5px; }
+.snapshot-fallback > p button { margin-left: auto; color: var(--accent); }
+.snapshot-fallback pre { min-height: 0; flex: 1; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--line2); border-radius: 7px; background: #fff; white-space: pre-wrap; overflow-wrap: anywhere; font: 10.5px/1.55 var(--mono); }
+.side-panel-empty { padding: 36px 20px; color: var(--muted); text-align: center; }
+.side-panel-empty b { display: block; margin-bottom: 5px; color: var(--ink); font-size: 13px; }
+.outline-list { min-height: 0; overflow: auto; padding: 6px 8px; }
+.outline-heading { width: 100%; display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 6px; color: var(--ink); text-align: left; font-size: 12.5px; }
+.outline-heading:hover { background: var(--line); }
+.outline-heading > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outline-heading > b { color: var(--amber); font-size: 10.5px; }
+.outline-heading.level-2 { padding-left: 22px; color: #3f4b5c; }
+.outline-heading.level-3 { padding-left: 34px; color: var(--muted); font-size: 12px; }
+.outline-heading.level-4, .outline-heading.level-5, .outline-heading.level-6 { padding-left: 44px; color: var(--muted); font-size: 11.5px; }
