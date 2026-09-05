@@ -948,7 +948,8 @@ function validFeedbackBody(value: unknown): value is FeedbackRequest {
       (annotation.line_end === undefined || Number.isInteger(annotation.line_end)) &&
       (annotation.css_path === undefined || typeof annotation.css_path === "string") &&
       (annotation.body === undefined || typeof annotation.body === "string") &&
-      (annotation.after === undefined || typeof annotation.after === "string");
+      (annotation.after === undefined || typeof annotation.after === "string") &&
+      (annotation.reply_to === undefined || typeof annotation.reply_to === "string");
   });
 }
 

@@ -17,10 +17,17 @@ export function init() {
   elements.main.insertBefore(elements.toolbar, elements.viewer);
 
   elements.viewer.addEventListener("mouseup", captureSelection);
+  elements.viewer.addEventListener("keyup", (event) => {
+    if (!event.shiftKey && !/^(Shift|Arrow|Home|End)/.test(event.key)) return;
+    const anchor = elementForNode(window.getSelection()?.anchorNode);
+    if (anchor) captureSelection({ target: anchor });
+  });
   elements.viewer.addEventListener("click", handleViewerClick);
   elements.viewer.addEventListener("focusin", handleBlockFocus);
+  elements.viewer.addEventListener("beforeinput", handleBeforeInput);
   elements.viewer.addEventListener("input", handleBlockInput);
   elements.viewer.addEventListener("focusout", handleBlockBlur);
+  elements.viewer.addEventListener("keydown", handleEditorKey);
   document.addEventListener("keydown", handleSelectionKey);
   window.addEventListener("message", receiveHtmlAnchor);
 
@@ -120,6 +127,7 @@ function renderMarkdown(doc, view) {
   for (const block of doc.blocks) blocks.append(buildBlock(block, view));
   page.append(blocks);
   elements.viewer.append(page);
+  idleToolbar();
   assignHeadingIds(doc);
   applyAnnotations();
 }
@@ -221,6 +229,7 @@ function receiveHtmlAnchor(event) {
 
 function captureSelection(event) {
   if (htmlFrame || event.target.closest(".gutter, .selection-add, .document-toolbar")) return;
+  if (activeEdit?.armed && activeEdit.content.contains(event.target)) return;
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || !selection.toString().trim()) {
     store.set({ selection: null });
@@ -273,7 +282,7 @@ function handleSelectionKey(event) {
   if (!store.selection || store.view.kind !== "artifact") return;
   const target = event.target;
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
-  if (target instanceof HTMLElement && target.isContentEditable && activeEdit) return;
+  if (activeEdit) return;
   const key = event.key.toLowerCase();
   const kind = key === "c" ? "comment" : key === "d" ? "delete" : key === "g" ? "looks-good" : null;
   if (!kind) return;
@@ -317,11 +326,14 @@ function applyAnnotations() {
     ...annotations.map((annotation) => ({ item: annotation, sent: false })),
     ...remarks.map((remark) => ({ item: remark, sent: true })),
   ];
-  marks.forEach(({ item, sent }, index) => {
+  // Bunsho's gutter shows one bubble per line with the number of threads on
+  // it, not a running index — so a block with three remarks reads "3".
+  const perBlock = new Map();
+  for (const { item, sent } of marks) {
     const kind = annotationKind(item.kind);
     const quote = remarkQuote(item, sent);
     const block = sent ? remarkBlock(item, quote) : annotationBlock(item);
-    if (!block || block.classList.contains("editing")) return;
+    if (!block || block.classList.contains("editing")) continue;
     const content = block.querySelector(".blk-content");
     let marked = quote ? markText(content, quote, kind, item.id, sent) : false;
     if (!marked && sent && kind === "suggestion") {
@@ -329,15 +341,22 @@ function applyAnnotations() {
       marked = Boolean(blockText) && markText(content, blockText, kind, item.id, true);
     }
     if (!marked && kind === "suggestion") block.classList.add("has-suggestion");
+    if (!perBlock.has(block)) perBlock.set(block, []);
+    perBlock.get(block).push({ item, sent, kind });
+  }
+  for (const [block, entries] of perBlock) {
+    const first = entries[0];
+    const pending = entries.filter((entry) => !entry.sent).length;
     const bubble = document.createElement("button");
     bubble.type = "button";
-    bubble.className = `bubble ${kind}${sent ? " sent" : ""}`;
-    bubble.dataset[sent ? "remark" : "annotation"] = item.id;
-    bubble.textContent = String(index + 1);
-    bubble.title = `${kindLabel(kind)} ${index + 1}${sent ? ` · sent in r${item.revision ?? "?"}` : " · pending"}`;
+    bubble.className = `bubble ${first.kind}${pending ? "" : " sent"}`;
+    bubble.dataset[first.sent ? "remark" : "annotation"] = first.item.id;
+    bubble.textContent = String(entries.length);
+    const summary = entries.map((entry) => `${kindLabel(entry.kind)}${entry.sent ? ` (r${entry.item.revision ?? "?"})` : " (pending)"}`).join(", ");
+    bubble.title = `${entries.length} ${entries.length === 1 ? "thread" : "threads"} · ${summary}`;
     bubble.setAttribute("aria-label", bubble.title);
     block.querySelector(".gutter").append(bubble);
-  });
+  }
   showSelectionAffordance(store.selection);
 }
 
@@ -479,13 +498,169 @@ function handleBlockFocus(event) {
   if (activeEdit) finishEdit(activeEdit);
   const data = blockData(wrapper);
   if (!data) return;
-  const visibleOffset = caretOffset(content);
   const source = sourceForBlock(data);
-  activeEdit = { wrapper, content, data, original: source };
+  // Focus alone changes nothing: the reader may be about to select text for a
+  // comment. The block switches to its Markdown source on the first keystroke
+  // or toolbar action (see armEdit), so selecting and editing share one surface.
+  activeEdit = { wrapper, content, data, original: source, history: [], future: [], armed: false };
   wrapper.classList.add("editing");
-  content.innerHTML = tokenizeMarkdown(source);
-  setCaretOffset(content, Math.min(source.length, visibleOffset));
   showToolbar(data, source);
+}
+
+/** Swap the rendered block for its Markdown source, keeping the caret on the same word. */
+function armEdit(edit) {
+  if (!edit || edit.armed) return;
+  const prefix = caretPrefix(edit.content);
+  edit.content.innerHTML = tokenizeMarkdown(edit.original);
+  setCaretOffset(edit.content, alignPrefixToSource(edit.original, prefix));
+  edit.armed = true;
+  edit.wrapper.classList.add("armed");
+}
+
+/** Rendered text from the start of the block to the caret. */
+function caretPrefix(root) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !root.contains(selection.anchorNode)) return "";
+  const range = selection.getRangeAt(0).cloneRange();
+  range.selectNodeContents(root);
+  range.setEnd(selection.anchorNode, selection.anchorOffset);
+  return range.toString();
+}
+
+/**
+ * Find where the rendered prefix ends inside the Markdown source. Rendered
+ * text is the source minus syntax (markers, list bullets, table pipes and
+ * rules, link targets), so walk both: every rendered character must be found
+ * in order in the source, skipping the syntax characters between them.
+ * Whitespace runs match any whitespace. Works for every block type without
+ * a grammar; the fallback for a character that never appears is the end.
+ */
+function alignPrefixToSource(source, prefix) {
+  let j = 0;
+  const isSpace = (ch) => /\s/.test(ch);
+  // Rendered whitespace carries no position information (tables and lists add
+  // layout whitespace the source never had), so only visible characters steer.
+  for (const ch of prefix) {
+    if (isSpace(ch)) continue;
+    while (j < source.length && source[j] !== ch) j += 1;
+    if (j >= source.length) return source.length;
+    j += 1;
+  }
+  // A caret that sat after a space in the rendered text stays after the space.
+  if (prefix.length && isSpace(prefix[prefix.length - 1])) {
+    while (j < source.length && isSpace(source[j]) && source[j] !== "\n") j += 1;
+  }
+  return Math.min(source.length, j);
+}
+
+/**
+ * The rendered text has no Markdown markers, so a caret placed by clicking the
+ * rendered block lands short of where the same text sits in the source. Walk
+ * the source counting only non-marker characters until the visible offset is
+ * reached; the caret then keeps the word the reader clicked on.
+ */
+function visibleToSourceOffset(source, visibleOffset) {
+  // Line-start markers swallow the whitespace after them (and a task box), because
+  // none of that reaches the rendered text; inline markers are exact.
+  const marker = /(^(?:#{1,6}|[-+*>]|\d+[.)])\s+(?:\[[ xX]\]\s+)?|^\s+|\*\*|~~|_|`)/gm;
+  let visible = 0;
+  let last = 0;
+  for (const match of source.matchAll(marker)) {
+    const plain = match.index - last;
+    if (visible + plain >= visibleOffset) return last + (visibleOffset - visible);
+    visible += plain;
+    last = match.index + match[0].length;
+  }
+  return Math.min(source.length, last + Math.max(0, visibleOffset - visible));
+}
+
+function snapshotEdit(edit) {
+  if (!edit) return;
+  const text = editorText(edit.content);
+  const last = edit.history[edit.history.length - 1];
+  if (last && last.text === text) return;
+  edit.history.push({ text, caret: caretOffset(edit.content) });
+  if (edit.history.length > 200) edit.history.shift();
+  edit.future = [];
+}
+
+function restoreEdit(edit, entry) {
+  edit.content.innerHTML = tokenizeMarkdown(entry.text);
+  setCaretOffset(edit.content, Math.min(entry.text.length, entry.caret));
+  edit.content.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "historyUndo" }));
+}
+
+function undoEdit(edit) {
+  if (!edit || edit.history.length === 0) return false;
+  const current = { text: editorText(edit.content), caret: caretOffset(edit.content) };
+  const entry = edit.history.pop();
+  edit.future.push(current);
+  restoreEdit(edit, entry);
+  return true;
+}
+
+function redoEdit(edit) {
+  if (!edit || edit.future.length === 0) return false;
+  edit.history.push({ text: editorText(edit.content), caret: caretOffset(edit.content) });
+  restoreEdit(edit, edit.future.pop());
+  return true;
+}
+
+function cancelEdit(edit) {
+  if (!edit || activeEdit !== edit) return;
+  edit.armed = false;
+  edit.content.blur();
+}
+
+function handleEditorKey(event) {
+  if (!activeEdit || !activeEdit.content.contains(event.target)) return;
+  const meta = event.metaKey || event.ctrlKey;
+  if (meta && !event.altKey && event.key.toLowerCase() === "z") {
+    event.preventDefault();
+    if (event.shiftKey) redoEdit(activeEdit);
+    else undoEdit(activeEdit);
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelEdit(activeEdit);
+  }
+}
+
+function handleBeforeInput(event) {
+  const content = event.target.closest(".blk-content[contenteditable]");
+  if (!activeEdit || content !== activeEdit.content) return;
+  if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
+    // Our own history replaces the browser's, which innerHTML swaps would corrupt.
+    event.preventDefault();
+    if (event.inputType === "historyUndo") undoEdit(activeEdit);
+    else redoEdit(activeEdit);
+    return;
+  }
+  if (!activeEdit.armed) {
+    // First keystroke on a rendered block: switch to source at the same caret,
+    // then replay the intended input against the source text.
+    event.preventDefault();
+    armEdit(activeEdit);
+    snapshotEdit(activeEdit);
+    replayInput(event);
+    return;
+  }
+  const last = activeEdit.history[activeEdit.history.length - 1];
+  const boundary = /^(insertParagraph|insertLineBreak|deleteContent|deleteWord|insertFromPaste)/.test(event.inputType || "") ||
+    (event.inputType === "insertText" && /\s/.test(event.data || ""));
+  if (!last || boundary) snapshotEdit(activeEdit);
+}
+
+function replayInput(event) {
+  const type = event.inputType || "";
+  if (type === "insertText" && event.data) document.execCommand("insertText", false, event.data);
+  else if (type === "insertFromPaste") {
+    const text = event.dataTransfer?.getData("text/plain") || "";
+    if (text) document.execCommand("insertText", false, text);
+  } else if (type === "insertParagraph" || type === "insertLineBreak") document.execCommand("insertText", false, "\n");
+  else if (type === "deleteContentBackward" || type === "deleteWordBackward") document.execCommand("delete");
+  else if (type === "deleteContentForward" || type === "deleteWordForward") document.execCommand("forwardDelete");
 }
 
 function handleBlockInput(event) {
@@ -507,9 +682,9 @@ function handleBlockBlur(event) {
 
 function finishEdit(edit) {
   if (!edit || activeEdit !== edit) return;
-  const after = editorText(edit.content);
-  const changed = after !== edit.original;
-  edit.wrapper.classList.remove("editing", "changed");
+  const after = edit.armed ? editorText(edit.content) : edit.original;
+  const changed = edit.armed && after !== edit.original;
+  edit.wrapper.classList.remove("editing", "changed", "armed");
   delete edit.wrapper.dataset.diff;
   edit.content.innerHTML = String(edit.data.html || "");
   activeEdit = null;
@@ -581,21 +756,34 @@ function buildToolbar() {
   return toolbar;
 }
 
+// The toolbar keeps its row whenever the document is editable, like Bunsho's:
+// showing it on focus would shift the text under a reader mid-selection.
 function showToolbar(block, source) {
   const label = blockLabel(block, source);
   elements.toolbar.querySelector(".toolbar-context").textContent =
     `Editing ${label} · a suggestion — the file is untouched until you decide`;
+  elements.toolbar.classList.add("active");
   elements.toolbar.hidden = false;
 }
 
+function idleToolbar() {
+  if (!elements.toolbar) return;
+  elements.toolbar.classList.remove("active");
+  elements.toolbar.querySelector(".toolbar-context").textContent =
+    "Select text to comment · click into a paragraph and type to suggest a change";
+  elements.toolbar.hidden = !isLiveGate(store.view);
+}
+
 function hideToolbar() {
-  if (elements.toolbar) elements.toolbar.hidden = true;
+  idleToolbar();
 }
 
 function applyFormatting(command) {
   if (!activeEdit) return;
   const editor = activeEdit.content;
   editor.focus();
+  armEdit(activeEdit);
+  snapshotEdit(activeEdit);
   const wrappers = {
     bold: ["**", "**"],
     italic: ["_", "_"],
@@ -695,6 +883,17 @@ function wordDiff(before, after) {
     }
   }
   return result;
+}
+
+/** When most tokens changed, an interleaved word diff is noise; show old → new whole. */
+function readableDiff(before, after) {
+  const parts = wordDiff(before, after);
+  const changed = parts.filter((part) => part.type !== "same").reduce((total, part) => total + part.value.length, 0);
+  const total = Math.max(1, before.length + after.length);
+  if (changed / total > 0.6 && before.trim() && after.trim()) {
+    return [{ type: "delete", value: before }, { type: "insert", value: after }];
+  }
+  return parts;
 }
 
 function summarizeDiff(parts) {

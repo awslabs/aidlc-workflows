@@ -31,8 +31,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 button { background: none; border: 0; padding: 0; cursor: pointer; }
 a { color: var(--accent); text-decoration: none; }
 code { font: 12px var(--mono); background: var(--panel); padding: 1px 5px; border-radius: 4px; }
-[hidden] { display: none; }
-.app [hidden] { display: none; }
+/* Every region sets its own display (grid/flex); the hidden attribute must always win,
+   otherwise a hidden fixed overlay (the palette) would swallow every click. */
+[hidden] { display: none !important; }
 
 /* layout: rail | panel | work(header / body(main | slot)) */
 .app { display: grid; grid-template-columns: var(--rail-w) var(--panel-w) minmax(0, 1fr); height: 100vh; }

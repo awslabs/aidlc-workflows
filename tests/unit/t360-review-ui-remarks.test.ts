@@ -32,6 +32,7 @@ describe("review UI sent remarks", () => {
         quote: "The user can mark a task complete.",
         body: "Clarify whether this can be undone.",
         diff: null,
+        reply_to: null,
       },
       {
         id: "a8",
@@ -41,6 +42,7 @@ describe("review UI sent remarks", () => {
         quote: null,
         body: null,
         diff: "--- a/requirements.md\n+++ b/requirements.md\n@@ -1 +1 @@\n-old\n+new\n",
+        reply_to: null,
       },
     ]);
   });
@@ -65,6 +67,7 @@ describe("review UI sent remarks", () => {
         quote: null,
         body: "`needs evidence`",
         diff: null,
+        reply_to: null,
       },
       {
         id: "a2",
@@ -74,6 +77,7 @@ describe("review UI sent remarks", () => {
         quote: "Obsolete sentence",
         body: null,
         diff: null,
+        reply_to: null,
       },
     ]);
   });
@@ -100,6 +104,7 @@ describe("review UI sent remarks", () => {
         quote: "Good sentence",
         body: null,
         diff: null,
+        reply_to: null,
       },
       {
         id: "feedback-001-2",
@@ -109,6 +114,32 @@ describe("review UI sent remarks", () => {
         quote: "Remove this sentence",
         body: "This is obsolete.",
         diff: null,
+        reply_to: null,
+      },
+    ]);
+  });
+
+  test("reads the reply-to suffix a threaded follow-up carries", () => {
+    const source = [
+      "## requirements.md",
+      "",
+      "### Comment · a9 · reply to a7 — Functional requirements › FR2 (lines ~3-3)",
+      "> The user can mark a task complete.",
+      "",
+      "Agreed — and keep the deleted task visible for a moment.",
+      "",
+    ].join("\n");
+
+    expect(parseReviewUiRemarks(source)).toEqual([
+      {
+        id: "a9",
+        kind: "comment",
+        artifact: "requirements.md",
+        heading_path: ["Functional requirements", "FR2"],
+        quote: "The user can mark a task complete.",
+        body: "Agreed — and keep the deleted task visible for a moment.",
+        diff: null,
+        reply_to: "a7",
       },
     ]);
   });

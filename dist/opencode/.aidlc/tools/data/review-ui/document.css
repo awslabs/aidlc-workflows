@@ -144,15 +144,23 @@
   padding-left: 12px;
 }
 
+/* Focused but untouched: a quiet rule says "you can type here"; the source
+   appears (and the tint) only once the reader actually edits. */
 .blk.editing .blk-content {
+  border-left-color: #d7c3ff;
+}
+
+.blk.editing.armed .blk-content {
   min-height: 1.65em;
   padding-top: 7px;
   padding-bottom: 7px;
   border-left-color: var(--violet);
   border-radius: 0 7px 7px 0;
   background: linear-gradient(90deg, var(--violet-soft), #fff 70%);
-  font: 13px/1.7 var(--mono);
+  /* Bunsho shows the Markdown source in the reading face; only the markers are mono. */
+  font: inherit;
   white-space: pre-wrap;
+  caret-color: var(--violet);
 }
 
 .blk.editing.changed .blk-content,
@@ -287,6 +295,8 @@
 }
 
 .document-toolbar[hidden] { display: none; }
+.document-toolbar:not(.active) .toolbar-button { color: var(--faint); pointer-events: none; }
+.document-toolbar:not(.active) .toolbar-context { color: var(--muted); }
 
 .toolbar-button {
   flex: none;

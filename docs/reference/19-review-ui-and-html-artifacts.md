@@ -213,6 +213,13 @@ Make this 2 minutes; the SLA changed.
 Free text.
 ````
 
+Every remark heading carries a stable id (`· a1`, `· a2`, …) assigned by the
+serializer (client-supplied ids are kept when unique). A reply to an earlier
+thread adds `· reply to aN` after the id — `### Comment · a9 · reply to a7 —
+Functional requirements › FR2` — from the annotation's optional `reply_to`
+field; `/api/remarks` surfaces it as `reply_to` so the Threads panel nests the
+follow-up under its parent and the agent answers it within that thread.
+
 Artifact sections use the artifact basename. Remark headings are `Comment`,
 `Delete`, `Looks good`, `Label`, or `Edit (unified diff)`, followed by a stable
 id such as `· a1`; the UI calls `Edit (unified diff)` a **Suggestion**. A remark
@@ -282,7 +289,8 @@ revised --responses <file>` copies the validated file here:
 ```
 
 The heading stage and current pre-revise revision must match the revised report. Each nonblank body
-line is exactly `- aN: applied|kept|answered — <nonblank text>`; remark ids are
+line is `- aN: applied|kept|answered — <nonblank text>` (the separator may also
+be a hyphen, en dash, or colon); remark ids are
 unique in the file and must exist in that stage and Unit's feedback files. The
 daemon projects entries as `{remark_id,status,text,revision,file}` so the
 Threads panel can join them to the original remarks.

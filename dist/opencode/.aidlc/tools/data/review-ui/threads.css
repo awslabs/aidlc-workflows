@@ -65,3 +65,11 @@
 .decision-note-form > div { display: flex; justify-content: flex-end; gap: 6px; margin-top: 7px; }
 .general-note-preview { margin: 10px 14px 0; padding: 9px 10px; border-radius: 7px; background: #fff; white-space: pre-wrap; font-size: 11.5px; }
 .general-note-preview b { display: block; margin-bottom: 3px; }
+
+.thread-followup { margin: 8px 0 0 10px; padding-left: 12px; border-left: 2px solid var(--line2); }
+.thread-followup p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.5; }
+.thread-followup.pending { border-left-style: dashed; }
+.sent-actions { margin-top: 6px; gap: 12px; }
+.sent-actions button { color: var(--muted); font-size: 12px; }
+.sent-actions button:hover { color: var(--accent); }
+.sent-card.resolved { opacity: 0.75; }

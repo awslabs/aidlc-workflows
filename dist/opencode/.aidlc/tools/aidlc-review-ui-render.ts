@@ -17,6 +17,8 @@ export interface ReviewAnnotation {
   css_path?: string;
   body?: string;
   after?: string;
+  /** Id of an earlier remark this one continues (a thread reply). */
+  reply_to?: string;
 }
 
 export interface FeedbackRequest {
@@ -718,6 +720,7 @@ function annotationHeading(annotation: ReviewAnnotation, id: string): string {
     edit: "Edit (unified diff)",
   };
   let heading = `### ${names[annotation.kind]} · ${id}`;
+  if (annotation.reply_to && REMARK_ID.test(annotation.reply_to)) heading += ` · reply to ${annotation.reply_to}`;
   if (annotation.kind === "edit") return heading;
   if (annotation.heading_path.length > 0) heading += ` — ${annotation.heading_path.join(" › ")}`;
   if (annotation.line_start !== undefined) {

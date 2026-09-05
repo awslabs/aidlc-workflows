@@ -88,19 +88,28 @@ same navigation and authority.
 
 ### Read, comment, and suggest
 
-Markdown is a reading surface with comment bubbles in the left gutter. Clicking
-a bubble focuses its thread. Select text and one `+` appears at that line;
-choose it to open a dashed pending card in **Threads**. The card's kind selector
-is **Comment · Suggestion · Delete · Looks good**. Add the remark and choose
-**Post**; the pending card remains editable or removable and persists in that
-browser tab's session storage. It is not sent yet.
+Markdown is a reading surface with one bubble per commented line in the left
+gutter, showing how many threads sit on that line (as in Bunsho). Clicking a
+bubble focuses its threads. Select text — with the mouse or with Shift and the
+arrow keys — and one `+` appears at that line; choose it to open a dashed
+pending card in **Threads**. The card's kind selector is **Comment · Suggestion
+· Delete · Looks good**. Add the remark and choose **Post**; the pending card
+remains editable or removable and persists in that browser tab's session
+storage. It is not sent yet.
 
-There is no separate editing mode. At a live Markdown gate, type directly in a
-paragraph to create a **Suggestion**. While the paragraph has focus, its
-Markdown markers are visible and a contextual formatting row appears with
-**Paragraph ▾**, bold, italic, strike, code, lists, quote, link, table, and
-diagram controls. The eventual pending card shows the change; the artifact
-itself is untouched. Browser suggestions become `edit` remarks in
+There is no separate editing mode. At a live Markdown gate every paragraph,
+heading, list, and table is editable in place: click into it and type. The
+first keystroke switches that block to its Markdown source, in the reading
+face with the markers (`**`, `-`, `|`, `##`) shown in muted type, and the caret
+stays on the word you clicked. Nothing changes on focus alone, so selecting
+text to comment never disturbs the document. While a block is being edited the
+formatting row above the document is live — **Paragraph ▾**, bold, italic,
+strike, code, lists, quote, link, table, and diagram insert Markdown syntax at
+the caret — and it reads *Editing FR2 · a suggestion — the file is untouched
+until you decide*. `⌘Z` / `⇧⌘Z` undo and redo within the block (including
+toolbar actions); `Esc` abandons the change. Clicking elsewhere finishes the
+edit: a changed block becomes a **Suggestion** whose pending card shows the
+changed lines as a word diff. Browser suggestions become `edit` remarks in
 `feedback-NNN.md`; the terminal equivalent is to describe the exact change in
 your **Request Changes** gate feedback.
 
@@ -140,6 +149,11 @@ was browser feedback, and the decision receipt is consumed as
 order** or **Recent**, and an optional general note. Pending, open, addressed,
 and resolved cards carry their quote, kind, body or diff, and status. Clicking a
 gutter bubble focuses its card; clicking a card scrolls to and flashes its mark.
+A sent thread offers **Reply** — a nested pending comment on the same passage,
+recorded in the next `feedback-NNN.md` as `### Comment · a9 · reply to a7` so the
+agent answers it as part of that thread — and **Resolve**, a reviewer-side
+receipt kept in the browser tab (hidden by **Show resolved**; **Reopen** undoes
+it). Resolving never writes to the record.
 
 After a revision, the agent's completion message includes **Feedback
 addressed**. The agent also records the same per-remark dispositions in

@@ -596,6 +596,8 @@ export interface ReviewUiRemark {
   quote: string | null;
   body: string | null;
   diff: string | null;
+  /** The remark this one continues, when the reviewer replied to an earlier thread. */
+  reply_to: string | null;
 }
 
 export interface ReviewUiRemarkFile {
@@ -607,7 +609,7 @@ export interface ReviewUiRemarkFile {
   remarks: ReviewUiRemark[];
 }
 
-const REMARK_HEADING = /^### (Comment|Delete|Looks good|Label|Edit \(unified diff\))(?: · (a[1-9][0-9]*))?(?: — (.*))?$/;
+const REMARK_HEADING = /^### (Comment|Delete|Looks good|Label|Edit \(unified diff\))(?: · (a[1-9][0-9]*))?(?: · reply to (a[1-9][0-9]*))?(?: — (.*))?$/;
 
 function remarkKind(label: string): FeedbackRemarkKind {
   if (label === "Looks good") return "looks-good";
@@ -686,10 +688,11 @@ export function parseReviewUiRemarks(body: string, legacyIdPrefix = "remark"): R
       id: heading[2] ?? `${legacyIdPrefix}-${remarks.length + 1}`,
       kind: remarkKind(heading[1]),
       artifact,
-      heading_path: remarkHeadingPath(heading[3] ?? ""),
+      heading_path: remarkHeadingPath(heading[4] ?? ""),
       quote: content.quote,
       body: content.body,
       diff: content.diff,
+      reply_to: heading[3] ?? null,
     });
     index = end - 1;
   }

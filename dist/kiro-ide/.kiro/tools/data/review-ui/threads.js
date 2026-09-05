@@ -17,6 +17,31 @@ let remoteLoading = false;
 let remoteSequence = 0;
 let showResolved = true;
 let sortMode = "document";
+// Resolving a sent thread is a reviewer-side receipt: it changes what the panel
+// shows, never the record. Kept per stage directory in sessionStorage.
+const RESOLVED_KEY = "aidlc-review-resolved";
+function resolvedSet() {
+  try {
+    const all = JSON.parse(sessionStorage.getItem(RESOLVED_KEY) || "{}");
+    return new Set(Array.isArray(all[stageDirectory() || ""]) ? all[stageDirectory() || ""] : []);
+  } catch {
+    return new Set();
+  }
+}
+function toggleResolved(id) {
+  const dir = stageDirectory() || "";
+  let all = {};
+  try {
+    all = JSON.parse(sessionStorage.getItem(RESOLVED_KEY) || "{}");
+  } catch {
+    all = {};
+  }
+  const set = new Set(Array.isArray(all[dir]) ? all[dir] : []);
+  if (set.has(id)) set.delete(id);
+  else set.add(id);
+  all[dir] = [...set];
+  sessionStorage.setItem(RESOLVED_KEY, JSON.stringify(all));
+}
 let noteEditor = null;
 let generalNote = "";
 let sending = false;
@@ -66,6 +91,7 @@ function openComposer(payload = {}) {
     line_end: numberOrUndefined(selection.line_end),
     heading_path: stringList(selection.heading_path),
     css_path: typeof selection.css_path === "string" ? selection.css_path : undefined,
+    reply_to: typeof payload.reply_to === "string" ? payload.reply_to : undefined,
     body: "",
   });
   if (store.panel !== "threads") store.set({ panel: "threads" });
@@ -173,7 +199,7 @@ function feedbackAnnotation(annotation) {
     kind,
     heading_path: stringList(annotation.heading_path),
   };
-  for (const key of ["selection", "css_path", "body"]) {
+  for (const key of ["selection", "css_path", "body", "reply_to"]) {
     if (typeof annotation[key] === "string" && annotation[key].trim()) output[key] = annotation[key];
   }
   for (const key of ["line_start", "line_end"]) {
@@ -321,6 +347,7 @@ function structuredRemarks(payload) {
       quote: typeof remark.quote === "string" ? remark.quote : "",
       body: typeof remark.body === "string" ? remark.body : "",
       diff: typeof remark.diff === "string" ? remark.diff : "",
+      reply_to: typeof remark.reply_to === "string" ? remark.reply_to : null,
       revision,
       file: round.file,
       line_start: Number.MAX_SAFE_INTEGER,
@@ -425,9 +452,10 @@ function renderNoteEditor() {
 }
 
 function renderThreadList() {
+  const nested = (item) => item.reply_to && sentThreads.some((thread) => thread.id === item.reply_to);
   const cards = [
-    ...drafts.map(renderDraft),
-    ...store.annotations.map(renderPending),
+    ...drafts.filter((draft) => !nested(draft)).map(renderDraft),
+    ...store.annotations.filter((annotation) => !nested(annotation)).map(renderPending),
     ...sortedSentThreads().map(renderSent),
     ...summaryThreads.map(renderSummary),
   ].filter(Boolean);
@@ -440,7 +468,7 @@ function renderThreadList() {
 }
 
 function sortedSentThreads() {
-  const visible = sentThreads.filter((thread) => showResolved || statusFor(thread).name !== "Resolved");
+  const visible = sentThreads.filter((thread) => !thread.reply_to && (showResolved || statusFor(thread).name !== "Resolved"));
   return visible.sort((left, right) => sortMode === "recent"
     ? (right.response?.revision || right.revision) - (left.response?.revision || left.revision)
     : (left.line_start || Number.MAX_SAFE_INTEGER) - (right.line_start || Number.MAX_SAFE_INTEGER));
@@ -470,12 +498,20 @@ function renderPending(annotation) {
 
 function renderSent(thread) {
   const status = statusFor(thread);
-  return `<article class="thread-card sent-card" data-thread-id="${escapeHtml(thread.id)}">
+  const followUps = sentThreads.filter((other) => other.reply_to === thread.id);
+  const pendingReplies = [...drafts, ...store.annotations].filter((item) => item.reply_to === thread.id);
+  const resolved = status.name === "Resolved";
+  return `<article class="thread-card sent-card${resolved ? " resolved" : ""}" data-thread-id="${escapeHtml(thread.id)}">
     ${quoteHtml(thread.quote)}
     <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span><span class="thread-kind">${kindLabel(thread.kind)}</span></div>
     ${thread.diff ? `<div class="thread-sent-diff">${renderRemarkDiff(thread.diff)}</div>` : thread.body ? `<p class="thread-body">${escapeHtml(thread.body)}</p>` : ""}
     ${renderReply(thread.response)}
+    ${followUps.map((reply) => `<div class="thread-followup"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${reply.revision}</span></div><p>${escapeHtml(reply.body || "")}</p>${renderReply(reply.response)}</div>`).join("")}
+    ${pendingReplies.map((reply) => drafts.includes(reply)
+      ? `<div class="thread-followup pending" data-draft-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>replying</span></div><textarea rows="2" placeholder="Reply…">${escapeHtml(reply.body || "")}</textarea><div class="thread-card-actions"><button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div></div>`
+      : `<div class="thread-followup pending" data-annotation-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>just now</span></div><p>${escapeHtml(reply.body || "")}</p><div class="thread-card-actions"><button data-remove-annotation type="button">Remove</button></div><p class="thread-status pending">Pending · sends with your decision</p></div>`).join("")}
     <p class="thread-status ${status.className}">${status.name}${status.detail ? ` · ${escapeHtml(status.detail)}` : ""}</p>
+    ${hasOpenGate() ? `<div class="thread-card-actions sent-actions"><button data-reply-to="${escapeHtml(thread.id)}" type="button">Reply</button><button data-resolve="${escapeHtml(thread.id)}" type="button">${resolved && resolvedSet().has(thread.id) ? "Reopen" : resolved ? "" : "Resolve"}</button></div>` : ""}
   </article>`;
 }
 
@@ -495,6 +531,7 @@ function renderSummary(summary) {
 }
 
 function statusFor(thread) {
+  if (resolvedSet().has(thread.id)) return { name: "Resolved", className: "resolved", detail: "by you" };
   if (thread.response?.status === "applied" || thread.response?.status === "answered") {
     return { name: `Addressed in r${thread.response.revision}`, className: "addressed", detail: "" };
   }
@@ -558,6 +595,21 @@ function bindThreads() {
     render();
   });
 
+  for (const button of slot.querySelectorAll("[data-reply-to]")) button.addEventListener("click", () => {
+    const parent = sentThreads.find((thread) => thread.id === button.dataset.replyTo);
+    if (!parent) return;
+    openComposer({
+      kind: "comment",
+      reply_to: parent.id,
+      artifact: parent.artifact,
+      selection: parent.quote,
+      heading_path: parent.heading_path,
+    });
+  });
+  for (const button of slot.querySelectorAll("[data-resolve]")) button.addEventListener("click", () => {
+    toggleResolved(button.dataset.resolve);
+    render();
+  });
   for (const card of slot.querySelectorAll("[data-thread-id]")) card.addEventListener("click", (event) => {
     if (event.target.closest("button, textarea, select")) return;
     const id = card.dataset.threadId;
@@ -634,6 +686,21 @@ function wordDiffHtml(before, after) {
   const left = tokens(String(before));
   const right = tokens(String(after));
   if (left.length * right.length > 40_000) return `<del>${escapeHtml(before)}</del><ins>${escapeHtml(after)}</ins>`;
+  // Interleaved fragments ("showsruns anin errormemory") are unreadable. Keep
+  // the common prefix and suffix, and show everything between them as one
+  // removal followed by one insertion — how a person would mark the sentence.
+  let head = 0;
+  while (head < left.length && head < right.length && left[head] === right[head]) head += 1;
+  let tail = 0;
+  while (tail < left.length - head && tail < right.length - head && left[left.length - 1 - tail] === right[right.length - 1 - tail]) tail += 1;
+  const removed = left.slice(head, left.length - tail).join("");
+  const added = right.slice(head, right.length - tail).join("");
+  const alternations = (removed.match(/\S+/g) || []).length + (added.match(/\S+/g) || []).length;
+  if (alternations > 3) {
+    const prefix = escapeHtml(left.slice(0, head).join(""));
+    const suffix = escapeHtml(left.slice(left.length - tail).join(""));
+    return `${prefix}${removed ? `<del>${escapeHtml(removed)}</del>` : ""}${removed && added ? " " : ""}${added ? `<ins>${escapeHtml(added)}</ins>` : ""}${suffix}`;
+  }
   const rows = Array.from({ length: left.length + 1 }, () => new Uint16Array(right.length + 1));
   for (let i = left.length - 1; i >= 0; i -= 1) {
     for (let j = right.length - 1; j >= 0; j -= 1) rows[i][j] = left[i] === right[j] ? rows[i + 1][j + 1] + 1 : Math.max(rows[i + 1][j], rows[i][j + 1]);

@@ -500,7 +500,7 @@ function parseFeedbackRemarks(body: string): FeedbackRemark[] {
   for (let index = 0; index < lines.length; index++) {
     const match = FEEDBACK_REMARK_HEADING.exec(lines[index]);
     if (!match) continue;
-    let location = match[3].trim();
+    let location = match[3].replace(/^ · reply to a[1-9][0-9]*/, "").trim();
     if (location.startsWith("— ")) location = location.slice(2);
     location = location
       .replace(/ \(element: .+\)$/, "")
