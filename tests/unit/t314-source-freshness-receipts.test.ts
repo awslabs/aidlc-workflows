@@ -38,6 +38,7 @@
 
 import { afterAll, beforeEach, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -352,6 +353,29 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     dir = mkdtempSync(join(tmpdir(), "t314-fp-"));
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  for (const size of [1, 65440, 65450, 65460, 65536]) {
+    test(`commit blob headers survive a buffer refill after ${size} bytes`, () => {
+      seedGitRepo(dir);
+      // a.bin sorts first: vary its length so the next cat-file header spans
+      // the 64 KiB reader boundary, alongside controls on either side.
+      const content = Buffer.alloc(size, 0x78);
+      writeFileSync(join(dir, "a.bin"), content);
+      // Keep enough data after the split header to overwrite the reused buffer.
+      writeFileSync(join(dir, "z.bin"), Buffer.alloc(65536, 0x79));
+      git(dir, ["add", "a.bin", "z.bin"]);
+      git(dir, ["commit", "-qm", "boundary fixture"]);
+      const head = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], {
+        encoding: "utf-8",
+      }).stdout.trim();
+      const digest = createHash("sha256").update(content).digest("hex");
+      const listing = gitCommitSourceListing(dir, head, true);
+      expect(listing).not.toBeNull();
+      expect(listing?.size).toBe(3);
+      expect(listing?.get("\0a.bin")).toBe(`100644 ${digest}`);
+      expect(listing?.has("\0app.ts")).toBe(true);
+    });
+  }
 
   test("deterministic, content-addressed, and edit-sensitive", () => {
     const src = seedGitRepo(dir);

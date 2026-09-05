@@ -10923,7 +10923,8 @@ function readSyncBufferedLine(
         : Buffer.concat(chunks, total);
     }
     const chunk = reader.buffer.subarray(reader.offset, reader.end);
-    chunks.push(chunk);
+    // A refill overwrites reader.buffer; retain owned bytes for split headers.
+    chunks.push(Buffer.from(chunk));
     total += chunk.length;
     reader.offset = reader.end;
     if (total > maxBytes) return null;
