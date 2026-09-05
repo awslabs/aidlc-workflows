@@ -29,7 +29,7 @@ the message body.
 
 This applies to **every** structured-question site, including but not limited to:
 
-- approval gates (every stage completion);
+- approval gates (every stage completion) — except while the review UI is live, see the one exception below;
 - the questions interaction-mode choice (Guide me / I'll edit the file / Chat);
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
@@ -85,6 +85,27 @@ AskUserQuestion({
   }]
 })
 ```
+
+## The one exception: approval gates while the review UI is live
+
+`AskUserQuestion` blocks inside the turn, so the Stop hook cannot run while the
+widget is open — and the browser decision (`Approve` / `Request changes` in the
+review UI) is delivered by that hook. Therefore, when `directive.review_ui` is
+present and its daemon is alive, render the **approval gate** (Part 3 of a
+stage completion, and only that) as numbered prose instead of the widget:
+
+```
+Requirements Analysis complete. How would you like to proceed?
+1. Approve (Recommended) — requirements are complete and consistent; continue to Code Generation.
+2. Request Changes — tell me what to change and I'll revise.
+Decide in the browser (**Browser:** http://localhost:4765/) or type the number or label here.
+```
+
+Then END THE TURN. The Stop hook holds it until either the browser decision
+lands (it then tells you the exact `report` command to run) or the human types
+a choice. Every other structured question — the interaction-mode menu, file
+questions, the consolidated summary, learnings, Plan Approval — still renders
+through `AskUserQuestion`. Without a live review UI the gate stays a widget.
 
 ## Mandatory consolidated-summary checkpoint
 

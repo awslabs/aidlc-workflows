@@ -44,6 +44,11 @@ function stages(workflow = store.workflow) {
   return (workflow?.phases || []).flatMap((phase) => phase.stages || []);
 }
 
+/** The viewed intent is the record the daemon reports active (writes are allowed only there). */
+function isActiveIntent(workflow = store.workflow) {
+  return !workflow?.intent || !store.state?.intent || workflow.intent === store.state.intent;
+}
+
 function findStage(slug, workflow = store.workflow) {
   return stages(workflow).find((stage) => stage.slug === slug) || null;
 }
@@ -52,16 +57,18 @@ function currentStage(workflow = store.workflow) {
   return stages(workflow).find((stage) => stage.state === "current") || findStage(store.state?.current?.stage || store.state?.current_stage, workflow);
 }
 
+function isQuestionsArtifact(artifact) {
+  return /-questions(?:\.[^.]+)?$/i.test(basename(artifact?.path || artifact?.name));
+}
+
+function stageArtifacts(stage) {
+  return (stage?.artifacts || []).filter(
+    (artifact) => artifact.path !== stage?.questions?.file && !isQuestionsArtifact(artifact),
+  );
+}
 
 function firstArtifact(stage, existingOnly = true) {
-  return (stage?.artifacts || []).find((artifact) => !existingOnly || artifact.exists) || null;
-}
-
-function isActiveIntent(workflow = store.workflow) {
-  return !workflow?.intent || !store.state?.intent || workflow.intent === store.state.intent;
-}
-function stageArtifacts(stage) {
-  return (stage?.artifacts || []).filter((artifact) => artifact.path !== stage?.questions?.file);
+  return stageArtifacts(stage).find((artifact) => !existingOnly || artifact.exists) || null;
 }
 
 function artifactView(stage, artifact, intent = store.workflow?.intent) {
@@ -150,7 +157,7 @@ function isSelected(stage, kind, path) {
 
 function questionChild(stage) {
   const data = stage.questions;
-  if (!data?.file) return "";
+  if (!data?.file || Number(data.total || 0) === 0) return "";
   const answered = Number(data.answered || 0);
   const total = Number(data.total || 0);
   const open = Math.max(0, total - answered) || total;
@@ -242,10 +249,11 @@ function renderPhase(phase) {
     </section>`;
   }
   const allStages = phase.stages || [];
-  const scopeReason = `${store.workflow?.scope || ""} scope`.toLowerCase();
-  const scopeSkipped = allStages.filter(
-    (stage) => stage.state === "skipped" && String(stage.reason || "").toLowerCase() === scopeReason,
-  );
+  const scopeSkipped = allStages.filter((stage) => {
+    if (stage.state !== "skipped") return false;
+    const reason = String(stage.reason || "").toLowerCase();
+    return reason.includes("scope");
+  });
   const visibleStages = allStages.filter((stage) => !scopeSkipped.includes(stage));
   const foldedNames = scopeSkipped.map((stage) => stage.name || titleCase(stage.slug)).join(", ");
   const folded = scopeSkipped.length
@@ -303,11 +311,11 @@ function renderPanel() {
   const stageDone = workflow.stages_done ?? stages(workflow).filter((stage) => stage.state === "done").length;
   const current = currentStage(workflow);
   const intent = workflow.intents?.find((entry) => entry.slug === workflow.intent);
-  const phase = titleCase(workflow.phase || current?.phase || "Workflow");
+  const phase = titleCase(String(workflow.phase || current?.phase || "Workflow").toLowerCase());
   panel.innerHTML = `<div class="workflow-context">
     <button type="button" class="intent-selector ${intentPopover ? "open" : ""}" data-intent-selector aria-expanded="${intentPopover}">
       <small>${escapeHtml(workflow.space || "default")} · intent</small><strong>${escapeHtml(workflow.intent || "No active intent")}</strong>
-      <span>${escapeHtml(workflow.scope || intent?.scope || "scope unknown")} · ${escapeHtml(workflow.depth || intent?.depth || "depth unknown")} · ${escapeHtml(phase)} · ${stageDone} / ${stageTotal} stages</span><i>▾</i>
+      <span title="${escapeHtml(`${workflow.scope || intent?.scope || "scope unknown"} · ${workflow.depth || intent?.depth || "depth unknown"} · ${phase} · ${stageDone} / ${stageTotal} stages`)}">${escapeHtml(workflow.scope || intent?.scope || "scope unknown")} · ${escapeHtml(workflow.depth || intent?.depth || "depth unknown")} · ${escapeHtml(phase)}</span><i>▾</i>
     </button>${renderIntentPopover(workflow)}
   </div>
   <div class="workflow-bar"><b>Stages</b><span>${stageTotal} · ${stageDone} done</span><button type="button" data-collapse-all>${collapseAll ? "Expand all" : "Collapse all"}</button></div>
@@ -334,10 +342,16 @@ function previousArtifacts(stage) {
   return results;
 }
 
-function nextStage(stage) {
+function nextStages(stage) {
   const list = stages();
   const index = list.indexOf(stage);
-  return index >= 0 ? list[index + 1] || null : null;
+  return index < 0 ? [] : list.slice(index + 1).filter((candidate) => candidate.state !== "skipped").slice(0, 4);
+}
+
+function questionArtifact(stage) {
+  return (stage?.artifacts || []).find(
+    (artifact) => artifact.produces && isQuestionsArtifact(artifact) && !artifact.exists,
+  );
 }
 
 function cardList(items, emptyText, renderer) {
@@ -360,19 +374,20 @@ function renderOverview() {
     overview.innerHTML = '<div class="workflow-placeholder"><b>Stage unavailable</b><span>This stage is not present in the current workflow projection. Check the terminal record for the authoritative state.</span></div>';
     return;
   }
+  const plannedQuestions = questionArtifact(stage);
   const asks = stage.questions?.file ? [stage.questions] : [];
-  const produces = stageArtifacts(stage).length ? stageArtifacts(stage) : (stage.produces || []).map((name) => ({ name: basename(name), path: name, exists: false }));
+  const produces = stageArtifacts(stage).length ? stageArtifacts(stage) : (stage.produces || []).filter((name) => !/-questions(?:\.[^.]+)?$/i.test(basename(name))).map((name) => ({ name: basename(name), path: name, exists: false }));
   const prior = previousArtifacts(stage);
-  const next = nextStage(stage);
+  const next = nextStages(stage);
   const live = stage.state === "current";
   overview.innerHTML = `<div class="stage-overview-page">
     <h1>${escapeHtml(stage.name || titleCase(stage.slug))}${live ? `<span>${stage.questions?.open ? `${Math.max(0, (stage.questions.total || 0) - (stage.questions.answered || 0)) || stage.questions.total || 0} questions for you` : "Live stage"}</span>` : ""}</h1>
     <p class="overview-lead">${escapeHtml(overviewLead(stage))}</p>
     <div class="overview-grid">
-      <section class="overview-card ${stage.questions?.open ? "hot" : ""}"><h2>Asks first</h2>${cardList(asks, stage.state === "skipped" ? "Nothing — this stage is skipped." : "No question round is expected.", (question) => `<li><span>${QUESTION_ICON}</span><code>${escapeHtml(basename(question.file))}</code><em>${question.open ? `${Math.max(0, (question.total || 0) - (question.answered || 0)) || question.total || 0} open` : `${question.answered || 0} / ${question.total || 0} answered`}</em></li>`)}</section>
+      <section class="overview-card ${stage.questions?.open ? "hot" : ""}"><h2>Asks first</h2>${asks.length ? cardList(asks, "", (question) => `<li><span>${QUESTION_ICON}</span><code>${escapeHtml(basename(question.file))}</code><em>${question.open ? `${Math.max(0, (question.total || 0) - (question.answered || 0)) || question.total || 0} open` : `${question.answered || 0} / ${question.total || 0} answered`}</em></li>`) : plannedQuestions ? `<p>Asks its questions first (<code>${escapeHtml(basename(plannedQuestions.path))}</code>).</p>` : `<p class="overview-placeholder">${stage.state === "skipped" ? "Nothing — this stage is skipped." : "No question round is expected."}</p>`}</section>
       <section class="overview-card"><h2>Will produce</h2>${cardList(produces, "No artifact is declared for this stage.", (artifact) => `<li><span>${FILE_ICON}</span><code>${escapeHtml(basename(artifact.path))}</code><em class="${artifact.exists ? "ready" : ""}">${artifact.exists ? `r${artifact.revision ?? "0"}` : "planned"}</em></li>`)}</section>
       <section class="overview-card"><h2>Builds on</h2>${cardList(prior, "The workflow record and prior human decisions.", (artifact) => `<li><span>${FILE_ICON}</span><code>${escapeHtml(basename(artifact.path))}</code><em class="ready">${escapeHtml(artifact.stage.name || titleCase(artifact.stage.slug))}</em></li>`)}</section>
-      <section class="overview-card"><h2>Then</h2>${next ? `<p><b>${escapeHtml(next.name || titleCase(next.slug))}</b></p><p>${escapeHtml(next.description || (next.state === "conditional" ? next.condition || "Runs when its condition is met." : "The workflow advances here after this stage is complete."))}</p>` : '<p>This is the final stage in the projected workflow.</p>'}</section>
+      <section class="overview-card then-card"><h2>Then</h2>${next.length ? `<ul>${next.map((candidate) => `<li><span class="stage-glyph ${escapeHtml(stageClass(candidate))}">${glyph(candidate)}</span><span class="then-label"><b>${escapeHtml(candidate.name || titleCase(candidate.slug))}</b>${candidate.state === "conditional" ? `<small> · ${escapeHtml(candidate.condition || "conditional")}</small>` : `<small> · ${escapeHtml(statusLabel(candidate))}</small>`}</span></li>`).join("")}</ul>` : '<p>This is the final stage in the projected workflow.</p>'}</section>
     </div>
     <aside class="scope-note"><b>${escapeHtml(store.workflow?.scope || "Selected")} scope</b> · ${escapeHtml(store.workflow?.depth || "Depth not reported")} depth. This projection comes from the compiled workflow graph and record; use the terminal for every equivalent action.</aside>
   </div>`;

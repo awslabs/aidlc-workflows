@@ -33,6 +33,13 @@ export function init() {
     invalidateRemote();
     render();
   });
+  store.on("view", () => {
+    invalidateRemote();
+    sentThreads = [];
+    summaryThreads = [];
+    store.set({ remarks: [] });
+    render();
+  });
   store.on("annotations", render);
   store.on("refresh", () => {
     invalidateRemote();
@@ -426,6 +433,7 @@ function renderThreadList() {
   ].filter(Boolean);
   if (cards.length) return cards.join("");
   if (remoteLoading) return `<p class="threads-empty">Loading threads…</p>`;
+  if (!hasOpenGate()) return `<p class="threads-empty">No threads yet · comments open at the approval gate</p>`;
   if (remarksMode === "unavailable") return `<p class="threads-empty"><b>Threads are not available yet.</b>The document remains reviewable. Pending remarks will stay here until you decide.</p>`;
   if (store.view?.readOnly) return `<p class="threads-empty"><b>No threads for this artifact.</b>This past artifact is read-only; return to the current stage to review.</p>`;
   return `<p class="threads-empty"><b>No threads yet.</b>Select text in the document to add a remark. Nothing sends until you decide.</p>`;
@@ -453,7 +461,7 @@ function renderPending(annotation) {
   return `<article class="thread-card pending-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
     ${quoteHtml(annotation.selection)}
     <div class="thread-editor-row">${kindSelect(annotation.kind)}<span>You · just now</span></div>
-    ${isEdit && annotation.before !== undefined && annotation.after_block !== undefined ? `<div class="thread-diff">${wordDiffHtml(annotation.before, annotation.after_block)}</div>` : ""}
+    ${isEdit && annotation.before !== undefined && annotation.after_block !== undefined ? `<div class="thread-diff">${focusedDiffHtml(annotation.before, annotation.after_block)}</div>` : ""}
     <textarea rows="2" placeholder="${isEdit ? "Reason (optional)" : "Write a remark…"}">${escapeHtml(annotation.body || "")}</textarea>
     <div class="thread-card-actions"><button data-remove-annotation type="button">Remove</button></div>
     <p class="thread-status pending">Pending · sends with your decision</p>
@@ -603,6 +611,25 @@ function quoteHtml(value) {
   return value ? `<p class="thread-quote">“${escapeHtml(value)}”</p>` : "";
 }
 
+/**
+ * Word diff of a block, trimmed to the changed lines plus one line of context
+ * so a one-line suggestion inside a long paragraph reads as that one line.
+ */
+function focusedDiffHtml(before, after) {
+  const a = String(before).split("\n");
+  const b = String(after).split("\n");
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
+  const from = Math.max(0, head - 1);
+  const leftSlice = a.slice(from, a.length - Math.max(0, tail - 1));
+  const rightSlice = b.slice(from, b.length - Math.max(0, tail - 1));
+  const prefix = from > 0 ? '<span class="diff-ellipsis">…</span>\n' : "";
+  const suffix = tail > 1 ? '\n<span class="diff-ellipsis">…</span>' : "";
+  return `${prefix}${wordDiffHtml(leftSlice.join("\n"), rightSlice.join("\n"))}${suffix}`;
+}
+
 function wordDiffHtml(before, after) {
   const left = tokens(String(before));
   const right = tokens(String(after));
@@ -631,9 +658,14 @@ function tokens(value) {
 }
 
 function stageDirectory() {
-  if (typeof store.state?.current?.stage_dir === "string") return store.state.current.stage_dir;
-  const path = store.document?.path;
-  return typeof path === "string" && path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : null;
+  const viewedPath = store.view?.kind === "artifact" && typeof store.view.path === "string" ? store.view.path : "";
+  if (viewedPath.includes("/")) return viewedPath.slice(0, viewedPath.lastIndexOf("/"));
+  if (!viewedPath && typeof store.state?.current?.stage_dir === "string") return store.state.current.stage_dir;
+  return null;
+}
+
+function hasOpenGate() {
+  return store.state?.current?.state === "awaiting-approval" && stageDirectory() === store.state.current.stage_dir;
 }
 
 function normalizeDecision(value) {

@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -133,7 +134,9 @@ describe("t331 review UI render helpers", () => {
   });
 
   test("confines project paths against traversal and symlink escapes", () => {
-    const root = mkdtempSync(join(tmpdir(), "aidlc-review-render-"));
+    // The resolver returns the realpath; macOS's TMPDIR is a symlink into
+    // /private, so canonicalise the fixture root before deriving expectations.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-review-render-")));
     created.push(root);
     const project = join(root, "project");
     const aidlc = join(project, "aidlc");

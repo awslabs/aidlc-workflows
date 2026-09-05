@@ -611,7 +611,8 @@ export interface ResponsesFile {
 }
 
 const RESPONSES_HEADING = /^# Feedback addressed: (.+) \(revision ([0-9]+)\)$/;
-const RESPONSE_LINE = /^- (a[1-9][0-9]*): (applied|kept|answered) — (\S(?:.*\S)?)$/;
+// Agents write the separator as an em dash, an en dash, a hyphen, or a colon; accept all four.
+const RESPONSE_LINE = /^- (a[1-9][0-9]*): (applied|kept|answered)\s*(?:—|–|-|:)\s*(\S(?:.*\S)?)$/;
 
 export function responsesFileName(n: number): string {
   return `${RESPONSES_PREFIX}${String(n).padStart(3, "0")}.md`;

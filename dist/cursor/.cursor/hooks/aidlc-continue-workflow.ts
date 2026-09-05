@@ -809,6 +809,11 @@ function waitForBrowserDecision(
     watcher?.close();
     settle(result);
   };
+  // A browser decision arrives as two writes — the decision file, then the
+  // HUMAN_TURN marker the daemon touches for it. Seeing the marker first must
+  // not be mistaken for a terminal prompt, so a marker change is confirmed as a
+  // human prompt only after one more look for the decision a moment later.
+  let confirming = false;
   const recheck = (): void => {
     const decision = currentBrowserDecision(round);
     if (decision) {
@@ -816,8 +821,12 @@ function waitForBrowserDecision(
       return;
     }
     const humanTurn = humanTurnMtime(projectDir);
-    if (humanTurn !== null && (initialHumanTurn === null || humanTurn > initialHumanTurn)) {
-      finish({ kind: "human-prompt" });
+    if (humanTurn !== null && (initialHumanTurn === null || humanTurn > initialHumanTurn) && !confirming) {
+      confirming = true;
+      setTimeout(() => {
+        const late = currentBrowserDecision(round);
+        finish(late ? { kind: "decision", file: late } : { kind: "human-prompt" });
+      }, REVIEW_WAIT_POLL_MS);
     }
   };
   const poll = setInterval(recheck, REVIEW_WAIT_POLL_MS);

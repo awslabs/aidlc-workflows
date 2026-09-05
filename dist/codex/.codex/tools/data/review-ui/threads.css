@@ -42,12 +42,13 @@
 .thread-reply { margin: 9px -2px 0; padding: 9px; border-radius: 7px; background: var(--soft); }
 .thread-reply p { margin: 7px 0 0; line-height: 1.45; }
 .thread-diff { margin-top: 8px; padding: 8px; border-radius: 6px; background: var(--panel); white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
-.thread-diff del { background: var(--rose-soft); color: #9f1239; }
-.thread-diff ins { background: var(--green-soft); color: #166534; text-decoration: none; }
+.thread-diff del { background: #fee2e2; color: #9f1239; }
+.thread-diff ins { background: #dcfce7; color: #166534; text-decoration: none; }
+.thread-diff .diff-ellipsis { color: var(--faint); }
 .thread-sent-diff { max-height: 180px; overflow: auto; margin: 8px 0 0; padding: 7px; border-radius: 6px; background: var(--panel); white-space: pre-wrap; font: 10.5px/1.45 var(--mono); }
 .thread-sent-diff .remark-word-diff { white-space: pre-wrap; }
-.thread-sent-diff .remark-word-diff del { background: var(--rose-soft); color: #9f1239; }
-.thread-sent-diff .remark-word-diff ins { background: var(--green-soft); color: #166534; text-decoration: none; }
+.thread-sent-diff .remark-word-diff del { background: #fee2e2; color: #9f1239; }
+.thread-sent-diff .remark-word-diff ins { background: #dcfce7; color: #166534; text-decoration: none; }
 .thread-sent-diff .remark-context { color: var(--muted); white-space: pre-wrap; }
 .sent-card .thread-quote { color: var(--muted); font-style: italic; }
 .summary-card > p { margin: 0; }

@@ -88,7 +88,10 @@ export interface WorkflowPhase {
 }
 
 export interface WorkflowIntent {
+  /** Record directory name — the identity `/api/state.intent` and every `intent=` parameter use. */
   slug: string;
+  /** Registry label when it differs from the record name (display only). */
+  label: string;
   status: WorkflowIntentStatus;
   scope: string | null;
   depth: string | null;
@@ -416,7 +419,8 @@ function intentSummary(
     status = "done";
   }
   return {
-    slug,
+    slug: recordName,
+    label: slug,
     status,
     scope: getField(state, "Scope"),
     depth: getField(state, "Depth"),
@@ -529,8 +533,10 @@ export function workflowPayload(
     const summary = intentSummary(projectDir, selection.space, recordName, entry.slug);
     return summary ? [summary] : [];
   });
-  const selectedRecord = records.find(({ recordName }) => recordName === selection.intent);
-  const intentSlug = selectedRecord?.entry.slug ?? selection.intent;
+  // The payload's `intent` is the record directory name, exactly what
+  // `/api/state.intent` reports and what `intent=` accepts; the registry
+  // label rides along on each entry as `label`.
+  const intentSlug = selection.intent;
   const state = selection.intent ? safeState(projectDir, selection.intent, selection.space) : null;
   if (state === null) {
     return {

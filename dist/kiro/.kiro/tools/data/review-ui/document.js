@@ -169,6 +169,12 @@ function buildReadOnlyBanner(doc, view) {
   banner.className = "read-only-banner";
   const stage = stageForArtifact(doc.path, view.stage);
   const label = stage?.name || humanize(view.stage || store.state?.current_stage || "stage");
+  if (stage?.state === "current") {
+    banner.classList.add("in-progress-banner");
+    banner.innerHTML = `<b>In progress</b><span></span>`;
+    banner.querySelector("span").textContent = `· ${label} is still running — read along; comments open at the approval gate`;
+    return banner;
+  }
   const finished = relativeTime(stage?.decided_at || doc.mtime);
   banner.innerHTML = `<b>Done stage</b><span></span>`;
   banner.querySelector("span").textContent = `· ${label} finished${finished ? ` ${finished}` : ""} · read-only; comments become notes on the record`;

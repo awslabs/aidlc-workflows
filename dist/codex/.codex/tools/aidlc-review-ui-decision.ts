@@ -1,7 +1,9 @@
 import {
   closeSync,
+  linkSync,
   mkdirSync,
   openSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -57,7 +59,7 @@ function parseDecisionBody(value: unknown): DecisionRequestBody | null {
     !Number.isInteger(body.revision) ||
     (body.revision as number) < 0 ||
     (body.decision !== "approve" && body.decision !== "request-changes") ||
-    (body.notes !== undefined && typeof body.notes !== "string")
+    (body.notes !== undefined && body.notes !== null && typeof body.notes !== "string")
   ) {
     return null;
   }
@@ -66,7 +68,7 @@ function parseDecisionBody(value: unknown): DecisionRequestBody | null {
     unit: body.unit,
     revision: body.revision as number,
     decision: body.decision,
-    ...(body.notes !== undefined ? { notes: body.notes } : {}),
+    ...(typeof body.notes === "string" ? { notes: body.notes } : {}),
   };
 }
 
@@ -131,23 +133,32 @@ export async function handleDecision(
     created: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
   };
 
+  // The Stop hook watches this directory and must never observe a half-written
+  // decision: write the full content to a private temp file, then publish it
+  // under the numbered name with link(2), which is exclusive (EEXIST on a race).
+  const payload = `${JSON.stringify(submission, null, 2)}\n`;
+  const temp = join(reviewDir, `.decision-${process.pid}-${Date.now()}.tmp`);
+  const descriptor = openSync(temp, "wx");
+  try {
+    writeFileSync(descriptor, payload, "utf-8");
+  } finally {
+    closeSync(descriptor);
+  }
   let sequence = nextSequence(reviewDir, DECISION_PREFIX);
-  while (true) {
-    const file = decisionFileName(sequence++);
-    const path = join(reviewDir, file);
-    let descriptor: number;
-    try {
-      descriptor = openSync(path, "wx");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-      throw error;
+  try {
+    while (true) {
+      const file = decisionFileName(sequence++);
+      const path = join(reviewDir, file);
+      try {
+        linkSync(temp, path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+        throw error;
+      }
+      await context.appendHumanTurn(file);
+      return Response.json({ file });
     }
-    try {
-      writeFileSync(descriptor, `${JSON.stringify(submission, null, 2)}\n`, "utf-8");
-    } finally {
-      closeSync(descriptor);
-    }
-    await context.appendHumanTurn(file);
-    return Response.json({ file });
+  } finally {
+    rmSync(temp, { force: true });
   }
 }

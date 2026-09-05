@@ -273,7 +273,15 @@ Entering the gate:
    When `directive.review_ui` is present, this turn still ends immediately after
    presenting the gate. The human may decide in the browser or in the terminal;
    the Stop hook holds the turn for the browser decision without changing the
-   terminal-complete flow.
+   terminal-complete flow. On a harness whose question widget blocks the turn
+   (Claude Code's `AskUserQuestion`), render this gate as numbered prose with
+   the recommended option first — the harness annex shows the form — so the
+   turn can end and the hook can hold it. When the hook reports a browser
+   decision, run the `report` command it names and continue; if it reports a
+   timeout, re-present the same gate. Harnesses without a Stop seam keep the
+   ordinary gate; a browser decision there is picked up by `report` on the
+   human's terminal answer, or by `aidlc-log.ts decision-apply` when the human
+   says they decided in the browser.
 4. Based on the user response:
    - **Approve** → `bun .kiro/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
    - **Request Changes** → `bun .kiro/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"`. The selected decision and its feedback are separate fields; never put feedback in `--user-input`. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each finding the human explicitly rejects as inapplicable; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `bun .kiro/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
