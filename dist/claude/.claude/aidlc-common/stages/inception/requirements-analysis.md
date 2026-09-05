@@ -30,6 +30,10 @@ consumes:
     conditional_on: brownfield
   - artifact: team-practices
     required: false
+  - artifact: wireframes
+    required: false
+  - artifact: user-flow
+    required: false
 requires_stage:
   - approval-handoff
   - reverse-engineering
@@ -59,6 +63,7 @@ outputs: requirements.md, requirements-analysis-questions.md (under this stage's
 ### Step 1: Load Prior Context
 
 - If brownfield: Read RE artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints)
+- If they exist, read the rough mockups from `<record>/ideation/rough-mockups/` (`wireframes.md`, `user-flow.md`). When a requirement traces to something the wireframes decided (a screen, a flow, a layout choice), cite the wireframe rather than restating it as unattributed prose — that citation is what keeps the design decision auditable downstream. These inputs are optional: absent for non-UI initiatives and for scopes that skip rough-mockups; never invent their content.
 - Run the fixed command
   `bun .claude/tools/aidlc-utility.ts project-description` and use its
   returned `description` verbatim as the authoritative initial request. A
@@ -237,7 +242,7 @@ This stage's outputs are markdown artefacts under `<record>/inception/requiremen
 
 Imports: `required-sections`, `upstream-coverage`.
 
-Upstream targets: `intent-statement`, `scope-document`, `business-overview`, `architecture`, `code-structure`, `team-practices`.
+Upstream targets: `intent-statement`, `scope-document`, `business-overview`, `architecture`, `code-structure`, `team-practices`, `wireframes`, `user-flow`.
 
 ## Learn
 
