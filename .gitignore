@@ -39,6 +39,11 @@ tests/logs/
 # Local scratch — explainers, throwaway HTML, etc. (claude writes explainers here)
 tmp/
 
+# RFC drafts and implementation plans are working notes, never documentation.
+# Draft them in tmp/ (or a GitHub issue via the RFC template); docs/ never
+# carries an rfcs/ directory.
+/docs/rfcs/
+
 # Local Claude Code memory (personal project preferences, not checked in)
 CLAUDE.local.md
 
