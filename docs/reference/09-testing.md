@@ -357,6 +357,14 @@ environment already set it. This makes the "everything with traces" profile run
 the live, token-spending TUI journeys by default; set `AIDLC_TUI_LIVE=0`
 explicitly to keep those files on their in-test SKIP path.
 
+The runner classifies a file whose every testcase skipped as `SKIP`, distinct
+from both `PASS` and `FAIL`. That remains non-blocking for optional coverage. If
+the file's own live-gate variable is explicitly `1`, the status becomes `UNMET`;
+the console, per-file metadata, verbose summary, and failures report all preserve
+that state, and the aggregate result is nonzero. A requested live file that
+registers zero testcases is also `UNMET`; an ordinary empty suite remains
+`PASS`.
+
 ## Parallel Execution
 
 `--parallel N` (or `-P N`) runs up to N test files concurrently within a tier. Default is serial (`1`).
