@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIDLC Rules Trend Report</title>
+<style>:root {
+    /* AWS Cloudscape-aligned palette */
+    --aws-squid-ink: #000716;
+    --aws-orange: #ec7211;
+    --aws-blue-600: #0972d3;
+
+    /* Status colors */
+    --green-bg: #f2fcf3; --green-text: #037f0c; --green-border: #29ad32;
+    --yellow-bg: #fff8e1; --yellow-text: #8d6605; --yellow-border: #d4a017;
+    --red-bg: #fff3f0; --red-text: #d91515; --red-border: #eb5f5f;
+    --blue-bg: #f0f6ff; --blue-text: #0972d3;
+
+    /* Neutral grays */
+    --gray-50: #fafafa; --gray-100: #f2f3f3; --gray-200: #e9ebed;
+    --gray-300: #d1d5db; --gray-500: #5f6b7a; --gray-700: #414d5c;
+    --gray-900: #000716;
+
+    --radius: 8px;
+}
+* { box-sizing: border-box; }
+body {
+    font-family: 'Amazon Ember', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    max-width: 1200px; margin: 0 auto; padding: 24px;
+    color: var(--gray-900); background: #fff; line-height: 1.6;
+}
+h1 { font-size: 28px; margin: 0 0 4px 0; }
+h2 {
+    font-size: 20px; margin: 40px 0 12px 0; padding-bottom: 8px;
+    border-bottom: 2px solid var(--gray-200); color: var(--gray-900);
+}
+h3 { font-size: 16px; margin: 24px 0 8px 0; color: var(--gray-700); }
+
+/* Hero header */
+.hero {
+    margin-bottom: 32px; padding: 20px 24px;
+    background: var(--aws-squid-ink); color: #fff; border-radius: var(--radius);
+}
+.hero h1 { font-size: 28px; color: #fff; }
+.hero .meta { color: #a8b4c4; font-size: 14px; margin-top: 4px; }
+
+/* Navigation */
+.nav {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 28px;
+    padding: 12px 16px; background: var(--aws-squid-ink); border-radius: var(--radius);
+    border: none;
+}
+.nav a {
+    font-size: 13px; color: #d5dbdb; text-decoration: none;
+    padding: 4px 10px; border-radius: 4px; transition: background 0.15s;
+}
+.nav a:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+
+/* Summary cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 16px 0 24px 0; }
+.card {
+    padding: 14px 16px; border-radius: var(--radius);
+    border: 1px solid var(--gray-200); background: #fff;
+}
+.card .label { font-size: 12px; color: var(--gray-500); text-transform: uppercase; letter-spacing: 0.5px; }
+.card .value { font-size: 24px; font-weight: 700; margin: 4px 0 2px 0; }
+.card .detail { font-size: 12px; color: var(--gray-500); }
+.card.good { border-left: 4px solid var(--green-border); }
+.card.warn { border-left: 4px solid var(--yellow-border); }
+.card.bad  { border-left: 4px solid #d91515; }
+
+/* Tables */
+table {
+    border-collapse: collapse; width: 100%; margin: 12px 0 24px 0;
+    font-size: 14px; border-radius: var(--radius); overflow: hidden;
+    border: 1px solid var(--gray-200);
+}
+th {
+    background: var(--gray-100); font-weight: 600; text-align: left;
+    padding: 10px 14px; border-bottom: 2px solid var(--gray-200);
+    font-size: 13px; color: var(--gray-700); text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+td { padding: 9px 14px; border-bottom: 1px solid var(--gray-100); }
+tr:hover td { background: var(--gray-50); }
+td:first-child { font-weight: 500; }
+
+/* Score cells */
+.s-green  { background: var(--green-bg); color: var(--green-text); font-weight: 600; }
+.s-yellow { background: var(--yellow-bg); color: var(--yellow-text); font-weight: 500; }
+.s-red    { background: var(--red-bg); color: var(--red-text); font-weight: 600; }
+.d-pos    { color: var(--green-text); font-weight: 500; }
+.d-neg    { color: var(--red-text); font-weight: 500; }
+.na       { color: var(--gray-500); font-style: italic; }
+
+/* Badges */
+.badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 12px; font-weight: 600; letter-spacing: 0.3px;
+}
+.badge-pass { background: var(--green-bg); color: var(--green-text); }
+.badge-fail { background: var(--red-bg); color: var(--red-text); }
+.badge-warn { background: var(--yellow-bg); color: var(--yellow-text); }
+
+/* Mini bar chart (CSS only) */
+.bar-cell { position: relative; }
+.bar {
+    display: inline-block; height: 16px; border-radius: 2px;
+    background: linear-gradient(90deg, #ec7211, #ff9900);
+    vertical-align: middle; margin-right: 6px;
+    min-width: 2px;
+}
+
+/* Two-column split layout */
+.split {
+    display: grid; grid-template-columns: 1fr 2fr;
+    gap: 24px; align-items: start; margin: 4px 0 24px 0;
+}
+.split-desc {
+    font-size: 14px; color: var(--gray-500); line-height: 1.7;
+    padding-top: 4px;
+}
+.split-desc p { margin: 0 0 8px 0; }
+.split table { margin-top: 0; }
+
+/* Blockquote callouts */
+.callout {
+    padding: 12px 16px; margin: 12px 0;
+    border-left: 4px solid var(--yellow-border); background: var(--yellow-bg);
+    border-radius: 0 var(--radius) var(--radius) 0; font-size: 14px;
+}
+.callout.info { border-left-color: var(--aws-blue-600); background: var(--blue-bg); }
+
+/* Section description */
+.section-desc { color: var(--gray-500); font-size: 14px; margin: 0 0 12px 0; }
+
+/* Responsive */
+@media (max-width: 768px) {
+    body { padding: 12px; }
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    .split { grid-template-columns: 1fr; }
+    table { font-size: 13px; }
+    th, td { padding: 6px 8px; }
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>AIDLC Rules Trend Report</h1>
+  <div class="meta">6 releases (v0.1.0 through v0.1.5) · awslabs/aidlc-workflows · 2026-03-20T16:04:28.635438+00:00</div>
+</div>
+
+<nav class="nav"><a href="#a-executive-summary">A. Summary</a> <a href="#b-functional-correctness">B. Correctness</a> <a href="#c-qualitative-evaluation">C. Qualitative</a> <a href="#d-efficiency-cost-metrics">D. Efficiency</a> <a href="#e-code-quality">E. Quality</a> <a href="#f-stability-reliability">F. Stability</a> <a href="#g-version-over-version-deltas">G. Deltas</a> <a href="#h-pre-release-data-points">H. Pre-Release</a></nav>
+
+<h2 id="a-executive-summary">A. Executive Summary</h2>
+<div class="cards">
+  <div class="card good"><div class="label">Qualitative Score</div><div class="value">0.898</div><div class="detail">Golden: 0.854</div></div>
+  <div class="card good"><div class="label">Contract Tests</div><div class="value">88/88</div><div class="detail">100.0% pass rate</div></div>
+  <div class="card good"><div class="label">Unit Tests</div><div class="value">100.0%</div><div class="detail">175/175 passed</div></div>
+  <div class="card good"><div class="label">Lint Findings</div><div class="value">0</div><div class="detail">Golden: 0</div></div>
+  <div class="card good"><div class="label">Execution Time</div><div class="value">17.9m</div><div class="detail">Golden: 23.8m</div></div>
+  <div class="card good"><div class="label">Total Tokens</div><div class="value">13.66M</div><div class="detail">Golden: 18.39M</div></div>
+</div>
+<p class="section-desc">High-level snapshot comparing the latest release against the golden baseline (the reference evaluation used as the quality target).</p>
+<table>
+<thead>
+<tr>
+  <th>Metric</th>
+  <th>What it measures</th>
+</tr>
+</thead>
+<tbody>
+<tr><td><strong>Unit test pass rate</strong></td><td>Percentage of generated unit tests that pass. Higher means more reliable code generation.</td></tr>
+<tr><td><strong>Contract tests</strong></td><td>API compliance checks against the OpenAPI spec (passed/total). 88/88 = full compliance.</td></tr>
+<tr><td><strong>Lint findings</strong></td><td>Static analysis warnings in generated code. Lower is better &mdash; 0 means clean code.</td></tr>
+<tr><td><strong>Qualitative score</strong></td><td>AI-graded documentation quality on a 0&ndash;1 scale (higher is better).</td></tr>
+<tr><td><strong>Execution time</strong></td><td>Wall-clock time for the full evaluation run. Lower means faster generation.</td></tr>
+<tr><td><strong>Total tokens</strong></td><td>Total LLM tokens consumed (input + output). Lower means more cost-efficient.</td></tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+  <th>Metric</th>
+  <th>Golden</th>
+  <th>Latest (v0.1.5)</th>
+  <th>vs Golden</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>Unit test pass rate</td>
+  <td>100.0% (180/180)</td>
+  <td>100.0% (175/175)</td>
+  <td>=</td>
+</tr>
+<tr>
+  <td>Contract tests</td>
+  <td>88/88</td>
+  <td>88/88</td>
+  <td>=</td>
+</tr>
+<tr>
+  <td>Lint findings</td>
+  <td>0</td>
+  <td>0</td>
+  <td>=</td>
+</tr>
+<tr>
+  <td>Qualitative score</td>
+  <td>0.854</td>
+  <td>0.898</td>
+  <td class="d-pos">+0.044</td>
+</tr>
+<tr>
+  <td>Execution time</td>
+  <td>23.8m</td>
+  <td>17.9m</td>
+  <td class="d-pos">-5.9m</td>
+</tr>
+<tr>
+  <td>Total tokens</td>
+  <td>18.39M</td>
+  <td>13.66M</td>
+  <td class="d-pos">-4.74M</td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="b-functional-correctness">B. Functional Correctness</h2>
+<p class="section-desc">Measures whether the code generated by each rules version actually works correctly. This is the most fundamental quality gate &mdash; code that doesn&rsquo;t pass its own tests is broken.</p>
+<h3>B.1 Unit Tests</h3>
+<div class="split">
+<div class="split-desc">
+<p>Unit tests validate individual functions and components in isolation. The AIDLC rules instruct the AI to generate both source code and test suites.</p>
+<p><strong>Pass/Total</strong> = tests that passed out of total generated. <strong>Rate</strong> = pass percentage (100% = all tests passing). <strong>Failures</strong> = tests that ran but produced wrong results.</p>
+</div>
+<div>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th>Pass/Total</th>
+  <th>Rate</th>
+  <th>Failures</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td>250/250</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td>194/194</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td>180/180</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td>126/126</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td>156/156</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td>175/175</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<h3>B.2 Contract Tests (API Compliance)</h3>
+<div class="split">
+<div class="split-desc">
+<p>Contract tests verify that the generated API implementation matches its OpenAPI specification. Each test sends a request to an endpoint and checks that the HTTP status code and response shape match the spec.</p>
+<p>88 endpoints are tested per version. <strong>Pass/Total</strong> = endpoints that returned the expected status code. <strong>Rate</strong> = pass percentage (100% = full spec compliance).</p>
+<p><strong>Failures</strong> lists the specific endpoints that deviated from the spec.</p>
+</div>
+<div>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th>Pass/Total</th>
+  <th>Rate</th>
+  <th>Failures</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td>88/88</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td>88/88</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td>88/88</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td>85/88</td>
+  <td class="s-green">96.6%</td>
+  <td class="d-neg">3</td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td>88/88</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td>88/88</td>
+  <td class="s-green">100.0%</td>
+  <td>0</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="callout"><strong>v0.1.3 failures:</strong><ul>
+<li><code>POST /api/v1/arithmetic/add</code> — expected 422, got 200 (add missing field → 422)</li>
+<li><code>POST /api/v1/arithmetic/divide</code> — expected 400, got 200 (divide by zero → error)</li>
+<li><code>POST /api/v1/arithmetic/modulo</code> — expected 400, got 200 (modulo by zero → error)</li>
+</ul></div>
+
+<h2 id="c-qualitative-evaluation">C. Qualitative Evaluation</h2>
+<p class="section-desc">Measures the quality of generated documentation by comparing it against human-authored reference documents. An AI evaluator scores each document on completeness, accuracy, and clarity, producing a 0&ndash;1 score (1.0 = perfect match to reference quality).</p>
+<h3>C.1 Overall Score</h3>
+<div class="split">
+<div class="split-desc">
+<p>The weighted average across all evaluated documents. This is the single best indicator of how well the rules produce documentation.</p>
+<p>Scores above 0.90 are considered strong; below 0.70 signals significant gaps.</p>
+<p>Golden baseline: <strong>0.854</strong></p>
+</div>
+<div>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th>Overall</th>
+  <th>vs Golden</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td class="s-yellow">0.860</td>
+  <td class="d-pos">+0.006</td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td class="s-yellow">0.888</td>
+  <td class="d-pos">+0.033</td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td class="s-yellow">0.893</td>
+  <td class="d-pos">+0.038</td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td class="s-yellow">0.866</td>
+  <td class="d-pos">+0.012</td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td class="s-yellow">0.891</td>
+  <td class="d-pos">+0.037</td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td class="s-yellow">0.898</td>
+  <td class="d-pos">+0.044</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<h3>C.2 Phase Breakdown</h3>
+<div class="split">
+<div class="split-desc">
+<p>Documents are grouped by SDLC phase. <strong>Inception</strong> covers early-stage design artifacts (requirements, architecture plans, component designs) &mdash; these are generated first and set the foundation.</p>
+<p><strong>Construction</strong> covers build-time artifacts (build instructions, test instructions, build-and-test summaries) &mdash; these depend on inception outputs being correct.</p>
+<p>A drop in inception quality often cascades into construction.</p>
+</div>
+<div>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th>Inception</th>
+  <th>Construction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td class="s-yellow">0.880</td>
+  <td class="s-yellow">0.840</td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td class="s-yellow">0.894</td>
+  <td class="s-yellow">0.882</td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td class="s-green">0.921</td>
+  <td class="s-yellow">0.864</td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td class="s-yellow">0.886</td>
+  <td class="s-yellow">0.846</td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td class="s-yellow">0.890</td>
+  <td class="s-yellow">0.892</td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td class="s-yellow">0.879</td>
+  <td class="s-green">0.918</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<h3>C.3 Per-Document Heatmap</h3>
+<p class="section-desc">Individual quality scores for each generated document across all versions. This reveals which specific documents are consistently strong, improving, or problematic. Documents scoring below 0.70 (red) are the top candidates for rules improvements.</p>
+<table>
+<thead>
+<tr>
+  <th>Document</th>
+  <th>v0.1.0</th>
+  <th>v0.1.1</th>
+  <th>v0.1.2</th>
+  <th>v0.1.3</th>
+  <th>v0.1.4</th>
+  <th>v0.1.5</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>application-design-plan.md</code></td>
+  <td><span class="na">—</span></td>
+  <td class="s-green">0.96</td>
+  <td class="s-green">1.00</td>
+  <td class="s-green">0.96</td>
+  <td class="s-green">1.00</td>
+  <td class="s-green">0.95</td>
+</tr>
+<tr>
+  <td><code>build-and-test-summary.md</code></td>
+  <td class="s-green">0.93</td>
+  <td class="s-green">0.95</td>
+  <td class="s-green">0.90</td>
+  <td class="s-green">0.90</td>
+  <td class="s-green">0.97</td>
+  <td class="s-green">0.95</td>
+</tr>
+<tr>
+  <td><code>build-instructions.md</code></td>
+  <td class="s-yellow">0.75</td>
+  <td class="s-yellow">0.75</td>
+  <td class="s-yellow">0.78</td>
+  <td class="s-yellow">0.88</td>
+  <td class="s-yellow">0.77</td>
+  <td class="s-yellow">0.87</td>
+</tr>
+<tr>
+  <td><code>component-dependency.md</code></td>
+  <td class="s-green">0.97</td>
+  <td class="s-green">0.95</td>
+  <td class="s-green">0.96</td>
+  <td class="s-green">0.96</td>
+  <td class="s-green">1.00</td>
+  <td class="s-green">0.95</td>
+</tr>
+<tr>
+  <td><code>component-methods.md</code></td>
+  <td class="s-green">0.93</td>
+  <td class="s-green">0.90</td>
+  <td class="s-green">0.96</td>
+  <td class="s-green">0.98</td>
+  <td class="s-green">0.93</td>
+  <td class="s-green">0.96</td>
+</tr>
+<tr>
+  <td><code>components.md</code></td>
+  <td class="s-green">1.00</td>
+  <td class="s-green">0.98</td>
+  <td class="s-green">1.00</td>
+  <td class="s-green">0.97</td>
+  <td class="s-green">0.98</td>
+  <td class="s-green">0.98</td>
+</tr>
+<tr>
+  <td><code>execution-plan.md</code></td>
+  <td class="s-green">0.97</td>
+  <td class="s-green">0.91</td>
+  <td class="s-green">0.98</td>
+  <td class="s-green">0.93</td>
+  <td class="s-green">0.97</td>
+  <td class="s-green">0.97</td>
+</tr>
+<tr>
+  <td><code>integration-test-instructions.md</code></td>
+  <td class="s-yellow">0.85</td>
+  <td class="s-yellow">0.87</td>
+  <td class="s-yellow">0.82</td>
+  <td class="s-yellow">0.70</td>
+  <td class="s-yellow">0.88</td>
+  <td class="s-green">0.91</td>
+</tr>
+<tr>
+  <td><code>requirement-verification-questions.md</code></td>
+  <td class="s-red">0.38</td>
+  <td class="s-red">0.54</td>
+  <td class="s-red">0.54</td>
+  <td class="s-red">0.38</td>
+  <td class="s-red">0.36</td>
+  <td class="s-red">0.28</td>
+</tr>
+<tr>
+  <td><code>requirements.md</code></td>
+  <td class="s-green">1.00</td>
+  <td class="s-green">1.00</td>
+  <td class="s-green">0.97</td>
+  <td class="s-green">1.00</td>
+  <td class="s-green">0.97</td>
+  <td class="s-green">0.97</td>
+</tr>
+<tr>
+  <td><code>sci-calc-code-generation-plan.md</code></td>
+  <td class="s-green">0.97</td>
+  <td class="s-green">0.98</td>
+  <td class="s-green">0.92</td>
+  <td class="s-green">0.98</td>
+  <td class="s-green">0.98</td>
+  <td class="s-green">0.98</td>
+</tr>
+<tr>
+  <td><code>services.md</code></td>
+  <td class="s-green">0.91</td>
+  <td class="s-green">0.91</td>
+  <td class="s-green">0.96</td>
+  <td class="s-green">0.91</td>
+  <td class="s-green">0.91</td>
+  <td class="s-green">0.97</td>
+</tr>
+<tr>
+  <td><code>unit-test-instructions.md</code></td>
+  <td class="s-yellow">0.70</td>
+  <td class="s-yellow">0.86</td>
+  <td class="s-green">0.90</td>
+  <td class="s-yellow">0.77</td>
+  <td class="s-yellow">0.86</td>
+  <td class="s-yellow">0.88</td>
+</tr>
+</tbody>
+</table>
+<p class="section-desc"><span class="badge badge-pass">green &ge; 0.90</span> <span class="badge badge-warn">yellow 0.70–0.89</span> <span class="badge badge-fail">red &lt; 0.70</span></p>
+<h3>C.4 Document Coverage</h3>
+<p class="section-desc">Tracks whether the generated output includes the same set of documents as the reference. <strong>Unmatched Ref</strong> = reference documents the AI failed to generate (missing output). <strong>Unmatched Candidate</strong> = extra documents the AI generated that don&rsquo;t exist in the reference (unexpected output). Ideally both columns are 0, meaning the AI produced exactly the expected set of documents.</p>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th>Unmatched Ref</th>
+  <th>Unmatched Candidate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td class="d-neg">1</td>
+  <td class="d-neg">1</td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td>0</td>
+  <td class="d-neg">4</td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td>0</td>
+  <td class="d-neg">1</td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td>0</td>
+  <td class="d-neg">6</td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td>0</td>
+  <td class="d-neg">6</td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td>0</td>
+  <td>0</td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="d-efficiency-cost-metrics">D. Efficiency &amp; Cost Metrics</h2>
+<p class="section-desc">Tracks the computational resources consumed by each evaluation run. These metrics directly affect cost (tokens) and developer wait time (execution time). Lower values are generally better, as long as quality metrics remain stable.</p>
+<h3>D.1 Token Consumption</h3>
+<div class="split">
+<div class="split-desc">
+<p>Total LLM tokens consumed during the run, broken down by agent. <strong>Total</strong> = all tokens across all agents (input + output).</p>
+<p><strong>Executor</strong> = the agent that generates code and documents. <strong>Simulator</strong> = the agent that simulates user interactions for testing.</p>
+<p>Token count is the primary cost driver &mdash; each token represents a unit of LLM usage billed by the provider.</p>
+</div>
+<div>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th></th>
+  <th>Total</th>
+  <th>Executor</th>
+  <th>Simulator</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td class="bar-cell"><span class="bar" style="width:68%"></span></td>
+  <td>9.26M</td>
+  <td>4.65M</td>
+  <td>119.3K</td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td class="bar-cell"><span class="bar" style="width:98%"></span></td>
+  <td>13.34M</td>
+  <td>6.56M</td>
+  <td>266.2K</td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td class="bar-cell"><span class="bar" style="width:61%"></span></td>
+  <td>8.34M</td>
+  <td>4.15M</td>
+  <td>295.5K</td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td class="bar-cell"><span class="bar" style="width:84%"></span></td>
+  <td>11.52M</td>
+  <td>5.72M</td>
+  <td>222.3K</td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td class="bar-cell"><span class="bar" style="width:84%"></span></td>
+  <td>11.52M</td>
+  <td>5.67M</td>
+  <td>251.9K</td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td class="bar-cell"><span class="bar" style="width:100%"></span></td>
+  <td>13.66M</td>
+  <td>6.88M</td>
+  <td>90.2K</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<h3>D.2 Execution Time</h3>
+<div class="split">
+<div class="split-desc">
+<p>Wall-clock duration of the full evaluation pipeline, broken down by handoff. Each <strong>handoff</strong> (H1, H2, H3) represents a sequential phase.</p>
+<p>H1 is typically code generation (the longest phase), H2 is build/test execution, and H3 is result collection and reporting.</p>
+<p><strong>Wall Clock</strong> is the total end-to-end time.</p>
+</div>
+<div>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th></th>
+  <th>Wall Clock</th>
+  <th>Handoff Breakdown</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td class="bar-cell"><span class="bar" style="width:85%"></span></td>
+  <td>16.0m</td>
+  <td>H1: 13.8m · H2: 0.9m · H3: 1.3m</td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td class="bar-cell"><span class="bar" style="width:99%"></span></td>
+  <td>18.6m</td>
+  <td>H1: 17.1m · H2: 1.0m · H3: 0.5m</td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td class="bar-cell"><span class="bar" style="width:82%"></span></td>
+  <td>15.5m</td>
+  <td>H1: 11.7m · H2: 1.4m · H3: 2.4m</td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td class="bar-cell"><span class="bar" style="width:100%"></span></td>
+  <td>18.8m</td>
+  <td>H1: 15.8m · H2: 1.3m · H3: 1.7m</td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td class="bar-cell"><span class="bar" style="width:89%"></span></td>
+  <td>16.8m</td>
+  <td>H1: 14.8m · H2: 1.3m · H3: 0.6m</td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td class="bar-cell"><span class="bar" style="width:95%"></span></td>
+  <td>17.9m</td>
+  <td>H1: 15.0m · H2: 0.7m · H3: 2.2m</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<h3>D.3 Context Window Pressure</h3>
+<div class="split">
+<div class="split-desc">
+<p>Measures how much of the LLM&rsquo;s context window is being used across API calls. <strong>Max</strong> = the largest single context seen during the run (approaching the model&rsquo;s limit risks truncation or degraded output).</p>
+<p><strong>Avg</strong> = the mean context size across all API calls. <strong>Median</strong> = the midpoint context size (less affected by outliers than avg).</p>
+<p>High context pressure can indicate overly verbose prompts or accumulated conversation history.</p>
+</div>
+<div>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th>Max</th>
+  <th>Avg</th>
+  <th>Median</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td>97.4K</td>
+  <td>44.9K</td>
+  <td>43.7K</td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td>138.5K</td>
+  <td>57.2K</td>
+  <td>50.4K</td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td>96.4K</td>
+  <td>38.8K</td>
+  <td>26.6K</td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td>118.6K</td>
+  <td>49.7K</td>
+  <td>42.4K</td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td>109.8K</td>
+  <td>48.8K</td>
+  <td>48.5K</td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td>121.7K</td>
+  <td>56.6K</td>
+  <td>55.2K</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<h2 id="e-code-quality">E. Code Quality</h2>
+<p class="section-desc">Static analysis of the generated codebase. These metrics reflect the cleanliness and maintainability of the AI-generated code, independent of whether it passes tests.</p>
+<table>
+<thead>
+<tr>
+  <th>Metric</th>
+  <th>What it measures</th>
+</tr>
+</thead>
+<tbody>
+<tr><td><strong>Lint Findings</strong></td><td>Warnings from static analysis (style violations, unused variables, etc.). 0 = clean.</td></tr>
+<tr><td><strong>Security Findings</strong></td><td>Vulnerabilities detected by security scanners (SQL injection, XSS, etc.). N/A if no scanner was configured.</td></tr>
+<tr><td><strong>Source Files</strong></td><td>Number of non-test source files in the generated project.</td></tr>
+<tr><td><strong>LOC</strong></td><td>Total lines of code across all source files. Large swings may indicate generated boilerplate or missing modules.</td></tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th>Lint Findings</th>
+  <th>Security Findings</th>
+  <th>Source Files</th>
+  <th>LOC</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td>0</td>
+  <td><span class="na">N/A</span></td>
+  <td>977</td>
+  <td>398.5K</td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td>0</td>
+  <td><span class="na">N/A</span></td>
+  <td>977</td>
+  <td>398.1K</td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td>0</td>
+  <td><span class="na">N/A</span></td>
+  <td>976</td>
+  <td>397.4K</td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td>0</td>
+  <td><span class="na">N/A</span></td>
+  <td>977</td>
+  <td>397.7K</td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td>0</td>
+  <td><span class="na">N/A</span></td>
+  <td>976</td>
+  <td>397.5K</td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td>0</td>
+  <td><span class="na">N/A</span></td>
+  <td>976</td>
+  <td>397.6K</td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="f-stability-reliability">F. Stability &amp; Reliability</h2>
+<p class="section-desc">Tracks whether the evaluation pipeline itself ran smoothly, independent of output quality.</p>
+<table>
+<thead>
+<tr>
+  <th>Metric</th>
+  <th>What it measures</th>
+</tr>
+</thead>
+<tbody>
+<tr><td><strong>Error Events</strong></td><td>Runtime errors logged during the run (exceptions, timeouts, API failures). 0 = clean run.</td></tr>
+<tr><td><strong>Handoffs</strong></td><td>Number of sequential pipeline phases completed. Typically 3 (generate, build/test, report). A different count may indicate an early abort or retry.</td></tr>
+<tr><td><strong>Server Startup</strong></td><td>Whether the generated application server started successfully. A failure here means the generated code couldn&rsquo;t even boot, preventing contract tests from running.</td></tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+  <th>Version</th>
+  <th>Error Events</th>
+  <th>Handoffs</th>
+  <th>Server Startup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0</td>
+  <td>0</td>
+  <td>3</td>
+  <td><span class="badge badge-pass">PASS</span></td>
+</tr>
+<tr>
+  <td>v0.1.1</td>
+  <td>0</td>
+  <td>3</td>
+  <td><span class="badge badge-pass">PASS</span></td>
+</tr>
+<tr>
+  <td>v0.1.2</td>
+  <td>0</td>
+  <td>3</td>
+  <td><span class="badge badge-pass">PASS</span></td>
+</tr>
+<tr>
+  <td>v0.1.3</td>
+  <td>0</td>
+  <td>3</td>
+  <td><span class="badge badge-pass">PASS</span></td>
+</tr>
+<tr>
+  <td>v0.1.4</td>
+  <td>0</td>
+  <td>3</td>
+  <td><span class="badge badge-pass">PASS</span></td>
+</tr>
+<tr>
+  <td>v0.1.5</td>
+  <td>0</td>
+  <td>3</td>
+  <td><span class="badge badge-pass">PASS</span></td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="g-version-over-version-deltas">G. Version-over-Version Deltas</h2>
+<p class="section-desc">Each row shows the change from one release to the next, making it easy to spot which specific version introduced an improvement or regression. Positive values (+) indicate an increase; negative (&minus;) indicate a decrease. For <strong>Unit Tests</strong> and <strong>Contract</strong>, positive is better (more tests passing). For <strong>Qualitative</strong>, positive is better (higher quality score). For <strong>Tokens</strong> and <strong>Time</strong>, negative is better (more efficient).</p>
+<table>
+<thead>
+<tr>
+  <th>Transition</th>
+  <th>Unit Tests</th>
+  <th>Contract</th>
+  <th>Qualitative</th>
+  <th>Tokens</th>
+  <th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>v0.1.0 &rarr; v0.1.1</td>
+  <td class="d-neg">-56</td>
+  <td>+0</td>
+  <td class="d-pos">+0.028</td>
+  <td class="d-neg">+4.08M</td>
+  <td class="d-neg">+155s</td>
+</tr>
+<tr>
+  <td>v0.1.1 &rarr; v0.1.2</td>
+  <td class="d-neg">-14</td>
+  <td>+0</td>
+  <td class="d-pos">+0.005</td>
+  <td class="d-pos">-5.00M</td>
+  <td class="d-pos">-188s</td>
+</tr>
+<tr>
+  <td>v0.1.2 &rarr; v0.1.3</td>
+  <td class="d-neg">-54</td>
+  <td class="d-neg">-3</td>
+  <td class="d-neg">-0.026</td>
+  <td class="d-neg">+3.19M</td>
+  <td class="d-neg">+200s</td>
+</tr>
+<tr>
+  <td>v0.1.3 &rarr; v0.1.4</td>
+  <td class="d-pos">+30</td>
+  <td class="d-pos">+3</td>
+  <td class="d-pos">+0.025</td>
+  <td class="d-pos">-9.2K</td>
+  <td class="d-pos">-122s</td>
+</tr>
+<tr>
+  <td>v0.1.4 &rarr; v0.1.5</td>
+  <td class="d-pos">+19</td>
+  <td>+0</td>
+  <td class="d-pos">+0.007</td>
+  <td class="d-neg">+2.14M</td>
+  <td class="d-neg">+71s</td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="h-pre-release-data-points">H. Pre-Release Data Points</h2>
+<p class="section-desc">Evaluation results from non-release sources &mdash; the <code>main</code> branch and open pull requests. These represent in-progress work that hasn&rsquo;t been tagged as a release yet. Use this data to preview whether upcoming changes will improve or regress metrics before they ship.</p>
+<p class="section-desc">No pre-release data available.</p>
+
+</body>
+</html>

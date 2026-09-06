@@ -1,0 +1,15 @@
+name: feature-realworld-follow
+description: "Brownfield FEATURE — RealWorld follow/unfollow (Django/django-ninja)"
+kind: brownfield
+task_type: feature
+# Repeatability: frozen snapshot of c4ffein/realworld-django-ninja at this
+# upstream commit (with follow/unfollow removed as the seed delta). Pinned so
+# the testbed is durable; verified at preflight against UPSTREAM_COMMIT.
+upstream_repo: https://github.com/c4ffein/realworld-django-ninja
+upstream_commit: 04ef47ced437ee8795a13bdcbc2eff2be19e33bd
+seed_repo: seed/                          # RealWorld with follow/unfollow removed
+task: task.md                             # the modify-this-repo instruction
+contract_hurl: contract-hurl-scored/      # the 3 follow-dependent .hurl files
+contract_hurl_full: contract-hurl/        # full 13-file suite (regression gate)
+framework: django
+tags: [brownfield, feature, django]
