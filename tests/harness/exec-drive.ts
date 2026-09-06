@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stringify } from "smol-toml";
 import { REPO_ROOT } from "./fixtures.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
@@ -26,6 +27,8 @@ const CURSOR_BIN = process.env.AIDLC_CURSOR_BIN ?? "agent";
 
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
+export const CODEX_AUTO_REVIEW_MIN_VERSION = [0, 147, 0] as const;
+export const CODEX_AUTO_REVIEW_MIN_VERSION_LABEL = "0.147.0";
 const OPENCODE_MODEL =
   process.env.AIDLC_OPENCODE_MODEL ??
   "amazon-bedrock/global.anthropic.claude-sonnet-4-6";
@@ -56,6 +59,70 @@ export interface CodexProject {
   proj: string;
   home: string;
   root: string;
+}
+
+export interface CodexExecConfigOptions {
+  awsProfile?: string;
+  awsRegion?: string;
+}
+
+// Render the complete scratch CODEX_HOME config through a TOML serializer.
+// Project and writable-root paths may contain Windows backslashes, quotes, or
+// spaces, so they must never be interpolated into TOML table headers/strings.
+export function renderCodexExecConfig(
+  projectDir: string,
+  trustToml: string,
+  options: CodexExecConfigOptions = {},
+): string {
+  const config = stringify({
+    model: "openai.gpt-5.5",
+    model_provider: "amazon-bedrock",
+    model_context_window: 1_000_000,
+    model_reasoning_effort: "low",
+    sandbox_mode: "workspace-write",
+    windows: {
+      sandbox: "elevated",
+    },
+    model_providers: {
+      "amazon-bedrock": {
+        aws: {
+          profile: options.awsProfile ?? AWS_PROFILE,
+          region: options.awsRegion ?? AWS_REGION,
+        },
+      },
+    },
+    shell_environment_policy: {
+      set: {
+        AIDLC_RULES_DIR: "aidlc/spaces/default/memory",
+      },
+    },
+    sandbox_workspace_write: {
+      // The installed harness needs no root beyond the workspace itself.
+      // In particular, .codex is a protected carveout and cannot be reopened
+      // as a split writable root on native Windows. Mutation journeys that hit
+      // a protected path use Codex's reviewed retry instead.
+      writable_roots: [],
+    },
+    projects: {
+      [projectDir]: {
+        trust_level: "trusted",
+      },
+    },
+  });
+  return `${config.trimEnd()}\n\n${trustToml.trim()}\n`;
+}
+
+export function writeCodexExecConfig(
+  home: string,
+  projectDir: string,
+  trustToml: string,
+  options: CodexExecConfigOptions = {},
+): void {
+  writeFileSync(
+    join(home, "config.toml"),
+    renderCodexExecConfig(projectDir, trustToml, options),
+    "utf-8",
+  );
 }
 
 // A scratch install: dist/codex copied verbatim, git-initialized (project
@@ -89,28 +156,7 @@ export function setupCodexProject(): CodexProject {
   if (trust.status !== 0) {
     throw new Error(`trust emit failed: ${trust.stderr}`);
   }
-  writeFileSync(
-    join(home, "config.toml"),
-    [
-      `model = "openai.gpt-5.5"`,
-      `model_provider = "amazon-bedrock"`,
-      `model_context_window = 1000000`,
-      `model_reasoning_effort = "low"`,
-      ``,
-      `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
-      ``,
-      `[shell_environment_policy]`,
-      `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
-      ``,
-      `[projects."${proj}"]`,
-      `trust_level = "trusted"`,
-      ``,
-      trust.stdout,
-    ].join("\n"),
-    "utf-8",
-  );
+  writeCodexExecConfig(home, proj, trust.stdout);
   return { proj, home, root };
 }
 
@@ -119,12 +165,72 @@ export interface ExecResult {
   out: string;
 }
 
+export function codexVersionAtLeast(
+  versionOutput: string,
+  minimum: readonly [number, number, number],
+): boolean {
+  const match = versionOutput.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const current = [Number(match[1]), Number(match[2]), Number(match[3])];
+  for (let i = 0; i < minimum.length; i++) {
+    if (current[i] !== minimum[i]) return current[i] > minimum[i];
+  }
+  return true;
+}
+
+export function shouldRetryCodexWindowsAclDenial(
+  output: string,
+  stateUnchanged: boolean,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return (
+    stateUnchanged &&
+    platform === "win32" &&
+    /Access to the path ['"](?:[A-Z]:\\)?[^'"]*aidlc-journey-[^'"]*['"] is denied\./i.test(
+      output,
+    )
+  );
+}
+
+export function runCodexWithWindowsAclRetry(
+  run: () => ExecResult,
+  mutationObserved: () => boolean,
+  platform: NodeJS.Platform = process.platform,
+): ExecResult {
+  const first = run();
+  if (
+    !shouldRetryCodexWindowsAclDenial(
+      first.out,
+      !mutationObserved(),
+      platform,
+    )
+  ) {
+    return first;
+  }
+  const retry = run();
+  return {
+    rc: retry.rc,
+    out: `${first.out}\n--- RETRY: Windows workspace ACL denial with unchanged mutation state ---\n${retry.out}`,
+  };
+}
+
+export function codexExecArgv(
+  prompt: string,
+  options: { approveForMe?: boolean; resume?: boolean } = {},
+): string[] {
+  const argv = ["exec"];
+  if (options.approveForMe) argv.push("--approve-for-me");
+  if (options.resume) argv.push("resume", "--last");
+  argv.push(prompt);
+  return argv;
+}
+
 export function execCodex(
   proj: string,
   home: string,
   prompt: string,
 ): ExecResult {
-  const result = spawnSync(CODEX_BIN, ["exec", prompt], {
+  const result = spawnSync(CODEX_BIN, codexExecArgv(prompt), {
     cwd: proj,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],

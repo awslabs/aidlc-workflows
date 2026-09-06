@@ -1,0 +1,21 @@
+AI-DLC Test Run Summary
+======================
+Timestamp: 2026-08-25T12:59:33Z
+Tiers: e2e
+Mode: debug (streaming + driver traces)
+
+Per-file results:
+  File                                     Status Assertions     Failed   Duration
+  ----                                     ------ ----------     ------   --------
+  t-exec-codex-compose-front.serial        PASS            1          0 478.7715583s
+  t-exec-codex-compose-inflight.serial     PASS            1          0 274.6047915s
+  t-exec-codex-journey-workspace.serial    FAIL            1          1 647.425762s
+  t-exec-codex-memory-include.serial       PASS            1          0 41.8313883s
+  t-exec-codex-status.serial               PASS            1          0 103.6093565s
+
+Totals:
+  Test files: 5
+  Failed files: 1
+  Total assertions: 5
+  Failed assertions: 1
+  Result: FAIL
