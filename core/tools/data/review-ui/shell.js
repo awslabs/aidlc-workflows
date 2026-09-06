@@ -295,6 +295,23 @@ function panelButtons(view) {
     .join("");
 }
 
+// Pending remarks decide the gate's primary verb. Edits, deletes, and comments
+// are requests: the agent has to act on them, so "Send N changes" leads and
+// Approve steps back. Looks-good remarks and general notes ride along with
+// either decision, so with only those (or nothing) Approve leads.
+export function pendingChangeCount() {
+  return (store.annotations || []).filter((item) => item.kind === "edit" || item.kind === "delete" || item.kind === "comment").length;
+}
+
+function gateActions() {
+  const changes = pendingChangeCount();
+  if (changes > 0) {
+    const label = `Send ${changes} ${changes === 1 ? "change" : "changes"} — the agent revises`;
+    return `${actionButton("Approve anyway", "approve")}${actionButton(label, "request-changes", true)}`;
+  }
+  return `${actionButton("Request changes", "request-changes")}${actionButton("Approve", "approve", true)}`;
+}
+
 function actionButton(label, action, primary = false) {
   return `<button type="button" class="${primary ? "btn primary" : "link"}" data-header-action="${action}">${escapeHtml(label)}</button>`;
 }
@@ -302,9 +319,7 @@ function actionButton(label, action, primary = false) {
 function headerActions(view, stage) {
   if (!stage) return "";
   const artifact = firstArtifact(stage);
-  if (view.kind === "artifact" && isLiveGate(stage)) {
-    return `${actionButton("Request changes", "request-changes")}${actionButton("Approve", "approve", true)}`;
-  }
+  if (view.kind === "artifact" && isLiveGate(stage)) return gateActions();
   if (view.kind === "questions" && store.questionsState === "submitted" && isActiveIntent()) return "";
   if (view.kind === "questions" && isLiveQuestions(stage)) {
     return `${actionButton("Edit the file instead", "terminal-edit")}${actionButton("Save answers — the agent continues", "save-answers", true)}`;
@@ -323,7 +338,7 @@ function headerActions(view, stage) {
       return actionButton(`Answer ${total} ${total === 1 ? "question" : "questions"} →`, "open-questions", true);
     }
     if (isLiveGate(stage)) {
-      return `${artifact?.exists ? actionButton(`Open ${basename(artifact.path)}`, "open-artifact") : ""}${actionButton("Request changes", "request-changes")}${actionButton("Approve", "approve", true)}`;
+      return `${artifact?.exists ? actionButton(`Open ${basename(artifact.path)}`, "open-artifact") : ""}${gateActions()}`;
     }
     if (artifact?.exists) return actionButton(`Open ${basename(artifact.path)}`, "open-artifact", true);
   }

@@ -89,3 +89,12 @@ export function decisionInFlight() {
   if (!sent || !current || current.state !== "awaiting-approval") return false;
   return sent.stage === current.stage && (sent.unit ?? null) === (current.unit ?? null) && sent.revision === current.revision;
 }
+
+try {
+  const saved = JSON.parse(sessionStorage.getItem("aidlc-review-ui:sent-edits") || "[]");
+  if (Array.isArray(saved)) store.sentEdits = saved;
+  const sent = JSON.parse(sessionStorage.getItem("aidlc-review-ui:decision-sent") || "null");
+  if (sent && typeof sent === "object") store.decisionSent = sent;
+} catch {
+  // ignore a corrupt or unavailable session store
+}

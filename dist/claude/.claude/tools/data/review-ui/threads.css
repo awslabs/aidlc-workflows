@@ -41,14 +41,6 @@
 .thread-body { margin: 8px 0 0; white-space: pre-wrap; }
 .thread-reply { margin: 9px -2px 0; padding: 9px; border-radius: 7px; background: var(--soft); }
 .thread-reply p { margin: 7px 0 0; line-height: 1.45; }
-.thread-diff { margin-top: 8px; padding: 8px; border-radius: 6px; background: var(--panel); white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
-.thread-diff del { background: #fee2e2; color: #9f1239; }
-.thread-diff ins { background: #dcfce7; color: #166534; text-decoration: none; }
-.thread-diff .diff-ellipsis { color: var(--faint); }
-.thread-sent-diff { max-height: 180px; overflow: auto; margin: 8px 0 0; padding: 7px; border-radius: 6px; background: var(--panel); white-space: pre-wrap; font: 10.5px/1.45 var(--mono); }
-.thread-sent-diff .remark-word-diff { white-space: pre-wrap; }
-.thread-sent-diff .remark-word-diff del { background: #fee2e2; color: #9f1239; }
-.thread-sent-diff .remark-word-diff ins { background: #dcfce7; color: #166534; text-decoration: none; }
 .sent-card .thread-quote { color: var(--muted); font-style: italic; }
 .summary-card > p { margin: 0; }
 .summary-card > span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
@@ -74,3 +66,10 @@
 .sent-card.resolved { opacity: 0.75; }
 
 .thread-card textarea { field-sizing: content; min-height: 3.2em; max-height: 14em; resize: vertical; }
+
+.decision-warning { margin: 4px 0 8px; padding: 8px 10px; border-radius: 6px; background: var(--amber-soft, #fff7e6); color: #7c4a03; font-size: 12px; line-height: 1.45; }
+
+.edit-card .edit-summary { margin: 4px 0 6px; font-size: 12px; color: var(--ink); }
+.edit-card .edit-summary ins { background: var(--green-soft); color: #166534; text-decoration: none; padding: 0 3px; border-radius: 3px; }
+.edit-card .edit-summary del { background: var(--rose-soft); color: #9f1239; text-decoration: none; padding: 0 3px; border-radius: 3px; }
+.edit-card .edit-summary q { color: var(--muted); }

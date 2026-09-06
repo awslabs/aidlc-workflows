@@ -1,7 +1,7 @@
 // Markdown document rendering, anchored pending feedback, and in-place suggestions.
 import { api } from "./api.js";
-import { wordDiffHtml } from "./diff.js";
-import { agentFor, decisionInFlight, store } from "./store.js";
+import { trackedChangesFragment, wordDiffHtml } from "./diff.js";
+import { agentFor, decisionInFlight, persistAnnotations, store } from "./store.js";
 
 const elements = {};
 let loadVersion = 0;
@@ -205,7 +205,7 @@ function buildDocumentMeta(doc, view) {
   meta.append(provenance);
   if (isLiveGate(view)) {
     const hint = document.createElement("span");
-    hint.textContent = "Type anywhere — a change is a suggestion until you decide";
+    hint.textContent = "Type anywhere — edits are suggestions; Send changes hands them to the agent to apply";
     meta.append(hint);
   }
   return meta;
@@ -314,7 +314,7 @@ function showSelectionAffordance(selection) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "selection-add";
-  button.textContent = "+";
+  button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/><path class="plus" d="M12 8.5v7M8.5 12h7"/></svg>';
   button.title = "Comment on selection (C)";
   button.setAttribute("aria-label", "Comment on selected text");
   button.addEventListener("mousedown", (event) => event.preventDefault());
@@ -367,8 +367,18 @@ function applyAnnotations() {
   }
   for (const annotation of annotations) reservedAnnotationIds.add(annotation.id);
   assignHeadingIds(doc);
+  // Suggested edits show in the document itself as tracked changes — the
+  // reviewer must see what they changed where they changed it, not only as a
+  // card in the rail. Sent edits stay visible (muted) until the file changes.
+  for (const wrapper of elements.viewer.querySelectorAll(".blk.suggested")) {
+    wrapper.classList.remove("suggested", "pending", "sent");
+    wrapper.querySelector(".sugg-pill")?.remove();
+  }
+  const edits = annotations.filter((annotation) => annotation.kind === "edit" && typeof annotation.after_block === "string");
+  for (const edit of edits) renderSuggestedEdit(edit, false);
+  for (const edit of sentEdits()) renderSuggestedEdit(edit, true);
   const marks = [
-    ...annotations.map((annotation) => ({ item: annotation, sent: false })),
+    ...annotations.filter((annotation) => !edits.includes(annotation)).map((annotation) => ({ item: annotation, sent: false })),
     ...remarks.map((remark) => ({ item: remark, sent: true })),
   ];
   // Bunsho's gutter shows one bubble per line with the number of threads on
@@ -403,6 +413,72 @@ function applyAnnotations() {
     block.querySelector(".gutter").append(bubble);
   }
   showSelectionAffordance(store.selection);
+}
+
+const fragmentCache = new Map();
+let fragmentFetches = 0;
+
+/** Rendered HTML for a Markdown fragment, cached by source; null until it lands. */
+function renderedFragment(source) {
+  if (fragmentCache.has(source)) return fragmentCache.get(source);
+  fragmentCache.set(source, null);
+  const path = store.document?.path;
+  fragmentFetches += 1;
+  api.post("/api/render-fragment", { source }).then((result) => {
+    fragmentCache.set(source, typeof result?.html === "string" ? result.html : "");
+    if (store.document?.path === path) applyAnnotations();
+  }).catch(() => {
+    fragmentCache.set(source, "");
+  }).finally(() => {
+    fragmentFetches -= 1;
+  });
+  return null;
+}
+
+function pendingEditFor(blockIndex) {
+  return pendingAnnotations().find((annotation) => annotation.kind === "edit" && Number(annotation.block) === Number(blockIndex) && typeof annotation.after_block === "string") || null;
+}
+
+/** Edits already sent for this exact file content: shown muted until the agent's revision replaces the file. */
+function sentEdits() {
+  const doc = store.document;
+  if (!doc) return [];
+  return (Array.isArray(store.sentEdits) ? store.sentEdits : []).filter((edit) => edit.path === doc.path && edit.sha256 === doc.sha256);
+}
+
+function renderSuggestedEdit(edit, sent) {
+  const wrapper = annotationBlock(edit);
+  if (!wrapper || wrapper.classList.contains("editing")) return;
+  const data = blockData(wrapper);
+  if (!data) return;
+  const afterHtml = renderedFragment(edit.after_block);
+  if (afterHtml === null) return; // arrives async; applyAnnotations re-runs
+  const content = wrapper.querySelector(".blk-content");
+  content.replaceChildren(trackedChangesFragment(String(data.html || ""), afterHtml));
+  wrapper.classList.add("suggested", sent ? "sent" : "pending");
+  const pill = document.createElement("div");
+  pill.className = "sugg-pill";
+  if (sent) {
+    pill.innerHTML = `<span>Your edit · sent${Number.isInteger(edit.revision) ? ` in r${edit.revision}` : ""} · awaiting the agent</span>`;
+  } else {
+    pill.innerHTML = `<span>Your edit · not sent yet</span><button type="button" data-undo-edit>Undo</button>`;
+    pill.querySelector("[data-undo-edit]").addEventListener("mousedown", (event) => event.preventDefault());
+    pill.querySelector("[data-undo-edit]").addEventListener("click", () => {
+      const remaining = (store.annotations || []).filter((item) => item.id !== edit.id);
+      store.set({ annotations: remaining });
+      persistAnnotations(store.state, remaining);
+    });
+  }
+  wrapper.append(pill);
+  const gutter = wrapper.querySelector(".gutter");
+  const bubble = document.createElement("button");
+  bubble.type = "button";
+  bubble.className = `bubble suggestion${sent ? " sent" : ""} pencil`;
+  bubble.dataset.annotation = edit.id;
+  bubble.title = sent ? "Your suggested edit (sent)" : "Your suggested edit (not sent yet)";
+  bubble.setAttribute("aria-label", bubble.title);
+  bubble.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 6.5l3 3"/></svg>';
+  gutter.append(bubble);
 }
 
 function sentRemarks() {
@@ -543,11 +619,15 @@ function handleBlockFocus(event) {
   if (activeEdit) finishEdit(activeEdit);
   const data = blockData(wrapper);
   if (!data) return;
-  const source = sourceForBlock(data);
+  const baseline = sourceForBlock(data);
+  // A block with a pending suggestion is edited from the suggestion, so edits
+  // compose; `baseline` stays the file's text for the before/after record.
+  const pending = pendingEditFor(data.index);
+  const source = pending ? pending.after_block : baseline;
   // Focus alone changes nothing: the reader may be about to select text for a
   // comment. The block switches to its Markdown source on the first keystroke
   // or toolbar action (see armEdit), so selecting and editing share one surface.
-  activeEdit = { wrapper, content, data, original: source, history: [], future: [], armed: false };
+  activeEdit = { wrapper, content, data, original: source, baseline, history: [], future: [], armed: false };
   wrapper.classList.add("editing");
   showToolbar(data, source);
 }
@@ -566,10 +646,28 @@ function armEdit(edit) {
 function caretPrefix(root) {
   const selection = window.getSelection();
   if (!selection?.rangeCount || !root.contains(selection.anchorNode)) return "";
-  const range = selection.getRangeAt(0).cloneRange();
-  range.selectNodeContents(root);
-  range.setEnd(selection.anchorNode, selection.anchorOffset);
-  return range.toString();
+  const anchor = selection.anchorNode;
+  const anchorOffset = selection.anchorOffset;
+  // Walk text nodes up to the caret, skipping struck-through (deleted) text:
+  // it is not part of the suggested source the editor is about to show.
+  let prefix = "";
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const inDel = node.parentElement?.closest("del");
+    if (node === anchor) {
+      if (!inDel) prefix += node.data.slice(0, anchorOffset);
+      return prefix;
+    }
+    if (anchor.nodeType === Node.ELEMENT_NODE && anchor.contains(node)) {
+      // caret on an element boundary: include text nodes before the offset child
+      const children = [...anchor.childNodes];
+      const before = children.slice(0, anchorOffset);
+      if (!before.some((child) => child === node || child.contains(node))) return prefix;
+    }
+    if (!inDel) prefix += node.data;
+  }
+  return prefix;
 }
 
 /**
@@ -728,14 +826,24 @@ function handleBlockBlur(event) {
 function finishEdit(edit) {
   if (!edit || activeEdit !== edit) return;
   const after = edit.armed ? editorText(edit.content) : edit.original;
-  const changed = edit.armed && after !== edit.original;
+  const baseline = edit.baseline ?? edit.original;
+  const touched = edit.armed && after !== edit.original;
+  const changed = after !== baseline;
   edit.wrapper.classList.remove("editing", "changed", "armed");
   delete edit.wrapper.dataset.diff;
   edit.content.innerHTML = String(edit.data.html || "");
   activeEdit = null;
   hideToolbar();
   assignHeadingIds(store.document);
-  if (changed) {
+  if (touched && !changed) {
+    // Typed the block back to the file's text: the suggestion is withdrawn.
+    const remaining = (store.annotations || []).filter((item) => !(item.kind === "edit" && Number(item.block) === Number(edit.data.index)));
+    if (remaining.length !== (store.annotations || []).length) {
+      store.set({ annotations: remaining });
+      persistAnnotations(store.state, remaining);
+    }
+  }
+  if (touched && changed) {
     const key = `${store.document.path}:${edit.data.index}`;
     const existing = pendingAnnotations().find(
       (annotation) => annotation.kind === "edit" && Number(annotation.block) === Number(edit.data.index),
@@ -750,8 +858,8 @@ function finishEdit(edit) {
       block: Number(edit.data.index),
       line_start: Number(edit.data.line_start),
       line_end: Number(edit.data.line_end),
-      before: edit.original,
-      original_block: edit.original,
+      before: baseline,
+      original_block: baseline,
       after_block: after,
       heading_path: headingPath(Number(edit.data.index)),
     };

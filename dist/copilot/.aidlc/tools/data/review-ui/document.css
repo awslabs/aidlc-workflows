@@ -267,8 +267,12 @@
   background: #fff;
   color: var(--accent);
   box-shadow: 0 2px 8px rgba(26, 32, 44, 0.12);
-  font: 500 19px/22px var(--font);
+  display: grid;
+  place-items: center;
+  padding: 0;
 }
+.selection-add svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.selection-add svg .plus { stroke-width: 2.2; }
 .selection-add:hover {
   border-color: var(--accent);
   background: var(--soft);
@@ -367,3 +371,18 @@
 .blk-diff-body { white-space: pre-wrap; word-break: break-word; }
 .blk-diff-body del { background: var(--rose-soft); color: #9f1239; text-decoration: line-through; }
 .blk-diff-body ins { background: var(--green-soft); color: #166534; text-decoration: none; }
+
+/* Suggested edits live in the document as tracked changes */
+.blk.suggested { position: relative; }
+.blk.suggested > .blk-content { border-left-color: var(--violet); }
+.blk.suggested .sugg-ins { background: var(--green-soft); color: #166534; text-decoration: none; border-radius: 2px; box-shadow: inset 0 -1px 0 rgba(22, 101, 52, 0.35); }
+.blk.suggested .sugg-del { background: var(--rose-soft); color: #9f1239; text-decoration: line-through; border-radius: 2px; }
+.blk.suggested.sent .sugg-ins { background: rgba(22, 101, 52, 0.08); color: #3f6b4f; box-shadow: none; }
+.blk.suggested.sent .sugg-del { background: rgba(159, 18, 57, 0.06); color: #a05a6b; }
+.sugg-pill { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px 12px; font: 11px/1 var(--font); color: var(--muted); }
+.sugg-pill span { padding: 3px 7px; border-radius: 999px; background: var(--violet-soft, rgba(124, 58, 237, 0.1)); color: var(--violet); font-weight: 600; letter-spacing: 0.01em; }
+.blk.suggested.sent .sugg-pill span { background: var(--soft); color: var(--muted); }
+.sugg-pill button { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+.sugg-pill button:hover { text-decoration: underline; }
+.bubble.pencil { display: grid; place-items: center; padding: 0; }
+.bubble.pencil svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

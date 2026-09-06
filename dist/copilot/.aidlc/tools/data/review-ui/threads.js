@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { escapeHtml, wordDiffHtml } from "./diff.js";
+import { diffOps, escapeHtml } from "./diff.js";
 import { agentFor, decisionInFlight, persistAnnotations, setNotice, store } from "./store.js";
 
 const slot = document.getElementById("slot");
@@ -165,8 +165,20 @@ async function sendDecision(decision, notes) {
         decision,
         ...(cleanNotes ? { notes: cleanNotes } : {}),
       });
+      const sentEdits = [
+        ...(Array.isArray(store.sentEdits) ? store.sentEdits : []),
+        ...store.annotations
+          .filter((item) => item.kind === "edit" && typeof item.after_block === "string")
+          .map((item) => ({ ...item, revision: current.revision, sha256: store.document?.sha256 || "", path: item.path || store.document?.path || "" })),
+      ];
       clearPending();
-      store.set({ decisionSent: { stage: current.stage, unit: current.unit ?? null, revision: current.revision, decision } });
+      store.set({ sentEdits, decisionSent: { stage: current.stage, unit: current.unit ?? null, revision: current.revision, decision } });
+      try {
+        sessionStorage.setItem("aidlc-review-ui:sent-edits", JSON.stringify(sentEdits));
+        sessionStorage.setItem("aidlc-review-ui:decision-sent", JSON.stringify(store.decisionSent));
+      } catch {
+        // session storage is a convenience only
+      }
       setNotice("Sent — the agent continues. (Answering the gate in the terminal does the same.)", "info");
     } catch (error) {
       if (error.status !== 404) throw error;
@@ -436,7 +448,7 @@ function render() {
         <button class="threads-note-link" type="button">${generalNote ? "Edit general note" : "Add general note"}</button>
       </header>
       ${renderNoteEditor()}
-      ${pending.length || drafts.length ? `<p class="threads-pending-line"><b>${pending.length + drafts.length} pending</b> · sends with your decision (Approve / Request changes, top right)</p>` : ""}
+      ${pending.length || drafts.length ? `<p class="threads-pending-line"><b>${pending.length + drafts.length} pending</b> · nothing is applied yet — <b>Send changes</b> (top right) hands them to the agent; Approve records them as notes only</p>` : ""}
       <div class="thread-list">${renderThreadList()}</div>
     </section>`;
   bindThreads();
@@ -452,16 +464,26 @@ function renderNoteEditor() {
   const pendingCount = store.annotations.length;
   const revisionLabel = Number.isInteger(store.state?.current?.revision) ? ` · r${store.state.current.revision}` : "";
   if (approving) {
+    const changes = store.annotations.filter((item) => item.kind === "edit" || item.kind === "delete" || item.kind === "comment").length;
+    const warning = changes
+      ? `<p class="decision-warning">Approving does <b>not</b> apply your ${changes} pending ${changes === 1 ? "change" : "changes"} — the file stays as it is and they are recorded as notes for the record. To have the agent apply them, send them as changes instead.</p>`
+      : "";
     return `<form class="decision-note-form approve-form">
-      <label>Approve ${escapeHtml(stage?.name || "this stage")}${revisionLabel}<span>${pendingCount ? `${pendingCount} pending ${pendingCount === 1 ? "remark goes" : "remarks go"} with it as notes; the agent continues to the next stage.` : "The agent continues to the next stage."}</span></label>
+      <label>Approve ${escapeHtml(stage?.name || "this stage")}${revisionLabel}<span>${changes ? "" : pendingCount ? `${pendingCount} pending ${pendingCount === 1 ? "remark goes" : "remarks go"} with it as notes; the agent continues to the next stage.` : "The agent continues to the next stage."}</span></label>
+      ${warning}
       <textarea id="decision-notes" rows="2" placeholder="Optional note for the record">${escapeHtml(generalNote)}</textarea>
-      <div><button class="btn" data-note-cancel type="button">Cancel</button><button class="btn primary" type="submit" ${sending ? "disabled" : ""}>Approve${revisionLabel} →</button></div>
+      <div><button class="btn" data-note-cancel type="button">Cancel</button>${changes ? `<button class="btn" data-send-changes type="button">Send ${changes} ${changes === 1 ? "change" : "changes"} instead</button>` : ""}<button class="btn ${changes ? "" : "primary"}" type="submit" ${sending ? "disabled" : ""}>${changes ? "Approve anyway" : `Approve${revisionLabel} →`}</button></div>
     </form>`;
   }
+  const changes = store.annotations.filter((item) => item.kind === "edit" || item.kind === "delete" || item.kind === "comment").length;
+  const requestTitle = changes ? `Send ${changes} ${changes === 1 ? "change" : "changes"}` : "Request changes";
+  const requestDetail = changes
+    ? `The agent applies your ${changes === 1 ? "edit or comment" : "edits and comments"} to the file, replies to each, and reopens the gate for you. Add context if it helps.`
+    : "Describe what should change; the agent revises and reopens the gate.";
   return `<form class="decision-note-form">
-    <label for="decision-notes">${deciding ? "Request changes" : "General note"}<span>${deciding ? `${pendingCount ? `${pendingCount} pending ${pendingCount === 1 ? "remark" : "remarks"} go with it. ` : ""}Optional — include context for the agent.` : "Sent with your decision."}</span></label>
-    <textarea id="decision-notes" rows="3" placeholder="What should the agent know?">${escapeHtml(generalNote)}</textarea>
-    <div><button class="btn" data-note-cancel type="button">Cancel</button><button class="btn primary" type="submit" ${sending ? "disabled" : ""}>${deciding ? "Send request" : "Save note"}</button></div>
+    <label for="decision-notes">${deciding ? requestTitle : "General note"}<span>${deciding ? requestDetail : "Sent with your decision."}</span></label>
+    <textarea id="decision-notes" rows="3" placeholder="${deciding && changes ? "Optional — anything the edits don't say" : "What should the agent know?"}">${escapeHtml(generalNote)}</textarea>
+    <div><button class="btn" data-note-cancel type="button">Cancel</button><button class="btn primary" type="submit" ${sending ? "disabled" : ""}>${deciding ? (changes ? `${requestTitle} →` : "Send request") : "Save note"}</button></div>
   </form>`;
 }
 
@@ -478,7 +500,7 @@ function renderThreadList() {
   if (!hasOpenGate()) return `<p class="threads-empty">No threads yet · comments open at the approval gate</p>`;
   if (remarksMode === "unavailable") return `<p class="threads-empty"><b>Threads are not available yet.</b>The document remains reviewable. Pending remarks will stay here until you decide.</p>`;
   if (store.view?.readOnly) return `<p class="threads-empty"><b>No threads for this artifact.</b>This past artifact is read-only; return to the current stage to review.</p>`;
-  return `<p class="threads-empty"><b>No threads yet.</b>Select text in the document to add a remark. Nothing sends until you decide.</p>`;
+  return `<p class="threads-empty"><b>No threads yet.</b>Select text to comment, or click into a paragraph and type to suggest an edit. Nothing reaches the agent until you send.</p>`;
 }
 
 function sortedSentThreads() {
@@ -494,20 +516,57 @@ function renderDraft(draft) {
     <div class="thread-editor-row">${kindSelect(draft.kind)}<span>Not posted</span></div>
     <textarea rows="3" placeholder="${draft.kind === "edit" ? "Replacement text" : "Write a remark…"}">${escapeHtml(draft.body)}</textarea>
     <div class="thread-card-actions"><button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div>
-    <p class="thread-status pending">Pending · sends with your decision</p>
+    <p class="thread-status pending">Pending · Send changes hands this to the agent</p>
   </article>`;
 }
 
 function renderPending(annotation) {
   const isEdit = annotation.kind === "edit";
+  if (isEdit && annotation.before !== undefined && annotation.after_block !== undefined) {
+    // The edit itself is shown in the document as tracked changes; the card is
+    // the index entry: where, how much, and the optional reason for the agent.
+    const summary = editSummary(annotation.before, annotation.after_block);
+    const where = (annotation.heading_path || []).slice(-1)[0] || `lines ${annotation.line_start ?? "?"}–${annotation.line_end ?? "?"}`;
+    return `<article class="thread-card pending-card edit-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
+      <div class="thread-editor-row"><span class="thread-kind">Suggested edit</span><span>${escapeHtml(where)}</span></div>
+      <p class="edit-summary">${summary}</p>
+      <textarea rows="1" placeholder="Why (optional) — the agent reads this with the edit">${escapeHtml(annotation.body || "")}</textarea>
+      <div class="thread-card-actions"><button data-show-annotation type="button">Show in document</button><button data-remove-annotation type="button">Undo edit</button></div>
+      <p class="thread-status pending">Not sent yet · Send changes hands it to the agent</p>
+    </article>`;
+  }
   return `<article class="thread-card pending-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
     ${quoteHtml(annotation.selection)}
     <div class="thread-editor-row">${kindSelect(annotation.kind)}<span>You · just now</span></div>
-    ${isEdit && annotation.before !== undefined && annotation.after_block !== undefined ? `<div class="thread-diff">${focusedDiffHtml(annotation.before, annotation.after_block)}</div>` : ""}
-    <textarea rows="2" placeholder="${isEdit ? "Reason (optional)" : "Write a remark…"}">${escapeHtml(annotation.body || "")}</textarea>
+    <textarea rows="2" placeholder="Write a remark…">${escapeHtml(annotation.body || "")}</textarea>
     <div class="thread-card-actions"><button data-remove-annotation type="button">Remove</button></div>
-    <p class="thread-status pending">Pending · sends with your decision</p>
+    <p class="thread-status pending">Not sent yet · Send changes hands it to the agent</p>
   </article>`;
+}
+
+/** The same summary for a sent remark, from its unified diff's removed/added lines. */
+function diffSummary(unified) {
+  const removed = [];
+  const added = [];
+  for (const line of String(unified).split("\n")) {
+    if (line.startsWith("---") || line.startsWith("+++") || line.startsWith("@@")) continue;
+    if (line.startsWith("-")) removed.push(line.slice(1));
+    else if (line.startsWith("+")) added.push(line.slice(1));
+  }
+  return editSummary(removed.join("\n"), added.join("\n"));
+}
+
+/** "+12 words, −3 words · “…first changed words…”" for an edit card. */
+function editSummary(before, after) {
+  const ops = diffOps(before, after);
+  const words = (text) => (String(text).match(/\S+/g) || []).length;
+  const added = ops.filter((op) => op.type === "ins").reduce((total, op) => total + words(op.text), 0);
+  const removed = ops.filter((op) => op.type === "del").reduce((total, op) => total + words(op.text), 0);
+  const first = ops.find((op) => op.type === "ins")?.text || ops.find((op) => op.type === "del")?.text || "";
+  const excerpt = first.replace(/\s+/g, " ").trim();
+  const shown = excerpt.length > 90 ? `${excerpt.slice(0, 90)}…` : excerpt;
+  const counts = [added ? `<ins>+${added} ${added === 1 ? "word" : "words"}</ins>` : "", removed ? `<del>−${removed} ${removed === 1 ? "word" : "words"}</del>` : ""].filter(Boolean).join(" ");
+  return `${counts}${shown ? ` · <q>${escapeHtml(shown)}</q>` : ""}`;
 }
 
 function renderSent(thread) {
@@ -518,12 +577,12 @@ function renderSent(thread) {
   return `<article class="thread-card sent-card${resolved ? " resolved" : ""}" data-thread-id="${escapeHtml(thread.id)}">
     ${quoteHtml(thread.quote)}
     <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span><span class="thread-kind">${kindLabel(thread.kind)}</span></div>
-    ${thread.diff ? `<div class="thread-sent-diff">${renderRemarkDiff(thread.diff)}</div>` : thread.body ? `<p class="thread-body">${escapeHtml(thread.body)}</p>` : ""}
+    ${thread.diff ? `<p class="edit-summary">${diffSummary(thread.diff)}</p>` : thread.body ? `<p class="thread-body">${escapeHtml(thread.body)}</p>` : ""}
     ${renderReply(thread.response)}
     ${followUps.map((reply) => `<div class="thread-followup"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${reply.revision}</span></div><p>${escapeHtml(reply.body || "")}</p>${renderReply(reply.response)}</div>`).join("")}
     ${pendingReplies.map((reply) => drafts.includes(reply)
       ? `<div class="thread-followup pending" data-draft-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>replying</span></div><textarea rows="2" placeholder="Reply…">${escapeHtml(reply.body || "")}</textarea><div class="thread-card-actions"><button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div></div>`
-      : `<div class="thread-followup pending" data-annotation-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>just now</span></div><p>${escapeHtml(reply.body || "")}</p><div class="thread-card-actions"><button data-remove-annotation type="button">Remove</button></div><p class="thread-status pending">Pending · sends with your decision</p></div>`).join("")}
+      : `<div class="thread-followup pending" data-annotation-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>just now</span></div><p>${escapeHtml(reply.body || "")}</p><div class="thread-card-actions"><button data-remove-annotation type="button">Remove</button></div><p class="thread-status pending">Pending · Send changes hands this to the agent</p></div>`).join("")}
     <p class="thread-status ${status.className}">${status.name}${status.detail ? ` · ${escapeHtml(status.detail)}` : ""}</p>
     ${hasOpenGate() ? `<div class="thread-card-actions sent-actions"><button data-reply-to="${escapeHtml(thread.id)}" type="button">Reply</button><button data-resolve="${escapeHtml(thread.id)}" type="button">${resolved && resolvedSet().has(thread.id) ? "Reopen" : resolved ? "" : "Resolve"}</button></div>` : ""}
   </article>`;
@@ -554,30 +613,6 @@ function statusFor(thread) {
   return { name: "Open", className: "open", detail: "" };
 }
 
-function renderRemarkDiff(value) {
-  const lines = String(value).split("\n");
-  const parts = [];
-  for (let index = 0; index < lines.length;) {
-    if (lines[index].startsWith("-") && !lines[index].startsWith("---")) {
-      const removed = [];
-      while (index < lines.length && lines[index].startsWith("-") && !lines[index].startsWith("---")) removed.push(lines[index++].slice(1));
-      const added = [];
-      while (index < lines.length && lines[index].startsWith("+") && !lines[index].startsWith("+++")) added.push(lines[index++].slice(1));
-      if (added.length) parts.push(`<div class="remark-word-diff">${wordDiffHtml(removed.join("\n"), added.join("\n"))}</div>`);
-      else parts.push(`<div class="remark-word-diff"><del>${escapeHtml(removed.join("\n"))}</del></div>`);
-      continue;
-    }
-    if (lines[index].startsWith("+") && !lines[index].startsWith("+++")) {
-      const added = [];
-      while (index < lines.length && lines[index].startsWith("+") && !lines[index].startsWith("+++")) added.push(lines[index++].slice(1));
-      parts.push(`<div class="remark-word-diff"><ins>${escapeHtml(added.join("\n"))}</ins></div>`);
-      continue;
-    }
-    // Context lines are noise on a card: the change is the point. Skip them.
-    index += 1;
-  }
-  return parts.join("");
-}
 
 function bindThreads() {
   slot.querySelector(".threads-close")?.addEventListener("click", () => store.set({ panel: null }));
@@ -608,6 +643,11 @@ function bindThreads() {
   slot.querySelector("[data-note-cancel]")?.addEventListener("click", () => {
     noteEditor = null;
     render();
+  });
+  slot.querySelector("[data-send-changes]")?.addEventListener("click", () => {
+    noteEditor = "decision";
+    render();
+    requestAnimationFrame(() => slot.querySelector("#decision-notes")?.focus());
   });
 
   for (const button of slot.querySelectorAll("[data-reply-to]")) button.addEventListener("click", () => {
@@ -659,6 +699,9 @@ function bindThreads() {
     card.querySelector("[data-remove-annotation]")?.addEventListener("click", () => {
       saveAnnotations(store.annotations.filter((_, itemIndex) => itemIndex !== index));
     });
+    card.querySelector("[data-show-annotation]")?.addEventListener("click", () => {
+      store.emit("focus", store.annotations[index]?.id);
+    });
   }
 }
 
@@ -682,20 +725,6 @@ function quoteHtml(value) {
  * Word diff of a block, trimmed to the changed lines plus one line of context
  * so a one-line suggestion inside a long paragraph reads as that one line.
  */
-function focusedDiffHtml(before, after) {
-  const a = String(before).split("\n");
-  const b = String(after).split("\n");
-  let head = 0;
-  while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
-  let tail = 0;
-  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
-  const from = Math.max(0, head - 1);
-  const leftSlice = a.slice(from, a.length - Math.max(0, tail - 1));
-  const rightSlice = b.slice(from, b.length - Math.max(0, tail - 1));
-  const prefix = from > 0 ? '<span class="diff-ellipsis">…</span>\n' : "";
-  const suffix = tail > 1 ? '\n<span class="diff-ellipsis">…</span>' : "";
-  return `${prefix}${wordDiffHtml(leftSlice.join("\n"), rightSlice.join("\n"))}${suffix}`;
-}
 
 function stageDirectory() {
   const viewedPath = store.view?.kind === "artifact" && typeof store.view.path === "string" ? store.view.path : "";

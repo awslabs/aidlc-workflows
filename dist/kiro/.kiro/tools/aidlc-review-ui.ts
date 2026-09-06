@@ -715,6 +715,24 @@ function renderResponse(projectDir: string, url: URL): Response {
   });
 }
 
+// Renders one Markdown fragment (a block the reviewer is suggesting) with the
+// same sanitized pipeline as /api/render, so the browser can show a suggested
+// edit in place as rendered tracked changes rather than as raw source.
+async function renderFragmentResponse(request: Request): Promise<Response> {
+  const contentLength = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) throw new HttpError(413, "request body too large");
+  let parsed: unknown;
+  try {
+    parsed = await request.json();
+  } catch {
+    throw new HttpError(400, "invalid JSON body");
+  }
+  const source = (parsed as { source?: unknown } | null)?.source;
+  if (typeof source !== "string") throw new HttpError(400, "source must be a string");
+  if (source.length > 200_000) throw new HttpError(413, "fragment too large");
+  return json({ html: renderMarkdown(source) });
+}
+
 function rawResponse(projectDir: string, url: URL): Response {
   const requested = queryPath(url);
   const path = reviewableFile(projectDir, requested, url);
@@ -1298,6 +1316,7 @@ async function serve(projectDir: string): Promise<void> {
           if (request.method === "GET" && url.pathname === "/api/responses") return responsesResponse(projectDir, url);
           if (request.method === "GET" && url.pathname === "/api/remarks") return remarksResponse(projectDir, url);
           if (request.method === "POST" && url.pathname === "/api/feedback") return await feedbackResponse(projectDir, request);
+          if (request.method === "POST" && url.pathname === "/api/render-fragment") return await renderFragmentResponse(request);
           if (request.method === "GET" && url.pathname === "/api/snapshots") return snapshotsResponse(projectDir, url);
           if (request.method === "POST" && url.pathname === "/api/answers") return await answersResponse(projectDir, request);
           if (request.method === "POST" && url.pathname === "/api/decision") {

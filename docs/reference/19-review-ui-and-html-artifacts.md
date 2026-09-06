@@ -419,7 +419,11 @@ into top-level blocks, renders each block with `Bun.markdown`, removes blocked
 tags, event handlers, and unsafe URL values, and returns sanitized HTML plus
 source line bounds and heading metadata. The ES-module client inlines those
 blocks into the privileged document surface and retains the Markdown `source`
-only to create suggestions; it never writes the artifact.
+only to create suggestions; it never writes the artifact. `POST /api/render-fragment`
+`{ source }` renders one suggested block through the same sanitizer so the
+client can show a pending edit in place as tracked changes (a word diff of the
+two renderings' visible text, inserted spans wrapped in `<ins>`, removed text
+re-inserted as `<del>`); it reads no files and takes the same token.
 
 Authored HTML follows a different trust path. `GET /api/artifact` supplies its
 `raw_url`, `/api/raw` applies CSP

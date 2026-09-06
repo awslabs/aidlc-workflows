@@ -102,8 +102,8 @@ same navigation and authority.
 Markdown is a reading surface with one bubble per commented line in the left
 gutter, showing how many threads sit on that line (as in Bunsho). Clicking a
 bubble focuses its threads. Select text — with the mouse or with Shift and the
-arrow keys — and one `+` appears at that line; choose it to open a dashed
-pending card in **Threads**. The card's kind selector is **Comment · Suggestion
+arrow keys — and a speech-bubble button appears beside that line; choose it to
+open a dashed pending card in **Threads**. The card's kind selector is **Comment · Suggestion
 · Delete · Looks good**. Add the remark and choose **Post**; the pending card
 remains editable or removable and persists in that browser tab's session
 storage. It is not sent yet.
@@ -118,9 +118,19 @@ formatting row above the document is live — **Paragraph ▾**, bold, italic,
 strike, code, lists, quote, link, table, and diagram insert Markdown syntax at
 the caret — and it reads *Editing FR2 · a suggestion — the file is untouched
 until you decide*. `⌘Z` / `⇧⌘Z` undo and redo within the block (including
-toolbar actions); `Esc` abandons the change. Clicking elsewhere finishes the
-edit: a changed block becomes a **Suggestion** whose pending card shows the
-changed lines as a word diff. Browser suggestions become `edit` remarks in
+toolbar actions); `Esc` abandons the change.
+
+Clicking elsewhere finishes the edit, and the document shows it **as tracked
+changes in place**: the block re-renders with your new text, inserted words
+highlighted and removed words struck through, a pencil in the gutter, and a
+pill beneath it — *Your edit · not sent yet · Undo*. Clicking back into the
+block edits the suggested text, so successive edits compose; typing it back to
+the file's text withdraws the suggestion. The Threads card for an edit is an
+index entry (*Suggested edit · Functional requirements · +6 words −1 word ·
+"…"*, with **Show in document** and **Undo edit**), not a second copy of the
+change. After you send, the block keeps showing your change in a muted style
+(*Your edit · sent in r1 · awaiting the agent*) until the agent's revision
+replaces the file. Browser suggestions become `edit` remarks in
 `feedback-NNN.md`; the terminal equivalent is to describe the exact change in
 your **Request Changes** gate feedback.
 
@@ -130,15 +140,19 @@ text, heading path, and optional element path.
 
 ### Decide
 
-Pending cards say that they send with your decision. Both header buttons
-confirm in the Threads rail before anything is written, because the Stop hook
-applies a decision the moment it lands: **Approve** shows the stage, its
-revision, and how many pending remarks travel with it (`Approve · r1 →` /
-Cancel); **Request changes** opens an optional note field (`Send request`).
-Approve posts any pending annotations or general note to the next
-`feedback-NNN.md`, then always writes the decision to the next
-`decision-NNN.json`; Request changes uses the same conditional feedback write
-and always writes the decision file. Once sent, the header reads **Approved ·
+Nothing you write in the browser reaches the agent until you send, and the
+header's verbs say what sending does. With no pending edits or comments the
+buttons are **Request changes** and **Approve**. As soon as you have a pending
+edit, delete, or comment, the primary button becomes **Send N changes — the
+agent revises**: the agent applies your edits to the file, replies to each
+remark, and reopens the gate. **Approve anyway** stays available, but its
+confirmation warns that approving does *not* apply your edits — the file stays
+as it is and they are recorded as notes — and offers **Send N changes instead**.
+Looks-good remarks and a general note ride along with either decision. Both
+paths confirm in the Threads rail before anything is written, because the Stop
+hook applies a decision the moment it lands. Under the hood, both write any
+pending annotations and note to the next `feedback-NNN.md` and the decision to
+the next `decision-NNN.json`. Once sent, the header reads **Approved ·
 rN** or **Changes requested · rN** and the document locks until the daemon
 reports the next state — **Revising · rN** while the agent addresses your
 remarks, then **Awaiting your review · rN+1** when the gate reopens on the
