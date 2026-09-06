@@ -75,9 +75,17 @@ export interface WorkflowStage {
   decided_at?: string;
   revision?: number;
   gate?: "awaiting-approval" | "revising" | "approved" | null;
+  /** Human label of the stage's lead persona, e.g. "Developer Agent". */
+  agent?: string;
   questions?: WorkflowQuestions;
   artifacts: WorkflowArtifact[];
   memory?: string;
+}
+
+function agentLabel(id: string | null | undefined): string | null {
+  const match = /^aidlc-(.+)-agent$/.exec(id ?? "");
+  if (!match) return null;
+  return `${match[1].split("-").map((part) => part === "aws" ? "AWS" : part.charAt(0).toUpperCase() + part.slice(1)).join(" ")} Agent`;
 }
 
 export interface WorkflowPhase {
@@ -345,7 +353,9 @@ function artifactsForStage(
   currentManifest: ReviewManifest | null,
 ): WorkflowArtifact[] {
   const formats = artifactFormatsFromState(state);
-  const stagePath = join(record, stage.phase, stage.slug);
+  const stagePath = current?.stage === stage.slug && currentManifest && current.stage_dir
+    ? join(projectDir, ...current.stage_dir.split("/"))
+    : join(record, stage.phase, stage.slug);
   const threadCounts = feedbackThreads(stagePath);
   return (stage.produces ?? []).map((name) => {
     const manifestArtifact = current?.stage === stage.slug
@@ -380,9 +390,12 @@ function readPointerAndManifest(record: string, projectDir: string): {
   if (!current?.stage_dir) return { current, manifest: null };
   try {
     const stagePath = realpathSync(join(projectDir, ...current.stage_dir.split("/")));
-    const recordPath = realpathSync(record);
-    const relativePath = relative(recordPath, stagePath);
-    if (relativePath === ".." || relativePath.startsWith(`..${sep}`)) return { current, manifest: null };
+    // Stage dirs live under the record for most stages, but codekb stages
+    // (reverse-engineering) publish into the space-level codekb tree, so the
+    // confinement is the project's aidlc/ root, not the record.
+    const aidlcRoot = realpathSync(join(projectDir, "aidlc"));
+    const relativePath = relative(aidlcRoot, stagePath);
+    if (relativePath === "" || relativePath === ".." || relativePath.startsWith(`..${sep}`)) return { current, manifest: null };
     return { current, manifest: readManifest(stagePath) };
   } catch {
     return { current, manifest: null };
@@ -415,7 +428,14 @@ function intentSummary(
     needs = { kind: "questions", label: `${open} ${open === 1 ? "question" : "questions"}` };
   } else if (current?.state === "in-progress") {
     status = "in-progress";
-  } else if (checkboxes.length > 0 && checkboxes.every((entry) => entry.state === "completed" || entry.state === "skipped")) {
+  } else if (
+    /^completed?$/i.test(getField(state, "Status") ?? "") ||
+    (checkboxes.length > 0 &&
+      checkboxes.every(
+        // Scope-skipped stages keep the pending marker with a SKIP suffix.
+        (entry) => entry.state === "completed" || entry.state === "skipped" || entry.suffix.startsWith("SKIP"),
+      ))
+  ) {
     status = "done";
   }
   return {
@@ -498,6 +518,8 @@ function buildPhases(
         artifacts: artifactsForStage(projectDir, selection.record, state, stage, current, manifest),
       };
       if (reason) result.reason = reason;
+      const agent = agentLabel((stage as { lead_agent?: string | null }).lead_agent);
+      if (agent) result.agent = agent;
       if (stageState === "conditional") result.condition = shortCondition(stage);
       if (latestDecision) result.decided_at = latestDecision.timestamp;
       if (current?.stage === stage.slug) {

@@ -1,5 +1,6 @@
 import { api } from "./api.js";
-import { store } from "./store.js";
+import { parseUnifiedHunks } from "./diff.js";
+import { agentFor, store } from "./store.js";
 
 const slot = document.getElementById("slot");
 let entries = [];
@@ -60,7 +61,11 @@ function historyContent() {
   if (diffVisible) {
     if (!diffText && loading) return `<p class="side-panel-empty">Loading diff…</p>`;
     if (!diffText && errorMessage) return `<p class="side-panel-empty"><b>Diff is not available yet.</b>${escapeHtml(errorMessage)}</p>`;
-    return `<div class="history-diff" aria-label="Unified diff">${renderUnifiedDiff(diffText)}</div>`;
+    const hunks = parseUnifiedHunks(diffText);
+    if (!hunks.length) return `<p class="side-panel-empty"><b>No changes</b>r${revisionNumbers()[0] ?? 0} and r${currentRevision()} are identical for this file.</p>`;
+    return `<div class="history-inline"><p><b>${hunks.length} ${hunks.length === 1 ? "change" : "changes"}</b> shown inline in the document, under the block each one touched.</p>
+      <ol>${hunks.map((hunk, index) => `<li><button type="button" data-jump-hunk="${index}">${escapeHtml(hunkSummary(hunk))}</button></li>`).join("")}</ol>
+      <button type="button" class="link" data-diff>Hide changes</button></div>`;
   }
   if (loading && !entries.length) return `<p class="side-panel-empty">Loading version history…</p>`;
   if (errorMessage && !entries.length) return `<p class="side-panel-empty"><b>Version history is not available yet.</b>The document remains reviewable while the daemon route catches up.</p>`;
@@ -75,7 +80,7 @@ function renderEntry(entry) {
   const delta = Number.isFinite(entry.chars_delta) ? signed(entry.chars_delta) : "";
   return `<button class="history-entry ${active ? "on" : ""}" type="button" ${entry.kind === "revision" && revision !== null ? `data-open-revision="${revision}"` : "disabled"}>
     <span class="history-entry-title"><b>${escapeHtml(title)}</b><time>${formatTime(entry.at)}</time></span>
-    <span class="history-entry-detail"><span>${entry.by === "you" ? "You" : "Product Agent"}</span>${delta ? `<span class="history-delta">${escapeHtml(delta)} chars</span>` : ""}</span>
+    <span class="history-entry-detail"><span>${entry.by === "you" ? "You" : agentFor()}</span>${delta ? `<span class="history-delta">${escapeHtml(delta)} chars</span>` : ""}</span>
     <span class="history-entry-summary">${escapeHtml(entry.summary || defaultSummary(entry.kind))}</span>
     <span class="history-entry-kind ${escapeHtml(entry.kind)}">${kindLabel(entry.kind)}</span>
   </button>`;
@@ -83,14 +88,17 @@ function renderEntry(entry) {
 
 function entryTitle(entry) {
   if (entry.kind === "revision" && Number.isInteger(entry.revision)) return `r${entry.revision} · ${entry.file || basename(store.document?.path)}`;
-  return `${entry.by === "you" ? "You" : "Product Agent"} · ${entry.file || kindLabel(entry.kind)}`;
+  return `${entry.by === "you" ? "You" : agentFor()} · ${entry.file || kindLabel(entry.kind)}`;
 }
 
 function bindHistory() {
   slot.querySelector(".side-panel-close")?.addEventListener("click", () => store.set({ panel: null }));
   for (const button of slot.querySelectorAll("[data-revision]")) button.addEventListener("click", () => void openRevision(Number(button.dataset.revision)));
   for (const button of slot.querySelectorAll("[data-open-revision]")) button.addEventListener("click", () => void openRevision(Number(button.dataset.openRevision)));
-  for (const button of slot.querySelectorAll("[data-diff]")) button.addEventListener("click", () => void showDiff());
+  for (const button of slot.querySelectorAll("[data-diff]")) button.addEventListener("click", () => void (diffVisible ? hideDiff() : showDiff()));
+  for (const button of slot.querySelectorAll("[data-jump-hunk]")) button.addEventListener("click", () => {
+    document.querySelector(`#viewer .blk-diff[data-hunk="${button.dataset.jumpHunk}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
 }
 
 async function loadHistory() {
@@ -127,6 +135,7 @@ async function openRevision(revision) {
   loading = true;
   errorMessage = "";
   selectedRevision = revision;
+  if (diffVisible) store.emit("inlineDiff", null);
   diffVisible = false;
   renderHistory();
   try {
@@ -175,6 +184,7 @@ async function showDiff() {
       intent: store.view?.intent || undefined,
     });
     diffText = typeof result.unified === "string" ? result.unified : hunksToUnified(result.hunks);
+    store.emit("inlineDiff", { path: store.document.path, from, to: current, hunks: parseUnifiedHunks(diffText), scroll: true });
   } catch (error) {
     errorMessage = error.message;
   } finally {
@@ -183,12 +193,17 @@ async function showDiff() {
   }
 }
 
-function renderUnifiedDiff(value) {
-  if (!value) return `<p class="side-panel-empty">No changes between these revisions.</p>`;
-  return String(value).split("\n").map((line) => {
-    const className = line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "delete" : "context";
-    return `<div class="diff-${className}">${escapeHtml(line || " ")}</div>`;
-  }).join("");
+function hideDiff() {
+  diffVisible = false;
+  diffText = "";
+  store.emit("inlineDiff", null);
+  renderHistory();
+}
+
+function hunkSummary(hunk) {
+  const text = (hunk.added.join(" ") || hunk.removed.join(" ")).replace(/\s+/g, " ").trim();
+  const verb = hunk.added.length && hunk.removed.length ? "Changed" : hunk.added.length ? "Added" : "Removed";
+  return `${verb} · ${text.length > 72 ? `${text.slice(0, 72)}…` : text}`;
 }
 
 function hunksToUnified(hunks) {

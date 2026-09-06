@@ -332,6 +332,7 @@ function posixRelative(projectDir: string, path: string): string {
 }
 
 interface StateContext {
+  projectDir: string;
   space: string;
   intent: string | null;
   record: string;
@@ -350,6 +351,14 @@ function selectionFromUrl(url: URL): { intent?: string; space?: string } {
   };
 }
 
+function within(root: string, path: string): boolean {
+  const relativePath = relative(root, path);
+  return relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
+}
+
+// The intent's record, plus the stage dir its own review pointer names: codekb
+// stages (reverse-engineering) publish into the space-level codekb tree, which
+// is the intent's current review surface even though it sits outside the record.
 function pathWithinRecord(path: string, context: StateContext): string {
   let recordReal: string;
   try {
@@ -357,11 +366,18 @@ function pathWithinRecord(path: string, context: StateContext): string {
   } catch {
     throw new HttpError(404, "not found");
   }
-  const relativePath = relative(recordReal, path);
-  if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
-    throw new HttpError(403, "path is outside the selected intent");
+  if (within(recordReal, path)) return path;
+  const pointerDir = context.current?.stage_dir;
+  if (pointerDir) {
+    try {
+      const stageReal = realpathSync(join(context.projectDir, ...pointerDir.split("/")));
+      const aidlcReal = realpathSync(join(context.projectDir, "aidlc"));
+      if (within(aidlcReal, stageReal) && stageReal !== aidlcReal && within(stageReal, path)) return path;
+    } catch {
+      // fall through to the 403 below
+    }
   }
-  return path;
+  throw new HttpError(403, "path is outside the selected intent");
 }
 function stateContext(
   projectDir: string,
@@ -379,12 +395,10 @@ function stateContext(
   let manifest: ReviewManifest | null = null;
   if (current?.stage_dir) {
     try {
+      // resolveProjectAidlcPath already confines to aidlc/; the pointer's stage
+      // dir may sit in the record or in the space-level codekb tree.
       const stagePath = resolveProjectAidlcPath(projectDir, current.stage_dir);
-      const recordReal = realpathSync(record);
-      const stageRelative = relative(recordReal, stagePath);
-      if (stageRelative !== ".." && !stageRelative.startsWith(`..${sep}`)) {
-        manifest = readManifest(stagePath);
-      }
+      manifest = readManifest(stagePath);
     } catch {
       manifest = null;
     }
@@ -392,7 +406,7 @@ function stateContext(
   const formats = state !== null
     ? artifactFormatsFromState(state)
     : artifactFormatsForProject(projectDir, intent ?? undefined, space);
-  return { space, intent, record, state, formats, current, manifest };
+  return { projectDir, space, intent, record, state, formats, current, manifest };
 }
 
 interface QuestionsTarget {
@@ -552,8 +566,10 @@ function reviewableFile(projectDir: string, requested: string, url?: URL): strin
   const path = resolveProjectAidlcPath(projectDir, requested);
   const context = stateContext(projectDir, url ? selectionFromUrl(url) : {});
   pathWithinRecord(path, context);
-  const relativeToRecord = posixRelative(realpathSync(context.record), path);
-  if (isReviewHiddenPath(relativeToRecord)) {
+  // Relative to the aidlc/ root (a parent of both the record and the codekb
+  // tree) so the hidden-segment rule never sees a spurious `..`.
+  const relativeToRoot = posixRelative(realpathSync(join(projectDir, "aidlc")), path);
+  if (isReviewHiddenPath(relativeToRoot)) {
     throw new HttpError(403, "not a reviewable artifact");
   }
   regularFile(path);

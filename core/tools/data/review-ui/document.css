@@ -359,3 +359,11 @@
   .toolbar-button:nth-of-type(11),
   .toolbar-button:nth-of-type(12) { display: none; }
 }
+
+/* History: inline r0 → r1 changes under the block they touched */
+.blk.changed > .blk-content { border-left-color: var(--accent); }
+.blk-diff { margin: 6px 0 4px 12px; padding: 8px 10px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); font: 13px/1.55 var(--font); }
+.blk-diff-label { display: inline-block; margin-bottom: 4px; font: 10.5px/1 var(--mono); color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.blk-diff-body { white-space: pre-wrap; word-break: break-word; }
+.blk-diff-body del { background: var(--rose-soft); color: #9f1239; text-decoration: line-through; }
+.blk-diff-body ins { background: var(--green-soft); color: #166534; text-decoration: none; }

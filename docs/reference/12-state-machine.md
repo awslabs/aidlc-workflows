@@ -322,8 +322,10 @@ report awaiting-approval  →  [?] AwaitingApproval
 ```
 
 `Revision Count` lives in the state file and increments on each rejected
-report. The conductor uses this to detect the revision-loop escape hatch
-(default is 3 cycles before offering to skip).
+report; it resets to 0 when the cursor moves to the next stage (advance,
+finalize, skip), so it always describes the gate currently under review. The
+conductor uses this to detect the revision-loop escape hatch (default is 3
+cycles before offering to skip), and the review UI shows it as the `rN` label.
 
 When a revision changes a `produces[]` artifact on a stage whose directive
 carries a reviewer, the conductor re-runs the `stage-protocol-reviewer.md` §12a step before

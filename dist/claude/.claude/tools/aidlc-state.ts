@@ -4114,6 +4114,10 @@ function handleAdvance(
   content = setField(content, "Next Stage", nextAfterNext ? nextAfterNext.slug : "none");
   content = setField(content, "In Progress", nextStage.slug);
   content = setField(content, "Active Agent", nextStage.lead_agent);
+  // Revision Count is per gate: the escape hatch (3 rejection cycles) and the
+  // review UI's rN label both describe the stage being reviewed, so a fresh
+  // stage starts at 0 regardless of how many revisions earlier gates took.
+  content = setField(content, "Revision Count", "0");
   content = setField(content, "Status", "Running");
   content = setField(content, "Last Updated", timestamp);
   content = setField(content, "Last Completed Stage", completedSlug);
@@ -4268,6 +4272,7 @@ function handleFinalize(args: string[]): void {
     content = setField(content, "Next Stage", nextAfterNext ? nextAfterNext.slug : "none");
     content = setField(content, "Lifecycle Phase", nextStage.phase.toUpperCase());
     content = setField(content, "Active Agent", nextStage.lead_agent);
+    content = setField(content, "Revision Count", "0");
     // Phase Progress boundary flip - mirrors handleAdvance's. finalize moves
     // the cursor without emitting phase events, but the display rows must
     // still track the phase the cursor now sits in.
@@ -5679,6 +5684,7 @@ function handleSkip(args: string[]): void {
     );
     content = setField(content, "In Progress", nextStage.slug);
     content = setField(content, "Active Agent", nextStage.lead_agent);
+    content = setField(content, "Revision Count", "0");
     content = setField(content, "Status", "Running");
     content = setField(content, "Next Action", `Execute ${nextStage.name}`);
     if (crossesPhaseBoundary) {

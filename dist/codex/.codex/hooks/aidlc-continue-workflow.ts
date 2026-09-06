@@ -1714,8 +1714,11 @@ if (gateRound) {
       HOOK_NAME,
       `browser decision ${file} saved for ${gateRound.slug}; blocking the stop so the conductor reports it (browser-gate-wait)`,
     );
+    const remarks = submission.decision === "approve"
+      ? ""
+      : ` The report's output carries the human's browser remarks (review_feedback, one \`### <kind> · aN\` heading each, with quotes and unified diffs): address every aN and answer each in the Feedback addressed list.`;
     return blockStop(
-      `The human decided in the browser (${file}): run \`${command}\`, then continue exactly as after a terminal decision. Do not ask the human again.`,
+      `The human decided in the browser (${file}): run \`${command}\`, then continue exactly as after a terminal decision.${remarks} Do not ask the human again.`,
     );
   }
 }

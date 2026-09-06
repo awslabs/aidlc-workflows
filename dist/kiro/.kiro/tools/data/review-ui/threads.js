@@ -1,5 +1,6 @@
 import { api } from "./api.js";
-import { persistAnnotations, setNotice, store } from "./store.js";
+import { escapeHtml, wordDiffHtml } from "./diff.js";
+import { agentFor, decisionInFlight, persistAnnotations, setNotice, store } from "./store.js";
 
 const slot = document.getElementById("slot");
 const KINDS = [
@@ -118,14 +119,13 @@ function upsertSuggestion(payload = {}) {
 function beginDecision(value) {
   const decision = normalizeDecision(value);
   if (!decision || sending) return;
-  if (decision === "request-changes") {
-    noteEditor = "decision";
-    if (store.panel !== "threads") store.set({ panel: "threads" });
-    else render();
-    requestAnimationFrame(() => slot.querySelector("#decision-notes")?.focus());
-    return;
-  }
-  void sendDecision(decision, generalNote);
+  // Both decisions confirm in the Threads rail: Request changes takes the
+  // note; Approve shows what will be sent and asks once. Neither fires from a
+  // bare click, since the Stop hook applies the decision the moment it lands.
+  noteEditor = decision === "request-changes" ? "decision" : "approve";
+  if (store.panel !== "threads") store.set({ panel: "threads" });
+  else render();
+  requestAnimationFrame(() => slot.querySelector(noteEditor === "approve" ? ".decision-note-form [type=submit]" : "#decision-notes")?.focus());
 }
 
 async function sendDecision(decision, notes) {
@@ -166,6 +166,7 @@ async function sendDecision(decision, notes) {
         ...(cleanNotes ? { notes: cleanNotes } : {}),
       });
       clearPending();
+      store.set({ decisionSent: { stage: current.stage, unit: current.unit ?? null, revision: current.revision, decision } });
       setNotice("Sent — the agent continues. (Answering the gate in the terminal does the same.)", "info");
     } catch (error) {
       if (error.status !== 404) throw error;
@@ -444,8 +445,19 @@ function render() {
 function renderNoteEditor() {
   if (!noteEditor) return generalNote ? `<p class="general-note-preview"><b>General note</b>${escapeHtml(generalNote)}</p>` : "";
   const deciding = noteEditor === "decision";
+  const approving = noteEditor === "approve";
+  const stage = store.workflow?.phases?.flatMap((phase) => phase.stages || []).find((item) => item.slug === store.state?.current?.stage);
+  const pendingCount = store.annotations.length;
+  const revisionLabel = Number.isInteger(store.state?.current?.revision) ? ` · r${store.state.current.revision}` : "";
+  if (approving) {
+    return `<form class="decision-note-form approve-form">
+      <label>Approve ${escapeHtml(stage?.name || "this stage")}${revisionLabel}<span>${pendingCount ? `${pendingCount} pending ${pendingCount === 1 ? "remark goes" : "remarks go"} with it as notes; the agent continues to the next stage.` : "The agent continues to the next stage."}</span></label>
+      <textarea id="decision-notes" rows="2" placeholder="Optional note for the record">${escapeHtml(generalNote)}</textarea>
+      <div><button class="btn" data-note-cancel type="button">Cancel</button><button class="btn primary" type="submit" ${sending ? "disabled" : ""}>Approve${revisionLabel} →</button></div>
+    </form>`;
+  }
   return `<form class="decision-note-form">
-    <label for="decision-notes">${deciding ? "Request changes" : "General note"}<span>${deciding ? "Optional — include context for the agent." : "Sent with your decision."}</span></label>
+    <label for="decision-notes">${deciding ? "Request changes" : "General note"}<span>${deciding ? `${pendingCount ? `${pendingCount} pending ${pendingCount === 1 ? "remark" : "remarks"} go with it. ` : ""}Optional — include context for the agent.` : "Sent with your decision."}</span></label>
     <textarea id="decision-notes" rows="3" placeholder="What should the agent know?">${escapeHtml(generalNote)}</textarea>
     <div><button class="btn" data-note-cancel type="button">Cancel</button><button class="btn primary" type="submit" ${sending ? "disabled" : ""}>${deciding ? "Send request" : "Save note"}</button></div>
   </form>`;
@@ -518,7 +530,7 @@ function renderSent(thread) {
 function renderReply(response) {
   if (!response) return "";
   const verb = response.status === "applied" ? "Applied" : response.status === "kept" ? "Kept" : "Answered";
-  return `<div class="thread-reply"><div class="thread-who"><span class="thread-avatar agent">A</span><b>Product Agent</b><span>r${response.revision}</span></div><p><b>${verb}${response.text ? ":" : "."}</b>${response.text ? ` ${escapeHtml(response.text)}` : ""}</p></div>`;
+  return `<div class="thread-reply"><div class="thread-who"><span class="thread-avatar agent">A</span><b>${escapeHtml(agentFor())}</b><span>r${response.revision}</span></div><p><b>${verb}${response.text ? ":" : "."}</b>${response.text ? ` ${escapeHtml(response.text)}` : ""}</p></div>`;
 }
 
 function renderSummary(summary) {
@@ -526,7 +538,7 @@ function renderSummary(summary) {
   return `<article class="thread-card summary-card">
     <p><b>${count} ${count === 1 ? "remark" : "remarks"} sent in r${summary.revision}</b></p>
     <span>${escapeHtml(summary.file || "Feedback")}</span>
-    ${summary.replies.length ? `<div class="summary-replies">${summary.replies.map((reply) => `<p><b>Product Agent · r${reply.revision}</b> · ${escapeHtml(reply.status)}${reply.text ? ` — ${escapeHtml(reply.text)}` : ""}</p>`).join("")}</div>` : ""}
+    ${summary.replies.length ? `<div class="summary-replies">${summary.replies.map((reply) => `<p><b>${escapeHtml(agentFor())} · r${reply.revision}</b> · ${escapeHtml(reply.status)}${reply.text ? ` — ${escapeHtml(reply.text)}` : ""}</p>`).join("")}</div>` : ""}
   </article>`;
 }
 
@@ -559,7 +571,7 @@ function renderRemarkDiff(value) {
       parts.push(`<div class="remark-word-diff"><ins>${escapeHtml(added.join("\n"))}</ins></div>`);
       continue;
     }
-    if (lines[index] && !/^```/.test(lines[index]) && !/^(---|\+\+\+|@@)/.test(lines[index])) parts.push(`<div class="remark-context">${escapeHtml(lines[index])}</div>`);
+    // Context lines are noise on a card: the change is the point. Skip them.
     index += 1;
   }
   return parts.join("");
@@ -585,6 +597,7 @@ function bindThreads() {
     event.preventDefault();
     generalNote = noteForm.querySelector("textarea").value.trim();
     if (noteEditor === "decision") void sendDecision("request-changes", generalNote);
+    else if (noteEditor === "approve") void sendDecision("approve", generalNote);
     else {
       noteEditor = null;
       render();
@@ -682,48 +695,6 @@ function focusedDiffHtml(before, after) {
   return `${prefix}${wordDiffHtml(leftSlice.join("\n"), rightSlice.join("\n"))}${suffix}`;
 }
 
-function wordDiffHtml(before, after) {
-  const left = tokens(String(before));
-  const right = tokens(String(after));
-  if (left.length * right.length > 40_000) return `<del>${escapeHtml(before)}</del><ins>${escapeHtml(after)}</ins>`;
-  // Interleaved fragments ("showsruns anin errormemory") are unreadable. Keep
-  // the common prefix and suffix, and show everything between them as one
-  // removal followed by one insertion — how a person would mark the sentence.
-  let head = 0;
-  while (head < left.length && head < right.length && left[head] === right[head]) head += 1;
-  let tail = 0;
-  while (tail < left.length - head && tail < right.length - head && left[left.length - 1 - tail] === right[right.length - 1 - tail]) tail += 1;
-  const removed = left.slice(head, left.length - tail).join("");
-  const added = right.slice(head, right.length - tail).join("");
-  const alternations = (removed.match(/\S+/g) || []).length + (added.match(/\S+/g) || []).length;
-  if (alternations > 3) {
-    const prefix = escapeHtml(left.slice(0, head).join(""));
-    const suffix = escapeHtml(left.slice(left.length - tail).join(""));
-    return `${prefix}${removed ? `<del>${escapeHtml(removed)}</del>` : ""}${removed && added ? " " : ""}${added ? `<ins>${escapeHtml(added)}</ins>` : ""}${suffix}`;
-  }
-  const rows = Array.from({ length: left.length + 1 }, () => new Uint16Array(right.length + 1));
-  for (let i = left.length - 1; i >= 0; i -= 1) {
-    for (let j = right.length - 1; j >= 0; j -= 1) rows[i][j] = left[i] === right[j] ? rows[i + 1][j + 1] + 1 : Math.max(rows[i + 1][j], rows[i][j + 1]);
-  }
-  const parts = [];
-  let i = 0;
-  let j = 0;
-  while (i < left.length || j < right.length) {
-    if (i < left.length && j < right.length && left[i] === right[j]) {
-      parts.push(escapeHtml(left[i])); i += 1; j += 1;
-    } else if (j < right.length && (i === left.length || rows[i][j + 1] > rows[i + 1][j])) {
-      parts.push(`<ins>${escapeHtml(right[j])}</ins>`); j += 1;
-    } else {
-      parts.push(`<del>${escapeHtml(left[i])}</del>`); i += 1;
-    }
-  }
-  return parts.join("");
-}
-
-function tokens(value) {
-  return value.match(/\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu) || [];
-}
-
 function stageDirectory() {
   const viewedPath = store.view?.kind === "artifact" && typeof store.view.path === "string" ? store.view.path : "";
   if (viewedPath.includes("/")) return viewedPath.slice(0, viewedPath.lastIndexOf("/"));
@@ -732,7 +703,7 @@ function stageDirectory() {
 }
 
 function hasOpenGate() {
-  return store.state?.current?.state === "awaiting-approval" && stageDirectory() === store.state.current.stage_dir;
+  return store.state?.current?.state === "awaiting-approval" && !decisionInFlight() && stageDirectory() === store.state.current.stage_dir;
 }
 
 function normalizeDecision(value) {
@@ -774,9 +745,6 @@ function stringList(value) {
   return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
 }
 
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]);
-}
 
 function escapeSelector(value) {
   return globalThis.CSS?.escape ? CSS.escape(String(value)) : String(value).replace(/[^\w-]/g, "\\$&");

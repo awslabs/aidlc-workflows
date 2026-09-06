@@ -9,6 +9,7 @@ const TEXT_ASSETS = [
   "index.html",
   "app.js",
   "app.css",
+  "diff.js",
   "api.js",
   "store.js",
   "shell.js",

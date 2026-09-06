@@ -69,3 +69,23 @@ export function persistAnnotations(state, annotations) {
 export function setNotice(message, kind = "error") {
   store.emit("notice", message ? { message, kind } : null);
 }
+
+/** The lead persona of the stage that owns `path` (or the current stage), e.g. "Developer Agent". */
+export function agentFor(path = null, stageSlug = null) {
+  const slug = stageSlug || store.state?.current?.stage || store.state?.current_stage;
+  for (const phase of store.workflow?.phases || []) {
+    for (const stage of phase.stages || []) {
+      if (path && (stage.artifacts || []).some((artifact) => artifact.path === path)) return stage.agent || "Agent";
+      if (!path && slug && stage.slug === slug) return stage.agent || "Agent";
+    }
+  }
+  return "Agent";
+}
+
+/** True while this tab's decision for the daemon's still-open gate awaits the hook. */
+export function decisionInFlight() {
+  const sent = store.decisionSent;
+  const current = store.state?.current;
+  if (!sent || !current || current.state !== "awaiting-approval") return false;
+  return sent.stage === current.stage && (sent.unit ?? null) === (current.unit ?? null) && sent.revision === current.revision;
+}

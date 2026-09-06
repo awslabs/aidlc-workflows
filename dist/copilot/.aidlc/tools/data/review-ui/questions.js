@@ -146,7 +146,7 @@ function renderCurrent() {
   const visibleQuestions = questions.questions.filter((question) => !question.confirmation);
   const confirmation = questions.questions.find((question) => question.confirmation);
   const answered = visibleQuestions.length > 0 && visibleQuestions.every((question) => question.answer !== null);
-  const questionsState = answered ? "answered" : "live";
+  const questionsState = answered ? "answered" : submittedSha === questions.sha256 ? "submitted" : "live";
   if (store.questionsState !== questionsState) store.set({ questionsState });
 
   elements.view.classList.toggle("answered", answered);
@@ -306,7 +306,7 @@ function renderExplainer(question, guide, recommendation) {
 function appendPrompt(container, prompt) {
   for (const paragraph of String(prompt || "").split(/\n\s*\n/).filter(Boolean)) {
     const text = document.createElement("p");
-    text.textContent = paragraph;
+    text.innerHTML = inlineMarkdown(paragraph);
     container.append(text);
   }
 }
@@ -328,7 +328,7 @@ function renderOption(question, option, recommendation, chosen, other, answered)
   choice.disabled = answered;
   const text = document.createElement("span");
   text.className = "option-text";
-  text.textContent = option.text;
+  text.innerHTML = inlineMarkdown(option.text);
   label.append(choice, text);
 
   let tagText = "";
@@ -376,6 +376,10 @@ function handleFormChange(event) {
   if (!event.target.matches("input[data-choice]")) return;
   syncOtherFields(event.target.closest(".qcard"));
   persistCurrentDraft();
+  // Choosing "Other" is a promise to type: put the caret in the field.
+  if (event.target.value === "X" && event.target.checked) {
+    event.target.closest(".option")?.querySelector("input[data-other]")?.focus();
+  }
 }
 
 function handleFormInput(event) {
@@ -486,6 +490,7 @@ async function saveAnswers() {
     submittedMessage = `Saved as ${basename(result.file)} — the agent is picking your answers up now.`;
     sessionStorage.removeItem(draftKey(round.sha256));
     elements.view.classList.add("submitted");
+    store.set({ questionsState: "submitted" });
     showBanner(submittedMessage, "success");
     store.emit("answers-saved", result);
   } catch (error) {
@@ -683,4 +688,13 @@ function humanize(value) {
   return String(value || "")
     .replace(/[-_]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/** Inline Markdown only (code, bold, italic) — question prose never carries block syntax. */
+function inlineMarkdown(value) {
+  const escaped = String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+  return escaped
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[\s(])_([^_]+)_(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>");
 }

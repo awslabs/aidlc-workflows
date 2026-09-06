@@ -27,11 +27,6 @@
 .history-entry-kind.responses { background: var(--panel); color: var(--ink); }
 .history-help { margin: 5px 4px; color: var(--muted); font-size: 11.5px; }
 .history-help button { color: var(--accent); }
-.history-diff { min-width: max-content; padding: 10px 0; background: #fff; font: 10.5px/1.5 var(--mono); }
-.history-diff > div { min-height: 16px; padding: 0 10px; white-space: pre; }
-.history-diff .diff-hunk { margin: 5px 0; background: var(--soft); color: var(--accent); }
-.history-diff .diff-add { background: var(--green-soft); color: #166534; }
-.history-diff .diff-delete { background: var(--rose-soft); color: #9f1239; }
 .snapshot-fallback { height: 100%; display: flex; flex-direction: column; padding: 10px; }
 .snapshot-fallback > p { display: flex; align-items: center; margin: 0 0 8px; font-size: 11.5px; }
 .snapshot-fallback > p button { margin-left: auto; color: var(--accent); }
@@ -46,3 +41,9 @@
 .outline-heading.level-2 { padding-left: 22px; color: #3f4b5c; }
 .outline-heading.level-3 { padding-left: 34px; color: var(--muted); font-size: 12px; }
 .outline-heading.level-4, .outline-heading.level-5, .outline-heading.level-6 { padding-left: 44px; color: var(--muted); font-size: 11.5px; }
+
+.history-inline { padding: 10px 12px; font: 12.5px/1.5 var(--font); color: var(--ink); }
+.history-inline ol { margin: 8px 0; padding-left: 18px; }
+.history-inline li { margin: 3px 0; }
+.history-inline li button { text-align: left; color: var(--accent); background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+.history-inline li button:hover { text-decoration: underline; }

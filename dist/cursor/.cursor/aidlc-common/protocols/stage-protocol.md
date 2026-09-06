@@ -292,7 +292,13 @@ After completing work requested at a rejected gate, the revised completion
 message MUST include a **Feedback addressed** list before the gate is
 re-presented. Include exactly one line for every feedback remark, preserving
 its `aN` id: `- a3: applied — <what changed>` or `- a4: kept — <reason it was
-kept>`. This list is mandatory in the terminal completion message, so terminal
+kept>`. The verb is the remark's fate, not the text's: `applied` means the
+artifact now carries the change the remark asked for (a suggestion's edit
+landed, a comment's request was written in, a delete was removed); `kept`
+means the original text stands and the remark was declined, with the reason;
+`answered` means a question was answered in the record without changing the
+artifact. A suggestion whose sentence you preserved is `applied`, never
+`kept`. This list is mandatory in the terminal completion message, so terminal
 review remains complete without the browser. When `directive.review_ui` is
 present, write the same heading and list to the next unused
 `<stage-dir>/.review-ui/responses-NNN.md` as

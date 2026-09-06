@@ -1,6 +1,7 @@
 // Markdown document rendering, anchored pending feedback, and in-place suggestions.
 import { api } from "./api.js";
-import { store } from "./store.js";
+import { wordDiffHtml } from "./diff.js";
+import { agentFor, decisionInFlight, store } from "./store.js";
 
 const elements = {};
 let loadVersion = 0;
@@ -32,6 +33,10 @@ export function init() {
   window.addEventListener("message", receiveHtmlAnchor);
 
   store.on("view", renderView);
+  store.on("inlineDiff", (payload) => {
+    inlineDiff = payload && payload.path === store.document?.path ? payload : null;
+    applyInlineDiff();
+  });
   store.on("refresh", () => {
     if (store.view.kind === "artifact") loadArtifact(store.view);
     else if (store.view.kind === "empty") renderEmpty();
@@ -130,6 +135,40 @@ function renderMarkdown(doc, view) {
   idleToolbar();
   assignHeadingIds(doc);
   applyAnnotations();
+  applyInlineDiff();
+}
+
+// History's "show r0 → r1 inline": every hunk becomes a word diff under the
+// block it changed, in the reading column, instead of a raw patch in the rail.
+let inlineDiff = null;
+
+function applyInlineDiff() {
+  for (const node of elements.viewer.querySelectorAll(".blk-diff")) node.remove();
+  for (const block of elements.viewer.querySelectorAll(".blk.changed")) block.classList.remove("changed");
+  if (!inlineDiff || inlineDiff.path !== store.document?.path) return;
+  const blocks = [...elements.viewer.querySelectorAll(".blk")];
+  let first = null;
+  for (const [index, hunk] of inlineDiff.hunks.entries()) {
+    const target = blocks.find((block) => Number(block.dataset.lineEnd) >= hunk.afterStart && Number(block.dataset.lineStart) <= Math.max(hunk.afterStart, hunk.afterEnd))
+      || blocks.find((block) => Number(block.dataset.lineStart) >= hunk.afterStart)
+      || blocks.at(-1);
+    if (!target) continue;
+    const before = hunk.removed.join("\n");
+    const after = hunk.added.join("\n");
+    const panel = document.createElement("div");
+    panel.className = "blk-diff";
+    panel.dataset.hunk = String(index);
+    panel.innerHTML = `<span class="blk-diff-label">r${inlineDiff.from} → r${inlineDiff.to}</span><div class="blk-diff-body">${
+      before && after ? wordDiffHtml(before, after) : before ? `<del>${escapeHtml(before)}</del>` : `<ins>${escapeHtml(after)}</ins>`
+    }</div>`;
+    target.classList.add("changed");
+    target.append(panel);
+    first ??= target;
+  }
+  if (first && inlineDiff.scroll) {
+    first.scrollIntoView({ block: "center", behavior: "smooth" });
+    inlineDiff.scroll = false;
+  }
 }
 
 function buildBlock(block, view) {
@@ -162,7 +201,7 @@ function buildDocumentMeta(doc, view) {
   const provenance = document.createElement("span");
   const revision = store.state?.manifest?.revision ?? store.state?.current?.revision;
   const when = relativeTime(doc.mtime || store.state?.manifest?.opened_at || store.state?.current?.updated_at);
-  provenance.textContent = `Product Agent${revision === null || revision === undefined ? "" : ` · revision ${revision}`}${when ? ` · ${when}` : ""}`;
+  provenance.textContent = `${agentFor(doc.path, view.stage)}${revision === null || revision === undefined ? "" : ` · revision ${revision}`}${when ? ` · ${when}` : ""}`;
   meta.append(provenance);
   if (isLiveGate(view)) {
     const hint = document.createElement("span");
@@ -177,6 +216,12 @@ function buildReadOnlyBanner(doc, view) {
   banner.className = "read-only-banner";
   const stage = stageForArtifact(doc.path, view.stage);
   const label = stage?.name || humanize(view.stage || store.state?.current_stage || "stage");
+  if (stage?.state === "current" && stage.gate === "revising") {
+    banner.classList.add("in-progress-banner");
+    banner.innerHTML = `<b>Revising</b><span></span>`;
+    banner.querySelector("span").textContent = `· the agent is addressing your feedback on ${label}; your remarks stay in Threads and the gate reopens with the next revision`;
+    return banner;
+  }
   if (stage?.state === "current") {
     banner.classList.add("in-progress-banner");
     banner.innerHTML = `<b>In progress</b><span></span>`;
@@ -958,7 +1003,7 @@ function assignHeadingIds(doc) {
 function isLiveGate(view) {
   if (!view || view.readOnly || !view.path) return false;
   const current = store.state?.current;
-  if (current?.state !== "awaiting-approval") return false;
+  if (current?.state !== "awaiting-approval" || decisionInFlight()) return false;
   const artifacts = store.state?.manifest?.artifacts || [];
   return artifacts.some((artifact) => artifact.path === view.path && artifact.exists !== false);
 }

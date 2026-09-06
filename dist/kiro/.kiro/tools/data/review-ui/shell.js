@@ -1,6 +1,6 @@
 // App rail, per-view header, inbox, and command palette.
 import { api } from "./api.js";
-import { store } from "./store.js";
+import { decisionInFlight, store } from "./store.js";
 
 const ICONS = {
   inbox: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 4h14l2 9v7H3v-7z"/></svg>',
@@ -88,10 +88,17 @@ function isActiveIntent(workflow = store.workflow) {
   return !workflow?.intent || !store.state?.intent || workflow.intent === store.state.intent;
 }
 
+// The decision this tab already sent for the gate the daemon still reports as
+// open: the hook has not delivered it yet, so the gate reads as "sent", not live.
+function sentDecision() {
+  return decisionInFlight() ? store.decisionSent : null;
+}
+
 function isLiveGate(stage) {
   return Boolean(
     stage?.state === "current" &&
       isActiveIntent() &&
+      !sentDecision() &&
       (stage.gate === "awaiting-approval" || store.state?.current?.state === "awaiting-approval"),
   );
 }
@@ -199,6 +206,9 @@ function viewState(view, stage) {
   }
   if (!stage) return { label: "Workflow unavailable", detail: "The terminal record remains complete.", tone: "quiet" };
   if (view.kind === "questions") {
+    if (store.questionsState === "submitted" && isActiveIntent()) {
+      return { label: "Answers sent", detail: "The agent is applying them and will confirm in the terminal; this page follows.", tone: "ok" };
+    }
     if (isLiveQuestions(stage)) {
       const total = stage.questions?.total || 0;
       const open = Math.max(0, total - (stage.questions?.answered || 0)) || total;
@@ -206,12 +216,22 @@ function viewState(view, stage) {
     }
     return { label: `Answered${time ? ` · ${time}` : ""}`, detail: "Saved in the record; the terminal file is authoritative.", tone: "ok" };
   }
+  if (sentDecision() && stage.state === "current" && (view.kind === "artifact" || view.kind === "overview")) {
+    const sent = sentDecision();
+    return sent.decision === "approve"
+      ? { label: `Approved · r${revision(stage)}`, detail: "Sent — the agent is picking it up and moves to the next stage.", tone: "ok" }
+      : { label: `Changes requested · r${revision(stage)}`, detail: "Sent — the agent is picking up your remarks; the gate reopens with the next revision.", tone: "ok" };
+  }
   if (isLiveGate(stage) && (view.kind === "artifact" || view.kind === "overview")) {
     return { label: `Awaiting your review · r${revision(stage)}`, detail: "The agent continues after your decision here or in the terminal.", tone: "needs" };
   }
   if (stage.state === "done") return { label: `Done${time ? ` · ${time}` : ""}`, detail: "Read-only stage record.", tone: "ok" };
   if (stage.state === "skipped") return { label: "Skipped", detail: stage.reason || "Not part of this intent's scope.", tone: "quiet" };
-  if (stage.state === "current") return { label: "In progress", detail: "The agent and terminal record remain authoritative.", tone: "needs" };
+  if (stage.state === "current" && stage.gate === "revising") {
+    const sent = (stage.artifacts || []).reduce((total, artifact) => total + (artifact.threads || 0), 0);
+    return { label: `Revising · r${revision(stage)}`, detail: sent ? `The agent is addressing your ${sent} ${sent === 1 ? "remark" : "remarks"}; the gate reopens when it is done.` : "The agent is addressing your request; the gate reopens when it is done.", tone: "needs" };
+  }
+  if (stage.state === "current") return { label: "In progress", detail: "The agent is working; this page updates when it needs you.", tone: "needs" };
   return { label: stage.state === "conditional" ? stage.condition || "Conditional" : "Later", detail: "This stage has not started.", tone: "quiet" };
 }
 
@@ -269,6 +289,7 @@ function headerActions(view, stage) {
   if (view.kind === "artifact" && isLiveGate(stage)) {
     return `${actionButton("Request changes", "request-changes")}${actionButton("Approve", "approve", true)}`;
   }
+  if (view.kind === "questions" && store.questionsState === "submitted" && isActiveIntent()) return "";
   if (view.kind === "questions" && isLiveQuestions(stage)) {
     return `${actionButton("Edit the file instead", "terminal-edit")}${actionButton("Save answers — the agent continues", "save-answers", true)}`;
   }
@@ -283,6 +304,9 @@ function headerActions(view, stage) {
     if (isLiveQuestions(stage)) {
       const total = Math.max(0, (stage.questions?.total || 0) - (stage.questions?.answered || 0)) || stage.questions?.total || 0;
       return actionButton(`Answer ${total} ${total === 1 ? "question" : "questions"} →`, "open-questions", true);
+    }
+    if (isLiveGate(stage)) {
+      return `${artifact?.exists ? actionButton(`Open ${basename(artifact.path)}`, "open-artifact") : ""}${actionButton("Request changes", "request-changes")}${actionButton("Approve", "approve", true)}`;
     }
     if (artifact?.exists) return actionButton(`Open ${basename(artifact.path)}`, "open-artifact", true);
   }
@@ -545,6 +569,7 @@ export function init() {
   store.on("connection", renderHeader);
   store.on("annotations", renderHeader);
   store.on("questionsState", renderHeader);
+  store.on("decisionSent", renderHeader);
   store.on("palette", showPalette);
   render();
 }

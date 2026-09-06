@@ -8341,6 +8341,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   const isGated = node.phase !== "initialization";
+  // Browser review remarks travelling with a rejected report, surfaced in the
+  // directive so the conductor never has to hunt for feedback-NNN.md.
+  let browserFeedback: string | undefined;
   const protectedHumanGate =
     isGated &&
     stageCheckbox.state !== "completed" &&
@@ -8488,9 +8491,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         feedbackStageDir = pending.stageDir;
         const bodies = pendingFeedback(pending.stageDir);
         if (bodies.length > 0) {
-          feedback += `\n\n## Browser review feedback\n\n${bodies.map((item) =>
-            `### ${item.file}\n\n${item.body}`
-          ).join("\n\n")}`;
+          browserFeedback = bodies.map((item) => `### ${item.file}\n\n${item.body}`).join("\n\n");
+          feedback += `\n\n## Browser review feedback\n\n${browserFeedback}`;
         }
       }
       subArgs = ["reject", slug, "--feedback", feedback];
@@ -8798,8 +8800,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     kind: "done",
     reason:
       `Committed ${committed.join(" + ")} for "${slug}" (scope: ${scope}). ` +
-      "State advanced; run next to continue.",
+      "State advanced; run next to continue." +
+      (browserFeedback
+        ? " The human's browser review feedback is in review_feedback below: address every remark by its aN id (the same ids the Feedback addressed list must answer), then revise."
+        : ""),
     ...(approvalNotes ? { approval_notes: approvalNotes } : {}),
+    ...(browserFeedback ? { review_feedback: browserFeedback } : {}),
   });
 }
 
