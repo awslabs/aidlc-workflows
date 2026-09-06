@@ -1502,7 +1502,7 @@ function buildForward(): Forward {
               };
             }
           }
-          if (Object.keys(toolArgs).length > 0 && toolName !== "execute_bash") {
+          if (state.active && Object.keys(toolArgs).length > 0 && toolName !== "execute_bash") {
             return {
               hook: "__legacy_plan_approval_block__",
               input: {
