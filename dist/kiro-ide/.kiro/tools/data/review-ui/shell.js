@@ -1,14 +1,15 @@
 // App rail, per-view header, inbox, and command palette.
 import { api } from "./api.js";
 import { decisionInFlight, store } from "./store.js";
+import { icon } from "./icons.js";
 
 const ICONS = {
-  inbox: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 4h14l2 9v7H3v-7z"/></svg>',
-  workflow: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="12" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8.5 6h4a3 3 0 0 1 3 3M8.5 18h4a3 3 0 0 0 3-3"/></svg>',
-  search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>',
-  threads: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/></svg>',
-  history: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5M12 8v4l3 2"/></svg>',
-  outline: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r=".8"/><circle cx="4" cy="12" r=".8"/><circle cx="4" cy="18" r=".8"/></svg>',
+  inbox: icon("mailInbox", { size: 18 }),
+  workflow: icon("flowchart", { size: 18 }),
+  search: icon("search", { size: 18 }),
+  threads: icon("comment", { size: 17 }),
+  history: icon("history", { size: 17 }),
+  outline: icon("textBulletListTree", { size: 17 }),
 };
 
 let rail;

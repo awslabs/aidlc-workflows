@@ -1,10 +1,11 @@
 // Workflow panel and stage overview.
 import { api } from "./api.js";
 import { store } from "./store.js";
+import { icon } from "./icons.js";
 
-const FILE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg>';
-const QUESTION_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 1-1 1.7M12 17h.01"/></svg>';
-const MEMORY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg>';
+const FILE_ICON = icon("documentText", { size: 14 });
+const QUESTION_ICON = icon("question", { size: 14 });
+const MEMORY_ICON = icon("book", { size: 14 });
 
 let panel;
 let overview;

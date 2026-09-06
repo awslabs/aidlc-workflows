@@ -1,6 +1,7 @@
 // Markdown document rendering, anchored pending feedback, and in-place suggestions.
 import { api } from "./api.js";
 import { trackedChangesFragment, wordDiffHtml } from "./diff.js";
+import { icon } from "./icons.js";
 import { agentFor, decisionInFlight, persistAnnotations, setNotice, store } from "./store.js";
 
 const elements = {};
@@ -318,7 +319,7 @@ function showSelectionAffordance(selection) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "selection-add";
-  button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/><path class="plus" d="M12 8.5v7M8.5 12h7"/></svg>';
+  button.innerHTML = icon("commentAdd", { size: 15 });
   button.title = "Comment on selection (C)";
   button.setAttribute("aria-label", "Comment on selected text");
   button.addEventListener("mousedown", (event) => event.preventDefault());
@@ -484,7 +485,7 @@ function renderSuggestedEdit(edit, sent) {
   bubble.dataset.annotation = edit.id;
   bubble.title = sent ? "Your suggested edit (sent)" : "Your suggested edit (not sent yet)";
   bubble.setAttribute("aria-label", bubble.title);
-  bubble.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 6.5l3 3"/></svg>';
+  bubble.innerHTML = icon("edit", { size: 12 });
   gutter.append(bubble);
 }
 
@@ -976,12 +977,12 @@ function buildToolbar() {
   toolbar.className = "document-toolbar";
   toolbar.setAttribute("aria-label", "Formatting");
   toolbar.hidden = true;
-  for (const [label, action, title] of [["↶", "undo", "Undo (⌘Z)"], ["↷", "redo", "Redo (⇧⌘Z)"]]) {
+  for (const [name, action, title] of [["arrowUndo", "undo", "Undo (⌘Z)"], ["arrowRedo", "redo", "Redo (⇧⌘Z)"]]) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `toolbar-button history ${action}`;
     button.dataset.history = action;
-    button.textContent = label;
+    button.innerHTML = icon(name);
     button.title = title;
     button.setAttribute("aria-label", title);
     button.disabled = true;
@@ -993,20 +994,20 @@ function buildToolbar() {
   historySeparator.className = "toolbar-separator";
   toolbar.append(historySeparator);
   const controls = [
-    ["Paragraph ▾", "paragraph"],
-    ["B", "bold"],
-    ["I", "italic"],
-    ["S", "strike"],
-    ["<>", "code"],
-    ["• list", "bullet"],
-    ["1.", "number"],
-    ["☑", "task"],
-    ["❝", "quote"],
-    ["🔗", "link"],
-    ["▦", "table"],
-    ["⧉", "diagram"],
+    ["textParagraph", "paragraph"],
+    ["textBold", "bold"],
+    ["textItalic", "italic"],
+    ["textStrikethrough", "strike"],
+    ["code", "code"],
+    ["textBulletListTree", "bullet"],
+    ["textNumberList", "number"],
+    ["checkboxChecked", "task"],
+    ["textQuote", "quote"],
+    ["link", "link"],
+    ["table", "table"],
+    ["flow", "diagram"],
   ];
-  controls.forEach(([label, command], index) => {
+  controls.forEach(([name, command], index) => {
     if ([1, 5, 9].includes(index)) {
       const separator = document.createElement("span");
       separator.className = "toolbar-separator";
@@ -1016,7 +1017,10 @@ function buildToolbar() {
     button.type = "button";
     button.className = `toolbar-button ${command}`;
     button.dataset.command = command;
-    button.textContent = label;
+    button.innerHTML = command === "paragraph"
+      ? `${icon(name)}<span class="toolbar-label">Paragraph</span>${icon("chevronDown", { size: 12 })}`
+      : icon(name);
+    button.setAttribute("aria-label", formattingTitle(command));
     button.title = formattingTitle(command);
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", () => applyFormatting(command));

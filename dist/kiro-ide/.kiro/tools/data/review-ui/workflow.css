@@ -160,7 +160,7 @@ button.workflow-child:hover { background: var(--panel); }
 .child-icon.complete { color: var(--green); }
 .child-icon svg,
 .overview-card svg,
-.record-files svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.record-files svg { width: 14px; height: 14px; }
 .child-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .child-label code { padding: 0; background: none; font-size: 11px; }
 .child-meta { color: var(--muted); font-size: 10.5px; white-space: nowrap; }

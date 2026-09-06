@@ -10,6 +10,7 @@ const TEXT_ASSETS = [
   "app.js",
   "app.css",
   "diff.js",
+  "icons.js",
   "api.js",
   "store.js",
   "shell.js",
@@ -20,6 +21,7 @@ const TEXT_ASSETS = [
   "questions.js",
   "bridge.js",
   join("vendor", "MERMAID-LICENSE.txt"),
+  join("vendor", "FLUENT-ICONS-LICENSE.txt"),
 ] as const;
 const MERMAID_BYTES = 3_572_661;
 const MERMAID_SHA256 = "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8";

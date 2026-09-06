@@ -23,14 +23,12 @@
 .rail button svg,
 .header-tools svg,
 .palette-box label svg {
-  width: 19px;
-  height: 19px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  width: 18px;
+  height: 18px;
 }
+/* Fluent icons draw with filled paths in currentColor; nothing to stroke. */
+svg.fi { display: inline-block; vertical-align: middle; flex: none; }
+svg.fi path { fill: currentColor; }
 .rail .logo {
   width: 30px;
   height: 30px;

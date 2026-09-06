@@ -271,8 +271,7 @@
   place-items: center;
   padding: 0;
 }
-.selection-add svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-.selection-add svg .plus { stroke-width: 2.2; }
+.selection-add svg { width: 15px; height: 15px; }
 .selection-add:hover {
   border-color: var(--accent);
   background: var(--soft);
@@ -311,11 +310,11 @@
   border-radius: 5px;
   font-size: 12px;
   white-space: nowrap;
+  display: inline-grid;
+  place-items: center;
+  color: var(--ink);
 }
-.toolbar-button.paragraph { min-width: 84px; text-align: left; }
-.toolbar-button.bold { font-weight: 700; }
-.toolbar-button.italic { font-style: italic; }
-.toolbar-button.strike { text-decoration: line-through; }
+.toolbar-button.paragraph { min-width: 0; text-align: left; }
 .toolbar-button:hover { background: var(--panel); }
 
 .toolbar-separator {
@@ -386,7 +385,12 @@
 .sugg-pill button { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
 .sugg-pill button:hover { text-decoration: underline; }
 .bubble.pencil { display: grid; place-items: center; padding: 0; }
-.bubble.pencil svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.bubble.pencil svg { width: 12px; height: 12px; }
 
-.toolbar-button.history { font-size: 15px; line-height: 1; min-width: 26px; }
+.toolbar-button.history { min-width: 26px; }
 .toolbar-button.history:disabled { opacity: 0.35; cursor: default; }
+
+.toolbar-button svg { width: 16px; height: 16px; }
+.toolbar-button.paragraph { display: inline-flex; align-items: center; gap: 5px; }
+.toolbar-button.paragraph .toolbar-label { font-size: 12px; }
+.toolbar-button.paragraph svg:last-child { width: 12px; height: 12px; color: var(--muted); }
