@@ -831,8 +831,8 @@ Boolean variables use the exact string `"1"` unless a row says otherwise.
 | Variable | Default | Effect |
 |---|---|---|
 | `AIDLC_REVIEW_UI` | unset | `1` enables daemon startup, review publication, directive field, browser gate line, and feedback/questions UI; unset preserves legacy behavior |
-| `AIDLC_REVIEW_PORT` | `0` | TCP port; `0` asks the OS for an ephemeral port |
-| `AIDLC_REVIEW_HOST` | `127.0.0.1` | Bind host; keep the default loopback address for the supported security posture |
+| `AIDLC_REVIEW_PORT` | unset | TCP port. Unset: the first free port from 4765 to 4774, then ephemeral. `<n>` pins that port exactly (the daemon fails if it is taken); `0` asks the OS for an ephemeral port |
+| `AIDLC_REVIEW_HOST` | `127.0.0.1` | Bind address. Loopback is always bound so the local address never changes; setting another address (a LAN IP) binds it **as well**, on the same port, sharing the token and cookie; `0.0.0.0`/`::` binds every interface (localhost is advertised, the interface addresses are listed as extras). `server.json` gains `hosts`/`urls` when more than one address is bound. Keep the default for the supported security posture — any extra address exposes the daemon to that network |
 | `AIDLC_REVIEW_OPEN` | enabled | `0` disables automatic browser launch. Otherwise the daemon opens a browser when a gate opens (transition into awaiting-approval) or a browser question round begins (the `<slug>-questions-guide.html` explainer lands) and no review tab is present (no live WebSocket and no authenticated request within the last 10 s); never over `SSH_CONNECTION`. A connected tab is not duplicated; WebSocket `{type:"state"}` invalidations reload the state and workflow projections |
 | `AIDLC_REVIEW_IDLE_MINUTES` | `240` | Exit after this many minutes with no WebSocket client and no observed state change |
 | `AIDLC_REVIEW_STRICT` | unset | `1` disables browser-navigation trust for `GET /`: the bare origin never opens and every printed URL is a single-use `/open/<nonce>` link. For shared multi-user hosts. Set it in the harness environment so the daemon and the CLI agree |

@@ -15,8 +15,10 @@ Set `AIDLC_REVIEW_UI=1` in the environment that starts your harness:
 export AIDLC_REVIEW_UI=1
 ```
 
-At session start, AI-DLC ensures that the project-local review daemon is running.
-It is detached from the session and stops after its idle timeout. If your harness
+At session start, AI-DLC ensures that the project-local review daemon is running,
+normally at **http://localhost:4765/** (the next free port upward if another
+project already holds it). It is detached from the session and stops after its
+idle timeout. If your harness
 does not run the session-start hook, start it directly from the project root:
 
 ```bash
@@ -344,10 +346,19 @@ export AIDLC_REVIEW_OPEN=0
 ssh -L 4765:127.0.0.1:4765 user@remote-host
 ```
 
-Use the single-use link printed at the remote gate in your local browser. The
-daemon chooses an ephemeral port when `AIDLC_REVIEW_PORT` is unset. Set
-`AIDLC_REVIEW_OPEN=0` for any environment where automatic browser launch is
-undesirable.
+Use the single-use link printed at the remote gate in your local browser. With
+`AIDLC_REVIEW_PORT` unset the daemon listens on **4765** when that port is free
+(a second project's daemon takes 4766, and so on up to 4774, before falling back
+to an ephemeral port), so the address is the same from one session to the next;
+`/aidlc --status` and `/aidlc --doctor` always print the one in use. Set
+`AIDLC_REVIEW_PORT=<n>` to pin a port exactly, or `0` to force an ephemeral one.
+The daemon always listens on localhost; `AIDLC_REVIEW_HOST=<address>` makes it
+listen on that address **too** (same port, same session cookie) — for a browser
+on another machine on a trusted network — and `--status` / `--doctor` list it
+as *also listening*. `0.0.0.0` binds every interface. Anything beyond loopback
+exposes the review daemon to that network; prefer the SSH tunnel above when you
+can. Set `AIDLC_REVIEW_OPEN=0` for any environment where automatic browser
+launch is undesirable.
 
 ## Privacy and security
 

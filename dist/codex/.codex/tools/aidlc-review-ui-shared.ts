@@ -107,7 +107,12 @@ export function noncesDir(projectDir: string, env: NodeJS.ProcessEnv = process.e
 export interface ServerInfo {
   version: 1;
   pid: number;
+  /** The loopback bind — the address the local human opens. */
   host: string;
+  /** Every bound address when more than one (loopback first); absent when only loopback. */
+  hosts?: string[];
+  /** Origins for the extra addresses, e.g. `http://192.168.1.5:4765/`. */
+  urls?: string[];
   port: number;
   /** Tokenless origin with trailing slash, e.g. `http://localhost:47391/`. Never carries the token. */
   url: string;

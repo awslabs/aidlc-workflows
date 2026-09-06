@@ -547,6 +547,70 @@ describe("t332 review UI daemon HTTP API", () => {
     }
   });
 
+  test("AIDLC_REVIEW_HOST adds an address beside loopback on one port; default port is 4765-range", async () => {
+    // IPv6 loopback stands in for a LAN address: a distinct socket on the same
+    // port, which is exactly the dual-listen contract (and present everywhere).
+    const extra = "::1";
+    const extraUrlHost = `[${extra}]`;
+    const dualProject = mkdtempSync(join(tmpdir(), "aidlc-t332-dual-"));
+    const dualHome = mkdtempSync(join(tmpdir(), "aidlc-t332-dual-home-"));
+    const env = {
+      ...process.env,
+      AIDLC_REVIEW_HOME: dualHome,
+      AIDLC_REVIEW_HOST: extra,
+      AIDLC_REVIEW_OPEN: "0",
+    };
+    delete (env as Record<string, string | undefined>).AIDLC_REVIEW_PORT; // unset: stable-port path
+    const dualInfoPath = serverInfoPath(dualProject, env);
+    const dualDaemon = Bun.spawn([process.execPath, DAEMON, "serve", "--project-dir", dualProject], {
+      cwd: ROOT,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      let dualInfo: ServerInfo | null = null;
+      const deadline = Date.now() + 10_000;
+      while (!dualInfo && Date.now() < deadline) {
+        if (existsSync(dualInfoPath)) {
+          try {
+            const parsed = JSON.parse(readFileSync(dualInfoPath, "utf-8")) as ServerInfo;
+            if (parsed.port > 0 && parsed.token) dualInfo = parsed;
+          } catch {
+            // Atomic creation can race the first read.
+          }
+        }
+        if (!dualInfo) await Bun.sleep(20);
+      }
+      expect(dualInfo).not.toBeNull();
+      // Stable port range (another daemon may already hold 4765 on this machine).
+      expect(dualInfo!.port).toBeGreaterThanOrEqual(4765);
+      expect(dualInfo!.port).toBeLessThanOrEqual(4774);
+      expect(dualInfo!.host).toBe("127.0.0.1");
+      expect(dualInfo!.url).toBe(`http://localhost:${dualInfo!.port}/`);
+      expect(dualInfo!.hosts).toEqual(["127.0.0.1", extra]);
+      expect(dualInfo!.urls).toEqual([`http://${extraUrlHost}:${dualInfo!.port}/`]);
+      for (const host of ["127.0.0.1", extraUrlHost]) {
+        const health = await fetch(`http://${host}:${dualInfo!.port}/api/health`);
+        expect(health.status, host).toBe(200);
+        expect(await health.json()).toMatchObject({ pid: dualInfo!.pid });
+      }
+      // A typed navigation on the extra address is trusted like loopback.
+      const typed = await fetch(`http://${extraUrlHost}:${dualInfo!.port}/`, {
+        headers: { "Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", Accept: "text/html" },
+      });
+      expect(typed.status).toBe(200);
+      expect(typed.headers.get("set-cookie")).toMatch(/aidlc/i);
+    } finally {
+      dualDaemon.kill("SIGTERM");
+      const deadline = Date.now() + 5_000;
+      while (dualDaemon.exitCode === null && Date.now() < deadline) await Bun.sleep(20);
+      if (dualDaemon.exitCode === null) dualDaemon.kill("SIGKILL");
+      rmSync(dualProject, { recursive: true, force: true });
+      rmSync(dualHome, { recursive: true, force: true });
+    }
+  });
+
   test("SIGTERM removes owner-only discovery state", async () => {
     expect(daemon).not.toBeNull();
     daemon!.kill("SIGTERM");

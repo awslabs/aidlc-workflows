@@ -17,6 +17,7 @@ import {
   type FSWatcher,
   type Stats,
 } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ArtifactFormats } from "./aidlc-artifact-vocabulary.ts";
 import {
@@ -204,14 +205,105 @@ function parseArgs(argv: string[]): {
   return { command, projectDir, asJson };
 }
 
-function parsePort(): number {
+// One address a human can remember. Unset: the daemon takes the first free port
+// from 4765 upward (ten tries — a second project's daemon lands on 4766, and so
+// on), then falls back to an ephemeral port. `AIDLC_REVIEW_PORT=<n>` pins that
+// exact port; `AIDLC_REVIEW_PORT=0` asks for an ephemeral one.
+export const DEFAULT_REVIEW_PORT = 4765;
+const DEFAULT_PORT_TRIES = 10;
+
+function parsePort(): { pinned: number | null; ephemeral: boolean } {
   const raw = process.env[ENV_REVIEW_PORT];
-  if (!raw || raw === "0") return 0;
+  if (raw === undefined || raw.trim() === "") return { pinned: null, ephemeral: false };
+  if (raw.trim() === "0") return { pinned: null, ephemeral: true };
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`${ENV_REVIEW_PORT} must be an integer from 0 to 65535`);
   }
-  return port;
+  return { pinned: port, ephemeral: false };
+}
+
+function portCandidates(choice: { pinned: number | null; ephemeral: boolean }): number[] {
+  if (choice.pinned !== null) return [choice.pinned];
+  if (choice.ephemeral) return [0];
+  return [...Array.from({ length: DEFAULT_PORT_TRIES }, (_, index) => DEFAULT_REVIEW_PORT + index), 0];
+}
+
+function isAddressInUse(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "EADDRINUSE" || /EADDRINUSE|address already in use/i.test(String((error as Error)?.message ?? ""));
+}
+
+function isWildcard(host: string): boolean {
+  const bare = host.replace(/^\[|\]$/g, "");
+  return bare === "0.0.0.0" || bare === "::";
+}
+
+/**
+ * IPv4 loopback is always bound so the local human's address never changes. A
+ * configured address is bound as well (including `::1`, a distinct socket); a
+ * wildcard already includes loopback, so it is bound alone.
+ */
+export function bindHostsFor(configured: string | undefined): string[] {
+  const host = configured?.trim().replace(/^\[|\]$/g, "");
+  if (!host || host === DEFAULT_REVIEW_HOST || host.toLowerCase() === "localhost") return [DEFAULT_REVIEW_HOST];
+  if (isWildcard(host)) return [host];
+  return [DEFAULT_REVIEW_HOST, host];
+}
+
+/**
+ * Bun reports every failed listen as EADDRINUSE, so an address this machine
+ * does not have would otherwise walk every port candidate and then blame the
+ * last port. An ephemeral bind on the configured address separates the cases.
+ */
+function assertBindable<T extends { stop(force?: boolean): unknown }>(serveOn: (host: string, port: number) => T, hosts: string[]): void {
+  for (const host of hosts) {
+    if (host === DEFAULT_REVIEW_HOST) continue;
+    try {
+      serveOn(host, 0).stop(true);
+    } catch {
+      throw new Error(`${ENV_REVIEW_HOST}=${host}: cannot listen on this address (not an address of this machine?)`);
+    }
+  }
+}
+
+/** Bind every host on one port, or throw the first EADDRINUSE after closing what was opened. */
+function bindAll<T extends { stop(force?: boolean): unknown }>(serveOn: (host: string, port: number) => T, hosts: string[], port: number): T[] {
+  const started: T[] = [];
+  try {
+    for (const host of hosts) {
+      // With an ephemeral request, later hosts must take the port the first one got.
+      const actualPort = port === 0 && started.length > 0 ? ((started[0] as { port?: number }).port ?? 0) : port;
+      started.push(serveOn(host, actualPort));
+    }
+    return started;
+  } catch (error) {
+    for (const instance of started) instance.stop(true);
+    throw error;
+  }
+}
+
+function localAddresses(): string[] {
+  const out: string[] = [];
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (!entry.internal) out.push(entry.address);
+    }
+  }
+  return out;
+}
+
+function bindFirstFree<T>(serveOn: (port: number) => T, candidates: number[]): T {
+  let lastError: unknown = null;
+  for (const candidate of candidates) {
+    try {
+      return serveOn(candidate);
+    } catch (error) {
+      if (!isAddressInUse(error)) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("no port available for the review UI daemon");
 }
 
 function parseIdleMinutes(): number {
@@ -1233,8 +1325,8 @@ function openBrowser(url: string): void {
 
 async function serve(projectDir: string): Promise<void> {
   projectDir = realpathSync(projectDir);
-  const bindHost = process.env[ENV_REVIEW_HOST]?.trim() || DEFAULT_REVIEW_HOST;
-  const port = parsePort();
+  const bindHosts = bindHostsFor(process.env[ENV_REVIEW_HOST]);
+  const bindHost = bindHosts[0];
   const idleMinutes = parseIdleMinutes();
   const token = randomBytes(32).toString("hex");
   const projectId = reviewUiProjectId(projectDir);
@@ -1252,9 +1344,9 @@ async function serve(projectDir: string): Promise<void> {
   let debounce: ReturnType<typeof setTimeout> | null = null;
   const watchers: FSWatcher[] = [];
 
-  const server = Bun.serve<{ authenticated: true }>({
-    hostname: bindHost,
-    port,
+  const serveOn = (hostname: string, candidatePort: number) => Bun.serve<{ authenticated: true }>({
+    hostname,
+    port: candidatePort,
     fetch: async (request, bunServer) => {
       const url = new URL(request.url);
       if (url.pathname === "/api/health") {
@@ -1304,7 +1396,7 @@ async function serve(projectDir: string): Promise<void> {
             return json(workflowPayload(projectDir, {
               ...selectionFromUrl(url),
               version: AIDLC_VERSION,
-              port: server.port ?? port,
+              port: boundPort,
             }));
           }
           if (request.method === "GET" && url.pathname === "/api/tree") return json(treePayload(projectDir, url));
@@ -1357,21 +1449,38 @@ async function serve(projectDir: string): Promise<void> {
       },
     },
   });
+  // One port, every configured address: the loopback listener is the one the
+  // local human opens; an extra address (a LAN IP, `0.0.0.0`) is for a browser
+  // on another machine and shares the same token, cookie, and handlers.
+  assertBindable(serveOn, bindHosts);
+  const servers = bindFirstFree(
+    (candidatePort) => bindAll(serveOn, bindHosts, candidatePort),
+    portCandidates(parsePort()),
+  );
+  const server = servers[0];
+  const boundPort = server.port ?? 0;
 
-  baseOrigin = `http://${urlHost(bindHost)}:${server.port}`;
+  // A wildcard bind is advertised as localhost (the address a human can open)
+  // with every interface address listed as an extra.
+  const advertisedHost = isWildcard(bindHost) ? DEFAULT_REVIEW_HOST : bindHost;
+  baseOrigin = `http://${urlHost(advertisedHost)}:${boundPort}`;
   const daemonOrigin = `${baseOrigin}/`;
-  // A trusted navigation must name this daemon: the advertised host plus the
+  // A trusted navigation must name this daemon: every advertised host plus the
   // literal loopback spellings a human may type for it.
-  allowedHosts.add(`${urlHost(bindHost)}:${server.port}`.toLowerCase());
-  if (bindHost === "127.0.0.1" || bindHost === "::1" || bindHost === "localhost") {
-    for (const spelling of ["localhost", "127.0.0.1", "[::1]"]) allowedHosts.add(`${spelling}:${server.port}`);
+  for (const host of bindHosts) allowedHosts.add(`${urlHost(host)}:${boundPort}`.toLowerCase());
+  for (const spelling of ["localhost", "127.0.0.1", "[::1]"]) allowedHosts.add(`${spelling}:${boundPort}`);
+  if (bindHosts.some((host) => host === "0.0.0.0" || host === "::")) {
+    for (const address of localAddresses()) allowedHosts.add(`${urlHost(address)}:${boundPort}`.toLowerCase());
   }
   const started = new Date().toISOString();
+  const extraHosts = isWildcard(bindHost) ? localAddresses().filter((address) => !address.includes(":")) : bindHosts.slice(1);
+  const extraUrls = extraHosts.map((host) => `http://${urlHost(host)}:${boundPort}/`);
   currentInfo = {
     version: 1,
     pid: process.pid,
-    host: bindHost,
-    port: server.port ?? port,
+    host: advertisedHost,
+    ...(extraHosts.length ? { hosts: [advertisedHost, ...extraHosts], urls: extraUrls } : {}),
+    port: boundPort,
     url: daemonOrigin,
     token,
     project_dir: projectDir,
@@ -1383,6 +1492,7 @@ async function serve(projectDir: string): Promise<void> {
   writeServerInfo(currentInfo);
   openUrl = reviewUiHumanUrl(projectDir) ?? daemonOrigin;
   process.stdout.write(`Review UI: ${openUrl}\n`);
+  for (const extra of extraUrls) process.stdout.write(`Review UI (also listening): ${extra}\n`);
 
   // Two moments need the human's eyes: a gate opening, and a browser question
   // round beginning (the guide explainer landing beside the questions file).
@@ -1417,7 +1527,7 @@ async function serve(projectDir: string): Promise<void> {
     }
     lastReviewState = state;
     lastGuideFile = guideFile;
-    server.publish("state", JSON.stringify({ type: "state" }));
+    for (const instance of servers) instance.publish("state", JSON.stringify({ type: "state" }));
   };
 
   const onWatch = (): void => {
@@ -1465,7 +1575,7 @@ async function serve(projectDir: string): Promise<void> {
     clearInterval(idle);
     for (const watcher of watchers) watcher.close();
     removeServerInfo(projectDir);
-    server.stop(true);
+    for (const instance of servers) instance.stop(true);
   };
   const shutdown = (code: number): void => {
     cleanup();
@@ -1485,6 +1595,7 @@ function status(projectDir: string, asJson: boolean): void {
           version: info.version,
           pid: info.pid,
           host: info.host,
+          ...(info.hosts ? { hosts: info.hosts, urls: info.urls ?? [] } : {}),
           port: info.port,
           url: info.url,
           project_dir: info.project_dir,
@@ -1503,6 +1614,7 @@ function status(projectDir: string, asJson: boolean): void {
   }
   const openUrl = reviewUiHumanUrl(projectDir) ?? info.url;
   process.stdout.write(`Review UI: running (pid ${info.pid})\n${openUrl}\n`);
+  for (const extra of info.urls ?? []) process.stdout.write(`also listening: ${extra}\n`);
 }
 
 function stop(projectDir: string): void {

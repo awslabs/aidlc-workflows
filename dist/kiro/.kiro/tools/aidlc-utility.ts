@@ -2291,17 +2291,23 @@ async function handleDoctor(projectDir: string, flags: Record<string, string> = 
     const origin = liveReviewUiOrigin(projectDir);
     let reachable = false;
     if (serverInfoLooksAlive(info)) {
-      try {
-        const healthUrl = new URL("/api/health", info.url);
-        const response = await fetch(healthUrl, {
-          signal: AbortSignal.timeout(500),
-        });
-        const body: unknown = response.ok ? await response.json() : null;
-        reachable = Boolean(
-          body && typeof body === "object" && "ok" in body && body.ok === true,
-        );
-      } catch {
-        // A live pid without a responding health endpoint is not a usable daemon.
+      // Two patient attempts: a daemon that is alive but busy (or still
+      // binding right after session start) must not read as "not reachable"
+      // one run and "alive" the next.
+      const healthUrl = new URL("/api/health", info.url);
+      for (let attempt = 0; attempt < 2 && !reachable; attempt += 1) {
+        try {
+          const response = await fetch(healthUrl, {
+            signal: AbortSignal.timeout(2000),
+          });
+          const body: unknown = response.ok ? await response.json() : null;
+          reachable = Boolean(
+            body && typeof body === "object" && "ok" in body && body.ok === true,
+          );
+        } catch {
+          // A live pid without a responding health endpoint is not a usable daemon.
+        }
+        if (!reachable && attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300));
       }
     }
     if (reachable && origin) {
@@ -2309,13 +2315,14 @@ async function handleDoctor(projectDir: string, flags: Record<string, string> = 
       // origin (the daemon trusts a typed navigation and sets the cookie itself);
       // in strict mode it is a fresh single-use link, minted here like `--status`.
       const openUrl = reviewUiHumanUrl(projectDir);
+      const also = info?.urls?.length ? ` (also listening on ${info.urls.join(", ")})` : "";
       results.push({
         pass: true,
-        label: openUrl === null
+        label: (openUrl === null
           ? `review-ui: alive at ${origin} — run /aidlc --status for a browser link`
           : openUrl === origin
             ? `review-ui: alive — open ${openUrl}`
-            : `review-ui: alive — open ${openUrl} (single-use link, 30 min; /aidlc --status mints another)`,
+            : `review-ui: alive — open ${openUrl} (single-use link, 30 min; /aidlc --status mints another)`) + also,
         id: "review-ui",
         severity: "info",
       });
@@ -2325,7 +2332,7 @@ async function handleDoctor(projectDir: string, flags: Record<string, string> = 
         : `'${projectDir.replaceAll("'", "'\"'\"'")}'`;
       results.push({
         pass: true,
-        label: "review-ui: enabled but daemon is not alive or reachable (warning)",
+        label: `review-ui: enabled but daemon is not alive or reachable (warning)${info?.url ? ` — last known address ${info.url}` : ""}`,
         fix: `bun ${harnessDir()}/tools/aidlc-review-ui.ts serve --project-dir ${quotedProject}`,
         id: "review-ui",
         severity: "warning",
