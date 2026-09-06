@@ -299,7 +299,8 @@
 }
 
 .document-toolbar[hidden] { display: none; }
-.document-toolbar:not(.active) .toolbar-button { color: var(--faint); pointer-events: none; }
+.document-toolbar:not(.active) .toolbar-button:not(.history) { color: var(--faint); pointer-events: none; }
+.document-toolbar .toolbar-button.history:not(:disabled) { color: var(--ink); }
 .document-toolbar:not(.active) .toolbar-context { color: var(--muted); }
 
 .toolbar-button {
@@ -386,3 +387,6 @@
 .sugg-pill button:hover { text-decoration: underline; }
 .bubble.pencil { display: grid; place-items: center; padding: 0; }
 .bubble.pencil svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.toolbar-button.history { font-size: 15px; line-height: 1; min-width: 26px; }
+.toolbar-button.history:disabled { opacity: 0.35; cursor: default; }

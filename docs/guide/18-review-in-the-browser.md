@@ -117,8 +117,14 @@ text to comment never disturbs the document. While a block is being edited the
 formatting row above the document is live — **Paragraph ▾**, bold, italic,
 strike, code, lists, quote, link, table, and diagram insert Markdown syntax at
 the caret — and it reads *Editing FR2 · a suggestion — the file is untouched
-until you decide*. `⌘Z` / `⇧⌘Z` undo and redo within the block (including
-toolbar actions); `Esc` abandons the change.
+until you decide*. Highlight text and press Delete to remove it, or type to
+replace it. **Undo and redo** (↶ ↷ at the left of the formatting row, `⌘Z` /
+`⇧⌘Z`) work as in Bunsho: while you are typing they step through your
+keystrokes (toolbar actions included); once you have clicked away they take
+back whole suggestions, most recent first, and bring them back again. The
+*Undo* on a suggestion's pill and *Undo edit* on its card feed the same stack.
+`Esc` abandons the typing in progress without touching an earlier suggestion
+on that block.
 
 Clicking elsewhere finishes the edit, and the document shows it **as tracked
 changes in place**: the block re-renders with your new text, inserted words

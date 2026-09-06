@@ -697,7 +697,9 @@ function bindThreads() {
       persistAnnotations(store.state, store.annotations);
     });
     card.querySelector("[data-remove-annotation]")?.addEventListener("click", () => {
-      saveAnnotations(store.annotations.filter((_, itemIndex) => itemIndex !== index));
+      const item = store.annotations[index];
+      if (item?.kind === "edit" && typeof item.after_block === "string") store.emit("undo-suggestion", item.id);
+      else saveAnnotations(store.annotations.filter((_, itemIndex) => itemIndex !== index));
     });
     card.querySelector("[data-show-annotation]")?.addEventListener("click", () => {
       store.emit("focus", store.annotations[index]?.id);

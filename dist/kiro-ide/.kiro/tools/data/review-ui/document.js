@@ -1,7 +1,7 @@
 // Markdown document rendering, anchored pending feedback, and in-place suggestions.
 import { api } from "./api.js";
 import { trackedChangesFragment, wordDiffHtml } from "./diff.js";
-import { agentFor, decisionInFlight, persistAnnotations, store } from "./store.js";
+import { agentFor, decisionInFlight, persistAnnotations, setNotice, store } from "./store.js";
 
 const elements = {};
 let loadVersion = 0;
@@ -42,7 +42,11 @@ export function init() {
     else if (store.view.kind === "empty") renderEmpty();
   });
   store.on("remarks", applyAnnotations);
-  store.on("annotations", applyAnnotations);
+  store.on("annotations", () => {
+    applyAnnotations();
+    refreshHistoryButtons();
+  });
+  store.on("undo-suggestion", (id) => removeSuggestion(id));
   store.on("selection", showSelectionAffordance);
   store.on("focus", focusAnnotation);
   store.on("scroll-to", scrollToHeading);
@@ -323,6 +327,13 @@ function showSelectionAffordance(selection) {
 }
 
 function handleSelectionKey(event) {
+  const meta = event.metaKey || event.ctrlKey;
+  if (meta && !event.altKey && event.key.toLowerCase() === "z" && !activeEdit && store.view?.kind === "artifact") {
+    const target = event.target;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target?.isContentEditable) return;
+    if (event.shiftKey ? redoAny() : undoAny()) event.preventDefault();
+    return;
+  }
   if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.repeat) return;
   if (!store.selection || store.view.kind !== "artifact") return;
   const target = event.target;
@@ -463,11 +474,7 @@ function renderSuggestedEdit(edit, sent) {
   } else {
     pill.innerHTML = `<span>Your edit · not sent yet</span><button type="button" data-undo-edit>Undo</button>`;
     pill.querySelector("[data-undo-edit]").addEventListener("mousedown", (event) => event.preventDefault());
-    pill.querySelector("[data-undo-edit]").addEventListener("click", () => {
-      const remaining = (store.annotations || []).filter((item) => item.id !== edit.id);
-      store.set({ annotations: remaining });
-      persistAnnotations(store.state, remaining);
-    });
+    pill.querySelector("[data-undo-edit]").addEventListener("click", () => removeSuggestion(edit.id));
   }
   wrapper.append(pill);
   const gutter = wrapper.querySelector(".gutter");
@@ -645,6 +652,7 @@ function armEdit(edit) {
   setSourceRange(edit.content, from, to);
   edit.armed = true;
   edit.wrapper.classList.add("armed");
+  refreshHistoryButtons();
 }
 
 /** Rendered text before the selection start and (when not collapsed) before its end, in document order. */
@@ -773,13 +781,90 @@ function cancelEdit(edit) {
   edit.content.blur();
 }
 
+// One undo model, as in Bunsho: while you are typing in a block, undo steps
+// through your keystrokes; once you have clicked away, undo takes back the
+// whole suggestion (and redo brings it back), most recent first. The pill's
+// Undo and the card's Undo edit feed the same stack, so ⇧⌘Z reverses them.
+const suggestionOrder = []; // annotation ids by last finish, oldest first
+const undoneSuggestions = []; // removed suggestions, most recent last
+
+function rememberSuggestion(id) {
+  const at = suggestionOrder.indexOf(id);
+  if (at !== -1) suggestionOrder.splice(at, 1);
+  suggestionOrder.push(id);
+  undoneSuggestions.length = 0; // a new edit clears redo, as in any editor
+  refreshHistoryButtons();
+}
+
+function removeSuggestion(id, { silent = false } = {}) {
+  const annotation = (store.annotations || []).find((item) => item.id === id && item.kind === "edit");
+  if (!annotation) return false;
+  const remaining = store.annotations.filter((item) => item.id !== id);
+  store.set({ annotations: remaining });
+  persistAnnotations(store.state, remaining);
+  const at = suggestionOrder.indexOf(id);
+  if (at !== -1) suggestionOrder.splice(at, 1);
+  undoneSuggestions.push(annotation);
+  if (!silent) setNotice("Suggestion removed — ⇧⌘Z or ↷ brings it back", "info");
+  refreshHistoryButtons();
+  return true;
+}
+
+function restoreSuggestion() {
+  const annotation = undoneSuggestions.pop();
+  if (!annotation) return false;
+  const annotations = [...(store.annotations || []).filter((item) => item.id !== annotation.id), annotation];
+  store.set({ annotations });
+  persistAnnotations(store.state, annotations);
+  suggestionOrder.push(annotation.id);
+  refreshHistoryButtons();
+  return true;
+}
+
+function undoAny() {
+  if (activeEdit?.armed) {
+    if (undoEdit(activeEdit)) return true;
+    // Nothing typed yet this session: fall through to the suggestion this block carries.
+    const pending = pendingEditFor(activeEdit.data.index);
+    if (pending) {
+      cancelEdit(activeEdit);
+      return removeSuggestion(pending.id);
+    }
+    return false;
+  }
+  const last = [...suggestionOrder].reverse().find((id) => (store.annotations || []).some((item) => item.id === id));
+  return last ? removeSuggestion(last) : false;
+}
+
+function redoAny() {
+  if (activeEdit?.armed && activeEdit.future.length) return redoEdit(activeEdit);
+  return restoreSuggestion();
+}
+
+function refreshHistoryButtons() {
+  const toolbar = elements.toolbar;
+  if (!toolbar) return;
+  // Suggestions restored from the tab's session (a reload) join the stack in
+  // their stored order so undo can take them back too.
+  for (const item of store.annotations || []) {
+    if (item.kind === "edit" && typeof item.after_block === "string" && !suggestionOrder.includes(item.id)) suggestionOrder.push(item.id);
+  }
+  const canUndo = activeEdit?.armed
+    ? activeEdit.history.length > 0 || Boolean(pendingEditFor(activeEdit.data.index))
+    : suggestionOrder.some((id) => (store.annotations || []).some((item) => item.id === id));
+  const canRedo = activeEdit?.armed && activeEdit.future.length > 0 ? true : !activeEdit?.armed && undoneSuggestions.length > 0;
+  toolbar.querySelector('[data-history="undo"]').disabled = !canUndo;
+  toolbar.querySelector('[data-history="redo"]').disabled = !canRedo;
+}
+
 function handleEditorKey(event) {
   if (!activeEdit || !activeEdit.content.contains(event.target)) return;
   const meta = event.metaKey || event.ctrlKey;
   if (meta && !event.altKey && event.key.toLowerCase() === "z") {
     event.preventDefault();
-    if (event.shiftKey) redoEdit(activeEdit);
-    else undoEdit(activeEdit);
+    if (event.shiftKey) redoAny();
+    else undoAny();
+    refreshHistoryButtons();
     return;
   }
   if (event.key === "Escape") {
@@ -811,6 +896,7 @@ function handleBeforeInput(event) {
   const boundary = /^(insertParagraph|insertLineBreak|deleteContent|deleteWord|insertFromPaste)/.test(event.inputType || "") ||
     (event.inputType === "insertText" && /\s/.test(event.data || ""));
   if (!last || boundary) snapshotEdit(activeEdit);
+  requestAnimationFrame(refreshHistoryButtons);
 }
 
 function replayInput(event) {
@@ -855,11 +941,8 @@ function finishEdit(edit) {
   assignHeadingIds(store.document);
   if (touched && !changed) {
     // Typed the block back to the file's text: the suggestion is withdrawn.
-    const remaining = (store.annotations || []).filter((item) => !(item.kind === "edit" && Number(item.block) === Number(edit.data.index)));
-    if (remaining.length !== (store.annotations || []).length) {
-      store.set({ annotations: remaining });
-      persistAnnotations(store.state, remaining);
-    }
+    const pending = pendingEditFor(edit.data.index);
+    if (pending) removeSuggestion(pending.id, { silent: true });
   }
   if (touched && changed) {
     const key = `${store.document.path}:${edit.data.index}`;
@@ -882,8 +965,10 @@ function finishEdit(edit) {
       heading_path: headingPath(Number(edit.data.index)),
     };
     store.emit("suggest", annotation);
+    rememberSuggestion(id);
   }
   applyAnnotations();
+  refreshHistoryButtons();
 }
 
 function buildToolbar() {
@@ -891,6 +976,22 @@ function buildToolbar() {
   toolbar.className = "document-toolbar";
   toolbar.setAttribute("aria-label", "Formatting");
   toolbar.hidden = true;
+  for (const [label, action, title] of [["↶", "undo", "Undo (⌘Z)"], ["↷", "redo", "Redo (⇧⌘Z)"]]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `toolbar-button history ${action}`;
+    button.dataset.history = action;
+    button.textContent = label;
+    button.title = title;
+    button.setAttribute("aria-label", title);
+    button.disabled = true;
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => (action === "undo" ? undoAny() : redoAny()));
+    toolbar.append(button);
+  }
+  const historySeparator = document.createElement("span");
+  historySeparator.className = "toolbar-separator";
+  toolbar.append(historySeparator);
   const controls = [
     ["Paragraph ▾", "paragraph"],
     ["B", "bold"],
