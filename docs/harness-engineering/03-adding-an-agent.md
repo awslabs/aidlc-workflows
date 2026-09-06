@@ -100,7 +100,8 @@ judge novel input against explicit criteria. Pick `templated` only when the
 output is dominantly pattern-following and the methodology is already encoded
 in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
 runbook scaffolding. `balanced` and `templated` both step effort down to
-`medium` (on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all
+`medium` (on Claude Code, Codex, and opencode; on Devin a model is pinned with no
+effort key; on Kiro, Cursor, and Copilot all
 tiers inherit the session model and effort, so the tier changes nothing there),
 and they currently project identically -- only `judgment` inherits the session
 effort. When

@@ -13,6 +13,7 @@ type ReviewerScopeRegistration =
   | "cursor-hooks"
   | "kiro-agent-json"
   | "opencode-plugin"
+  | "devin-hooks"
   | "unsupported";
 
 type HarnessCapabilities = {
@@ -36,7 +37,8 @@ type HarnessCapabilities = {
     | "cursor-rule"
     | "kiro-resources"
     | "kiro-steering"
-    | "opencode-instructions";
+    | "opencode-instructions"
+    | "devin-rule-pointer";
   kiroAgentJson: boolean;
   ideAgentTools: boolean;
   reviewerScopeRegistration: ReviewerScopeRegistration;
@@ -83,6 +85,31 @@ const HARNESS_CAPABILITIES = {
     kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "codex-hooks",
+  },
+  devin: {
+    harnessDir: ".devin",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".devin/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".devin-plugin",
+      wiringFile: "hooks/hooks.json",
+    },
+    // Devin expands no @-imports (measured: `devin rules show AGENTS` prints the
+    // literal @-line), so the method reaches ambient context through the
+    // project-root AGENTS.md, which NAMES the memory files under an explicit
+    // "read these" instruction rather than embedding them. A `.devin/rules/*.md`
+    // with `trigger: always_on` would also load, but is deliberately not shipped:
+    // AGENTS.md is already always-on and carries the same pointer.
+    memoryInclude: "devin-rule-pointer",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "devin-hooks",
   },
   copilot: {
     harnessDir: ".aidlc",
@@ -282,7 +309,16 @@ function validateManifest(
         manifest.harnessDir === ".aidlc" &&
         manifest.skipRunnerGen === true) ||
     (capabilities.memoryInclude === "cursor-rule") !==
-      manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.mdc")
+      manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.mdc") ||
+    // devin: the pointer rides the project-root AGENTS.md and NO rules file
+    // ships. Without this arm "devin-rule-pointer" was the only one of the eight
+    // values with nothing to disagree with, so the capability could drift from
+    // the manifest freely.
+    (capabilities.memoryInclude === "devin-rule-pointer") !==
+      (manifest.onboarding?.projectRoot === true &&
+        manifest.onboarding.dst === "AGENTS.md" &&
+        manifest.harnessDir === ".devin" &&
+        !manifest.harnessFiles.some((file) => file.dst.startsWith("rules/")))
   ) {
     fail(name, "memoryInclude does not agree with manifest-owned include surfaces");
   }

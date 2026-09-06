@@ -1,0 +1,243 @@
+{
+  "_comment": "Devin hook payloads shaped against Devin CLI 3000.6.7 (260a97c8). RE-MEASURED 2026-09-02 by installing a stdin-capture hook in a trusted workspace and running a live non-interactive session, which corrected three things the earlier corpus got wrong: every tool payload carries tool_use_id (previously absent here), NO payload carries cwd (previously present on all of them), and NO payload carries transcript_path — which is why aidlc-fold-usage.ts is not wired on this harness: it exits at its `if (!transcriptPath)` guard on every invocation. Devin's stdin envelope is otherwise Claude Code's — hook_event_name, tool_name, tool_input, tool_response, session_id — which is why the adapter is a name translator and not a payload reshaper (contrast Codex, which reshapes a genuinely foreign envelope). Two Devin-specific facts the corpus encodes: tool names are lowercase snake_case (exec, edit, apply_patch, run_subagent, todo_write), and ask_user_question is NOT a documented matchable tool name, so the picker arrives only on the matcher-free PreToolUse arm and is never named in a hooks.v1.json matcher. Volatile values (ids) are anonymized; every KEY is as delivered.",
+  "sessionStart": {
+    "hook_event_name": "SessionStart",
+    "session_id": "probe-session-0001",
+    "prompt_id": null
+  },
+  "userPromptSubmit": {
+    "hook_event_name": "UserPromptSubmit",
+    "session_id": "probe-session-0001",
+    "prompt_id": "probe-prompt-0001",
+    "prompt": "/aidlc --status"
+  },
+  "preToolUseExec": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exec",
+    "tool_input": {
+      "command": "bun .devin/tools/aidlc-state.ts approve"
+    },
+    "session_id": "probe-session-0001",
+    "prompt_id": "probe-prompt-0001",
+    "tool_use_id": "probe-tooluse-0001"
+  },
+  "preToolUseWrite": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "write",
+    "tool_input": {
+      "path": "aidlc/spaces/default/intents/probe/requirements.md",
+      "content": "x"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0002"
+  },
+  "preToolUseApplyPatch": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "apply_patch",
+    "tool_input": {
+      "path": "src/app.ts",
+      "patch": "@@ -1 +1 @@"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0003"
+  },
+  "preToolUseRead": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "read",
+    "tool_input": {
+      "path": "AGENTS.md"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0004"
+  },
+  "preToolUseGrep": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "grep",
+    "tool_input": {
+      "pattern": "Status",
+      "path": "aidlc/"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0005"
+  },
+  "preToolUseRunSubagent": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "run_subagent",
+    "tool_input": {
+      "profile": "aidlc-developer-agent",
+      "prompt": "implement unit"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0006"
+  },
+  "preToolUseAskUserQuestion": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "ask_user_question",
+    "tool_input": {
+      "question": "Approve this stage?",
+      "options": [
+        "Approve",
+        "Request Changes"
+      ]
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0007"
+  },
+  "postToolUseExec": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "exec",
+    "tool_input": {
+      "command": "bun .devin/tools/aidlc-state.ts approve"
+    },
+    "tool_response": {
+      "stdout": "ok",
+      "stderr": "",
+      "status": 0
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0008"
+  },
+  "postToolUseTodoWrite": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "todo_write",
+    "tool_input": {
+      "status": "in_progress",
+      "activeForm": "Running domain design [domain-design]"
+    },
+    "tool_response": {
+      "ok": true
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0009"
+  },
+  "postToolUseWrite": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "write",
+    "tool_input": {
+      "path": "aidlc/spaces/default/intents/probe/requirements.md",
+      "content": "x"
+    },
+    "tool_response": {
+      "ok": true
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0010"
+  },
+  "postToolUseRunSubagent": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "run_subagent",
+    "tool_input": {
+      "profile": "aidlc-developer-agent",
+      "prompt": "implement unit"
+    },
+    "tool_response": {
+      "summary": "unit implemented"
+    },
+    "agent_type": "aidlc-developer-agent",
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0011"
+  },
+  "preToolUseEdit": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "edit",
+    "tool_input": {
+      "path": "src/app.ts",
+      "old_str": "a",
+      "new_str": "b"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0012"
+  },
+  "postToolUseEdit": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "edit",
+    "tool_input": {
+      "path": "src/app.ts",
+      "old_str": "a",
+      "new_str": "b"
+    },
+    "tool_response": {
+      "success": true,
+      "output": "edited"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0013"
+  },
+  "preToolUseNotebookRead": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "notebook_read",
+    "tool_input": {
+      "path": "analysis.ipynb"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0014"
+  },
+  "preToolUseNotebookEdit": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "notebook_edit",
+    "tool_input": {
+      "path": "analysis.ipynb",
+      "new_source": "print(1)"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0015"
+  },
+  "postToolUseNotebookEdit": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "notebook_edit",
+    "tool_input": {
+      "path": "analysis.ipynb",
+      "new_source": "print(1)"
+    },
+    "tool_response": {
+      "success": true,
+      "output": "cell replaced"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0016"
+  },
+  "preToolUseGlob": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "glob",
+    "tool_input": {
+      "pattern": "**/*.ts",
+      "path": "src/"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0017"
+  },
+  "preToolUseExitPlanMode": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "exit_plan_mode",
+    "tool_input": {
+      "plan": "Implement the unit, then run the sensors."
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0018"
+  },
+  "postToolUseReadSubagent": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "read_subagent",
+    "tool_input": {
+      "subagent_id": "sa-0001"
+    },
+    "tool_response": {
+      "summary": "unit implemented"
+    },
+    "session_id": "probe-session-0001",
+    "tool_use_id": "probe-tooluse-0019"
+  },
+  "postCompaction": {
+    "hook_event_name": "PostCompaction",
+    "session_id": "probe-session-0001",
+    "summary": "Earlier turns summarized."
+  },
+  "stop": {
+    "hook_event_name": "Stop",
+    "session_id": "probe-session-0001"
+  },
+  "sessionEnd": {
+    "hook_event_name": "SessionEnd",
+    "session_id": "probe-session-0001"
+  }
+}

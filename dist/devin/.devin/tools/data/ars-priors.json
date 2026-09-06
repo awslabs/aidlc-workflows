@@ -1,0 +1,71 @@
+{
+  "_comment": "ARS (Autonomy Risk Score) priors — the deterministic data behind `aidlc-graph.ts ars`. Single source of truth for the component weights, band boundaries, stage cost priors, and EV thresholds that previously lived as prose arithmetic in the composer persona; the persona's tables are now documentation of THIS file. All values are UNCALIBRATED priors: the composite is an advisory index for the human at the gate, and nothing deterministic routes on it. evThresholds carries the persona's shipped anchors (cost 1 → any non-zero component justifies, cost 2 → > 0.2, cost 4 → > 0.4); costs 3 and 5 are linear interpolation/extension (0.3, 0.5) pending calibration. Stages with `cost: null` (incident-response, feedback-optimization) have no row in the persona's cost-prior table — the screen reports them as not numerically screenable instead of inventing a cost. `role` marks stages the screen decides without component arithmetic: initialization (always run), core (spine — always), phase-gate (approval-handoff executes iff any other ideation stage executes), structural (decomposition judgment — mechanical default SKIP). `projectTypes` mirrors a stage's compiled `condition:` when that condition restricts the stage to one kind of project (reverse-engineering is brownfield-only): with `--project-type`, a stage outside the given type SKIPs regardless of its component scores, so the screen never contradicts the stage it would have to run.",
+  "schemaVersion": 1,
+  "weights": {
+    "iae": 0.2,
+    "csu": 0.3,
+    "ve": 0.25,
+    "r": 0.15,
+    "ua": 0.1
+  },
+  "componentInfo": {
+    "iae": { "name": "Intent Ambiguity" },
+    "csu": { "name": "Codebase Structural Uncertainty" },
+    "ve": { "name": "Verification Entropy" },
+    "r": { "name": "Risk / Blast Radius" },
+    "ua": { "name": "Unresolved Assumptions" }
+  },
+  "componentBands": {
+    "lowMax": 0.3,
+    "medMax": 0.7
+  },
+  "compositeBands": [
+    { "min": 0, "max": 20, "label": "Near-direct", "shape": "Near-direct implementation" },
+    { "min": 21, "max": 40, "label": "Focused", "shape": "Focused workflow" },
+    { "min": 41, "max": 60, "label": "Standard", "shape": "Standard workflow" },
+    { "min": 61, "max": 80, "label": "Comprehensive", "shape": "Comprehensive workflow" },
+    { "min": 81, "max": 100, "label": "Full ceremony", "shape": "Full ceremony" }
+  ],
+  "evThresholds": {
+    "1": 0,
+    "2": 0.2,
+    "3": 0.3,
+    "4": 0.4,
+    "5": 0.5
+  },
+  "stages": {
+    "workspace-scaffold": { "targets": [], "cost": null, "role": "initialization" },
+    "workspace-detection": { "targets": [], "cost": null, "role": "initialization" },
+    "state-init": { "targets": [], "cost": null, "role": "initialization" },
+    "intent-capture": { "targets": ["iae", "ua"], "cost": 1 },
+    "market-research": { "targets": ["iae"], "cost": 2 },
+    "feasibility": { "targets": ["csu", "r", "ua"], "cost": 3 },
+    "scope-definition": { "targets": ["iae", "ua"], "cost": 1 },
+    "team-formation": { "targets": ["ua"], "cost": 2 },
+    "rough-mockups": { "targets": ["iae", "ua"], "cost": 2 },
+    "approval-handoff": { "targets": [], "cost": 1, "role": "phase-gate" },
+    "reverse-engineering": { "targets": ["csu"], "cost": 4, "projectTypes": ["brownfield"] },
+    "practices-discovery": { "targets": ["ve"], "cost": 2 },
+    "requirements-analysis": { "targets": ["iae", "ua"], "cost": 3 },
+    "user-stories": { "targets": ["iae"], "cost": 3 },
+    "refined-mockups": { "targets": ["iae"], "cost": 3 },
+    "domain-design": { "targets": ["csu", "r"], "cost": 4 },
+    "units-generation": { "targets": [], "cost": 3, "role": "structural" },
+    "contract-design": { "targets": [], "cost": 4, "role": "structural" },
+    "delivery-planning": { "targets": [], "cost": 3, "role": "structural" },
+    "functional-design": { "targets": ["csu"], "cost": 4 },
+    "nfr-requirements": { "targets": ["ve", "r"], "cost": 4 },
+    "nfr-design": { "targets": ["ve", "r"], "cost": 4 },
+    "infrastructure-design": { "targets": ["csu", "r"], "cost": 4 },
+    "code-generation": { "targets": [], "cost": 5, "role": "core" },
+    "build-and-test": { "targets": ["ve"], "cost": 4, "role": "core" },
+    "ci-pipeline": { "targets": ["ve"], "cost": 3 },
+    "deployment-pipeline": { "targets": ["r"], "cost": 5 },
+    "environment-provisioning": { "targets": ["r"], "cost": 5 },
+    "deployment-execution": { "targets": ["r"], "cost": 5 },
+    "observability-setup": { "targets": ["ve"], "cost": 5 },
+    "incident-response": { "targets": ["r"], "cost": null },
+    "performance-validation": { "targets": ["ve", "r"], "cost": 5 },
+    "feedback-optimization": { "targets": ["ve"], "cost": null }
+  }
+}

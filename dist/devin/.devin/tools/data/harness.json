@@ -1,0 +1,8 @@
+{
+  "name": "devin",
+  "harnessDir": ".devin",
+  "rulesSubdir": "rules",
+  "runnerFrontmatterAdditions": [
+    "triggers: [user]"
+  ]
+}

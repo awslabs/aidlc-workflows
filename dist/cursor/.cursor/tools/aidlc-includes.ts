@@ -278,6 +278,28 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
     return written;
   }
 
+  if (harness === ".devin") {
+    // Devin: the project-root AGENTS.md carries the method pointer. Devin has NO
+    // documented file-include mechanism inside a rule (no @-import, no glob), so
+    // the pointer NAMES each method file and the agent reads them — which means
+    // the paths must still track the active space. Same surface and same rewriter
+    // as Copilot; only the harness differs.
+    //
+    // Deliberately NOT .devin/rules/: `devin rules paths` on CLI v3000.4.25
+    // reports only `.windsurf/rules/*.md` as the always-on rule directory, so a
+    // pointer placed in .devin/rules/ may never be read. AGENTS.md is documented
+    // AND observed as Devin's primary rules file on both surfaces (CLI, Desktop),
+    // so the method include lives there and nowhere else.
+    const agentsMdPath = join(projectDir, "AGENTS.md");
+    if (existsSync(agentsMdPath)) {
+      const raw = readSafe(agentsMdPath);
+      if (raw !== null) {
+        repointFile(agentsMdPath, "AGENTS.md", raw, sp, repointClaudeStub, written);
+      }
+    }
+    return written;
+  }
+
   if (harness === ".aidlc") {
     // Two harnesses ship the .aidlc engine dir; both include surfaces are
     // probed (each rewriter no-ops when its surface carries no method

@@ -110,6 +110,20 @@ export type TierProjection = {
    *  accounts reject every named model), so a pinned id would hard-fail
    *  installs on lower plans; agents inherit the session model instead. */
   cursor: { model: string | null };
+  /** Devin subagent profile frontmatter: `model:` (a Devin alias - opus,
+   *  sonnet, swe, codex, gemini). Model-only: Devin's documented profile
+   *  frontmatter is name/description/model/allowed-tools/max-nesting, with no
+   *  effort key.
+   *
+   *  NOTE the type: `string`, NOT `string | null`, and it is the only column
+   *  where null is forbidden. Every other harness treats an omitted `model:` as
+   *  "inherit the session model", which is why they can all ship null. Devin
+   *  does the OPPOSITE - its docs state a profile whose model is absent falls
+   *  back to the DEFAULT SUBAGENT MODEL, "not the parent's model", routed to
+   *  SWE-1.6 by default. Omitting the key there would silently downshift every
+   *  judgment persona, so the type makes that structurally unrepresentable
+   *  rather than leaving it to a reviewer to notice. */
+  devin: { model: string };
 };
 
 export type Harness = keyof TierProjection;
@@ -126,6 +140,11 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
+    // Devin cannot express "inherit": there is no sentinel, and omission means
+    // the default subagent model. `opus` is Devin's own top alias, so this is
+    // the closest available statement of "do not downshift judgment work" -
+    // an alias, not a vendor model id, so it survives catalogue churn.
+    devin: { model: "opus" },
   },
   balanced: {
     // Effort pinned to medium (was: inherit the session effort). Balanced is
@@ -139,6 +158,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
     copilot: { model: null },
+    devin: { model: "sonnet" },
   },
   templated: {
     // The pattern-following tier. It currently shares balanced's smaller-model,
@@ -149,6 +169,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
     copilot: { model: null },
     cursor: { model: null },
+    devin: { model: "sonnet" },
   },
 };
 
