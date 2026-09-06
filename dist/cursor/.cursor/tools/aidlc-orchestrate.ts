@@ -8600,12 +8600,18 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         "revising",
       );
     }
+    const message = revalidatingOpenGate
+      ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
+      : `Recorded ${flags.result} for "${slug}".`;
     emit(
-      printDirective(
-        revalidatingOpenGate
-          ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
-          : `Recorded ${flags.result} for "${slug}".`,
-      ),
+      browserFeedback
+        ? {
+          ...printDirective(
+            `${message} The human's browser review feedback is in review_feedback below: address every remark by its aN id (the same ids the Feedback addressed list must answer), then revise.`,
+          ),
+          review_feedback: browserFeedback,
+        }
+        : printDirective(message),
     );
     return;
   }
@@ -8800,12 +8806,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     kind: "done",
     reason:
       `Committed ${committed.join(" + ")} for "${slug}" (scope: ${scope}). ` +
-      "State advanced; run next to continue." +
-      (browserFeedback
-        ? " The human's browser review feedback is in review_feedback below: address every remark by its aN id (the same ids the Feedback addressed list must answer), then revise."
-        : ""),
+      "State advanced; run next to continue.",
     ...(approvalNotes ? { approval_notes: approvalNotes } : {}),
-    ...(browserFeedback ? { review_feedback: browserFeedback } : {}),
   });
 }
 

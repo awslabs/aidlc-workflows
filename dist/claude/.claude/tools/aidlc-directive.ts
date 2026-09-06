@@ -516,6 +516,8 @@ export type Directive = DirectivePayload & {
   review_ui?: ReviewUiDirective;
   /** Browser feedback carried forward after an approved report. */
   approval_notes?: string;
+  /** Browser remarks a rejected report hands the conductor to address (one `### <kind> · aN` heading each). */
+  review_feedback?: string;
 };
 
 export type ValidationResult =
@@ -651,6 +653,7 @@ const NARRATION_FIELD = "narration" as const;
 const STAGE_VALIDITY_FIELD = "stage_validity" as const;
 const REVIEW_UI_FIELD = "review_ui" as const;
 const APPROVAL_NOTES_FIELD = "approval_notes" as const;
+const REVIEW_FEEDBACK_FIELD = "review_feedback" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the
 // record of what is kind-SPECIFIC and this one helper adds what is universal.
@@ -661,6 +664,7 @@ function withNarration(fields: readonly string[]): readonly string[] {
     STAGE_VALIDITY_FIELD,
     REVIEW_UI_FIELD,
     APPROVAL_NOTES_FIELD,
+    REVIEW_FEEDBACK_FIELD,
   ];
 }
 
@@ -727,6 +731,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   checkOptionalStageValidity(o, kind, errors);
   checkOptionalReviewUi(o, kind, errors);
   checkOptionalString(o, APPROVAL_NOTES_FIELD, kind, errors);
+  checkOptionalString(o, REVIEW_FEEDBACK_FIELD, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.

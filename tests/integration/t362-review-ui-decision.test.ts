@@ -285,8 +285,14 @@ describe("t362 review UI decision", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const output = JSON.parse(new TextDecoder().decode(result.stdout).trim()) as { kind: string; message?: string };
+    const output = JSON.parse(new TextDecoder().decode(result.stdout).trim()) as { kind: string; message?: string; review_feedback?: string };
     expect(output.kind, output.message).not.toBe("error");
+    // The conductor never hunts for feedback-NNN.md: a rejected report hands the
+    // browser remarks back in the directive it actually returns (the gate-result
+    // `print`, not the `done` of a completed stage).
+    expect(output.review_feedback).toContain("### feedback-001.md");
+    expect(output.review_feedback).toContain("Browser feedback.");
+    expect(output.message).toContain("review_feedback");
     const consumed = JSON.parse(readFileSync(join(stageDir, ".review-ui", "consumed.json"), "utf-8"));
     expect(consumed.entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ file: "decision-001.json", result: "decision-applied" }),
