@@ -1,5 +1,4 @@
-Fluent UI System Icons
-https://github.com/microsoft/fluentui-system-icons
+Fluent UI System Icons (github.com/microsoft/fluentui-system-icons)
 
 MIT License
 
