@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import {
+  backgroundLifecycleCommand,
   BLOCKED_STATE_TRANSITIONS,
   DELEGATED_STATE_MUTATIONS,
   delegatedLifecycleCommand,
@@ -208,6 +209,14 @@ describe("t242 state-transition ownership guard", () => {
       [
         "bun .claude/tools/aidlc-orchestrate.ts --project-dir /tmp next --resume",
         "aidlc-orchestrate.ts next",
+      ],
+      [
+        "bun .claude/tools/aidlc-orchestrate.ts --aidlc-attempt-id retry-1 --project-dir /tmp next",
+        "aidlc-orchestrate.ts next",
+      ],
+      [
+        'sh -c "bun .claude/tools/aidlc-orchestrate.ts --aidlc-attempt-id retry-2 --project-dir /tmp continue steering-token"',
+        "aidlc-orchestrate.ts continue",
       ],
       [
         "bun .claude/tools/aidlc-state.ts --project-dir /tmp unpark",
@@ -431,6 +440,38 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(conductor.status).toBe(0);
     expect(conductor.stderr).toBe("");
+  });
+
+  test("delegated agents retain benign Bun eval validation", () => {
+    const command =
+      `bun -e "import { loadAgents } from './core/tools/aidlc-lib.ts'; ` +
+      `console.log(loadAgents().length)"`;
+    expect(delegatedLifecycleCommand(command)).toBeNull();
+    const delegated = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        agent_type: "aidlc-developer-agent",
+        tool_input: { command },
+      }),
+      encoding: "utf-8",
+    });
+    expect(delegated.status).toBe(0);
+    expect(delegated.stderr).toBe("");
+  });
+
+  test("background lifecycle classification fails closed on Bun eval and print", () => {
+    for (const command of [
+      `bun -e 'Bun.spawnSync(["bun",".claude/tools/aidlc-orchestrate.ts","next"])'`,
+      `bun --eval='Bun.spawnSync(["bun",".claude/tools/aidlc-orchestrate.ts","next"])'`,
+      `bun -p 'Bun.spawnSync(["bun",".claude/tools/aidlc-orchestrate.ts","next"])'`,
+      `bun run --print 'Bun.spawnSync(["bun",".claude/tools/aidlc-orchestrate.ts","next"])'`,
+    ]) {
+      expect(delegatedLifecycleCommand(command), command).toBeNull();
+      expect(backgroundLifecycleCommand(command), command).toBe(
+        "bun eval/print beyond guard inspection",
+      );
+    }
   });
 
   test("the hook blocks delegated lifecycle commands behind wrappers and literal variables", () => {

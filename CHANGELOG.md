@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-09-04
+
+Cursor background reviews no longer enter the foreground workflow's advisory Stop-hook continuation loop, so they cannot reset or consume its single-use steering cursor. **Upgrade:** re-copy `dist/cursor/` into the project; active workflows need no state migration.
+
+* Cursor `is_background_agent` stop events remain silent and workflow lifecycle/routing commands are denied through direct, nested-shell, variable-indirection, and Bun eval/print forms, preserving the foreground conversation's already-issued continuation across concurrent review activity and repeated background retries while leaving read-only utilities available.
+* Foreground continuation tokens retain the existing atomic stale, duplicate, wrong-project, wrong-state, and replay rejection behavior; concurrent uses of one authorized token still have exactly one winner.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.

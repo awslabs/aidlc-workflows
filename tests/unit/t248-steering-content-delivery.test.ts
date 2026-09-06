@@ -115,6 +115,39 @@ function invoke(
   };
 }
 
+async function invokeInstalledAsync(
+  proj: string,
+  subcommand: "next" | "continue",
+  args: string[],
+): Promise<{ directive: WireDirective; bytes: number }> {
+  const proc = Bun.spawn(
+    [
+      BUN,
+      join(proj, ".claude", "tools", "aidlc-orchestrate.ts"),
+      subcommand,
+      ...args,
+      "--project-dir",
+      proj,
+    ],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env },
+    },
+  );
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  expect(exitCode, stderr).toBe(0);
+  const line = stdout.trim();
+  return {
+    directive: JSON.parse(line) as WireDirective,
+    bytes: Buffer.byteLength(line, "utf-8"),
+  };
+}
+
 function drive(
   proj: string,
   args = ["--scope", "mvp", "--stage", "intent-capture"],
@@ -518,6 +551,67 @@ describe("t248 deterministic steering delivery", () => {
     ) as { cursor_harness?: string; owner_session?: string };
     expect(marker.cursor_harness).toBe("claude");
     expect(marker.owner_session).toStartWith("sessionless:");
+  });
+
+  test("concurrent continuation has one winner and rejects every replay", async () => {
+    const proj = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
+    projects.push(proj);
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      Array.from(
+        { length: 260 },
+        (_, i) => `## Concurrent ${i}\n\n${"x".repeat(320)}\n\n`,
+      ).join(""),
+      "utf-8",
+    );
+    const first = invoke(proj, "next", []).directive;
+    expect(first.kind).toBe("load-steering");
+    expect(first.parts ?? 0).toBeGreaterThan(3);
+    const token = first.continue_token ?? "";
+
+    const raced = await Promise.all([
+      invokeInstalledAsync(proj, "continue", [token]),
+      invokeInstalledAsync(proj, "continue", [token]),
+    ]);
+    const winners = raced.filter(({ directive }) => directive.kind !== "error");
+    const rejected = raced.filter(({ directive }) => directive.kind === "error");
+    expect(winners).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.directive.message).toContain("no longer current");
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const replay = invoke(proj, "continue", [token]).directive;
+      expect(replay.kind).toBe("error");
+      expect(replay.message).toContain("no longer current");
+    }
+  });
+
+  test("a token from another project cannot move the local cursor", () => {
+    const source = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
+    const target = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
+    projects.push(source, target);
+    for (const proj of [source, target]) {
+      writeFileSync(
+        join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+        Array.from(
+          { length: 180 },
+          (_, i) => `## Wrong project ${i}\n\n${"x".repeat(320)}\n\n`,
+        ).join(""),
+        "utf-8",
+      );
+    }
+    const foreign = invoke(source, "next", []).directive.continue_token ?? "";
+    const local = invoke(target, "next", []).directive;
+    const markerPath = join(seededRecordDir(target), ".aidlc-active-directive.json");
+    const before = readFileSync(markerPath, "utf-8");
+
+    const rejected = invoke(target, "continue", [foreign]).directive;
+    expect(rejected.kind).toBe("error");
+    expect(rejected.message).toContain("Invalid steering continuation token");
+    expect(readFileSync(markerPath, "utf-8")).toBe(before);
+
+    const accepted = invoke(target, "continue", [local.continue_token ?? ""]).directive;
+    expect(accepted.kind).not.toBe("error");
   });
 
   test("stage validity advisory survives every steering continuation", () => {
