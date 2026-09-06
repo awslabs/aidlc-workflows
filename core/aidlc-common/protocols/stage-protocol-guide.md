@@ -65,6 +65,15 @@ Standard and Comprehensive depth write the full shape above.
 - Under **Related decisions** (Standard/Comprehensive), quote relevant prior `[Answer]:` values or record content and cite project-relative file paths. Leave the scaffold's `None found` when there is no grounded related decision.
 - An optional `<figure>` may clarify architecture or flow. Give it an accessible name and a useful `<figcaption>`; it never replaces the required prose.
 
+## Follow-ups
+
+A follow-up (contradiction, ambiguity, re-ask) stays in the browser: append its
+`## Q<n>.` section to the questions file, then append one matching
+`<section data-aidlc-question="Q<n>" id="Q<n>">` to the guide in the same shape
+(same depth, letters from the file, `data-aidlc-recommend` filled), leaving
+earlier sections untouched. Never re-run the scaffold — it discards your prose.
+Run the check again and end the turn as Step 3d describes.
+
 ## Required check
 
 Before pointing the human to the browser, run:

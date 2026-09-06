@@ -572,6 +572,7 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
 - Load `stage-protocol-guide.md`; run `bun .aidlc/tools/aidlc-html.ts scaffold --guide <stage-dir>/<slug>-questions.md --out <stage-dir>/<slug>-questions-guide.html` (add `--depth minimal` at Minimal depth), fill the scaffold's prose and every `data-aidlc-recommend`, run the module's check, then say: "Open the review UI (`**Browser:** <review_ui.url>` or origin fallback) → Questions and save your answers there; I'll continue as soon as they land." On Claude Code: END TURN — the Stop hook holds the turn until the human clicks **Save**, then resumes you with the apply command; the human types nothing.
 - On every other harness the Stop seam cannot hold a turn. There, before ending the turn, run `bun .aidlc/tools/aidlc-log.ts answers-wait --stage <slug> --questions-file <path> [--unit <unit>]`: it blocks until the answers are saved (exit 0) or nine minutes pass (exit 3 — call it again). Ask for a shell-tool timeout of at least ten minutes when you invoke it.
 - Once the answers have landed, run `bun .aidlc/tools/aidlc-log.ts answers-apply --stage <slug> --questions-file <path> [--unit <unit>]`, then continue exactly as Step 3b: read the file, present the consolidated summary, and run the same **Looks correct / Request changes** checkpoint. A human who types **done** anyway is simply early; apply and continue the same way.
+- **The browser is the mode for the rest of the round.** Every follow-up — a contradiction to resolve, an ambiguity to probe, a re-ask after **Request changes** at the summary — goes to the browser the same way the first batch did: append the new `## Q<n>.` section (with its options and a blank `[Answer]:`) to the questions file, append the matching `<section data-aidlc-question="Q<n>">` to the guide (see the guide module's *Follow-ups*), run the module's check, say "I've added a follow-up in the browser — answer it there and I'll continue", and END TURN (or `answers-wait` off Claude Code). NEVER present a terminal structured question for a question the browser is showing: the browser renders the file, so a terminal widget and the browser form become two answers to one question, and while the widget is open the Stop hook cannot resume you when the human saves in the browser — the round deadlocks with the human's answer already on disk. The only way the round leaves browser mode is the human saying so in the terminal ("let's continue here", an answer typed in chat); then finish as **Guide me** and never switch back on your own.
 
 **Step 3c: If "Chat" (freeform mode):**
 - Engage in open-ended conversation about the stage's topic
@@ -642,7 +643,7 @@ After all answers are collected, cross-check the full answer set for:
 When contradictions are detected:
 1. Present the specific contradictory answers side by side
 2. Explain why they conflict
-3. Ask a targeted follow-up question to resolve the contradiction
+3. Ask a targeted follow-up question to resolve the contradiction — in the round's current mode: a browser round gets a new `Q<n>` in the file and the guide (Step 3d), never a terminal widget
 4. Do NOT proceed until contradictions are resolved
 
 ### Overconfidence prevention
