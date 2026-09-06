@@ -323,7 +323,7 @@ function headerActions(view, stage) {
   if (view.kind === "artifact" && isLiveGate(stage)) return gateActions();
   if (view.kind === "questions" && store.questionsState === "submitted" && isActiveIntent()) return "";
   if (view.kind === "questions" && isLiveQuestions(stage)) {
-    return `${actionButton("Edit the file instead", "terminal-edit")}${actionButton("Save answers — the agent continues", "save-answers", true)}`;
+    return `${actionButton("Edit the file instead", "terminal-edit")}${actionButton("Save", "save-answers", true)}`;
   }
   if (view.kind === "questions") {
     return `${actionButton("Reopen round (terminal)", "terminal-reopen")}${artifact ? actionButton(`Open ${basename(artifact.path)}`, "open-artifact", true) : ""}`;

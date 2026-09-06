@@ -43,7 +43,7 @@ The agent creates (or opens) the questions file and you edit it directly. Best w
 
 ### Guide me in the browser
 
-With `AIDLC_REVIEW_UI=1` this is the automatic mode: the agent writes an HTML explainer with trade-offs and recommendations instead of asking how you want to answer. The browser renders each question's explainer directly above its answer card; **Save answers — the agent continues** writes `answers-NNN.json`, and the Stop hook holds the conductor's turn for that click on Claude Code while other harnesses can wait on `answers-wait`. `answers-apply` then folds the submission into the canonical questions file before the ordinary consolidated-summary confirmation. The terminal modes remain complete and write the same file. See [Review in the Browser](18-review-in-the-browser.md#guide-me-in-the-browser).
+With `AIDLC_REVIEW_UI=1` this is the automatic mode: the agent writes an HTML explainer with trade-offs and recommendations instead of asking how you want to answer. The browser renders each question's explainer directly above its answer card; **Save** writes `answers-NNN.json`, and the Stop hook holds the conductor's turn for that click on Claude Code while other harnesses can wait on `answers-wait`. `answers-apply` then folds the submission into the canonical questions file before the ordinary consolidated-summary confirmation. The terminal modes remain complete and write the same file. See [Review in the Browser](18-review-in-the-browser.md#guide-me-in-the-browser).
 
 ### Chat
 

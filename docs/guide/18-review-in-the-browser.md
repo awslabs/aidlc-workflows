@@ -246,8 +246,7 @@ The palette can also hide or show **Workflow** and open **Threads** or
 ## Answer questions in the browser
 
 When the current stage publishes a valid `*-questions-guide.html`, the workflow
-panel selects **Questions** and the header shows **Save answers — the agent
-continues**. Each question appears in one reading column: its agent-authored
+panel selects **Questions** and the header shows **Save**. Each question appears in one reading column: its agent-authored
 explainer — **Why now**, optional figure, trade-offs, **Recommendation**, and
 **Related decisions** — is immediately above its answer card. The recommended
 option is preselected and marked **Recommended**; multi-select, **Other** with
@@ -256,8 +255,7 @@ and an optional **Note for the agent** follow the question file's schema.
 Inline `code`, **bold**, and _italic_ in option and explainer text render as
 such. Your draft answers survive a reload of the tab until you save.
 
-The browser never edits `*-questions.md`. **Save answers — the agent continues**
-writes `answers-NNN.json` against the questions-file digest; the header then
+The browser never edits `*-questions.md`. **Save** writes `answers-NNN.json` against the questions-file digest; the header then
 reads **Answers sent** and the form locks while the agent applies them. If the
 file changed while the form was open, the save is refused with **Questions
 changed — reload**. On Claude Code the Stop hook holds the conductor's turn until the file

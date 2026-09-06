@@ -52,7 +52,7 @@ describe("t353 — review UI browser questions assets", () => {
     expect(questions).not.toContain("send **done**");
     // The explainer sits above each answer card; the header carries the save action.
     const shell = asset("shell.js");
-    expect(shell).toContain("Save answers — the agent continues");
+    expect(shell).toContain('actionButton("Save", "save-answers", true)');
 
     const css = asset("questions.css");
     expect(css).toMatch(/\.qblock\b/);

@@ -132,8 +132,7 @@ pre-answer. The next matching `report` consumes it as `decision-applied`.
 ### Browser answers were refused as stale
 
 The questions file changed after the form loaded. Reload the Questions view,
-review the current options, and choose **Save answers — the agent continues**
-again. A successful save writes `answers-NNN.json`; if a harness cannot hold the
+review the current options, and choose **Save** again. A successful save writes `answers-NNN.json`; if a harness cannot hold the
 turn or the hold expired, use `aidlc-log.ts answers-wait` followed by
 `answers-apply`. The canonical questions file and the terminal interaction modes
 remain the fallback.
