@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-09-05
+
+Plan Approval now retains answers and fingerprints under nested Markdown headings. **Upgrade:** replace the complete `dist/<harness>/` tree; no workflow state migration is required.
+
+* Explanatory subheadings no longer cause misleading missing-fingerprint or missing-answer errors during Plan Approval (#1022).
+* Unit merge evidence uses the same latest-section approval readers as the runtime guard.
+* Git source snapshots preserve blob headers across buffer refills, preventing valid worktree creation from failing at particular content sizes.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.

@@ -219,7 +219,9 @@ bun .cursor/tools/aidlc-testing-posture.ts fingerprint --stage-level
 
 Write the returned hash into the Plan Approval section as
 `[Approval Fingerprint]: sha256:<hash>`, followed by both options below and a
-blank `[Answer]:` tag:
+blank `[Answer]:` tag. Nested headings remain inside this question; a heading
+of the same or a shallower level ends its section. Keep both tags inside the
+latest Plan Approval section (including when using a numbered question heading):
 
 - "Approve Plan" — proceed to code generation
 - "Request Changes" — revise the plan

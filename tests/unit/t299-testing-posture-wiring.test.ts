@@ -24,6 +24,7 @@ import {
   parseTestingContract,
   questionsFileApprovalFingerprint,
   questionsFileApproved,
+  questionsFileHasPendingPlanApproval,
   renderTestingContract,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
@@ -802,5 +803,36 @@ describe("t299 (5) authored consumers use the same contract", () => {
         "stage-protocol-construction.md` — load on the first Construction directive of the session and on every `invoke-swarm`",
       );
     }
+  });
+});
+
+
+describe("Plan Approval Markdown section boundaries", () => {
+  const fingerprint = `sha256:${"a".repeat(64)}`;
+  for (const level of [1, 2, 3, 4, 5]) {
+    for (const label of ["Plan Approval", "Q1: Plan Approval", "Q1\n\n**Plan Approval**"]) {
+      test(`level ${level} ${label} retains tags under nested headings`, () => {
+        const body = `${"#".repeat(level)} ${label}\n${"#".repeat(level + 1)} Why re-approval is needed\n[Approval Fingerprint]: ${fingerprint}\n${"#".repeat(level + 1)} Options\n[Answer]: A. Approve Plan\n`;
+        expect(questionsFileApprovalFingerprint(body)).toBe(fingerprint);
+        expect(questionsFileApproved(body)).toBe(true);
+        expect(questionsFileHasPendingPlanApproval(body)).toBe(false);
+        const pending = body.replace("[Answer]: A. Approve Plan", "[Answer]: ___");
+        expect(questionsFileApproved(pending)).toBe(false);
+        expect(questionsFileHasPendingPlanApproval(pending)).toBe(true);
+      });
+    }
+  }
+  test("same-level and shallower sections cannot supply approval tags", () => {
+    for (const closing of ["# Other section", "## Other question"]) {
+      const body = `## Plan Approval\n### Notes\n${closing}\n[Approval Fingerprint]: ${fingerprint}\n[Answer]: A. Approve Plan\n`;
+      expect(questionsFileApprovalFingerprint(body)).toBe(null);
+      expect(questionsFileApproved(body)).toBe(false);
+    }
+  });
+  test("a later unanswered approval supersedes an earlier approval with nested content", () => {
+    const body = `## Plan Approval\n### Options\n[Approval Fingerprint]: ${fingerprint}\n[Answer]: A. Approve Plan\n## Q2\nPlan Approval\n### Updated plan\n[Answer]: ___\n`;
+    expect(questionsFileApprovalFingerprint(body)).toBe(null);
+    expect(questionsFileApproved(body)).toBe(false);
+    expect(questionsFileHasPendingPlanApproval(body)).toBe(true);
   });
 });

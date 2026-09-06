@@ -858,6 +858,7 @@ function latestPlanApproval(body: string): {
   fingerprint: string | null;
 } {
   let inPlanApproval = false;
+  let questionHeadingLevel = 0;
   let awaitingNumberedQuestionText = false;
   let foundPlanApproval = false;
   let latestAnswer: string | null = null;
@@ -866,6 +867,11 @@ function latestPlanApproval(body: string): {
   for (const line of visibleMarkdownLines(body)) {
     const heading = line.match(MARKDOWN_HEADING_RE);
     if (heading) {
+      const headingLevel = heading[1].length;
+      // A Markdown section includes its subsections; only a sibling or ancestor
+      // heading ends the active question. Preserve tags below explanatory headings.
+      if (inPlanApproval && headingLevel > questionHeadingLevel) continue;
+      questionHeadingLevel = headingLevel;
       const headingText = heading[2].trim();
       inPlanApproval = isPlanApprovalLabel(
         headingText.replace(QUESTION_PREFIX_RE, ""),
