@@ -323,7 +323,7 @@ function headerActions(view, stage) {
   if (view.kind === "artifact" && isLiveGate(stage)) return gateActions();
   if (view.kind === "questions" && store.questionsState === "submitted" && isActiveIntent()) return "";
   if (view.kind === "questions" && isLiveQuestions(stage)) {
-    return `${actionButton("Edit the file instead", "terminal-edit")}${actionButton("Save", "save-answers", true)}`;
+    return actionButton("Save", "save-answers", true);
   }
   if (view.kind === "questions") {
     return `${actionButton("Reopen round (terminal)", "terminal-reopen")}${artifact ? actionButton(`Open ${basename(artifact.path)}`, "open-artifact", true) : ""}`;
@@ -498,7 +498,6 @@ function handleHeaderAction(action) {
   const stage = stageForView();
   if (action === "approve" || action === "request-changes") store.emit("decide", action);
   else if (action === "save-answers") store.emit("save-answers");
-  else if (action === "terminal-edit") store.emit("notice", { message: `Edit ${basename(stage?.questions?.file || "the questions file")} in the terminal; the browser is only a mirror.`, kind: "info" });
   else if (action === "terminal-reopen") store.emit("notice", { message: "Reopen the question round from the terminal so the canonical questions file stays authoritative.", kind: "info" });
   else if (action === "open-artifact") artifactView(stage, firstArtifact(stage, false));
   else if (action === "open-questions") questionsView(stage);

@@ -53,6 +53,8 @@ describe("t353 — review UI browser questions assets", () => {
     // The explainer sits above each answer card; the header carries the save action.
     const shell = asset("shell.js");
     expect(shell).toContain('actionButton("Save", "save-answers", true)');
+    // A question round has one action: the browser is the form, not a file editor.
+    expect(shell).not.toContain("terminal-edit");
 
     const css = asset("questions.css");
     expect(css).toMatch(/\.qblock\b/);
