@@ -131,6 +131,7 @@ import {
   SNAPSHOT_STAGE_PHASE,
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
+import { parseDirectiveOutput } from "../harness/directive-output.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { driveAidlc, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
 import { resolveWinNode } from "../harness/tui-drive.ts";
@@ -427,13 +428,11 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
           .map((tr) => tr.resultText)
           .find((text) => text.includes(`"lead_agent":"${CUSTOM_AGENT_SLUG}"`));
         expect(directiveText).toBeDefined();
-        const directive = JSON.parse((directiveText as string).trim()) as {
-          kind?: string;
-          stage?: string;
-          lead_agent?: string;
-          consumes?: string[];
-        };
+        const { directive } = parseDirectiveOutput(directiveText as string);
         expect(directive.kind).toBe("run-stage");
+        if (directive.kind !== "run-stage") {
+          throw new Error(`Expected run-stage directive, got ${directive.kind}`);
+        }
         expect(directive.stage).toBe(SNAPSHOT_STAGE_SLUG);
         expect(directive.lead_agent).toBe(CUSTOM_AGENT_SLUG);
       } finally {
