@@ -191,7 +191,7 @@ function renderIntro(count, answered) {
     lead.textContent = "The reasoning stays with the answers so anyone can see why each decision was made. To change one, reopen the round from the terminal.";
   } else {
     const amount = NUMBER_WORDS[count] || String(count);
-    lead.textContent = `${amount} decisions in this round. Read the reasoning, then answer — recommendations are pre-selected; you can also edit the questions file in the terminal.`;
+    lead.textContent = `${amount} decisions in this round. Read the reasoning, then answer — recommendations are pre-selected.`;
   }
   intro.append(heading, lead);
   return intro;

@@ -228,7 +228,7 @@ function viewState(view, stage) {
     if (isLiveQuestions(stage)) {
       const total = stage.questions?.total || 0;
       const open = Math.max(0, total - (stage.questions?.answered || 0)) || total;
-      return { label: `${open} ${open === 1 ? "question" : "questions"} for you`, detail: "Answer here or edit the questions file in the terminal.", tone: "needs" };
+      return { label: `${open} ${open === 1 ? "question" : "questions"} for you`, detail: "", tone: "needs" };
     }
     return { label: `Answered${time ? ` · ${time}` : ""}`, detail: "Saved in the record; the terminal file is authoritative.", tone: "ok" };
   }
@@ -362,7 +362,7 @@ function renderHeader() {
       <span class="header-path">${escapeHtml(space)} <i>›</i> ${escapeHtml(intent)} <i>›</i> ${escapeHtml(phase)} <i>›</i> ${escapeHtml(stageName)}</span>
       ${renderPicker(view, stage, title)}
     </nav>
-    <div class="header-state ${state.tone}"><b>${escapeHtml(state.label)}</b><small>${escapeHtml(state.detail)}</small></div>
+    <div class="header-state ${state.tone}"><b>${escapeHtml(state.label)}</b>${state.detail ? `<small>${escapeHtml(state.detail)}</small>` : ""}</div>
     <div class="header-tools">
       <span class="connection ${store.connected ? "connected" : "disconnected"}" title="${escapeHtml(connectedTitle)}" aria-label="${escapeHtml(connectedTitle)}"><i></i></span>
       ${panelButtons(view)}
