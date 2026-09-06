@@ -393,8 +393,8 @@ function applyAnnotations() {
     ...annotations.filter((annotation) => !edits.includes(annotation)).map((annotation) => ({ item: annotation, sent: false })),
     ...remarks.map((remark) => ({ item: remark, sent: true })),
   ];
-  // Bunsho's gutter shows one bubble per line with the number of threads on
-  // it, not a running index — so a block with three remarks reads "3".
+  // The gutter shows one bubble per line with the number of threads on it,
+  // not a running index — so a block with three remarks reads "3".
   const perBlock = new Map();
   for (const { item, sent } of marks) {
     const kind = annotationKind(item.kind);
@@ -782,7 +782,7 @@ function cancelEdit(edit) {
   edit.content.blur();
 }
 
-// One undo model, as in Bunsho: while you are typing in a block, undo steps
+// One undo model, like a document editor's: while you are typing in a block, undo steps
 // through your keystrokes; once you have clicked away, undo takes back the
 // whole suggestion (and redo brings it back), most recent first. The pill's
 // Undo and the card's Undo edit feed the same stack, so ⇧⌘Z reverses them.
@@ -1032,8 +1032,8 @@ function buildToolbar() {
   return toolbar;
 }
 
-// The toolbar keeps its row whenever the document is editable, like Bunsho's:
-// showing it on focus would shift the text under a reader mid-selection.
+// The toolbar keeps its row whenever the document is editable: showing it on
+// focus would shift the text under a reader mid-selection.
 function showToolbar(block, source) {
   const label = blockLabel(block, source);
   elements.toolbar.querySelector(".toolbar-context").textContent =

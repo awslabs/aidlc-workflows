@@ -11,7 +11,7 @@ The moment it's best at: Returning to a busy workspace and clearing gates, quest
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>v9 · AI-DLC Workflows — Bunsho shell</title>
+<title>v9 · AI-DLC Workflows — the reference editor shell</title>
 <style>
 :root{--ink:#1a202c;--muted:#8792a2;--faint:#b6bfcc;--line:#eef2f7;--line2:#dfe5ed;--panel:#f7f9fc;--accent:#2d7ff9;--soft:#edf4ff;--amber:#f59e0b;--amber-soft:rgba(245,158,11,.15);--violet:#7c3aed;--violet-soft:#f4efff;--rose:#e11d48;--rose-soft:#fff0f3;--green:#16a34a;--green-soft:#eefbf2;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:"SFMono-Regular",Consolas,monospace}
 *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{color:var(--ink);background:#fff;font:15px/1.55 var(--font)}button,input{font:inherit;color:inherit}button{border:0;background:none;cursor:pointer}.top{height:54px;display:grid;grid-template-columns:320px minmax(0,1fr) auto auto;align-items:center;border-bottom:1px solid var(--line2);background:#fff;position:relative;z-index:5}.brand{height:54px;padding:0 18px;display:flex;align-items:center;gap:10px;border-right:1px solid var(--line2);font-weight:720;letter-spacing:-.01em}.brandmark{width:26px;height:26px;border-radius:8px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:12px}.search{width:min(460px,80%);height:34px;margin-left:22px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);display:flex;align-items:center;gap:9px;padding:0 11px;color:var(--muted);font-size:13px}.search b{font-size:18px;font-weight:400;line-height:1}.filter{height:34px;border:1px solid var(--line2);border-radius:8px;padding:0 12px;font-size:13px;background:#fff}.live{padding:0 18px 0 13px;color:var(--muted);font-size:12px;white-space:nowrap}.live:before{content:"";display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%;background:var(--green)}
@@ -277,8 +277,8 @@ body[data-show="scope-classic"] .scope-screen{display:grid}
 .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:-1px}
 .legend .a{background:var(--accent)}.legend .g{background:var(--green)}.legend .m{border:1.5px solid var(--faint);width:6px;height:6px}
 
-/* ================= v9: Bunsho shell ================= */
-/* app rail (Bunsho: 53px, monochrome, app-level destinations only) + a toggleable workflow panel + header row per screen */
+/* ================= v9: the reference editor shell ================= */
+/* app rail (the reference editor: 53px, monochrome, app-level destinations only) + a toggleable workflow panel + header row per screen */
 .screen{height:100vh}
 .review-screen,.question-screen,.editing-screen,.past-screen,.answered-screen,.scope-screen{grid-template-columns:56px 300px minmax(0,1fr)}
 body[data-show="collapsed"] .review-screen{grid-template-columns:56px minmax(0,1fr)}
@@ -296,7 +296,7 @@ body[data-show="collapsed"] .review-screen .side{display:none}
 .side .side-tabs{display:none}
 .side .ctx{padding-top:14px}
 .right{grid-template-rows:52px minmax(0,1fr)}
-/* header row = Bunsho's document header: title, then connection · people · panel icons · primary */
+/* header row = the reference editor's document header: title, then connection · people · panel icons · primary */
 .ctxbar{height:52px;gap:12px;padding:0 14px 0 18px}
 .ctxbar .crumbs{font-size:12px;color:var(--muted);flex-direction:column;align-items:flex-start;gap:0;line-height:1.25}
 .ctxbar .crumbs .path{display:flex;gap:6px;align-items:center;white-space:nowrap}
@@ -319,13 +319,13 @@ body[data-show="collapsed"] .review-screen .side{display:none}
 .hdr-tools .btn{margin-left:6px}
 .hdr-tools .link{color:var(--ink);font-size:12.5px;padding:0 6px}
 .hdr-tools .link:hover{color:var(--accent)}
-/* no bottom action bars: the decision lives in the header, like Bunsho's Share */
+/* no bottom action bars: the decision lives in the header, like the reference editor's Share */
 .actionbar,.decision{display:none !important}
 .review-screen .artifact,.history-screen .artifact,.outline-screen .artifact{grid-template-rows:40px 34px minmax(0,1fr)}
 .question-pane{grid-template-rows:40px minmax(0,1fr)}
 .past-screen .artifact,.scope-screen .artifact{grid-template-rows:40px minmax(0,1fr) !important}
 .viewbar .tool-right .seg{display:none}
-/* right slot: one panel at a time — Threads · History · Outline — with Bunsho's header controls */
+/* right slot: one panel at a time — Threads · History · Outline — with the reference editor's header controls */
 .workarea{grid-template-columns:minmax(0,1fr) 300px}
 .threads header{padding:12px 14px 10px}
 .threads header .row{display:flex;align-items:center;gap:8px}

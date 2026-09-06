@@ -125,10 +125,10 @@ answered → review → look back → folded → rail*):
   statuses *Pending · Open · Addressed in rN · Resolved*; stage words *done ·
   in review · questions · next · skipped · if …*.
 
-`mock-v9.html` — **v8 rebuilt on Bunsho's shell**, after a second look at
-Bunsho at its real size (1728 px). What Bunsho does that v8 did not:
+`mock-v9.html` — **v8 rebuilt on the reference editor's shell**, after a second look at
+the reference editor at its real size (1728 px). What the reference editor does that v8 did not:
 
-| Bunsho | v8 had | v9 does |
+| Reference editor | v8 had | v9 does |
 |---|---|---|
 | A 53 px **app rail** of monochrome icons — logo, Search, Notifications; Contact/integrations/Settings at the bottom. App destinations only, no document state. | A rail of coloured stage dots | Rail = logo · Inbox (badge) · Workflow · Search · Notifications · … · Audit · Help · Settings · you. The workflow tree is a **panel** the Workflow icon toggles (screen *10 panel hidden*), never dots. |
 | Header = document title + ☆, then right: *Connected*, access, collaborator avatars, panel icons (Comments · Edit with AI · Media · History · Attribution · View Raw), one primary (*Share*). | A brand bar + a context bar + a bottom action bar | One 52 px header per screen: small path + **file name** ☆ · state · *Connected* · avatars (PA, you) · panel icons (**Threads · History · Outline · Raw**) · the primary decision (*Approve* with *Request changes* beside it; *Save answers…*; *Answer 4 questions →*). No bottom action bars. |
@@ -187,9 +187,9 @@ and a collapse-to-rail; screens review / editing / questions).
 
 [`review-ui-redesign/mock-v3.html`](review-ui-redesign/mock-v3.html) is the
 design I'd build. v1/v2 explored the full surface; v3 keeps only what a
-reviewer needs in the moment, at Bunsho's register. Rules it follows:
+reviewer needs in the moment, at the reference editor's register. Rules it follows:
 
-- **One accent, one mark.** Blue for the single primary action; Bunsho's amber
+- **One accent, one mark.** Blue for the single primary action; the reference editor's amber
   for a commented span. Kinds are words in the card (`Delete`, `Suggestion`),
   not colours in the page: a deletion is a strike-through, a suggestion a
   dotted underline, a looks-good a grey ✓ in the margin. No numbered coloured
@@ -231,15 +231,15 @@ floating four-button toolbar, and a "decision hint". It shows the machinery. The
 person using it is doing one of two things — **answering a few questions** or
 **reading a document and reacting to it** — and both are better served by the
 shape every good document tool has converged on: a wide reading column, comments
-anchored to the text, and one clear action. Bunsho (the internal Markdown
-editor) is the reference: white page, 14–15 px system type, ~880 px measure,
+anchored to the text, and one clear action. The internal Markdown
+editor is the reference: white page, 14–15 px system type, ~880 px measure,
 amber comment highlights with margin bubbles, a quiet threads sidebar, a single
 comment affordance on selection, and almost no chrome.
 
-What is different from Bunsho: the author is an **agent**, the reader is a
+What is different from the reference editor: the author is an **agent**, the reader is a
 **reviewer with a decision to make**, the document moves through **revisions**
 in response to the comments, and the whole thing is a step in a workflow that
-also asks **questions**. So the design is Bunsho's reading and commenting
+also asks **questions**. So the design is the reference editor's reading and commenting
 model plus a review layer: comment kinds, revisions, agent replies, and a
 decision.
 
@@ -279,7 +279,7 @@ browser rendering second.
    change it; the change is a suggestion the agent answers. A selection is a
    comment; a keystroke is a suggestion; both are threads; the file is untouched
    until the decision.
-1. **The document is the product.** Full-width reading column with Bunsho's
+1. **The document is the product.** Full-width reading column with the reference editor's
    type scale; every panel earns its pixels or collapses. No "No artifact
    available" — the zero state shows what the agent is doing right now.
 2. **One act per moment.** The screen is in exactly one of three modes, driven
@@ -333,23 +333,23 @@ browser rendering second.
 - **Rail** (icon-only, 56 px): Documents · Questions (badge) · Revisions ·
   Record. Expands on hover to labels. Replaces the left sidebar; the record
   tree becomes a drawer, not a permanent column.
-- **Document**: Bunsho's measure and type — `#1a202c` on white, 15/1.65 body,
+- **Document**: the reference editor's measure and type — `#1a202c` on white, 15/1.65 body,
   h1 30/700, h2 20/700, system font stack, borders `#eef2f7`, panel `#f7f9fc`.
   Left gutter carries numbered **bubbles** coloured by kind (amber comment,
   violet suggested edit, rose delete, green looks-good). The highlight in the
   text uses the same kind colour: amber fill + 2 px underline for comments
-  (Bunsho's exact treatment), violet for edits, strike-through for deletes,
+  (the reference editor's exact treatment), violet for edits, strike-through for deletes,
   green underline for looks-good. Clicking a bubble or highlight focuses its
   thread; clicking a thread scrolls and pulses its highlight.
-- **Menu bar + toolbar**: Bunsho's three chrome rows — title, `File Edit
+- **Menu bar + toolbar**: the reference editor's three chrome rows — title, `File Edit
   View Comment Review Help`, and the Markdown formatting toolbar with a
   **Mode** switch (Review · Suggest edits · Source). See *Chrome* below.
 - **Selection → one affordance.** A `+` in the right margin of the selected
-  line (Bunsho puts it left; ours sits right because the left gutter holds the
+  line (the reference editor puts it left; ours sits right because the left gutter holds the
   bubbles) opens the inline composer. See *Adding a comment* and *Editing*.
 - **Threads sidebar** (320 px, `#f7f9fc`): header with count and filter chips
   (Open · Resolved · Agent replies · r0). Cards: kind-coloured left bar, quoted
-  anchor in italic grey (Bunsho), author/avatar/time, kind tag, body, **agent
+  anchor in italic grey (the reference editor), author/avatar/time, kind tag, body, **agent
   replies indented** with the agent avatar, and a status line — `Pending ·
   sends with your decision`, `Open`, `Addressed in r1`, `Resolved · kept in
   r1` — with `Reply` / `Resolve` / `View change`. Pending cards are dashed.
@@ -376,14 +376,14 @@ browser rendering second.
   directly* is listed but disabled — "agent-owned". The browser never writes
   the artifact.
 - **View** — r0 / r1 / Diff, Show resolved, Comments as sidebar or popover
-  (Bunsho's Style switch), Reading width, Rendered / Source.
+  (the reference editor's Style switch), Reading width, Rendered / Source.
 - **Comment** — Comment on selection `C`, Looks good `G`, Delete `D`, Add
   general note `N`, Next / previous thread `J` / `K`, Resolve `⌘↩`.
 - **Review** — Approve `A`, Request changes `R`, Send pending comments, Reload.
 - **Help** — Keyboard shortcuts `⌘/`, "What the agent sees" (comments become
   `feedback-NNN.md`; answers become `answers-NNN.json`).
 
-The toolbar is the Markdown bar Bunsho users know: block type, bold / italic /
+The toolbar is the Markdown bar the reference editor users know: block type, bold / italic /
 strike / code, bullet / numbered / task list, quote, link, table, image,
 Mermaid, and a **Comment** button. In Review mode the formatting buttons are
 inert; in Suggest-edits mode they act on the block under the caret by inserting
@@ -404,12 +404,12 @@ editable) · Source (raw Markdown, read-only, same anchors).
 Same composer everywhere: kind chips **Comment · Suggest edit · Delete · Looks
 good** (Comment default; Delete and Looks good need no text), a body, **Add
 comment** (`⌘↩`). Nothing is sent yet — the card appears in the sidebar as
-*Pending · sends with your decision*, editable and removable, like a Bunsho
+*Pending · sends with your decision*, editable and removable, like a the reference editor
 draft. Sending happens once, from the decision bar, into `feedback-NNN.md`.
 
 Highlight ↔ card are linked both ways (click either; the other scrolls and
-outlines); margin bubbles carry the thread count per line (Bunsho's `4`).
-Cards read the Bunsho way — quoted anchor, who/when, body, replies indented —
+outlines); margin bubbles carry the thread count per line (the reference editor's `4`).
+Cards read the reference editor's way — quoted anchor, who/when, body, replies indented —
 plus our kind tag and status line.
 
 ### Editing the document — suggestions, in Markdown
@@ -429,7 +429,7 @@ Consequences for the chrome: the Markdown formatting row appears under the
 menu bar only while the caret is in the document (it names the block being
 edited: *Editing FR2 · your change is a suggestion — the file is untouched
 until you decide*), and disappears when you click out. The active block shows
-its Markdown markers (`**`) in muted mono while the caret is in it, as Bunsho
+its Markdown markers (`**`) in muted mono while the caret is in it, as the reference editor
 does; other blocks render clean. A comment and an edit on the same span are one
 thread: the comment text becomes the suggestion's reason.
 
@@ -444,7 +444,7 @@ The artifact is Markdown and the agent owns the file, so browser editing is
   changed block gets a violet bar and a pending card.
 - A comment card's *Turn into edit*.
 
-An editing block shows its **Markdown source with visible markers** as Bunsho
+An editing block shows its **Markdown source with visible markers** as the reference editor
 does — `**FR2 — Complete a task.**` renders bold while the `**` show in muted
 mono — so users see and type Markdown, and the toolbar inserts it. Deletions
 and insertions render red/green inside the block as you type (character diff
@@ -478,14 +478,14 @@ round or gate awaits.
 
 | Token | Value | From |
 |---|---|---|
-| ink / muted / faint | `#1a202c` / `#8792a2` / `#b6bfcc` | Bunsho |
-| line / panel | `#eef2f7` / `#f7f9fc` | Bunsho |
-| accent | `#2d7ff9` (+ `#edf4ff` soft) | Bunsho |
-| comment | `#f59e0b`, fill `rgba(245,158,11,.15)`, 2 px underline | Bunsho |
+| ink / muted / faint | `#1a202c` / `#8792a2` / `#b6bfcc` | the reference editor |
+| line / panel | `#eef2f7` / `#f7f9fc` | the reference editor |
+| accent | `#2d7ff9` (+ `#edf4ff` soft) | the reference editor |
+| comment | `#f59e0b`, fill `rgba(245,158,11,.15)`, 2 px underline | the reference editor |
 | suggested edit | `#7c3aed` | ours |
 | delete | `#e11d48`, strike-through | ours |
 | looks good | `#16a34a` | ours |
-| type | system stack; body 15/1.65; h1 30/1.2/700; h2 20/700; h3 16/600 | Bunsho scale, one step larger for reading |
+| type | system stack; body 15/1.65; h1 30/1.2/700; h2 20/700; h3 16/600 | the reference editor scale, one step larger for reading |
 | radius / shadow | 8–12 px; `0 1px 2px rgba(26,32,44,.04)` cards, `0 8px 24px .10` popovers | |
 
 Dark mode: same tokens inverted (`#0f1419` page, `#e6e9ef` ink); kind colours
@@ -556,7 +556,7 @@ Every interaction has a backend already:
 ## Phasing
 
 1. **Shell + document + threads** (the look): new `index.html`/`app.css`,
-   Bunsho type and tokens, rail, top bar with status pill, threads sidebar
+   the reference editor type and tokens, rail, top bar with status pill, threads sidebar
    replacing the feedback drawer, gutter bubbles, inline composer replacing the
    floating toolbar, decision bar replacing decision-hint + send. No engine
    change. This alone removes most of the "dashboard" feel.

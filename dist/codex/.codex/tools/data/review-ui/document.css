@@ -157,7 +157,7 @@
   border-left-color: var(--violet);
   border-radius: 0 7px 7px 0;
   background: linear-gradient(90deg, var(--violet-soft), #fff 70%);
-  /* Bunsho shows the Markdown source in the reading face; only the markers are mono. */
+  /* The Markdown source is shown in the reading face; only the markers are mono. */
   font: inherit;
   white-space: pre-wrap;
   caret-color: var(--violet);

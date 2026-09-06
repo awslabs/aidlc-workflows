@@ -100,7 +100,7 @@ same navigation and authority.
 ### Read, comment, and suggest
 
 Markdown is a reading surface with one bubble per commented line in the left
-gutter, showing how many threads sit on that line (as in Bunsho). Clicking a
+gutter, showing how many threads sit on that line. Clicking a
 bubble focuses its threads. Select text — with the mouse or with Shift and the
 arrow keys — and a speech-bubble button appears beside that line; choose it to
 open a dashed pending card in **Threads**. The card's kind selector is **Comment · Suggestion
@@ -119,7 +119,7 @@ strike, code, lists, quote, link, table, and diagram insert Markdown syntax at
 the caret — and it reads *Editing FR2 · a suggestion — the file is untouched
 until you decide*. Highlight text and press Delete to remove it, or type to
 replace it. **Undo and redo** (↶ ↷ at the left of the formatting row, `⌘Z` /
-`⇧⌘Z`) work as in Bunsho: while you are typing they step through your
+`⇧⌘Z`) work as in any document editor: while you are typing they step through your
 keystrokes (toolbar actions included); once you have clicked away they take
 back whole suggestions, most recent first, and bring them back again. The
 *Undo* on a suggestion's pill and *Undo edit* on its card feed the same stack.

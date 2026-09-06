@@ -277,8 +277,8 @@ body[data-show="scope-classic"] .scope-screen{display:grid}
 .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:-1px}
 .legend .a{background:var(--accent)}.legend .g{background:var(--green)}.legend .m{border:1.5px solid var(--faint);width:6px;height:6px}
 
-/* ================= v9: Bunsho shell ================= */
-/* app rail (Bunsho: 53px, monochrome, app-level destinations only) + a toggleable workflow panel + header row per screen */
+/* ================= v9: the reference editor shell ================= */
+/* app rail (the reference editor: 53px, monochrome, app-level destinations only) + a toggleable workflow panel + header row per screen */
 .screen{height:100vh}
 .review-screen,.question-screen,.editing-screen,.past-screen,.answered-screen,.scope-screen{grid-template-columns:56px 300px minmax(0,1fr)}
 body[data-show="collapsed"] .review-screen{grid-template-columns:56px minmax(0,1fr)}
@@ -296,7 +296,7 @@ body[data-show="collapsed"] .review-screen .side{display:none}
 .side .side-tabs{display:none}
 .side .ctx{padding-top:14px}
 .right{grid-template-rows:52px minmax(0,1fr)}
-/* header row = Bunsho's document header: title, then connection · people · panel icons · primary */
+/* header row = the reference editor's document header: title, then connection · people · panel icons · primary */
 .ctxbar{height:52px;gap:12px;padding:0 14px 0 18px}
 .ctxbar .crumbs{font-size:12px;color:var(--muted);flex-direction:column;align-items:flex-start;gap:0;line-height:1.25}
 .ctxbar .crumbs .path{display:flex;gap:6px;align-items:center;white-space:nowrap}
@@ -319,13 +319,13 @@ body[data-show="collapsed"] .review-screen .side{display:none}
 .hdr-tools .btn{margin-left:6px}
 .hdr-tools .link{color:var(--ink);font-size:12.5px;padding:0 6px}
 .hdr-tools .link:hover{color:var(--accent)}
-/* no bottom action bars: the decision lives in the header, like Bunsho's Share */
+/* no bottom action bars: the decision lives in the header, like the reference editor's Share */
 .actionbar,.decision{display:none !important}
 .review-screen .artifact,.history-screen .artifact,.outline-screen .artifact{grid-template-rows:40px 34px minmax(0,1fr)}
 .question-pane{grid-template-rows:40px minmax(0,1fr)}
 .past-screen .artifact,.scope-screen .artifact{grid-template-rows:40px minmax(0,1fr) !important}
 .viewbar .tool-right .seg{display:none}
-/* right slot: one panel at a time — Threads · History · Outline — with Bunsho's header controls */
+/* right slot: one panel at a time — Threads · History · Outline — with the reference editor's header controls */
 .workarea{grid-template-columns:minmax(0,1fr) 300px}
 .threads header{padding:12px 14px 10px}
 .threads header .row{display:flex;align-items:center;gap:8px}
