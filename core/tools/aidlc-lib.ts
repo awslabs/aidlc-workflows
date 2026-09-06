@@ -6328,6 +6328,18 @@ export function isNonAnswer(text: string | undefined | null): boolean {
   return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
+// The question-rendering convention tells the conductor to mark a recommended
+// option by appending " (Recommended)" to its picker label, and pickers return
+// the exact label as the answer. The decorator is presentation, not choice
+// content, so gate-reply matching strips ONE trailing decorator before
+// comparing; error messages still show the reply verbatim.
+const RECOMMENDED_DECORATOR_RE = /\s*\(Recommended\)$/;
+export function stripRecommendedDecorator(
+  text: string | undefined | null,
+): string {
+  return (text ?? "").trim().replace(RECOMMENDED_DECORATOR_RE, "").trim();
+}
+
 const RECEIVED_REPLY_DISPLAY_LIMIT = 120;
 export function formatReceivedReply(text: string | undefined | null): string {
   const normalized = (text ?? "").trim().replace(/\s+/g, " ") || "(empty)";

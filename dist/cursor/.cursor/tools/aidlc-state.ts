@@ -58,6 +58,7 @@ import {
   findAllEvents,
   firstInScopeStageOfPhase,
   formatReceivedReply,
+  stripRecommendedDecorator,
   freshReviewReceipts,
   getField,
   harnessDir,
@@ -4810,9 +4811,10 @@ function verifyApprovalDecision(
     const revisionCount = Number.isFinite(parsedRevisionCount)
       ? parsedRevisionCount
       : 0;
+    const approvalChoice = stripRecommendedDecorator(approvalInput);
     const matchesOfferedApproval =
-      approvalInput === "Approve" ||
-      (approvalInput === "Accept as-is" && revisionCount >= 3);
+      approvalChoice === "Approve" ||
+      (approvalChoice === "Accept as-is" && revisionCount >= 3);
     if (!matchesOfferedApproval) {
       const cancellation = isNonAnswer(approvalInput)
         ? " The reply is cancellation boilerplate, not consent."
@@ -5223,7 +5225,7 @@ function handleReject(args: string[]): void {
   if (
     !autonomousDecision &&
     !humanPresenceGuardDisabled() &&
-    decision !== "Request Changes"
+    stripRecommendedDecorator(decision) !== "Request Changes"
   ) {
     const cancellation = isNonAnswer(decision)
       ? " The reply is cancellation boilerplate, not a decision."

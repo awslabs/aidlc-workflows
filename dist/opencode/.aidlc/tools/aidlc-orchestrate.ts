@@ -125,6 +125,7 @@ import {
   filterProducesByKind,
   firstInScopeStageOfPhase,
   formatReceivedReply,
+  stripRecommendedDecorator,
   freshReviewReceipts,
   getField,
   gridCostSummary,
@@ -7922,7 +7923,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   if (protectedHumanGate && flags.result === "rejected") {
-    if (flags.userInput?.trim() !== "Request Changes") {
+    if (stripRecommendedDecorator(flags.userInput) !== "Request Changes") {
       emit(errorDirective(
         `report --result rejected for "${slug}" received reply ` +
           `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
@@ -7947,14 +7948,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const rawRevisionCount = getField(stateContent, "Revision Count");
     const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
     const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
-    const approvalChoice = flags.userInput?.trim();
+    const approvalChoice = stripRecommendedDecorator(flags.userInput);
     const matchesOfferedApproval =
       approvalChoice === "Approve" ||
       (approvalChoice === "Accept as-is" && revisionCount >= 3);
     if (!matchesOfferedApproval) {
       emit(errorDirective(
         `report --result ${flags.result} for "${slug}" received reply ` +
-          `${formatReceivedReply(approvalChoice)} which did not match an offered choice at ` +
+          `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
           "the held gate. Re-present the original held gate with every offered " +
           "choice and wait for the human to choose one.",
       ));
