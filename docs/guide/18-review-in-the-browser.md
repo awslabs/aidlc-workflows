@@ -252,14 +252,18 @@ terminal.
 
 ### Guide me in the browser
 
-With `AIDLC_REVIEW_UI=1`, the interaction-mode prompt can offer **Guide me in
-the browser** first. The agent writes `<slug>-questions-guide.html`; the daemon
-waits until it passes the guide checks before exposing the round, so an
-unfinished explainer is never shown. The recommendation remains present in the
-terminal question options too, and choosing another browser option always wins.
+With `AIDLC_REVIEW_UI=1` and the daemon alive, the browser is the mode — the
+agent does not ask how you want to answer. It writes `<slug>-questions-guide.html`
+and tells you the questions are waiting in the browser; the daemon waits until
+the guide passes its checks before exposing the round, so an unfinished
+explainer is never shown. The round stays in the browser for its follow-ups
+(a contradiction to resolve, an ambiguity to probe): each is appended to the
+questions file and the guide, and the agent ends its turn again for your save.
+To answer in the terminal instead, say so there — the agent continues as
+**Guide me** and does not switch back on its own.
 
 Saving writes only the append-only answer submission described above. Without
-the daemon or guide, answer the same questions in the terminal and continue
+the daemon or guide, the agent offers the terminal modes and you continue
 normally.
 
 ## HTML stage artifacts

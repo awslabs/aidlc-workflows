@@ -607,8 +607,8 @@ function isPendingQuestionStop(
 
 // --- Tier-2 browser wait: hold the turn until the human clicks Save ------------
 //
-// "Guide me in the browser" ends the conductor's turn with the human answering
-// in the review UI. Without this, the saved answers sit on disk until the human
+// "Guide me in the browser" (automatic whenever the directive carries
+// review_ui) ends the conductor's turn with the human answering in the review UI. Without this, the saved answers sit on disk until the human
 // also types `done` in the terminal — a second, redundant act. Plannotator's
 // approach applies here unchanged: the hook process is the only thing that can
 // hold the session open, so it waits for the submission and then BLOCKS the

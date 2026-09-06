@@ -103,9 +103,12 @@ Decide in the browser (**Browser:** http://localhost:4765/) or type the number o
 
 Then END THE TURN. The Stop hook holds it until either the browser decision
 lands (it then tells you the exact `report` command to run) or the human types
-a choice. Every other structured question — the interaction-mode menu, file
-questions, the consolidated summary, learnings, Plan Approval — still renders
-through `AskUserQuestion`. Without a live review UI the gate stays a widget.
+a choice. Every other structured question — the interaction-mode menu (shown
+only without `review_ui`), terminal-mode file questions, the consolidated
+summary, learnings, Plan Approval — still renders through `AskUserQuestion`.
+With `review_ui` the questions of a round, including its follow-ups, are
+answered in the browser and never rendered as widgets. Without a live review UI
+the gate stays a widget.
 
 ## Mandatory consolidated-summary checkpoint
 

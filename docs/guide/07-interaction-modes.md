@@ -14,17 +14,16 @@ AI-DLC provides three standard ways to interact with agents during stages, plus 
 
 ## Question Flow
 
-When a stage gathers your input, the agent presents three standard interaction modes. When the [Review UI](18-review-in-the-browser.md) is available, it also offers **Guide me in the browser** — listed first and marked recommended, so it is the preselected default. You choose which mode works best for the current stage.
+When a stage gathers your input and the [Review UI](18-review-in-the-browser.md) is live (`AIDLC_REVIEW_UI=1` and its daemon running), the questions go to the browser automatically — no menu. The agent publishes an explainer per question, tells you they are waiting in the browser, and continues the moment you save. Follow-up questions in that round stay in the browser too. To answer in the terminal instead, just say so (or type an answer); the round then continues as **Guide Me** and stays there.
+
+Without the Review UI, the agent presents the three terminal modes:
 
 ```
 ▸ Choose interaction mode:
-  (1) Guide me in the browser — read each explainer above its answer card (recommended; Review UI only)
-  (2) Guide Me — agent asks structured questions
-  (3) Edit File — write directly to the artifact
-  (4) Chat — freeform discussion
+  (1) Guide Me — agent asks structured questions (recommended)
+  (2) Edit File — write directly to the artifact
+  (3) Chat — freeform discussion
 ```
-
-Without the Review UI the menu is the three terminal modes in the order Guide Me, Edit File, Chat.
 
 ### Guide Me
 
@@ -44,7 +43,7 @@ The agent creates (or opens) the questions file and you edit it directly. Best w
 
 ### Guide me in the browser
 
-With `AIDLC_REVIEW_UI=1`, the agent can write an HTML explainer with trade-offs and recommendations. The browser renders each question's explainer directly above its answer card; **Save answers — the agent continues** writes `answers-NNN.json`, and the Stop hook holds the conductor's turn for that click on Claude Code while other harnesses can wait on `answers-wait`. `answers-apply` then folds the submission into the canonical questions file before the ordinary consolidated-summary confirmation. The terminal modes remain complete and write the same file. See [Review in the Browser](18-review-in-the-browser.md#guide-me-in-the-browser).
+With `AIDLC_REVIEW_UI=1` this is the automatic mode: the agent writes an HTML explainer with trade-offs and recommendations instead of asking how you want to answer. The browser renders each question's explainer directly above its answer card; **Save answers — the agent continues** writes `answers-NNN.json`, and the Stop hook holds the conductor's turn for that click on Claude Code while other harnesses can wait on `answers-wait`. `answers-apply` then folds the submission into the canonical questions file before the ordinary consolidated-summary confirmation. The terminal modes remain complete and write the same file. See [Review in the Browser](18-review-in-the-browser.md#guide-me-in-the-browser).
 
 ### Chat
 

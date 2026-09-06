@@ -27,9 +27,10 @@ All stages follow `aidlc-common/protocols/stage-protocol.md` for approval gates,
 structured question, inspect the visible numbered list. Its final numbered line
 MUST be exactly one Other choice. A prose tip or sentence mentioning Other does
 not count. The interaction-mode prompt MUST visibly render all four lines:
-`1. Guide me (Recommended)`, `2. I'll edit the file`, `3. Chat`, `4. Other` — or,
-when the directive carries `review_ui`, all five: `1. Guide me in the browser
-(Recommended)`, `2. Guide me`, `3. I'll edit the file`, `4. Chat`, `5. Other`.
+`1. Guide me (Recommended)`, `2. I'll edit the file`, `3. Chat`, `4. Other`. When
+the directive carries `review_ui` there is no prompt at all: the round goes to
+the browser automatically (stage protocol Step 3d) and the human switches back
+only by typing in the terminal.
 The `(Recommended)` marker is presentation only and never enters an answer,
 `--user-input`, or an audit row. When an ordinary
 file-backed question already contains `X. Other (please specify)`, remap that

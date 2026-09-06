@@ -14,13 +14,14 @@ describe("browser guide protocol prose", () => {
     expect(protocol).toContain("Guide me in the browser");
     expect(protocol).toContain("Read an explainer with trade-offs and answer in the browser");
     expect(protocol).toContain("ONLY when `directive.review_ui` is present");
-    expect(protocol).toContain("five visible lines");
-    expect(protocol).toContain('**Step 3d: If "Guide me in the browser":**');
+    expect(protocol).toContain("so do NOT ask");
+    expect(protocol).toContain("four visible lines");
+    expect(protocol).toContain('**Step 3d: "Guide me in the browser" (automatic when `directive.review_ui` is present):**');
     expect(protocol).toContain("`[Note]:` lines are discussion input");
 
     const reference = readFileSync(REFERENCE, "utf-8");
     expect(reference).toContain("Guide Me in the Browser");
-    expect(reference).toContain("five visible lines including Other");
+    expect(reference).toContain("automatic whenever `review_ui` is present");
     expect(reference).toContain("aidlc-log.ts answers-apply");
   });
 

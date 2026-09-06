@@ -124,7 +124,9 @@ describe("t328 Kiro numbered Other rendering contract", () => {
       expect(body, rel).toContain(
         "`1. Guide me (Recommended)`, `2. I'll edit the file`, `3. Chat`, `4. Other`",
       );
-      expect(body, rel).toContain("`2. Guide me`, `3. I'll edit the file`, `4. Chat`, `5. Other`");
+      // With review_ui there is no menu at all: the round goes to the browser.
+      expect(body, rel).toContain("there is no prompt at all");
+      expect(body, rel).not.toContain("`5. Other`");
       expect(body, rel).toContain(
         "A prose tip or sentence mentioning Other does\nnot count",
       );
@@ -135,17 +137,15 @@ describe("t328 Kiro numbered Other rendering contract", () => {
       );
     }
     expect(CORE_PROTOCOL).toContain(
-      "On a numbered-prose harness that gives five visible lines",
+      "On a numbered-prose harness that gives four visible lines",
     );
-    expect(CORE_PROTOCOL).toContain(
-      "Without `review_ui`, omit it and retain the existing\nthree semantic options in the order **Guide me**, **I'll edit the file**,\n**Chat**, with **Guide me (Recommended)** first",
-    );
-    // With a live review daemon the browser round is the harness default:
-    // listed first and marked recommended in the label itself.
-    expect(CORE_PROTOCOL).toContain("- label: Guide me in the browser (Recommended)");
-    expect(CORE_PROTOCOL.indexOf("- label: Guide me in the browser (Recommended)")).toBeLessThan(
-      CORE_PROTOCOL.indexOf("- label: Guide me\n"),
-    );
+    expect(CORE_PROTOCOL).toContain("- label: Guide me (Recommended)");
+    expect(CORE_PROTOCOL).toContain("**Guide me (Recommended)** is first");
+    // With a live review daemon the browser round is automatic, not a menu
+    // option: the menu is offered only when `directive.review_ui` is absent.
+    expect(CORE_PROTOCOL).not.toContain("- label: Guide me in the browser");
+    expect(CORE_PROTOCOL).toContain("go straight to\n**Step 3d**");
+    expect(CORE_PROTOCOL).toContain("**Guide me in the browser** is never a\nmenu option");
     // The always-recommend rule and its presentation-only boundary.
     expect(CORE_PROTOCOL).toContain("**Every structured question carries a recommendation.**");
     expect(CORE_PROTOCOL).toContain("NEVER write `(Recommended)` or `(Toss-up)` into an `[Answer]:` tag");

@@ -454,15 +454,24 @@ stage inputs, and the prior answers, so say what you recommend and why.
 - The marker is presentation only. NEVER write `(Recommended)` or `(Toss-up)` into an `[Answer]:` tag, a questions file, an audit row, `--details`, `--user-input`, or a `report` argument: record the undecorated option exactly as offered.
 - Exception: the Code Generation **Plan Approval** choice is a protected, exact-label challenge (`Approve Plan` / `Request Changes`). Do not decorate those two labels; put the recommendation in the prompt text instead. Plan Approval is answered in the terminal only: the browser can show the plan for reading, but it has no plan gate, so never offer "decide in the browser" or print a `**Browser:**` line for it — that line belongs to approval gates and question rounds.
 
-**Step 2: Offer the user a choice of interaction mode:**
+**Step 2: Choose the interaction mode.**
+
+When `directive.review_ui` is present, the mode is already chosen: the human
+enabled the review UI and its daemon is alive, so do NOT ask — go straight to
+**Step 3d** (**Guide me in the browser**): the explainer carries trade-offs and
+a recommendation per question, the address opens directly, and Save resumes you
+without a keystroke. Your one message at the end of Step 3d tells the human the
+questions are in the browser and that typing here switches to the terminal.
+Asking "how would you like to answer?" every round when the browser is live was
+the single most-repeated interruption in real runs.
+
+When `directive.review_ui` is absent, offer the terminal modes:
 ```question
 prompt: "I've created [N] questions at `[file path]`. How would you like to answer them?"
 header: Questions
 multiSelect: false
 options:
-  - label: Guide me in the browser (Recommended)
-    description: Read an explainer with trade-offs and answer in the browser — a recommendation per question, and I continue the moment you save
-  - label: Guide me
+  - label: Guide me (Recommended)
     description: Walk through each question interactively here
   - label: I'll edit the file
     description: I'll fill in the answers in the file directly
@@ -470,17 +479,13 @@ options:
     description: Discuss freely — I'll extract decisions from our conversation
 ```
 
-Include **Guide me in the browser** ONLY when `directive.review_ui` is present,
-and then it is the first, recommended option: the explainer carries trade-offs
-and a recommendation per question, the address opens directly, and Save resumes
-you without a keystroke. Without `review_ui`, omit it and retain the existing
-three semantic options in the order **Guide me**, **I'll edit the file**,
-**Chat**, with **Guide me (Recommended)** first (the guided pass is the safest
-terminal default). On a numbered-prose harness that gives five visible lines:
-the four semantic options above, then the final Other; without `review_ui`, the
-three semantic options plus Other.
+**Guide me (Recommended)** is first (the guided pass is the safest terminal
+default). On a numbered-prose harness that gives four visible lines: the three
+semantic options, then the final Other. **Guide me in the browser** is never a
+menu option: it is the automatic mode whenever `directive.review_ui` is present,
+ONLY when `directive.review_ui` is present, and it does not appear otherwise.
 
-Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Question interaction log format.
+Log the mode to `<record>/audit/<host>-<clone>.md` using the Question interaction log format — the human's choice from the menu, or `Guide me in the browser (review_ui)` when the browser mode was taken automatically.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
@@ -568,8 +573,8 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
   checkpoint from Step 3a. Editing the source file does not waive the separate
   pre-generation confirmation.
 
-**Step 3d: If "Guide me in the browser":**
-- Load `stage-protocol-guide.md`; run `bun .codex/tools/aidlc-html.ts scaffold --guide <stage-dir>/<slug>-questions.md --out <stage-dir>/<slug>-questions-guide.html` (add `--depth minimal` at Minimal depth), fill the scaffold's prose and every `data-aidlc-recommend`, run the module's check, then say: "Open the review UI (`**Browser:** <review_ui.url>` or origin fallback) → Questions and save your answers there; I'll continue as soon as they land." On Claude Code: END TURN — the Stop hook holds the turn until the human clicks **Save**, then resumes you with the apply command; the human types nothing.
+**Step 3d: "Guide me in the browser" (automatic when `directive.review_ui` is present):**
+- Load `stage-protocol-guide.md`; run `bun .codex/tools/aidlc-html.ts scaffold --guide <stage-dir>/<slug>-questions.md --out <stage-dir>/<slug>-questions-guide.html` (add `--depth minimal` at Minimal depth), fill the scaffold's prose and every `data-aidlc-recommend`, run the module's check, then say: "Your [N] questions are in the browser (`**Browser:** <review_ui.url>` or origin fallback) → Questions, each with an explainer and a recommendation. Read an explainer with trade-offs and answer in the browser; I'll continue the moment you save. Prefer the terminal? Say so and I'll walk you through here." On Claude Code: END TURN — the Stop hook holds the turn until the human clicks **Save**, then resumes you with the apply command; the human types nothing. A human who answers in the terminal instead has chosen **Guide me**: continue as Step 3a from there and do not switch back.
 - On every other harness the Stop seam cannot hold a turn. There, before ending the turn, run `bun .codex/tools/aidlc-log.ts answers-wait --stage <slug> --questions-file <path> [--unit <unit>]`: it blocks until the answers are saved (exit 0) or nine minutes pass (exit 3 — call it again). Ask for a shell-tool timeout of at least ten minutes when you invoke it.
 - Once the answers have landed, run `bun .codex/tools/aidlc-log.ts answers-apply --stage <slug> --questions-file <path> [--unit <unit>]`, then continue exactly as Step 3b: read the file, present the consolidated summary, and run the same **Looks correct / Request changes** checkpoint. A human who types **done** anyway is simply early; apply and continue the same way.
 - **The browser is the mode for the rest of the round.** Every follow-up — a contradiction to resolve, an ambiguity to probe, a re-ask after **Request changes** at the summary — goes to the browser the same way the first batch did: append the new `## Q<n>.` section (with its options and a blank `[Answer]:`) to the questions file, append the matching `<section data-aidlc-question="Q<n>">` to the guide (see the guide module's *Follow-ups*), run the module's check, say "I've added a follow-up in the browser — answer it there and I'll continue", and END TURN (or `answers-wait` off Claude Code). NEVER present a terminal structured question for a question the browser is showing: the browser renders the file, so a terminal widget and the browser form become two answers to one question, and while the widget is open the Stop hook cannot resume you when the human saves in the browser — the round deadlocks with the human's answer already on disk. The only way the round leaves browser mode is the human saying so in the terminal ("let's continue here", an answer typed in chat); then finish as **Guide me** and never switch back on your own.

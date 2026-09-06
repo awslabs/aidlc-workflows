@@ -142,7 +142,7 @@ The aidlc-product-agent asks you to choose an interaction mode:
 - **Edit File** opens the artifact for direct editing
 - **Chat** lets you discuss freely; the agent extracts decisions
 
-See [Interaction Modes](07-interaction-modes.md) for details on each mode. With `AIDLC_REVIEW_UI=1`, a fourth **Guide me in the browser** choice adds a side-by-side explainer and questions form. You can switch modes mid-stage.
+See [Interaction Modes](07-interaction-modes.md) for details on each mode. With `AIDLC_REVIEW_UI=1` the menu does not appear: questions go straight to the browser with an explainer beside each answer card, and typing in the terminal switches you back. You can switch modes mid-stage.
 
 ### Approval Gate
 

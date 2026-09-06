@@ -332,7 +332,11 @@ changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
 answer format: `[Answer]: A, B, E`.
 
-**Step 2: Present mode choice:**
+**Step 2: Choose the mode.** Browser mode (Guide Me in the Browser, below) is
+automatic whenever `review_ui` is present in the directive: no menu is shown; the
+conductor publishes the guide and tells the human the questions are in the
+browser, and the human switches to the terminal only by typing there. Without
+`review_ui` the terminal menu is presented:
 
 ```
 AskUserQuestion({
@@ -341,18 +345,17 @@ AskUserQuestion({
     header: "Questions",
     multiSelect: false,
     options: [
-      { label: "Guide me", description: "Walk through each question interactively here" },
+      { label: "Guide me (Recommended)", description: "Walk through each question interactively here" },
       { label: "I'll edit the file", description: "I'll fill in the answers in the file directly" },
-      { label: "Chat", description: "Discuss freely -- I'll extract decisions from our conversation" },
-      { label: "Guide me in the browser", description: "Read an explainer with trade-offs and answer in the browser" }
+      { label: "Chat", description: "Discuss freely -- I'll extract decisions from our conversation" }
     ]
   }]
 })
 ```
 
-The fourth option requires `review_ui`; numbered prose then has five visible lines including Other.
+Numbered prose has four visible lines including Other.
 
-Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
+Log the mode to the `audit/` shards (the menu choice, or `Guide me in the browser (review_ui)` when taken automatically). Users can switch modes mid-stage by saying so in the terminal; a browser round stays in the browser for its follow-ups until they do.
 
 #### Guide Me (Interactive Mode)
 
