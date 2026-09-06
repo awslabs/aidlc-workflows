@@ -111,6 +111,34 @@ sequenceDiagram
 
 ---
 
+## The Guard Kernel: Default-Deny with Proven Provenance
+
+Names may deny; only proofs may allow. A guard may use a token, executable
+name, or parse to refuse an operation, but an allow decision may rest only on
+a canonical real-path identity, raw Git object reads, or fields already sealed
+in the append-only audit ledger. Unresolvable, ambiguous, or indirect input is
+denied within the guard's protected principal scope.
+
+The shared `tools/aidlc-guard-kernel.ts` module exposes those proof sources:
+`resolveProtectedStore` and `protectedStoreBarrier` decide protected-store
+access on canonical real paths; `immutableCommitSourceListing`,
+`immutableBlobBytes`, and `immutableBlobSha256` read commit/blob identity
+without materializing working-tree bytes; and retrying review dispatches carry
+the original request fields already sealed in the ledger. The kernel returns a
+proof status, while each adopting guard maps `unprovable` to deny for the
+principals it protects.
+
+On Windows, drive-letter paths and separator variants go through the same
+canonical resolution. UNC or device-path forms that cannot obtain a canonical
+filesystem identity remain `unprovable` and are denied in protected scope.
+
+Recorded evidence therefore describes a subject another reader can derive
+independently from Git objects or sealed rows. Content-transformation
+pipelines and materialized bytes do not establish committed-source identity;
+when that identity cannot be proven, the operation fails closed.
+
+---
+
 ## Workflow-Spine Hooks
 
 These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validation/subagent spine) are registered project-wide in `settings.json`. They are always on, but each **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / the active intent's `audit/` shard absent), so audit logging and state sync never clutter non-AI-DLC sessions. Before v0.6.0 they were declared in `aidlc/SKILL.md` frontmatter (skill-scoped); the move to `settings.json` lets every entry point — the orchestrator and every packaged or hand-written runner — inherit the spine without copying a `hooks:` block.

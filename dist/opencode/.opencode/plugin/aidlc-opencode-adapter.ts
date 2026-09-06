@@ -150,6 +150,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "tools/aidlc-doctor-bundle.ts",
     "tools/aidlc-documentkb-schema.ts",
     "tools/aidlc-graph.ts",
+    "tools/aidlc-guard-kernel.ts",
     "tools/aidlc-includes.ts",
     "tools/aidlc-jump.ts",
     "tools/aidlc-knowledge.ts",

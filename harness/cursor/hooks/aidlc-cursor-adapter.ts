@@ -763,6 +763,96 @@ export async function run(
     ];
   }
 
+  type BarrierVerdict =
+    | { kind: "proven-disjoint" }
+    | { kind: "proven-framework-tool" }
+    | { kind: "store-overlap"; store: string; path: string }
+    | { kind: "unprovable"; reason: string };
+
+  interface ProtectedStore {
+    name: string;
+    realPath: string;
+  }
+
+  interface GuardKernelModule {
+    resolveProtectedStore?: (
+      name: string,
+      lexicalPath: string,
+    ) => ProtectedStore | null;
+    protectedStoreBarrier?: (
+      input: {
+        toolName: string;
+        toolInput: Record<string, unknown> | undefined;
+        cwd: string;
+        projectDir: string;
+        frameworkExecutablePaths?: readonly string[];
+        preclassifiedVerdict?:
+          | "proven-disjoint"
+          | "store-overlap"
+          | "unprovable";
+      },
+      stores: readonly ProtectedStore[],
+    ) => BarrierVerdict;
+  }
+
+  let guardKernelModule: Promise<GuardKernelModule> | null = null;
+  function loadGuardKernelModule(): Promise<GuardKernelModule> {
+    guardKernelModule ??= import(
+      join(HOOKS_DIR, "..", "tools", "aidlc-guard-kernel.ts")
+    ) as Promise<GuardKernelModule>;
+    return guardKernelModule;
+  }
+
+  async function protectedReviewerStateVerdict(
+    preclassifiedVerdict: NonNullable<
+      Parameters<NonNullable<GuardKernelModule["protectedStoreBarrier"]>>[0][
+        "preclassifiedVerdict"
+      ]
+    >,
+  ): Promise<BarrierVerdict> {
+    try {
+      const module = await loadGuardKernelModule();
+      if (
+        typeof module.resolveProtectedStore !== "function" ||
+        typeof module.protectedStoreBarrier !== "function"
+      ) {
+        return {
+          kind: "unprovable",
+          reason: "guard kernel exports are unavailable",
+        };
+      }
+      const stores: ProtectedStore[] = [];
+      for (const [index, path] of protectedReviewerPaths().entries()) {
+        const store = module.resolveProtectedStore(
+          `cursor-reviewer-state-${index + 1}`,
+          path,
+        );
+        if (store !== null) stores.push(store);
+      }
+      return module.protectedStoreBarrier(
+        {
+          toolName,
+          toolInput: cursor.tool_input,
+          cwd: effectiveCwd(),
+          projectDir,
+          frameworkExecutablePaths: [
+            process.execPath,
+            ...(process.env.AIDLC_COMPILED_EXECUTABLE
+              ? [process.env.AIDLC_COMPILED_EXECUTABLE]
+              : []),
+          ],
+          preclassifiedVerdict,
+        },
+        stores,
+      );
+    } catch {
+      return {
+        kind: "unprovable",
+        reason: "guard kernel classification was unavailable",
+      };
+    }
+  }
+
   interface CanonicalPath {
     flavor: PathFlavor;
     value: string;
@@ -2939,11 +3029,37 @@ export async function run(
       }
       const agent = attributed();
       const command = cursor.tool_input?.command;
+      const shellUnprovable =
+        agent &&
+        toolName === "Bash" &&
+        typeof command === "string"
+          ? await shellInvokesDynamicEvaluation(command, effectiveCwd())
+          : false;
+      const storeOverlap =
+        agent && !shellUnprovable
+          ? await touchesProtectedReviewerState()
+          : false;
+      const protectedVerdict =
+        agent
+          ? await protectedReviewerStateVerdict(
+              storeOverlap
+                ? "store-overlap"
+                : shellUnprovable
+                  ? "unprovable"
+                  : "proven-disjoint",
+            )
+          : null;
       if (
         agent &&
         toolName === "Bash" &&
         typeof command === "string" &&
-        await shellInvokesDynamicEvaluation(command, effectiveCwd())
+        (
+          (
+            protectedVerdict?.kind === "unprovable" &&
+            (REVIEW_AGENT_RE.test(agent) || activeReviewerDispatch() !== null)
+          ) ||
+          shellUnprovable
+        )
       ) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
@@ -2955,7 +3071,19 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (agent && await touchesProtectedReviewerState()) {
+      if (
+        agent &&
+        (
+          storeOverlap ||
+          protectedVerdict?.kind === "store-overlap" ||
+          (
+            protectedVerdict?.kind === "unprovable" &&
+            toolName !== "Bash" &&
+            agent !== AMBIGUOUS_REVIEWER &&
+            (REVIEW_AGENT_RE.test(agent) || activeReviewerDispatch() !== null)
+          )
+        )
+      ) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:

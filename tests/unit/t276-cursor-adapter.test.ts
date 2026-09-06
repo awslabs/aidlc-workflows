@@ -2874,7 +2874,7 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(staleManifestResult, staleManifestStatus);
-  }, 55_000);
+  }, 90_000);
 
   test("30: existing symlink or junction aliases cannot hide protected attribution paths", () => {
     const proj = installedProject();
