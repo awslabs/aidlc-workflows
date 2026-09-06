@@ -196,7 +196,7 @@ ${checkboxes}
 }
 
 function coverUnit(proj: string, unit: string, slug: string): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, slug);
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of PRODUCES[slug]) {
     writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
@@ -285,12 +285,13 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
   const artifact = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     stage,
     artifactFilename(reviewArtifact),
   );
   if (stage === "code-generation") {
-    const dir = join(seededRecordDir(proj), "construction", unit, stage);
+    const dir = join(seededRecordDir(proj), "construction", "units", unit, stage);
     writeFileSync(
       join(dir, "source-manifest.json"),
       `${JSON.stringify({ stage, unit, version: 1, writes: [] }, null, 2)}\n`,
@@ -459,7 +460,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     seedBoltDag(proj, ["alpha", "beta"]);
     coverFullGrid(proj, ["alpha", "beta"]);
     const dir = join(
-      seededRecordDir(proj), "construction", "alpha", "code-generation",
+      seededRecordDir(proj), "construction", "units", "alpha", "code-generation",
     );
     rmSync(join(dir, "code-summary.md"));
     const d = runNext(proj);
@@ -468,7 +469,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/code-generation/code-summary.md`,
+      `${RP}/construction/units/alpha/code-generation/code-summary.md`,
     );
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).toContain("- **Current Stage**: functional-design");

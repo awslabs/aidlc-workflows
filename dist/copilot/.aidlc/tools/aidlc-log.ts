@@ -1653,7 +1653,7 @@ function handleReview(args: string[]): void {
       flags.unit as string,
     );
     if (!manifest.ok) {
-      const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
+      const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/units/${flags.unit}/${flags.stage}/source-manifest.json`;
       refuseReview(
         `Cannot record REVIEW_REQUESTED for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
           `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
@@ -2126,7 +2126,7 @@ function handleReview(args: string[]): void {
         ? readUnitSourceManifest(pd, flags.stage, flags.unit as string)
         : null;
       if (manifest?.ok === false) {
-        const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
+        const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/units/${flags.unit}/${flags.stage}/source-manifest.json`;
         refuseReview(
           `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
             `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +

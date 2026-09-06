@@ -137,7 +137,7 @@ function coverUnit(
   slug: string,
   producesNames: string[],
 ): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, slug);
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of producesNames) {
     writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
@@ -150,6 +150,7 @@ function reviewUnit(proj: string, unit: string): void {
   const artifact = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     "functional-design",
     artifactFilename("functional-spec"),

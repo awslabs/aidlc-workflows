@@ -43,7 +43,7 @@ outputs: ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this st
 ### Step 1: Load Prior Context
 
 - Read build/test results from `<record>/construction/build-and-test/` (if exists)
-- Read code summary from `<record>/construction/{unit-name}/code-generation/` (if exists)
+- Read code summary from `<record>/construction/units/{unit-name}/code-generation/` (if exists)
 - Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
 - Read workspace profile for existing CI configuration
 
@@ -73,7 +73,7 @@ Run Construction → Operation verification check:
 - Read
   `<record>/construction/build-and-test/cross-unit-traceability.md`.
 - Read every
-  `<record>/construction/*/code-generation/traceability.json`.
+  `<record>/construction/units/*/code-generation/traceability.json`.
 - Confirm all Units built and tested, all code-generation tables have no
   unresolved findings, and the cross-Unit FR/NFR/AC gate passed.
 - Confirm the CI quality gates enforce the build and test commands recorded by

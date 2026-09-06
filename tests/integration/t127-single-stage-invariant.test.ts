@@ -532,6 +532,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     const stageDir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "api",
       "functional-design",
     );

@@ -88,7 +88,7 @@ Incremental scopes (refactor) deliberately skip units-generation and domain-desi
 
 ### Step 2: Create Functional Design Plan
 
-Analyze the unit's scope and create a functional design questions file at `<record>/construction/{unit-name}/functional-design/functional-design-questions.md` with context-appropriate questions using [Answer]: tags.
+Analyze the unit's scope and create a functional design questions file at `<record>/construction/units/{unit-name}/functional-design/functional-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
 Focus areas:
 - Business logic workflows and algorithms
@@ -111,7 +111,7 @@ If ANY ambiguity found: create follow-up questions and resolve before proceeding
 
 ### Step 4: Generate Artifacts
 
-Generate the following in `<record>/construction/{unit-name}/functional-design/`. Technology-agnostic — implementable in any language. No code, no SQL, no framework references.
+Generate the following in `<record>/construction/units/{unit-name}/functional-design/`. Technology-agnostic — implementable in any language. No code, no SQL, no framework references.
 
 - **entities.md**: The entity model. Carries a fenced ```yaml source-of-truth block listing each entity with its description, attributes (name, logical type, required/unique, references, allowed values, defaults, min/max, constraints), entity-level constraints, and relationships (cardinality + direction). Follow the block with a short human-readable summary of the entity set.
 - **rules.md**: The business rules. Carries a fenced ```yaml source-of-truth block listing each numbered rule (`id: BRx.y`, e.g. `BR1.1` — the `BR{group}.{seq}` format the traceability sensor recognizes) with its statement, category (validation/authorization/constraint/calculation/policy), what it applies to, trigger, logic (IF…THEN in plain language), violation behaviour, and source (FR-n/NFR-n). Follow the block with a short human-readable rules summary table.
@@ -119,7 +119,7 @@ Generate the following in `<record>/construction/{unit-name}/functional-design/`
 - **frontend-components.md** (CONDITIONAL — only if unit includes frontend/UI): Component hierarchy, props/state design, interaction flows, form validation rules, API integration points
 
 Create
-`<record>/construction/{unit-name}/functional-design/traceability.json`.
+`<record>/construction/units/{unit-name}/functional-design/traceability.json`.
 Enumerate every acceptance criterion assigned to this Unit. Each `OK` target
 must name one or more `BRx.y` IDs that exist in `rules.md`. Use the
 optional `reverse` array to explain rules that intentionally have no AC; any
@@ -157,14 +157,14 @@ Present completion message and approval gate:
 Summary of artifacts produced, then:
 
 ```
-**Review:** `<record>/construction/{unit-name}/functional-design/`
+**Review:** `<record>/construction/units/{unit-name}/functional-design/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown design artefacts under `<record>/construction/{unit-name}/functional-design/`. Some sections include code samples that the code-shape sensors can also flag.
+This stage's outputs are markdown design artefacts under `<record>/construction/units/{unit-name}/functional-design/`. Some sections include code samples that the code-shape sensors can also flag.
 
 Imports: `required-sections`, `upstream-coverage`, `linter`, `type-check`, `traceability`.
 

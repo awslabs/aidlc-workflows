@@ -2224,7 +2224,7 @@ function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
       `Refusing wave completion for unit "${unit}" of "${stage}": no active intent record directory exists.`,
     );
   }
-  const unitPath = join(rec, "construction", unit, stage, "memory.md");
+  const unitPath = join(rec, "construction", "units", unit, stage, "memory.md");
   const parentPath = join(rec, "construction", stage, "memory.md");
   const unitContent = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
   const entries = parseMemoryEntries(unitContent);
@@ -2261,7 +2261,8 @@ function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
 }
 
 // The unit's missing REQUIRED artifacts (kind-filtered like the engine's
-// unitCovered): resolved under <record>/construction/<unit>/<slug>/<name>.md.
+// unitCovered): resolved under
+// <record>/construction/units/<unit>/<slug>/<name>.md.
 // Returns [] when everything applicable exists. Kind filtering reads the
 // bolt_dag the same way the engine does; with no readable dag the FULL
 // required list applies (fail strict, like unitCovered's kinds=null path).
@@ -2285,7 +2286,7 @@ function missingUnitArtifacts(
   }
   const missing: string[] = [];
   for (const name of required) {
-    const p = join(rec, "construction", unit, stage.slug, artifactFilename(name));
+    const p = join(rec, "construction", "units", unit, stage.slug, artifactFilename(name));
     if (!isRegularFile(p)) missing.push(name);
   }
   return missing;
@@ -2357,7 +2358,7 @@ function handleCount(args: string[]): void {
 // layout is gone - a stage's produces[] artifacts now live under the ACTIVE
 // intent's per-intent record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/
 // <phase>/<stage>/`), per-unit Construction artifacts under that record's
-// `construction/<unit>/<stage>/`, and codekb stages (reverse-engineering) under
+// `construction/units/<unit>/<stage>/`, and codekb stages (reverse-engineering) under
 // the space-level `aidlc/spaces/<space>/codekb/<repo>/`. This guard resolves
 // against those live seams (recordDir / codekbDir), mirroring
 // resolveArtifactPath in aidlc-orchestrate.ts so the two cannot drift on shape.
@@ -2558,7 +2559,7 @@ function revisionBackstopDisabled(): boolean {
 //     - see the codekb arm of resolveArtifactPath).
 //   - per-unit Construction (for_each: unit-of-work): the {unit} segment is
 //     unknown at approve/advance time, so we glob every
-//     <record>/construction/<unit>/<slug>/ instead of resolving one.
+//     <record>/construction/units/<unit>/<slug>/ instead of resolving one.
 //   - everything else: <record>/<phase>/<slug>/.
 // Returns [] when no active intent record resolves (recordDir null) - a stage
 // that declares produces then vacuously fails the existence check, which is the
@@ -2581,7 +2582,7 @@ function producesDirsForStage(
     if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
       return [join(rec, "construction", stage.slug)];
     }
-    const ctorRoot = join(rec, "construction");
+    const ctorRoot = join(rec, "construction", "units");
     if (!existsSync(ctorRoot)) return [];
     const dirs: string[] = [];
     for (const unit of readdirSync(ctorRoot)) {
@@ -4973,7 +4974,8 @@ function handleApprove(args: string[]): void {
   // the slug as already [x] and skip their own guard, so this is the single
   // enforcement point on the approve path. Bypass via AIDLC_SKIP_ARTIFACT_GUARD.
   // Covers per-unit Construction stages (globs the record's
-  // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
+  // construction/units/<unit>/<slug>/) and code-producing stages
+  // (workspace_requires).
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
 

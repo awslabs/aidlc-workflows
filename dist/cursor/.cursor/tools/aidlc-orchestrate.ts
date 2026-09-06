@@ -1946,8 +1946,9 @@ function resolveScope(
 // the workspace root; the engine only joins them to projectDir for deterministic
 // diary bootstrap. Re-rooting remains a pure prefix swap, not a route through
 // the absolute projectDir-keyed state helpers.
-// Per-unit Construction stages embed a {unit-name} segment that a later engine
-// change resolves; until then the bare phase/slug form is the faithful derivation.
+// Per-unit Construction stages keep their shared diary here; concrete unit
+// diaries are rooted under construction/units/<unit>/<slug>/ by
+// unitMemoryPathFor.
 function memoryPathFor(phase: string, slug: string, recordPrefix: string | null): string {
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   return `${prefix}/${phase}/${slug}/memory.md`;
@@ -1959,7 +1960,7 @@ function unitMemoryPathFor(
   recordPrefix: string | null,
 ): string {
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
-  return `${prefix}/construction/${unit}/${slug}/memory.md`;
+  return `${prefix}/construction/units/${unit}/${slug}/memory.md`;
 }
 
 // Create the stage diary at the deterministic directive-emission boundary so
@@ -2407,7 +2408,8 @@ function codekbArtifactRepos(ctx: CodekbCtx): string[] {
 // Resolve a single artifact vocabulary name to its canonical aidlc-docs/... path
 // UNDER THE STAGE THAT OWNS THE FILE. Non-per-unit stages map to
 // `aidlc-docs/<phase>/<stage-slug>/<name>.md`; per-unit Construction stages
-// inject a `{unit-name}` segment: `aidlc-docs/construction/{unit}/<stage>/<name>.md`.
+// inject a `units/{unit-name}` segment:
+// `aidlc-docs/construction/units/{unit}/<stage>/<name>.md`.
 // `unit` defaults to the documented placeholder token; a caller with active
 // Bolt context passes the concrete unit name to materialise the real path. The
 // {unit-name} segment is INJECTED here — it never appears in the node's
@@ -2421,8 +2423,9 @@ function codekbArtifactRepos(ctx: CodekbCtx): string[] {
 // artifact has exactly one producing stage (enforced by graph compile) and
 // lives in that producer's directory, NOT the consuming stage's. The per-unit
 // decision is likewise the OWNER's — a consume of a per-unit-produced artifact
-// resolves under construction/{unit}/<producer>/, a consume of a non-per-unit
-// artifact under <producer-phase>/<producer-slug>/ with no construction prefix.
+// resolves under construction/units/{unit}/<producer>/, a consume of a
+// non-per-unit artifact under <producer-phase>/<producer-slug>/ with no
+// construction prefix.
 function resolveArtifactPath(
   name: string,
   owner: GraphStage,
@@ -2443,7 +2446,7 @@ function resolveArtifactPath(
   }
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   if (isPerUnit(owner) && unit !== null) {
-    return `${prefix}/construction/${unit}/${owner.slug}/${filename}`;
+    return `${prefix}/construction/units/${unit}/${owner.slug}/${filename}`;
   }
   return `${prefix}/${owner.phase}/${owner.slug}/${filename}`;
 }
@@ -4971,7 +4974,7 @@ function emitRunStageForSlug(
 // never duplicates rows, verified). So a single checkbox cannot, on its own,
 // track "stage done for 3 of 9 units". The COVERAGE LEDGER is the per-unit
 // ARTIFACTS on disk: a unit is "covered" for this stage once all of the stage's
-// produces[] exist under <recordPrefix>/construction/<unit>/<slug>/. The engine
+// produces[] exist under <recordPrefix>/construction/units/<unit>/<slug>/. The engine
 // walks the ordered unit list (the compiled Bolt DAG, flattened to topo order),
 // finds the FIRST uncovered unit, and emits a run-stage for THAT concrete unit,
 // with the gate SUPPRESSED (false) on EVERY not-yet-covered unit. The conductor
@@ -4986,7 +4989,7 @@ function emitRunStageForSlug(
 
 // True when `unit` is COVERED for `node`: every APPLICABLE artifact in
 // node.produces[] (the REQUIRED set) exists on disk under the resolved per-unit
-// path (<recordPrefix>/construction/<unit>/<owner.slug>/<name>.md).
+// path (<recordPrefix>/construction/units/<unit>/<owner.slug>/<name>.md).
 // node.optional_produces entries are DELIBERATELY not checked here - they are
 // artifacts the unit MAY write (marked CONDITIONAL in the stage body), so their
 // absence never blocks coverage. The resolved path
@@ -7156,7 +7159,7 @@ function checkEnsembleEvidence(
   );
   const contributionDirs: Array<{ path: string; unit: string | null }> = usesUnitDirs
     ? evidenceUnits.map((unit) => ({
-        path: join(pd, prefix, "construction", unit, slug, "contributions"),
+        path: join(pd, prefix, "construction", "units", unit, slug, "contributions"),
         unit,
       }))
     : [{
@@ -7183,7 +7186,7 @@ function checkEnsembleEvidence(
   if (missing.length === 0) return { ok: true };
 
   const contributionPath = usesUnitDirs
-    ? `${prefix}/construction/<unit>/${slug}/contributions/<agent-slug>.md`
+    ? `${prefix}/construction/units/<unit>/${slug}/contributions/<agent-slug>.md`
     : `${prefix}/${node.phase}/${slug}/contributions/<agent-slug>.md`;
   return {
     ok: false,

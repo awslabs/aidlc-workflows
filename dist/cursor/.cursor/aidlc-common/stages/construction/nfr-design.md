@@ -89,11 +89,11 @@ Execute all steps sequentially as written.
 
 ### Step 1: Read Prior Artifacts
 
-Read NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`. Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — the integration mechanism and failure behaviour at each boundary drive the resilience and scalability patterns designed here. Read the domain-design component catalogue from `<record>/inception/domain-design/components.md` (if exists) for architectural context; when the scope skipped those design stages, derive the architectural context from the NFR requirements and, on brownfield, the code knowledge base — never invent the content of a missing artifact.
+Read NFR requirements from `<record>/construction/units/{unit-name}/nfr-requirements/`. Read functional design artifacts from `<record>/construction/units/{unit-name}/functional-design/` (if they exist). Read the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — the integration mechanism and failure behaviour at each boundary drive the resilience and scalability patterns designed here. Read the domain-design component catalogue from `<record>/inception/domain-design/components.md` (if exists) for architectural context; when the scope skipped those design stages, derive the architectural context from the NFR requirements and, on brownfield, the code knowledge base — never invent the content of a missing artifact.
 
 ### Step 2: Generate Design Questions
 
-Create a questions file at `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md` with context-appropriate questions using [Answer]: tags.
+Create a questions file at `<record>/construction/units/{unit-name}/nfr-design/nfr-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
 Focus areas:
 - Resilience patterns (circuit breakers, bulkheads, fallback strategies)
@@ -124,7 +124,7 @@ Design concrete solutions for each NFR category:
 
 ### Step 5: Generate Artifacts
 
-Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
+Generate the following in `<record>/construction/units/{unit-name}/nfr-design/`:
 
 - **performance-design.md**: Caching architecture, optimization strategies, resource pooling, async patterns, performance budgets
 - **security-design.md**: Authentication/authorization architecture, encryption design, input validation strategy, security headers, compliance controls
@@ -133,7 +133,7 @@ Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 - **observability-design.md**: Metrics collection architecture, structured logging design, distributed tracing strategy, alerting rules and escalation, dashboard specifications, SLI/SLO definitions, correlation ID propagation
 - **logical-components.md**: Logical infrastructure component inventory — service boundaries, failure domains, blast radius mapping, component isolation strategy, shared resource identification. Bridges NFR design decisions with Infrastructure Design by providing a component-level view of where NFR patterns apply.
 
-Create `<record>/construction/{unit-name}/nfr-design/traceability.json`.
+Create `<record>/construction/units/{unit-name}/nfr-design/traceability.json`.
 Enumerate every `NFRx.y` from this Unit's NFR requirements and map it to the
 concrete design solution:
 
@@ -166,14 +166,14 @@ Present completion message and approval gate:
 Summary of design decisions per NFR category, then:
 
 ```
-**Review:** `<record>/construction/{unit-name}/nfr-design/`
+**Review:** `<record>/construction/units/{unit-name}/nfr-design/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown design artefacts under `<record>/construction/{unit-name}/nfr-design/`. Some sections include code samples that the code-shape sensors can also flag.
+This stage's outputs are markdown design artefacts under `<record>/construction/units/{unit-name}/nfr-design/`. Some sections include code samples that the code-shape sensors can also flag.
 
 Imports: `required-sections`, `upstream-coverage`, `linter`, `type-check`, `traceability`.
 

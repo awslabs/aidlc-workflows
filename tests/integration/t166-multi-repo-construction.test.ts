@@ -186,7 +186,7 @@ function recordMainReview(
   sourcePath: string,
 ): RunResult {
   const record = activeRecord(proj);
-  const dir = join(record, "construction", unit, "code-generation");
+  const dir = join(record, "construction", "units", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md"]) {
     writeFileSync(join(dir, name), `# ${name}\n`);
@@ -237,7 +237,7 @@ function recordWorktreeReview(
   sourcePath: string,
 ): RunResult {
   const record = activeRecord(wt);
-  const dir = join(record, "construction", unit, "code-generation");
+  const dir = join(record, "construction", "units", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md"]) {
     writeFileSync(join(dir, name), `# ${name}\n`);

@@ -324,6 +324,7 @@ function seedApprovedCodeGenerationPlan(
   const dir = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     "code-generation",
   );
@@ -386,7 +387,13 @@ function logWorktreeReview(
   iteration = 1,
 ): void {
   const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
-  const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
+  const dir = join(
+    seededRecordDir(wt),
+    "construction",
+    "units",
+    unit,
+    "code-generation",
+  );
   mkdirSync(dir, { recursive: true });
   const reviewArtifact = join(dir, "code-generation-plan.md");
   if (!existsSync(reviewArtifact)) {
@@ -484,6 +491,7 @@ function finalizeWithNotReady(iteration: number): {
       join(
         seededRecordDir(worktree),
         "construction",
+        "units",
         unit,
         "code-generation",
         "code-summary.md",
@@ -579,6 +587,7 @@ function setupStaleReviewRefusal(): void {
   const artifact = join(
     seededRecordDir(wt),
     "construction",
+    "units",
     "stale",
     "code-generation",
     "code-summary.md",
@@ -787,6 +796,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const unitRecord = join(
       seededRecordDir(wtproj),
       "construction",
+      "units",
       "win",
       "code-generation",
     );

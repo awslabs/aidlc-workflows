@@ -465,7 +465,7 @@ function seedActiveWithCheckbox(
  *     this body (a blank `[Answer]:` tag = a pending question; an answered one
  *     = resolved). Omit to seed NO questions file.
  *   - `unit`: if given for Construction, writes under the per-unit
- *     `<record>/construction/<unit>/<slug>/` layout and must also be returned by
+ *     `<record>/construction/units/<unit>/<slug>/` layout and must also be returned by
  *     the mock engine for the hook to select that exact directory.
  *   - `currentSlug`: when set, keeps the state cursor on this different stage
  *     while the questions file belongs to `slug` (the unit-major interleave).
@@ -507,7 +507,13 @@ function seedInProgressWithQuestions(
   if (opts.questions !== undefined) {
     // The stage's questions dir re-roots under the record.
     const stageDir = opts.unit
-      ? join(seededRecordDir(proj), phase.toLowerCase(), opts.unit, slug)
+      ? join(
+          seededRecordDir(proj),
+          phase.toLowerCase(),
+          "units",
+          opts.unit,
+          slug,
+        )
       : join(seededRecordDir(proj), phase.toLowerCase(), slug);
     mkdirSync(stageDir, { recursive: true });
     writeFileSync(join(stageDir, `${slug}-questions.md`), opts.questions, "utf-8");

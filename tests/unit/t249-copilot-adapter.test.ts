@@ -753,7 +753,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // calls carry a toolu_* id as session_id (live-verified in the compat
     // spike, T6b/T12). The ledger must resolve the identity and the core
     // reviewer-scope hook must convert the block to the deny JSON.
-    const sibling = join(record, "construction", "U02", "functional-design", "design.md");
+    const sibling = join(record, "construction", "units", "U02", "functional-design", "design.md");
     const r = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: "toolu_test0000000000000001",
@@ -806,8 +806,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("17: createFile/filePath and editFiles/files reach audit and sensors", () => {
     const dir = scratchProject(true);
-    const first = join(seededRecordDir(dir), "construction", "U01", "code", "first.ts");
-    const second = join(seededRecordDir(dir), "construction", "U01", "code", "second.ts");
+    const first = join(seededRecordDir(dir), "construction", "units", "U01", "code", "first.ts");
+    const second = join(seededRecordDir(dir), "construction", "units", "U01", "code", "second.ts");
     mkdirSync(dirname(first), { recursive: true });
     writeFileSync(first, "export const first = true;\n", "utf-8");
     writeFileSync(second, "export const second = true;\n", "utf-8");
@@ -838,6 +838,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const added = join(
       seededRecordDir(dir),
       "construction",
+      "units",
       "U01",
       "code",
       "added.ts",
@@ -888,7 +889,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ...identity,
     });
 
-    const sibling = join(record, "construction", "U02", "functional-design", "design.md");
+    const sibling = join(record, "construction", "units", "U02", "functional-design", "design.md");
     const blocked = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: hostSessionId,
@@ -942,7 +943,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       agent_id: "vscode-agent-patch",
     });
 
-    const sibling = join(record, "construction", "U02", "code", "sibling.ts");
+    const sibling = join(record, "construction", "units", "U02", "code", "sibling.ts");
     const result = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: hostSessionId,
@@ -990,12 +991,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         tool_name: "file_search",
         tool_input: { query },
       });
-    const currentUnit = search(join(record, "construction", "U01", "**", "*.ts"));
+    const currentUnit = search(join(record, "construction", "units", "U01", "**", "*.ts"));
     expect(currentUnit.stdout.trim()).toBe("");
 
     for (const query of [
-      join(record, "construction", "U02", "**", "*.ts"),
-      join(record, "construction", "*", "**", "*.ts"),
+      join(record, "construction", "units", "U02", "**", "*.ts"),
+      join(record, "construction", "units", "*", "**", "*.ts"),
       "**/*",
     ]) {
       const blocked = search(query);

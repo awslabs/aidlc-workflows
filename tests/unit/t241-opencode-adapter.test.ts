@@ -269,8 +269,8 @@ describe("t241 OpenCode adapter reviewer scope", () => {
     copyCore(root, "tools/aidlc-runtime-paths.ts");
 
     const recordRoot = join(root, "aidlc", "spaces", "default", "intents");
-    const current = join(recordRoot, "construction", "U01", "design.md");
-    const sibling = join(recordRoot, "construction", "U02", "design.md");
+    const current = join(recordRoot, "construction", "units", "U01", "design.md");
+    const sibling = join(recordRoot, "construction", "units", "U02", "design.md");
     mkdirSync(dirname(current), { recursive: true });
     mkdirSync(dirname(sibling), { recursive: true });
     writeFileSync(current, "# current\n", "utf-8");

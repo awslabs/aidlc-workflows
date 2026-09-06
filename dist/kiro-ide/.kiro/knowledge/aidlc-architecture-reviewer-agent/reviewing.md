@@ -24,7 +24,7 @@ When invoked as a reviewer, your role changes. You are NOT designing — you are
 - Entities have all attributes needed to implement rules?
 - State machines complete? (all states reachable, no dead ends)
 - API specs cover error cases, not just happy paths?
-- Cross-unit contract boundaries respected? Verify against the shared inception contracts passed with the invocation (`components.md`, `contract-summary.md`, `unit-of-work.md`), NOT against sibling units' `construction/<other-unit>/functional-design/` prose and not via grep, glob, or shell patterns that span sibling unit paths. If the current unit's design names a specific integration point in another unit, open the owning file (resolved via the shared contracts, not by browsing or searching the sibling unit's directory) to spot-check; do not sweep the sibling unit.
+- Cross-unit contract boundaries respected? Verify against the shared inception contracts passed with the invocation (`components.md`, `contract-summary.md`, `unit-of-work.md`), NOT against sibling units' `construction/units/<other-unit>/functional-design/` prose and not via grep, glob, or shell patterns that span sibling unit paths. If the current unit's design names a specific integration point in another unit, open the owning file (resolved via the shared contracts, not by browsing or searching the sibling unit's directory) to spot-check; do not sweep the sibling unit.
 
 ### NFR Design
 - Quality targets measurable? (SLOs with numbers)
@@ -74,8 +74,8 @@ Use this exact format:
 | ID | Severity | Location | Finding | Required action | Status |
 |---|---|---|---|---|---|
 | R-01 | Critical | aidlc/spaces/<space>/intents/<intent-record>/inception/domain-design/components.md > component CMP-003 dependencies | CMP-003 depends on CMP-001 which depends on CMP-003, creating a cycle | Break the cycle, for example by extracting the shared concern into a new component | New |
-| R-02 | Major | aidlc/spaces/<space>/intents/<intent-record>/construction/<unit>/functional-design/entities.md > entity ENT-005 | ENT-005 references entity "Payment", which is not defined | Define Payment in the owning artifact or reference the correct upstream entity | New |
-| R-03 | Minor | aidlc/spaces/<space>/intents/<intent-record>/construction/<unit>/nfr-design/performance-design.md > Caching layer cost | No cost estimate exists for the caching layer | Add a cost estimate or explicitly record it as TBD with an owner | New |
+| R-02 | Major | aidlc/spaces/<space>/intents/<intent-record>/construction/units/<unit>/functional-design/entities.md > entity ENT-005 | ENT-005 references entity "Payment", which is not defined | Define Payment in the owning artifact or reference the correct upstream entity | New |
+| R-03 | Minor | aidlc/spaces/<space>/intents/<intent-record>/construction/units/<unit>/nfr-design/performance-design.md > Caching layer cost | No cost estimate exists for the caching layer | Add a cost estimate or explicitly record it as TBD with an owner | New |
 
 ### Validation Tool Results
 

@@ -708,7 +708,7 @@ function reviewerReceiptError(
         return {
           error:
             `claimed converged but the worktree wrote application-source paths outside unit "${unit}"'s ` +
-            `source manifest (${rendered}); update construction/${unit}/code-generation/source-manifest.json ` +
+            `source manifest (${rendered}); update construction/units/${unit}/code-generation/source-manifest.json ` +
             `in the worktree, re-run the reviewer there, and record a fresh verdict before finalizing`,
         };
       }
@@ -797,6 +797,7 @@ function captureReviewedRecordSnapshot(
     const manifestPath = join(
       wtRecord,
       "construction",
+      "units",
       unit,
       stage.slug,
       "source-manifest.json",
@@ -826,7 +827,7 @@ function captureReviewedRecordSnapshot(
     entries.push(
       {
         logicalPath:
-          `construction/${unit}/${stage.slug}/source-manifest.json`,
+          `construction/units/${unit}/${stage.slug}/source-manifest.json`,
         bytes: manifestBytes,
       },
     );
