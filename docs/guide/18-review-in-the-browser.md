@@ -56,6 +56,14 @@ Opening it exchanges the nonce for an `HttpOnly` browser cookie; the daemon's
 long-lived token is never printed. Run `/aidlc --status` whenever you need a
 fresh one.
 
+Every gated stage reviews in the browser, including Reverse Engineering, whose
+knowledge base lives in the space-level `aidlc/spaces/<space>/codekb/<repo>/`
+rather than the intent record: its artifacts list, render, take remarks, and
+decide exactly like a record stage. The document header names the stage's lead
+persona (Developer Agent, Product Agent, …) as the author of each revision.
+Plan Approval in Code Generation is the one human checkpoint that stays in the
+terminal; the browser shows the plan for reading only.
+
 ### Find your place
 
 The left rail has **Inbox**, **Workflow**, and **Search**. **Workflow** opens or
@@ -70,8 +78,11 @@ present. Current stages open by default, done stages stay folded, phase headings
 fold a whole phase, and **Collapse all** / **Expand all** folds or opens the
 tree. Skipped stages name the reason and show that nothing was produced;
 upcoming stages say what they will ask and produce. The footer shows the agent
-state and links to **All files** and the **Audit log**. Use the rail's Workflow
-icon to hide the panel for a wider document view.
+state read from the record (*Agent working*, *Agent waiting for you*, *Agent
+revising*, *Workflow complete*), an **All files** list of the intent's
+reviewable files, and a note pointing at the audit ledger, which stays in the
+terminal record and is never served. Use the rail's Workflow icon to hide the
+panel for a wider document view.
 
 The header keeps the current workspace, intent, phase, and stage path beside a
 file-name dropdown. The dropdown switches among the stage's questions,
@@ -119,11 +130,19 @@ text, heading path, and optional element path.
 
 ### Decide
 
-Pending cards say that they send with your decision. **Approve** posts any
-pending annotations or general note to the next `feedback-NNN.md`, then always
-writes the decision to the next `decision-NNN.json`. **Request changes** first
-opens an optional note field; it uses the same conditional feedback write and
-always writes the decision file.
+Pending cards say that they send with your decision. Both header buttons
+confirm in the Threads rail before anything is written, because the Stop hook
+applies a decision the moment it lands: **Approve** shows the stage, its
+revision, and how many pending remarks travel with it (`Approve · r1 →` /
+Cancel); **Request changes** opens an optional note field (`Send request`).
+Approve posts any pending annotations or general note to the next
+`feedback-NNN.md`, then always writes the decision to the next
+`decision-NNN.json`; Request changes uses the same conditional feedback write
+and always writes the decision file. Once sent, the header reads **Approved ·
+rN** or **Changes requested · rN** and the document locks until the daemon
+reports the next state — **Revising · rN** while the agent addresses your
+remarks, then **Awaiting your review · rN+1** when the gate reopens on the
+artifact your threads are on.
 
 A browser decision is an append-only pre-answer to the ordinary gate, not a
 second state machine: the
@@ -164,9 +183,12 @@ the browser is their projection.
 
 **History** is the record timeline: saved revisions, feedback, answers,
 decisions, and responses appear newest first. Its **Compare** control opens a
-saved revision or **Diff** between the earlier snapshot and the current file.
-The equivalent terminal evidence is the numbered files and snapshots under the
-stage's `.review-ui/` directory.
+saved revision, and **Diff** shows what changed between the earlier snapshot
+and the current file *inline*: each changed block gets an accent bar and an
+`r0 → r1` panel beneath it with the old text struck through and the new text
+highlighted, and the rail lists the changes so you can jump to each one
+(**Hide changes** restores the plain view). The equivalent terminal evidence is
+the numbered files and snapshots under the stage's `.review-ui/` directory.
 
 **Outline** lists the Markdown headings and pending-thread counts by section.
 Choose a heading to jump to it. It is derived from the same server-rendered
@@ -207,13 +229,16 @@ continues**. Each question appears in one reading column: its agent-authored
 explainer — **Why now**, optional figure, trade-offs, **Recommendation**, and
 **Related decisions** — is immediately above its answer card. The recommended
 option is preselected and marked **Recommended**; multi-select, **Other** with
-**Describe your answer**, and an optional **Note for the agent** follow the
-question file's schema.
+**Describe your answer** (choosing it puts the caret in the field — just type),
+and an optional **Note for the agent** follow the question file's schema.
+Inline `code`, **bold**, and _italic_ in option and explainer text render as
+such. Your draft answers survive a reload of the tab until you save.
 
 The browser never edits `*-questions.md`. **Save answers — the agent continues**
-writes `answers-NNN.json` against the questions-file digest. If the file changed
-while the form was open, the save is refused with **Questions changed —
-reload**. On Claude Code the Stop hook holds the conductor's turn until the file
+writes `answers-NNN.json` against the questions-file digest; the header then
+reads **Answers sent** and the form locks while the agent applies them. If the
+file changed while the form was open, the save is refused with **Questions
+changed — reload**. On Claude Code the Stop hook holds the conductor's turn until the file
 lands; other harnesses can use `aidlc-log.ts answers-wait`. The conductor then
 runs `answers-apply`, the only browser path that writes `[Answer]:` and optional
 `[Note]:` lines into the canonical questions file. The terminal equivalents are

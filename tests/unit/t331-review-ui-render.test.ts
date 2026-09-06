@@ -157,4 +157,23 @@ describe("t331 review UI render helpers", () => {
       PathConfinementError,
     );
   });
+
+  test("remark ids skip ids already used by earlier feedback files of the stage", () => {
+    const markdown = renderFeedbackMarkdown(
+      {
+        stage: "requirements-analysis",
+        unit: null,
+        revision: 1,
+        decision_hint: "request-changes",
+        annotations: [
+          { artifact: "requirements.md", kind: "comment", id: "a1", heading_path: [], body: "reply body", reply_to: "a1" },
+          { artifact: "requirements.md", kind: "comment", heading_path: [], body: "second" },
+        ],
+      } as never,
+      { created: "2026-09-06T00:00:00Z", takenIds: new Set(["a1", "a2"]) },
+    );
+    expect(markdown).toContain("### Comment · a3 · reply to a1");
+    expect(markdown).toContain("### Comment · a4");
+    expect(markdown).not.toMatch(/### Comment · a1 —|### Comment · a1 ·|### Comment · a2/);
+  });
 });

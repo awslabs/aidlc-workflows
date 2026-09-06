@@ -173,9 +173,11 @@ button.workflow-child:hover { background: var(--panel); }
 .agent-dot.waiting { background: var(--accent); }
 .agent-dot.revising,
 .agent-dot.writing { background: var(--amber); }
+.agent-dot.idle { background: var(--faint); }
+.agent-dot.done { background: var(--green); }
 .workflow-footer button { margin-left: auto; color: var(--muted); font-size: 10.5px; }
 .workflow-footer button:hover { color: var(--ink); }
-.audit-link { cursor: help; }
+.audit-note { cursor: help; color: var(--muted); }
 .workflow-placeholder,
 .workflow-tree-empty { display: grid; align-content: center; justify-items: center; gap: 5px; padding: 32px 20px; color: var(--muted); text-align: center; }
 .workflow-placeholder { min-height: 260px; }

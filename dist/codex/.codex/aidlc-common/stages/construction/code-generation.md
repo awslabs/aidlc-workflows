@@ -236,7 +236,6 @@ Before presenting, record the exact prompt identity:
 ```bash
 bun .codex/tools/aidlc-log.ts decision --stage code-generation \
   --checkpoint plan-approval \
-  --session "<Runtime Session from SessionStart context>" \
   --questions-file "<code-generation-record>/code-generation-questions.md" \
   --decision "Approve this exact Code Generation plan?" \
   --options "Approve Plan,Request Changes" \
@@ -244,6 +243,11 @@ bun .codex/tools/aidlc-log.ts decision --stage code-generation \
 ```
 
 For zero-Unit work replace `--unit "<directive.unit>"` with `--stage-level`.
+The challenge binds to the runtime session automatically (the SessionStart
+hook's current-session marker); pass `--session "<Runtime Session>"` only when
+the SessionStart context names one and you want to be explicit. Never guess a
+session id from `aidlc/.aidlc-sessions/` — a wrong id refuses the receipt and
+forces the human to answer twice.
 Then present the structured question and STOP the turn. Fill `[Answer]:` only
 after the human explicitly responds, using the exact unlettered choice
 `Approve Plan` or `Request Changes`, then immediately run the matching receipt:
@@ -251,7 +255,6 @@ after the human explicitly responds, using the exact unlettered choice
 ```bash
 bun .codex/tools/aidlc-log.ts answer --stage code-generation \
   --checkpoint plan-approval \
-  --session "<same Runtime Session>" \
   --questions-file "<code-generation-record>/code-generation-questions.md" \
   --details "<exact choice>" \
   --unit "<directive.unit>"

@@ -1003,6 +1003,7 @@ async function feedbackResponse(projectDir: string, request: Request): Promise<R
   const created = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const reviewDir = stageReviewUiDir(stageDir);
   mkdirSync(reviewDir, { recursive: true });
+  const takenIds = new Set(listFeedbackFiles(stageDir).flatMap((entry) => entry.remarks.map((remark) => remark.id)));
 
   let sequence = nextSequence(reviewDir, FEEDBACK_PREFIX);
   let file = "";
@@ -1017,7 +1018,7 @@ async function feedbackResponse(projectDir: string, request: Request): Promise<R
       throw error;
     }
     try {
-      writeFileSync(descriptor, renderFeedbackMarkdown(parsed, { created, sources }), "utf-8");
+      writeFileSync(descriptor, renderFeedbackMarkdown(parsed, { created, sources, takenIds }), "utf-8");
     } finally {
       closeSync(descriptor);
     }

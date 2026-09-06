@@ -273,6 +273,8 @@ function uniqueAnnotationId(preferred, self) {
   const taken = new Set([
     ...store.annotations.filter((item) => item !== self).map((item) => item.id),
     ...drafts.filter((item) => item !== self).map((item) => item.id),
+    // ids already on the record for this stage (the daemon enforces this too)
+    ...(store.remarks || []).map((item) => item.id),
   ]);
   if (preferred && !taken.has(String(preferred))) return String(preferred);
   let number = 1;

@@ -731,21 +731,25 @@ function annotationHeading(annotation: ReviewAnnotation, id: string): string {
   return heading;
 }
 
-function assignRemarkIds(annotations: readonly ReviewAnnotation[]): string[] {
+// Remark ids are unique across the stage's feedback files, not just within one:
+// the agent's `- aN:` replies and a `reply to aN` heading both name a remark
+// from an earlier round, so `taken` carries every id already on disk.
+function assignRemarkIds(annotations: readonly ReviewAnnotation[], taken: ReadonlySet<string> = new Set()): string[] {
   const counts = new Map<string, number>();
   for (const annotation of annotations) {
-    if (!annotation.id || !REMARK_ID.test(annotation.id)) continue;
+    if (!annotation.id || !REMARK_ID.test(annotation.id) || taken.has(annotation.id)) continue;
     counts.set(annotation.id, (counts.get(annotation.id) ?? 0) + 1);
   }
   const reserved = new Set(
     [...counts].filter(([, count]) => count === 1).map(([id]) => id),
   );
-  const used = new Set<string>();
+  const used = new Set<string>(taken);
   let candidate = 1;
   return annotations.map((annotation) => {
     if (
       annotation.id &&
       REMARK_ID.test(annotation.id) &&
+      !taken.has(annotation.id) &&
       counts.get(annotation.id) === 1
     ) {
       used.add(annotation.id);
@@ -760,11 +764,11 @@ function assignRemarkIds(annotations: readonly ReviewAnnotation[]): string[] {
 
 export function renderFeedbackMarkdown(
   input: FeedbackRequest,
-  options: { created?: string; sources?: Readonly<Record<string, string>> } = {},
+  options: { created?: string; sources?: Readonly<Record<string, string>>; takenIds?: ReadonlySet<string> } = {},
 ): string {
   const created = options.created ?? new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const sections = new Map<string, Array<{ annotation: ReviewAnnotation; id: string }>>();
-  const ids = assignRemarkIds(input.annotations);
+  const ids = assignRemarkIds(input.annotations, options.takenIds);
   input.annotations.forEach((annotation, index) => {
     const artifact = basename(annotation.artifact);
     const identified = { annotation, id: ids[index] };

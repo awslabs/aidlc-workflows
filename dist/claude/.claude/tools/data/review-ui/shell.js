@@ -63,6 +63,11 @@ function currentStage(workflow = store.workflow) {
   );
 }
 
+function workflowComplete(workflow = store.workflow) {
+  const all = stages(workflow);
+  return all.length > 0 && all.every((stage) => stage.state === "done" || stage.state === "skipped");
+}
+
 function stageForView(view = store.view, workflow = store.workflow) {
   if (view?.stage) return findStage(view.stage, workflow);
   if (view?.path) {
@@ -80,8 +85,18 @@ function stageArtifacts(stage) {
   return (stage?.artifacts || []).filter((artifact) => artifact.path !== stage?.questions?.file);
 }
 
+// The artifact a stage opens on: at a revised gate, the one carrying the
+// reviewer's threads (that is where the conversation is); otherwise the
+// stage's declared review artifact, else the first written one.
 function firstArtifact(stage, existingOnly = true) {
-  return stageArtifacts(stage).find((artifact) => !existingOnly || artifact.exists) || null;
+  const artifacts = stageArtifacts(stage).filter((artifact) => !existingOnly || artifact.exists);
+  if (!artifacts.length) return null;
+  if (stage?.state === "current" && stage.gate) {
+    const threaded = [...artifacts].filter((artifact) => artifact.threads > 0).sort((a, b) => b.threads - a.threads);
+    if (threaded.length) return threaded[0];
+  }
+  const review = store.state?.manifest?.review_artifact;
+  return artifacts.find((artifact) => review && artifact.path === review) || artifacts[0];
 }
 
 function isActiveIntent(workflow = store.workflow) {
@@ -225,6 +240,7 @@ function viewState(view, stage) {
   if (isLiveGate(stage) && (view.kind === "artifact" || view.kind === "overview")) {
     return { label: `Awaiting your review · r${revision(stage)}`, detail: "The agent continues after your decision here or in the terminal.", tone: "needs" };
   }
+  if (stage.state === "done" && workflowComplete()) return { label: `Workflow complete${time ? ` · ${time}` : ""}`, detail: "Every stage is done; the record is read-only. Start the next intent from the terminal with /aidlc.", tone: "ok" };
   if (stage.state === "done") return { label: `Done${time ? ` · ${time}` : ""}`, detail: "Read-only stage record.", tone: "ok" };
   if (stage.state === "skipped") return { label: "Skipped", detail: stage.reason || "Not part of this intent's scope.", tone: "quiet" };
   if (stage.state === "current" && stage.gate === "revising") {
@@ -298,7 +314,8 @@ function headerActions(view, stage) {
   }
   if (view.kind === "artifact" && (view.readOnly || stage.state !== "current")) {
     const current = currentStage();
-    return `${actionButton("Add note", "add-note")}${current ? actionButton(`Back to ${current.name} →`, "open-current", true) : ""}`;
+    const showBack = current && current.slug !== stage.slug && !workflowComplete();
+    return `${actionButton("Add note", "add-note")}${showBack ? actionButton(`Back to ${current.name} →`, "open-current", true) : ""}`;
   }
   if (view.kind === "overview") {
     if (isLiveQuestions(stage)) {

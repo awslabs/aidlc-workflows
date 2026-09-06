@@ -8,6 +8,7 @@ import {
   type ArtifactKind,
 } from "./aidlc-artifact-vocabulary.ts";
 import {
+  loadAgents,
   activeIntent,
   activeSpace,
   artifactFormatsFromState,
@@ -82,8 +83,24 @@ export interface WorkflowStage {
   memory?: string;
 }
 
+let agentDisplayCache: Map<string, string> | null = null;
+
+// Same source as the statusline: the agent roster's `display_name` frontmatter
+// ("Pipeline & Deploy Agent"), falling back to a title-cased slug when the
+// roster cannot be read.
 function agentLabel(id: string | null | undefined): string | null {
-  const match = /^aidlc-(.+)-agent$/.exec(id ?? "");
+  if (!id) return null;
+  if (!agentDisplayCache) {
+    agentDisplayCache = new Map();
+    try {
+      for (const agent of loadAgents()) agentDisplayCache.set(agent.slug, agent.display_name);
+    } catch {
+      // fall through to the derived label
+    }
+  }
+  const known = agentDisplayCache.get(id);
+  if (known) return known;
+  const match = /^aidlc-(.+)-agent$/.exec(id);
   if (!match) return null;
   return `${match[1].split("-").map((part) => part === "aws" ? "AWS" : part.charAt(0).toUpperCase() + part.slice(1)).join(" ")} Agent`;
 }
@@ -120,7 +137,7 @@ export interface WorkflowPayload {
   stages_total: number;
   stages_done: number;
   phases: WorkflowPhase[];
-  agent_status: "idle" | "writing" | "revising" | "waiting";
+  agent_status: "idle" | "writing" | "revising" | "waiting" | "done";
   daemon: { version: string; port: number };
 }
 
@@ -589,11 +606,20 @@ export function workflowPayload(
   } catch {
     // No marker is the ordinary case for older records.
   }
-  const agentStatus: WorkflowPayload["agent_status"] = current?.state === "awaiting-approval"
+  // Pointer states are authoritative where they exist; otherwise the stage
+  // cursor says whether the agent has work in hand (a stage in progress) or
+  // the workflow has nothing left to do.
+  const currentCheckbox = checkboxes.find((entry) => entry.slug === getField(state, "Current Stage"));
+  const questionsOpen = phases.some((phase) => phase.stages.some((stage) => stage.state === "current" && stage.questions?.open));
+  const agentStatus: WorkflowPayload["agent_status"] = current?.state === "awaiting-approval" || questionsOpen
     ? "waiting"
     : current?.state === "revising"
       ? "revising"
-      : "idle";
+      : /^completed?$/i.test(getField(state, "Status") ?? "")
+        ? "done"
+        : currentCheckbox?.state === "in-progress" || currentCheckbox?.state === "pending"
+          ? "writing"
+          : "idle";
   return {
     space: selection.space,
     spaces,

@@ -18,6 +18,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  readCurrentSessionId,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   boltSlugForUnit,
@@ -306,13 +307,7 @@ function handleDecision(args: string[]): void {
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
-    const session = flags.session?.trim();
-    if (!session) {
-      error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
-      );
-    }
-    fields.Session = session;
+    fields.Session = planApprovalSession(pd, flags.session);
   }
   if (flags.unit) {
     fields.Unit = flags.unit;
@@ -636,13 +631,7 @@ function handleAnswer(args: string[]): void {
         flags.details as "Approve Plan" | "Request Changes",
       );
       Object.assign(fields, planApprovalFields(planEvidence));
-      const session = flags.session?.trim();
-      if (!session) {
-        error(
-          "Plan Approval requires --session <id> from the invoking SessionStart context.",
-        );
-      }
-      fields.Session = session;
+      fields.Session = planApprovalSession(pd, flags.session);
     }
     // Human-presence gate (ledger-event design): the interview answer is
     // a human-judgement event, so require a HUMAN_TURN appended AFTER the last
@@ -2826,6 +2815,20 @@ export function main(argv: string[]): void {
 }
 
 // --- Utility ---
+
+// Plan Approval binds its challenge to the runtime session. `--session` may
+// name it explicitly; when omitted, the SessionStart hook's `.current-session`
+// marker is the same id — so the conductor never has to pick a binding file by
+// hand (and pick the wrong one after /clear).
+function planApprovalSession(pd: string, flag: string | undefined): string {
+  const explicit = flag?.trim();
+  if (explicit) return explicit;
+  const current = readCurrentSessionId(pd);
+  if (current) return current;
+  return error(
+    "Plan Approval requires the runtime session: pass --session <id> from the SessionStart context (no .current-session marker was found).",
+  );
+}
 
 function error(msg: string): never {
   const pd = resolveProjectDir(projectDir);

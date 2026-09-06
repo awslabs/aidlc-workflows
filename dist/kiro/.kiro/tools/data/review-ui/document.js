@@ -1061,6 +1061,9 @@ function nextAnnotationId() {
   for (const annotation of store.annotations || []) {
     if (annotation?.id) reservedAnnotationIds.add(annotation.id);
   }
+  for (const remark of store.remarks || []) {
+    if (remark?.id) reservedAnnotationIds.add(remark.id);
+  }
   let number = 1;
   while (reservedAnnotationIds.has(`a${number}`)) number += 1;
   const id = `a${number}`;
