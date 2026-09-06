@@ -358,13 +358,34 @@ function wrapContext(coreStdout: string, eventName: string): string {
   return coreStdout;
 }
 
+// Codex applies a PreToolUse updatedInput rewrite only when the same envelope
+// carries an explicit permissionDecision "allow"; without it the rewrite is
+// dropped and the original input runs. The decision authorizes only the
+// rewritten input — Codex's own approval flow still governs the call.
 function wrapUpdatedInput(updatedInput: Record<string, unknown>): string {
   return `${JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
+      permissionDecision: "allow",
       updatedInput,
     },
   })}\n`;
+}
+
+// Re-emit a core hook's PreToolUse rewrite with the explicit "allow" Codex
+// needs to apply it. Output without an updatedInput passes through untouched.
+function authorizeUpdatedInput(coreStdout: string): string {
+  try {
+    const parsed = JSON.parse(coreStdout) as {
+      hookSpecificOutput?: { updatedInput?: Record<string, unknown> };
+    };
+    if (parsed.hookSpecificOutput?.updatedInput) {
+      return wrapUpdatedInput(parsed.hookSpecificOutput.updatedInput);
+    }
+  } catch {
+    // unparseable core output — pass through untouched
+  }
+  return coreStdout;
 }
 
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
@@ -639,11 +660,15 @@ switch (target) {
   case "deliver-stage-rules": {
     // Codex 0.145 consumes the same PreToolUse hookSpecificOutput.updatedInput
     // contract as Claude. The core hook recognizes spawn_agent and appends the
-    // exact active-stage bundle to message/items without adapter re-shaping.
+    // exact active-stage bundle to message/items without adapter re-shaping —
+    // but Codex only applies the rewrite when the envelope also carries
+    // permissionDecision "allow", so the adapter re-wraps the core output
+    // here instead of changing the harness-neutral core hook.
     const r = runCoreWithStderr("aidlc-deliver-stage-rules.ts", rawInput);
+    const output = authorizeUpdatedInput(r.stdout);
     const answeredCode = r.code === 2 ? 2 : 0;
-    persistResponse(r.stdout, answeredCode, r.stderr);
-    if (r.stdout) process.stdout.write(r.stdout);
+    persistResponse(output, answeredCode, r.stderr);
+    if (output) process.stdout.write(output);
     if (r.code === 2) {
       process.stderr.write(r.stderr);
       return 2;
