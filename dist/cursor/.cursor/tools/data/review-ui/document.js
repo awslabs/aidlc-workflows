@@ -635,19 +635,37 @@ function handleBlockFocus(event) {
 /** Swap the rendered block for its Markdown source, keeping the caret on the same word. */
 function armEdit(edit) {
   if (!edit || edit.armed) return;
-  const prefix = caretPrefix(edit.content);
+  // Carry the whole selection across the swap, not just the caret: a reader who
+  // highlighted a sentence and pressed Delete (or typed over it) means that
+  // sentence. Both ends are aligned from rendered text to source offsets.
+  const { start, end } = selectionPrefixes(edit.content);
   edit.content.innerHTML = tokenizeMarkdown(edit.original);
-  setCaretOffset(edit.content, alignPrefixToSource(edit.original, prefix));
+  const from = alignPrefixToSource(edit.original, start);
+  const to = end === null ? from : Math.max(from, alignPrefixToSource(edit.original, end));
+  setSourceRange(edit.content, from, to);
   edit.armed = true;
   edit.wrapper.classList.add("armed");
+}
+
+/** Rendered text before the selection start and (when not collapsed) before its end, in document order. */
+function selectionPrefixes(root) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !root.contains(selection.anchorNode)) return { start: "", end: null };
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return { start: caretPrefix(root), end: null };
+  const start = renderedPrefix(root, range.startContainer, range.startOffset);
+  if (range.collapsed) return { start, end: null };
+  return { start, end: renderedPrefix(root, range.endContainer, range.endOffset) };
 }
 
 /** Rendered text from the start of the block to the caret. */
 function caretPrefix(root) {
   const selection = window.getSelection();
   if (!selection?.rangeCount || !root.contains(selection.anchorNode)) return "";
-  const anchor = selection.anchorNode;
-  const anchorOffset = selection.anchorOffset;
+  return renderedPrefix(root, selection.anchorNode, selection.anchorOffset);
+}
+
+function renderedPrefix(root, anchor, anchorOffset) {
   // Walk text nodes up to the caret, skipping struck-through (deleted) text:
   // it is not part of the suggested source the editor is about to show.
   let prefix = "";
@@ -1220,7 +1238,7 @@ function caretOffset(root) {
   return range.toString().length;
 }
 
-function setCaretOffset(root, offset) {
+function textPosition(root, offset) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let remaining = offset;
   let node = null;
@@ -1229,10 +1247,21 @@ function setCaretOffset(root, offset) {
     if (remaining <= node.data.length) break;
     remaining -= node.data.length;
   }
-  if (!node) return;
+  return node ? { node, offset: Math.min(remaining, node.data.length) } : null;
+}
+
+function setCaretOffset(root, offset) {
+  setSourceRange(root, offset, offset);
+}
+
+/** Select source text from `from` to `to` (collapsed caret when equal). */
+function setSourceRange(root, from, to) {
+  const start = textPosition(root, from);
+  if (!start) return;
+  const end = to > from ? textPosition(root, to) || start : start;
   const range = document.createRange();
-  range.setStart(node, Math.min(remaining, node.data.length));
-  range.collapse(true);
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
   const selection = window.getSelection();
   selection.removeAllRanges();
   selection.addRange(range);
