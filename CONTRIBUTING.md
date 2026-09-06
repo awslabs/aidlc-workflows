@@ -50,6 +50,7 @@ Before submitting a PR, verify:
 - `bun tests/run-tests.ts` passes (see [Testing](docs/reference/09-testing.md)).
 - User-visible changes bump `core/tools/aidlc-version.ts`, the README version badge, and add a matching `CHANGELOG.md` entry in the same commit (see the Changelog Policy in [`AGENTS.md`](AGENTS.md)).
 - Stale stage names, paths, or flags do not remain in examples, docs, or generated output (grep `docs/` and `README.md` when renaming anything).
+- If the change adds an input to any fingerprint, epoch, or receipt identity, the PR names the human-visible change that input detects (see the Authority Policy in [`docs/reference/11-contributing.md`](docs/reference/11-contributing.md#authority-policy)).
 
 ## Testing Changes
 

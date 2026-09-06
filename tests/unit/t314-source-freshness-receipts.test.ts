@@ -38,6 +38,7 @@
 
 import { afterAll, beforeEach, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -57,10 +58,13 @@ import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltSlugForUnit,
+  auditBlockField,
   gitCommitSourceListing,
   readAllAuditShards,
   sourceBaselineAuditFields,
   reviewArtifactFingerprint,
+  reviewRecordDigest,
+  type ReviewRecord,
   resolveStage,
   shapeSourceSnapshotIndex,
   workspaceSourceFingerprint,
@@ -310,8 +314,8 @@ function seedTwoUnitDag(proj: string): void {
   );
 }
 
-// Strip the stamped Source Fingerprint field from every audit shard - the
-// exact shape of a pre-upgrade (legacy) REVIEW_COMPLETED row.
+// Rewrite the request/completion pair into the genuine pre-record appendix
+// shape: no request id, no named record, and an explicit appendix boundary.
 function stripFingerprintFields(proj: string): void {
   const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
   for (const intent of readdirSync(intentsDir)) {
@@ -320,11 +324,42 @@ function stripFingerprintFields(proj: string): void {
     for (const f of readdirSync(auditDirPath)) {
       if (!f.endsWith(".md")) continue;
       const p = join(auditDirPath, f);
-      const body = readFileSync(p, "utf-8");
-      if (!body.includes("**Source Fingerprint**: ")) continue;
-      writeFileSync(p, body.replace(/^\*\*Source Fingerprint\*\*: .*\r?\n/gm, ""), "utf-8");
+      const blocks = readFileSync(p, "utf-8").split(/\n---\n/).map((block) => {
+        if (!/\*\*Event\*\*: REVIEW_(?:REQUESTED|COMPLETED)/.test(block)) {
+          return block;
+        }
+        const stripped = block.replace(
+          /^\*\*(?:Source Fingerprint|Request Source Fingerprint|Request Id|Review Record|Review Record Digest)\*\*: .*\r?\n/gm,
+          "",
+        );
+        return `${stripped.trimEnd()}\n` +
+          "**Review Appendix Artifact**: construction/code-generation/code-generation-plan.md\n" +
+          "**Review Appendix Offset**: 0\n";
+      });
+      writeFileSync(p, blocks.join("\n---\n"), "utf-8");
     }
   }
+}
+
+function rewriteRecordedSourceBinding(proj: string, value: string): void {
+  const shard = seededAuditShard(proj);
+  let audit = readFileSync(shard, "utf-8");
+  const completion = audit
+    .split(/\n---\n/)
+    .find((block) => auditBlockField(block, "Event") === "REVIEW_COMPLETED");
+  if (completion === undefined) throw new Error("missing review completion");
+  const relativeRecord = auditBlockField(completion, "Review Record");
+  if (relativeRecord === null) throw new Error("missing review record path");
+  const path = join(seededRecordDir(proj), relativeRecord);
+  const record = JSON.parse(readFileSync(path, "utf-8")) as ReviewRecord;
+  record.source_fingerprint = value;
+  const bytes = `${JSON.stringify(record, null, 2)}\n`;
+  writeFileSync(path, bytes, "utf-8");
+  audit = audit.replace(
+    /^\*\*Review Record Digest\*\*: .*$/m,
+    `**Review Record Digest**: ${reviewRecordDigest(bytes)}`,
+  );
+  writeFileSync(shard, audit, "utf-8");
 }
 
 // Seed the minimum an intent registry needs for intentRepos() to resolve a
@@ -1230,6 +1265,69 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   });
 
+  test("commit reconstruction preserves a batch header split at the 64 KiB refill boundary", () => {
+    git(dir, ["init", "-q", "--object-format=sha1"]);
+    git(dir, ["config", "user.email", "t@test"]);
+    git(dir, ["config", "user.name", "t"]);
+    const first = Buffer.alloc(65_482, 0x61);
+    const second = Buffer.alloc(65_482, 0x62);
+    const third = Buffer.from("tail\n");
+    const paths = [
+      "a-boundary.bin",
+      "b-split-header.bin",
+      "c-refill.bin",
+    ] as const;
+    for (const [path, bytes] of [
+      [paths[0], first],
+      [paths[1], second],
+      [paths[2], third],
+    ] as const) {
+      writeFileSync(join(dir, path), bytes);
+    }
+    git(dir, ["add", "--", ...paths]);
+    git(dir, ["commit", "-qm", "batch boundary"]);
+    const head = spawnSync(
+      "git",
+      ["-C", dir, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const oids = paths.map((path) =>
+      spawnSync(
+        "git",
+        ["-C", dir, "rev-parse", `${head}:${path}`],
+        { encoding: "utf-8" },
+      ).stdout.trim()
+    );
+    const responseBytes = (oid: string, bytes: Buffer): number =>
+      Buffer.byteLength(`${oid} blob ${bytes.length}\n`, "ascii") +
+      bytes.length +
+      1;
+    const firstResponseBytes = responseBytes(oids[0], first);
+    const secondResponseBytes = responseBytes(oids[1], second);
+    const thirdResponseBytes = responseBytes(oids[2], third);
+
+    // The first response leaves byte 65,535 as the first byte of the second
+    // header. The next full refill reaches the third header and overwrites that
+    // borrowed buffer position, so a non-owning partial-line slice is corrupted.
+    expect(oids.every((oid) => /^[0-9a-f]{40}$/.test(oid))).toBe(true);
+    expect(firstResponseBytes).toBe(64 * 1024 - 1);
+    expect(secondResponseBytes).toBe(64 * 1024 - 1);
+    expect(secondResponseBytes - 1 + thirdResponseBytes).toBeGreaterThanOrEqual(
+      64 * 1024,
+    );
+    expect(oids[1][0]).not.toBe(oids[2][1]);
+
+    const listing = gitCommitSourceListing(dir, head, true);
+    expect([...(listing ?? new Map()).entries()]).toEqual(
+      paths.map((path, index) => [
+        `\0${path}`,
+        `100644 ${createHash("sha256")
+          .update([first, second, third][index])
+          .digest("hex")}`,
+      ]),
+    );
+  });
+
   test("commit reconstruction never reads a symlinked worktree metadata target", () => {
     seedGitRepo(dir);
     const external = `${dir}-external-worktree-meta.json`;
@@ -1941,6 +2039,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
   test("a newly stamped unbindable receipt remains fail-closed while Git is still unavailable", () => {
     recordReview(proj);
     const shard = seededAuditShard(proj);
+    rewriteRecordedSourceBinding(proj, "unbindable");
     writeFileSync(
       shard,
       readFileSync(shard, "utf-8")
@@ -1956,7 +2055,10 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     );
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("project source changed after");
+    expect(r.out).toContain("reviewed source boundary could not be fingerprinted");
+    expect(r.out).toContain(".aidlc-source-paths.json");
+    expect(r.out).not.toContain("project source changed after");
+    expect(r.out).not.toContain("revert the source change");
   }, 60_000);
 
   test("a true advance replay stays idempotent even if source later changes", () => {
@@ -2432,8 +2534,8 @@ describe("t314 multi-unit source attribution", () => {
     expect(dirty.out).toContain(
       "workspace source changed again after the one recovery review",
     );
-    expect(dirty.out).toContain("To change this document");
-    expect(dirty.out).toContain("Request Changes decision");
+    expect(dirty.out).toContain('Ask \\"What should change?\\" for stage \\"code-generation\\"');
+    expect(dirty.out).toContain("their exact text unchanged");
   }, 60_000);
 });
 

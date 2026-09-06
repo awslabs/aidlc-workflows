@@ -634,6 +634,64 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("the guard-recovery rendering clause is byte-identical across every harness", () => {
+    // The clause is authored once and ported: the router and every enforcing tool
+    // emit the same typed ask, so every conductor must render it the same way.
+    // Both the sentence inside the `ask` row and the execution paragraph below the
+    // directive table are extracted by their own anchors and compared as bytes.
+    const sentences = new Map<string, string[]>();
+    const paragraphs = new Map<string, string[]>();
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const askRow = body
+        .split("\n")
+        .find((line) => line.startsWith("| `ask` |"));
+      expect(askRow, `${rel} lacks the ask row`).toBeDefined();
+      const sentenceStart = (askRow as string).indexOf(
+        'When `directive.ask_type === "guard-recovery"`',
+      );
+      const sentenceEnd = (askRow as string).indexOf(
+        "take no engine action until they answer.",
+      );
+      expect(sentenceStart, `${rel} lacks the guard-recovery sentence`).toBeGreaterThan(-1);
+      expect(sentenceEnd, `${rel} lacks the terminal-ask rule`).toBeGreaterThan(sentenceStart);
+      const sentence = (askRow as string).slice(
+        sentenceStart,
+        sentenceEnd + "take no engine action until they answer.".length,
+      );
+      sentences.set(sentence, [...(sentences.get(sentence) ?? []), rel]);
+      const paragraph = body
+        .split("\n")
+        .find((line) => line.startsWith("**Guard-recovery execution.**"));
+      expect(paragraph, `${rel} lacks the guard-recovery execution paragraph`).toBeDefined();
+      paragraphs.set(paragraph as string, [
+        ...(paragraphs.get(paragraph as string) ?? []),
+        rel,
+      ]);
+    }
+    expect([...sentences.values()].map((v) => v.sort())).toHaveLength(1);
+    expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
+  });
+
+  test("every conductor keeps action-only guard recovery behind a fresh human turn", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        "A remedy without `command` is action-only",
+        "render that follow-up and END THE TURN",
+        "their exact text",
+        "Never synthesize a missing command",
+        "process its returned directive through the table above",
+        "whose last line is a guard-recovery ask JSON is the same directive",
+        "When `directive.remedies` is empty the ask is terminal",
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("retained native Windows evidence proves completed CLI and IDE routing", () => {
     const manifest = readFileSync(join(P3_EVIDENCE_DIR, "README.md"), "utf-8");
     const hashes: Record<string, string> = {

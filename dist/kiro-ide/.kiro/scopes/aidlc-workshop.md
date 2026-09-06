@@ -9,6 +9,7 @@ keywords:
 description: Facilitated group session with mandatory gates
 skeleton: on
 review_cap: advisory
+change_control: strict
 ---
 
 # workshop scope
@@ -19,6 +20,8 @@ test floor light for a teaching context. It runs the inception,
 construction, and operation arc end to end (so participants see the whole
 lifecycle) while skipping the ideation discovery stages that a facilitator
 front-loads by hand.
+
+Change Control defaults to strict so participants see every reopened approval instead of a quiet continue.
 
 ## Why these stages, why skip those
 

@@ -51,6 +51,7 @@
 // suppressed too should say so — it is a one-line follow-on, not a silent choice.
 import { existsSync } from "node:fs";
 import {
+  consumeSharedDirectiveAsk,
   humanTurnMintAllowed,
   markHumanTurn,
   resolveProjectDirFromHook,
@@ -129,13 +130,22 @@ try {
           }
         }
       } catch { /* presence still records without identity on legacy payloads */ }
-      appendAuditEntry("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
-      if (sessionId && humanResponseText) {
-        recordPlanApprovalHumanResponse(
-          projectDir,
-          sessionId,
-          humanResponseText,
-        );
+      try {
+        appendAuditEntry("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
+        if (sessionId && humanResponseText) {
+          recordPlanApprovalHumanResponse(
+            projectDir,
+            sessionId,
+            humanResponseText,
+          );
+        }
+      } catch {
+        // Authority bookkeeping remains fail-open for the human's turn.
+      }
+      try {
+        consumeSharedDirectiveAsk(projectDir, humanResponseText);
+      } catch {
+        // Non-authority marker consumption is independently best-effort.
       }
     }
     markHumanTurn(projectDir);

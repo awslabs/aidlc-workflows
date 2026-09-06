@@ -401,6 +401,8 @@ function compositionScenario(
   );
   git(repoA, "add", "--", "aidlc/application.ts");
   git(repoA, "commit", "-q", "-m", "seed composition source");
+  // The scenario pins the strict source refusal; the feature scope's Change
+  // Control default is relaxed, so the intent asks for strict explicitly.
   const created = runUtil(
     proj,
     "intent-create",
@@ -408,6 +410,8 @@ function compositionScenario(
     "feature",
     "--repos",
     "repo-a",
+    "--change-control",
+    "strict",
   );
   if (created.status !== 0) throw new Error(created.out);
   const unit = `composition-${suffix}`;

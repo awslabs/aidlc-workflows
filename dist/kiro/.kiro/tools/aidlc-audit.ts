@@ -13,7 +13,7 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
@@ -23,10 +23,13 @@ import {
   errorMessage,
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
+  mergeReviewRecordsFromDelta,
   parseFieldArgs,
+  holdsAuditLock,
   redactProjectDirPrefix,
   relativeRecordDir,
   readRegularFileNoFollowOrThrow,
+  refuseEngineObserverWrite,
   releaseAuditLock,
   requireLiveClaimForTeamUnit,
   resolveProjectDir,
@@ -34,6 +37,7 @@ import {
   validateLiveUnitScope,
   worktreeClaimBoundaryMatches,
   worktreeAuditFilePath,
+  worktreeDocsDir,
   worktreePath,
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
@@ -138,6 +142,13 @@ const VALID_EVENT_TYPES = new Set([
   // Per-run review-class override changed (config-change --review). The
   // effective class each stage runs at is resolved at directive emission.
   "REVIEW_CLASS_CHANGED",
+  // Change Control: the per-intent value moved (the change-control verb, or a
+  // memory layer edit observed by a governed checkpoint), and a governed
+  // checkpoint accepted an input change under `relaxed` instead of refusing.
+  // Emitted through the library by aidlc-utility.ts and the checkpoint owners
+  // (aidlc-state.ts, aidlc-log.ts, aidlc-testing-posture.ts).
+  "CHANGE_CONTROL_SET",
+  "CHANGE_ACCEPTED",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
@@ -252,6 +263,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
   REVIEW_CLASS_CHANGED: "Review Class Change",
+  CHANGE_CONTROL_SET: "Change Control Set",
+  CHANGE_ACCEPTED: "Change Accepted",
   RECOMPOSED: "Plan Recomposed",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
@@ -396,6 +409,11 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  // Change Control provenance: a governed checkpoint owns the acceptance row
+  // and the verb owns the setting row. A CLI-forged CHANGE_ACCEPTED would make
+  // a change look already reported and suppress the genuine row.
+  "CHANGE_CONTROL_SET",
+  "CHANGE_ACCEPTED",
 ]);
 // Events a WORKTREE DELTA may never carry into the main intent shard. This is
 // deliberately an explicit enumeration, not prefix families: a Bolt/swarm
@@ -649,6 +667,11 @@ function appendAuditBlockAtPath(
   block: string,
   expectedIdentity?: AuditAppendExpectation,
 ): void {
+  // Every audit append funnels through here, so one barrier covers
+  // appendAuditEntry, appendAuditEntryUnlocked, appendAuditEntryAtPathUnlocked
+  // and appendAuditEntries: the ledger is authority evidence, and an observer
+  // that appended to it would be minting the very receipts it came to read.
+  refuseEngineObserverWrite("appendAuditBlockAtPath");
   const dir = dirname(shardPath);
   const projectAbs = resolve(projectDir);
   const projectReal = realpathSync(projectAbs);
@@ -813,10 +836,7 @@ export function appendAuditEntries(
   }
   for (const entry of entries) validateAuditEntry(entry);
 
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
-    throw new Error("Failed to acquire audit lock after retries");
-  }
-  try {
+  const append = (): { appended: true; events: string[]; timestamps: string[] } => {
     const timestamps = entries.map(() => isoTimestamp());
     const payload = entries
       .map((entry, index) =>
@@ -832,6 +852,17 @@ export function appendAuditEntries(
       events: entries.map((entry) => entry.eventType),
       timestamps,
     };
+  };
+
+  // A caller may hold the same lock across this batch and its related state
+  // write. In that transaction the validated one-write batch is already
+  // serialized; attempting the non-reentrant acquisition would deadlock.
+  if (holdsAuditLock(projectDir, intent, space)) return append();
+  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+    throw new Error("Failed to acquire audit lock after retries");
+  }
+  try {
+    return append();
   } finally {
     releaseAuditLock(projectDir, intent, space);
   }
@@ -1567,6 +1598,9 @@ function handleAuditMerge(args: string[], projectDir: string): void {
       mainFork.end,
     );
     if (existingMerge || deltaAlreadyPresent) {
+      // The earlier merge carried the delta's review records with its rows; a
+      // retry after that has nothing left to carry and must stay idempotent
+      // even once the worktree is gone.
       alreadyMerged = true;
       result = {
         timestamp: existingMerge
@@ -1574,6 +1608,17 @@ function handleAuditMerge(args: string[], projectDir: string): void {
           : forkTs,
       };
     } else {
+      // The review records the delta's REVIEW_COMPLETED rows name travel with
+      // the rows, under the same lock and before any row lands: main must never
+      // hold a completion pointing at a record it does not have. Paired to
+      // their requests, digest-verified from the worktree, exclusive on main.
+      if (recordPrefix !== null) {
+        mergeReviewRecordsFromDelta(
+          delta,
+          worktreeDocsDir(wtPath, recordPrefix),
+          join(projectDir, ...recordPrefix.split("/")),
+        );
+      }
       const mergedEntry = {
         eventType: "AUDIT_MERGED",
         fields: {

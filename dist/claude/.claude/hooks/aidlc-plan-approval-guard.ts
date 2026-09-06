@@ -78,6 +78,8 @@ import {
   codeGenerationRecordDir,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
+  PlanApprovalSourceDriftError,
+  planReviewAppendix,
   promptTestingContractMarkers,
 } from "../tools/aidlc-testing-posture.ts";
 
@@ -189,12 +191,27 @@ export interface UnitEvidence {
   receiptValid: boolean;
   /** The current approved Testing Contract hash, used to bind the worker brief. */
   contractHash: string | null;
+  /**
+   * The evaluator's own sentence when the receipt is not valid. It names what
+   * retired the approval (a moved workspace source, an ended stage attempt, a
+   * changed plan) so the block text can carry the remedy instead of the generic
+   * "present Plan Approval" steps alone.
+   */
+  reason?: string;
+  /**
+   * The plan's terminal `## Review` appendix, when a review recorded under the
+   * earlier protocol left one. The fingerprint deliberately excludes it, so it
+   * was never approved as work and must not appear in a developer handoff.
+   */
+  reviewAppendix?: string;
 }
 
 /** The decision's verdict. `mentioned` carries the explicit marker value(s). */
 export interface PlanApprovalVerdict {
   block: boolean;
   mentioned: string[];
+  /** The handoff carried the plan's review appendix, bytes the approval excludes. */
+  appendixInBrief?: boolean;
 }
 
 function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean {
@@ -282,21 +299,57 @@ export function evaluatePlanApprovalDispatch(
         ? ctx.units.find((u) => u.unit === null)
         : undefined;
   const contractMarkers = promptTestingContractMarkers(promptText);
+  // The approval excludes a terminal review appendix from the plan, so a brief
+  // that carries those bytes hands the developer work nobody approved. The
+  // `brief` command produces the body-only handoff; a prompt that quotes the
+  // appendix is refused whether the approval is otherwise current or not.
+  const appendixInBrief =
+    target !== undefined && promptCarriesReviewAppendix(promptText, target.reviewAppendix);
   return {
     block:
       target === undefined ||
       !approvalEvidenceIsCurrent(target) ||
       contractMarkers.length !== 1 ||
-      contractMarkers[0] !== target.contractHash,
+      contractMarkers[0] !== target.contractHash ||
+      appendixInBrief,
     mentioned,
+    ...(appendixInBrief ? { appendixInBrief: true } : {}),
   };
+}
+
+/** Whitespace-insensitive containment of a non-trivial appendix in the prompt. */
+function promptCarriesReviewAppendix(
+  promptText: string,
+  appendix: string | undefined,
+): boolean {
+  if (!appendix) return false;
+  const fold = (text: string): string => text.replace(/\s+/g, " ").trim();
+  // The heading alone is not evidence: a brief may legitimately mention that a
+  // review exists. The appendix's content lines are.
+  const content = fold(appendix.replace(/^\s*##[ \t]*Review\b[^\n]*/i, ""));
+  if (content.length === 0) return false;
+  return fold(promptText).includes(content);
+}
+
+export function appendixBlockReason(mentioned: string[]): string {
+  const scope =
+    mentioned[0] === `stage:${GUARDED_STAGE}`
+      ? "the zero-Unit stage-level implementation"
+      : `unit ${mentioned[0]}`;
+  return (
+    `Code generation cannot start for ${scope} because the developer handoff carries the ` +
+    "plan's terminal `## Review` appendix. That appendix is excluded from the approval " +
+    "fingerprint, so nobody approved it as work. Hand the developer the plan BODY and the " +
+    "unit-test instructions only: run `aidlc-testing-posture.ts brief` for this target and " +
+    "pass its output verbatim, then retry the handoff."
+  );
 }
 
 // The block reason handed back to the conductor through the harness's
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // missing evidence and the exact stage steps that produce it, so the
 // conductor self-corrects instead of retrying the same call.
-export function blockReason(mentioned: string[]): string {
+export function blockReason(mentioned: string[], detail: string | null = null): string {
   const scope =
     mentioned.length === 1
       ? mentioned[0] === `stage:${GUARDED_STAGE}`
@@ -307,7 +360,7 @@ export function blockReason(mentioned: string[]): string {
         : "one target, but the brief does not name it";
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
-    `not currently approved. Finish Steps 2-3 in code-generation: update ` +
+    `not currently approved.${detail ? ` Reason: ${detail}.` : ""} Finish Steps 2-3 in code-generation: update ` +
     `code-generation-plan.md and unit-test-instructions.md, refresh the Testing Contract and ` +
     `approval fingerprint, present Plan Approval, end the turn, and wait for the human's ` +
     `"Approve Plan" answer. Then retry the developer handoff with ` +
@@ -316,10 +369,27 @@ export function blockReason(mentioned: string[]): string {
   );
 }
 
+/**
+ * The evaluator's reason for the first mentioned target whose receipt is not
+ * valid, or null when every mentioned target is approved or unknown.
+ */
+export function receiptDetail(
+  evidence: UnitEvidence[],
+  mentioned: string[],
+): string | null {
+  for (const name of mentioned) {
+    const unit = name === `stage:${GUARDED_STAGE}` ? null : name;
+    const match = evidence.find((entry) => entry.unit === unit);
+    if (match && !match.receiptValid && match.reason) return match.reason;
+  }
+  return null;
+}
+
 export function mutationBlockReason(
   target: string,
   unit: string | null,
   opaqueShell = false,
+  detail: string | null = null,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const action = opaqueShell
@@ -328,7 +398,7 @@ export function mutationBlockReason(
   return (
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract are fingerprinted and ` +
-    `approved. Writes inside the selected code-generation record directory remain ` +
+    `approved.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
     `available for Steps 2-3. Record the human's explicit "Approve Plan" answer before beginning ` +
     `Step 4 generation.`
   );
@@ -369,9 +439,24 @@ export function knownUnits(projectDir: string, recordDir: string): string[] {
   return Array.from(units);
 }
 
+/** The plan's terminal review appendix for a target, or undefined when it has none. */
+function planAppendixFor(projectDir: string, unit: string | null): string | undefined {
+  try {
+    const plan = readFileSync(
+      join(codeGenerationRecordDir(projectDir, unit), "code-generation-plan.md"),
+      "utf-8",
+    );
+    const appendix = planReviewAppendix(plan);
+    return appendix.trim().length > 0 ? appendix : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvidence[] {
   return units.map((unit) => {
     const approval = evaluateCodeGenerationApproval(projectDir, { unit });
+    const reviewAppendix = planAppendixFor(projectDir, unit);
     return {
       unit,
       planExists: approval.planExists,
@@ -381,12 +466,15 @@ export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvi
       fingerprintValid: approval.fingerprintValid,
       receiptValid: approval.receiptValid,
       contractHash: approval.contractHash,
+      ...(approval.ok ? {} : { reason: approval.reason }),
+      ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     };
   });
 }
 
 export function gatherApprovalEvidence(projectDir: string, units: string[]): UnitEvidence[] {
   const stageApproval = evaluateCodeGenerationApproval(projectDir, { unit: null });
+  const reviewAppendix = planAppendixFor(projectDir, null);
   return [
     {
       unit: null,
@@ -397,6 +485,8 @@ export function gatherApprovalEvidence(projectDir: string, units: string[]): Uni
       fingerprintValid: stageApproval.fingerprintValid,
       receiptValid: stageApproval.receiptValid,
       contractHash: stageApproval.contractHash,
+      ...(stageApproval.ok ? {} : { reason: stageApproval.reason }),
+      ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     },
     ...gatherUnitEvidence(projectDir, units),
   ];
@@ -671,6 +761,7 @@ export async function run(input: string): Promise<number> {
     target: string;
     unit: string | null;
     opaqueShell: boolean;
+    detail: string | null;
   } | null = null;
   try {
     const statePath = stateFilePath(projectDir);
@@ -745,6 +836,7 @@ export async function run(input: string): Promise<number> {
           fingerprintValid: approval.fingerprintValid,
           receiptValid: approval.receiptValid,
           contractHash: approval.contractHash,
+          ...(approval.ok ? {} : { reason: approval.reason }),
         };
         verdict = {
           block: !approvalEvidenceIsCurrent(evidence),
@@ -757,6 +849,7 @@ export async function run(input: string): Promise<number> {
               `shell command: ${(mutation.shellCommand ?? "").trim().slice(0, 160)}`,
             unit,
             opaqueShell: outsideRecord === undefined,
+            detail: receiptDetail([evidence], verdict.mentioned),
           };
         }
       }
@@ -768,27 +861,39 @@ export async function run(input: string): Promise<number> {
     verdict = { block: true, mentioned: [] };
   }
   if (!verdict.block) {
+    // Under Change Control `relaxed`, generation start may accept source that
+    // moved after approval: the ledger row is written there and the one human
+    // line comes back to be printed on this hook's stdout.
+    const changeNotices: string[] = [];
     try {
       if (guardedDispatch) {
         for (const mentioned of verdict.mentioned) {
-          beginCodeGeneration(projectDir, {
-            unit:
-              mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
-          });
+          changeNotices.push(
+            ...beginCodeGeneration(projectDir, {
+              unit:
+                mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
+            }),
+          );
         }
       } else if (blockedMutation === null) {
         const state = readFileSync(stateFilePath(projectDir), "utf-8");
         const marker = readActiveDirectiveMarker(projectDir, state);
         if (marker?.version === 2 && marker.kind === "run-stage") {
-          beginCodeGeneration(projectDir, {
-            unit: marker.unit?.trim() || null,
-          });
+          changeNotices.push(
+            ...beginCodeGeneration(projectDir, {
+              unit: marker.unit?.trim() || null,
+            }),
+          );
         }
       }
     } catch (e) {
       authorityFailure =
-        `Code Generation could not start from its protected approval receipt: ${errorMessage(e)}`;
+        `Code Generation could not start from its protected approval receipt: ${errorMessage(e)}` +
+        (e instanceof PlanApprovalSourceDriftError ? ` ${e.remedy}` : "");
       verdict = { block: true, mentioned: verdict.mentioned };
+    }
+    if (!verdict.block) {
+      for (const notice of changeNotices) process.stdout.write(`${notice}\n`);
     }
   }
   if (!verdict.block) return 0;
@@ -839,8 +944,11 @@ export async function run(input: string): Promise<number> {
           blockedMutation.target,
           blockedMutation.unit,
           blockedMutation.opaqueShell,
+          blockedMutation.detail,
         )
-      : blockReason(verdict.mentioned)}\n`,
+      : verdict.appendixInBrief
+      ? appendixBlockReason(verdict.mentioned)
+      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}\n`,
   );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }

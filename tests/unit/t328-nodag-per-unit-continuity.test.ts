@@ -9,10 +9,9 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  auditBlockField,
   boltSlugForUnit,
   freshReviewReceipts,
   loadStageGraphAll,
@@ -239,52 +238,43 @@ function reviewArgs(
   ];
 }
 
+// The request opens this dispatch's review slot and names it in its JSON; the
+// reviewer writes its review there and the verdict records it as the review
+// record. Remember the slot per scope so a later verdict finds it.
+const reviewFiles = new Map<string, string>();
+
 function requestReview(
   proj: string,
   unit: string | undefined,
   iteration = 1,
   retryPending = false,
 ): RunResult {
-  return run(LOG, reviewArgs(unit, iteration, undefined, retryPending), proj);
+  const result = run(LOG, reviewArgs(unit, iteration, undefined, retryPending), proj);
+  if (result.status === 0) {
+    const parsed = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}") as {
+      reviewFile?: string;
+    };
+    if (typeof parsed.reviewFile === "string") {
+      reviewFiles.set(`${unit ?? ""}\u0000${iteration}`, parsed.reviewFile);
+    }
+  }
+  return result;
 }
 
-// Completion validates a canonical `## Review` appendix appended after the
-// request boundary, and refuses bytes that predate the request; write a
-// fresh, distinct reviewer section onto the exact append owner the matching
-// REVIEW_REQUESTED row recorded.
 let reviewPass = 0;
 
-function appendReviewerSection(
+function writeReviewFile(
   proj: string,
   unit: string | undefined,
   iteration: number,
 ): void {
-  const requested = readAllAuditShards(proj)
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .filter(
-      (block) =>
-        auditBlockField(block, "Event") === "REVIEW_REQUESTED" &&
-        auditBlockField(block, "Stage") === STAGE &&
-        (auditBlockField(block, "Unit") ?? undefined) === unit &&
-        auditBlockField(block, "Iteration") === String(iteration),
-    )
-    .at(-1);
-  const logicalPath =
-    requested === undefined
-      ? null
-      : auditBlockField(requested, "Review Appendix Artifact");
-  if (!logicalPath) return;
-  const artifact = join(seededRecordDir(proj), logicalPath);
-  const current = readFileSync(artifact, "utf-8");
-  const staleAppendix = current.search(/^## Review[ \t]*$/m);
-  const body =
-    staleAppendix === -1
-      ? current
-      : `${current.slice(0, staleAppendix).replace(/\s+$/, "")}\n`;
+  const reviewFile = reviewFiles.get(`${unit ?? ""}\u0000${iteration}`);
+  if (!reviewFile) return;
+  const absolute = join(proj, reviewFile);
+  mkdirSync(dirname(absolute), { recursive: true });
   writeFileSync(
-    artifact,
-    `${body}\n## Review\n\n` +
+    absolute,
+    "## Review\n\n" +
       "**Verdict:** READY\n" +
       `**Reviewer:** ${REVIEWER}\n` +
       `**Iteration:** ${iteration}\n\n` +
@@ -297,7 +287,7 @@ function recordVerdict(
   unit: string | undefined,
   iteration = 1,
 ): RunResult {
-  appendReviewerSection(proj, unit, iteration);
+  writeReviewFile(proj, unit, iteration);
   return run(LOG, reviewArgs(unit, iteration, "READY"), proj);
 }
 
@@ -345,6 +335,9 @@ function forgeUnitReceipt(proj: string, unit: string): void {
     Unit: unit,
     Iteration: "1",
     "Artifact Fingerprint": fingerprint,
+    "Review Appendix Artifact":
+      `construction/${unit}/${STAGE}/functional-spec.md`,
+    "Review Appendix Offset": "0",
   };
   appendAuditEntry("REVIEW_REQUESTED", fields, proj);
   appendAuditEntry(
@@ -868,6 +861,9 @@ describe("t328 no-DAG per-unit review continuity", () => {
       Unit: "alpha",
       Iteration: "1",
       "Artifact Fingerprint": fingerprint,
+      "Review Appendix Artifact":
+        `construction/alpha/${STAGE}/functional-spec.md`,
+      "Review Appendix Offset": "0",
     };
     const timestamp = "2026-08-25T02:00:00Z";
     const auditDir = seededAuditDir(proj);

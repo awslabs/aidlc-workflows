@@ -56,6 +56,34 @@ table and the resolver mechanics are the normative contract:
 [Rule System § Filename-derived scope](../reference/08-rule-system.md#filename-derived-scope)
 and [§ Layout](../reference/08-rule-system.md#layout).
 
+### Holding Change Control for the whole repo
+
+One heading in these files is read as a structured setting rather than prose:
+`## Change Control`. It decides what happens when an input changes after a human
+approved or confirmed something (a plan whose source moved, a reviewed document
+edited after its review, an output saved without the current summary
+confirmation): `strict` reopens that approval; `relaxed` records the change
+once, tells the human in one line, and continues. By default each intent takes
+its scope's value and any person on the intent can flip it from chat or with
+`/aidlc --change-control <value>`. To hold `strict` for everyone, put one line
+under the heading in `team.md` (or `org.md`, or `project.md` for one project):
+
+```markdown
+## Change Control
+
+Mode: strict
+```
+
+A `Mode: strict` in any layer wins over the scope default and over the intent's
+own line; a chat or flag flip to relaxed is then refused with a sentence naming
+this file, and the next governed check on a running intent records the change
+as a `CHANGE_CONTROL_SET` row naming the file as its source. `Mode: relaxed`
+here has no effect (an intent can always be relaxed by its scope or by chat),
+and so does leaving the section empty. Any other value is a validation error
+naming the file and the two allowed values. The line is read with the same
+`Field: value` grammar as `## Testing Posture`, commented-out lines included:
+a `Mode:` inside an HTML comment declares nothing.
+
 ---
 
 ## Strict-additive: layers stack, none silently overrides

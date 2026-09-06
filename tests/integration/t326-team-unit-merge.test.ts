@@ -20,6 +20,10 @@ import {
   readAllAuditShards,
   readUnitMergeTransaction,
   reviewArtifactFingerprint,
+  reviewRecordDigest,
+  reviewRecordRelativePath,
+  serializeReviewRecord,
+  type ReviewRecord,
   unitMergeTransactionPath,
   writeUnitMergeTransaction,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -244,6 +248,51 @@ ${extra}
 `;
 }
 
+function reviewAuditExtras(
+  projectDir: string,
+  stage: string,
+  unit: string,
+  reviewer: string,
+  fingerprint: string,
+  nonce: string,
+): { request: string; completion: string } {
+  const requestId = `review:${createHash("sha256").update(nonce).digest("hex").slice(0, 32)}`;
+  const attempt = createHash("sha256").update(`attempt:${nonce}`).digest("hex").slice(0, 16);
+  const record: ReviewRecord = {
+    version: 1,
+    stage,
+    unit,
+    workflow: null,
+    attempt,
+    iteration: 1,
+    reviewer,
+    verdict: "READY",
+    request_id: requestId,
+    request_challenge: null,
+    artifact_fingerprint: fingerprint,
+    source_fingerprint: null,
+    unit_source_fingerprint: null,
+    findings: [],
+    body: `**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n`,
+    recorded_at: "2026-08-20T01:00:00Z",
+  };
+  const bytes = serializeReviewRecord(record);
+  const path = reviewRecordRelativePath(stage, unit, attempt, 1);
+  const target = join(seededRecordDir(projectDir), ...path.split("/"));
+  mkdirSync(join(target, ".."), { recursive: true });
+  writeFileSync(target, bytes);
+  return {
+    request:
+      `**Reviewer**: ${reviewer}\n**Iteration**: 1\n` +
+      `**Artifact Fingerprint**: ${fingerprint}\n**Request Id**: ${requestId}\n`,
+    completion:
+      `**Reviewer**: ${reviewer}\n**Iteration**: 1\n` +
+      `**Verdict**: READY\n**Request Fingerprint**: ${fingerprint}\n` +
+      `**Artifact Fingerprint**: ${fingerprint}\n**Request Id**: ${requestId}\n` +
+      `**Review Record**: ${path}\n**Review Record Digest**: ${reviewRecordDigest(bytes)}\n`,
+  };
+}
+
 function prepareCandidate(
   remote: string,
   unit: string,
@@ -415,20 +464,27 @@ function prepareCandidate(
         unit,
       );
       expect(fingerprint).not.toBeNull();
+      const review = reviewAuditExtras(
+        checkout,
+        stage,
+        unit,
+        stageNode.reviewer,
+        fingerprint as string,
+        `${label}:${unit}:${generation}:${stage}`,
+      );
       audit += auditBlock(
         "REVIEW_REQUESTED",
         unit,
         generation,
         stage,
-        `**Reviewer**: ${stageNode.reviewer}\n**Iteration**: 1\n`,
+        review.request,
       );
       audit += auditBlock(
         "REVIEW_COMPLETED",
         unit,
         generation,
         stage,
-        `**Reviewer**: ${stageNode.reviewer}\n**Iteration**: 1\n` +
-          `**Verdict**: READY\n**Artifact Fingerprint**: ${fingerprint}\n`,
+        review.completion,
       );
     }
     audit += auditBlock(
@@ -497,9 +553,7 @@ function completeUnitOnMain(projectDir: string, unit: string): void {
     {
       targetId: `unit:${unit}`,
       intentId: "main-fixture",
-      directiveEpoch: `sha256:${"1".repeat(64)}`,
       runFloor: "unstarted#0",
-      sourceFloor: `sha256:${"2".repeat(64)}`,
     },
   );
   writeFileSync(join(codeDir, "code-generation-plan.md"), plan);
@@ -525,20 +579,27 @@ function completeUnitOnMain(projectDir: string, unit: string): void {
         unit,
       );
       expect(fingerprint).not.toBeNull();
+      const review = reviewAuditExtras(
+        projectDir,
+        stageSlug,
+        unit,
+        stage.reviewer,
+        fingerprint as string,
+        `main:${unit}:1:${stageSlug}`,
+      );
       audit += auditBlock(
         "REVIEW_REQUESTED",
         unit,
         1,
         stageSlug,
-        `**Reviewer**: ${stage.reviewer}\n**Iteration**: 1\n`,
+        review.request,
       );
       audit += auditBlock(
         "REVIEW_COMPLETED",
         unit,
         1,
         stageSlug,
-        `**Reviewer**: ${stage.reviewer}\n**Iteration**: 1\n` +
-          `**Verdict**: READY\n**Artifact Fingerprint**: ${fingerprint}\n`,
+        review.completion,
       );
     }
     audit += auditBlock(
@@ -2383,7 +2444,7 @@ describe("t326 pinned team Unit merge", () => {
     writeFileSync(
       auditPath,
       audit.replace(
-        /(\*\*Event\*\*: PLAN_APPROVAL_RECORDED[\s\S]*?\*\*Approval Fingerprint\*\*: )sha256:[0-9a-f]{64}/,
+        /(\*\*Event\*\*: PLAN_APPROVAL_RECORDED[\s\S]*?\*\*Approval Fingerprint\*\*: )sha256:(?:v[23]:)?[0-9a-f]{64}/,
         `$1sha256:${"0".repeat(64)}`,
       ),
     );

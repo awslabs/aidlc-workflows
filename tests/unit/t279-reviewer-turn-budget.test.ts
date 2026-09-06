@@ -22,19 +22,18 @@
 // behaves identically everywhere.
 //
 // An uncapped-and-uninstructed reviewer death (turn cap, crash, context
-// exhaustion) used to leave §12a step 3 reading a stale or missing
-// `## Review` - an undefined branch. The guard this test pins:
-//   - step 1 DELETES any existing `## Review` section before EVERY dispatch
-//     (review history lives in the audit ledger, so nothing is lost; deleting
-//     rather than renaming keeps superseded reviewer prose out of the
-//     claim-sources sensor, which skips only the exact `Review` heading, and
-//     out of the artifact forever) - so "no current section" means
+// exhaustion) used to leave §12a step 3 reading a stale or missing review -
+// an undefined branch. The guard this test pins:
+//   - step 1 records the request before EVERY dispatch; the request opens the
+//     review slot the reviewer writes (removing a draft an earlier incomplete
+//     dispatch of the same iteration left), so "no review file" means
 //     "incomplete review" uniformly on first entry and the Part 0 revision
 //     path alike, and no stale pre-revision READY can be misread as covering
-//     a revision;
-//   - step 3 validates exactly ONE current `## Review` section with exactly
-//     one canonical verdict (READY | NOT-READY) - partial, verdict-less, and
-//     duplicated sections are an INCOMPLETE attempt, not a verdict;
+//     a revision; the reviewer writes that one file and never the artifact;
+//   - step 3 validates exactly ONE review with exactly one canonical verdict
+//     (READY | NOT-READY) and records it as the review record - a missing,
+//     verdict-less, or duplicated review is an INCOMPLETE attempt, not a
+//     verdict;
 //   - an incomplete attempt retries the SAME unmatched request once via
 //     `--retry-pending` (consuming no review iteration - on an advisory
 //     stage the budget is exactly one pass, so counting a cut-off attempt
@@ -110,17 +109,20 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       // exactly where no native cap exists.
       expect(section).not.toMatch(/Claude Code|opencode|Codex|Kiro|Cursor|Copilot/i);
       expect(section).not.toContain("steps:");
-      // The final turns are reserved for writing the review.
+      // The final turns are reserved for writing the review file.
       expect(section).toMatch(/RESERVED/);
-      expect(section).toContain("## Review");
-      // A thin verdict beats no verdict; never end without the section - and
-      // the section must parse: exactly one, exactly one canonical verdict.
+      expect(section).toContain("review file");
+      // A thin verdict beats no verdict; never end without the review - and
+      // the review must parse: exactly one, exactly one canonical verdict,
+      // written to the file the dispatch named and nowhere else.
       expect(section).toMatch(/ALWAYS beats no verdict/);
-      expect(section).toMatch(/exactly ONE `## Review` section/);
+      expect(section).toMatch(/exactly ONE review, to the review file the dispatch named/);
       expect(section).toMatch(/exactly one verdict line/);
+      expect(section).toMatch(/Never write to the artifact you are reviewing/);
       expect(section).toMatch(
-        /Never end your run with the stage's `review_artifact` missing its `## Review` section for this iteration\./,
+        /Never end your run with the review file for this iteration unwritten\./,
       );
+      expect(section).not.toContain("## Review");
     });
 
     test(`${agent}: shipped Claude dist carries the binding maxTurns frontmatter and the Turn Budget prose`, () => {
@@ -202,15 +204,13 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("reviewer module §12a step 1 records the request, hydrates prior findings, then deletes an existing ## Review section (core + dist/claude)", () => {
+  test("reviewer module §12a step 1 records the request, hydrates prior findings, and names the review file the reviewer writes (core + dist/claude)", () => {
     // The stale-READY hole: a stage passes review READY; the human rejects at
     // the gate; the builder revises a produces[] artifact; the re-review is
-    // itself cut off before writing - and the artifact still carries the
-    // pre-revision READY section, which a presence-only check would misread
-    // as current. Deleting (not renaming) before every dispatch closes it
-    // without leaving `## Review (superseded)` prose behind for the
-    // claim-sources sensor (it skips only the exact `Review` H2) or letting
-    // sections accumulate across iterations and revisions forever.
+    // itself cut off before writing. The request opens an empty review slot
+    // for every dispatch, so nothing stale can stand in for the review; the
+    // artifact itself is never written by the reviewer, so nothing is deleted
+    // or renamed inside it either.
     for (const path of [
       join(REPO_ROOT, "core", REVIEWER_MODULE),
       join(AIDLC_SRC, REVIEWER_MODULE),
@@ -218,41 +218,38 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       const body = readFileSync(path, "utf-8");
       const labelled = `${path}\n${body}`;
       expect(labelled).toMatch(
-        /Invoke reviewer sub-agent\.\*\* Before every dispatch, not only the first,[\s\S]*before changing an existing `## Review` section,[\s\S]*record the request/,
+        /Invoke reviewer sub-agent\.\*\* Before every dispatch, not only the first,\s+record the request/,
       );
       expect(labelled).toContain("Before every dispatch, not only the first");
-      expect(labelled).toContain(
-        "validated pending recovery request suspends the",
-      );
+      expect(labelled).toContain("returns `requestId` and `reviewFile`");
+      expect(labelled).toContain("The request opens that slot");
       expect(labelled).toContain(
         "`directive.review_artifact` names the one required Markdown output",
       );
-      const request = labelled.indexOf(
-        "before changing an existing `## Review` section, record the request",
-      );
-      const hydrate = labelled.indexOf(
-        "aidlc-review-brief.ts context",
-        request,
-      );
-      const deletion = labelled.indexOf(
-        "DELETE the existing `## Review` section",
-        hydrate,
-      );
+      expect(labelled).toContain("Nobody writes to it");
+      const request = labelled.indexOf("record the request:");
+      const hydrate = labelled.indexOf("aidlc-review-brief.ts context", request);
+      const dispatch = labelled.indexOf("Then delegate to the reviewer agent", hydrate);
       expect(request).toBeGreaterThan(-1);
       expect(hydrate).toBeGreaterThan(request);
-      expect(deletion).toBeGreaterThan(hydrate);
+      expect(dispatch).toBeGreaterThan(hydrate);
       expect(labelled).toContain("durable human dispositions from the audit ledger");
-      expect(labelled).toMatch(/receipt history remains in the audit ledger/i);
-      // The Part 0 revision-path paragraph names step 1's delete rule as what
-      // protects it.
-      expect(labelled).toContain("request-first delete rule removes the stale");
-      // Negative pin: the rename mechanism must not come back - superseded
-      // sections leak reviewer prose into the claim-sources sensor scan.
+      expect(labelled).toContain("as the one file the reviewer writes");
+      // The reviewer's write contract: one file, nothing else.
+      expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");
+      expect(labelled).toContain("Writes NOTHING else");
+      // The Part 0 revision-path paragraph relies on request binding, not on
+      // deleting anything from the artifact.
+      expect(labelled).toContain("the new request binds");
+      // Negative pins: the retired appendix mechanics must not come back.
+      expect(labelled).not.toContain("DELETE the existing `## Review` section");
       expect(labelled).not.toContain("## Review (superseded)");
+      expect(labelled).not.toContain("reviewChallenge");
+      expect(labelled).not.toMatch(/suspends the review freeze/);
     }
   });
 
-  test("reviewer module §12a step 3 validates one canonical verdict and routes incomplete attempts through --retry-pending to a terminal receipt (core + dist/claude)", () => {
+  test("reviewer module §12a step 3 records the review as a record, validates one canonical verdict, and routes incomplete attempts through --retry-pending to a terminal receipt (core + dist/claude)", () => {
     for (const path of [
       join(REPO_ROOT, "core", REVIEWER_MODULE),
       join(AIDLC_SRC, REVIEWER_MODULE),
@@ -260,82 +257,75 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       const body = readFileSync(path, "utf-8");
       const labelled = `${path}\n${body}`;
       // t221's ordering (read verdict AFTER deleting the dispatch record)
-      // still holds around the new validation.
+      // still holds around the record write.
       expect(labelled).toMatch(
-        /Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`.*validate it/s,
-      );
-      // Exactly one owned suffix with canonical identity fields.
-      expect(labelled).toContain(
-        "entire appended suffix is exactly ONE terminal owned `## Review` section",
+        /Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`.*validates it/s,
       );
       expect(labelled).toContain(
-        "canonical verdict, reviewer, and iteration fields",
+        "writes the review record `<record>/.aidlc-reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`)",
       );
-      // Partial and duplicated sections are named incomplete, not guessed at.
+      expect(labelled).toContain("The record is the review; only this command writes one");
+      // Partial and duplicated reviews are named incomplete, not guessed at.
       expect(labelled).toMatch(/no canonical verdict line/);
-      expect(labelled).toContain("semantic bytes before the heading");
       expect(labelled).toContain(
-        "rendered Markdown or raw-HTML H1/H2 headings are terminal-section escapes",
+        "rendered Markdown or raw-HTML H1/H2 headings are section escapes",
       );
+      expect(labelled).toContain("validates it with Bun's Markdown parser");
       expect(labelled).toContain(
-        "Validation uses Bun's Markdown parser",
-      );
-      expect(labelled).toContain(
-        "list/blockquote/table containers cannot mint top-level ownership",
+        "list/blockquote/table containers cannot mint ownership",
       );
       expect(labelled).toContain(
         "forged/missing/conflicting duplicate ownership fields",
       );
-      expect(labelled).toMatch(/never guess which was meant/);
       // The incomplete-attempt path: retry the SAME unmatched request once,
       // consuming no iteration (the advisory budget is one pass - counting a
       // cut-off attempt would exhaust it without any review happening).
       expect(labelled).toContain("**On an incomplete attempt:**");
       expect(labelled).toMatch(/re-dispatch it exactly once/);
-      expect(labelled).toContain("has not already spent its retry");
+      expect(labelled).toMatch(/has not already\s+spent its retry/);
       expect(labelled).toMatch(
-        /original artifact and\s+source bytes are restored/,
+        /original artifact and source bytes are unchanged/,
       );
       expect(labelled).toMatch(/never mints a\s+new fingerprint/);
       expect(labelled).toContain("`Upgrade: legacy-request`");
       expect(labelled).toMatch(
-        /A field-light historical `Retry: pending-request` marker is not\s+a modern binding/,
+        /A field-light historical\s+`Retry: pending-request` marker is not a modern binding/,
       );
-      expect(labelled).toContain(
-        "A structurally malformed request row has no authority and is ignored",
+      expect(labelled).toMatch(
+        /A structurally malformed request row\s+has no authority and is ignored/,
       );
       // The second incomplete attempt records the terminal receipt with the
       // named finding and routes per review class.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
       expect(labelled).toMatch(
-        /record\s+the\s+terminal receipt with `--verdict NOT-READY`/,
+        /record the\s+terminal receipt with `--verdict NOT-READY` and no review file/,
       );
       expect(labelled).toMatch(/on `advisory` it is terminal/);
       expect(labelled).toMatch(/skip the lead re-invoke/);
       expect(labelled).toMatch(
         /never presented on a\s+silently missing verdict, and never deadlocks/,
       );
-      // The turn cap is named as the reachable cause of a missing section.
+      // The turn cap is named as the reachable cause of a missing review.
       expect(labelled).toMatch(/hard turn cap/);
       // The complete-review receipt sentence survives verbatim - it was
       // silently dropped once in a rebase (PR #613 round 2, P1) and nothing
       // pinned it; now something does.
       expect(labelled).toMatch(
-        /record\s+the\s+terminal receipt with the same `aidlc-log\.ts review` command plus\s+`--verdict <READY\|NOT-READY>`/,
+        /record the terminal receipt with the same `aidlc-log\.ts review` command plus `--verdict <READY\|NOT-READY>`/,
       );
-      // Step 1's dispatch-failure contract now names the incomplete attempt
-      // as a retry-pending cause too.
+      // Step 1's dispatch-failure contract names the incomplete attempt as a
+      // retry-pending cause too.
       expect(labelled).toMatch(/or ends without a recorded verdict/);
       expect(labelled).toMatch(
-        /reuses\s+those original fingerprints instead of rebaselining/,
+        /reuses those\s+original fingerprints and request id instead of rebaselining/,
       );
       expect(labelled).toContain(
         "malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request",
       );
       expect(labelled).toContain("one coherent snapshot");
-      expect(labelled).toContain(
-        "A complete reviewer appendix therefore records directly",
-      );
+      // Migration: the embedded form is readable and deprecated, never written.
+      expect(labelled).toContain("**Migration (deprecated).**");
+      expect(labelled).toContain("removed in the next minor release");
     }
   });
 
@@ -376,39 +366,34 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
         "utf-8",
       );
       const labelled = `harness ${harness.name} module\n${module}`;
-      // Request-first, hydrate dispositions, then delete, on every dispatch.
-      expect(labelled).toContain("DELETE the existing `## Review` section");
+      // Request-first, hydrate dispositions, then dispatch with the review
+      // file named, on every dispatch.
+      expect(labelled).toContain("Before every dispatch, not only the first");
+      expect(labelled).toContain("returns `requestId` and `reviewFile`");
       expect(labelled).toContain("aidlc-review-brief.ts context");
       expect(labelled).toContain(
         "durable human dispositions from the audit ledger",
       );
-      expect(labelled).toContain(
-        "before changing an existing `## Review` section",
-      );
-      expect(labelled).toContain("Before every dispatch, not only the first");
-      expect(labelled).toContain(
-        "validated pending recovery request suspends the",
-      );
-      // Canonical-verdict + ownership validation.
-      expect(labelled).toContain(
-        "entire appended suffix is exactly ONE terminal owned `## Review` section",
-      );
-      expect(labelled).toContain(
-        "canonical verdict, reviewer, and iteration fields",
-      );
+      expect(labelled).toContain("Writes exactly ONE file: its review, at the passed `reviewFile` path");
+      expect(labelled).toContain("Writes NOTHING else");
+      // The record write and canonical-verdict validation.
+      expect(labelled).toContain("writes the review record `<record>/.aidlc-reviews/");
+      expect(labelled).toContain("The record is the review; only this command writes one");
+      expect(labelled).toMatch(/no canonical verdict line/);
       // Incomplete attempt: one retry, then the terminal NOT-READY receipt.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
-      expect(labelled).toMatch(/no\s+current `## Review` section/);
+      expect(labelled).toMatch(/no review file at all/);
       expect(labelled).toContain("`--retry-pending`");
       expect(labelled).toMatch(/re-dispatch it\s+exactly once/);
       expect(labelled).toMatch(/never mints a\s+new fingerprint/);
       expect(labelled).toContain("`Upgrade: legacy-request`");
-      expect(labelled).toContain(
-        "A structurally malformed request row has no authority and is ignored",
+      expect(labelled).toMatch(
+        /A structurally malformed request row\s+has no authority and is ignored/,
       );
-      expect(labelled).toContain(
-        "complete reviewer appendix therefore records directly",
-      );
+      // The retired appendix mechanics stay retired on every harness.
+      expect(labelled).not.toContain("DELETE the existing `## Review` section");
+      expect(labelled).not.toContain("reviewChallenge");
+      expect(labelled).not.toMatch(/suspends the review freeze/);
       // The review-class contract is present on every harness - including
       // Copilot, which shipped without it (its bullet predated #718 and the
       // six-harness test lists never caught it).

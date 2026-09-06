@@ -53,6 +53,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
 | `/aidlc --review <class>` | Cap stage reviews for this run (adversarial, advisory, none) |
+| `/aidlc --change-control <value>` | Set what an input change after an approval does for this piece of work (strict, relaxed) |
 | `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`) |
 | `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`, `review`) |
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
@@ -346,7 +347,7 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, and the stage progress list. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Change Control value with where it came from (`Change Control: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), and the stage progress list. An invalid Change Control field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
 
 Under `Unit Ownership: team`, it appends a clearly labeled **Team Construction
 Snapshot** with the same board unscoped main renders: Unit Progress, locally
@@ -861,6 +862,48 @@ request at the next ordinal.
 
 ---
 
+### `/aidlc --change-control <value>` - Change Control for this piece of work
+
+Set the intent's Change Control value: what happens when something a human
+already approved or confirmed turns out to have changed underneath (source
+files moved after a code plan was approved, a reviewed document edited after
+its review, an output saved without the current summary confirmation).
+
+**Syntax:**
+
+```
+/aidlc --change-control strict
+/aidlc --change-control relaxed
+```
+
+**Behavior:** `strict` reopens the approval: the run stops with a plain
+sentence naming what changed and asks for the approval again. `relaxed` records
+the change once as a `CHANGE_ACCEPTED` audit row, tells you in one line, and
+continues. Neither value removes a gate: every approval question is still
+asked, and a reviewer's verdict is never changed. Runs
+`aidlc-utility.ts change-control <value>` behind the scenes, which rewrites
+the `Change Control` line in `aidlc-state.md` (so the value is committed with
+the intent, survives sessions, and teammates see it) and logs a
+`CHANGE_CONTROL_SET` audit event. The same command repairs an invalid line and
+records the old text. A plain-chat request ("stop asking me to re-approve when
+files change") runs the same command. An older intent without the line stays
+strict until this command sets it; a new intent starts from its scope's default.
+When a memory layer's `## Change Control` section says `Mode: strict`, the
+command refuses and names that file: edit the line there to change it for
+everyone. At creation the flag can be given with the scope (`/aidlc --scope poc
+--change-control strict "..."`).
+
+**Valid values:** `strict`, `relaxed`.
+
+**Examples:**
+
+```
+/aidlc --change-control relaxed        Record and announce input changes, keep going
+/aidlc --change-control strict         Approve again whenever an approved input changes
+```
+
+---
+
 ### `/aidlc --version` — Framework version
 
 Print the framework version (`aidlc <X.Y.Z>`) and exit. Read-only — works without a workflow and never prompts to resume one.
@@ -1101,7 +1144,7 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
-`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}`, ascending), with composer-authored scope entries excluded and missing or extra keys counted as differences. For front/report composition, the matched-vs-custom decision routes solely on this final proposal result (`diff <= 2` plus compatible depth), not a model recount or the earlier mechanical ARS screen. In-flight recomposition treats the ranking as advisory and preserves the running scope and plan. Exit 1 iff invalid; the JSON result lands on stdout.
+`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--change-control <strict|relaxed>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). `--change-control` (or a `changeControl` member beside `stages`) checks the composer's proposed Change Control value: anything but `strict` or `relaxed` is an error, a `relaxed` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as `change_control`. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 

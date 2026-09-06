@@ -443,6 +443,55 @@ export function seedAuditFile(proj: string): void {
 }
 
 /**
+ * Record an artifact write the way a harness does: through the shipped
+ * write-audit hook, which emits ARTIFACT_CREATED/ARTIFACT_UPDATED and stamps
+ * the row with the scope's active Summary Authorization Id. Tests that seed
+ * writes must use this rather than appending ARTIFACT_* rows by hand, because
+ * completion decides by descent from that stamp, not by row order. `tool` is
+ * the harness tool name the hook classifies (Edit always records an update).
+ */
+export function recordArtifactWriteViaHook(
+  proj: string,
+  file: string,
+  tool: "Write" | "Edit" = "Write",
+  extraEnv: NodeJS.ProcessEnv = {},
+): void {
+  // The hook never creates the audit trail (the orchestrator does at workflow
+  // start); a fixture that has not seeded one gets the header the emitter
+  // would have written, so the row lands instead of being dropped silently.
+  const shard = seededAuditShard(proj);
+  if (!existsSync(shard)) {
+    mkdirSync(dirname(shard), { recursive: true });
+    writeFileSync(shard, "# AI-DLC Audit Log\n", "utf-8");
+  }
+  const rowsBefore = readFileSync(shard, "utf-8").split("**Event**: ARTIFACT_").length;
+  const result = spawnSync(
+    process.execPath,
+    [join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts")],
+    {
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...extraEnv },
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse",
+        tool_name: tool,
+        tool_input: { file_path: file },
+      }),
+      encoding: "utf-8",
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `write-audit hook failed for ${file}: ${result.stdout}${result.stderr}`,
+    );
+  }
+  const rowsAfter = readFileSync(shard, "utf-8").split("**Event**: ARTIFACT_").length;
+  if (rowsAfter !== rowsBefore + 1) {
+    throw new Error(
+      `write-audit hook recorded no ARTIFACT row for ${file} (is it under the active record?)`,
+    );
+  }
+}
+
+/**
  * Recursively remove a temp project dir. Mirrors cleanup_test_project
  * (fixtures.sh:58-61) — guards against empty/non-existent paths.
  */

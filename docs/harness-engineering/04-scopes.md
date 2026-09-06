@@ -41,6 +41,7 @@ The scope frontmatter fields are:
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
 | `runner` | No | `true` includes the scope in the default generated scope-runner set. |
 | `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`classic`) is not enabled. |
+| `change_control` | No | The scope's Change Control default, `strict` or `relaxed`: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed records the change once, tells the human in one line, and continues). Absence means strict. The shipped defaults are strict on `enterprise`, `security-patch`, `workshop`, and `infra`, relaxed on the rest. A memory layer's `## Change Control` section (`Mode: strict`) wins over every scope default and every per-intent flip; see [Change Control](../guide/13-customization.md#change-control). |
 
 The loader rejects duplicate scope `name` values across files and names both
 files in the error.
@@ -68,6 +69,22 @@ walking-skeleton ceremony for this scope. `skeleton: off` means the first Bolt
 runs as a regular Bolt. Absence defaults to off, so composed/runtime-approved
 scopes and plugin scopes do not conjure a skeleton Bolt unless they opt in
 explicitly.
+
+### Change Control default
+
+The optional `change_control:` field is the value a new intent on this scope
+starts with, written to its state file at creation as
+`- **Change Control**: <value> (from scope <name>)`. The human can flip it for
+that one intent with `/aidlc --change-control <value>` or a plain-chat request;
+an older intent without this line remains strict until explicitly set, while
+the next new intent starts from the scope default again. To hold a value for
+everyone on the repo, do not edit eleven scope files: declare it once in memory
+(`## Change Control` with `Mode: strict` in `aidlc/spaces/<space>/memory/org.md`,
+`team.md`, or `project.md`). A memory `strict` wins over every scope default and
+refuses chat or flag flips by naming the file; a memory `relaxed` or an absent
+section has no effect. The validation error for anything other than the two
+values names the file and the allowed values; the per-intent command repairs an
+invalid state line.
 
 **2. The membership tag — each stage's `scopes:` frontmatter.** A stage names the scopes it runs under in its own frontmatter, in `core/aidlc-common/stages/<phase>/<slug>.md`:
 

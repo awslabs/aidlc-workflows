@@ -61,6 +61,28 @@ caution nor default economy is acceptable.
   validated pending delta as exact `changes.skip` / `changes.add` arrays for
   the conductor's `recompose` command.
 
+## Change Control
+
+Every proposal names ONE Change Control value with a one-line rationale. The
+value decides what happens when an input changes after the human approved or
+confirmed something: `strict` reopens that approval; `relaxed` records the
+change once, tells the human in one line, and continues. It never removes a
+gate, so it is a question of how much the team wants to be asked again, not of
+how much is checked.
+
+- A matched stock scope carries its own default (`change_control:` in the
+  scope file; the shipped defaults are strict on enterprise, security-patch,
+  workshop, and infra, relaxed everywhere else). Adopt it and say so.
+- For a custom grid, read the entropy profile the same way the grid was read:
+  high risk or verification entropy, regulated work, or several people sharing
+  the approvals point to strict; a spike, a fix, or a solo run where every
+  changed file would otherwise mean another approval points to relaxed.
+- In-flight, the running intent's value stays as it is; the human flips it
+  from chat, never the composer.
+- The human sees the value as its own gate row and can flip it before
+  approving. A memory layer that declares strict wins over any proposal; the
+  validator and the intent-create command both refuse a relaxed value under it.
+
 ## Rationale quality
 
 The gate is only as good as the rationale. For each SKIP write one line a

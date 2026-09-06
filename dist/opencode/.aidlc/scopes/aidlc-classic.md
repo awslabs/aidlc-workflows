@@ -5,6 +5,7 @@ keywords: []
 description: "V1-style lifecycle without ideation ceremony — the implicit default"
 skeleton: on
 review_cap: advisory
+change_control: relaxed
 ---
 
 # classic scope
@@ -13,6 +14,8 @@ review_cap: advisory
 `AWS_AIDLC_DEFAULT_SCOPE` names one — and reproduces the AI-DLC v1 experience: the
 lifecycle begins after Ideation, then adapts through Inception, Construction,
 and Operation according to each stage's applicability.
+
+Change Control defaults to relaxed: an input that changes after a human approved or confirmed it is recorded and announced in one line, and the run continues.
 
 ## Why these stages, why skip those
 

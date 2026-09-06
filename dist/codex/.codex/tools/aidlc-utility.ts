@@ -24,7 +24,12 @@ import {
   win32 as winPath,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import {
+  appendAuditEntries,
+  appendAuditEntry,
+  appendAuditEntryUnlocked,
+  type AuditEntryInput,
+} from "./aidlc-audit.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
@@ -64,6 +69,15 @@ import {
   auditBlockField,
   auditFilePath,
   auditShards,
+  assertChangeControlLedgerWritable,
+  CHANGE_CONTROL_FIELD,
+  CHANGE_CONTROL_VALUES,
+  changeControlMemoryStrictRefusal,
+  formatChangeControl,
+  memoryChangeControlDeclarations,
+  parseChangeControl,
+  recordChangeControlSet,
+  resolveChangeControl,
   createIntent,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
@@ -275,6 +289,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "depth",
   "test-strategy",
   "review",
+  "change-control",
   "repos",
   "project-dir",
 ] as const;
@@ -403,6 +418,7 @@ Utilities:
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
+  --change-control <value>  Set what an input change after an approval does for this piece of work (strict, relaxed)
   --version         Show the framework version
   --help            Show this help message
 
@@ -424,7 +440,8 @@ Examples:
   /aidlc --scope bugfix --depth comprehensive  Bugfix with comprehensive depth
   /aidlc --depth minimal                       Change depth of active workflow
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
-  /aidlc --review advisory                     Single-pass reviews, findings at the gate`;
+  /aidlc --review advisory                     Single-pass reviews, findings at the gate
+  /aidlc --change-control relaxed              Record and announce input changes after approval instead of re-approving`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -1513,6 +1530,15 @@ To get started:
   const activeAgent = getField(content, "Active Agent") || "None";
   const lastCompleted = getField(content, "Last Completed Stage") || "None";
   const nextStage = getField(content, "Next Stage") || "None";
+  // Resolved, not the raw line: a memory layer holding strict shows as strict
+  // from that file even when the intent's own line says relaxed.
+  let changeControlDisplay: string;
+  try {
+    const resolution = resolveChangeControl(projectDir, content);
+    changeControlDisplay = formatChangeControl(resolution.value, resolution.source);
+  } catch (error) {
+    changeControlDisplay = `unavailable (${errorMessage(error)})`;
+  }
 
   // Find current stage number
   const currentEntry = graph.find((s) => s.slug === currentStage);
@@ -1671,6 +1697,7 @@ Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 Status:         ${statusLine}
 Active Agent:   ${activeAgent}
+Change Control: ${changeControlDisplay}
 Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` — ${skipped} skipped` : ""}
 
 Phase Progress:
@@ -5495,6 +5522,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
   const reviewOverride = parseReviewOverride(flags.review);
+  if (flags["change-control"] !== undefined && parseChangeControl(flags["change-control"]) === null) {
+    die(
+      `Unknown Change Control value: "${flags["change-control"]}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`,
+    );
+  }
   const initialSelection = resolveWorkflowSelection(projectDir);
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
@@ -5767,6 +5799,24 @@ function handleIntentCreateStateBuild(
   const effectiveTestStrategy = testStrategyOverride
     ? VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]
     : (scopeDef.testStrategy ?? effectiveDepth);
+  // Change Control: a memory layer that declares strict wins and names itself;
+  // otherwise the human's flag is theirs, otherwise the scope default. The
+  // source rides on the line for `--status` and the human line; only the value
+  // is ever read back.
+  const memoryStrict =
+    memoryChangeControlDeclarations(projectDir).find(
+      (declaration) => declaration.value === "strict",
+    ) ?? null;
+  const requestedChangeControl = parseChangeControl(flags["change-control"]);
+  if (memoryStrict !== null && requestedChangeControl === "relaxed") {
+    die(changeControlMemoryStrictRefusal(memoryStrict));
+  }
+  const effectiveChangeControl =
+    memoryStrict !== null
+      ? formatChangeControl("strict", `${memoryStrict.layer}.md`)
+      : requestedChangeControl !== null
+        ? formatChangeControl(requestedChangeControl, "you")
+        : formatChangeControl(scopeDef.changeControl ?? "strict", `scope ${scope}`);
 
   // Compute stages to execute/skip
   const executeStages: string[] = [];
@@ -5925,6 +5975,7 @@ function handleIntentCreateStateBuild(
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
+- **Change Control**: ${effectiveChangeControl}
 
 ## Workspace State
 - **Project Root**: .
@@ -7102,7 +7153,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   const newScopeDef = scopeMapping[newScope];
   if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
 
-  let content = readStateFile(projectDir, flags.intent, flags.space);
+  const contentBefore = readStateFile(projectDir, flags.intent, flags.space);
+  const before = resolveChangeControl(projectDir, contentBefore);
+  let content = contentBefore;
   // AUTONOMY GUARD (the recompose guard's twin, same rationale): scope-change
   // flips stage EXECUTE/SKIP suffixes exactly like recompose does, so an
   // unattended autonomous Construction run must not have its plan re-shaped
@@ -7220,6 +7273,17 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     ? VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]
     : (newScopeDef.testStrategy ?? effectiveDepth);
   content = setField(content, "Test Strategy", effectiveTestStrategy);
+  // A Change Control line the scope supplied follows the new scope; a value
+  // the human set, a legacy intent with no line, or a memory override stays.
+  const scopeSuppliedChangeControl = before.intent?.source.startsWith("scope ") === true;
+  const scopeChangeControl = newScopeDef.changeControl ?? "strict";
+  if (scopeSuppliedChangeControl) {
+    content = setField(
+      content,
+      CHANGE_CONTROL_FIELD,
+      formatChangeControl(scopeChangeControl, `scope ${newScope}`),
+    );
+  }
   const reviewUpdate = applyReviewOverride(content, reviewOverride);
   content = reviewUpdate.content;
   content = setField(content, "Total Stages", String(executeStages.length));
@@ -7252,9 +7316,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   // Update Last Updated timestamp
   content = setField(content, "Last Updated", isoTimestamp());
 
-  writeStateFile(projectDir, content, flags.intent, flags.space);
-
-  // Append SCOPE_CHANGED audit event
+  const after = resolveChangeControl(projectDir, content);
+  // Build every audit row before mutation. The batch lands in one append
+  // before the state write under the same lock, so append failure leaves both untouched.
   const oldScopeDef = scopeMapping[oldScope];
   const oldExecuteCount = oldScopeDef
     ? graph.filter(s => (oldScopeDef.stages[s.slug] || "SKIP") === "EXECUTE").length
@@ -7268,22 +7332,45 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   const gates = gridCostSummary(
     adjustedMapping as Record<string, "EXECUTE" | "SKIP">,
   ).gates;
-
-  appendAuditEvent(projectDir, "SCOPE_CHANGED", {
-    "Old Scope": oldScope,
-    "New Scope": newScope,
-    "Stage Count Delta": deltaStr,
-    "Stages in Scope": String(executeStages.length),
-    "Approval Gates": String(gates),
-    Depth: effectiveDepth,
-  });
+  const auditEntries: AuditEntryInput[] = [{
+    eventType: "SCOPE_CHANGED",
+    fields: {
+      "Old Scope": oldScope,
+      "New Scope": newScope,
+      "Stage Count Delta": deltaStr,
+      "Stages in Scope": String(executeStages.length),
+      "Approval Gates": String(gates),
+      Depth: effectiveDepth,
+    },
+  }];
   if (reviewUpdate.changed) {
-    appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
-      "Old Override": reviewUpdate.oldReview || "none set",
-      "New Override":
-        reviewUpdate.storedReview || "cleared (stage defaults apply)",
+    auditEntries.push({
+      eventType: "REVIEW_CLASS_CHANGED",
+      fields: {
+        "Old Override": reviewUpdate.oldReview || "none set",
+        "New Override": reviewUpdate.storedReview || "cleared (stage defaults apply)",
+      },
     });
   }
+  if (before.value !== after.value) {
+    auditEntries.push({
+      eventType: "CHANGE_CONTROL_SET",
+      fields: {
+        "Old Value": before.value,
+        "New Value": after.value,
+        Source: `scope ${newScope}`,
+      },
+    });
+  }
+  withAuditLock(projectDir, () => {
+    try {
+      if (before.value !== after.value) assertChangeControlLedgerWritable();
+      appendAuditEntries(auditEntries, projectDir, flags.intent, flags.space);
+    } catch (error) {
+      throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
+    }
+    writeStateFile(projectDir, content, flags.intent, flags.space);
+  }, flags.intent, flags.space);
 
   process.stdout.write(
     `Scope changed: ${oldScope} → ${newScope}
@@ -7676,6 +7763,71 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
         : `Review override is already ${display}\n`
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// change-control <strict|relaxed> - rewrite the intent's Change Control line
+// ---------------------------------------------------------------------------
+//
+// The one write path for the per-intent value: the `/aidlc --change-control`
+// flag and the plain-chat request both land here. A memory layer that declares
+// strict refuses the flip and names its file; the value is then not the
+// human's to change from chat. The rewritten line carries `(set by you)` so
+// `--status` can say where the value came from; the ledger gets one
+// CHANGE_CONTROL_SET row per real change.
+
+function handleChangeControl(
+  projectDir: string,
+  positional: string[],
+  flags: Record<string, string>,
+): void {
+  const raw = positional[1];
+  const requested = parseChangeControl(raw);
+  if (raw === undefined || requested === null) {
+    die(
+      `change-control requires exactly one of: ${CHANGE_CONTROL_VALUES.join(", ")}` +
+        (raw === undefined ? "." : ` (received "${raw}").`),
+    );
+  }
+  const sp = stateFilePath(projectDir, flags.intent, flags.space);
+  if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
+  let content = readStateFile(projectDir, flags.intent, flags.space);
+  const resolution = resolveChangeControl(projectDir, content, { tolerateInvalidState: true });
+  if (resolution.memoryStrict !== null && requested !== "strict") {
+    die(changeControlMemoryStrictRefusal(resolution.memoryStrict));
+  }
+  const previous = getField(content, CHANGE_CONTROL_FIELD);
+  const line = formatChangeControl(requested, "you");
+  if (previous === line) {
+    process.stdout.write(`Change Control is already ${line}\n`);
+    return;
+  }
+  if (previous === null) {
+    const beforeInsert = content;
+    for (const anchor of ["Review Override", "Test Strategy", "Scope"]) {
+      content = content.replace(
+        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+        `$1\n- **${CHANGE_CONTROL_FIELD}**:`,
+      );
+      if (content !== beforeInsert) break;
+    }
+    if (content === beforeInsert) {
+      content = `${content.trimEnd()}\n- **${CHANGE_CONTROL_FIELD}**:\n`;
+    }
+  }
+  content = setField(content, CHANGE_CONTROL_FIELD, line);
+  content = setField(content, "Last Updated", isoTimestamp());
+  // Audit first, then the state write, like every other state-mutating verb:
+  // a ledger that cannot take the row leaves the line untouched.
+  const oldAuditValue = resolution.intent === null && resolution.rawStateValue !== null
+    ? resolution.rawStateValue
+    : resolution.value;
+  recordChangeControlSet(projectDir, oldAuditValue, requested, "you");
+  writeStateFile(projectDir, content, flags.intent, flags.space);
+  const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
+    ? resolution.rawStateValue
+    : formatChangeControl(resolution.value, resolution.source);
+  process.stdout.write(`Change Control changed: ${oldDisplay} to ${line}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -8161,7 +8313,7 @@ export async function main(argv: string[]): Promise<void> {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--repos <name,...>] " +
+        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--change-control <value>] [--repos <name,...>] " +
         "[--project-dir <path>]\n",
     );
     return;
@@ -8309,6 +8461,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case "detect-scope":
       handleDetectScope(projectDir, flags);
+      break;
+    case "change-control":
+      handleChangeControl(projectDir, positional, flags);
       break;
     case "resolve-env-scope":
       handleResolveEnvScope();

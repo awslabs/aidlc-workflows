@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import {
   type CheckboxState,
   countCheckboxes,
@@ -73,17 +74,37 @@ function resolveProjectPath(pd: string, path: string): string {
   return resolve(pd, path);
 }
 
+// The reviews a backward jump invalidates, named as `<artifact>#Review` where
+// `<artifact>` is the reviewed artifact: the record-backed reviews the brief
+// renders for the stage plus, for migration, any legacy embedded `## Review`
+// section still sitting in a declared artifact.
 function stageReviewPaths(pd: string, stage: StageEntry): string[] {
-  return existingStageArtifactPaths(pd, stage).filter((path) => {
+  const paths = new Set<string>();
+  if (stage.reviewer) {
     try {
-      return extractMarkdownSection(
-        readFileSync(resolveProjectPath(pd, path), "utf-8"),
-        "## Review",
-      ).length > 0;
+      for (const context of readReviewArtifactContexts(pd, stage)) {
+        paths.add(`${context.artifact}#Review`);
+      }
     } catch {
-      return false;
+      // A malformed review is not a reason to refuse the jump; the embedded
+      // scan below still names what it can.
     }
-  }).map((path) => `${path}#Review`);
+  }
+  for (const path of existingStageArtifactPaths(pd, stage)) {
+    try {
+      if (
+        extractMarkdownSection(
+          readFileSync(resolveProjectPath(pd, path), "utf-8"),
+          "## Review",
+        ).length > 0
+      ) {
+        paths.add(`${path}#Review`);
+      }
+    } catch {
+      // unreadable artifact: nothing to name
+    }
+  }
+  return [...paths].sort();
 }
 
 // --- CLI entry point ---

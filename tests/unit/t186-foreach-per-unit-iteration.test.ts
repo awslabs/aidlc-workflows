@@ -179,6 +179,10 @@ interface Directive {
       required_produces: string[];
     }>;
   };
+  remedies?: Array<{
+    action: string;
+    executableNow: boolean;
+  }>;
   message?: string;
   [k: string]: unknown;
 }
@@ -504,9 +508,25 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runNext(proj, true);
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain("alpha");
-    expect(d.message).toContain("has no functional-design-questions.md");
+    expect(d.kind).toBe("ask");
+    expect(d.ask_type).toBe("guard-recovery");
+    expect(d.reason_codes).toEqual(["SUMMARY_QUESTIONS_MISSING"]);
+    expect(d.unit).toBe("alpha");
+    const executable = (d.remedies ?? [])
+      .filter((remedy) => remedy.executableNow)
+      .map((remedy) => remedy.action);
+    expect(
+      executable.some((action) =>
+        action.startsWith("Present the current consolidated summary")
+      ),
+    ).toBe(true);
+    expect(
+      executable.some(
+        (action) =>
+          action.startsWith("Start the one stale-receipt recovery review") ||
+          action.startsWith("Request the next permitted review"),
+      ),
+    ).toBe(false);
   }, 30000);
 
   // 9b: with every unit covered, the approve is ALLOWED (the guard passes) and

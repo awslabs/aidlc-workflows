@@ -231,9 +231,13 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(CONSTRUCTION_PROTOCOL).toContain("checklist item\n   6");
   });
 
-  test("plan approval is re-minted for the replay directive epoch", () => {
+  test("plan approval is re-minted for the replay's new stage attempt", () => {
+    // A backward jump is a new ATTEMPT, and that is what retires the prior
+    // approval. It is not the re-issued directive: the engine re-issues directives
+    // constantly, and treating each one as a new decision point is what made an
+    // approval impossible to keep.
     expect(CONSTRUCTION_PROTOCOL).toContain(
-      "The jump creates a new directive authority epoch",
+      "The jump opens a new stage attempt",
     );
     expect(CONSTRUCTION_PROTOCOL).toContain(
       "blank `[Answer]:`, regenerate the target-bound fingerprint",

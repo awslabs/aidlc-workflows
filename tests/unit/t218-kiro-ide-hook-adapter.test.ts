@@ -42,6 +42,8 @@ import {
   readIntentRegistry,
   writePlanApprovalLegacyOffer,
   writeActiveDirectiveMarker,
+  stateDigest,
+  workspaceSourceFingerprint,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -138,7 +140,7 @@ function seedCodeGenerationDirective(dir: string, unit?: string): void {
     kind: "run-stage",
     stage: "code-generation",
     ...(unit ? { unit } : {}),
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
 }
 
@@ -157,7 +159,10 @@ function initGitWorkspace(dir: string): void {
   }
 }
 
-function seedStageLevelPlanApproval(dir: string): string {
+function seedStageLevelPlanApproval(
+  dir: string,
+  options: { bareSection?: boolean } = {},
+): string {
   const contract = resolveTestingPosture(dir);
   const authority = resolveCodeGenerationAuthority(dir, { unit: null });
   const record = codeGenerationRecordDir(dir, null);
@@ -173,12 +178,15 @@ function seedStageLevelPlanApproval(dir: string): string {
   const questions = join(record, "code-generation-questions.md");
   writeFileSync(join(record, "code-generation-plan.md"), plan);
   writeFileSync(join(record, "unit-test-instructions.md"), instructions);
+  // The legacy channel cannot run the fingerprint command, so the adapter owns
+  // both tags: it replaces a stale fingerprint and records the planned source
+  // itself. A bare section (neither tag) is what a legacy planner writes.
   writeFileSync(
     questions,
     [
       "## Plan Approval",
       "",
-      `[Approval Fingerprint]: ${fingerprint}`,
+      ...(options.bareSection ? [] : [`[Approval Fingerprint]: ${fingerprint}`]),
       "- Approve Plan",
       "- Request Changes",
       "[Answer]:",
@@ -1636,13 +1644,24 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           "[Answer]: Approve Plan",
         ),
       );
-      expect(
-        runIde(
-          dir,
-          "audit-and-sensors",
-          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
-        ).code,
-      ).toBe(0);
+      // The refusal is visible: the answer's mediation surfaces its reason on
+      // stderr with exit 2 instead of a silent hook drop, and the receipt is
+      // never written.
+      const driftedAnswer = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+      );
+      expect(driftedAnswer.code).toBe(2);
+      expect(driftedAnswer.stderr).toContain(
+        "Legacy Plan Approval mediation did not complete",
+      );
+      expect(driftedAnswer.stderr).toContain(
+        "1 file changed since this plan was approved: src/base.ts. Look them over and approve the plan again to continue.",
+      );
+      expect(driftedAnswer.stderr).toContain(
+        "Re-run the fingerprint command and re-present the plan.",
+      );
       expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(false);
       expect(
         runIde(
@@ -1748,6 +1767,77 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   }, 20000);
 
+  test("legacy mediation records both approval tags from a section that carries neither", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true });
+      const before = readFileSync(questions, "utf-8");
+      expect(before).not.toContain("[Approval Fingerprint]:");
+      expect(before).not.toContain("[Planned Source]:");
+
+      const decision = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+      );
+      expect(decision.code, decision.stderr).toBe(0);
+      expect(decision.stdout.trim()).toBe("");
+      const after = readFileSync(questions, "utf-8");
+      expect(after).toMatch(/^\[Approval Fingerprint\]: sha256:v3:[0-9a-f]{64}$/m);
+      expect(after).toMatch(
+        new RegExp(
+          `^\\[Planned Source\\]: ${workspaceSourceFingerprint(dir) ?? "unbindable"}$`,
+          "m",
+        ),
+      );
+      // Both tags sit inside the section, above the answer line the human fills.
+      expect(after.indexOf("[Approval Fingerprint]:")).toBeLessThan(
+        after.indexOf("[Answer]:"),
+      );
+      expect(after.indexOf("[Planned Source]:")).toBeLessThan(
+        after.indexOf("[Answer]:"),
+      );
+      expect(readAudit(dir)).toContain("DECISION_RECORDED");
+
+      // The adapter-recorded planned source is the one core accepts: the human
+      // answer completes to a valid approval with no hand-seeded tag anywhere.
+      expect(
+        runIde(
+          dir,
+          "record-human-turn",
+          JSON.stringify({ prompt: choices.approve }),
+        ).code,
+      ).toBe(0);
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "[Answer]:",
+          "[Answer]: Approve Plan",
+        ),
+      );
+      const answer = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+      );
+      expect(answer.code, answer.stderr).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20000);
+
   test("legacy same-host chats cannot consume or overwrite another challenge", () => {
     const dir = scratchProject(true);
     const sharedHost = {
@@ -1784,14 +1874,20 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       expect(decisionA.code).toBe(0);
       expect(decisionA.stdout.trim()).toBe("");
 
+      // A second decision write from the same host while the first challenge is
+      // live is refused by the decision tool. The refusal is visible (exit 2 and
+      // its reason on stderr), and nothing about the live challenge changes.
       const overwrite = runIde(
         dir,
         "audit-and-sensors",
         ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
         sharedHost,
       );
-      expect(overwrite.code).toBe(0);
+      expect(overwrite.code).toBe(2);
       expect(overwrite.stdout.trim()).toBe("");
+      expect(overwrite.stderr).toContain(
+        "Legacy Plan Approval mediation did not complete",
+      );
 
       expect(readFileSync(questions, "utf-8")).not.toContain(choices.approve);
       expect(readAudit(dir)).not.toContain(choices.approve);
@@ -1810,14 +1906,18 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           "[Answer]: Approve Plan",
         ),
       );
-      expect(
-        runIde(
-          dir,
-          "audit-and-sensors",
-          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
-          sharedHost,
-        ).code,
-      ).toBe(0);
+      // No capability was consumed, so the answer cannot be recorded. The
+      // refusal is visible (exit 2 with its reason), and no receipt exists.
+      const unconsumed = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        sharedHost,
+      );
+      expect(unconsumed.code).toBe(2);
+      expect(unconsumed.stderr).toContain(
+        "Legacy Plan Approval mediation did not complete",
+      );
       expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(false);
 
       expect(
@@ -2471,7 +2571,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       writeActiveDirectiveMarker(dir, {
         kind: "run-stage",
         stage: "code-generation",
-        state_sha256: createHash("sha256").update(state).digest("hex"),
+        state_sha256: stateDigest(state),
       });
       expect(
         runIdeStdin(

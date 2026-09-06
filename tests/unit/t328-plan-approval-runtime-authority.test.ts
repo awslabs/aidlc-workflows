@@ -1,7 +1,7 @@
 // covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -20,6 +20,8 @@ import {
   refreshActiveDirectiveMarker,
   sessionsDir,
   writeActiveDirectiveMarker,
+  stateDigest,
+  workspaceSourceFingerprint,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -96,7 +98,7 @@ function createProject(): string {
   writeActiveDirectiveMarker(project, {
     kind: "run-stage",
     stage: "code-generation",
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
   return project;
 }
@@ -124,6 +126,9 @@ function seedPlan(project: string): string {
     [
       "## Plan Approval",
       `[Approval Fingerprint]: ${fingerprint}`,
+      // The fingerprint command prints this second tag; the approval binds to it
+      // rather than to the directive's sticky source floor.
+      `[Planned Source]: ${workspaceSourceFingerprint(project) ?? "unbindable"}`,
       "A. Approve Plan",
       "B. Request Changes",
       "[Answer]:",
@@ -402,34 +407,31 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
   }, 30000);
 
-  test("rotates the source floor and retires authority across generation, Build and Test, resume, and new directives", () => {
+  test("directive churn preserves authority while a moved stage or attempt retires it", () => {
     const project = createProject();
-    let questions = seedPlan(project);
-    const firstFloor =
-      resolveCodeGenerationAuthority(project, { unit: null }).sourceFloor;
+    const questions = seedPlan(project);
     approve(project, questions, "lifecycle-one");
     beginCodeGeneration(project, { unit: null });
+
+    // (a) Generation has begun, so the developer agent writing source is the
+    // point, not a violation. The approval covers this work.
     writeFileSync(
       join(project, "src", "generated.ts"),
       "export const generated = true;\n",
     );
-
     const statePath = join(seededRecordDir(project), "aidlc-state.md");
     const codeGenerationState = readFileSync(statePath, "utf-8");
     writeActiveDirectiveMarker(project, {
       kind: "run-stage",
       stage: "code-generation",
-      state_sha256: createHash("sha256")
-        .update(codeGenerationState)
-        .digest("hex"),
+      state_sha256: stateDigest(codeGenerationState),
     });
-    const rotated =
-      resolveCodeGenerationAuthority(project, { unit: null }).sourceFloor;
-    expect(rotated).not.toBe(firstFloor);
-    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
+    expect(
+      evaluateCodeGenerationApproval(project, { unit: null }).reason,
+    ).toBe("approved");
 
-    questions = seedPlan(project);
-    approve(project, questions, "lifecycle-two");
+    // (b) A routing change is different: moving Current Stage supersedes the
+    // live directive, so Code Generation authority no longer resolves at all.
     const buildState = codeGenerationState.replace(
       "- **Current Stage**: code-generation",
       "- **Current Stage**: build-and-test",
@@ -445,19 +447,37 @@ describe("t328 Plan Approval runtime authority", () => {
     ).toBe(true);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
 
+    // (c) And the approval was not DESTROYED by any of that: restore the state,
+    // re-issue the directive, and the same recorded decision authorizes again.
+    // Before this change, a marker clear or republish deleted it, so the only way
+    // back was to ask the human the same question a second time.
     clearActiveDirectiveMarker(project);
     writeFileSync(statePath, codeGenerationState);
     writeActiveDirectiveMarker(project, {
       kind: "run-stage",
       stage: "code-generation",
-      state_sha256: createHash("sha256")
-        .update(codeGenerationState)
-        .digest("hex"),
+      state_sha256: stateDigest(codeGenerationState),
     });
-    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
     expect(
-      resolveCodeGenerationAuthority(project, { unit: null }).sourceFloor,
-    ).toMatch(/^[0-9a-f]{40,64}$/);
+      evaluateCodeGenerationApproval(project, { unit: null }).reason,
+    ).toBe("approved");
+
+    // (d) A new stage attempt DOES retire it: a jump is the human saying "do this
+    // again", and the recorded approval belonged to the previous attempt.
+    appendAuditEntry(
+      "STAGE_JUMPED",
+      {
+        Stage: "code-generation",
+        Direction: "REDO",
+        Reason: "fixture redo",
+      },
+      project,
+    );
+    const afterJump = evaluateCodeGenerationApproval(project, { unit: null });
+    expect(afterJump.ok).toBe(false);
+    expect(
+      resolveCodeGenerationAuthority(project, { unit: null }).runFloor,
+    ).toStartWith("STAGE_JUMPED:");
   }, 30000);
 
   test("concurrent first-generation guards serialize and share one validated publication", async () => {
@@ -543,7 +563,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(firstExit).not.toBe(0);
     expect(secondExit).not.toBe(0);
     expect(`${firstError}\n${secondError}`).toMatch(
-      /source changed while Code Generation authority was starting|protected approval receipt/,
+      /Source files changed while code generation was starting\. Retry the step\.|1 file changed since this plan was approved: src\/zz-persistent-publication-race\.ts\. Look them over and approve the plan again to continue\./,
     );
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
   }, 60000);
@@ -594,7 +614,7 @@ describe("t328 Plan Approval runtime authority", () => {
           `import { writeActiveDirectiveMarker } from ${JSON.stringify(libUrl)};`,
           `writeActiveDirectiveMarker(${JSON.stringify(project)}, {`,
           'kind: "run-stage", stage: "code-generation",',
-          `state_sha256: ${JSON.stringify(createHash("sha256").update(state).digest("hex"))}`,
+          `state_sha256: ${JSON.stringify(stateDigest(state))}`,
           "});",
         ].join("\n"),
       ],
@@ -619,7 +639,13 @@ describe("t328 Plan Approval runtime authority", () => {
       ]);
     expect(beginExit, beginError).toBe(0);
     expect(publisherExit, publisherError).toBe(0);
-    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
+    // The publication is serialized behind the authority locks AND has no reason
+    // to retire anything: the approval is bound to content and attempt, neither of
+    // which a re-issued directive changes. This is what the test's name always
+    // claimed; previously the publication retired the receipt anyway.
+    expect(
+      evaluateCodeGenerationApproval(project, { unit: null }).reason,
+    ).toBe("approved");
   }, 60000);
 
   test("receipt certification excludes concurrent legacy challenge reissue", async () => {
@@ -707,7 +733,7 @@ describe("t328 Plan Approval runtime authority", () => {
           `import { writeActiveDirectiveMarker } from ${JSON.stringify(libUrl)};`,
           `writeActiveDirectiveMarker(${JSON.stringify(project)}, {`,
           'kind: "run-stage", stage: "code-generation",',
-          `state_sha256: ${JSON.stringify(createHash("sha256").update(state).digest("hex"))}`,
+          `state_sha256: ${JSON.stringify(stateDigest(state))}`,
           `}, { legacyPlanApprovalSession: ${JSON.stringify(session)},`,
           `legacyPlanApprovalOffer: { session: ${JSON.stringify(session)}, optionHashes: [${JSON.stringify("d".repeat(64))}, ${JSON.stringify("e".repeat(64))}] } });`,
         ].join("\n"),
@@ -734,9 +760,13 @@ describe("t328 Plan Approval runtime authority", () => {
       ]);
     expect(answerExit, answerError).toBe(0);
     expect(publisherExit, publisherError).toBe(0);
-    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(
-      false,
-    );
+    // The receipt was certified between two source reads while both authority
+    // locks were held, and the concurrent legacy-offer publication could not
+    // interleave. It also no longer deletes the receipt on its way past, so the
+    // human's decision stands.
+    expect(
+      evaluateCodeGenerationApproval(project, { unit: null }).reason,
+    ).toBe("approved");
   }, 60000);
 
   test("rejects a source mutation that lands after validation but before certification completes", async () => {
@@ -755,7 +785,7 @@ describe("t328 Plan Approval runtime authority", () => {
     writeActiveDirectiveMarker(project, {
       kind: "run-stage",
       stage: "code-generation",
-      state_sha256: createHash("sha256").update(state).digest("hex"),
+      state_sha256: stateDigest(state),
     });
     const questions = seedPlan(project);
     const session = "race-session";
@@ -840,7 +870,13 @@ describe("t328 Plan Approval runtime authority", () => {
     if (exitCode !== 0) {
       expect(stderr).toContain("source changed during receipt certification");
     } else {
-      expect(approval.reason).toContain("protected Plan Approval receipt");
+      // The answer won the race, so a receipt exists and the refusal comes from the
+      // source check instead. Which of the two fires is timing, so accept either, and
+      // pin what actually matters: the refusal names the changed file and asks for
+      // the plan to be approved again (Change Control strict on this fixture).
+      expect(approval.reason).toMatch(
+        /protected Plan Approval receipt|1 file changed since this plan was approved: src\/zz-after-validation\.ts\. Look them over and approve the plan again to continue\./,
+      );
     }
   }, 60000);
 });
