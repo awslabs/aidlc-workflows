@@ -144,10 +144,13 @@ registry or use the pending prose to invent a new-work offer.
 
 After guided or chat file-backed Q&A (and whenever a stage definition requires
 it explicitly, such as Requirements Analysis), the stage protocol requires a
-separate confirmation before any stage artifact is generated. Append or update
-`## Consolidated Summary Confirmation` in the questions file with the summary,
-the prompt, both options without A/B file-letter prefixes, and a blank
-`[Answer]:` tag, then render this numbered question in chat:
+separate confirmation before any stage artifact is generated. Run
+`aidlc-review-brief.ts summary` (print the brief above its separator; the fenced
+spec below it is the widget) and the checkpoint `aidlc-log.ts decision`, which
+writes the `## Consolidated Summary Confirmation` entry in the questions file
+when it is missing (the summary, the prompt, both options without A/B
+file-letter prefixes, and a blank `[Answer]:` tag) - never write it by hand -
+then render this numbered question in chat:
 
 ```
 **Confirm** — Does this all look correct before I generate the artifact?

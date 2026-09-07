@@ -107,10 +107,12 @@ Reply with a number (or just tell me).
 
 After guided or chat file-backed Q&A (and whenever a stage definition requires
 it explicitly, such as Requirements Analysis), the stage protocol requires a
-separate confirmation before any stage artifact is generated. Append or update
-`## Consolidated Summary Confirmation` in the questions file with the summary,
-the prompt, both options without A/B file-letter prefixes, and a blank
-`[Answer]:` tag.
+separate confirmation before any stage artifact is generated. Run
+`aidlc-review-brief.ts summary` (print the brief above its separator; the fenced
+spec below it is the question) and the checkpoint `aidlc-log.ts decision`, which
+writes the `## Consolidated Summary Confirmation` entry in the questions file
+when it is missing (the summary, the prompt, both options without A/B
+file-letter prefixes, and a blank `[Answer]:` tag) - never write it by hand.
 
 Render the protocol's **Confirm** question through the active track. With
 `request_user_input`, map the prompt and the two semantic options directly; the

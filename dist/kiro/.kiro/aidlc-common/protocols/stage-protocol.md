@@ -516,9 +516,16 @@ Log the mode to `<record>/audit/<host>-<clone>.md` using the Question interactio
       description: Revise one or more answers before generation
   ```
   (Record the undecorated `Looks correct`; the marker never enters the file or the audit.)
-  Before presenting it, append or update a dedicated **Consolidated Summary Confirmation**
-  entry in `<slug>-questions.md` with this prompt, both options **without
-  file-letter prefixes**, and a blank `[Answer]:` tag:
+  Before presenting it, record the checkpoint prompt:
+  `bun .kiro/tools/aidlc-log.ts decision --stage <slug>
+  --checkpoint summary-confirmation --questions-file "<questions-path>"
+  --decision "Does this all look correct before I generate the artifact?"
+  --options "Looks correct,Request changes"`; add `--unit "<directive.unit>"`
+  for a per-unit stage and `--single` for an isolated run. That command also
+  writes the dedicated **Consolidated Summary Confirmation** entry into
+  `<slug>-questions.md` when it is missing - the recorded answers restated, the
+  prompt, both options **without file-letter prefixes**, and a blank
+  `[Answer]:` tag - so you never write that entry by hand:
   ```markdown
   - Looks correct
   - Request changes
@@ -528,14 +535,11 @@ Log the mode to `<record>/audit/<host>-<clone>.md` using the Question interactio
   This confirmation entry is the exception to ordinary file-backed A-E/X
   labels. Fill its tag only after the user responds, storing exactly
   `[Answer]: Looks correct` or `[Answer]: Request changes`. Strip any source
-  letter, chat number, punctuation, or option description before writing;
-  `[Answer]: A. Looks correct` and `[Answer]: 1. Looks correct` are invalid.
-  Before presenting it, record the checkpoint prompt:
-  `bun .kiro/tools/aidlc-log.ts decision --stage <slug>
-  --checkpoint summary-confirmation --questions-file "<questions-path>"
-  --decision "Does this all look correct before I generate the artifact?"
-  --options "Looks correct,Request changes"`; add `--unit "<directive.unit>"`
-  for a per-unit stage and `--single` for an isolated run. Never ask for this confirmation as bare prose: the harness must render an answerable structured
+  letter, chat number, punctuation, option description, or `(Recommended)`
+  marker before writing; `[Answer]: A. Looks correct`, `[Answer]: 1. Looks
+  correct` and `[Answer]: Looks correct (Recommended)` are invalid. Then render
+  the fenced spec the brief emitted, exactly as emitted. Never ask for this
+  confirmation as bare prose: the harness must render an answerable structured
   question before the turn ends.
 
   After the human responds, first write the exact choice to the confirmation

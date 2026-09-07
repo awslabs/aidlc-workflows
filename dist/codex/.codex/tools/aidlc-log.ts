@@ -106,6 +106,7 @@ import {
   publishConfirmationRound,
   reviewUiEnabled,
 } from "./aidlc-review-ui-shared.ts";
+import { parseQuestionsMarkdown } from "./aidlc-review-ui-render.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -178,6 +179,42 @@ function parseFlags(
     }
   }
   return { positional, flags };
+}
+
+/**
+ * Append the Consolidated Summary Confirmation section when the file has none.
+ * The restated answers come from the file itself (question title -> chosen
+ * option text), so the summary is exact rather than the conductor's paraphrase.
+ */
+function ensureSummaryConfirmationSection(absolute: string): void {
+  if (!existsSync(absolute)) return;
+  const body = readFileSync(absolute, "utf-8");
+  if (new RegExp(`^\\s{0,3}##[ \\t]+${SUMMARY_CONFIRMATION_CHECKPOINT}\\s*$`, "m").test(body)) return;
+  const questions = parseQuestionsMarkdown(body).filter((question) => !question.confirmation);
+  const restated = questions.map((question) => {
+    const chosen = (question.answer ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+    const texts = chosen.map((letter) => {
+      const option = question.options.find((candidate) => candidate.letter === letter);
+      return option ? `${letter}. ${option.text}` : letter;
+    });
+    const title = question.title.replace(/^Q\d+[.:]?\s*/, "");
+    return `${question.id}. ${title}: ${texts.join("; ") || "(no answer recorded)"}${question.note ? ` - note: ${question.note}` : ""}`;
+  });
+  const section = [
+    "",
+    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
+    "",
+    ...restated,
+    "",
+    "Does this all look correct before I generate the artifact?",
+    "",
+    "- Looks correct",
+    "- Request changes",
+    "",
+    "[Answer]:",
+    "",
+  ].join("\n");
+  writeFileAtomic(absolute, `${body.replace(/\s*$/, "\n")}${section}`);
 }
 
 function summaryQuestionEvidence(
@@ -277,6 +314,14 @@ function handleDecision(args: string[]): void {
 
   const pd = resolveActiveProjectDir(projectDir);
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
+  // The confirmation entry is the tool's to write: one deterministic section
+  // (the recorded answers restated, the prompt, the two undecorated options, a
+  // blank tag) appended when absent. The conductor then only renders the
+  // marked spec the brief handed it - it never hand-types the unmarked labels
+  // moments before rendering, which is where the marker kept getting lost.
+  if (flags.checkpoint === "summary-confirmation" && flags["questions-file"]) {
+    ensureSummaryConfirmationSection(resolve(pd, flags["questions-file"]));
+  }
   const summaryEvidence =
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
