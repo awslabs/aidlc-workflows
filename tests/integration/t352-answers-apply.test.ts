@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import { summaryConfirmationContentHash } from "../../core/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -150,6 +151,7 @@ describe("aidlc-log answers-apply", () => {
     expect(result.status, result.output).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       applied: 3,
+      confirmed: true,
       files: ["answers-001.json", "answers-002.json"],
       questions_file: rel,
     });
@@ -157,14 +159,23 @@ describe("aidlc-log answers-apply", () => {
     expect(body).toContain("[Answer]: A");
     expect(body).toContain("[Answer]: A, C\n[Note]: Metrics can follow the first release.");
     expect(body).toContain("[Answer]: X — On-prem appliance");
-    expect(body).toContain("## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]:");
+    // A browser round is its own confirmation: the human saw each answer beside
+    // its recommendation and saved them, so the summary checkpoint is recorded
+    // here, not asked again in the terminal.
+    expect(body).toContain("## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: Looks correct");
 
     const log = audit(project);
     expect(log.match(/\*\*Event\*\*: QUESTION_ANSWERED/g)).toHaveLength(1);
+    expect(log.match(/\*\*Event\*\*: SUMMARY_CONFIRMATION_RECORDED/g)).toHaveLength(1);
     expect(log).toContain("**Mode**: browser");
     expect(log).toContain("**Answers**: 3");
     expect(log).toContain("**Submissions**: answers-001.json, answers-002.json");
-    expect(log).toContain(`**Digest**: ${createHash("sha256").update(body).digest("hex")}`);
+    // QUESTION_ANSWERED digests the file the answers produced; the confirmation
+    // recorded right after it carries its own content hash of the final file.
+    const answered = body.replace("[Answer]: Looks correct", "[Answer]:");
+    expect(log).toContain(`**Digest**: ${createHash("sha256").update(answered).digest("hex")}`);
+    expect(log).toContain(`**Questions SHA-256**: ${summaryConfirmationContentHash(body)}`);
+    expect(log).toContain("**Source**: review-ui");
     const consumed = JSON.parse(readFileSync(join(stageDir, ".review-ui", "consumed.json"), "utf-8"));
     expect(consumed.entries.map((entry: { result: string }) => entry.result)).toEqual([
       "answers-applied",

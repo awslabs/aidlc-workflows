@@ -1596,7 +1596,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const decision = JSON.parse(r.out) as { decision: string; reason: string };
     expect(decision.decision).toBe("block");
     expect(decision.reason).toContain(`aidlc-log.ts answers-apply --stage requirements-analysis --questions-file ${questionsFile}`);
-    expect(decision.reason).toContain("Do not ask the human to type done");
+    expect(decision.reason).toMatch(/do not ask the human to type done/i);
   }, 30000);
 
   test("(f-browser) the hook holds the turn until the submission lands, then blocks", async () => {
