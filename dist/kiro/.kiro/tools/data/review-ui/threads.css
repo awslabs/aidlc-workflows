@@ -64,14 +64,16 @@
 .thread-card-actions .icon-btn.action[data-remove-annotation][title="Undo edit"]:hover { color: var(--ink); background: var(--panel); }
 .thread-who .icon-btn { margin-left: auto; }
 /* Reactions: pills with the emoji and how many; yours carries the accent. */
-.reactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
-.reactions:empty { display: none; }
+/* Reactions live in one place: under the body, where they read as reactions
+   to it. The add button waits at the end of the row, alone when there are none. */
+.reactions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 8px; }
 .reaction { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--line2); border-radius: 999px; background: #fff; font-size: 12px; line-height: 18px; }
 .reaction b { font-size: 11px; color: var(--muted); font-weight: 600; }
 .reaction:hover { border-color: #cbd5e1; background: var(--panel); }
 .reaction.mine { border-color: var(--accent); background: var(--soft); }
 .reaction.mine b { color: var(--accent); }
-.reaction.add { padding: 1px 6px; color: var(--muted); }
+.reaction.add { padding: 1px 6px; color: #a3adbb; border-color: transparent; background: transparent; }
+.reaction.add:hover { color: var(--ink); border-color: var(--line2); background: var(--panel); }
 .reaction-picker { position: absolute; z-index: 5; display: flex; gap: 2px; padding: 5px; border: 1px solid var(--line2); border-radius: 999px; background: #fff; box-shadow: 0 8px 24px rgba(26, 32, 44, 0.16); }
 .reaction-picker button { width: 28px; height: 28px; border-radius: 50%; font-size: 16px; line-height: 28px; text-align: center; }
 .reaction-picker button:hover { background: var(--panel); transform: scale(1.15); }

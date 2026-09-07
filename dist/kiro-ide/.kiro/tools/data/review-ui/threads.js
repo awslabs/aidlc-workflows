@@ -87,12 +87,7 @@ let openPicker = null;
 function reactionsHtml(target) {
   const entry = reactionsFor()[target] || {};
   const pills = Object.entries(entry).map(([emoji, who]) => `<button type="button" class="reaction${who.includes(ME) ? " mine" : ""}" data-react="${escapeHtml(emoji)}" data-target="${escapeHtml(target)}" title="${escapeHtml(who.includes(ME) ? (who.length > 1 ? `You and ${who.length - 1} other${who.length > 2 ? "s" : ""}` : "You") : who.join(", "))}"><span>${emoji}</span><b>${who.length}</b></button>`).join("");
-  return `<div class="reactions" data-reactions-for="${escapeHtml(target)}">${pills}${pills ? `<button type="button" class="reaction add" data-react-add="${escapeHtml(target)}" title="Add reaction" aria-label="Add reaction">${icon("emojiAdd", { size: 13 })}</button>` : ""}</div>`;
-}
-
-/** The icon in a message header that opens the picker. */
-function reactButton(target) {
-  return `<button type="button" class="icon-btn" data-react-add="${escapeHtml(target)}" title="Add reaction" aria-label="Add reaction">${icon("emojiAdd", { size: 14 })}</button>`;
+  return `<div class="reactions" data-reactions-for="${escapeHtml(target)}">${pills}<button type="button" class="reaction add" data-react-add="${escapeHtml(target)}" title="Add reaction" aria-label="Add reaction">${icon("emojiAdd", { size: 13 })}</button></div>`;
 }
 
 function openReactionPicker(anchor, target) {
@@ -688,7 +683,7 @@ function renderPending(annotation) {
     const where = (annotation.heading_path || []).slice(-1)[0] || `lines ${annotation.line_start ?? "?"}–${annotation.line_end ?? "?"}`;
     return `<article class="thread-card pending-card edit-card kind-edit" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
       <div class="thread-head"><p class="thread-quote edit-summary" title="${escapeHtml(where)}">${summary}</p><span class="thread-kind">Edit</span></div>
-      <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
+      <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>${relativeTime(annotation.created) || "just now"}</span></div>
       <textarea rows="2" placeholder="Add a reason (optional)">${escapeHtml(annotation.body || "")}</textarea>
       ${reactionsHtml(annotation.id)}
       <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}${iconAction("data-remove-annotation", "arrowUndo", "Undo edit")}</div>
@@ -696,7 +691,7 @@ function renderPending(annotation) {
   }
   return `<article class="thread-card pending-card kind-${escapeHtml(normalizeKind(annotation.kind))}" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
     ${headRow(annotation.selection, kindSelect(annotation.kind))}
-    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
+    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>${relativeTime(annotation.created) || "just now"}</span></div>
     <textarea rows="2" placeholder="Write a remark…">${escapeHtml(annotation.body || "")}</textarea>
     ${reactionsHtml(annotation.id)}
     <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}${iconAction("data-remove-annotation", "delete", "Remove")}</div>
@@ -724,7 +719,7 @@ function renderSent(thread) {
     ${thread.diff
       ? `<div class="thread-head"><p class="thread-quote edit-summary">${diffSummary(thread.diff)}</p><span class="thread-kind">${kindLabel(thread.kind)}</span></div>`
       : headRow(thread.quote, `<span class="thread-kind">${kindLabel(thread.kind)}</span>`)}
-    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span>${reactButton(thread.id)}</div>
+    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span></div>
     ${thread.diff ? "" : thread.body ? `<p class="thread-body">${escapeHtml(thread.body)}</p>` : ""}
     ${reactionsHtml(thread.id)}
     ${renderReply(thread.response, `${thread.id}:reply`)}
@@ -739,7 +734,7 @@ function renderSent(thread) {
 function renderReply(response, target = null) {
   if (!response) return "";
   const verb = response.status === "applied" ? "Applied" : response.status === "kept" ? "Kept" : "Answered";
-  return `<div class="thread-reply"><div class="thread-who"><span class="thread-avatar agent">A</span><b>${escapeHtml(agentFor())}</b><span>r${response.revision}</span>${target ? reactButton(target) : ""}</div><p><b>${verb}${response.text ? ":" : "."}</b>${response.text ? ` ${escapeHtml(response.text)}` : ""}</p>${target ? reactionsHtml(target) : ""}</div>`;
+  return `<div class="thread-reply"><div class="thread-who"><span class="thread-avatar agent">A</span><b>${escapeHtml(agentFor())}</b><span>r${response.revision}</span></div><p><b>${verb}${response.text ? ":" : "."}</b>${response.text ? ` ${escapeHtml(response.text)}` : ""}</p>${target ? reactionsHtml(target) : ""}</div>`;
 }
 
 function renderSummary(summary) {
