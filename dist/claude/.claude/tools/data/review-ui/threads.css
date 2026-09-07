@@ -42,6 +42,29 @@
 .thread-card-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 7px; }
 .thread-card-actions > button:not(.btn) { color: var(--muted); font-size: 11px; }
 .thread-card-actions > button:not(.btn):hover { color: var(--rose); }
+/* As in the reference, actions and the reaction button wait for the hand: they
+   fade in when the card is hovered, selected, or holds the keyboard focus. The
+   state label at bottom-left is information and always shows. */
+.thread-card-actions > button, .thread-card .hover-only { opacity: 0; transition: opacity 120ms ease; }
+.thread-card:hover .thread-card-actions > button, .thread-card.focused .thread-card-actions > button, .thread-card:focus-within .thread-card-actions > button,
+.thread-card:hover .hover-only, .thread-card.focused .hover-only, .thread-card:focus-within .hover-only { opacity: 1; }
+.thread-card .thread-card-actions > .btn.primary { opacity: 1; }
+.thread-card { position: relative; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: auto; border-radius: 5px; color: var(--muted); }
+.icon-btn:hover { background: var(--panel); color: var(--ink); }
+.thread-who .icon-btn { margin-left: auto; }
+/* Reactions: pills with the emoji and how many; yours carries the accent. */
+.reactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.reactions:empty { display: none; }
+.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--line2); border-radius: 999px; background: #fff; font-size: 12px; line-height: 18px; }
+.reaction b { font-size: 11px; color: var(--muted); font-weight: 600; }
+.reaction:hover { border-color: #cbd5e1; background: var(--panel); }
+.reaction.mine { border-color: var(--accent); background: var(--soft); }
+.reaction.mine b { color: var(--accent); }
+.reaction.add { padding: 1px 6px; color: var(--muted); }
+.reaction-picker { position: absolute; z-index: 5; display: flex; gap: 2px; padding: 5px; border: 1px solid var(--line2); border-radius: 999px; background: #fff; box-shadow: 0 8px 24px rgba(26, 32, 44, 0.16); }
+.reaction-picker button { width: 28px; height: 28px; border-radius: 50%; font-size: 16px; line-height: 28px; text-align: center; }
+.reaction-picker button:hover { background: var(--panel); transform: scale(1.15); }
 /* Where the thread is in its life, said once at the bottom-left, as a reviewed
    document says it: Not sent → Sent · r0 → Applied in r1 → Resolved. A check
    only when the agent applied it or you resolved it. */

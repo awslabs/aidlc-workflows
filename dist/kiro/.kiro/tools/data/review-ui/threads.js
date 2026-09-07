@@ -45,6 +45,86 @@ function toggleResolved(id) {
   sessionStorage.setItem(RESOLVED_KEY, JSON.stringify(all));
   store.set({ resolved: [...set] });
 }
+// Reactions: an emoji and who gave it, per thread (or per agent reply, keyed
+// `<thread>:reply`). Kept per stage directory in sessionStorage today; the
+// shape - { [target]: { [emoji]: [who, ...] } } - is what a shared record
+// would hold once several people review the same gate.
+const REACTIONS_KEY = "aidlc-review-reactions";
+const REACTION_PALETTE = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
+const ME = "you";
+function reactionsFor() {
+  try {
+    const all = JSON.parse(sessionStorage.getItem(REACTIONS_KEY) || "{}");
+    const mine = all[stageDirectory() || ""];
+    return mine && typeof mine === "object" ? mine : {};
+  } catch {
+    return {};
+  }
+}
+function toggleReaction(target, emoji) {
+  const dir = stageDirectory() || "";
+  let all = {};
+  try {
+    all = JSON.parse(sessionStorage.getItem(REACTIONS_KEY) || "{}");
+  } catch {
+    all = {};
+  }
+  const forStage = all[dir] && typeof all[dir] === "object" ? all[dir] : {};
+  const entry = forStage[target] && typeof forStage[target] === "object" ? forStage[target] : {};
+  const who = new Set(Array.isArray(entry[emoji]) ? entry[emoji] : []);
+  if (who.has(ME)) who.delete(ME);
+  else who.add(ME);
+  if (who.size) entry[emoji] = [...who];
+  else delete entry[emoji];
+  if (Object.keys(entry).length) forStage[target] = entry;
+  else delete forStage[target];
+  all[dir] = forStage;
+  sessionStorage.setItem(REACTIONS_KEY, JSON.stringify(all));
+}
+let openPicker = null;
+
+/** The reaction pills under a message, and the picker that adds one. */
+function reactionsHtml(target) {
+  const entry = reactionsFor()[target] || {};
+  const pills = Object.entries(entry).map(([emoji, who]) => `<button type="button" class="reaction${who.includes(ME) ? " mine" : ""}" data-react="${escapeHtml(emoji)}" data-target="${escapeHtml(target)}" title="${escapeHtml(who.includes(ME) ? (who.length > 1 ? `You and ${who.length - 1} other${who.length > 2 ? "s" : ""}` : "You") : who.join(", "))}"><span>${emoji}</span><b>${who.length}</b></button>`).join("");
+  return `<div class="reactions" data-reactions-for="${escapeHtml(target)}">${pills}${pills ? `<button type="button" class="reaction add" data-react-add="${escapeHtml(target)}" title="Add reaction" aria-label="Add reaction">${icon("emojiAdd", { size: 13 })}</button>` : ""}</div>`;
+}
+
+/** The hover-revealed icon in a message header that opens the picker. */
+function reactButton(target) {
+  return `<button type="button" class="icon-btn hover-only" data-react-add="${escapeHtml(target)}" title="Add reaction" aria-label="Add reaction">${icon("emojiAdd", { size: 14 })}</button>`;
+}
+
+function openReactionPicker(anchor, target) {
+  closeReactionPicker();
+  const picker = document.createElement("div");
+  picker.className = "reaction-picker";
+  picker.setAttribute("role", "menu");
+  picker.innerHTML = REACTION_PALETTE.map((emoji) => `<button type="button" role="menuitem" data-pick="${emoji}" aria-label="React ${emoji}">${emoji}</button>`).join("");
+  picker.addEventListener("click", (event) => {
+    const pick = event.target.closest("[data-pick]");
+    if (!pick) return;
+    toggleReaction(target, pick.dataset.pick);
+    closeReactionPicker();
+    render();
+  });
+  anchor.closest(".thread-card")?.append(picker);
+  const card = anchor.closest(".thread-card").getBoundingClientRect();
+  const at = anchor.getBoundingClientRect();
+  picker.style.top = `${Math.round(at.bottom - card.top + 6)}px`;
+  picker.style.right = `${Math.round(card.right - at.right)}px`;
+  openPicker = picker;
+  setTimeout(() => document.addEventListener("mousedown", closePickerOnOutside, { once: true }), 0);
+}
+function closePickerOnOutside(event) {
+  if (openPicker && !openPicker.contains(event.target)) closeReactionPicker();
+  else if (openPicker) document.addEventListener("mousedown", closePickerOnOutside, { once: true });
+}
+function closeReactionPicker() {
+  openPicker?.remove();
+  openPicker = null;
+}
+
 let noteEditor = null;
 let generalNote = "";
 let sending = false;
@@ -636,9 +716,10 @@ function renderSent(thread) {
   const resolved = status.name === "Resolved";
   return `<article class="thread-card sent-card${resolved ? " resolved" : ""}" data-thread-id="${escapeHtml(thread.id)}">
     ${headRow(thread.quote, `<span class="thread-kind">${kindLabel(thread.kind)}</span>`)}
-    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span></div>
+    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span>${reactButton(thread.id)}</div>
     ${thread.diff ? `<p class="edit-summary">${diffSummary(thread.diff)}</p>` : thread.body ? `<p class="thread-body">${escapeHtml(thread.body)}</p>` : ""}
-    ${renderReply(thread.response)}
+    ${reactionsHtml(thread.id)}
+    ${renderReply(thread.response, `${thread.id}:reply`)}
     ${followUps.map((reply) => `<div class="thread-followup"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${reply.revision}</span></div><p>${escapeHtml(reply.body || "")}</p>${renderReply(reply.response)}</div>`).join("")}
     ${pendingReplies.map((reply) => drafts.includes(reply)
       ? `<div class="thread-followup pending" data-draft-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>replying</span></div><textarea rows="2" placeholder="Reply…">${escapeHtml(reply.body || "")}</textarea><div class="thread-card-actions"><button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div></div>`
@@ -647,10 +728,10 @@ function renderSent(thread) {
   </article>`;
 }
 
-function renderReply(response) {
+function renderReply(response, target = null) {
   if (!response) return "";
   const verb = response.status === "applied" ? "Applied" : response.status === "kept" ? "Kept" : "Answered";
-  return `<div class="thread-reply"><div class="thread-who"><span class="thread-avatar agent">A</span><b>${escapeHtml(agentFor())}</b><span>r${response.revision}</span></div><p><b>${verb}${response.text ? ":" : "."}</b>${response.text ? ` ${escapeHtml(response.text)}` : ""}</p></div>`;
+  return `<div class="thread-reply"><div class="thread-who"><span class="thread-avatar agent">A</span><b>${escapeHtml(agentFor())}</b><span>r${response.revision}</span>${target ? reactButton(target) : ""}</div><p><b>${verb}${response.text ? ":" : "."}</b>${response.text ? ` ${escapeHtml(response.text)}` : ""}</p>${target ? reactionsHtml(target) : ""}</div>`;
 }
 
 function renderSummary(summary) {
@@ -719,6 +800,15 @@ function bindThreads() {
       selection: parent.quote,
       heading_path: parent.heading_path,
     });
+  });
+  for (const button of slot.querySelectorAll("[data-react-add]")) button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openReactionPicker(button, button.dataset.reactAdd);
+  });
+  for (const pill of slot.querySelectorAll("[data-react][data-target]")) pill.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleReaction(pill.dataset.target, pill.dataset.react);
+    render();
   });
   for (const button of slot.querySelectorAll("[data-resolve]")) button.addEventListener("click", () => {
     toggleResolved(button.dataset.resolve);
