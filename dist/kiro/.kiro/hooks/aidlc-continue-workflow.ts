@@ -662,9 +662,6 @@ function browserQuestionRound(
     if (!existsSync(questionsPath)) return null;
     // A file edited since publication is not the published round.
     if (sha256Hex(readFileSync(questionsPath)) !== pointer.questions_sha256) return null;
-    // This process is about to wait for the answers: open the round. The
-    // daemon shows the form from this write onward, and only from it.
-    if (!openQuestionsRound(docsRoot(projectDir), slug, pointer.questions_sha256)) return null;
     return {
       slug,
       stageDirPath: join(projectDir, ...pointer.stage_dir.split("/")),
@@ -1756,7 +1753,18 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
   // Browser round: hold the turn for the Save click, then hand the conductor
   // the apply step. On expiry, fall through to the plain allow (the `done` flow).
   const round = browserQuestionRound(projectDir, stateContent, activeStage, activeUnit);
-  if (round && (await waitForBrowserAnswers(round, reviewWaitSeconds()))) {
+  const waitSeconds = reviewWaitSeconds();
+  // Open the round only when this process will actually wait for the answers:
+  // the daemon shows the form from this write onward, and only from it. With
+  // the wait disabled (non-Claude harnesses, AIDLC_REVIEW_WAIT_SECONDS=0) the
+  // round stays prepared until `answers-wait` - the process that does wait -
+  // opens it.
+  if (
+    round &&
+    waitSeconds > 0 &&
+    openQuestionsRound(docsRoot(projectDir), round.slug, round.questionsSha256) &&
+    (await waitForBrowserAnswers(round, waitSeconds))
+  ) {
     recordHookDrop(
       projectDir,
       HOOK_NAME,

@@ -224,11 +224,15 @@ function viewState(view, stage) {
     return { label: count ? `${count} ${count === 1 ? "item needs" : "items need"} you` : "Nothing waiting", tone: count ? "needs" : "ok" };
   }
   if (!stage) return { label: "Workflow unavailable", tone: "quiet" };
+  // A terminal checkpoint is stated wherever the human is looking, not only on
+  // the Questions view: the terminal is waiting for them.
+  if (phase() === "confirming" && stage.state === "current" && isActiveIntent()) {
+    return { label: store.state?.checkpoint === "plan-approval" ? "Plan approval waiting in the terminal" : "Confirming in the terminal", tone: "needs" };
+  }
   if (view.kind === "questions") {
     if (stage.state === "current" && isActiveIntent()) {
       if (phase() === "questions" && answersSubmitted()) return { label: "Answers sent", tone: "ok" };
       if (phase() === "preparing") return { label: "Preparing your questions", tone: "quiet" };
-      if (phase() === "confirming") return { label: "Confirming in the terminal", tone: "quiet" };
       if (isLiveQuestions(stage)) {
         const total = stage.questions?.total || 0;
         const open = Math.max(0, total - (stage.questions?.answered || 0)) || total;

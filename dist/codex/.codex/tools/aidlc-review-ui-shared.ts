@@ -416,6 +416,8 @@ export interface CurrentPointer {
   questions_file?: string | null;
   questions_sha256?: string | null;
   guide?: string | null;
+  /** `confirming` rounds: which terminal checkpoint is open. */
+  checkpoint?: "summary-confirmation" | "plan-approval" | null;
 }
 
 export interface ReviewManifest {
@@ -529,8 +531,18 @@ export function openQuestionsRound(recordDir: string, stage: string, questionsSh
   return pointer;
 }
 
-/** The consolidated-summary confirmation is open for `stage` (terminal-rendered; the browser shows it as such). */
-export function publishConfirmationRound(recordDir: string, stage: string, unit: string | null, questionsFile: string): CurrentPointer | null {
+/**
+ * A terminal checkpoint is open for `stage` - the consolidated-summary
+ * confirmation or the Code Generation plan approval. Both are decided in the
+ * terminal by design; the browser shows exactly that, and which one.
+ */
+export function publishConfirmationRound(
+  recordDir: string,
+  stage: string,
+  unit: string | null,
+  questionsFile: string | null,
+  checkpoint: "summary-confirmation" | "plan-approval" = "summary-confirmation",
+): CurrentPointer | null {
   const previous = readCurrentPointer(recordDir);
   const pointer: CurrentPointer = {
     version: 1,
@@ -545,6 +557,7 @@ export function publishConfirmationRound(recordDir: string, stage: string, unit:
     questions_file: questionsFile,
     questions_sha256: null,
     guide: null,
+    checkpoint,
   };
   writePointer(recordDir, pointer);
   return pointer;
@@ -567,6 +580,7 @@ export function closeHumanRound(recordDir: string, stage: string, state: Current
     ends_with: null,
     questions_sha256: null,
     guide: null,
+    checkpoint: null,
   });
   return true;
 }

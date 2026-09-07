@@ -227,6 +227,15 @@ function buildReadOnlyBanner(doc, view) {
     banner.querySelector("span").textContent = `· the agent is addressing your feedback on ${label}; your remarks stay in Threads and the gate reopens with the next revision`;
     return banner;
   }
+  if (stage?.state === "current" && store.state?.phase === "confirming") {
+    banner.classList.add("in-progress-banner");
+    const plan = store.state?.checkpoint === "plan-approval";
+    banner.innerHTML = `<b>${plan ? "Plan approval" : "Confirmation"}</b><span></span>`;
+    banner.querySelector("span").textContent = plan
+      ? "· the terminal is asking you to approve this plan - read it here, decide there"
+      : "· the terminal is asking you to confirm the answers before this is generated";
+    return banner;
+  }
   if (stage?.state === "current") {
     banner.classList.add("in-progress-banner");
     banner.innerHTML = `<b>In progress</b><span></span>`;

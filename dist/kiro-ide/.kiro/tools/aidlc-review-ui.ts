@@ -607,7 +607,9 @@ function statePayload(projectDir: string): Record<string, unknown> {
   const context = stateContext(projectDir);
   const revisionValue = context.state ? getField(context.state, "Revision Count") : null;
   const revision = revisionValue === null ? null : Number(revisionValue);
-  const currentStage = context.current?.stage ?? (context.state ? getField(context.state, "Current Stage") : null);
+  // The workflow's cursor names the stage. The pointer may still describe a
+  // finished round of an earlier stage (approved) after the workflow moved on.
+  const currentStage = (context.state ? getField(context.state, "Current Stage") : null) ?? context.current?.stage ?? null;
   const questions = currentQuestionsTarget(projectDir, context);
   const gateStageDir = context.current?.stage_dir ? (() => { try { return resolveProjectAidlcPath(projectDir, context.current!.stage_dir!); } catch { return null; } })() : null;
   const decisionSent = context.current?.state === "awaiting-approval" && gateStageDir
@@ -619,6 +621,8 @@ function statePayload(projectDir: string): Record<string, unknown> {
   return {
     project_dir: projectDir,
     phase: humanPhase(context, questions),
+    /** Which terminal checkpoint a `confirming` phase refers to. */
+    checkpoint: context.current?.state === "confirming" ? context.current.checkpoint ?? "summary-confirmation" : null,
     /** The decision already recorded for the open gate ("approve" | "request-changes"), until the hook delivers it. */
     decision_sent: decisionSent,
     space: context.space,

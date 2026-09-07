@@ -580,11 +580,53 @@ export function init() {
 
   store.on("workflow", render);
   store.on("state", render);
+  store.on("refresh", followPhase);
   store.on("view", () => {
     if (store.view.kind !== "overview") filesMode = false;
     render();
   });
   store.on("sidebar", renderPanel);
   render();
+}
+
+// The tab follows the workflow. The daemon's `phase` is the one signal: when it
+// changes, take the human to the thing that now needs them - unless they are
+// mid-work here (pending remarks) - and badge the title while something waits.
+// Steering is a transition, never a rule re-applied on every push, so a human
+// who navigates away after the transition is left alone.
+const BASE_TITLE = "AI-DLC Workflows";
+let lastPhase = null;
+let lastStageSlug = null;
+function followPhase() {
+  const phase = store.state?.phase ?? "idle";
+  const stage = currentStage();
+  const waiting =
+    (phase === "questions" && !store.state?.questions?.submitted) ||
+    (phase === "reviewing" && !store.state?.decision_sent) ||
+    phase === "confirming";
+  document.title = waiting ? `(1) ${BASE_TITLE}` : BASE_TITLE;
+  const previousPhase = lastPhase;
+  const previousStage = lastStageSlug;
+  lastPhase = phase;
+  lastStageSlug = stage?.slug ?? null;
+  if (previousPhase === null || !stage || !isActiveIntent()) return;
+  const busy = (store.annotations || []).length > 0;
+  if (busy) return;
+  // The workflow moved to another stage: leave the finished one behind.
+  if (previousStage !== null && previousStage !== stage.slug) {
+    openWorkflow();
+    return;
+  }
+  if (previousPhase === phase) return;
+  if (phase === "questions" && store.view.kind !== "questions") {
+    questionsView(stage);
+  } else if (phase === "reviewing") {
+    const artifact = firstArtifact(stage);
+    if (artifact && !(store.view.kind === "artifact" && store.view.path === artifact.path)) artifactView(stage, artifact);
+  } else if (phase === "confirming" && store.state?.checkpoint === "plan-approval") {
+    // The terminal is asking the human to approve the plan: show them the plan.
+    const plan = (stage.artifacts || []).find((item) => item.exists && /-plan\.(md|html)$/.test(item.path)) || firstArtifact(stage);
+    if (plan && !(store.view.kind === "artifact" && store.view.path === plan.path)) artifactView(stage, plan);
+  }
 }
 

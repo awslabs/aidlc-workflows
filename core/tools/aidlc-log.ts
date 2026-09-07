@@ -369,9 +369,17 @@ function handleDecision(args: string[]): void {
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
-  if (flags.checkpoint === "summary-confirmation" && reviewUiEnabled()) {
+  if ((flags.checkpoint === "summary-confirmation" || flags.checkpoint === "plan-approval") && reviewUiEnabled()) {
     const record = recordDir(pd);
-    if (record) publishConfirmationRound(record, flags.stage, flags.unit ?? null, summaryEvidence!.relativePath);
+    if (record) {
+      publishConfirmationRound(
+        record,
+        flags.stage,
+        flags.unit ?? null,
+        summaryEvidence?.relativePath ?? null,
+        flags.checkpoint,
+      );
+    }
   }
   if (planEvidence) {
     try {
@@ -775,6 +783,10 @@ function handleAnswer(args: string[]): void {
     }
 
     if (planCheckpoint) {
+      {
+        const record = recordDir(pd);
+        if (record) closeHumanRound(record, flags.stage, "confirming");
+      }
       try {
         recordPlanApprovalReceipt(
           pd,
