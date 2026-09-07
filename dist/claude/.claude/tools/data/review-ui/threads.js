@@ -495,10 +495,22 @@ function renderNoteEditor() {
 
 function renderThreadList() {
   const nested = (item) => item.reply_to && sentThreads.some((thread) => thread.id === item.reply_to);
+  const entries = [
+    ...drafts.filter((draft) => !nested(draft)).map((draft) => ({ item: draft, render: renderDraft, order: 0 })),
+    ...store.annotations.filter((annotation) => !nested(annotation)).map((annotation) => ({ item: annotation, render: renderPending, order: 1 })),
+    ...sortedSentThreads().map((thread) => ({ item: thread, render: renderSent, order: 2 })),
+  ];
+  // "In document order" means the whole rail reads top to bottom with the
+  // document - pending and sent alike - so walking the cards walks the page in
+  // one direction. "Recent" keeps what is still yours first, then sent threads
+  // newest round first.
+  if (sortMode === "document") {
+    const keyed = entries.map((entry, index) => ({ ...entry, line: documentLine(entry.item), index }));
+    keyed.sort((left, right) => left.line - right.line || left.order - right.order || left.index - right.index);
+    entries.splice(0, entries.length, ...keyed);
+  }
   const cards = [
-    ...drafts.filter((draft) => !nested(draft)).map(renderDraft),
-    ...store.annotations.filter((annotation) => !nested(annotation)).map(renderPending),
-    ...sortedSentThreads().map(renderSent),
+    ...entries.map((entry) => entry.render(entry.item)),
     ...summaryThreads.map(renderSummary),
   ].filter(Boolean);
   if (cards.length) return cards.join("");
@@ -507,6 +519,26 @@ function renderThreadList() {
   if (remarksMode === "unavailable") return `<p class="threads-empty"><b>Threads are not available yet.</b>The document remains reviewable. Pending remarks will stay here until you decide.</p>`;
   if (store.view?.readOnly) return `<p class="threads-empty"><b>No threads for this artifact.</b>This past artifact is read-only; return to the current stage to review.</p>`;
   return `<p class="threads-empty"><b>No threads yet.</b>Select text to comment, or click into a paragraph and type to suggest an edit. Nothing reaches the agent until you send.</p>`;
+}
+
+/**
+ * Where a thread sits in the current document, as a source line: the recorded
+ * line when there is one, else the line its quote is found on, else the start
+ * of its block. Unknown places sort last.
+ */
+function documentLine(item) {
+  const recorded = Number(item.line_start);
+  if (Number.isFinite(recorded) && recorded > 0 && recorded < Number.MAX_SAFE_INTEGER) return recorded;
+  const source = typeof store.document?.source === "string" ? store.document.source : null;
+  const quote = (item.quote || item.selection || "").trim();
+  if (source && quote) {
+    const needle = quote.split("\n")[0].trim();
+    const at = needle ? source.indexOf(needle) : -1;
+    if (at >= 0) return source.slice(0, at).split("\n").length;
+  }
+  const block = store.document?.blocks?.[Number(item.block)];
+  if (block && Number.isFinite(Number(block.line_start))) return Number(block.line_start);
+  return Number.MAX_SAFE_INTEGER;
 }
 
 function sortedSentThreads() {
