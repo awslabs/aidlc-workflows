@@ -823,7 +823,8 @@ describe("t326 pinned team Unit merge", () => {
     expect(completeRetry.status, completeRetry.out).toBe(0);
     expect(readFileSync(seededStateFile(seed), "utf-8")).toBe(completedState);
     expect(readAllAuditShards(seed)).toBe(completedAudit);
-  }, 120000);
+  // Two full gate-and-land cycles measure ~110 s alone on an M3 Pro (each tool call is a fresh bun process), so 120 s leaves no headroom under --parallel 4.
+  }, 300000);
 
   test("moved refs require re-pin and released attempts cannot pin", () => {
     const { seed, remote } = makeSeed();
