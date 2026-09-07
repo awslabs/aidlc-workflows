@@ -917,8 +917,74 @@ function touchEngineMarker(projectDir: string | undefined): void {
 
 // --- Terminal-directive constructors (the non-run-stage kinds) ---
 
-function askDirective(question: string): AskDirective {
-  return { kind: "ask", question };
+function scopeConfirmAskDirective(
+  question: string,
+  proposedScope: string,
+  intentText: string,
+): AskDirective {
+  const tool = `bun ${harnessDir()}/tools/aidlc-orchestrate.ts`;
+  const intentArg = shellArg(intentText);
+  return {
+    kind: "ask",
+    ask_type: "scope-confirm",
+    response_route: "next",
+    question,
+    proposed_scope: proposedScope,
+    intent_text: intentText,
+    confirm_command:
+      `${tool} next --scope ${shellArg(proposedScope)} -- ${intentArg}`,
+    compose_command: `${tool} next compose -- ${intentArg}`,
+    scope_command_template: `${tool} next --scope <scope> -- ${intentArg}`,
+  };
+}
+
+function composeOfferAskDirective(
+  question: string,
+  intentText: string,
+): AskDirective {
+  const tool = `bun ${harnessDir()}/tools/aidlc-orchestrate.ts`;
+  const intentArg = shellArg(intentText);
+  return {
+    kind: "ask",
+    ask_type: "compose-offer",
+    response_route: "next",
+    question,
+    intent_text: intentText,
+    compose_command: `${tool} next compose -- ${intentArg}`,
+    scope_command_template: `${tool} next --scope <scope> -- ${intentArg}`,
+  };
+}
+
+function intentPickAskDirective(
+  question: string,
+  availableIntents: string[],
+): AskDirective {
+  return {
+    kind: "ask",
+    ask_type: "intent-pick",
+    response_route: "next",
+    question,
+    available_intents: availableIntents,
+    select_command_template:
+      `bun ${harnessDir()}/tools/aidlc-orchestrate.ts next intent <selector>`,
+  };
+}
+
+function unitPausedAskDirective(
+  question: string,
+  stage: string,
+  unit: string,
+): AskDirective {
+  return {
+    kind: "ask",
+    ask_type: "unit-paused",
+    response_route: "command",
+    question,
+    stage,
+    unit,
+    resume_command:
+      `bun ${harnessDir()}/tools/aidlc-state.ts unit resume --stage ${shellArg(stage)} --unit ${shellArg(unit)}`,
+  };
 }
 
 function newWorkRoutingAskDirective(
@@ -1875,11 +1941,12 @@ function intentPickPromptIfRecordsExist(
       selectors,
     );
   }
-  return askDirective(
+  return intentPickAskDirective(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
       `Pick the one to work on with \`/aidlc intent <name>\`: ${list}. ` +
       "That selects it; re-run `next` afterward to carry on where it left off.",
+    selectors,
   );
 }
 
@@ -4390,9 +4457,11 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       // resolve (a fixture tree without it) rather than emit a broken preview.
       const clause = costClause(inferred.scope, pd);
       const cost = clause ? ` - ${clause}` : "";
-      emit(askDirective(
+      emit(scopeConfirmAskDirective(
         `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${flags.intent}"${cost}. ` +
           "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
+        inferred.scope,
+        flags.intent,
       ));
       return;
     }
@@ -4406,10 +4475,11 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     const examples = express && classic && feat
       ? `express = ${express.execute} of ${express.total} stages, classic = ${classic.execute}, feature = all ${feat.execute}`
       : fallbackExamples;
-    emit(askDirective(
+    emit(composeOfferAskDirective(
       `None of the ready-made plans is an obvious fit for: "${flags.intent}". ` +
         "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
         `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
+      flags.intent,
     ));
     return;
   }
@@ -5459,13 +5529,15 @@ function emitPerUnitRunStage(
   // wave has no single active Unit; every entry settles with `complete --wave`.
   if (ledger.checkpoint?.state === "paused") {
     const cp = ledger.checkpoint;
-    emit(askDirective(
+    emit(unitPausedAskDirective(
       `Unit "${cp.unit}" of stage "${node.slug}" is PAUSED (unit_state: paused)` +
         `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
         `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
         `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
         `--stage ${node.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
         "the human how to proceed. STOP until the unit is explicitly resumed.",
+      node.slug,
+      cp.unit,
     ));
     return;
   }
@@ -6081,13 +6153,15 @@ function emitTeamUnitMajorRunStage(
   for (const stage of block) {
     const checkpoint = ledgers.get(stage.slug)?.checkpoint;
     if (checkpoint?.state === "paused") {
-      emit(askDirective(
+      emit(unitPausedAskDirective(
         `Unit "${checkpoint.unit}" of stage "${stage.slug}" is PAUSED (unit_state: paused)` +
           `${checkpoint.reason ? ` — reason: ${checkpoint.reason}` : ""}.` +
           `${checkpoint.nextAction ? ` Recorded next action: ${checkpoint.nextAction}.` : ""} ` +
           `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
           `--stage ${stage.slug} --unit ${checkpoint.unit}) and continue from the recorded next action, or ask ` +
           "the human how to proceed. STOP until the unit is explicitly resumed.",
+        stage.slug,
+        checkpoint.unit,
       ));
       return;
     }
@@ -6373,13 +6447,15 @@ function emitUnitMajorRunStage(
   for (const k of block) {
     const cp = ledgers.get(k.slug)?.checkpoint;
     if (cp?.state === "paused") {
-      emit(askDirective(
+      emit(unitPausedAskDirective(
         `Unit "${cp.unit}" of stage "${k.slug}" is PAUSED (unit_state: paused)` +
           `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
           `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
           `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
           `--stage ${k.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
           "the human how to proceed. STOP until the unit is explicitly resumed.",
+        k.slug,
+        cp.unit,
       ));
       return;
     }
@@ -7637,7 +7713,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       kind: "error",
       message:
         `Unknown --result "${flags.result}". ` +
-        `accepted outcomes: ${[...REPORT_RESULTS].join(", ")}.`,
+        `accepted outcomes: ${[...REPORT_RESULTS].join(", ")}. ` +
+        "An ask's answer is never reported except for the resume menu; follow the ask's response_route and named command.",
     });
     return;
   }
@@ -7648,7 +7725,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     emit({
       kind: "error",
       message:
-        "No active intent workflow state found (aidlc-state.md is absent) — nothing to report a transition for.",
+        "No active intent workflow state found (aidlc-state.md is absent) - nothing to report a transition for. " +
+        "An ask's answer is never reported except for the resume menu; follow the ask's response_route and named command.",
     });
     return;
   }

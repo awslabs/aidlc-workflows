@@ -145,7 +145,59 @@ function presentGate(): Record<string, unknown> {
 }
 
 function ask(): Record<string, unknown> {
-  return { kind: "ask", question: "Resume from the last checkpoint, or start fresh?" };
+  return {
+    kind: "ask",
+    ask_type: "scope-confirm",
+    response_route: "next",
+    question: "Continue with the bugfix plan?",
+    proposed_scope: "bugfix",
+    intent_text: "fix the login bug",
+    confirm_command:
+      "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix -- 'fix the login bug'",
+    compose_command:
+      "bun .claude/tools/aidlc-orchestrate.ts next compose -- 'fix the login bug'",
+    scope_command_template:
+      "bun .claude/tools/aidlc-orchestrate.ts next --scope <scope> -- 'fix the login bug'",
+  };
+}
+
+function composeOfferAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "compose-offer",
+    response_route: "next",
+    question: "Compose a tailored plan or choose a scope?",
+    intent_text: "build a portal",
+    compose_command:
+      "bun .claude/tools/aidlc-orchestrate.ts next compose -- 'build a portal'",
+    scope_command_template:
+      "bun .claude/tools/aidlc-orchestrate.ts next --scope <scope> -- 'build a portal'",
+  };
+}
+
+function intentPickAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "intent-pick",
+    response_route: "next",
+    question: "Pick an intent.",
+    available_intents: ["260901-login-a1b2c3d4"],
+    select_command_template:
+      "bun .claude/tools/aidlc-orchestrate.ts next intent <selector>",
+  };
+}
+
+function unitPausedAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "unit-paused",
+    response_route: "command",
+    question: "Resume the paused Unit?",
+    stage: "code-generation",
+    unit: "auth",
+    resume_command:
+      "bun .claude/tools/aidlc-state.ts unit resume --stage code-generation --unit auth",
+  };
 }
 
 function newWorkRoutingAsk(): Record<string, unknown> {
@@ -327,8 +379,20 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(presentGate()).valid).toBe(true);
   });
 
-  test("ask well-formed -> VALID", () => {
+  test("scope-confirm ask carries its direct next commands", () => {
     expect(validateDirective(ask()).valid).toBe(true);
+  });
+
+  test("compose-offer ask carries compose and scope commands", () => {
+    expect(validateDirective(composeOfferAsk()).valid).toBe(true);
+  });
+
+  test("intent-pick ask carries exact selectors and a select template", () => {
+    expect(validateDirective(intentPickAsk()).valid).toBe(true);
+  });
+
+  test("unit-paused ask carries its resume command", () => {
+    expect(validateDirective(unitPausedAsk()).valid).toBe(true);
   });
 
   test("new-work-routing ask carries its direct next response contract", () => {
@@ -360,17 +424,13 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     ).toContain('ask: new-work-routing response_route must be "next"');
   });
 
-  test("new-work route metadata requires the typed ask subtype", () => {
+  test("an untyped ask is invalid", () => {
     expect(
       errs({
-        ...ask(),
-        response_route: "next",
-        new_work_description: "standalone dashboard",
-        proposed_scope: "feature",
-        available_intents: ["fixture"],
-        numbered_prose_question: "1. Continue\n2. Separate\n3. Reshape\n4. Other",
+        kind: "ask",
+        question: "Choose a route.",
       }),
-    ).toContain('ask: response_route requires ask_type "new-work-routing"');
+    ).toContain("ask: missing required field: ask_type");
   });
 
   test("print well-formed -> VALID", () => {

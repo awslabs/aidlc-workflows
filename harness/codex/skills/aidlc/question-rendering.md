@@ -160,8 +160,10 @@ Rules (both tracks):
 - A free-text reply that clearly matches an option counts as that option;
   anything else is an "Other" answer — treat it per the protocol (discuss,
   then re-ask for a final pick).
-- Gate semantics live in the ENGINE either way — the rendering never decides;
-  an ordinary ask's answer rides back on
-  `report --user-input "<exact label>"`. The exception is an ask with
-  `ask_type: "new-work-routing"`: its answer routes through `next` exactly as
-  the SKILL.md `ask` row specifies, never through `report`.
+- Gate semantics live in the ENGINE either way - the rendering never decides.
+  Every engine ask carries `ask_type` and `response_route`; follow the exact
+  command field named for the chosen answer. A `"next"` route never calls
+  `report`, a `"command"` route runs the named command and then re-runs `next`,
+  and a `"claim"` route keeps the Unit claim flow. The prompt-rendered resume
+  menu is the only `"report"` route and uses
+  `report --result resumed --user-input "<exact label>"`.

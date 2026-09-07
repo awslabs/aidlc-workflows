@@ -111,8 +111,9 @@ invariant.
 
 An engine `ask` directive is already the routing decision. Do not run another
 query, inspect intent state, add a recommendation, or replace it with a newly
-derived question before rendering. Untyped asks use `directive.question`; the
-typed exception uses the engine-authored numbered field below. This prose-only
+derived question before rendering. Typed asks other than `new-work-routing`
+use `directive.question`; that subtype uses the engine-authored numbered field
+below. This prose-only
 path is the compatibility contract for older and newer Kiro CLI versions.
 
 Every engine-ask render is invalid until its final displayed option is the next
@@ -133,12 +134,13 @@ If that answer is only `4` or `Other`, ask exactly
 tool. Forward the human's subsequent substantive alternative unchanged through
 `next "<human alternative>"`; never use `report` for this response route.
 
-For an untyped intent-picker ask that explicitly names
-`/aidlc intent <name>`, keep the complete `directive.question` as the prompt,
-render each record name already named by the engine as one numbered option in the same
-order, then write option `N+1` as
-`**Other** — describe what you want instead`, and END THE TURN. Do not query the
-registry or use the pending prose to invent a new-work offer.
+For `ask_type: "intent-pick"`, keep the complete `directive.question` as the
+prompt, render each exact `directive.available_intents` selector as one numbered
+option in the same order, then write option `N+1` as
+`**Other** - describe what you want instead`, and END THE TURN. Do not query the
+registry or use pending prose to invent a new-work offer. After the human
+chooses, replace `<selector>` in `directive.select_command_template` with that
+exact selector and run the resulting command.
 
 ## Mandatory consolidated-summary checkpoint
 

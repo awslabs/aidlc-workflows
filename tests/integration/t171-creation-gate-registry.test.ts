@@ -31,6 +31,7 @@ import { readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
+const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 
@@ -72,6 +73,24 @@ function util(args: string[], p = proj): Run {
 function next(args: string[], p = proj, orchestrator = ORCH): Run {
   return runTool(orchestrator, ["next", ...args], p);
 }
+function runEmittedCommand(command: string, p = proj): Run {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    AIDLC_PROJECT_DIR: p,
+  };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  delete env.AIDLC_HARNESS_DIR;
+  delete env.AIDLC_HARNESS_NAME;
+  const r = Bun.spawnSync({
+    cmd: ["bash", "-c", command],
+    cwd: CLAUDE_DIST,
+    stdout: "pipe",
+    stderr: "pipe",
+    env,
+  });
+  const stdout = r.stdout.toString();
+  return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
+}
 
 const intentsDir = (p: string, space = "default"): string =>
   join(p, "aidlc", "spaces", space, "intents");
@@ -108,6 +127,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       // NOT a creation print: the gate must not name intent-create here.
       expect(d.kind).not.toBe("print");
       expect(d.kind).toBe("ask");
+      expect(d.ask_type).toBe("intent-pick");
+      expect(d.response_route).toBe("next");
       expect(d.message ?? "").not.toContain("intent-create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
@@ -117,6 +138,10 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         .filter((name): name is string => typeof name === "string");
       expect(records.length).toBe(2);
       for (const name of records) expect(d.question).toContain(name);
+      expect(d.available_intents).toEqual(records);
+      expect(d.select_command_template).toContain(
+        "aidlc-orchestrate.ts next intent <selector>",
+      );
       // Read-only: no third intent was created; the cursor is still unset.
       expect(recordDirs(proj).length).toBe(2);
       expect(existsSync(cursorPath(proj))).toBe(false);
@@ -127,15 +152,19 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const r = next(["poc"]); // positional valid-scope name, no --scope flag
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
+      expect(d.ask_type).toBe("intent-pick");
+      expect(d.response_route).toBe("next");
       expect(d.message ?? "").not.toContain("intent-create");
       expect(d.question).toContain("/aidlc intent <name>");
+      expect(d.available_intents).toHaveLength(2);
+      expect(d.select_command_template).toContain("<selector>");
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
 
     for (const harness of HARNESS_MATRIX.filter(
       (candidate) => candidate.name !== "kiro" && candidate.name !== "kiro-ide",
     )) {
-      test(`${harness.name}: scoped new prose retains the pre-existing untyped picker contract`, () => {
+      test(`${harness.name}: scoped new prose emits the typed intent picker`, () => {
         seedTwoIntentsNoCursor();
         const orchestrator = join(
           harness.engineRoot,
@@ -148,8 +177,10 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         ], proj, orchestrator);
         const d = JSON.parse(r.stdout.trim());
         expect(d.kind).toBe("ask");
-        expect(d.ask_type).toBeUndefined();
-        expect(d.available_intents).toBeUndefined();
+        expect(d.ask_type).toBe("intent-pick");
+        expect(d.response_route).toBe("next");
+        expect(d.available_intents).toHaveLength(2);
+        expect(d.select_command_template).toContain("<selector>");
         expect(d.numbered_prose_question).toBeUndefined();
         expect(d.question).toContain("/aidlc intent <name>");
       });
@@ -159,7 +190,13 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       seedTwoIntentsNoCursor();
       const r = next(["fix the broken login button"]);
       const d = JSON.parse(r.stdout.trim());
-      expect(d.ask_type).toBeUndefined();
+      expect(d.ask_type).toBe("scope-confirm");
+      expect(d.response_route).toBe("next");
+      expect(d.proposed_scope).toBe("bugfix");
+      expect(d.intent_text).toBe("fix the broken login button");
+      expect(d.confirm_command).toContain(
+        "next --scope bugfix -- 'fix the broken login button'",
+      );
       expect(d.available_intents).toBeUndefined();
       expect(d.question).toContain('This looks like "bugfix" work');
       expect(d.question).toContain("fix the broken login button");
@@ -261,6 +298,53 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
   // (2) ZERO intents → STILL creates exactly as before
   // ----------------------------------------------------------------
   describe("a fresh empty workspace still names intent-create (unchanged)", () => {
+    test("Branch 8 scope-confirm carries exact next commands and its confirm round trip reaches intent-create", () => {
+      const intentText = "a workshop for the team";
+      const routed = next([intentText]);
+      const directive = JSON.parse(routed.stdout.trim());
+      expect(directive.kind).toBe("ask");
+      expect(directive.ask_type).toBe("scope-confirm");
+      expect(directive.response_route).toBe("next");
+      expect(directive.proposed_scope).toBe("workshop");
+      expect(directive.intent_text).toBe(intentText);
+      expect(directive.confirm_command).toContain(
+        "aidlc-orchestrate.ts next --scope workshop -- 'a workshop for the team'",
+      );
+      expect(directive.compose_command).toContain(
+        "aidlc-orchestrate.ts next compose -- 'a workshop for the team'",
+      );
+      expect(directive.scope_command_template).toContain(
+        "aidlc-orchestrate.ts next --scope <scope> -- 'a workshop for the team'",
+      );
+
+      const confirmed = runEmittedCommand(directive.confirm_command);
+      expect(confirmed.status, confirmed.out).toBe(0);
+      const creation = JSON.parse(confirmed.stdout.trim());
+      expect(creation.kind).toBe("print");
+      expect(creation.message).toContain("intent-create --scope workshop");
+      expect(creation.message).toContain("--arguments='a workshop for the team'");
+
+      const quoted = JSON.parse(next(["team's workshop"]).stdout.trim());
+      expect(quoted.confirm_command).toContain("'team'\"'\"'s workshop'");
+    });
+
+    test("Branch 8 compose-offer carries exact compose and scope commands", () => {
+      const intentText =
+        "build an onboarding portal for new engineers with SSO";
+      const routed = next([intentText]);
+      const directive = JSON.parse(routed.stdout.trim());
+      expect(directive.kind).toBe("ask");
+      expect(directive.ask_type).toBe("compose-offer");
+      expect(directive.response_route).toBe("next");
+      expect(directive.intent_text).toBe(intentText);
+      expect(directive.compose_command).toContain(
+        "aidlc-orchestrate.ts next compose -- 'build an onboarding portal for new engineers with SSO'",
+      );
+      expect(directive.scope_command_template).toContain(
+        "aidlc-orchestrate.ts next --scope <scope> -- 'build an onboarding portal for new engineers with SSO'",
+      );
+    });
+
     test("Branch 9a creates on zero intents", () => {
       const r = next(["--scope", "poc"]);
       const d = JSON.parse(r.stdout.trim());

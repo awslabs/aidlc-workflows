@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-09-07
+
+Fix the new-workspace plan question so answering it cannot make the conductor invent `report --result answered` and fail with `Unknown --result`. Every question emitted by the engine now carries its typed response route and the exact follow-up command or command template, while report errors point conductors back to that route. **Upgrade:** replace the complete `dist/<harness>/` tree; no workflow state migration is required.
+
+* Scope confirmation and compose offers now name shell-safe `next` commands that preserve the original intent text after a literal `--`.
+* Intent selection and paused-Unit questions now carry exact selectors or resume commands, so conductors copy the engine route instead of constructing one.
+* `report` errors now state that ordinary ask answers never use `report`; only the resume menu uses `report --result resumed --user-input`.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.

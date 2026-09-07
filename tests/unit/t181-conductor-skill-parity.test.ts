@@ -575,7 +575,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("Codex routes typed new-work questions through next, not report", () => {
+  test("Codex routes typed engine questions by response_route", () => {
     const annex = readFileSync(
       join(
         REPO_ROOT,
@@ -583,9 +583,47 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ),
       "utf-8",
     );
-    expect(annex).toContain('ask_type: "new-work-routing"');
-    expect(annex).toContain("routes through `next`");
-    expect(annex).toContain("never through `report`");
+    expect(annex).toContain("Every engine ask carries `ask_type` and `response_route`");
+    expect(annex).toContain('A `"next"` route never calls');
+    expect(annex).toContain("prompt-rendered resume");
+  });
+
+  test("every ask row and renderer rejects ordinary report routing", () => {
+    const failures: string[] = [];
+    for (const rel of harnessSkills()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const row = body
+        .split(/\r?\n/)
+        .find((line) => line.startsWith("| `ask` |"));
+      if (!row) {
+        failures.push(`${rel}  missing ask row`);
+        continue;
+      }
+      if (row.includes("feed the human's answer back")) {
+        failures.push(`${rel}  reports an ordinary ask answer`);
+      }
+      if (!row.includes("ask_type") || !row.includes("response_route")) {
+        failures.push(`${rel}  missing typed ask contract`);
+      }
+    }
+    for (const rel of harnessQuestionAnnexes()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (body.includes("rides back on")) {
+        failures.push(`${rel}  routes an ordinary ask through report`);
+      }
+    }
+    const docsRel = "docs/reference/17-skill-system.md";
+    const docs = readFileSync(join(REPO_ROOT, docsRel), "utf-8");
+    const docsRow = docs
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("| `ask` |"));
+    if (!docsRow?.includes("response_route")) {
+      failures.push(`${docsRel}  missing response_route`);
+    }
+    if (docsRow?.includes("Ordinary asks return through")) {
+      failures.push(`${docsRel}  reports an ordinary ask answer`);
+    }
+    expect(failures).toEqual([]);
   });
 
   test("Kiro renders engine asks without a second routing query or replacement prompt", () => {
@@ -617,12 +655,13 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       for (const token of [
         "## Engine-emitted ask directives",
-        "Untyped asks use `directive.question`",
+        "Typed asks other than `new-work-routing`",
         'For `ask_type: "new-work-routing"`',
         "`directive.numbered_prose_question` verbatim",
         "`4. **Other** — describe what you want instead`",
         "older and newer Kiro",
-        "untyped intent-picker ask",
+        'For `ask_type: "intent-pick"`',
+        "directive.select_command_template",
         "Every engine-ask render is invalid",
         '**"What would you like me to do instead?"**',
         '`next "<human alternative>"`',

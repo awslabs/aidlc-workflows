@@ -28,8 +28,11 @@ engine owns all routing; the conductor persona arrives on the first directive's
    `directive.protocol_modules`. Load every listed module before acting; skip
    only a module already loaded earlier in this session. Then act on
    `directive.kind` exactly as the orchestrator does (run-stage / invoke-swarm /
-   ask / print / error / done).
-3. `bun .cursor/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]` when the directive names a stage; omit `--stage` only for non-stage report round-trips.
+   ask / print / error / done). For `ask`, follow `response_route` and the
+   named command: `next` runs the chosen command directly, `command` runs
+   `resume_command` then re-runs `next`, and `claim` follows the Unit claim
+   contract. Never send an engine ask through `report`.
+3. `bun .cursor/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]` only after acting on a stage directive. The prompt-rendered resume menu is the sole non-stage report round-trip and uses `report --result resumed --user-input "<choice>"`.
 4. Repeat from step 1 until `directive.kind == done`.
 
 Pass `$ARGUMENTS` through verbatim after `--scope express`; the engine parses
