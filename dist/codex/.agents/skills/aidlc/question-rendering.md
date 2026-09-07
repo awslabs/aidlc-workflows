@@ -133,9 +133,11 @@ identity. END THE TURN after presenting it and wait for the user's response.
 Then persist `[Answer]: Looks correct` or `[Answer]: Request changes` exactly,
 regardless of which track rendered the question, and run the matching
 checkpoint-specific `aidlc-log.ts answer` command. Strip any source letter,
-numbered-prose index, punctuation, and option description before writing:
-`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`,
-`[Answer]: 1`, and a self-selected answer are invalid. On Request changes, ask
+numbered-prose index, punctuation, option description, and the `(Recommended)` /
+`(Toss-up)` marker before writing (the marker is presentation only and never
+enters the file or the audit): `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`,
+`[Answer]: Looks correct (Recommended)`, `[Answer]: A`, `[Answer]: 1`, and
+a self-selected answer are invalid. On Request changes, ask
 **"What should change?"** and END THE TURN again; do not update any answer
 until that feedback arrives. Then record the feedback, update the affected
 answers, reset this tag to blank, and present the consolidated summary again.

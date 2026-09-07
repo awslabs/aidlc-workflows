@@ -1016,7 +1016,7 @@ export function renderSummaryConfirmationBrief(
     `**Confirming:** Consolidated answers in \`${questions}\` before generating ${generated}.`,
     "**Why now:** All stage questions are answered; artifact generation will use this confirmed summary.",
     "**Decision options:**",
-    "- **Looks correct** - record this confirmation and generate the named artifacts.",
+    "- **Looks correct (Recommended)** - record this confirmation and generate the named artifacts; the summary restates each recorded answer verbatim.",
     `- **Request changes** - leave the artifacts ungenerated and return to \`${questions}\`.`,
   ].join("\n");
 }

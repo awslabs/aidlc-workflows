@@ -747,6 +747,21 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("every harness annex marks the recommended option in its examples and strips the marker before writing", () => {
+    const missing: string[] = [];
+    for (const harness of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
+      const annexRel = `harness/${harness}/skills/aidlc/question-rendering.md`;
+      const annex = readFileSync(join(REPO_ROOT, annexRel), "utf-8");
+      if (!annex.includes("Approve (Recommended)")) missing.push(`${annexRel}  gate example lacks the marker`);
+      if (!annex.includes("Looks correct (Recommended)")) missing.push(`${annexRel}  confirmation example lacks the marker`);
+      // The marker is presentation only: the annex must name it in the strip list
+      // and show the decorated form as an invalid persisted value.
+      if (!annex.includes("`(Recommended)` /")) missing.push(`${annexRel}  strip list omits the marker`);
+      if (!annex.includes("`[Answer]: Looks correct (Recommended)`")) missing.push(`${annexRel}  decorated answer not shown as invalid`);
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("every prose question renderer starts a fresh local numbering scope", () => {
     const missing: string[] = [];
     for (const harness of [

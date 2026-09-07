@@ -897,7 +897,7 @@ describe("t304 executable review brief scenarios", () => {
         "**Why now:** All stage questions are answered",
       );
       expect(rendered).toContain(
-        "**Looks correct** - record this confirmation and generate",
+        "**Looks correct (Recommended)** - record this confirmation and generate",
       );
       expect(rendered).toContain(
         "**Request changes** - leave the artifacts ungenerated",
