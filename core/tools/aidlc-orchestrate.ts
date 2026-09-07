@@ -149,6 +149,7 @@ import {
   isPerUnitStage,
   isReadOnlyEngineProbe,
   isRegularFile,
+  isArchivedIntent,
   isRouteCheckProbe,
   isStopHookProbe,
   isTeamUnitOwnership,
@@ -1907,7 +1908,12 @@ function intentPickPromptIfRecordsExist(
 ): AskDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
-  const intents = listIntents(projectDir, space, selection.intent);
+  // Archived intents are retired work: they never block creation and are never
+  // offered as a pick (the listing shows them only under --all). A space whose
+  // every record is archived therefore reads as zero intents here.
+  const intents = listIntents(projectDir, space, selection.intent).filter(
+    (intent) => !isArchivedIntent(intent),
+  );
   if (intents.length === 0) return null; // zero intents → creation is correct
   if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
@@ -4345,6 +4351,30 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     emit(printDirective(
       `Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark\` to clear this checkout's Unit park marker, then re-run \`next --resume\`.`,
     ));
+    return;
+  }
+
+  // Branch 2.4 - ARCHIVED intent (issue #980). `aidlc-utility intent archive`
+  // flips the record's Status to `Archived` (and its registry row to
+  // `archived`) without touching stage progress, so a per-user cursor or a
+  // session binding that still names the record must not resume its stages on
+  // a bare `next`, a `--resume`, or a jump. Emit a terminal `done` that names
+  // the way back (`intent unarchive`) and the read-only listing; the Stop hook
+  // honours `done` as a clean turn-end. Only `--new-intent` passes: starting
+  // unrelated work never needs the archived record.
+  if (
+    stateContent &&
+    !flags.newIntent &&
+    getField(stateContent, "Status") === "Archived"
+  ) {
+    const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
+    emit({
+      kind: "done",
+      reason:
+        `Intent "${archivedIntent}" is archived; its remaining stages do not run. ` +
+        `Bring it back with \`/aidlc intent unarchive ${archivedIntent}\`, or pick another ` +
+        `intent with \`/aidlc intent <name>\` (\`/aidlc intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
+    });
     return;
   }
 

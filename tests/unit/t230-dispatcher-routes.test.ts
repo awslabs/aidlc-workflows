@@ -409,6 +409,29 @@ describe("t230 dispatcher route parity", () => {
       toolArgs: ["intent-create"],
     },
     {
+      // An unknown target keeps the row a pure routing check: both runs fail
+      // identically without archiving the fixture intent.
+      name: "intent archive maps through workspace parser with its trailing flags",
+      routerArgs: ["engine", "intent", "archive", "no-such-intent", "--reason", "routing check"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "archive", "no-such-intent", "--reason", "routing check"],
+      fixture: true,
+    },
+    {
+      name: "intent unarchive maps through workspace parser",
+      routerArgs: ["engine", "intent", "unarchive", "no-such-intent"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "unarchive", "no-such-intent"],
+      fixture: true,
+    },
+    {
+      name: "intent list --all maps through workspace parser",
+      routerArgs: ["engine", "intent", "list", "--all"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "--all"],
+      fixture: true,
+    },
+    {
       name: "space list maps through workspace parser",
       routerArgs: ["engine", "space", "list"],
       tool: "aidlc-utility.ts",

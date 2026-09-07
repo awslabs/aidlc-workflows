@@ -32,7 +32,8 @@ diagnostic and lifecycle routes.
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
 | `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
 | `/aidlc` | Resume an existing workflow (if an intent exists) or creation the first intent and start new |
-| `/aidlc intent [name]` | List intents in the active space, or switch to an existing intent |
+| `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
+| `/aidlc intent archive <name>` | Retire an in-flight intent without deleting its record; `unarchive <name>` brings it back |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
@@ -271,10 +272,32 @@ before changing state. See [Artifacts Reference](14-artifacts-reference.md).
 
 ### `/aidlc intent [name]` — List or switch intents
 
-Bare `/aidlc intent` lists the intents in the active space; add `--json` for
-structured output. `/aidlc intent <name>` switches the per-user active-intent
-cursor to an existing intent by unambiguous slug or full record-dir name. It
-never creates an intent or advances a workflow.
+Bare `/aidlc intent` lists the in-flight and completed intents in the active
+space; add `--json` for structured output (every row, archived included) and
+`--all` to show archived intents in the human listing. `/aidlc intent <name>`
+switches the per-user active-intent cursor to an existing intent by unambiguous
+slug or full record-dir name. It never creates an intent or advances a workflow.
+
+### `/aidlc intent archive <name>` — Retire an intent you will not finish
+
+`/aidlc intent archive <name> [--reason "<text>"]` moves an in-flight intent to
+the terminal `archived` status. Nothing is deleted: the record dir, its
+artifacts, and its audit shards stay exactly where they are, and the archive
+itself is recorded in that intent's audit trail as `WORKFLOW_ARCHIVED` (with
+your `--reason` when you give one). The registry row flips to `archived`, the
+state file's `Status` flips to `Archived`, and the default `/aidlc intent`
+listing hides the row. If the archived intent was the active one, the per-user
+cursor is cleared, so the next `/aidlc` asks which intent to work on (or creates
+new work when none is left) instead of resuming retired stages.
+
+Archiving is refused for a completed intent (already terminal), for an intent
+with Bolt worktrees still in flight, and for a team-owned intent with claimed
+Units, because those still have work running in other checkouts.
+
+`/aidlc intent unarchive <name>` reverses it: the row returns to `in-flight`,
+`Status` returns to `Running` at the stage it stopped on, and `WORKFLOW_UNARCHIVED`
+is recorded. It does not move the cursor; switch to the revived intent with
+`/aidlc intent <name>` when you want to continue it.
 
 ### `/aidlc space [name]` — List or switch spaces
 

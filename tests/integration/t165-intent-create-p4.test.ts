@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveIntentRepoSet, function:discoverSiblingRepos
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
 // P4 - retire the user-facing --init; the engine auto-creates the first intent
@@ -14,7 +14,7 @@
 // updateIntentStatus) is asserted in-process against the dist lib (pure reads/
 // transforms), then cross-checked against the spawned `intent`/`space --json`.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -43,12 +43,19 @@ import {
   PROJECT_DESCRIPTION_FILE,
   readAllAuditShards,
   readIntentRegistry,
+  getField,
+  setField,
   setActiveIntentCursor,
   slugify,
   updateIntentStatus,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
+// Every case here spawns several dist tools in sequence; under a parallel tier
+// run that comfortably exceeds bun's 5 s default, so pin the file-wide budget
+// the way t188/t224 do.
+const TIMEOUT_MS = 60_000;
+setDefaultTimeout(TIMEOUT_MS);
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
@@ -901,10 +908,10 @@ describe("t164 slugify", () => {
 });
 
 // ============================================================
-// Intent status lifecycle (creation in-flight; complete; abandoned stays in-flight)
+// Intent status lifecycle (creation in-flight; complete; unfinished stays in-flight)
 // ============================================================
 describe("t164 intent status lifecycle", () => {
-  test("creation writes in-flight; updateIntentStatus flips to complete; an abandoned intent stays in-flight", () => {
+  test("creation writes in-flight; updateIntentStatus flips to complete; an unfinished intent stays in-flight until archived", () => {
     expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
     const dir = activeIntent(proj);
     expect(dir).not.toBeNull();
@@ -918,11 +925,188 @@ describe("t164 intent status lifecycle", () => {
     expect(changed).toBe(true);
     expect(readIntentRegistry(proj)[0].status).toBe("complete");
 
-    // Create a SECOND intent and leave it (abandon) - it stays in-flight, never
-    // self-completes.
+    // Create a SECOND intent and leave it unfinished - it stays in-flight: nothing
+    // self-completes and nothing self-archives. Retiring it is the human's
+    // explicit `intent archive` move, covered by the describe below.
     expect(util(["intent-create", "--scope", "bugfix"]).status).toBe(0);
-    const abandoned = readIntentRegistry(proj).find((e) => e.scope === "bugfix");
-    expect(abandoned?.status).toBe("in-flight");
+    const unfinished = readIntentRegistry(proj).find((e) => e.scope === "bugfix");
+    expect(unfinished?.status).toBe("in-flight");
+  });
+});
+
+// ============================================================
+// Intent archive / unarchive (issue #980): retire unfinished work without
+// hand-editing intents.json, keep every byte of the record, and make sure the
+// retired record never resumes by accident.
+// ============================================================
+describe("t165 intent archive / unarchive (issue #980)", () => {
+  const recordPath = (dir: string): string => join(intentsDir(proj), dir);
+  const cursorFile = (): string => join(intentsDir(proj), "active-intent");
+  const registryStatus = (dir: string): string | undefined =>
+    readIntentRegistry(proj).find((e) => e.dirName === dir)?.status;
+  const stateStatus = (dir: string): string | null =>
+    getField(readFileSync(join(recordPath(dir), "aidlc-state.md"), "utf-8"), "Status");
+  const auditText = (dir: string): string => readIntentAudit(proj, dir);
+  // Two in-flight intents; the second one created holds the cursor.
+  function createTwo(): { a: string; b: string } {
+    expect(util(["intent-create", "--scope", "poc", "--label", "first spike"]).status).toBe(0);
+    const a = activeIntent(proj) as string;
+    expect(util(["intent-create", "--scope", "feature", "--label", "second feature"]).status).toBe(0);
+    const b = activeIntent(proj) as string;
+    expect(b).not.toBe(a);
+    return { a, b };
+  }
+
+  test("archiving the active intent flips registry + state, audits into its own shard, and clears the cursor", () => {
+    const { a, b } = createTwo();
+    const r = util(["intent", "archive", b, "--reason", "superseded by a broader design"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(`Archived intent → ${b}`);
+    expect(registryStatus(b)).toBe("archived");
+    expect(registryStatus(a)).toBe("in-flight");
+    expect(stateStatus(b)).toBe("Archived");
+    // Audit-first, and into the ARCHIVED intent's own shard, reason included.
+    const audit = auditText(b);
+    expect(audit).toContain("WORKFLOW_ARCHIVED");
+    expect(audit).toContain("superseded by a broader design");
+    expect(auditText(a)).not.toContain("WORKFLOW_ARCHIVED");
+    // The archived record was the active one: the per-user cursor is gone and
+    // the one remaining in-flight record resolves through the lone-record fallback.
+    expect(existsSync(cursorFile())).toBe(false);
+    expect(activeIntent(proj)).toBe(a);
+    // Nothing was moved or deleted.
+    expect(existsSync(join(recordPath(b), "aidlc-state.md"))).toBe(true);
+  });
+
+  test("archiving a non-active intent leaves the cursor where it was", () => {
+    const { a, b } = createTwo();
+    expect(util(["intent", "archive", a]).status).toBe(0);
+    expect(registryStatus(a)).toBe("archived");
+    expect(readFileSync(cursorFile(), "utf-8").trim()).toBe(b);
+    expect(activeIntent(proj)).toBe(b);
+  });
+
+  test("the default listing hides archived rows, --all shows them, --json always carries every row", () => {
+    const { a, b } = createTwo();
+    expect(util(["intent", "archive", a]).status).toBe(0);
+    const plain = util(["intent"]).stdout;
+    expect(plain).toContain(b);
+    expect(plain).not.toContain(a);
+    expect(plain).toContain("1 archived intent hidden");
+    const all = util(["intent", "list", "--all"]).stdout;
+    expect(all).toContain(`${a}  [archived]`);
+    expect(all).toContain(b);
+    expect(all).not.toContain("hidden");
+    const parsed = JSON.parse(util(["intent", "--json"]).stdout.trim());
+    const rows = parsed.intents
+      .map((i: { dirName: string; status: string }) => `${i.dirName}=${i.status}`)
+      .sort();
+    expect(rows).toEqual([`${a}=archived`, `${b}=in-flight`].sort());
+  });
+
+  test("a space whose only intent is archived reads as empty: no implicit resolution, creation proceeds", () => {
+    expect(util(["intent-create", "--scope", "poc", "--label", "only one"]).status).toBe(0);
+    const only = activeIntent(proj) as string;
+    expect(util(["intent", "archive", only]).status).toBe(0);
+    expect(activeIntent(proj)).toBeNull();
+    const listing = util(["intent"]).stdout;
+    expect(listing).toContain("No in-flight intents");
+    expect(listing).toContain("1 archived");
+    // The creation gate ignores archived records: an explicit scope names the
+    // intent-create move instead of asking to pick the retired record.
+    const d = JSON.parse(next(["--scope", "poc"]).stdout.trim());
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("intent create --scope poc");
+    expect(d.message).not.toContain(only);
+  });
+
+  test("next on an archived record (stale cursor) is done, names unarchive, and never auto-creates", () => {
+    expect(util(["intent-create", "--scope", "poc", "--label", "stale cursor"]).status).toBe(0);
+    const only = activeIntent(proj) as string;
+    expect(util(["intent", "archive", only]).status).toBe(0);
+    // Another clone's per-user cursor can still name the archived record.
+    setActiveIntentCursor(proj, only);
+    const d = JSON.parse(next([]).stdout.trim());
+    expect(d.kind).toBe("done");
+    expect(d.reason).toContain(`intent unarchive ${only}`);
+    expect(d.reason.toLowerCase()).toContain("never auto-create");
+    expect(readIntentRegistry(proj).length).toBe(1);
+    // Neither a resume nor a jump re-opens retired stages.
+    expect(JSON.parse(next(["--resume"]).stdout.trim()).kind).toBe("done");
+    expect(JSON.parse(next(["--stage", "intent-capture"]).stdout.trim()).kind).toBe("done");
+  });
+
+  test("unarchive restores in-flight / Running, audits it, and leaves the cursor alone", () => {
+    const { a, b } = createTwo();
+    expect(util(["intent", "archive", a]).status).toBe(0);
+    const r = util(["intent", "unarchive", a]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(`Unarchived intent → ${a}`);
+    expect(registryStatus(a)).toBe("in-flight");
+    expect(stateStatus(a)).toBe("Running");
+    expect(auditText(a)).toContain("WORKFLOW_UNARCHIVED");
+    expect(activeIntent(proj)).toBe(b);
+    // It is switchable again like any in-flight intent.
+    expect(util(["intent", a]).status).toBe(0);
+    expect(activeIntent(proj)).toBe(a);
+    expect(util(["intent"]).stdout).not.toContain("hidden");
+  });
+
+  test("archive refuses nameless, unknown, completed, worktree-bearing, and already-archived targets; unarchive refuses in-flight", () => {
+    const { a, b } = createTwo();
+    const missing = util(["intent", "archive"]);
+    expect(missing.status).not.toBe(0);
+    expect(missing.out).toContain("Usage: aidlc-utility intent archive <name>");
+    const unknown = util(["intent", "archive", "no-such-intent"]);
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.out).toContain("Unknown intent");
+    expect(unknown.out).toContain("Do not start a new workflow");
+    // A completed intent is already terminal.
+    expect(updateIntentStatus(proj, a, "complete")).toBe(true);
+    const completed = util(["intent", "archive", a]);
+    expect(completed.status).not.toBe(0);
+    expect(completed.out).toContain("is complete");
+    expect(registryStatus(a)).toBe("complete");
+    expect(stateStatus(a)).toBe("Running");
+    // Live Bolt worktrees would be orphaned.
+    const statePath = join(recordPath(b), "aidlc-state.md");
+    writeFileSync(statePath, setField(readFileSync(statePath, "utf-8"), "Bolt Refs", "auth-service"), "utf-8");
+    const busy = util(["intent", "archive", b]);
+    expect(busy.status).not.toBe(0);
+    expect(busy.out).toContain("Bolt worktree");
+    expect(registryStatus(b)).toBe("in-flight");
+    writeFileSync(statePath, setField(readFileSync(statePath, "utf-8"), "Bolt Refs", ""), "utf-8");
+    // Idempotence is a refusal, not a silent no-op, in both directions.
+    const notArchived = util(["intent", "unarchive", b]);
+    expect(notArchived.status).not.toBe(0);
+    expect(notArchived.out).toContain("is not archived");
+    expect(util(["intent", "archive", b]).status).toBe(0);
+    const twice = util(["intent", "archive", b]);
+    expect(twice.status).not.toBe(0);
+    expect(twice.out).toContain("already archived");
+    expect(registryStatus(b)).toBe("archived");
+  });
+
+  test("park refuses an archived workflow", () => {
+    expect(util(["intent-create", "--scope", "poc", "--label", "parkable"]).status).toBe(0);
+    const only = activeIntent(proj) as string;
+    expect(util(["intent", "archive", only]).status).toBe(0);
+    setActiveIntentCursor(proj, only);
+    // `park` is an engine verb (the state tool refuses a direct call), so go
+    // through the orchestrator the way the conductor does.
+    const env = { ...process.env };
+    delete env.AWS_AIDLC_DEFAULT_SCOPE;
+    const r = Bun.spawnSync({
+      cmd: [BUN, ORCH, "park", "--project-dir", proj],
+      stdout: "pipe",
+      stderr: "pipe",
+      env,
+    });
+    const d = JSON.parse(r.stdout.toString().trim());
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("Cannot park the workflow");
+    expect(d.message).toContain("Archived");
+    expect(stateStatus(only)).toBe("Archived");
   });
 });
 

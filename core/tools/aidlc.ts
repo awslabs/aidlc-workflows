@@ -759,11 +759,23 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create"],
+    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
-    human: [{ command: "intent [list|switch|create]", summary: "list, switch, or create intent context" }],
-    all: ["list [--json]", "switch <name>", "<name>", "create [args]"],
+    human: [
+      {
+        command: "intent [list|switch|create|archive|unarchive]",
+        summary: "list, switch, create, archive, or unarchive intent context",
+      },
+    ],
+    all: [
+      "list [--json] [--all]",
+      "switch <name>",
+      "<name>",
+      "create [args]",
+      "archive <name> [--reason <text>]",
+      "unarchive <name>",
+    ],
   },
   {
     id: "space",

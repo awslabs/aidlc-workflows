@@ -1803,6 +1803,12 @@ function handlePark(_args: string[]): void {
     if (status === "Completed") {
       error("Workflow is already Completed - nothing to park.");
     }
+    if (status === "Archived") {
+      error(
+        "Workflow is Archived - nothing to park. Bring it back first with " +
+          "`aidlc-utility intent unarchive <name>`.",
+      );
+    }
     const currentSlug = getField(content, "Current Stage") ?? "";
     if (currentSlug.length === 0) {
       error("State file has no Current Stage - cannot park.");

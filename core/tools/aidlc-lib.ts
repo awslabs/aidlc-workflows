@@ -710,6 +710,8 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
   "switch",
   "create",
+  "archive",
+  "unarchive",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -719,23 +721,32 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
 ]);
 
 export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
-  "archive",
   "rename",
   "show",
   "birth",
 ]);
 
+// The two intent lifecycle verbs that retire and revive a record without
+// touching its files: `archive` moves an in-flight intent to the terminal
+// `archived` status, `unarchive` brings it back to `in-flight`.
+export type IntentLifecycleVerb = "archive" | "unarchive";
+
 export type WorkspaceCommand =
-  | { kind: "list"; noun: WorkspaceNoun; json: boolean }
+  // `all` is only ever set (true) for `intent list --all`; a plain list omits
+  // it so existing shape consumers keep matching the two-field object.
+  | { kind: "list"; noun: WorkspaceNoun; json: boolean; all?: true }
   | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
   | { kind: "create"; noun: "space"; name: string }
   | { kind: "create-intent"; noun: "intent"; rest: string[] }
+  // `rest` carries the verb's trailing flags (`--reason <text>`) through to the
+  // utility argv verbatim, the same way `create-intent` forwards its args.
+  | { kind: IntentLifecycleVerb; noun: "intent"; name: string; rest: string[] }
   | { kind: "help"; noun: WorkspaceNoun }
   | {
       kind: "error";
       noun: WorkspaceNoun;
       code: "missing-name";
-      verb: "switch" | "create" | "space-create";
+      verb: "switch" | "create" | "space-create" | IntentLifecycleVerb;
       message: string;
     }
   | {
@@ -749,7 +760,7 @@ export type WorkspaceCommand =
 
 function missingWorkspaceName(
   noun: WorkspaceNoun,
-  verb: "switch" | "create" | "space-create",
+  verb: "switch" | "create" | "space-create" | IntentLifecycleVerb,
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
@@ -788,11 +799,19 @@ function isReservedFutureWorkspaceVerb(
   return token !== undefined && RESERVED_FUTURE.has(token);
 }
 
-function explicitWorkspaceList(
-  noun: WorkspaceNoun,
-  tokens: string[],
-): WorkspaceCommand {
-  return { kind: "list", noun, json: tokens[2] === "--json" };
+function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecycleVerb {
+  return token === "archive" || token === "unarchive";
+}
+
+// `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
+// in either order after the verb. `--all` (intents only) includes archived
+// records, which the default listing hides; the `all` field is set only when
+// requested so the plain list keeps its two-field shape.
+function explicitWorkspaceList(noun: WorkspaceNoun, tokens: string[]): WorkspaceCommand {
+  const flags = tokens.slice(2);
+  const command: WorkspaceCommand = { kind: "list", noun, json: flags.includes("--json") };
+  if (noun === "intent" && flags.includes("--all")) command.all = true;
+  return command;
 }
 
 export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
@@ -813,8 +832,11 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
   if (verbOrName === undefined) {
     return { kind: "list", noun, json: false };
   }
-  if (verbOrName === "--json") {
-    return { kind: "list", noun, json: true };
+
+  if (verbOrName === "--json" || (noun === "intent" && verbOrName === "--all")) {
+    // A bare list with flags only (`intent --json`, `intent --all --json`):
+    // re-read the flags from the verb position onward.
+    return explicitWorkspaceList(noun, [tokens[0], "list", ...tokens.slice(1)]);
   }
   if (verbOrName === "help" || verbOrName === "-h") {
     return { kind: "help", noun };
@@ -832,6 +854,13 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
     }
     if (verbOrName === "create") {
       return { kind: "create-intent", noun, rest: tokens.slice(2) };
+    }
+    if (isIntentLifecycleVerb(verbOrName)) {
+      const name = tokens[2];
+      if (name === undefined || name.startsWith("--")) {
+        return missingWorkspaceName(noun, verbOrName);
+      }
+      return { kind: verbOrName, noun, name, rest: tokens.slice(3) };
     }
   }
 
@@ -856,8 +885,17 @@ export function workspaceCommandUtilityArgv(
   command: WorkspaceCommand,
 ): string[] | null {
   switch (command.kind) {
-    case "list":
-      return command.json ? [command.noun, "--json"] : [command.noun];
+    case "list": {
+      const argv: string[] = [command.noun];
+      if (command.json) argv.push("--json");
+      if (command.all) argv.push("--all");
+      return argv;
+    }
+    case "archive":
+    case "unarchive":
+      // The lifecycle verbs forward verbatim, trailing flags included:
+      // `intent archive <name> --reason <text>`.
+      return [command.noun, command.kind, command.name, ...command.rest];
     case "switch":
       return command.explicit
         ? [command.noun, "switch", command.name]
@@ -1737,7 +1775,18 @@ export function activeIntent(
   } catch {
     // no cursor → fall through to lone-intent
   }
-  const records = listIntentDirs(projectDir, sp);
+  // Archived records never resolve implicitly: a space whose only record was
+  // archived reads as "no active intent" (creation is correct), not as that
+  // retired record silently coming back. An explicit cursor naming an archived
+  // record still resolves above, so the engine can explain it instead of
+  // guessing. The registry is read ONCE and matched in memory: this is the
+  // hot path of intent resolution, and an unregistered (orphan) record has no
+  // status, so it stays live work.
+  const registry = readIntentRegistry(projectDir, sp);
+  const records = listIntentDirs(projectDir, sp).filter((dirName) => {
+    const row = registry.find((entry) => recordDirMatches(entry, dirName));
+    return row === undefined || !isArchivedIntent(row);
+  });
   if (records.length === 1) return records[0];
   // 0 records → null (bare space root); >1 with no cursor → null (the handler
   // layer prompts; a path helper cannot guess which intent the caller meant).
@@ -2446,6 +2495,18 @@ export function recordDirMatches(entry: IntentRegistryEntry, dirName: string): b
   return /^[0-9a-f]+$/.test(suffix) && idSuffix(entry.uuid, suffix.length) === suffix;
 }
 
+// The intent status lifecycle is a registry-row field. Creation writes
+// `in-flight`; workflow completion flips it to `complete`; `intent archive`
+// flips an in-flight row to `archived` and `intent unarchive` restores
+// `in-flight`. `archived` is the only status a human moves a row INTO and back
+// OUT of, so it gets a named constant and predicate; the other two stay the
+// literals the creation and completion paths already write.
+export const ARCHIVED_INTENT_STATUS = "archived";
+
+export function isArchivedIntent(entry: { status: string }): boolean {
+  return entry.status.trim().toLowerCase() === ARCHIVED_INTENT_STATUS;
+}
+
 export function intentsRegistryPath(projectDir: string, space?: string): string {
   return join(intentsDir(projectDir, space), "intents.json");
 }
@@ -2616,6 +2677,17 @@ export function setActiveIntentCursor(projectDir: string, dirName: string, space
     writeFileSync(join(dir, ACTIVE_INTENT_POINTER), `${dirName}\n`, "utf-8");
   } catch {
     /* per-user cursor; best-effort */
+  }
+}
+
+// Remove a space's active-intent cursor so no record resolves implicitly until
+// the human picks one (`intent <name>`) or creates new work. Best-effort and
+// idempotent, like the writer: an absent cursor is already the desired state.
+export function clearActiveIntentCursor(projectDir: string, space?: string): void {
+  try {
+    unlinkSync(join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER));
+  } catch {
+    /* absent cursor, or per-user state is unwritable — nothing to clear */
   }
 }
 
