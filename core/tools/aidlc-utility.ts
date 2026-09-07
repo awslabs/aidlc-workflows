@@ -7922,6 +7922,20 @@ export function inferScopeFromText(input: string): InferResult {
     }
   }
 
+  // An explicit reference — "<name> scope", "<name> plan", "<name> workflow",
+  // or "scope <name>" — names the plan the way `--scope <name>` does. Length is
+  // irrelevant ("create a todo application using the express scope" is not a
+  // description that happens to contain "express"), and it outranks incidental
+  // keyword hits ("fix the login bug with the mvp plan" is mvp work).
+  const explicit = explicitScopeMention(text, mapping);
+  if (explicit) {
+    return {
+      scope: explicit.scope,
+      source: "keyword",
+      matches: [explicit, ...allMatches.filter((match) => match.scope !== explicit.scope)],
+    };
+  }
+
   // Disambiguation: keyword + >5 words → likely a project description
   // containing the keyword incidentally. Also: no matches at all → default.
   if (allMatches.length === 0 || wordCount > 5) {
@@ -7938,6 +7952,29 @@ export function inferScopeFromText(input: string): InferResult {
     source: "keyword",
     matches: allMatches,
   };
+}
+
+const SCOPE_NOUN = "(?:scope|plan|workflow)";
+
+/**
+ * A scope name or keyword bound to the word "scope"/"plan"/"workflow" is an
+ * explicit choice, not a description. Scopes are visited alphabetically so a
+ * text naming two is deterministic (first alphabetical wins, as elsewhere).
+ */
+function explicitScopeMention(
+  text: string,
+  mapping: Record<string, { keywords?: string[] } | undefined>,
+): { scope: string; keyword: string } | null {
+  for (const scope of [...validScopes()]) {
+    const terms = [scope, ...(mapping[scope]?.keywords ?? [])];
+    for (const term of terms) {
+      const tokens = term.toLowerCase().trim().split(/\s+/).map(escapeRegex).join("\\s+");
+      const after = new RegExp(`\\b${tokens}\\s+${SCOPE_NOUN}\\b`, "i");
+      const before = new RegExp(`\\b${SCOPE_NOUN}\\s*[:=]?\\s+${tokens}\\b`, "i");
+      if (after.test(text) || before.test(text)) return { scope, keyword: term };
+    }
+  }
+  return null;
 }
 
 /** Doctor uses this for keyword-overlap detection. */

@@ -442,6 +442,7 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
       expected,
     );
   };
+  const keywordCase = fallbackCase;
 
   test('20: "debug this issue" -> classic (word-boundary, no bugfix)', fallbackCase("debug this issue", "classic"));
   test('21: "fixture scope testing" -> classic (word-boundary, no bugfix)', fallbackCase("fixture scope testing", "classic"));
@@ -459,6 +460,11 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
 
   // §9 >5-word input with keywords -> feature default.
   test('23: ">5-word input with keywords -> classic default"', fallbackCase("I want to fix the broken auth flow quickly today", "classic"));
+  // An explicit "<name> scope|plan|workflow" / "scope <name>" is a choice, not a
+  // description: it survives the >5-word rule and outranks incidental keywords.
+  test('23b: "create a todo application using the express scope" -> express (explicit beats length)', keywordCase("create a todo application using the express scope", "express"));
+  test('23c: "fix the login bug with the mvp plan" -> mvp (explicit beats incidental bugfix)', keywordCase("fix the login bug with the mvp plan", "mvp"));
+  test('23d: "build an express.js api for orders with three endpoints" -> classic (no scope noun)', fallbackCase("build an express.js api for orders with three endpoints", "classic"));
 
   // §10 empty input -> feature default (valid CLI path under --from-text).
   test("24: empty input -> classic default", () => {

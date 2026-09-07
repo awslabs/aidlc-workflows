@@ -203,7 +203,7 @@ The engine analyzes your intent against keyword patterns:
 | "express", "lightweight" | `express` |
 | Explicit low-context fallback | `feature` when core is enabled; otherwise the sole enabled plugin's first scope when unambiguous |
 
-**Disambiguation rule:** If your input contains both a scope keyword and a longer project description (more than 5 words), the match is treated as incidental and the compose offer fires instead (below). This prevents mismatches like "Fix the infrastructure monitoring dashboard" being routed to `infra` when a tailored plan is more appropriate.
+**Disambiguation rule:** If your input contains both a scope keyword and a longer project description (more than 5 words), the match is treated as incidental and the compose offer fires instead (below). This prevents mismatches like "Fix the infrastructure monitoring dashboard" being routed to `infra` when a tailored plan is more appropriate. Naming the plan explicitly — `<name> scope`, `<name> plan`, `<name> workflow`, or `scope <name>` — is never incidental: "create a todo application using the express scope" runs `express` however long the sentence, and it outranks an incidental keyword elsewhere in the text ("fix the login bug with the mvp plan" is `mvp`). `--scope <name>` remains the unambiguous form.
 
 After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid:
 
