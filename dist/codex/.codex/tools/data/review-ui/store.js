@@ -59,7 +59,9 @@ export function selectedThreadIds(value) {
 export function annotationsKey(state) {
   const current = state?.current;
   if (!current?.stage) return null;
-  return `aidlc-review-feedback:${current.stage}:${current.unit || ""}:${current.revision}`;
+  // Scoped to the intent: a new intent reaching the same stage at the same
+  // revision starts with an empty rail, not the last intent's pending remarks.
+  return `aidlc-review-feedback:${state.space || "default"}:${state.intent || ""}:${current.stage}:${current.unit || ""}:${current.revision}`;
 }
 
 export function restoreAnnotations(state) {

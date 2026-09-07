@@ -101,3 +101,9 @@ code { font: 12px var(--mono); background: var(--panel); padding: 1px 5px; borde
 @media (max-width: 1180px) {
   :root { --panel-w: 260px; --slot-w: 280px; }
 }
+
+/* A small spinner beside a stage the agent is writing: the session is alive
+   and this is what it is doing. */
+.spin { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; border: 1.5px solid var(--soft); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+.header-state .spin { width: 11px; height: 11px; }
+@keyframes spin { to { transform: rotate(360deg); } }

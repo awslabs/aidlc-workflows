@@ -123,12 +123,20 @@ function openWorkflow(workflow = store.workflow) {
   }
 }
 
+/** The agent has the current stage in hand: writing it, or revising after feedback. */
+function agentWorking(stage) {
+  if (stage.state !== "current" || stage.questions?.open) return false;
+  const status = store.workflow?.agent_status;
+  return status === "writing" || status === "revising";
+}
+
 function statusLabel(stage) {
   if (stage.state === "done") return "done";
   if (stage.state === "current") {
     if (stage.questions?.open) return "questions";
     if (stage.gate === "awaiting-approval" || store.state?.current?.state === "awaiting-approval") return `in review · r${stage.revision ?? store.state?.current?.revision ?? 0}`;
     if (stage.gate === "revising") return "revising";
+    if (agentWorking(stage)) return "working";
     return "current";
   }
   if (stage.state === "skipped") return stage.reason ? `skipped · ${stage.reason}` : "skipped";
@@ -214,7 +222,7 @@ function renderStage(stage) {
   const classes = stageClass(stage);
   const open = !collapseAll && (expandAll || stage.state === "current");
   return `<details class="workflow-stage ${classes}" data-stage-details="${escapeHtml(stage.slug)}" ${open ? "open" : ""}>
-    <summary><span class="stage-glyph">${glyph(stage)}</span><button type="button" class="stage-name" data-stage-overview="${escapeHtml(stage.slug)}">${escapeHtml(stage.name || titleCase(stage.slug))}</button><span class="stage-status">${escapeHtml(statusLabel(stage))}</span><span class="stage-chevron">▾</span></summary>
+    <summary><span class="stage-glyph">${glyph(stage)}</span><button type="button" class="stage-name" data-stage-overview="${escapeHtml(stage.slug)}">${escapeHtml(stage.name || titleCase(stage.slug))}</button><span class="stage-status">${agentWorking(stage) ? `<i class="spin" aria-hidden="true"></i>` : ""}${escapeHtml(statusLabel(stage))}</span><span class="stage-chevron">▾</span></summary>
     ${stageChildren(stage)}
   </details>`;
 }

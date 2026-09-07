@@ -250,7 +250,8 @@ function viewState(view, stage) {
   if (stage.state === "done" && workflowComplete()) return { label: `Workflow complete${time ? ` · ${time}` : ""}`, tone: "ok" };
   if (stage.state === "done") return { label: `Done${time ? ` · ${time}` : ""}`, tone: "ok" };
   if (stage.state === "skipped") return { label: "Skipped", tone: "quiet" };
-  if (stage.state === "current" && stage.gate === "revising") return { label: `Revising · r${revision(stage)}`, tone: "needs" };
+  if (stage.state === "current" && stage.gate === "revising") return { label: `Revising · r${revision(stage)}`, tone: "needs", working: true };
+  if (stage.state === "current" && (store.workflow?.agent_status === "writing")) return { label: `Agent working on ${stage.name || titleCase(stage.slug)}`, tone: "needs", working: true };
   if (stage.state === "current") return { label: "In progress", tone: "needs" };
   return { label: stage.state === "conditional" ? stage.condition || "Conditional" : "Later", tone: "quiet" };
 }
@@ -365,7 +366,7 @@ function renderHeader() {
       <span class="header-path">${escapeHtml(space)} <i>›</i> ${escapeHtml(intent)} <i>›</i> ${escapeHtml(phase)} <i>›</i> ${escapeHtml(stageName)}</span>
       ${renderPicker(view, stage, title)}
     </nav>
-    <div class="header-state ${state.tone}"><b>${escapeHtml(state.label)}</b></div>
+    <div class="header-state ${state.tone}${state.working ? " working" : ""}"><b>${state.working ? `<i class="spin" aria-hidden="true"></i>` : ""}${escapeHtml(state.label)}</b></div>
     <div class="header-tools">
       <span class="connection ${store.connected ? "connected" : "disconnected"}" title="${escapeHtml(connectedTitle)}" aria-label="${escapeHtml(connectedTitle)}"><i></i></span>
       ${panelButtons(view)}
