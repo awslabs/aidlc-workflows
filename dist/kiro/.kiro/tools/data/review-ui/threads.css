@@ -18,7 +18,7 @@
 .threads-pending-line { margin: 8px 14px 0; padding: 0 2px; color: var(--muted); font-size: 11px; }
 .threads-pending-line b { color: var(--ink); font-weight: 600; }
 .thread-list { min-height: 0; flex: 1; overflow: auto; padding: 10px; }
-.thread-card { margin-bottom: 9px; padding: 10px 11px; border: 1px solid var(--line2); border-radius: 8px; background: #fff; font-size: 12px; transition: box-shadow 120ms ease, border-color 120ms ease; }
+.thread-card { margin-bottom: 10px; padding: 12px 14px 10px; border: 1px solid var(--line2); border-radius: 9px; background: #fff; font-size: 12px; transition: box-shadow 120ms ease, border-color 120ms ease; }
 .thread-card.pending-card { border-color: var(--line2); }
 .thread-card:hover { border-color: #cbd5e1; }
 /* The selected thread - from its badge, its marked text, or the card itself:
@@ -26,10 +26,18 @@
 .thread-card.focused,
 .thread-card.pending-card.focused,
 .thread-card.focused:hover { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2); background: rgba(37, 99, 235, 0.03); }
-.thread-quote { margin: 0 0 8px; color: #5b6574; font-size: 11.5px; line-height: 1.45; }
+/* What the thread is about - the quoted passage, or for an edit the change
+   itself - with the reference's small bar beside it, in the kind's colour:
+   the same amber, violet, rose, and green the marks in the document use. */
+.thread-quote { margin: 0 0 8px; padding-left: 8px; border-left: 2px solid var(--amber); color: #5b6574; font-size: 11.5px; line-height: 1.5; font-style: italic; }
+.kind-edit .thread-quote, .kind-suggestion .thread-quote { border-left-color: var(--violet); }
+.kind-delete .thread-quote { border-left-color: var(--rose); }
+.kind-looks-good .thread-quote { border-left-color: var(--green); }
+.thread-card.resolved .thread-quote { border-left-color: var(--line2); }
+.thread-quote.edit-summary { font-style: normal; }
 /* First row: what the thread is about on the left, its kind in the upper-right corner. */
 .thread-head { display: flex; align-items: flex-start; gap: 10px; }
-.thread-head .thread-quote { flex: 1; min-width: 0; margin-bottom: 6px; }
+.thread-head .thread-quote { flex: 1; min-width: 0; margin-bottom: 8px; }
 .thread-head .thread-quote-empty { margin: 0; }
 .thread-head select, .thread-head .thread-kind { flex: none; margin-left: auto; }
 .thread-head select { max-width: 128px; padding: 3px 22px 3px 6px; border: 1px solid var(--line2); border-radius: 5px; background: #fff; font-size: 11.5px; }
@@ -39,11 +47,11 @@
 .thread-editor-row { margin-bottom: 2px; }
 /* The body reads as text, as in the reference - no box, no resize handle. It
    grows with what is typed; the box only shows while it is being edited. */
-.thread-card textarea { display: block; width: 100%; margin: 6px 0 0; padding: 4px 6px; margin-left: -6px; width: calc(100% + 12px); resize: none; border: 1px solid transparent; border-radius: 6px; background: transparent; outline: 0; color: var(--ink); font: inherit; font-size: 12.5px; line-height: 1.5; }
+.thread-card textarea { display: block; margin: 8px 0 0 -6px; padding: 5px 6px; width: calc(100% + 12px); resize: none; border: 1px solid transparent; border-radius: 6px; background: transparent; outline: 0; color: var(--ink); font: inherit; font-size: 12.5px; line-height: 1.5; }
 .thread-card textarea::placeholder { color: var(--muted); }
 .thread-card textarea:hover { background: var(--panel); }
 .thread-card textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--soft); background: #fff; }
-.thread-card-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 7px; }
+.thread-card-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
 .thread-card-actions > button:not(.btn) { color: var(--muted); font-size: 11px; }
 .thread-card-actions > button:not(.btn):hover { color: var(--rose); }
 /* Actions stay put: a row that appears and disappears under the hand reads as
@@ -84,7 +92,6 @@
 .thread-body { margin: 8px 0 0; white-space: pre-wrap; }
 .thread-reply { margin: 9px -2px 0; padding: 9px; border-radius: 7px; background: var(--soft); }
 .thread-reply p { margin: 7px 0 0; line-height: 1.45; }
-.sent-card .thread-quote { color: var(--muted); font-style: italic; }
 .summary-card > p { margin: 0; }
 .summary-card > span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
 .summary-replies { margin-top: 8px; padding-top: 5px; border-top: 1px solid var(--line); }
@@ -107,7 +114,7 @@
 .sent-actions button { color: var(--muted); font-size: 12px; }
 .sent-actions button:hover { color: var(--accent); }
 
-.thread-card textarea { field-sizing: content; min-height: 1.5em; max-height: 14em; }
+.thread-card textarea { field-sizing: content; min-height: 3em; max-height: 14em; }
 
 .decision-warning { margin: 4px 0 8px; padding: 8px 10px; border-radius: 6px; background: var(--amber-soft, #fff7e6); color: #7c4a03; font-size: 12px; line-height: 1.45; }
 
@@ -115,6 +122,8 @@
    went (struck) and came (highlighted); formatting as before → after with the
    after actually bold, italic, struck, coded, or linked. */
 .edit-summary { margin: 4px 0 6px; font-size: 12.5px; line-height: 1.7; color: var(--ink); }
+.thread-quote.edit-summary { margin: 0 0 8px; font-size: 12.5px; line-height: 1.6; }
+.sent-card .thread-quote.edit-summary, .edit-card .thread-quote.edit-summary { color: var(--ink); }
 .edit-summary .count { font-size: 11px; padding: 0 5px; border-radius: 3px; }
 .edit-summary .count.ins { background: var(--green-soft); color: #166534; }
 .edit-summary .count.del { background: var(--rose-soft); color: #9f1239; }

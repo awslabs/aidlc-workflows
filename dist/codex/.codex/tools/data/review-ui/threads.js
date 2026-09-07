@@ -666,9 +666,9 @@ function sentLife(thread, status) {
 }
 
 function renderDraft(draft) {
-  return `<article class="thread-card pending-card" data-draft-id="${escapeHtml(draft.id)}" data-thread-id="${escapeHtml(draft.id)}">
+  return `<article class="thread-card pending-card kind-${escapeHtml(normalizeKind(draft.kind))}" data-draft-id="${escapeHtml(draft.id)}" data-thread-id="${escapeHtml(draft.id)}">
     ${headRow(draft.selection, kindSelect(draft.kind))}
-    <div class="thread-editor-row"><span class="thread-meta">You</span></div>
+    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>drafting</span></div>
     <textarea rows="3" placeholder="${draft.kind === "edit" ? "Replacement text" : "Write a remark…"}">${escapeHtml(draft.body)}</textarea>
     <div class="thread-card-actions">${lifeLabel("draft", "Draft")}<button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div>
   </article>`;
@@ -681,18 +681,17 @@ function renderPending(annotation) {
     // the index entry: where, how much, and the optional reason for the agent.
     const summary = editSummary(annotation.before, annotation.after_block);
     const where = (annotation.heading_path || []).slice(-1)[0] || `lines ${annotation.line_start ?? "?"}–${annotation.line_end ?? "?"}`;
-    return `<article class="thread-card pending-card edit-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
-      ${headRow(where, `<span class="thread-kind">Edit</span>`, { plain: true })}
-      <div class="thread-editor-row"><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
-      <p class="edit-summary">${summary}</p>
-      <textarea rows="1" placeholder="Add a reason (optional)">${escapeHtml(annotation.body || "")}</textarea>
+    return `<article class="thread-card pending-card edit-card kind-edit" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
+      <div class="thread-head"><p class="thread-quote edit-summary" title="${escapeHtml(where)}">${summary}</p><span class="thread-kind">Edit</span></div>
+      <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
+      <textarea rows="2" placeholder="Add a reason (optional)">${escapeHtml(annotation.body || "")}</textarea>
       ${reactionsHtml(annotation.id)}
       <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Undo edit</button></div>
     </article>`;
   }
-  return `<article class="thread-card pending-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
+  return `<article class="thread-card pending-card kind-${escapeHtml(normalizeKind(annotation.kind))}" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
     ${headRow(annotation.selection, kindSelect(annotation.kind))}
-    <div class="thread-editor-row"><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
+    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
     <textarea rows="2" placeholder="Write a remark…">${escapeHtml(annotation.body || "")}</textarea>
     ${reactionsHtml(annotation.id)}
     <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Remove</button></div>
@@ -716,10 +715,12 @@ function renderSent(thread) {
   const followUps = sentThreads.filter((other) => other.reply_to === thread.id);
   const pendingReplies = [...drafts, ...store.annotations].filter((item) => item.reply_to === thread.id);
   const resolved = status.name === "Resolved";
-  return `<article class="thread-card sent-card${resolved ? " resolved" : ""}" data-thread-id="${escapeHtml(thread.id)}">
-    ${headRow(thread.quote, `<span class="thread-kind">${kindLabel(thread.kind)}</span>`)}
+  return `<article class="thread-card sent-card kind-${escapeHtml(normalizeKind(thread.kind))}${resolved ? " resolved" : ""}" data-thread-id="${escapeHtml(thread.id)}">
+    ${thread.diff
+      ? `<div class="thread-head"><p class="thread-quote edit-summary">${diffSummary(thread.diff)}</p><span class="thread-kind">${kindLabel(thread.kind)}</span></div>`
+      : headRow(thread.quote, `<span class="thread-kind">${kindLabel(thread.kind)}</span>`)}
     <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span>${reactButton(thread.id)}</div>
-    ${thread.diff ? `<p class="edit-summary">${diffSummary(thread.diff)}</p>` : thread.body ? `<p class="thread-body">${escapeHtml(thread.body)}</p>` : ""}
+    ${thread.diff ? "" : thread.body ? `<p class="thread-body">${escapeHtml(thread.body)}</p>` : ""}
     ${reactionsHtml(thread.id)}
     ${renderReply(thread.response, `${thread.id}:reply`)}
     ${followUps.map((reply) => `<div class="thread-followup"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${reply.revision}</span></div><p>${escapeHtml(reply.body || "")}</p>${renderReply(reply.response)}</div>`).join("")}
