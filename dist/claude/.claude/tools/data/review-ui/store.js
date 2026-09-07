@@ -15,6 +15,7 @@ export const store = {
   selection: null, // { block, text, line_start, line_end, heading_path } | null
   responses: new Map(), // remark_id -> { status, text, revision }
   focusThread: null,
+  resolved: [],
   connected: false,
   set(partial) {
     const changed = [];

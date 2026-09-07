@@ -58,6 +58,7 @@ export function init() {
   store.on("undo-suggestion", (id) => removeSuggestion(id));
   store.on("selection", showSelectionAffordance);
   store.on("focus", focusAnnotation);
+  store.on("resolved", () => applyAnnotations());
   store.on("scroll-to", scrollToHeading);
   store.on("state", () => {
     if (store.view.kind === "empty") renderEmpty();
@@ -769,8 +770,12 @@ function renderSuggestedEdit(edit, sent) {
 function sentRemarks() {
   const currentPath = store.document?.path || store.view.path || "";
   const file = basename(currentPath);
+  const resolved = new Set(store.resolved || []);
   return (Array.isArray(store.remarks) ? store.remarks : []).filter((remark) => {
     if (!remark?.id || !remark.artifact) return false;
+    // A thread you resolved is done: its mark and badge leave the page, as in
+    // the reference; the rail keeps it under "Show resolved".
+    if (resolved.has(remark.id)) return false;
     return remark.artifact === file || remark.artifact === currentPath;
   });
 }

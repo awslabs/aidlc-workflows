@@ -35,16 +35,16 @@
 .thread-card-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 7px; }
 .thread-card-actions > button:not(.btn) { color: var(--muted); font-size: 11px; }
 .thread-card-actions > button:not(.btn):hover { color: var(--rose); }
-/* Card state is a glyph, not a sentence: an amber ring while still yours to
-   send, a check once the agent addressed or you resolved it. The sentence is
-   the tooltip. */
+/* Where the thread is in its life, said once at the bottom-left, as a reviewed
+   document says it: Not sent → Sent · r0 → Applied in r1 → Resolved. A check
+   only when the agent applied it or you resolved it. */
 .thread-meta { display: inline-flex; align-items: center; gap: 6px; }
-.thread-state { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10.5px; cursor: help; }
-.thread-who .thread-state { margin-left: 4px; }
-.state-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--amber-deep); box-sizing: border-box; }
-.thread-state.addressed, .thread-state.resolved { color: var(--green); }
-.thread-state.open { color: var(--muted); }
-.threads-pending-line .state-dot { margin-right: 7px; vertical-align: 0; }
+.thread-life { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; color: var(--muted); font-size: 11px; }
+.thread-life.unsent { color: var(--ink); }
+.thread-life.applied, .thread-life.resolved { color: var(--green); }
+.thread-life svg { flex: none; }
+.thread-card.resolved { opacity: 0.5; }
+.thread-card.resolved:hover, .thread-card.resolved.focused { opacity: 1; }
 .threads-pending-line b { white-space: nowrap; }
 .thread-avatar { width: 19px; height: 19px; display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: #fff; font-size: 9px; font-weight: 700; }
 .thread-avatar.agent { background: var(--accent); }
@@ -75,7 +75,6 @@
 .sent-actions { margin-top: 6px; gap: 12px; }
 .sent-actions button { color: var(--muted); font-size: 12px; }
 .sent-actions button:hover { color: var(--accent); }
-.sent-card.resolved { opacity: 0.75; }
 
 .thread-card textarea { field-sizing: content; min-height: 3.2em; max-height: 14em; resize: vertical; }
 
