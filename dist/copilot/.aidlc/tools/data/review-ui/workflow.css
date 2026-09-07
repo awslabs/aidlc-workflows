@@ -183,6 +183,12 @@ button.workflow-child:hover { background: var(--panel); }
 .stage-overview-page,
 .record-tree-page { width: min(820px, 100%); margin: 0 auto; padding: 34px 40px 72px; }
 .stage-overview-page h1,
+.record-back { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 14px; padding: 0; color: var(--muted); font-size: 12px; }
+.record-back:hover { color: var(--accent); }
+.record-group { margin: 0 0 22px; }
+.record-group h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.record-group h2 small { color: var(--muted); font-weight: 400; }
+.record-files em { flex: none; font-style: normal; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .record-tree-page h1 { display: flex; align-items: center; gap: 12px; margin: 0 0 6px; font-size: 26px; letter-spacing: -.015em; }
 .stage-overview-page h1 span { padding: 2px 10px; border-radius: 99px; color: var(--accent); background: var(--soft); font-size: 11px; font-weight: 750; }
 .overview-lead,
@@ -208,7 +214,7 @@ button.workflow-child:hover { background: var(--panel); }
 .scope-note b { color: var(--ink); }
 .record-files { margin: 0; padding: 0; border-top: 1px solid var(--line2); list-style: none; }
 .record-files li { border-bottom: 1px solid var(--line); }
-.record-files button { width: 100%; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 10px 8px; text-align: left; }
+.record-files button { width: 100%; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 10px 8px; text-align: left; }
 .record-files button:hover { background: var(--panel); }
 .record-files button span { color: var(--muted); }
 .record-files code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; }

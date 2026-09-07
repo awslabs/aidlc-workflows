@@ -394,10 +394,32 @@ function renderOverview() {
   </div>`;
 }
 
+/**
+ * The files a human edits or reviews: each stage's questions file, produced
+ * artifacts, and stage memory — nothing the engine keeps for itself (graph
+ * caches, tokens, guides rendered inside Questions). Grouped in workflow order.
+ */
+function reviewableRows(entries) {
+  const byPath = new Map((entries || []).filter((entry) => entry.type === "file").map((entry) => [entry.path, entry]));
+  const groups = [];
+  for (const stage of stages()) {
+    const rows = [];
+    const add = (path, role) => {
+      const entry = path ? byPath.get(path) : null;
+      if (entry && !rows.some((row) => row.path === path)) rows.push({ path, role, entry });
+    };
+    add(stage.questions?.file, "Questions");
+    for (const artifact of stage.artifacts || []) add(artifact.path, "Artifact");
+    add(stage.memory, "Memory");
+    if (rows.length) groups.push({ stage, rows });
+  }
+  return groups;
+}
+
 function treeRows(entries) {
-  const files = (entries || []).filter((entry) => entry.type === "file");
-  if (!files.length) return '<p class="overview-placeholder">No record files were returned. They remain available from the terminal.</p>';
-  return `<ul class="record-files">${files.map((entry) => `<li><button type="button" data-tree-path="${escapeHtml(entry.path)}"><span>${FILE_ICON}</span><code>${escapeHtml(entry.path)}</code><small>${entry.size == null ? "" : `${entry.size.toLocaleString()} bytes`}</small></button></li>`).join("")}</ul>`;
+  const groups = reviewableRows(entries);
+  if (!groups.length) return '<p class="overview-placeholder">Nothing to review yet. Files appear here as stages ask questions and produce artifacts.</p>';
+  return groups.map(({ stage, rows }) => `<section class="record-group"><h2><span class="stage-glyph ${escapeHtml(stageClass(stage))}">${glyph(stage)}</span>${escapeHtml(stage.name || titleCase(stage.slug))}<small>${escapeHtml(statusLabel(stage))}</small></h2><ul class="record-files">${rows.map(({ path, role, entry }) => `<li><button type="button" data-tree-path="${escapeHtml(path)}"><span>${FILE_ICON}</span><code>${escapeHtml(basename(path))}</code><em>${role}</em><small>${entry.size == null ? "" : `${entry.size.toLocaleString()} bytes`}</small></button></li>`).join("")}</ul></section>`).join("");
 }
 
 async function showAllFiles() {
@@ -409,7 +431,9 @@ async function showAllFiles() {
   try {
     const data = await api.get("/api/tree", { intent: store.workflow?.intent });
     if (!filesMode) return;
-    overview.innerHTML = `<div class="record-tree-page"><h1>All files</h1><p>Read-only files in <code>${escapeHtml(store.workflow?.intent || "the active record")}</code>. The terminal record is authoritative.</p>${treeRows(data.entries)}</div>`;
+    const back = fallbackStage ? `<button type="button" class="record-back" data-stage-overview="${escapeHtml(fallbackStage.slug)}">← ${escapeHtml(fallbackStage.name || titleCase(fallbackStage.slug))}</button>` : "";
+    const count = reviewableRows(data.entries).reduce((total, group) => total + group.rows.length, 0);
+    overview.innerHTML = `<div class="record-tree-page">${back}<h1>All files${count ? `<small>${count}</small>` : ""}</h1><p>The files you review or answer in <code>${escapeHtml(store.workflow?.intent || "the active record")}</code>: each stage's questions, artifacts, and memory.</p>${treeRows(data.entries)}</div>`;
   } catch (error) {
     if (!filesMode) return;
     overview.innerHTML = `<div class="workflow-placeholder"><b>File tree unavailable</b><span>${escapeHtml(error.message)}. Browse the record from the terminal.</span></div>`;
@@ -436,11 +460,13 @@ async function selectIntent(slug) {
 }
 
 function handleTreeFile(path) {
-  const stage = stages().find((entry) => entry.memory === path || (entry.artifacts || []).some((artifact) => artifact.path === path));
-  if (!stage) {
-    store.emit("notice", { message: `${basename(path)} is available in the terminal record but is not a reviewable workflow artifact.`, kind: "info" });
+  const owner = stages().find((stage) => stage.questions?.file === path);
+  if (owner) {
+    questionsView(owner);
     return;
   }
+  const stage = stages().find((entry) => entry.memory === path || (entry.artifacts || []).some((artifact) => artifact.path === path));
+  if (!stage) return;
   const artifact = (stage.artifacts || []).find((entry) => entry.path === path) || { path, name: basename(path), exists: true };
   artifactView(stage, artifact);
 }
@@ -521,6 +547,11 @@ export function init() {
   overview.addEventListener("click", (event) => {
     const path = event.target.closest("[data-tree-path]")?.dataset.treePath;
     if (path) handleTreeFile(path);
+    const backTo = event.target.closest(".record-back[data-stage-overview]")?.dataset.stageOverview;
+    if (backTo) {
+      const stage = findStage(backTo);
+      if (stage) overviewView(stage);
+    }
   });
   document.addEventListener("click", (event) => {
     if (event.target.closest("[data-intent-selector]")) return;

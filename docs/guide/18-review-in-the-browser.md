@@ -79,10 +79,13 @@ the row reveals **Questions**, produced artifacts, and the stage memory when
 present. Current stages open by default, done stages stay folded, phase headings
 fold a whole phase, and **Collapse all** / **Expand all** folds or opens the
 tree. Skipped stages name the reason and show that nothing was produced;
-upcoming stages say what they will ask and produce. The footer holds an **All
-files** list of the intent's reviewable files and a note pointing at the audit
-ledger, which stays in the terminal record and is never served; what the agent
-is doing is stated once, in the header. Use the rail's Workflow icon to hide the
+upcoming stages say what they will ask and produce. The footer holds **All
+files** — the files you review or answer, grouped by stage: each stage's
+questions, produced artifacts, and memory, every row opening the same view the
+tree does. Engine bookkeeping (graph caches, tokens, the explainer rendered
+inside Questions) is not listed. Beside it, a note points at the audit ledger,
+which stays in the terminal record and is never served; what the agent is doing
+is stated once, in the header. Use the rail's Workflow icon to hide the
 panel for a wider document view.
 
 The header keeps the current workspace, intent, phase, and stage path beside a
