@@ -432,7 +432,14 @@ function showSelectionAffordance(selection) {
     button.title = "Comment on this line";
     const top = (selection.anchor_top ?? 0) + (selection.anchor_height ?? 20) / 2;
     button.style.top = `${Math.round(top)}px`;
-    if (block.querySelector(".gutter .bubble") && top < 30) button.classList.add("beside-bubble");
+    // Badges already on this line keep their place; the trigger sits to their
+    // left, however many and however wide they are.
+    let clear = 0;
+    for (const badge of block.querySelectorAll(".gutter .bubble")) {
+      const centre = parseFloat(badge.style.top || "0") + badge.getBoundingClientRect().height / 2;
+      if (Math.abs(centre - top) < 12) clear = Math.max(clear, parseFloat(badge.style.right || "0") + badge.getBoundingClientRect().width + 4);
+    }
+    if (clear) button.style.right = `calc(100% + 21px + ${Math.round(clear)}px)`;
   } else {
     button.className = "selection-add floating";
     button.title = "Comment on selection (C)";

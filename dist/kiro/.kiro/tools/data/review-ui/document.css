@@ -188,7 +188,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  right: calc(100% + 13px);
+  right: calc(100% + 21px);
   width: 27px;
   pointer-events: none;
 }
@@ -282,8 +282,7 @@
 }
 .selection-add svg { width: 15px; height: 15px; }
 /* Caret in a line: a quiet trigger in the gutter beside that line. */
-.selection-add.gutter-trigger { right: calc(100% + 13px); top: 0; color: var(--muted); }
-.selection-add.gutter-trigger.beside-bubble { right: calc(100% + 13px + 30px); }
+.selection-add.gutter-trigger { right: calc(100% + 21px); top: 0; color: var(--muted); }
 /* Highlighted text: a dark floating bubble just above where the selection starts. */
 .selection-add.floating {
   width: 28px;
