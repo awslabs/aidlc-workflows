@@ -239,9 +239,11 @@ describe("t351 review UI questions routes", () => {
     const guidePath = join(stagePath, "requirements-analysis-questions-guide.html");
     writeFileSync(guidePath, VALID_GUIDE.replace('data-aidlc-recommend="B"', 'data-aidlc-recommend=""'));
     expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: true });
-    // No explainer at all is a terminal round: presentable, not a browser round.
+    // No explainer at all is the same hold: with the daemon live every open
+    // round is a browser round, and the form must not appear before the
+    // explainer the terminal is about to wait for.
     rmSync(guidePath);
-    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: false });
+    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: true });
     writeFileSync(guidePath, VALID_GUIDE);
     expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ ready: true, preparing: false });
 

@@ -254,8 +254,14 @@ The palette can also hide or show **Workflow** and open **Threads** or
 
 ## Answer questions in the browser
 
-When the current stage publishes a valid `*-questions-guide.html`, the workflow
-panel selects **Questions** and the header shows **Save**. Each question appears in one reading column: its agent-authored
+A question round reaches the browser only once its `*-questions-guide.html`
+explainer exists and passes its check. Until then the round is **preparing**:
+the Questions view shows a spinner ("the agent is writing the explainer and its
+recommendations"), the header reads **Preparing your questions**, the stage row
+says *preparing* instead of *N open*, nothing counts as needing you, and there
+is no form and no **Save** - a submission before the terminal is holding for it
+would have nowhere to go. When the explainer passes, the workflow panel selects
+**Questions** and the header shows **Save**; the tab updates on its own. Each question appears in one reading column: its agent-authored
 explainer — **Why now**, optional figure, trade-offs, **Recommendation**, and
 **Related decisions** — is immediately above its answer card. The recommended
 option is preselected and marked **Recommended**; multi-select, **Other** with

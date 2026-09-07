@@ -439,7 +439,9 @@ function intentSummary(
   if (current?.state === "awaiting-approval" || current?.state === "revising") {
     status = "needs-you";
     needs = { kind: "gate", label: current.state === "revising" ? "Review changes" : "Review approval gate" };
-  } else if (current?.state === "in-progress" && questions?.open) {
+  } else if (current?.state === "in-progress" && questions?.open && questions.guide) {
+    // Open answers alone are not a call on the human: until the explainer
+    // passes, the agent is still preparing the round.
     status = "needs-you";
     const open = Math.max(0, questions.total - questions.answered);
     needs = { kind: "questions", label: `${open} ${open === 1 ? "question" : "questions"}` };
@@ -610,7 +612,7 @@ export function workflowPayload(
   // cursor says whether the agent has work in hand (a stage in progress) or
   // the workflow has nothing left to do.
   const currentCheckbox = checkboxes.find((entry) => entry.slug === getField(state, "Current Stage"));
-  const questionsOpen = phases.some((phase) => phase.stages.some((stage) => stage.state === "current" && stage.questions?.open));
+  const questionsOpen = phases.some((phase) => phase.stages.some((stage) => stage.state === "current" && stage.questions?.open && stage.questions.guide));
   const agentStatus: WorkflowPayload["agent_status"] = current?.state === "awaiting-approval" || questionsOpen
     ? "waiting"
     : current?.state === "revising"

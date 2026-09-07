@@ -507,7 +507,12 @@ interface QuestionsTarget {
   guide: string | null;
   /** Browser round complete: explainer present and valid. */
   ready: boolean;
-  /** A guide file exists but does not pass yet — the agent is still writing it. */
+  /**
+   * The round has open answers but no passing explainer yet — the agent is
+   * still writing it (or it does not exist yet). The tab shows a spinner, never
+   * a form: with the review daemon live every round is a browser round, and a
+   * form before the explainer is a form the hook is not yet holding for.
+   */
   preparing: boolean;
   stage: string;
   stage_dir: string;
@@ -546,34 +551,37 @@ function currentQuestionsTarget(projectDir: string, context = stateContext(proje
     return null;
   }
 
-  // The explainer decides how the round reaches the human. A browser round is
-  // never shown half-built: while a guide file exists but fails the guide check
+  // The explainer decides when the round reaches the human. A browser round is
+  // never shown half-built: until a guide file exists AND passes the guide check
   // (unfilled scaffold, empty recommendations, sections out of step with the
-  // questions), the round is "preparing" — the tab must not steer, open, or
-  // render the form yet. Only a passing guide makes the round `ready`, and only
-  // then is it published as the guide. No guide file at all is a terminal round.
+  // questions, a malformed questions file), an open round is "preparing" — the
+  // tab must not steer, open, or render the form yet. Only a passing guide makes
+  // the round `ready`, and only then is it published as the guide. A round whose
+  // answers are all in is neither: it is answered, however it was answered.
   const guideFile = `${stageRelative}/${stage.slug}-questions-guide.html`;
+  const questionsSource = readFileSync(questionsPath, "utf-8");
+  const open = parseQuestionsMarkdown(questionsSource)
+    .filter((question) => !question.confirmation)
+    .some((question) => question.answer === null || question.answer.trim() === "");
   let guide: string | null = null;
-  let preparing = false;
   try {
     const guidePath = resolveProjectAidlcPath(projectDir, guideFile);
     regularFile(guidePath);
     const verdict = checkGuideArtifact(
       readFileSync(guidePath, "utf-8"),
-      readFileSync(questionsPath, "utf-8"),
+      questionsSource,
       { name: `${stage.slug}-questions-guide`, stage: stage.slug },
     );
     if (verdict.ok) guide = guideFile;
-    else preparing = true;
   } catch (error) {
     if (error instanceof PathConfinementError) throw error;
-    // No explainer: a terminal round, or one not started yet.
+    // No explainer yet.
   }
   return {
     file,
     guide,
     ready: guide !== null,
-    preparing,
+    preparing: guide === null && open,
     stage: stage.slug,
     stage_dir: stageRelative,
     questionsPath,

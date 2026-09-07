@@ -162,7 +162,9 @@ function questionChild(stage) {
   const answered = Number(data.answered || 0);
   const total = Number(data.total || 0);
   const open = Math.max(0, total - answered) || total;
-  const meta = data.open ? `<span class="open-pill">${open} open</span>` : `<b>${answered} / ${total}</b> answered`;
+  const meta = data.open
+    ? data.guide ? `<span class="open-pill">${open} open</span>` : `<span class="preparing-pill">preparing</span>`
+    : `<b>${answered} / ${total}</b> answered`;
   const selected = isSelected(stage, "questions", data.file);
   return `<button type="button" class="workflow-child questions ${selected ? "on" : ""} ${stage.state !== "current" ? "past" : ""}" data-child-kind="questions" data-stage="${escapeHtml(stage.slug)}" data-path="${escapeHtml(data.file)}">
     <span class="child-icon ${!data.open && total && answered >= total ? "complete" : ""}">${QUESTION_ICON}</span>
@@ -374,7 +376,7 @@ function renderOverview() {
   const next = nextStages(stage);
   const live = stage.state === "current";
   overview.innerHTML = `<div class="stage-overview-page">
-    <h1>${escapeHtml(stage.name || titleCase(stage.slug))}${live ? `<span>${stage.questions?.open ? `${Math.max(0, (stage.questions.total || 0) - (stage.questions.answered || 0)) || stage.questions.total || 0} questions for you` : "Live stage"}</span>` : ""}</h1>
+    <h1>${escapeHtml(stage.name || titleCase(stage.slug))}${live ? `<span>${stage.questions?.open ? stage.questions.guide ? `${Math.max(0, (stage.questions.total || 0) - (stage.questions.answered || 0)) || stage.questions.total || 0} questions for you` : "Preparing questions" : "Live stage"}</span>` : ""}</h1>
     <p class="overview-lead">${escapeHtml(overviewLead(stage))}</p>
     <div class="overview-grid">
       <section class="overview-card ${stage.questions?.open ? "hot" : ""}"><h2>Asks first</h2>${asks.length ? cardList(asks, "", (question) => `<li><span>${QUESTION_ICON}</span><code>${escapeHtml(basename(question.file))}</code><em>${question.open ? `${Math.max(0, (question.total || 0) - (question.answered || 0)) || question.total || 0} open` : `${question.answered || 0} / ${question.total || 0} answered`}</em></li>`) : plannedQuestions ? `<p>Asks its questions first (<code>${escapeHtml(basename(plannedQuestions.path))}</code>).</p>` : `<p class="overview-placeholder">${stage.state === "skipped" ? "Nothing — this stage is skipped." : "No question round is expected."}</p>`}</section>

@@ -123,7 +123,8 @@ function isLiveQuestions(stage) {
   return Boolean(
     stage?.state === "current" &&
       isActiveIntent() &&
-      (store.questionsState ? store.questionsState === "live" : stage.questions?.open),
+      !store.state?.questions?.preparing &&
+      (store.questionsState ? store.questionsState === "live" : stage.questions?.open && stage.questions?.guide),
   );
 }
 
@@ -223,6 +224,7 @@ function viewState(view, stage) {
   if (!stage) return { label: "Workflow unavailable", tone: "quiet" };
   if (view.kind === "questions") {
     if (store.questionsState === "submitted" && isActiveIntent()) return { label: "Answers sent", tone: "ok" };
+    if (store.state?.questions?.preparing && stage.state === "current") return { label: "Preparing your questions", tone: "quiet" };
     if (isLiveQuestions(stage)) {
       const total = stage.questions?.total || 0;
       const open = Math.max(0, total - (stage.questions?.answered || 0)) || total;

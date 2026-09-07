@@ -170,7 +170,11 @@ or `machine`. A missing artifact remains represented with `exists: false` and
 `sha256: null`. `questions_file` is null when absent. The manifest's `guide`
 field remains null; M3 derives the optional `<slug>-questions-guide.html` from
 the active questions stage and exposes it through `GET /api/state.questions`,
-independently of the held review manifest.
+independently of the held review manifest. That pointer carries `ready`
+(explainer present and passing) and `preparing` (open answers, no passing
+explainer - absent or failing); the client renders a form only when `ready`,
+and the workflow payload counts a round as needing the human only when its
+`questions.guide` is true.
 
 #### `<stage-dir>/.review-ui/snapshots/r<N>/<basename>`
 

@@ -97,6 +97,16 @@ async function loadQuestions() {
     return;
   }
 
+  // Not ready: the agent is still writing the explainer (or the questions
+  // file is malformed and being fixed). No form, no Save — a submission now
+  // would land before the terminal is holding for it.
+  if (pointer.preparing) {
+    current = null;
+    if (store.questionsState !== "preparing") store.set({ questionsState: "preparing" });
+    renderPlaceholder("Preparing your questions — the agent is writing the explainer and its recommendations. This page updates on its own.", true);
+    return;
+  }
+
   const generation = ++loadGeneration;
   renderPlaceholder("Loading the question round…", true);
   const guideRequest = pointer.guide
