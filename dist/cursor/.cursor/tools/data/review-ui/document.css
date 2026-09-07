@@ -219,6 +219,12 @@
 .bubble svg { flex: none; }
 .bubble-count { font: 600 11px/1 var(--font); }
 .bubble.pencil { padding: 0 4px; }
+/* The pencil badge wears the edit's violet, as the edit and its card do. */
+.bubble.suggestion {
+  color: var(--violet);
+  border-color: var(--violet);
+  background: var(--violet-soft);
+}
 .bubble.sent {
   color: #9ca3af;
   border-color: #9ca3af;
@@ -231,6 +237,14 @@
   color: var(--amber-deep);
   border-color: var(--amber-deep);
   background: rgba(245, 158, 11, 0.08);
+}
+.bubble.suggestion:hover,
+.bubble.suggestion.selected,
+.bubble.suggestion.sent:hover,
+.bubble.suggestion.sent.selected {
+  color: var(--violet);
+  border-color: var(--violet);
+  background: var(--violet-soft);
 }
 
 .mark.sent {
@@ -274,7 +288,7 @@
   border: 1px solid var(--line2);
   border-radius: 50%;
   background: #fff;
-  color: var(--accent);
+  color: var(--amber-deep);
   box-shadow: 0 2px 8px rgba(26, 32, 44, 0.12);
   display: grid;
   place-items: center;
@@ -282,8 +296,11 @@
 }
 .selection-add svg { width: 15px; height: 15px; }
 /* Caret in a line: a quiet trigger in the gutter beside that line. */
-.selection-add.gutter-trigger { right: calc(100% + 21px); top: 0; color: var(--muted); }
+.selection-add.gutter-trigger { right: calc(100% + 21px); top: 0; color: var(--amber-deep); }
 /* Highlighted text: a dark floating bubble just above where the selection starts. */
+/* Comments are amber everywhere - the badge, the bar on the card, the mark -
+   so the two triggers that start one are amber too: the floating bubble over
+   a highlight is solid amber, the quiet gutter trigger is amber on white. */
 .selection-add.floating {
   width: 28px;
   height: 28px;
@@ -291,16 +308,16 @@
   border: none;
   border-radius: 50%;
   color: #fff;
-  background: #1a202c;
-  box-shadow: 0 3px 10px rgba(26, 32, 44, 0.28);
+  background: var(--amber-deep);
+  box-shadow: 0 3px 10px rgba(217, 119, 6, 0.35);
   z-index: 3;
 }
 .selection-add.floating svg { width: 15px; height: 15px; }
 .selection-add:hover {
-  border-color: var(--accent);
-  background: var(--soft);
+  border-color: var(--amber-deep);
+  background: rgba(245, 158, 11, 0.08);
 }
-.selection-add.floating:hover { background: #000; border-color: transparent; }
+.selection-add.floating:hover { background: #b45309; border-color: transparent; }
 
 .annotation-flash {
   animation: annotation-flash 1.4s ease-out;
