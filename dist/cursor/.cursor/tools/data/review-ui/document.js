@@ -368,6 +368,13 @@ function captureSettled(target) {
   // stay off - a keystroke there is the start of an edit, not a command.
   const caret = !range || selection.isCollapsed || !selection.toString().trim();
   const caretNode = range ? range.startContainer : target;
+  // A caret inside commented text selects that thread in the rail, as the
+  // reference does; the click on the mark itself already did, harmlessly twice.
+  const markAtCaret = caret ? elementForNode(caretNode)?.closest(".mark[data-annotation], .mark[data-remark]") : null;
+  if (markAtCaret) {
+    const id = markAtCaret.dataset.annotation || markAtCaret.dataset.remark;
+    if (id && store.focusThread !== id) selectThreadFromDocument(id);
+  }
   // A caret's line is the element's own text, not its nested lists.
   const ownText = (line) => {
     const clone = line.cloneNode(true);
@@ -540,8 +547,19 @@ function handleViewerClick(event) {
   if (!anchor) return;
   const id = anchor.dataset.annotation || anchor.dataset.remark;
   if (!id) return;
+  selectThreadFromDocument(id);
+}
+
+/**
+ * Selecting a thread from the document (its badge, its mark, a caret in it):
+ * the Threads panel is brought up if another panel or none is showing, its
+ * card gets the selection ring and scrolls into view, and the document itself
+ * does not move - the reader is already looking at the place.
+ */
+function selectThreadFromDocument(id) {
   store.set({ focusThread: id });
-  store.emit("focus", id);
+  if (store.panel !== "threads") store.set({ panel: "threads" });
+  store.emit("focus", { id, source: "document" });
 }
 
 function applyAnnotations() {
@@ -626,6 +644,8 @@ function applyAnnotations() {
     bubble.type = "button";
     bubble.className = `bubble ${first.kind}${pending ? "" : " sent"}`;
     bubble.dataset[first.sent ? "remark" : "annotation"] = first.item.id;
+    bubble.dataset.threads = entries.map((entry) => entry.item.id).join(" ");
+    bubble.classList.toggle("selected", entries.some((entry) => entry.item.id === store.focusThread));
     bubble.textContent = String(entries.length);
     const summary = entries.map((entry) => `${kindLabel(entry.kind)}${entry.sent ? ` (r${entry.item.revision ?? "?"})` : " (pending)"}`).join(", ");
     bubble.title = `${entries.length} ${entries.length === 1 ? "thread" : "threads"} · ${summary}`;
@@ -700,6 +720,8 @@ function renderSuggestedEdit(edit, sent) {
   bubble.type = "button";
   bubble.className = `bubble suggestion${sent ? " sent" : ""} pencil`;
   bubble.dataset.annotation = edit.id;
+  bubble.dataset.threads = edit.id;
+  bubble.classList.toggle("selected", edit.id === store.focusThread);
   bubble.title = sent ? "Your suggested edit (sent)" : "Your suggested edit (not sent yet)";
   bubble.setAttribute("aria-label", bubble.title);
   bubble.innerHTML = icon("edit", { size: 12 });
@@ -872,6 +894,10 @@ function markText(root, text, kind, id, sent = false) {
 function focusAnnotation(value) {
   const id = typeof value === "string" ? value : value?.id;
   if (!id || !elements.viewer) return;
+  markSelectedBadge(id);
+  // Selected from the document itself (badge, mark, caret) or by clicking into
+  // a card's input: the reader is where they want to be; only the rail moves.
+  if (value?.source === "document" || value?.source === "rail-input") return;
   const escaped = cssEscape(id);
   const match = elements.viewer.querySelector(`[data-annotation="${escaped}"], [data-remark="${escaped}"]`);
   if (!match) return;
@@ -879,6 +905,13 @@ function focusAnnotation(value) {
   match.classList.remove("annotation-flash");
   requestAnimationFrame(() => match.classList.add("annotation-flash"));
   setTimeout(() => match.classList.remove("annotation-flash"), 1400);
+}
+
+/** The badge whose threads include the selected one reads as selected. */
+function markSelectedBadge(id) {
+  for (const bubble of elements.viewer.querySelectorAll(".gutter .bubble")) {
+    bubble.classList.toggle("selected", Boolean(id) && (bubble.dataset.threads || "").split(" ").includes(String(id)));
+  }
 }
 
 function scrollToHeading(value) {

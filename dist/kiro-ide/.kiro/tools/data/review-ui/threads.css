@@ -19,8 +19,13 @@
 .threads-pending-line b { color: var(--accent); }
 .thread-list { min-height: 0; flex: 1; overflow: auto; padding: 10px; }
 .thread-card { margin-bottom: 9px; padding: 10px 11px; border: 1px solid var(--line2); border-radius: 8px; background: #fff; font-size: 12px; transition: box-shadow 120ms ease, border-color 120ms ease; }
-.thread-card.focused { border-color: var(--amber); box-shadow: 0 0 0 2px var(--amber-soft); }
 .thread-card.pending-card { border-style: dashed; border-color: #b8c9ed; }
+.thread-card:hover { border-color: #cbd5e1; }
+/* The selected thread - from its badge, its marked text, or the card itself:
+   the blue ring the reference uses. One at a time. */
+.thread-card.focused,
+.thread-card.pending-card.focused,
+.thread-card.focused:hover { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2); background: rgba(37, 99, 235, 0.03); }
 .thread-quote { margin: 0 0 8px; color: #5b6574; font-size: 11.5px; line-height: 1.45; }
 .thread-editor-row, .thread-who { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .thread-editor-row select { min-width: 0; max-width: 128px; padding: 3px 22px 3px 6px; border: 1px solid var(--line2); border-radius: 5px; background: #fff; font-size: 11.5px; }

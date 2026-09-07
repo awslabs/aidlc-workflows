@@ -193,25 +193,37 @@
   pointer-events: none;
 }
 /* Each bubble sits beside the line it belongs to. */
-.gutter .bubble { position: absolute; right: 0; }
-
+.gutter /* The gutter badge, as in the reference: an outlined pill with the thread
+   count. Grey once sent (the agent has it); amber while still yours to send,
+   and amber while hovered or selected. Selecting a badge selects its thread in
+   the rail; the rail card carries the blue selection ring. */
 .bubble {
-  width: 22px;
+  min-width: 22px;
   height: 22px;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  color: #fff;
-  box-shadow: 0 1px 3px rgba(26, 32, 44, 0.22);
-  font: 700 10.5px/18px var(--font);
+  padding: 0 5px;
+  border: 1.5px solid var(--amber-deep);
+  border-radius: 999px;
+  color: var(--amber-deep);
+  background: rgba(245, 158, 11, 0.08);
+  font: 600 11px/19px var(--font);
   text-align: center;
   pointer-events: auto;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
-
-.bubble.comment { background: var(--amber); }
-.bubble.delete { background: var(--rose); }
-.bubble.looks-good { background: var(--green); }
-.bubble.suggestion { background: var(--violet); }
-.bubble:hover { transform: scale(1.08); }
+.bubble svg { vertical-align: -2px; }
+.bubble.sent {
+  color: #9ca3af;
+  border-color: #9ca3af;
+  background: transparent;
+}
+.bubble:hover,
+.bubble.selected,
+.bubble.sent:hover,
+.bubble.sent.selected {
+  color: var(--amber-deep);
+  border-color: var(--amber-deep);
+  background: rgba(245, 158, 11, 0.08);
+}
 
 .mark.sent {
   opacity: 0.72;
@@ -219,11 +231,6 @@
 .mark.sent:hover,
 .mark.sent.annotation-flash { opacity: 1; }
 
-.bubble.sent {
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6), 0 1px 3px rgba(26, 32, 44, 0.18);
-  opacity: 0.8;
-}
-.bubble.sent:hover { opacity: 1; }
 .mark {
   padding: 0;
   color: inherit;
