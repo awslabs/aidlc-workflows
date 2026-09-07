@@ -39,6 +39,7 @@ import {
   sha256Hex,
   snapshotDir,
   writeConsumed,
+  endsWithFor,
 } from "./aidlc-review-ui-shared.ts";
 
 export interface ReviewPublishStageNode {
@@ -137,6 +138,7 @@ function pointerFor(
     revision,
     updated_at: now,
     open,
+    ends_with: endsWithFor(state),
   };
 }
 

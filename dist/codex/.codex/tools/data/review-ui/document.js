@@ -1234,7 +1234,7 @@ function assignHeadingIds(doc) {
 function isLiveGate(view) {
   if (!view || view.readOnly || !view.path) return false;
   const current = store.state?.current;
-  if (current?.state !== "awaiting-approval" || decisionInFlight()) return false;
+  if (store.state?.phase !== "reviewing" || decisionInFlight()) return false;
   const artifacts = store.state?.manifest?.artifacts || [];
   return artifacts.some((artifact) => artifact.path === view.path && artifact.exists !== false);
 }

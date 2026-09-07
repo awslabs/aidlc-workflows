@@ -3,9 +3,10 @@ import {
 	readFileSync,
 	writeFileSync,
 } from "node:fs";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selfContainedMarkdownExport } from "./aidlc-review-ui-render.ts";
+import { publishQuestionsRound, recordOfStageDir, reviewUiEnabled, sha256Hex } from "./aidlc-review-ui-shared.ts";
 
 type HtmlText = { type: "text"; value: string };
 type HtmlElement = {
@@ -855,6 +856,21 @@ function usage(): number {
 	return 2;
 }
 
+function publishRound(guidePath: string, questionsPath: string, questionsSource: string, stage: string): void {
+	if (!reviewUiEnabled()) return;
+	const owner = recordOfStageDir(dirname(resolve(guidePath)));
+	if (!owner || owner.currentStage !== stage) return;
+	const rel = (target: string): string => relative(owner.projectDir, resolve(target)).split(sep).join("/");
+	publishQuestionsRound(owner.recordDir, {
+		stage,
+		unit: null,
+		stageDir: rel(dirname(resolve(guidePath))),
+		questionsFile: rel(questionsPath),
+		questionsSha256: sha256Hex(questionsSource),
+		guide: rel(guidePath),
+	});
+}
+
 function cli(argv: string[]): number {
 	const [command, first, ...rest] = argv;
 	if (!command || !first || !["text", "check", "export", "scaffold"].includes(command)) return usage();
@@ -905,14 +921,15 @@ function cli(argv: string[]): number {
 					: basename(dirname(path))
 			),
 		};
+		const questionsSource = guideMode ? readFileSync(flags.questions, "utf-8") : "";
 		const result = guideMode
-			? checkGuideArtifact(
-				readFileSync(path, "utf-8"),
-				readFileSync(flags.questions, "utf-8"),
-				identity,
-			)
+			? checkGuideArtifact(readFileSync(path, "utf-8"), questionsSource, identity)
 			: checkHtmlArtifact(readFileSync(path, "utf-8"), identity);
 		if (!result.ok) process.stdout.write(`${result.findings.join("\n")}\n`);
+		// A passing guide for the current stage IS the round's publication: the
+		// review daemon shows the form and the Stop hook holds for the answers
+		// from this record onward, and only from it.
+		if (result.ok && guideMode) publishRound(path, flags.questions, questionsSource, identity.stage);
 		return result.ok ? 0 : 1;
 	}
 	if (Object.keys(flags).some((flag) => flag !== "out")) return usage();

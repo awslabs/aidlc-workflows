@@ -48,8 +48,13 @@ describe("t353 — review UI browser questions assets", () => {
     expect(questions).toContain("data-aidlc-recommend");
     expect(questions).toContain("Recommended");
     // Saving hands the round to the agent; the browser never asks for a terminal keystroke.
-    expect(questions).toContain("the agent is picking your answers up now.");
+    expect(questions).toContain("the agent is picking them up now.");
     expect(questions).not.toContain("send **done**");
+    // Whether the round was submitted is the daemon's fact, not this tab's memory.
+    expect(questions).toContain("store.state?.questions?.submitted");
+    expect(questions).not.toContain("submittedSha");
+    const storeJs = asset("store.js");
+    expect(storeJs).not.toContain("decision-sent");
     // The explainer sits above each answer card; the header carries the save action.
     const shell = asset("shell.js");
     expect(shell).toContain('actionButton("Save", "save-answers", true)');

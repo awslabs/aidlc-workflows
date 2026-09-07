@@ -104,28 +104,30 @@ function isActiveIntent(workflow = store.workflow) {
   return !workflow?.intent || !store.state?.intent || workflow.intent === store.state.intent;
 }
 
-// The decision this tab already sent for the gate the daemon still reports as
-// open: the hook has not delivered it yet, so the gate reads as "sent", not live.
+// The daemon's one-word answer to "what does the human do now". Every label,
+// button and count below reads it; the client derives nothing of its own.
+function phase() {
+  return store.state?.phase ?? "idle";
+}
+
+// The decision already recorded for the open gate, until the hook delivers it:
+// the gate reads as "sent", not live.
 function sentDecision() {
-  return decisionInFlight() ? store.decisionSent : null;
+  return decisionInFlight();
 }
 
 function isLiveGate(stage) {
-  return Boolean(
-    stage?.state === "current" &&
-      isActiveIntent() &&
-      !sentDecision() &&
-      (stage.gate === "awaiting-approval" || store.state?.current?.state === "awaiting-approval"),
-  );
+  return Boolean(stage?.state === "current" && isActiveIntent() && phase() === "reviewing" && !sentDecision());
+}
+
+// The daemon reports a submission on its next push; `questionsState` bridges
+// the moment between the click and that push.
+function answersSubmitted() {
+  return Boolean(store.state?.questions?.submitted) || store.questionsState === "submitted";
 }
 
 function isLiveQuestions(stage) {
-  return Boolean(
-    stage?.state === "current" &&
-      isActiveIntent() &&
-      !store.state?.questions?.preparing &&
-      (store.questionsState ? store.questionsState === "live" : stage.questions?.open && stage.questions?.guide),
-  );
+  return Boolean(stage?.state === "current" && isActiveIntent() && phase() === "questions" && !answersSubmitted());
 }
 
 function revision(stage) {
@@ -223,17 +225,20 @@ function viewState(view, stage) {
   }
   if (!stage) return { label: "Workflow unavailable", tone: "quiet" };
   if (view.kind === "questions") {
-    if (store.questionsState === "submitted" && isActiveIntent()) return { label: "Answers sent", tone: "ok" };
-    if (store.state?.questions?.preparing && stage.state === "current") return { label: "Preparing your questions", tone: "quiet" };
-    if (isLiveQuestions(stage)) {
-      const total = stage.questions?.total || 0;
-      const open = Math.max(0, total - (stage.questions?.answered || 0)) || total;
-      return { label: `${open} ${open === 1 ? "question" : "questions"} for you`, tone: "needs" };
+    if (stage.state === "current" && isActiveIntent()) {
+      if (phase() === "questions" && answersSubmitted()) return { label: "Answers sent", tone: "ok" };
+      if (phase() === "preparing") return { label: "Preparing your questions", tone: "quiet" };
+      if (phase() === "confirming") return { label: "Confirming in the terminal", tone: "quiet" };
+      if (isLiveQuestions(stage)) {
+        const total = stage.questions?.total || 0;
+        const open = Math.max(0, total - (stage.questions?.answered || 0)) || total;
+        return { label: `${open} ${open === 1 ? "question" : "questions"} for you`, tone: "needs" };
+      }
     }
     return { label: "Answered", tone: "ok" };
   }
   if (sentDecision() && stage.state === "current" && (view.kind === "artifact" || view.kind === "overview")) {
-    return sentDecision().decision === "approve"
+    return sentDecision() === "approve"
       ? { label: `Approved · r${revision(stage)}`, tone: "ok" }
       : { label: `Changes requested · r${revision(stage)}`, tone: "ok" };
   }
@@ -312,7 +317,7 @@ function headerActions(view, stage) {
   if (!stage) return "";
   const artifact = firstArtifact(stage);
   if (view.kind === "artifact" && isLiveGate(stage)) return gateActions();
-  if (view.kind === "questions" && store.questionsState === "submitted" && isActiveIntent()) return "";
+  if (view.kind === "questions" && answersSubmitted() && isActiveIntent()) return "";
   if (view.kind === "questions" && isLiveQuestions(stage)) {
     return actionButton("Save", "save-answers", true);
   }
@@ -591,7 +596,6 @@ export function init() {
   store.on("connection", renderHeader);
   store.on("annotations", renderHeader);
   store.on("questionsState", renderHeader);
-  store.on("decisionSent", renderHeader);
   store.on("palette", showPalette);
   render();
 }

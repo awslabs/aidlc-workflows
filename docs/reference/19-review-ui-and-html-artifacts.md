@@ -113,10 +113,28 @@ setting the session cookie. Expired nonces are swept when a new one is minted.
 
 #### `<record>/.review-ui/current.json`
 
+The human round: the one record of what the human does now and what ends it,
+written by the tool that makes each transition and read by the daemon, the Stop
+hook and `--status` - none of them re-derives it from the stage files. `state`
+is `questions` (a browser question round is published; `ends_with: "answers"`),
+`confirming` (the consolidated-summary confirmation is open in the terminal;
+`ends_with: "confirmation"`), `awaiting-approval` (`ends_with: "decision"`),
+`revising`, `approved`, or `none`. Writers: `aidlc-html.ts check --guide`
+publishes `questions` when the explainer passes for the current stage
+(carrying `questions_file`, `questions_sha256` and `guide`; a questions file
+that no longer matches the digest is not published); `aidlc-log.ts
+answers-apply` closes it; `aidlc-log.ts decision --checkpoint
+summary-confirmation` publishes `confirming` and the matching `answer` closes
+it; `report` publishes the gate states as before. `GET /api/state` projects the
+record as `phase` (`preparing | questions | confirming | reviewing | revising |
+working | done | idle`) plus `questions.submitted` and `decision_sent`, and
+`POST /api/answers` refuses (409) a round that is not published.
+
 ```json
 {
   "version": 1,
   "state": "awaiting-approval",
+  "ends_with": "decision",
   "stage": "requirements-analysis",
   "unit": null,
   "stage_dir": "aidlc/spaces/default/intents/260903-example/inception/requirements-analysis",

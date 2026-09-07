@@ -16,6 +16,22 @@ import {
 
 const ROOT = join(import.meta.dir, "..", "..");
 const DAEMON = join(ROOT, "core", "tools", "aidlc-review-ui.ts");
+const HTML_TOOL = join(ROOT, "core", "tools", "aidlc-html.ts");
+
+/**
+ * The real publication path: `check --guide` publishes the round record when
+ * the explainer passes (and only then). Returns the exit code.
+ */
+function checkGuide(guidePath: string, questionsPath: string): number {
+  const result = Bun.spawnSync({
+    cmd: [process.execPath, HTML_TOOL, "check", "--guide", guidePath, "--questions", questionsPath],
+    cwd: ROOT,
+    env: { ...process.env, AIDLC_REVIEW_UI: "1" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return result.exitCode;
+}
 const TOKEN_HEADER = "X-AIDLC-Token";
 const INTENT = "questions-fixture-12345678";
 const VALID_GUIDE = `<!doctype html>
@@ -141,9 +157,10 @@ beforeAll(async () => {
       "",
     ].join("\n"),
   );
-  // A complete explainer: the daemon publishes a guide (and marks the round
-  // ready) only once it passes the guide check, so the fixture must pass it.
+  // A complete explainer, published the way the conductor publishes it: the
+  // round record exists only once `check --guide` passes.
   writeFileSync(join(stagePath, "requirements-analysis-questions-guide.html"), VALID_GUIDE);
+  expect(checkGuide(join(stagePath, "requirements-analysis-questions-guide.html"), questionsPath)).toBe(0);
   writeFileSync(join(stagePath, "other.md"), "# Not the current questions file\n");
   writeFileSync(
     graphPath,
@@ -219,42 +236,44 @@ describe("t351 review UI questions routes", () => {
     const state = await authorized("/api/state");
     expect(state.status).toBe(200);
     expect(await state.json()).toMatchObject({
-      // A question round runs before any gate publishes a pointer; the header
-      // still needs the stage, so the payload names it from the state file.
-      current: null,
+      // The round record IS the pointer: `check --guide` published it with the
+      // questions-file digest; the daemon and the Stop hook both read it.
+      phase: "questions",
+      current: { state: "questions", ends_with: "answers", stage: "requirements-analysis", questions_file: questionsFile },
       current_stage: "requirements-analysis",
       questions: {
         file: questionsFile,
         guide: projectRelative(join(stagePath, "requirements-analysis-questions-guide.html")),
         ready: true,
         preparing: false,
+        submitted: false,
         stage: "requirements-analysis",
         stage_dir: projectRelative(stagePath),
       },
     });
 
-    // A half-written explainer is never published: while the guide file fails
-    // its check (here: an unfilled scaffold recommendation) the round reports
-    // `preparing` with no guide, so the tab neither steers nor renders a form.
+    // The record, not the files, decides. A questions file edited after
+    // publication (a follow-up appended, a tag fixed) no longer matches the
+    // published digest: the round is `preparing` again - spinner, no form, and
+    // a Save is refused - until the conductor re-checks and republishes.
     const guidePath = join(stagePath, "requirements-analysis-questions-guide.html");
-    writeFileSync(guidePath, VALID_GUIDE.replace('data-aidlc-recommend="B"', 'data-aidlc-recommend=""'));
-    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: true });
-    // No explainer at all is the same hold: with the daemon live every open
-    // round is a browser round, and the form must not appear before the
-    // explainer the terminal is about to wait for.
-    rmSync(guidePath);
-    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: true });
-    writeFileSync(guidePath, VALID_GUIDE);
-    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ ready: true, preparing: false });
-
-    // A malformed questions file is held back the same way: Q2 without its
-    // `[Answer]:` tag would be refused by answers-apply after the human saved,
-    // so the round stays `preparing` until the agent fixes the file.
     const questionsSource = readFileSync(questionsPath, "utf-8");
-    writeFileSync(questionsPath, questionsSource.replace("X. Other\n\n[Answer]:\n\n## Consolidated", "X. Other\n\n## Consolidated"));
+    writeFileSync(questionsPath, `${questionsSource}\n## Q3. Anything else?\n\nA. No\nX. Other\n\n[Answer]:\n`);
+    expect((await (await authorized("/api/state")).json())).toMatchObject({ phase: "preparing", questions: { guide: null, ready: false, preparing: true } });
+    const early = await authorized("/api/answers", {
+      method: "POST",
+      body: JSON.stringify({ questions_file: questionsFile, source_sha256: (await (await authorized(`/api/questions?path=${encodeURIComponent(questionsFile)}`)).json()).sha256, answers: [{ id: "Q1", labels: ["A"] }] }),
+    });
+    expect(early.status).toBe(409);
+    expect((await early.json()).error).toMatch(/not published/);
+    // A failing re-check publishes nothing.
+    writeFileSync(guidePath, VALID_GUIDE.replace('data-aidlc-recommend="B"', 'data-aidlc-recommend=""'));
+    expect(checkGuide(guidePath, questionsPath)).toBe(1);
     expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ guide: null, ready: false, preparing: true });
+    // Restore the file the record was published for: ready again, without a re-check.
     writeFileSync(questionsPath, questionsSource);
-    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ ready: true, preparing: false });
+    writeFileSync(guidePath, VALID_GUIDE);
+    expect((await (await authorized("/api/state")).json())).toMatchObject({ phase: "questions", questions: { ready: true, preparing: false } });
 
     const questionsResponse = await authorized(`/api/questions?path=${encodeURIComponent(questionsFile)}`);
     expect(questionsResponse.status).toBe(200);
@@ -342,6 +361,8 @@ describe("t351 review UI questions routes", () => {
     });
     expect(saved.status).toBe(200);
     expect(await saved.json()).toEqual({ file: "answers-001.json" });
+    // The daemon states the submission; the tab keeps no memory of it.
+    expect((await (await authorized("/api/state")).json()).questions).toMatchObject({ submitted: true });
     const diskSubmission = JSON.parse(
       readFileSync(join(stagePath, ".review-ui", "answers-001.json"), "utf-8"),
     );

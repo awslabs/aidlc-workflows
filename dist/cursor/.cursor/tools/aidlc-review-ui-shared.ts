@@ -10,7 +10,7 @@
 // Layout (see docs/reference/19-review-ui-and-html-artifacts.md):
 //   <REVIEW_HOME>/<project-id>/server.json         daemon discovery (home dir, never in the repo)
 //   <REVIEW_HOME>/<project-id>/server.log          daemon stdout/stderr
-//   <record>/.review-ui/current.json               pointer: which stage is under review
+//   <record>/.review-ui/current.json               pointer: the human round — what the human does now and what ends it
 //   <stage-dir>/.review-ui/manifest.json           resolved artifact manifest for the held gate
 //   <stage-dir>/.review-ui/snapshots/r<N>/<file>   artifact bytes at gate open (revision N)
 //   <stage-dir>/.review-ui/feedback-<NNN>.md       browser feedback rounds (daemon-written)
@@ -369,7 +369,31 @@ export interface ReviewManifestArtifact {
   exists: boolean;
 }
 
-export type CurrentReviewState = "awaiting-approval" | "revising" | "approved" | "none";
+/**
+ * The human round. One record, written by the tool that makes each transition
+ * and read by everything that shows or waits on the human — the daemon, the
+ * Stop hook, `--status`. Nothing re-derives these from the stage files.
+ *
+ *   questions          a browser question round is published (guide passed)
+ *   confirming         the consolidated-summary confirmation is open (terminal)
+ *   awaiting-approval  an approval gate is open
+ *   revising           the agent is addressing a rejected gate
+ *   approved           the gate closed with an approval
+ *   none               nothing waits on the human
+ */
+export type CurrentReviewState = "questions" | "confirming" | "awaiting-approval" | "revising" | "approved" | "none";
+
+/** What ends the human's part of the round; null when nothing is waiting on them. */
+export type RoundEndsWith = "answers" | "confirmation" | "decision" | null;
+
+export function endsWithFor(state: CurrentReviewState): RoundEndsWith {
+  switch (state) {
+    case "questions": return "answers";
+    case "confirming": return "confirmation";
+    case "awaiting-approval": return "decision";
+    default: return null;
+  }
+}
 
 export interface CurrentPointer {
   version: 1;
@@ -385,6 +409,12 @@ export interface CurrentPointer {
    * Read-only directive emission prints it while `openLinkIsFresh`.
    */
   open: OpenLink | null;
+  /** Derived from `state` by `endsWithFor`; carried so readers need no table. */
+  ends_with?: RoundEndsWith;
+  /** `questions` rounds: the file and the digest it was published at. A file that no longer matches is not published. */
+  questions_file?: string | null;
+  questions_sha256?: string | null;
+  guide?: string | null;
 }
 
 export interface ReviewManifest {
@@ -413,7 +443,113 @@ export function readJsonFile<T>(path: string): T | null {
 }
 
 export function readCurrentPointer(recordDir: string): CurrentPointer | null {
-  return readJsonFile<CurrentPointer>(currentPointerPath(recordDir));
+  const pointer = readJsonFile<CurrentPointer>(currentPointerPath(recordDir));
+  if (pointer && pointer.ends_with === undefined) pointer.ends_with = endsWithFor(pointer.state);
+  return pointer;
+}
+
+function writePointer(recordDir: string, pointer: CurrentPointer): void {
+  mkdirSync(recordReviewUiDir(recordDir), { recursive: true });
+  const path = currentPointerPath(recordDir);
+  const temp = `${path}.${process.pid}.tmp`;
+  writeFileSync(temp, `${JSON.stringify(pointer, null, 2)}\n`, "utf-8");
+  renameSync(temp, path);
+}
+
+/**
+ * Locate the record and project that own a stage directory, without the stage
+ * graph: the record is the nearest ancestor holding `aidlc-state.md`, the
+ * project is the parent of the nearest `aidlc/` ancestor. Null for per-unit or
+ * foreign layouts, in which case the caller simply does not publish.
+ */
+export function recordOfStageDir(stageDir: string): { recordDir: string; projectDir: string; currentStage: string | null } | null {
+  let dir = resolve(stageDir);
+  for (let depth = 0; depth < 3; depth++) {
+    dir = dirname(dir);
+    if (existsSync(join(dir, "aidlc-state.md"))) {
+      let probe = dir;
+      while (probe !== dirname(probe)) {
+        if (probe.split(/[\\/]/).pop() === "aidlc") {
+          const state = readFileSync(join(dir, "aidlc-state.md"), "utf-8");
+          const current = /^- \*\*Current Stage\*\*:[ \t]*(.*)$/m.exec(state)?.[1].trim() ?? null;
+          return { recordDir: dir, projectDir: dirname(probe), currentStage: current || null };
+        }
+        probe = dirname(probe);
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Publish a browser question round: called by `aidlc-html.ts check --guide`
+ * the moment the explainer passes. From here the daemon shows the form, the
+ * Stop hook holds for `answers-NNN.json`, and both agree by construction.
+ */
+export function publishQuestionsRound(
+  recordDir: string,
+  round: { stage: string; unit: string | null; stageDir: string; questionsFile: string; questionsSha256: string; guide: string },
+): CurrentPointer {
+  const previous = readCurrentPointer(recordDir);
+  const pointer: CurrentPointer = {
+    version: 1,
+    state: "questions",
+    stage: round.stage,
+    unit: round.unit,
+    stage_dir: round.stageDir,
+    revision: previous?.stage === round.stage ? previous.revision : 0,
+    updated_at: new Date().toISOString(),
+    open: null,
+    ends_with: "answers",
+    questions_file: round.questionsFile,
+    questions_sha256: round.questionsSha256,
+    guide: round.guide,
+  };
+  writePointer(recordDir, pointer);
+  return pointer;
+}
+
+/** The consolidated-summary confirmation is open for `stage` (terminal-rendered; the browser shows it as such). */
+export function publishConfirmationRound(recordDir: string, stage: string, unit: string | null, questionsFile: string): CurrentPointer | null {
+  const previous = readCurrentPointer(recordDir);
+  const pointer: CurrentPointer = {
+    version: 1,
+    state: "confirming",
+    stage,
+    unit,
+    stage_dir: previous?.stage === stage ? previous.stage_dir : null,
+    revision: previous?.stage === stage ? previous.revision : 0,
+    updated_at: new Date().toISOString(),
+    open: null,
+    ends_with: "confirmation",
+    questions_file: questionsFile,
+    questions_sha256: null,
+    guide: null,
+  };
+  writePointer(recordDir, pointer);
+  return pointer;
+}
+
+/**
+ * Close the round the human was in (answers applied, confirmation recorded):
+ * nothing waits on them until the next transition publishes. Only closes a
+ * round of the named state for the named stage, so a stale caller cannot
+ * unpublish a newer round.
+ */
+export function closeHumanRound(recordDir: string, stage: string, state: CurrentReviewState): boolean {
+  const current = readCurrentPointer(recordDir);
+  if (!current || current.stage !== stage || current.state !== state) return false;
+  writePointer(recordDir, {
+    ...current,
+    state: "none",
+    updated_at: new Date().toISOString(),
+    open: null,
+    ends_with: null,
+    questions_sha256: null,
+    guide: null,
+  });
+  return true;
 }
 
 export function readManifest(stageDir: string): ReviewManifest | null {
@@ -730,6 +866,39 @@ export function listDecisionFiles(stageDir: string): DecisionFile[] {
     }
     const submission = parseDecisionSubmission(value);
     if (submission) out.push({ file: entry, submission, sha256: sha256Hex(source) });
+  }
+  return out;
+}
+
+/**
+ * Browser answer submissions `answers-apply` has not consumed. With `sha256`,
+ * only submissions recorded against that questions-file digest count — the
+ * published round's identity.
+ */
+export function pendingAnswerFiles(stageDir: string, questionsSha256?: string | null): string[] {
+  const reviewDir = stageReviewUiDir(stageDir);
+  if (!existsSync(reviewDir)) return [];
+  const consumed = readConsumed(stageDir);
+  const seen = new Set(consumed.entries.map((entry) => `${entry.file}\u0000${entry.sha256}`));
+  const out: string[] = [];
+  for (const file of readdirSync(reviewDir).sort()) {
+    if (!file.startsWith(ANSWERS_PREFIX) || !file.endsWith(".json")) continue;
+    let raw: Buffer;
+    try {
+      raw = readFileSync(join(reviewDir, file));
+    } catch {
+      continue;
+    }
+    if (seen.has(`${file}\u0000${sha256Hex(raw)}`)) continue;
+    if (questionsSha256) {
+      try {
+        const parsed = JSON.parse(raw.toString("utf-8")) as { source_sha256?: unknown };
+        if (parsed.source_sha256 !== questionsSha256) continue;
+      } catch {
+        continue;
+      }
+    }
+    out.push(file);
   }
   return out;
 }

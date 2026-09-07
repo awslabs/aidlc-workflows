@@ -165,9 +165,8 @@ import {
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
 import {
-  ANSWERS_PREFIX,
+  pendingAnswerFiles,
   pendingDecisions,
-  readConsumed,
   readCurrentPointer,
   readServerInfo,
   reviewUiEnabled,
@@ -607,27 +606,25 @@ function isPendingQuestionStop(
 
 // --- Tier-2 browser wait: hold the turn until the human clicks Save ------------
 //
-// "Guide me in the browser" (automatic whenever the directive carries
-// review_ui) ends the conductor's turn with the human answering in the review UI. Without this, the saved answers sit on disk until the human
-// also types `done` in the terminal — a second, redundant act. Plannotator's
-// approach applies here unchanged: the hook process is the only thing that can
-// hold the session open, so it waits for the submission and then BLOCKS the
-// stop with the apply instruction; the conductor resumes on its own.
+// A browser question round ends the conductor's turn with the human answering
+// in the review UI. Without this, the saved answers sit on disk until the
+// human also types `done` in the terminal — a second, redundant act. The hook
+// process is the only thing that can hold the session open, so it waits for
+// the submission and then BLOCKS the stop with the apply instruction; the
+// conductor resumes on its own.
 //
-// Positive-confirmation only, and narrow on purpose:
-//   - the pending-question carve-out already fired for this stage ([-] cursor,
-//     unanswered `[Answer]:` tag);
-//   - `<slug>-questions-guide.html` sits beside the questions file — the
-//     artifact stage-protocol-guide.md writes ONLY in browser mode. A terminal
-//     question round has no guide, and blocking there would trap the human's
-//     typed answer;
-//   - the review UI is enabled and its daemon is alive, otherwise nobody can
-//     click Save and the wait would only delay the release.
-// The wait is bounded (AIDLC_REVIEW_WAIT_SECONDS, default 20 min; the Stop hook's
-// settings.json timeout must exceed it) and falls back to the plain allow on
-// expiry, i.e. exactly today's `done` flow. The submission the daemon writes is
-// paired with its own HUMAN_TURN row, so answers-apply passes without a
-// keystroke. Fail-open on every read error.
+// The round record is the sole signal. `aidlc-html.ts check --guide` publishes
+// `.review-ui/current.json` with `state: "questions"` (and the questions-file
+// digest) the moment the explainer passes; the same record makes the daemon
+// show the form. Reading it here — rather than inferring a round from a guide
+// file, a blank tag and a live daemon — is what makes "the form is up" and "the
+// terminal is holding for it" one fact instead of two rules. No record, a
+// record for another stage, or a digest the file no longer matches: no hold.
+// The daemon must be alive too, otherwise nobody can click Save.
+// The wait is bounded (AIDLC_REVIEW_WAIT_SECONDS, default 20 min; the Stop
+// hook's settings.json timeout must exceed it) and falls back to the plain
+// allow on expiry, i.e. exactly today's `done` flow. Fail-open on every read
+// error.
 const REVIEW_WAIT_DEFAULT_SECONDS = 20 * 60;
 const REVIEW_WAIT_POLL_MS = 1_000;
 
@@ -635,6 +632,7 @@ interface BrowserQuestionRound {
   slug: string;
   stageDirPath: string;
   questionsFile: string;
+  questionsSha256: string;
 }
 
 function browserQuestionRound(
@@ -647,35 +645,66 @@ function browserQuestionRound(
   if (!serverInfoLooksAlive(readServerInfo(projectDir))) return null;
   try {
     const slug = activeStage?.trim() || currentStageSlug(stateContent);
-    const phase = (getField(stateContent, "Lifecycle Phase") ?? "").toLowerCase();
-    if (slug.length === 0 || phase.length === 0) return null;
-    const stageDirPath =
-      phase === "construction" && unit
-        ? join(docsRoot(projectDir), phase, unit, slug)
-        : stageDir(projectDir, phase, slug);
-    const questionsPath = join(stageDirPath, `${slug}-questions.md`);
-    if (!existsSync(questionsPath) || !existsSync(join(stageDirPath, `${slug}-questions-guide.html`))) return null;
-    if (!/\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(questionsPath, "utf-8"))) return null;
-    return { slug, stageDirPath, questionsFile: relative(projectDir, questionsPath).split(sep).join("/") };
+    if (slug.length === 0) return null;
+    const pointer = readCurrentPointer(docsRoot(projectDir));
+    if (
+      pointer?.state !== "questions" ||
+      pointer.stage !== slug ||
+      pointer.unit !== (unit ?? null) ||
+      !pointer.stage_dir ||
+      !pointer.questions_file ||
+      !pointer.questions_sha256
+    ) {
+      return null;
+    }
+    const questionsPath = join(projectDir, ...pointer.questions_file.split("/"));
+    if (!existsSync(questionsPath)) return null;
+    // A file edited since publication is not the published round.
+    if (sha256Hex(readFileSync(questionsPath)) !== pointer.questions_sha256) return null;
+    return {
+      slug,
+      stageDirPath: join(projectDir, ...pointer.stage_dir.split("/")),
+      questionsFile: pointer.questions_file,
+      questionsSha256: pointer.questions_sha256,
+    };
   } catch {
     return null;
   }
 }
 
-// An answers-NNN.json the daemon wrote that answers-apply has not consumed yet.
-function hasUnconsumedBrowserAnswers(stageDirPath: string): boolean {
+// Resolves true as soon as a submission for the published round lands, false
+// on expiry. Polling is the guarantee; the directory watcher only shortens the
+// wake-up.
+function waitForBrowserAnswers(round: BrowserQuestionRound, timeoutSeconds: number): Promise<boolean> {
+  const landed = (): boolean => {
+    try {
+      return pendingAnswerFiles(round.stageDirPath, round.questionsSha256).length > 0;
+    } catch {
+      return false;
+    }
+  };
+  if (landed()) return Promise.resolve(true);
+  if (timeoutSeconds <= 0) return Promise.resolve(false);
+  const { promise, resolve: settle } = Promise.withResolvers<boolean>();
+  let watcher: FSWatcher | null = null;
+  const finish = (found: boolean): void => {
+    clearInterval(poll);
+    clearTimeout(deadline);
+    watcher?.close();
+    settle(found);
+  };
+  const recheck = (): void => {
+    if (landed()) finish(true);
+  };
+  const poll = setInterval(recheck, REVIEW_WAIT_POLL_MS);
+  const deadline = setTimeout(() => finish(false), timeoutSeconds * 1000);
   try {
-    const reviewDir = stageReviewUiDir(stageDirPath);
-    if (!existsSync(reviewDir)) return false;
-    const consumed = readConsumed(stageDirPath);
-    return readdirSync(reviewDir).some((file) => {
-      if (!file.startsWith(ANSWERS_PREFIX) || !file.endsWith(".json")) return false;
-      const sha256 = sha256Hex(readFileSync(join(reviewDir, file)));
-      return !consumed.entries.some((entry) => entry.file === file && entry.sha256 === sha256);
-    });
+    watcher = watch(round.stageDirPath, { recursive: true }, recheck);
+    watcher.on("error", () => {});
   } catch {
-    return false;
+    // Polling alone carries the wait where recursive watching is unavailable.
   }
+  return promise;
 }
 
 // Only a harness whose Stop hook may run for minutes can hold the turn. Claude
@@ -688,33 +717,6 @@ function reviewWaitSeconds(): number {
   if (raw === undefined) return harnessDir() === ".claude" ? REVIEW_WAIT_DEFAULT_SECONDS : 0;
   const value = Number(raw);
   return Number.isFinite(value) && value >= 0 ? value : REVIEW_WAIT_DEFAULT_SECONDS;
-}
-
-// Resolves true as soon as a submission lands, false on expiry. Polling is the
-// guarantee; the directory watcher only shortens the wake-up.
-function waitForBrowserAnswers(stageDirPath: string, timeoutSeconds: number): Promise<boolean> {
-  if (hasUnconsumedBrowserAnswers(stageDirPath)) return Promise.resolve(true);
-  if (timeoutSeconds <= 0) return Promise.resolve(false);
-  const { promise, resolve: settle } = Promise.withResolvers<boolean>();
-  let watcher: FSWatcher | null = null;
-  const finish = (found: boolean): void => {
-    clearInterval(poll);
-    clearTimeout(deadline);
-    watcher?.close();
-    settle(found);
-  };
-  const recheck = (): void => {
-    if (hasUnconsumedBrowserAnswers(stageDirPath)) finish(true);
-  };
-  const poll = setInterval(recheck, REVIEW_WAIT_POLL_MS);
-  const deadline = setTimeout(() => finish(false), timeoutSeconds * 1000);
-  try {
-    watcher = watch(stageDirPath, { recursive: true }, recheck);
-    watcher.on("error", () => {});
-  } catch {
-    // Polling alone carries the wait where recursive watching is unavailable.
-  }
-  return promise;
 }
 
 // A browser approval gate uses the same bounded hold as browser questions. The
@@ -1750,7 +1752,7 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
   // Browser round: hold the turn for the Save click, then hand the conductor
   // the apply step. On expiry, fall through to the plain allow (the `done` flow).
   const round = browserQuestionRound(projectDir, stateContent, activeStage, activeUnit);
-  if (round && (await waitForBrowserAnswers(round.stageDirPath, reviewWaitSeconds()))) {
+  if (round && (await waitForBrowserAnswers(round, reviewWaitSeconds()))) {
     recordHookDrop(
       projectDir,
       HOOK_NAME,

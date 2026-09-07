@@ -971,13 +971,25 @@ export function renderReviewBrief(
       );
     }
   }
+  // The recommendation follows the evidence the brief itself carries: open
+  // findings or a NOT-READY verdict recommend Request Changes, otherwise
+  // Approve. The recommended option is listed first, marked, so the conductor
+  // renders the gate from this order instead of the template's.
+  const recommendChanges = open.length > 0 || contexts.some((context) => context.verdict === "NOT-READY");
   lines.push(
     "",
     renderFindingsContext(contexts),
     "",
     "**Decision options:**",
-    "- **Approve** - continue with the open findings accepted.",
-    "- **Request Changes** - return to the listed artifacts so the required actions can be addressed.",
+    ...(recommendChanges
+      ? [
+        `- **Request Changes (Recommended)** - return to the listed artifacts so the ${open.length > 0 ? `${open.length} open ${open.length === 1 ? "finding" : "findings"}` : "review"} can be addressed.`,
+        "- **Approve** - continue with the open findings accepted.",
+      ]
+      : [
+        "- **Approve (Recommended)** - no open findings remain; continue.",
+        "- **Request Changes** - return to the listed artifacts with revision feedback.",
+      ]),
   );
   return lines.join("\n");
 }

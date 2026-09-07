@@ -172,10 +172,9 @@ async function sendDecision(decision, notes) {
           .map((item) => ({ ...item, revision: current.revision, sha256: store.document?.sha256 || "", path: item.path || store.document?.path || "" })),
       ];
       clearPending();
-      store.set({ sentEdits, decisionSent: { stage: current.stage, unit: current.unit ?? null, revision: current.revision, decision } });
+      store.set({ sentEdits });
       try {
         sessionStorage.setItem("aidlc-review-ui:sent-edits", JSON.stringify(sentEdits));
-        sessionStorage.setItem("aidlc-review-ui:decision-sent", JSON.stringify(store.decisionSent));
       } catch {
         // session storage is a convenience only
       }
@@ -736,7 +735,7 @@ function stageDirectory() {
 }
 
 function hasOpenGate() {
-  return store.state?.current?.state === "awaiting-approval" && !decisionInFlight() && stageDirectory() === store.state.current.stage_dir;
+  return store.state?.phase === "reviewing" && !decisionInFlight() && stageDirectory() === store.state.current?.stage_dir;
 }
 
 function normalizeDecision(value) {

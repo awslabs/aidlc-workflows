@@ -101,6 +101,9 @@ import {
   sha256Hex,
   stageReviewUiDir,
   writeConsumed,
+  closeHumanRound,
+  publishConfirmationRound,
+  reviewUiEnabled,
 } from "./aidlc-review-ui-shared.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
@@ -319,6 +322,10 @@ function handleDecision(args: string[]): void {
     emitAudit(pd, "DECISION_RECORDED", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
+  }
+  if (flags.checkpoint === "summary-confirmation" && reviewUiEnabled()) {
+    const record = recordDir(pd);
+    if (record) publishConfirmationRound(record, flags.stage, flags.unit ?? null, summaryEvidence!.relativePath);
   }
   if (planEvidence) {
     try {
@@ -707,6 +714,10 @@ function handleAnswer(args: string[]): void {
       } catch (e) {
         error(`Audit emission failed: ${errorMessage(e)}`);
       }
+      {
+        const record = recordDir(pd);
+        if (record) closeHumanRound(record, flags.stage, "confirming");
+      }
       console.log(
         JSON.stringify({
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
@@ -1087,10 +1098,14 @@ function handleAnswersApply(args: string[]): void {
     const source = readFileSync(questions.absolute, "utf-8");
     const sourceSha256 = sha256Hex(source);
     for (const item of pending) {
-      const submittedPath = resolve(
-        pd,
-        item.submission.questions_file,
-      );
+      // Compare real paths: the project dir may be reached through a symlink
+      // (macOS /tmp -> /private/tmp) while `questions.absolute` is resolved.
+      let submittedPath = resolve(pd, item.submission.questions_file);
+      try {
+        submittedPath = realpathSync(submittedPath);
+      } catch {
+        // A missing file fails the comparison below with the precise message.
+      }
       if (submittedPath !== questions.absolute) {
         error(
           `answers-apply refused: ${item.file} targets a different questions file.`,
@@ -1141,6 +1156,10 @@ function handleAnswersApply(args: string[]): void {
       version: 1,
       entries: [...consumed.entries, ...entries],
     });
+    // The human's part of the round is over: unpublish it so the browser shows
+    // the agent at work rather than a form, until the next transition.
+    const record = recordDir(pd);
+    if (record) closeHumanRound(record, flags.stage, "questions");
     console.log(JSON.stringify({
       applied: answers.size,
       files,

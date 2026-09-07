@@ -82,19 +82,18 @@ export function agentFor(path = null, stageSlug = null) {
   return "Agent";
 }
 
-/** True while this tab's decision for the daemon's still-open gate awaits the hook. */
+/**
+ * The decision recorded for the daemon's still-open gate, until the hook
+ * delivers it: "approve" | "request-changes" | null. The daemon states it
+ * from the decision file; this tab keeps no memory of what it sent.
+ */
 export function decisionInFlight() {
-  const sent = store.decisionSent;
-  const current = store.state?.current;
-  if (!sent || !current || current.state !== "awaiting-approval") return false;
-  return sent.stage === current.stage && (sent.unit ?? null) === (current.unit ?? null) && sent.revision === current.revision;
+  return store.state?.phase === "reviewing" ? store.state.decision_sent ?? null : null;
 }
 
 try {
   const saved = JSON.parse(sessionStorage.getItem("aidlc-review-ui:sent-edits") || "[]");
   if (Array.isArray(saved)) store.sentEdits = saved;
-  const sent = JSON.parse(sessionStorage.getItem("aidlc-review-ui:decision-sent") || "null");
-  if (sent && typeof sent === "object") store.decisionSent = sent;
 } catch {
   // ignore a corrupt or unavailable session store
 }

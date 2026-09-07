@@ -55,6 +55,8 @@ import {
   nextSequence,
   readCurrentPointer,
   readManifest,
+  pendingAnswerFiles,
+  pendingDecisions,
   listDecisionFiles,
   listFeedbackFiles,
   listResponsesFiles,
@@ -89,8 +91,7 @@ import {
   type ReviewAnnotation,
 } from "./aidlc-review-ui-render.ts";
 import { handleDecision } from "./aidlc-review-ui-decision.ts";
-import { reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
-import { checkGuideArtifact } from "./aidlc-html.ts";
+import { questionsRoundPublished, reviewUiRemarkFiles, workflowPayload, workflowSelection } from "./aidlc-review-ui-workflow.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -503,17 +504,17 @@ function stateContext(
 
 interface QuestionsTarget {
   file: string;
-  /** The explainer, published only once it passes the guide check. */
+  /** The explainer, as published by the round record (`check --guide` passed). */
   guide: string | null;
-  /** Browser round complete: explainer present and valid. */
+  /** The round record publishes this exact questions file: the form may be shown. */
   ready: boolean;
   /**
-   * The round has open answers but no passing explainer yet — the agent is
-   * still writing it (or it does not exist yet). The tab shows a spinner, never
-   * a form: with the review daemon live every round is a browser round, and a
-   * form before the explainer is a form the hook is not yet holding for.
+   * Open answers, no published round: the agent is still writing the explainer
+   * (or the file changed since it was published). Spinner, never a form.
    */
   preparing: boolean;
+  /** An unconsumed browser submission exists for the published round. */
+  submitted: boolean;
   stage: string;
   stage_dir: string;
   questionsPath: string;
@@ -551,42 +552,49 @@ function currentQuestionsTarget(projectDir: string, context = stateContext(proje
     return null;
   }
 
-  // The explainer decides when the round reaches the human. A browser round is
-  // never shown half-built: until a guide file exists AND passes the guide check
-  // (unfilled scaffold, empty recommendations, sections out of step with the
-  // questions, a malformed questions file), an open round is "preparing" — the
-  // tab must not steer, open, or render the form yet. Only a passing guide makes
-  // the round `ready`, and only then is it published as the guide. A round whose
-  // answers are all in is neither: it is answered, however it was answered.
-  const guideFile = `${stageRelative}/${stage.slug}-questions-guide.html`;
+  // The round record decides. `aidlc-html.ts check --guide` publishes the
+  // round when the explainer passes; the daemon does not re-run that check.
   const questionsSource = readFileSync(questionsPath, "utf-8");
+  const sha256 = sha256Hex(questionsSource);
   const open = parseQuestionsMarkdown(questionsSource)
     .filter((question) => !question.confirmation)
     .some((question) => question.answer === null || question.answer.trim() === "");
-  let guide: string | null = null;
-  try {
-    const guidePath = resolveProjectAidlcPath(projectDir, guideFile);
-    regularFile(guidePath);
-    const verdict = checkGuideArtifact(
-      readFileSync(guidePath, "utf-8"),
-      questionsSource,
-      { name: `${stage.slug}-questions-guide`, stage: stage.slug },
-    );
-    if (verdict.ok) guide = guideFile;
-  } catch (error) {
-    if (error instanceof PathConfinementError) throw error;
-    // No explainer yet.
-  }
+  const ready = questionsRoundPublished(context.current, stage.slug, sha256);
+  const guide = ready ? context.current?.guide ?? null : null;
+  const submitted = ready && pendingAnswerFiles(stagePath, sha256).length > 0;
   return {
     file,
     guide,
-    ready: guide !== null,
-    preparing: guide === null && open,
+    ready,
+    preparing: !ready && open,
+    submitted,
     stage: stage.slug,
     stage_dir: stageRelative,
     questionsPath,
     stagePath: realpathSync(stagePath),
   };
+}
+
+/**
+ * The one word the browser renders. Every header label, Save button, "needs
+ * you" count and tab steer reads this; nothing else in the client decides.
+ */
+export type HumanPhase = "preparing" | "questions" | "confirming" | "reviewing" | "revising" | "working" | "done" | "idle";
+
+function humanPhase(context: ReturnType<typeof stateContext>, questions: QuestionsTarget | null): HumanPhase {
+  const state = context.state;
+  const current = context.current;
+  const currentStage = state ? getField(state, "Current Stage") : null;
+  if (state && /^completed?$/i.test(getField(state, "Status") ?? "")) return "done";
+  if (current?.stage && current.stage === currentStage) {
+    if (current.state === "questions" && questions?.ready) return "questions";
+    if (current.state === "confirming") return "confirming";
+    if (current.state === "awaiting-approval") return "reviewing";
+    if (current.state === "revising") return "revising";
+  }
+  if (questions?.preparing) return "preparing";
+  const checkbox = state && currentStage ? parseCheckboxes(state).find((entry) => entry.slug === currentStage) : undefined;
+  return checkbox?.state === "in-progress" || checkbox?.state === "pending" ? "working" : "idle";
 }
 
 function stageMarker(state: string | null, currentStage: string | null): string | null {
@@ -601,8 +609,18 @@ function statePayload(projectDir: string): Record<string, unknown> {
   const revision = revisionValue === null ? null : Number(revisionValue);
   const currentStage = context.current?.stage ?? (context.state ? getField(context.state, "Current Stage") : null);
   const questions = currentQuestionsTarget(projectDir, context);
+  const gateStageDir = context.current?.stage_dir ? (() => { try { return resolveProjectAidlcPath(projectDir, context.current!.stage_dir!); } catch { return null; } })() : null;
+  const decisionSent = context.current?.state === "awaiting-approval" && gateStageDir
+    ? pendingDecisions(gateStageDir).find((item) =>
+        item.submission.stage === context.current!.stage &&
+        item.submission.unit === (context.current!.unit ?? null) &&
+        item.submission.revision === context.current!.revision)?.submission.decision ?? null
+    : null;
   return {
     project_dir: projectDir,
+    phase: humanPhase(context, questions),
+    /** The decision already recorded for the open gate ("approve" | "request-changes"), until the hook delivers it. */
+    decision_sent: decisionSent,
     space: context.space,
     intent: context.intent,
     record_dir: posixRelative(projectDir, context.record),
@@ -621,6 +639,7 @@ function statePayload(projectDir: string): Record<string, unknown> {
           guide: questions.guide,
           ready: questions.ready,
           preparing: questions.preparing,
+          submitted: questions.submitted,
           stage: questions.stage,
           stage_dir: questions.stage_dir,
         },
@@ -1238,6 +1257,11 @@ async function answersResponse(projectDir: string, request: Request): Promise<Re
   const sourceSha256 = sha256Hex(source);
   if (body.source_sha256 !== sourceSha256) {
     throw new HttpError(409, "questions file changed; reload");
+  }
+  // Only a published round accepts answers: the same record the Stop hook
+  // holds on, so a submission can never land where nothing waits for it.
+  if (!target.ready) {
+    throw new HttpError(409, "question round not published yet; the agent is still preparing it");
   }
 
   let answers: AnswerSubmissionEntry[];

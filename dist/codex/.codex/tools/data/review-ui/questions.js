@@ -43,8 +43,12 @@ const DRAFT_PREFIX = "aidlc-review-answers:";
 let elements;
 let current = null;
 let loadGeneration = 0;
-let submittedSha = null;
-let submittedMessage = "";
+// Whether the published round already has a submission is the daemon's fact
+// (`state.questions.submitted`); this tab keeps no memory of what it sent.
+function submitted() {
+  return Boolean(store.state?.questions?.submitted);
+}
+const SUBMITTED_MESSAGE = "Answers sent - the agent is picking them up now.";
 let saving = false;
 
 export function init() {
@@ -124,10 +128,6 @@ async function loadQuestions() {
       guideRequest,
     ]);
     if (generation !== loadGeneration || store.view?.kind !== "questions") return;
-    if (submittedSha && submittedSha !== questions.sha256) {
-      submittedSha = null;
-      submittedMessage = "";
-    }
     current = { questions, guide, pointer };
     renderCurrent();
   } catch (error) {
@@ -156,11 +156,11 @@ function renderCurrent() {
   const visibleQuestions = questions.questions.filter((question) => !question.confirmation);
   const confirmation = questions.questions.find((question) => question.confirmation);
   const answered = visibleQuestions.length > 0 && visibleQuestions.every((question) => question.answer !== null);
-  const questionsState = answered ? "answered" : submittedSha === questions.sha256 ? "submitted" : "live";
+  const questionsState = answered ? "answered" : submitted() ? "submitted" : "live";
   if (store.questionsState !== questionsState) store.set({ questionsState });
 
   elements.view.classList.toggle("answered", answered);
-  elements.view.classList.toggle("submitted", submittedSha === questions.sha256);
+  elements.view.classList.toggle("submitted", submitted());
   elements.title.textContent = "Questions";
   const column = document.createElement("section");
   column.className = "qcol";
@@ -182,8 +182,8 @@ function renderCurrent() {
   elements.guide.hidden = true;
   if (answered) {
     clearBanner();
-  } else if (submittedSha === questions.sha256) {
-    showBanner(submittedMessage, "success");
+  } else if (submitted()) {
+    showBanner(SUBMITTED_MESSAGE, "success");
     setFormLocked(true);
   } else {
     clearBanner();
@@ -418,7 +418,7 @@ function syncOtherFields(card) {
 }
 
 function persistCurrentDraft() {
-  if (!current || submittedSha === current.questions.sha256 || elements.view.classList.contains("answered")) return;
+  if (!current || submitted() || elements.view.classList.contains("answered")) return;
   try {
     const answers = collectAnswers(false);
     sessionStorage.setItem(draftKey(current.questions.sha256), JSON.stringify({ answers: Object.fromEntries(
@@ -475,7 +475,7 @@ function answerError(message, field) {
 
 async function saveAnswers() {
   if (saving || !current || store.view?.kind !== "questions" || elements.view.classList.contains("answered")) return;
-  if (submittedSha === current.questions.sha256) return;
+  if (submitted()) return;
   const round = current.questions;
 
   let answers;
@@ -496,18 +496,19 @@ async function saveAnswers() {
       source_sha256: round.sha256,
       answers,
     });
-    submittedSha = round.sha256;
-    submittedMessage = `Saved as ${basename(result.file)} — the agent is picking your answers up now.`;
     sessionStorage.removeItem(draftKey(round.sha256));
+    // The daemon's next state push carries `submitted`; lock and say so now so
+    // the click is acknowledged before it arrives.
     elements.view.classList.add("submitted");
     store.set({ questionsState: "submitted" });
-    showBanner(submittedMessage, "success");
+    showBanner(SUBMITTED_MESSAGE, "success");
     store.emit("answers-saved", result);
   } catch (error) {
     setFormLocked(false);
     if (error.status === 409) {
-      showBanner("Questions changed — reload", "error");
-      store.emit("notice", { message: "Questions changed — reload", kind: "error" });
+      const message = /not published/.test(error.message || "") ? "The agent is still preparing this round; this page updates when it is ready." : "Questions changed - reload";
+      showBanner(message, "error");
+      store.emit("notice", { message, kind: "error" });
     } else {
       showBanner(`Answers were not saved: ${error.message}`, "error");
     }

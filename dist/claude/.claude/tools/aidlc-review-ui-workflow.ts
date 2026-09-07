@@ -31,12 +31,12 @@ import {
   type IntentRegistryEntry,
   type StageEntry,
 } from "./aidlc-lib.ts";
-import { checkGuideArtifact } from "./aidlc-html.ts";
 import {
   listFeedbackFiles,
   readConsumed,
   readCurrentPointer,
   readManifest,
+  sha256Hex,
   stageReviewUiDir,
   type CurrentPointer,
   type FeedbackRemarkKind,
@@ -287,10 +287,25 @@ function shortCondition(stage: StageEntry): string {
   return sentence.length <= 80 ? sentence : `${sentence.slice(0, 77).trimEnd()}…`;
 }
 
+/**
+ * Whether the pointer publishes a browser question round for this stage at
+ * this exact questions file. Published by `aidlc-html.ts check --guide`; the
+ * daemon never re-runs the check itself.
+ */
+export function questionsRoundPublished(pointer: CurrentPointer | null, stage: string, questionsSha256: string): boolean {
+  return Boolean(
+    pointer &&
+      pointer.state === "questions" &&
+      pointer.stage === stage &&
+      pointer.questions_sha256 === questionsSha256,
+  );
+}
+
 function questionsForStage(
   projectDir: string,
   record: string,
   stage: StageEntry,
+  pointer: CurrentPointer | null,
 ): WorkflowQuestions | undefined {
   const stagePath = join(record, stage.phase, stage.slug);
   const questionsPath = join(stagePath, `${stage.slug}-questions.md`);
@@ -303,18 +318,7 @@ function questionsForStage(
   }
   const questions = parseQuestionsMarkdown(source).filter((question) => !question.confirmation);
   const answered = questions.filter((question) => question.answer !== null && question.answer.trim() !== "").length;
-  const guidePath = join(stagePath, `${stage.slug}-questions-guide.html`);
-  let guide = false;
-  if (regularFile(guidePath)) {
-    try {
-      guide = checkGuideArtifact(readFileSync(guidePath, "utf-8"), source, {
-        name: `${stage.slug}-questions-guide`,
-        stage: stage.slug,
-      }).ok;
-    } catch {
-      guide = false;
-    }
-  }
+  const guide = questionsRoundPublished(pointer, stage.slug, sha256Hex(source));
   return {
     file: posixRelative(projectDir, questionsPath),
     answered,
@@ -433,7 +437,8 @@ function intentSummary(
   const current = currentStage ? checkboxes.find((entry) => entry.slug === currentStage) : undefined;
   const graph = loadStageGraphAll().filter((stage) => stage.enabled !== false);
   const graphStage = graph.find((stage) => stage.slug === currentStage);
-  const questions = graphStage ? questionsForStage(projectDir, record, graphStage) : undefined;
+  const pointer = readCurrentPointer(record);
+  const questions = graphStage ? questionsForStage(projectDir, record, graphStage, pointer) : undefined;
   let status: WorkflowIntentStatus = "idle";
   let needs: WorkflowIntent["needs"] = null;
   if (current?.state === "awaiting-approval" || current?.state === "revising") {
@@ -527,7 +532,7 @@ function buildPhases(
           ?? (latestSkip ? auditBlockField(latestSkip.block, "Reason") : null)
           ?? (scope ? `not in ${scope} scope` : "not in scope")
         : null;
-      const questions = questionsForStage(projectDir, selection.record, stage);
+      const questions = questionsForStage(projectDir, selection.record, stage, current);
       const memoryPath = join(selection.record, stage.phase, stage.slug, "memory.md");
       const result: WorkflowStage = {
         slug: stage.slug,
@@ -543,7 +548,7 @@ function buildPhases(
       if (latestDecision) result.decided_at = latestDecision.timestamp;
       if (current?.stage === stage.slug) {
         result.revision = current.revision;
-        result.gate = current.state === "none" ? null : current.state;
+        result.gate = current.state === "awaiting-approval" || current.state === "revising" || current.state === "approved" ? current.state : null;
       }
       if (questions) result.questions = questions;
       if (regularFile(memoryPath)) result.memory = posixRelative(projectDir, memoryPath);

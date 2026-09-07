@@ -80,7 +80,7 @@ Before pointing the human to the browser, run:
 
 `bun .claude/tools/aidlc-html.ts check --guide <file> --questions <slug>-questions.md`
 
-Fix every finding. Do not present a guide that fails the base HTML artifact contract, lacks a question section, has an extra section, recommends a letter absent from its question, or still has empty prose. The check also holds the questions file to what `answers-apply` will demand after the human saves — each `## Q<n>` heading once, with parsable options, exactly one `[Answer]:` line, and an `X. Other (please specify)` option — so a malformed file is yours to fix now, not a refusal of the human's saved answers later.
+A passing check is also what publishes the round: the browser shows the form and the Stop hook holds for the answers from that moment, and only from it. Fix every finding. Do not present a guide that fails the base HTML artifact contract, lacks a question section, has an extra section, recommends a letter absent from its question, or still has empty prose. The check also holds the questions file to what `answers-apply` will demand after the human saves — each `## Q<n>` heading once, with parsable options, exactly one `[Answer]:` line, and an `X. Other (please specify)` option — so a malformed file is yours to fix now, not a refusal of the human's saved answers later.
 
 The review UI enforces the same check: it shows the human a browser round only
 once the guide passes; until then the tab says "Preparing your questions" (no form, no Save).

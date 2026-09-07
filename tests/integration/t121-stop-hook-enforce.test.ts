@@ -108,7 +108,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { reviewUiProjectId, writeServerInfo } from "../../dist/claude/.claude/tools/aidlc-review-ui-shared.ts";
+import { publishQuestionsRound, reviewUiProjectId, sha256Hex, writeServerInfo } from "../../dist/claude/.claude/tools/aidlc-review-ui-shared.ts";
 
 const BUN = process.execPath; // the bun running this test (mirrors t104)
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -1523,22 +1523,37 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
 
   // --- (f-browser) "Guide me in the browser": hold the turn for Save, then block ---
   //
-  // The browser round is positively signalled by <slug>-questions-guide.html
-  // beside the blank questions file plus a live review-UI daemon. Then the hook
-  // waits for the daemon's answers-NNN.json and BLOCKS with the apply command,
-  // so the conductor resumes without the human typing `done`. No guide, no
-  // daemon, or expiry → the plain pending-question allow, exactly as before.
+  // The browser round is positively signalled by the round record
+  // (`.review-ui/current.json`, state "questions", carrying the questions-file
+  // digest) that `aidlc-html.ts check --guide` publishes when the explainer
+  // passes, plus a live review-UI daemon. Then the hook waits for the daemon's
+  // answers-NNN.json for that digest and BLOCKS with the apply command, so the
+  // conductor resumes without the human typing `done`. No record, a record the
+  // file no longer matches, no daemon, or expiry → the plain pending-question
+  // allow, exactly as before.
   const BROWSER_QUESTIONS = "# Questions\n\n## Q1\nWhich URL scheme?\n[Answer]:\n";
 
   function seedBrowserRound(
     proj: string,
-    opts: { guide?: boolean; daemon?: boolean; submission?: boolean } = {},
+    opts: { published?: boolean; editedAfterPublish?: boolean; daemon?: boolean; submission?: boolean } = {},
   ): { env: Record<string, string>; reviewDir: string; questionsFile: string } {
     seedInProgressWithQuestions(proj, { questions: BROWSER_QUESTIONS });
-    const stageDir = join(seededRecordDir(proj), "inception", "requirements-analysis");
-    if (opts.guide !== false) {
-      writeFileSync(join(stageDir, "requirements-analysis-questions-guide.html"), "<!doctype html><title>Guide</title>", "utf-8");
+    const record = seededRecordDir(proj);
+    const stageDir = join(record, "inception", "requirements-analysis");
+    const questionsPath = join(stageDir, "requirements-analysis-questions.md");
+    const questionsFile = `aidlc/spaces/default/intents/${record.split("/").pop()}/inception/requirements-analysis/requirements-analysis-questions.md`;
+    writeFileSync(join(stageDir, "requirements-analysis-questions-guide.html"), "<!doctype html><title>Guide</title>", "utf-8");
+    if (opts.published !== false) {
+      publishQuestionsRound(record, {
+        stage: "requirements-analysis",
+        unit: null,
+        stageDir: questionsFile.replace(/\/requirements-analysis-questions\.md$/, ""),
+        questionsFile,
+        questionsSha256: sha256Hex(BROWSER_QUESTIONS),
+        guide: questionsFile.replace(/\.md$/, "-guide.html"),
+      });
     }
+    if (opts.editedAfterPublish) writeFileSync(questionsPath, `${BROWSER_QUESTIONS}\n## Q2\nAnd storage?\n[Answer]:\n`, "utf-8");
     const reviewHome = mkdtempSync(join(tmpdir(), "aidlc-t121-review-"));
     const env: Record<string, string> = { AIDLC_REVIEW_UI: "1", AIDLC_REVIEW_HOME: reviewHome };
     if (opts.daemon !== false) {
@@ -1559,18 +1574,16 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
     const reviewDir = join(stageDir, ".review-ui");
     if (opts.submission) writeBrowserSubmission(reviewDir);
-    return {
-      env,
-      reviewDir,
-      questionsFile: `aidlc/spaces/default/intents/${seededRecordDir(proj).split("/").pop()}/inception/requirements-analysis/requirements-analysis-questions.md`,
-    };
+    return { env, reviewDir, questionsFile };
   }
 
+  // A submission the daemon would have written for the published round: it
+  // carries the round's questions-file digest.
   function writeBrowserSubmission(reviewDir: string): void {
     mkdirSync(reviewDir, { recursive: true });
     writeFileSync(
       join(reviewDir, "answers-001.json"),
-      `${JSON.stringify({ version: 1, questions_file: "x", source_sha256: "y", created: "2026-09-04T00:00:00Z", answers: [{ id: "Q1", labels: ["A"] }] })}\n`,
+      `${JSON.stringify({ version: 1, questions_file: "x", source_sha256: sha256Hex(BROWSER_QUESTIONS), created: "2026-09-04T00:00:00Z", answers: [{ id: "Q1", labels: ["A"] }] })}\n`,
       "utf-8",
     );
   }
@@ -1625,14 +1638,22 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe("");
   }, 30000);
 
-  test("(f-browser) a terminal question round (no guide) is never held, even with a stray submission", () => {
+  test("(f-browser) an unpublished round (guide on disk, no round record) is never held, even with a stray submission", () => {
     const proj = makeProject();
-    const { env } = seedBrowserRound(proj, { guide: false, submission: true });
+    const { env } = seedBrowserRound(proj, { published: false, submission: true });
     const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, env);
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
   }, 30000);
 
+
+  test("(f-browser) a questions file edited since publication is not the published round: plain allow", () => {
+    const proj = makeProject();
+    const { env } = seedBrowserRound(proj, { editedAfterPublish: true, submission: true });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, env);
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
   test("(f-browser) no live daemon means nobody can click Save: plain allow", () => {
     const proj = makeProject();
     const { env } = seedBrowserRound(proj, { daemon: false, submission: true });

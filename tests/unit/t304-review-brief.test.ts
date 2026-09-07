@@ -297,6 +297,16 @@ describe("t304 executable review brief scenarios", () => {
       );
       expect(rendered).not.toContain(`**Review outcome:** ${verdict}`);
       if (verdict === "NOT-READY") expect(rendered).toContain("R-01");
+      // The recommendation follows the evidence and the recommended option is
+      // listed first, so a gate rendered from this brief is already marked.
+      const options = rendered.slice(rendered.indexOf("**Decision options:**"));
+      if (verdict === "READY") {
+        expect(options).toContain("- **Approve (Recommended)**");
+        expect(options.indexOf("Approve (Recommended)")).toBeLessThan(options.indexOf("Request Changes"));
+      } else {
+        expect(options).toContain("- **Request Changes (Recommended)**");
+        expect(options.indexOf("Request Changes (Recommended)")).toBeLessThan(options.indexOf("**Approve**"));
+      }
     }
   });
 
