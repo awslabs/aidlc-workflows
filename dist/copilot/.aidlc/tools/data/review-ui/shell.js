@@ -315,7 +315,7 @@ function headerActions(view, stage) {
     return actionButton("Save", "save-answers", true);
   }
   if (view.kind === "questions") {
-    return `${actionButton("Reopen round (terminal)", "terminal-reopen")}${artifact ? actionButton(`Open ${basename(artifact.path)}`, "open-artifact", true) : ""}`;
+    return artifact ? actionButton(`Open ${basename(artifact.path)}`, "open-artifact", true) : "";
   }
   if (view.kind === "artifact" && (view.readOnly || stage.state !== "current")) {
     const current = currentStage();
@@ -487,7 +487,6 @@ function handleHeaderAction(action) {
   const stage = stageForView();
   if (action === "approve" || action === "request-changes") store.emit("decide", action);
   else if (action === "save-answers") store.emit("save-answers");
-  else if (action === "terminal-reopen") store.emit("notice", { message: "Reopen the question round from the terminal so the canonical questions file stays authoritative.", kind: "info" });
   else if (action === "open-artifact") artifactView(stage, firstArtifact(stage, false));
   else if (action === "open-questions") questionsView(stage);
   else if (action === "open-current") openCurrentThing();

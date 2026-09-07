@@ -234,8 +234,10 @@ You can also expand a done stage and open its questions or artifacts. Completed
 artifacts show a read-only banner; their empty Threads panel explains that the
 live review is elsewhere, and the primary action returns to the current stage.
 Answered questions retain the same explainer-and-answer layout with the chosen
-options locked. To change a completed round, use **Reopen round (terminal)**;
-the browser never rewrites its canonical questions file.
+options locked. A completed round is not reopened; to change a decision it
+produced, ask for it at the stage's approval gate with **Request changes** (or,
+before generation, at the consolidated-summary confirmation). The browser never
+rewrites the canonical questions file.
 
 ### Inbox and search
 

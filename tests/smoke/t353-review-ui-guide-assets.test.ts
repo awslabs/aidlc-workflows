@@ -55,6 +55,8 @@ describe("t353 — review UI browser questions assets", () => {
     expect(shell).toContain('actionButton("Save", "save-answers", true)');
     // A question round has one action: the browser is the form, not a file editor.
     expect(shell).not.toContain("terminal-edit");
+    // An answered round offers no "reopen" signpost either; changes go through the gate.
+    expect(shell).not.toContain("terminal-reopen");
 
     // The diary is a folded overview section, never a tree row or dropdown entry.
     const workflow = asset("workflow.js");
