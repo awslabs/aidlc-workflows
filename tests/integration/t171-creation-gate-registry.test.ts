@@ -122,6 +122,15 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(existsSync(cursorPath(proj))).toBe(false);
     });
 
+    test("Branch 8 explicit prose also prompts over an unset cursor, not creates", () => {
+      seedTwoIntentsNoCursor();
+      const r = next(["create a todo application using the express scope"]);
+      const d = JSON.parse(r.stdout.trim());
+      expect(d.kind).toBe("ask");
+      expect(d.message ?? "").not.toContain("intent-create");
+      expect(recordDirs(proj).length).toBe(2);
+    });
+
     test("Branch 7b (bare valid-scope positional) also prompts, not creates", () => {
       seedTwoIntentsNoCursor();
       const r = next(["poc"]); // positional valid-scope name, no --scope flag
@@ -276,6 +285,22 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.kind).toBe("print");
       expect(d.message).toContain("intent-create --scope poc");
       expect(existsSync(intentsDir(proj))).toBe(false);
+    });
+
+    test("Branch 8 explicit prose (\"using the express scope\") creates like a named scope — no confirm", () => {
+      const r = next(["create a todo application using the express scope"]);
+      const d = JSON.parse(r.stdout.trim());
+      expect(d.kind).toBe("print");
+      expect(d.message).toContain("intent-create --scope express");
+      expect(d.message).toContain("--arguments='create a todo application using the express scope'");
+      expect(existsSync(intentsDir(proj))).toBe(false);
+    });
+
+    test("Branch 8 keyword inference still confirms (\"fix the broken login button\")", () => {
+      const r = next(["fix the broken login button"]);
+      const d = JSON.parse(r.stdout.trim());
+      expect(d.kind).toBe("ask");
+      expect(d.question).toContain('This looks like "bugfix" work');
     });
   });
 

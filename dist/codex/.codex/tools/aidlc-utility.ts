@@ -7895,7 +7895,13 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
 
 export interface InferResult {
   scope: string;
-  source: "keyword" | "freeform";
+  /**
+   * `explicit`: the text names the plan ("<name> scope|plan|workflow",
+   * "scope <name>") — as authoritative as `--scope <name>`, no confirm.
+   * `keyword`: a short input matched a scope keyword — an inference the
+   * engine confirms. `freeform`: no usable match — the compose offer.
+   */
+  source: "explicit" | "keyword" | "freeform";
   matches: Array<{ scope: string; keyword: string }>;
 }
 
@@ -7931,7 +7937,7 @@ export function inferScopeFromText(input: string): InferResult {
   if (explicit) {
     return {
       scope: explicit.scope,
-      source: "keyword",
+      source: "explicit",
       matches: [explicit, ...allMatches.filter((match) => match.scope !== explicit.scope)],
     };
   }
@@ -8198,6 +8204,7 @@ function handleStageTable(
 const VALID_SCOPE_SOURCES: ReadonlySet<string> = new Set([
   "freeform",
   "keyword",
+  "explicit",
   "env",
   "cli",
 ]);

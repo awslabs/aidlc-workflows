@@ -4495,6 +4495,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // keyword inference (inferScopeFromText, a pure read; the
   // audit-emitting detect-scope verb remains the conductor's recording move)
   // now drives the ask.
+  //   - EXPLICIT MENTION (source "explicit": the prose binds a scope name or
+  //     keyword to "scope"/"plan"/"workflow"): create, exactly like Branch 7b.
   //   - CLEAR KEYWORD HIT (source "keyword": matched a scope's keywords and
   //     is within the matcher's word bound): a one-line confirm naming the
   //     MATCHED scope, with "name another scope" and "compose" as outs.
@@ -4510,6 +4512,23 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     !flags.positionalScope
   ) {
     const inferred = inferScopeFromText(flags.intent);
+    // EXPLICIT (source "explicit": the prose names the plan — "using the
+    // express scope", "scope: poc"): as authoritative as `--scope`, so it takes
+    // Branch 7b's creation move with the whole sentence preserved as the
+    // intent's description. The confirm below is for inference, not for
+    // repeating an instruction back to the human.
+    if (inferred.source === "explicit") {
+      const pick = intentPickPromptIfRecordsExist(pd, {
+        description: flags.intent,
+        proposedScope: inferred.scope,
+      });
+      if (pick) {
+        emit(pick);
+        return;
+      }
+      emit(createPrintDirective(inferred.scope, flags, pd, flags.intent));
+      return;
+    }
     if (isKiroRoutingHarness()) {
       const pick = intentPickPromptIfRecordsExist(pd, {
         description: flags.intent,
