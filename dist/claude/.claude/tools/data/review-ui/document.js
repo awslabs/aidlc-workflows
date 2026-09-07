@@ -115,8 +115,10 @@ async function loadArtifact(view) {
         });
     if (version !== loadVersion || store.view.kind !== "artifact" || store.view.path !== view.path) return;
     if (same) {
+      // Same bytes, same gate, same revision: nothing on screen would change.
       const unchanged = store.document.sha256 === String(rendered.sha256 || "")
-        && elements.viewer.dataset.readOnly === String(isReadOnly(view));
+        && elements.viewer.dataset.readOnly === String(isReadOnly(view))
+        && elements.viewer.dataset.revision === String(currentRevision());
       if (unchanged) return;
       reset();
     }
@@ -155,6 +157,7 @@ function renderMarkdown(doc, view) {
   elements.viewer.replaceChildren();
   elements.viewer.dataset.path = doc.path;
   elements.viewer.dataset.readOnly = String(isReadOnly(view));
+  elements.viewer.dataset.revision = String(currentRevision());
 
   const page = document.createElement("div");
   page.className = "document-page";
@@ -286,6 +289,7 @@ function renderHtml(doc, view) {
   elements.viewer.replaceChildren();
   elements.viewer.dataset.path = doc.path;
   elements.viewer.dataset.readOnly = String(isReadOnly(view));
+  elements.viewer.dataset.revision = String(currentRevision());
   if (isReadOnly(view)) elements.viewer.append(buildReadOnlyBanner(doc, view));
   elements.viewer.append(buildDocumentMeta(doc, view));
   const frame = document.createElement("iframe");
@@ -1538,6 +1542,11 @@ function assignHeadingIds(doc) {
     const element = wrapper?.querySelector(`h${heading.level}`);
     if (element && heading.id) element.id = heading.id;
   }
+}
+
+/** The revision the document meta line shows. */
+function currentRevision() {
+  return store.state?.manifest?.revision ?? store.state?.current?.revision ?? "";
 }
 
 function isLiveGate(view) {
