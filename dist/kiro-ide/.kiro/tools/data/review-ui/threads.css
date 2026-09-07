@@ -93,3 +93,5 @@
 .edit-card .edit-summary ins { background: var(--green-soft); color: #166534; text-decoration: none; padding: 0 3px; border-radius: 3px; }
 .edit-card .edit-summary del { background: var(--rose-soft); color: #9f1239; text-decoration: none; padding: 0 3px; border-radius: 3px; }
 .edit-card .edit-summary q { color: var(--muted); }
+
+.edit-summary .fmt { color: var(--ink); }

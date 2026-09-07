@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { diffOps, escapeHtml } from "./diff.js";
+import { editSummary, escapeHtml } from "./diff.js";
 import { icon } from "./icons.js";
 import { agentFor, decisionInFlight, persistAnnotations, relativeTime, setNotice, store, selectedThreadIds } from "./store.js";
 
@@ -627,19 +627,6 @@ function diffSummary(unified) {
     else if (line.startsWith("+")) added.push(line.slice(1));
   }
   return editSummary(removed.join("\n"), added.join("\n"));
-}
-
-/** "+12 words, −3 words · “…first changed words…”" for an edit card. */
-function editSummary(before, after) {
-  const ops = diffOps(before, after);
-  const words = (text) => (String(text).match(/\S+/g) || []).length;
-  const added = ops.filter((op) => op.type === "ins").reduce((total, op) => total + words(op.text), 0);
-  const removed = ops.filter((op) => op.type === "del").reduce((total, op) => total + words(op.text), 0);
-  const first = ops.find((op) => op.type === "ins")?.text || ops.find((op) => op.type === "del")?.text || "";
-  const excerpt = first.replace(/\s+/g, " ").trim();
-  const shown = excerpt.length > 90 ? `${excerpt.slice(0, 90)}…` : excerpt;
-  const counts = [added ? `<ins>+${added} ${added === 1 ? "word" : "words"}</ins>` : "", removed ? `<del>−${removed} ${removed === 1 ? "word" : "words"}</del>` : ""].filter(Boolean).join(" ");
-  return `${counts}${shown ? ` · <q>${escapeHtml(shown)}</q>` : ""}`;
 }
 
 function renderSent(thread) {

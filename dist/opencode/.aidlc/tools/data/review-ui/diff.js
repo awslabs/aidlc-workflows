@@ -197,3 +197,111 @@ export function parseUnifiedHunks(unified) {
   }
   return hunks;
 }
+
+// --- Markdown-aware edit summaries -----------------------------------------
+//
+// An edit made with the toolbar changes markers, not words: bolding "simple"
+// turns it into "**simple**". A word diff of the raw source would report that
+// as "+2 words · **", which tells the reader nothing. The summary therefore
+// names the formatting it sees - "Bold “simple”", "Heading 2", "Bulleted
+// list" - and counts words on the text with the markers stripped, so a real
+// rewording is still "+3 words −1 word · “…”".
+
+const INLINE = [
+  { name: "Bold", re: /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__/g },
+  { name: "Strikethrough", re: /~~([^~\n]+?)~~/g },
+  { name: "Code", re: /`([^`\n]+?)`/g },
+  { name: "Link", re: /\[([^\]\n]+?)\]\([^)\n]*\)/g },
+  { name: "Italic", re: /(?<![*\w])\*(?!\*)([^*\n]+?)\*(?!\*)|(?<![_\w])_(?!_)([^_\n]+?)_(?!_)/g },
+];
+
+/** The text a reader sees: inline markers and line prefixes removed. */
+export function plainText(markdown) {
+  return String(markdown ?? "")
+    .split("\n")
+    .map((line) => line.replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)/, ""))
+    .join("\n")
+    .replace(/\[([^\]\n]+?)\]\([^)\n]*\)/g, "$1")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/`([^`]+?)`/g, "$1")
+    .replace(/(?<![*\w])\*(?!\*)([^*\n]+?)\*(?!\*)/g, "$1")
+    .replace(/(?<![_\w])_(?!_)([^_\n]+?)_(?!_)/g, "$1");
+}
+
+function inlineSpans(text) {
+  const found = new Map();
+  for (const { name, re } of INLINE) {
+    for (const match of String(text).matchAll(re)) {
+      const inner = (match[1] ?? match[2] ?? "").trim();
+      if (inner) found.set(`${name}:${inner}`, { name, inner });
+    }
+  }
+  return found;
+}
+
+function linePrefix(line) {
+  const heading = line.match(/^\s{0,3}(#{1,6})\s+/);
+  if (heading) return `Heading ${heading[1].length}`;
+  if (/^\s{0,3}(?:[-*+])\s+\[[ xX]\]\s+/.test(line)) return "Task list";
+  if (/^\s{0,3}(?:[-*+])\s+/.test(line)) return "Bulleted list";
+  if (/^\s{0,3}\d+[.)]\s+/.test(line)) return "Numbered list";
+  if (/^\s{0,3}>\s?/.test(line)) return "Quote";
+  if (/^\s{0,3}\|/.test(line)) return "Table";
+  if (/^\s{0,3}```/.test(line)) return "Code block";
+  return "Paragraph";
+}
+
+/**
+ * What changed in formatting between two Markdown texts, as short phrases:
+ * ["Bold “simple”", "Heading 2 → Heading 3", "Bulleted list"]. Empty when only
+ * words changed.
+ */
+export function formattingChanges(before, after) {
+  const notes = [];
+  const was = inlineSpans(before);
+  const now = inlineSpans(after);
+  const quote = (inner) => `“${inner.length > 40 ? `${inner.slice(0, 40)}…` : inner}”`;
+  for (const [key, { name, inner }] of now) if (!was.has(key)) notes.push(`${name} ${quote(inner)}`);
+  for (const [key, { name, inner }] of was) if (!now.has(key)) notes.push(`Removed ${name.toLowerCase()} ${quote(inner)}`);
+  // Block-level: compare the line prefixes of lines whose visible text matches.
+  const beforeLines = String(before ?? "").split("\n");
+  const afterLines = String(after ?? "").split("\n");
+  const seen = new Set();
+  for (const line of afterLines) {
+    const visible = plainText(line).trim();
+    if (!visible) continue;
+    const prefix = linePrefix(line);
+    const twin = beforeLines.find((candidate) => plainText(candidate).trim() === visible);
+    if (twin === undefined) continue;
+    const previous = linePrefix(twin);
+    if (previous === prefix) continue;
+    const note = previous === "Paragraph" ? prefix : prefix === "Paragraph" ? `Removed ${previous.toLowerCase()}` : `${previous} → ${prefix}`;
+    if (!seen.has(note)) { seen.add(note); notes.push(note); }
+  }
+  return notes;
+}
+
+/**
+ * "+3 words −1 word · “…”" for a reworded block; "Bold “simple”" for a
+ * formatting change; both when both happened. Words are counted and quoted
+ * on the visible text, never on markers.
+ */
+export function editSummary(before, after) {
+  const notes = formattingChanges(before, after);
+  const ops = diffOps(plainText(before), plainText(after));
+  const words = (text) => (String(text).match(/\S+/g) || []).length;
+  const added = ops.filter((op) => op.type === "ins").reduce((total, op) => total + words(op.text), 0);
+  const removed = ops.filter((op) => op.type === "del").reduce((total, op) => total + words(op.text), 0);
+  const parts = [];
+  if (added || removed) {
+    const first = ops.find((op) => op.type === "ins")?.text || ops.find((op) => op.type === "del")?.text || "";
+    const excerpt = first.replace(/\s+/g, " ").trim();
+    const shown = excerpt.length > 90 ? `${excerpt.slice(0, 90)}…` : excerpt;
+    const counts = [added ? `<ins>+${added} ${added === 1 ? "word" : "words"}</ins>` : "", removed ? `<del>−${removed} ${removed === 1 ? "word" : "words"}</del>` : ""].filter(Boolean).join(" ");
+    parts.push(`${counts}${shown ? ` · <q>${escapeHtml(shown)}</q>` : ""}`);
+  }
+  for (const note of notes) parts.push(`<span class="fmt">${escapeHtml(note)}</span>`);
+  if (!parts.length) parts.push(`<span class="fmt">Formatting</span>`);
+  return parts.join(" · ");
+}
