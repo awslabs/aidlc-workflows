@@ -13,6 +13,17 @@ nav = [
       "guide/workflow-profiles.md",
       "guide/02-your-first-workflow.md",
     ] },
+    { "Writing Inputs" = [
+      "guide/writing-inputs/inputs-quickstart.md",
+      "guide/writing-inputs/vision-document-guide.md",
+      "guide/writing-inputs/technical-environment-guide.md",
+      "guide/writing-inputs/example-vision-scientific-calculator-api.md",
+      "guide/writing-inputs/example-tech-env-scientific-calculator-api.md",
+      "guide/writing-inputs/example-minimal-vision-scientific-calculator-api.md",
+      "guide/writing-inputs/example-minimal-tech-env-scientific-calculator-api.md",
+      "guide/writing-inputs/example-minimal-vision-brownfield.md",
+      "guide/writing-inputs/example-minimal-tech-env-brownfield.md",
+    ] },
     { "Core Concepts" = [
       "guide/03-spaces-and-intents.md",
       "guide/04-phases-and-stages.md",
