@@ -177,7 +177,7 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     unit,
     state_sha256: createHash("sha256").update(state).digest("hex"),
   });
-  mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
+  mkdirSync(join(seededRecordDir(dir), "construction", "units", unit, "code-generation"), {
     recursive: true,
   });
 }

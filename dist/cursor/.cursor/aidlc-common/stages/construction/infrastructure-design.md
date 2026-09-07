@@ -89,17 +89,17 @@ Execute all steps sequentially as written.
 ### Step 1: Read Prior Artifacts
 
 Read all prior design artifacts for context:
-- NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
-- Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists)
+- NFR design from `<record>/construction/units/{unit-name}/nfr-design/` (if exists)
+- Functional design from `<record>/construction/units/{unit-name}/functional-design/` (if exists)
 - Domain design (component catalogue) from `<record>/inception/domain-design/components.md` (if exists)
 - Inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — boundary integration mechanisms (sync/async/shared store) inform networking, messaging, and shared-resource provisioning
-- NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
+- NFR requirements from `<record>/construction/units/{unit-name}/nfr-requirements/` (if exists)
 
 Incremental scopes (infra) skip the domain-design and functional-design chain by design. When those inputs are absent, derive the component topology from the NFR requirements and, on brownfield, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` — never invent the content of a missing artifact.
 
 ### Step 2: Generate Infrastructure Questions
 
-Create a questions file at `<record>/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md` with context-appropriate questions using [Answer]: tags.
+Create a questions file at `<record>/construction/units/{unit-name}/infrastructure-design/infrastructure-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
 Focus areas:
 - Deployment strategy (containerized, serverless, hybrid, multi-region)
@@ -129,7 +129,7 @@ Design infrastructure across four areas:
 
 ### Step 5: Generate Artifacts
 
-Generate the following in `<record>/construction/{unit-name}/infrastructure-design/`. Keep the content **tabular** — the deployment, services, and shared sections are tables, and monitoring is tabular wherever it can be. Prose is for rationale only, not for data a table can hold.
+Generate the following in `<record>/construction/units/{unit-name}/infrastructure-design/`. Keep the content **tabular** — the deployment, services, and shared sections are tables, and monitoring is tabular wherever it can be. Prose is for rationale only, not for data a table can hold.
 
 **1. `infrastructure-specification.md`** — the core infrastructure design: deployment, infrastructure services, and any shared resources, folded into one document. Structure it as:
 
@@ -152,7 +152,7 @@ Generate the following in `<record>/construction/{unit-name}/infrastructure-desi
 **3. `cicd-pipeline.md`** — the delivery pipeline: build stages, test-automation integration, deployment strategy (blue-green / canary / rolling), rollback procedures, environment promotion, and secrets management in CI/CD. Steps are inherently sequential, so prose or an ordered list is fine here; use a table for the stage→gate mapping where it helps.
 
 Create
-`<record>/construction/{unit-name}/infrastructure-design/traceability.json`.
+`<record>/construction/units/{unit-name}/infrastructure-design/traceability.json`.
 Enumerate every `NFRx.y` design decision that requires infrastructure and map
 it to the concrete resource or configuration:
 
@@ -185,14 +185,14 @@ Present completion message and approval gate:
 Summary of infrastructure decisions and service selections, then:
 
 ```
-**Review:** `<record>/construction/{unit-name}/infrastructure-design/`
+**Review:** `<record>/construction/units/{unit-name}/infrastructure-design/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown design artefacts under `<record>/construction/{unit-name}/infrastructure-design/`. Some sections include code samples that the code-shape sensors can also flag.
+This stage's outputs are markdown design artefacts under `<record>/construction/units/{unit-name}/infrastructure-design/`. Some sections include code samples that the code-shape sensors can also flag.
 
 Imports: `required-sections`, `upstream-coverage`, `linter`, `type-check`, `traceability`.
 

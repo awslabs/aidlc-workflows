@@ -21,7 +21,10 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
+import {
+  constructionUnitLayoutCheck,
+  workspaceManifestChecks,
+} from "../../core/tools/aidlc-workspace-doctor.ts";
 
 const tmpRoots: string[] = [];
 afterAll(() => {
@@ -66,6 +69,38 @@ const MANIFEST = `{
 `;
 
 describe("t256 workspace-doctor - advisory manifest rows", () => {
+  test("legacy construction unit dirs are advisory while stage dirs and units/ are valid", () => {
+    const ws = freshGitWorkspace();
+    const construction = join(ws, "record", "construction");
+    mkdirSync(join(construction, "units", "checkout-api"), { recursive: true });
+    mkdirSync(join(construction, "functional-design"), { recursive: true });
+    mkdirSync(join(construction, "legacy-svc"), { recursive: true });
+
+    const row = constructionUnitLayoutCheck(
+      join(ws, "record"),
+      ["functional-design", "code-generation"],
+    );
+    expect(row?.pass).toBe(true);
+    expect(row?.label).toContain("[legacy-svc]");
+    expect(row?.label).not.toContain("[functional-design]");
+    expect(row?.label).toContain(
+      "mv construction/<u> construction/units/<u>",
+    );
+  });
+
+  test("clean construction layout emits no migration advisory", () => {
+    const ws = freshGitWorkspace();
+    const construction = join(ws, "record", "construction");
+    mkdirSync(join(construction, "units", "checkout-api"), { recursive: true });
+    mkdirSync(join(construction, "functional-design"), { recursive: true });
+    expect(
+      constructionUnitLayoutCheck(
+        join(ws, "record"),
+        ["functional-design", "code-generation"],
+      ),
+    ).toBeNull();
+  });
+
   test("no repos.json → only the W1 records row, and it is advisory", () => {
     const ws = freshGitWorkspace();
     const rows = workspaceManifestChecks(ws);

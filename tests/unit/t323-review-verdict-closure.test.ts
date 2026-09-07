@@ -70,6 +70,7 @@ describe("t323 review verdict closure", () => {
     const dir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "alpha",
       "functional-design",
     );

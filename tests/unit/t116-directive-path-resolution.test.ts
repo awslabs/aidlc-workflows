@@ -19,7 +19,7 @@
 //            isCodekb arm — fires for produces[] AND consumes[] of a codekb stage
 //            like reverse-engineering, dropping the per-intent record tail).
 //          - non-per-unit: aidlc-docs/<owner.phase>/<owner.slug>/<name>.md
-//          - per-unit:     aidlc-docs/construction/<unit>/<owner.slug>/<name>.md
+//          - per-unit:     aidlc-docs/construction/units/<unit>/<owner.slug>/<name>.md
 //   :639 resolveConsumePath(name, node, unit) — keys on producersOf(name)[0],
 //          NOT the consuming node (1:1 producer rule); orphan fallback to node.
 //   :651 projectTypeFrom(stateContent) — reads "Project Type", lowercased to
@@ -401,31 +401,31 @@ describe("t116 per-unit {unit-name} injection", () => {
   });
 
   // .sh test 9: functional-design (per-unit) resolves a produces name to the
-  // per-unit shape construction/{unit-name}/functional-design/<name>.md.
-  test("9: per-unit functional-design injects {unit-name}: construction/{unit-name}/functional-design/functional-spec.md", () => {
+  // per-unit shape construction/units/{unit-name}/functional-design/<name>.md.
+  test("9: per-unit functional-design injects {unit-name}: construction/units/{unit-name}/functional-design/functional-spec.md", () => {
     expect(FD.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
+      `${RP}/construction/units/{unit-name}/functional-design/functional-spec.md`,
     );
   });
 
   // .sh test 10: code-generation (per-unit) also resolves under
-  // construction/{unit-name}/code-generation/. STRONGER: assert at least one
+  // construction/units/{unit-name}/code-generation/. STRONGER: assert at least one
   // produces path begins with the per-unit code-generation prefix (the .sh
   // grepped the joined string for the prefix).
-  test("10: per-unit code-generation resolves under construction/{unit-name}/code-generation/", () => {
+  test("10: per-unit code-generation resolves under construction/units/{unit-name}/code-generation/", () => {
     expect(
       CG.produces.some((p) =>
-        p.startsWith(`${RP}/construction/{unit-name}/code-generation/`),
+        p.startsWith(`${RP}/construction/units/{unit-name}/code-generation/`),
       ),
     ).toBe(true);
   });
 
   // .sh test 11 (negative): a non-per-unit stage (domain-design) does NOT
-  // get the construction/{unit-name}/ prefix — its produces stay under inception/.
+  // get the construction/units/{unit-name}/ prefix — its produces stay under inception/.
   // STRONGER: assert the invariant over EVERY produces entry.
-  test("11: non-per-unit domain-design produces NEVER carry construction/{unit-name}/", () => {
+  test("11: non-per-unit domain-design produces NEVER carry construction/units/{unit-name}/", () => {
     const perUnit = AD.produces.filter((p) =>
-      p.includes("construction/{unit-name}/"),
+      p.includes("construction/units/{unit-name}/"),
     );
     expect(perUnit).toEqual([]);
   });

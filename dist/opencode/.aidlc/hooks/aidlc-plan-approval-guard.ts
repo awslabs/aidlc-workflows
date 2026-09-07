@@ -22,7 +22,7 @@
 // instructions, questions, and diary that make approval possible.
 //
 // How the hook decides: the active directive is the approval authority. A
-// directive with `unit` selects construction/<unit>/code-generation; a
+// directive with `unit` selects construction/units/<unit>/code-generation; a
 // zero-Unit directive selects construction/code-generation. Step 4 dispatches
 // carry that choice explicitly as `AIDLC-UNIT: <unit>` or
 // `AIDLC-STAGE: code-generation`, plus the exact `AIDLC-TESTING-CONTRACT`
@@ -345,7 +345,7 @@ function authorityBlockReason(reason: string): string {
 // --- Evidence gathering ---------------------------------------------------------
 
 // The workflow's known units: the compiled bolt DAG when one resolves, plus
-// every existing construction/<unit>/ dir (incremental scopes skip
+// every existing construction/units/<unit>/ dir (incremental scopes skip
 // units-generation, so a conductor-chosen unit dir is the only register
 // there). A malformed DAG contributes nothing - the dir listing still stands.
 export function knownUnits(projectDir: string, recordDir: string): string[] {
@@ -357,14 +357,14 @@ export function knownUnits(projectDir: string, recordDir: string): string[] {
     // DAG resolution is best-effort here.
   }
   try {
-    const constructionDir = join(recordDir, "construction");
-    if (existsSync(constructionDir)) {
-      for (const entry of readdirSync(constructionDir, { withFileTypes: true })) {
-        if (entry.isDirectory() && entry.name !== GUARDED_STAGE) units.add(entry.name);
+    const unitsDir = join(recordDir, "construction", "units");
+    if (existsSync(unitsDir)) {
+      for (const entry of readdirSync(unitsDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) units.add(entry.name);
       }
     }
   } catch {
-    // Unreadable construction dir - the DAG set (possibly empty) stands.
+    // Unreadable units dir - the DAG set (possibly empty) stands.
   }
   return Array.from(units);
 }

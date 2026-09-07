@@ -217,7 +217,7 @@ function runReport(proj: string, args: string[]): Directive {
 }
 
 function coverUnit(proj: string, unit: string, stage: string): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, stage);
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, stage);
   mkdirSync(dir, { recursive: true });
   for (const artifact of PRODUCES[stage]) {
     writeFileSync(
@@ -242,6 +242,7 @@ function addReviewFinding(
   const artifact = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     stage,
     artifactFilename(PRODUCES[stage][0]),
@@ -289,6 +290,7 @@ function logReviewReady(
   const reviewArtifact = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     stage,
     artifactFilename(findStageBySlug(stage)!.review_artifact!),

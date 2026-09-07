@@ -685,6 +685,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       const questions = join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "api",
         "functional-design",
         "functional-design-questions.md",

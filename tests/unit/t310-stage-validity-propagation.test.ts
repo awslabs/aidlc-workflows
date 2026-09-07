@@ -161,7 +161,7 @@ function writeUnitArtifact(
 ): string {
   return writeArtifact(
     record,
-    join("construction", unit),
+    join("construction", "units", unit),
     stage,
     artifactFile,
     content,
@@ -435,6 +435,9 @@ describe("v2 stage-graph compatibility", () => {
     expect(instances.map((instance) => instance.unit)).toEqual([
       "payments-api",
     ]);
+    expect(instances[0]?.relativePath).toContain(
+      "/construction/units/payments-api/kind-aware-stage/service-contract.md",
+    );
   });
 
   test("resolves an express per-unit output as one stage-level fingerprint", () => {

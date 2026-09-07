@@ -79,10 +79,10 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 ### Step 1: Read All Unit Artifacts
 
 Read all design artifacts for the current unit:
-- Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists)
-- NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
-- NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
-- Infrastructure design from `<record>/construction/{unit-name}/infrastructure-design/` (if exists)
+- Functional design from `<record>/construction/units/{unit-name}/functional-design/` (if exists)
+- NFR requirements from `<record>/construction/units/{unit-name}/nfr-requirements/` (if exists)
+- NFR design from `<record>/construction/units/{unit-name}/nfr-design/` (if exists)
+- Infrastructure design from `<record>/construction/units/{unit-name}/infrastructure-design/` (if exists)
 - Domain design (component catalogue) from `<record>/inception/domain-design/components.md` (if exists)
 - Contracts from `<record>/inception/contract-design/contract-summary.md` (if exists)
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md` (if exists)
@@ -106,7 +106,7 @@ For every later path in this stage, set `<code-generation-record>` from the
 directive exactly once:
 
 - `directive.unit` present:
-  `<record>/construction/<directive.unit>/code-generation/`
+  `<record>/construction/units/<directive.unit>/code-generation/`
 - `directive.unit` absent:
   `<record>/construction/code-generation/`
 
@@ -329,7 +329,7 @@ documenting:
 - Test coverage summary
 - Any deviations from the plan
 
-Create `<record>/construction/{unit-name}/code-generation/source-manifest.json`
+Create `<code-generation-record>/source-manifest.json`
 with this strict schema:
 
 ```json

@@ -87,14 +87,14 @@ function wave() {
         review_state: "outstanding",
         review_iteration: 1,
         unit_memory_path:
-          "aidlc-docs/construction/auth/functional-design/memory.md",
+          "aidlc-docs/construction/units/auth/functional-design/memory.md",
         consumes: ["aidlc-docs/inception/requirements/requirements.md"],
         consumes_absent: [],
         produces: [
-          "aidlc-docs/construction/auth/functional-design/business-logic-model.md",
+          "aidlc-docs/construction/units/auth/functional-design/business-logic-model.md",
         ],
         required_produces: [
-          "aidlc-docs/construction/auth/functional-design/business-logic-model.md",
+          "aidlc-docs/construction/units/auth/functional-design/business-logic-model.md",
         ],
       },
     ],
@@ -111,11 +111,11 @@ function dispatchSubagent(): Record<string, unknown> {
     mode: "subagent",
     inline_context_paths: [],
     gate: false,
-    memory_path: "aidlc-docs/construction/auth/code-generation/memory.md",
+    memory_path: "aidlc-docs/construction/units/auth/code-generation/memory.md",
     consumes: [
-      "aidlc-docs/construction/auth/functional-design/functional-design.md",
+      "aidlc-docs/construction/units/auth/functional-design/functional-design.md",
     ],
-    produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
+    produces: ["aidlc-docs/construction/units/auth/code-generation/code-manifest.md"],
     rules_in_context: ["aidlc-org.md"],
     sensors_applicable: ["linter"],
     stage_file: ".claude/skills/aidlc/stages/construction/code-generation.md",

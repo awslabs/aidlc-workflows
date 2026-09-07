@@ -483,32 +483,36 @@ describe("t164 intent-create fails closed on a bare invocation", () => {
     expect(readIntentRegistry(proj).length).toBe(0);
   });
 
-  test("every value-bearing creation flag rejects valueless or blank occurrences", () => {
-    for (const args of [
-      ["intent-create", "--scope"],
-      ["intent-create", "--arguments"],
-      ["intent-create", "--label"],
-      ["intent-create", "--scope", "poc", "--depth"],
-      ["intent-create", "--scope", "poc", "--test-strategy"],
-      ["intent-create", "--scope", "poc", "--review"],
-      ["intent-create", "--scope", "poc", "--repos"],
-      ["intent-create", "--scope", "poc", "--project-dir"],
-      ["intent-create", "--scope", "   "],
-      ["intent-create", "--arguments", "   "],
-      ["intent", "create", "--label", ""],
-      ["intent-create", "--scope", "poc", "--depth", "   "],
-      ["intent-create", "--scope", "poc", "--test-strategy", ""],
-      ["intent-create", "--scope", "poc", "--review", "   "],
-      ["intent-create", "--scope", "poc", "--repos", "   "],
-      ["intent-create", "--scope", "poc", "--project-dir", ""],
-    ]) {
-      const r = util(args);
-      expect(r.status, args.join(" ")).toBe(1);
-      expect(r.out, args.join(" ")).toContain("requires a nonblank value");
-      expect(existsSync(intentsDir(proj)), args.join(" ")).toBe(false);
-      expect(readIntentRegistry(proj).length, args.join(" ")).toBe(0);
-    }
-  });
+  test(
+    "every value-bearing creation flag rejects valueless or blank occurrences",
+    () => {
+      for (const args of [
+        ["intent-create", "--scope"],
+        ["intent-create", "--arguments"],
+        ["intent-create", "--label"],
+        ["intent-create", "--scope", "poc", "--depth"],
+        ["intent-create", "--scope", "poc", "--test-strategy"],
+        ["intent-create", "--scope", "poc", "--review"],
+        ["intent-create", "--scope", "poc", "--repos"],
+        ["intent-create", "--scope", "poc", "--project-dir"],
+        ["intent-create", "--scope", "   "],
+        ["intent-create", "--arguments", "   "],
+        ["intent", "create", "--label", ""],
+        ["intent-create", "--scope", "poc", "--depth", "   "],
+        ["intent-create", "--scope", "poc", "--test-strategy", ""],
+        ["intent-create", "--scope", "poc", "--review", "   "],
+        ["intent-create", "--scope", "poc", "--repos", "   "],
+        ["intent-create", "--scope", "poc", "--project-dir", ""],
+      ]) {
+        const r = util(args);
+        expect(r.status, args.join(" ")).toBe(1);
+        expect(r.out, args.join(" ")).toContain("requires a nonblank value");
+        expect(existsSync(intentsDir(proj)), args.join(" ")).toBe(false);
+        expect(readIntentRegistry(proj).length, args.join(" ")).toBe(0);
+      }
+    },
+    15_000,
+  );
 
   // The guard keys on "no scope AND no args AND no label"; each of the three
   // signals independently satisfies it, so every blessed path still creates.

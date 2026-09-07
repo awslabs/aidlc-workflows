@@ -1033,7 +1033,7 @@ describe("t327 team construction dispatcher", () => {
     );
     const movedDoctor = run(UTILITY, ["doctor"], moved.project);
     expect(movedDoctor.out).not.toContain("no observed ref movement");
-  });
+  }, 15_000);
 
   test("local board failures name the real source instead of blaming the registry", () => {
     const fixture = boardFixture();

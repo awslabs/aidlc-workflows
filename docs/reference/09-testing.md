@@ -249,7 +249,7 @@ Contents: minimal .md files (requirements, the consolidated `components.md` cata
 
 ### Construction Artifacts Fixture: `tests/fixtures/construction-artifacts/`
 
-Pre-seeded construction phase output for tests that jump to mid-construction stages (e.g., code-generation). Copied into `$PROJ/aidlc/spaces/default/intents/<record>/construction/todo-core/functional-design/` during setup.
+Pre-seeded construction phase output for tests that jump to mid-construction stages (e.g., code-generation). Copied into `$PROJ/aidlc/spaces/default/intents/<record>/construction/units/todo-core/functional-design/` during setup.
 
 Contents: 1 minimal .md file (functional-design) describing the todo-core unit's component specs and state management.
 

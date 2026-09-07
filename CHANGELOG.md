@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-09-02
+
+Per-unit Construction artifacts now live under a dedicated `construction/units/` axis, while shared stage diaries and non-per-unit stage artifacts remain directly under `construction/<stage>/`. **Upgrade:** for every in-flight Construction workflow, move each existing unit directory with `mv construction/<unit> construction/units/<unit>` before resuming. Pre-upgrade per-unit terminal review receipts are invalid because their logical fingerprint paths changed; run the affected reviews again after moving the artifacts.
+
+* Run-stage directives, unit diaries, artifact guards, sensors, traceability checks, Plan Approval evidence, review fingerprints, and collaborator evidence now resolve per-unit files as `construction/units/<unit>/<stage>/...`.
+* Reviewer scope enforcement allows only the dispatched `construction/units/<unit>/` subtree, blocks sibling and wildcard sweeps, and fails closed on legacy `construction/<unit>/` paths.
+* `/aidlc --doctor` reports legacy unit directories that still sit directly under `construction/` and prints the migration command without misclassifying known construction stage directories.
+
 ## [2.7.1] - 2026-09-01
 
 Fix a Plan Approval deadlock that made Code Generation unreachable on solo (non-team) workflows. The Stop hook's read-only `next` probe published the durable active-directive marker on every turn boundary, which bumped the Code Generation authority revision and reset the plan-approval runtime, so the approval challenge minted while answering "Approve Plan" was destroyed before its receipt could be written. The probe no longer publishes that marker for any workflow, matching the read-only contract it already advertised. **Upgrade:** replace the `dist/<harness>/` tree; no workflow state migration is required. Closes #995.
@@ -496,7 +504,7 @@ Bugfix and refactor workflows now carry verified changes through the existing de
 
 Per-unit source review now binds the manifest and claimed source at dispatch, and sibling-repository Bolt worktrees preserve application source under root `aidlc/` and `.aidlc/` directories. **Upgrade:** refresh your `dist/<harness>/` shell; write a valid `source-manifest.json` before every per-unit workspace review request, and use `--retry-pending` to re-dispatch after any pre-verdict source change.
 
-Code-generation review receipts now attribute reviewed application source per Unit and fail closed when changed source is unclaimed. **Upgrade:** refresh your `dist/<harness>/` shell. In-flight Code Generation runs retain migration-compatible behavior until their next per-unit review; that review must write `construction/<unit>/code-generation/source-manifest.json` before its terminal verdict.
+Code-generation review receipts now attribute reviewed application source per Unit and fail closed when changed source is unclaimed. **Upgrade:** refresh your `dist/<harness>/` shell. In-flight Code Generation runs retain migration-compatible behavior until their next per-unit review; that review must write `construction/units/<unit>/code-generation/source-manifest.json` before its terminal verdict.
 
 * `aidlc-log.ts review` validates `source-manifest.json` before dispatch and records request-side `Source Fingerprint` and `Unit Source Fingerprint` bindings. The terminal verdict recomputes both and refuses source or manifest changes; `--retry-pending` refreshes the bindings only when the reviewer is actually re-dispatched. `AIDLC_SKIP_SOURCE_FRESHNESS=1` no longer permits dispatch without the manifest the reviewer must inspect.
 * Completion validates modern receipts newest-first, invalidates only Units whose exact/directory claims changed, and lets a newer fresh claimant own intentional shared-file integration. Invalidated Units use the existing one bounded stale-receipt recovery and must stop editing declared artifacts, manifest bytes, and claimed source paths afterward.

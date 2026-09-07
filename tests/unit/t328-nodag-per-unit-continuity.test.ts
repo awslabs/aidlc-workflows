@@ -91,6 +91,7 @@ function seedOutputs(proj: string, unit: string): void {
   const dir = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     STAGE,
   );

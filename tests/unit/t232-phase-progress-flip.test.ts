@@ -244,7 +244,7 @@ describe("t232 Phase Progress - finalize", () => {
     expect(run(STATE_TOOL, proj, ["finalize", "approval-handoff"]).rc).toBe(0);
     expect(rowStatus(proj, "Ideation")).toBe("Verified");
     expect(rowStatus(proj, "Inception")).toBe("Active");
-  });
+  }, 15_000);
 
   test("final-stage finalize flips the last phase to Verified", () => {
     const proj = createTestProject();

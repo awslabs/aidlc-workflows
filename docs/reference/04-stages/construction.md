@@ -22,8 +22,8 @@ completion messages, and state tracking.
 > intent directory: a compact UTC date prefix like `260624` plus a short
 > kebab-case label so records sort chronologically). Below, `<record>/` is
 > shorthand for that dir; e.g.
-> `<record>/construction/{unit-name}/functional-design/` expands to
-> `aidlc/spaces/default/intents/<YYMMDD>-<label>/construction/{unit-name}/functional-design/`.
+> `<record>/construction/units/{unit-name}/functional-design/` expands to
+> `aidlc/spaces/default/intents/<YYMMDD>-<label>/construction/units/{unit-name}/functional-design/`.
 > The dir name is a human-readable label; the canonical identity is the UUIDv7
 > stored in the `intents.json` registry row. (Projects created before the
 > per-intent layout used a flat tree; the engine migrates them on first run.)
@@ -201,7 +201,7 @@ for the canonical specification.
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
 | Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain design artifacts         |
-| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, CONDITIONAL: frontend-components.md |
+| Outputs           | `<record>/construction/units/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, CONDITIONAL: frontend-components.md |
 
 ### Purpose
 
@@ -223,7 +223,7 @@ feasibility input.
 
 2. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
-   `<record>/construction/{unit-name}/functional-design/functional-design-questions.md`
+   `<record>/construction/units/{unit-name}/functional-design/functional-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Business logic workflows and algorithms
    - Domain models and entity relationships
@@ -246,7 +246,7 @@ feasibility input.
      proceeding
 
 4. **Generate Artifacts** -- Generate the following in
-   `<record>/construction/{unit-name}/functional-design/`:
+   `<record>/construction/units/{unit-name}/functional-design/`:
    - **functional-spec.md**: Detailed algorithms, workflows, data
      transformations, processing sequences, and decision trees for the unit's
      business logic
@@ -279,7 +279,7 @@ Strictly 2-option: Approve / Request Changes.
 ### Notes
 
 - The questions file is co-located with stage artifacts at
-  `<record>/construction/{unit-name}/functional-design/functional-design-questions.md`.
+  `<record>/construction/units/{unit-name}/functional-design/functional-design-questions.md`.
 - frontend-components.md is only produced when the unit includes frontend/UI
   work.
 - All questions use the tri-mode interaction flow (Guide me / I'll edit the
@@ -302,7 +302,7 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent                                       |
 | mode              | inline                                                                                            |
 | Inputs            | functional design artifacts, requirements.md, RE artifacts                                        |
-| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md |
+| Outputs           | `<record>/construction/units/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md |
 
 ### Purpose
 
@@ -315,7 +315,7 @@ providing testability and measurability input.
 ### Inputs
 
 - Functional design artifacts from
-  `<record>/construction/{unit-name}/functional-design/` (if they exist)
+  `<record>/construction/units/{unit-name}/functional-design/` (if they exist)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
 - Reverse engineering artifacts from
   `aidlc/spaces/<active-space>/codekb/<repo>/` (if they exist)
@@ -336,7 +336,7 @@ providing testability and measurability input.
    - **Observability**: Monitoring, logging, alerting, tracing requirements
 
 3. **Generate Questions** -- Create a questions file at
-   `<record>/construction/{unit-name}/nfr-requirements/nfr-requirements-questions.md`
+   `<record>/construction/units/{unit-name}/nfr-requirements/nfr-requirements-questions.md`
    for unclear NFR areas using `[Answer]:` tags. Focus on quantifiable targets
    and specific constraints.
 
@@ -349,7 +349,7 @@ providing testability and measurability input.
      proceeding
 
 5. **Generate Artifacts** -- Generate the following in
-   `<record>/construction/{unit-name}/nfr-requirements/`:
+   `<record>/construction/units/{unit-name}/nfr-requirements/`:
    - **performance-requirements.md**: Response time targets, throughput
      requirements, latency budgets, resource constraints, benchmarks
    - **security-requirements.md**: Authentication requirements, authorization
@@ -412,7 +412,7 @@ a dedicated tech-stack-decisions.md for technology selection rationale.
 | support_agents    | aidlc-aws-platform-agent                                                                                |
 | mode              | inline                                                                                            |
 | Inputs            | NFR requirements artifacts, functional design artifacts                                           |
-| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md |
+| Outputs           | `<record>/construction/units/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md |
 
 ### Purpose
 
@@ -422,9 +422,9 @@ infrastructure and platform input.
 
 ### Inputs
 
-- NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`
+- NFR requirements from `<record>/construction/units/{unit-name}/nfr-requirements/`
 - Functional design artifacts from
-  `<record>/construction/{unit-name}/functional-design/` (if they exist)
+  `<record>/construction/units/{unit-name}/functional-design/` (if they exist)
 - Domain design from `<record>/inception/domain-design/` for
   architectural context
 
@@ -434,7 +434,7 @@ infrastructure and platform input.
    artifacts (if they exist), and domain design for architectural context.
 
 2. **Generate Design Questions** -- Create a questions file at
-   `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md`
+   `<record>/construction/units/{unit-name}/nfr-design/nfr-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Resilience patterns (circuit breakers, bulkheads, fallback strategies)
    - Scalability patterns (horizontal vs vertical, data partitioning, caching
@@ -471,7 +471,7 @@ infrastructure and platform input.
      SLI/SLO tracking, correlation ID propagation
 
 5. **Generate Artifacts** -- Generate the following in
-   `<record>/construction/{unit-name}/nfr-design/`:
+   `<record>/construction/units/{unit-name}/nfr-design/`:
    - **performance-design.md**: Caching architecture, optimization strategies,
      resource pooling, async patterns, performance budgets
    - **security-design.md**: Authentication/authorization architecture,
@@ -537,7 +537,7 @@ by mapping where NFR patterns apply at the component level.
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent                                                           |
 | mode              | inline                                                                                            |
 | Inputs            | NFR design artifacts, domain design, functional design                                       |
-| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- infrastructure-specification.md (deployment + services + CONDITIONAL shared), monitoring-design.md, cicd-pipeline.md |
+| Outputs           | `<record>/construction/units/{unit-name}/infrastructure-design/` -- infrastructure-specification.md (deployment + services + CONDITIONAL shared), monitoring-design.md, cicd-pipeline.md |
 
 ### Purpose
 
@@ -548,12 +548,12 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 
 ### Inputs
 
-- NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
+- NFR design from `<record>/construction/units/{unit-name}/nfr-design/` (if exists)
 - Functional design from
-  `<record>/construction/{unit-name}/functional-design/` (if exists)
+  `<record>/construction/units/{unit-name}/functional-design/` (if exists)
 - Domain design from `<record>/inception/domain-design/`
 - NFR requirements from
-  `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
+  `<record>/construction/units/{unit-name}/nfr-requirements/` (if exists)
 
 ### Steps
 
@@ -561,7 +561,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
    NFR design, functional design, domain design, NFR requirements.
 
 2. **Generate Infrastructure Questions** -- Create a questions file at
-   `<record>/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md`
+   `<record>/construction/units/{unit-name}/infrastructure-design/infrastructure-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Deployment strategy (containerized, serverless, hybrid, multi-region)
    - Compute/storage/networking (sizing, topology, latency requirements)
@@ -593,7 +593,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      management
 
 5. **Generate Artifacts** -- Generate the following in
-   `<record>/construction/{unit-name}/infrastructure-design/`. Keep the content
+   `<record>/construction/units/{unit-name}/infrastructure-design/`. Keep the content
    **tabular** (deployment, services, shared, and monitoring are tables):
    - **infrastructure-specification.md**: the core infra design — a
      **Deployment** table (compute, networking, storage, environments, IaC,
@@ -655,7 +655,7 @@ present only when multiple units share resources.
 | support_agents    | (none -- focused implementation)                                                                  |
 | mode              | subagent (Task tool subagent_type: aidlc-developer-agent)                                               |
 | Inputs            | ALL prior design artifacts for this unit                                                          |
-| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json, plus engine-required companion source-manifest.json |
+| Outputs           | application code (workspace root) + `<record>/construction/units/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json, plus engine-required companion source-manifest.json |
 
 ### Purpose
 
@@ -681,12 +681,12 @@ the execution plan. Code is written to the workspace root, never to
 ### Inputs
 
 - Functional design from
-  `<record>/construction/{unit-name}/functional-design/` (if exists)
+  `<record>/construction/units/{unit-name}/functional-design/` (if exists)
 - NFR requirements from
-  `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
-- NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
+  `<record>/construction/units/{unit-name}/nfr-requirements/` (if exists)
+- NFR design from `<record>/construction/units/{unit-name}/nfr-design/` (if exists)
 - Infrastructure design from
-  `<record>/construction/{unit-name}/infrastructure-design/` (if exists)
+  `<record>/construction/units/{unit-name}/infrastructure-design/` (if exists)
 - Domain design from `<record>/inception/domain-design/`
 - Unit definition from
   `<record>/inception/units-generation/unit-of-work.md`
@@ -704,7 +704,7 @@ This stage has a **two-part structure**: planning followed by generation.
    design, domain design, unit definition, story map).
 
 2. **Create Code Generation Plan** -- Create a detailed plan at
-   `<record>/construction/{unit-name}/code-generation/code-generation-plan.md`
+   `<record>/construction/units/{unit-name}/code-generation/code-generation-plan.md`
    with checkboxes for each implementation step. Include story-to-code-step
    traceability -- map each plan step back to the user story it implements.
 
@@ -749,7 +749,7 @@ This stage has a **two-part structure**: planning followed by generation.
    execution ordering and traceability.
 
    Resolve one code-generation record directory from the directive:
-   `<record>/construction/<directive.unit>/code-generation/` when
+   `<record>/construction/units/<directive.unit>/code-generation/` when
    `directive.unit` is present, otherwise the zero-Unit stage directory
    `<record>/construction/code-generation/`. Also create
    `unit-test-instructions.md` there before Plan Approval. Match the active test
@@ -773,7 +773,7 @@ This stage has a **two-part structure**: planning followed by generation.
    `unit-test-instructions.md`. On a revision, reset the prior `[Answer]:` to
    blank first. After both files are final, run
    `aidlc-testing-posture.ts fingerprint --unit <unit>` for a unit directive or
-   `aidlc-testing-posture.ts fingerprint` for zero-Unit stage-level work. Then
+   `aidlc-testing-posture.ts fingerprint --stage-level` for zero-Unit stage-level work. Then
    create or reset `code-generation-questions.md` in the resolved record
    directory with that `[Approval Fingerprint]`, a **Plan Approval** question,
    and blank `[Answer]:`; render it as a structured question and stop the turn:
@@ -833,7 +833,7 @@ This stage has a **two-part structure**: planning followed by generation.
 
 5. **Generate Code Summary and Source Manifest** -- After the subagent
    completes, create
-   `<record>/construction/{unit-name}/code-generation/code-summary.md`
+   `<record>/construction/units/{unit-name}/code-generation/code-summary.md`
    documenting:
    - Files created/modified
    - Key implementation decisions
@@ -841,7 +841,7 @@ This stage has a **two-part structure**: planning followed by generation.
    - Any deviations from the plan
 
    Also create
-   `<record>/construction/{unit-name}/code-generation/source-manifest.json`.
+   `<record>/construction/units/{unit-name}/code-generation/source-manifest.json`.
    This is a strict version-1 JSON companion file, not a declared `produces[]`
    artifact. It records `stage: "code-generation"`, the exact unit name, and a
    `writes` array containing every application-source path the unit created,
@@ -935,9 +935,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
 ### Inputs
 
 - Code generation outputs across all units from
-  `<record>/construction/*/code-generation/code-summary.md`
+  `<record>/construction/units/*/code-generation/code-summary.md`
 - Per-unit test instructions from
-  `<record>/construction/*/code-generation/unit-test-instructions.md`
+  `<record>/construction/units/*/code-generation/unit-test-instructions.md`
 - Every applicable artifact under each unit's `nfr-requirements/` and
   `nfr-design/` directory
 - Every approved `## Testing Contract` in the stage-level or per-unit

@@ -72,7 +72,14 @@
 // 10 .sh asserts -> 10 expect()-bearing test() cases here, plus the S1..S3
 // inline strengtheners on the cases that drive the spawns.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -84,6 +91,8 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(15_000);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");

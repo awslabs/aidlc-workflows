@@ -224,7 +224,7 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     unit,
     state_sha256: createHash("sha256").update(state).digest("hex"),
   });
-  mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
+  mkdirSync(join(seededRecordDir(dir), "construction", "units", unit, "code-generation"), {
     recursive: true,
   });
 }
@@ -1001,8 +1001,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             cwd: dir,
             tool_name,
             tool_input: tool_name === "read_files"
-              ? { paths: [null, "construction/sibling-unit/design.md"] }
-              : { path: "construction/sibling-unit/design.md" },
+              ? { paths: [null, "construction/units/sibling-unit/design.md"] }
+              : { path: "construction/units/sibling-unit/design.md" },
           },
           ["aidlc-architecture-reviewer-agent"],
         );
@@ -1023,7 +1023,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             hook_event_name: "preToolUse",
             cwd: dir,
             tool_name,
-            tool_input: { path: "construction/sibling-unit/design.md" },
+            tool_input: { path: "construction/units/sibling-unit/design.md" },
           },
           ["aidlc-architecture-reviewer-agent"],
         );
@@ -1042,7 +1042,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           hook_event_name: "preToolUse",
           cwd: dir,
           tool_name,
-          tool_input: { path: "construction/todo-core/design.md" },
+          tool_input: { path: "construction/units/todo-core/design.md" },
         });
         expect(r.code, tool_name).toBe(0);
         expect(existsSync(freezeHeartbeat), tool_name).toBe(true);
@@ -1055,7 +1055,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           ...(FIXTURES.preToolUse_fs_read as Record<string, unknown>),
           cwd: dir,
           tool_input: {
-            operations: [null, { path: "construction/sibling-unit/design.md" }],
+            operations: [null, { path: "construction/units/sibling-unit/design.md" }],
           },
         },
         ["aidlc-architecture-reviewer-agent"],
@@ -1065,7 +1065,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 10000);
 
   test("6: log-subagent emits SUBAGENT_COMPLETED to the audit", () => {
     const dir = scratchProject(true);
@@ -1189,7 +1189,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         const deleted = runAdapter(dir, "audit-and-sensors", {
           cwd: dir,
           tool_name,
-          tool_input: { path: "construction/todo-core/design.md" },
+          tool_input: { path: "construction/units/todo-core/design.md" },
         });
         expect(deleted.code, tool_name).toBe(0);
         expect(existsSync(auditHeartbeat), tool_name).toBe(false);

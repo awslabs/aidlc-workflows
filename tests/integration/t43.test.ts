@@ -262,7 +262,7 @@ describe("inception stages declare their per-intent record dir in outputs", () =
 // no longer lives in the `outputs:` frontmatter — that line now carries relative
 // artifact names plus "(under this stage's per-unit record dir, engine-resolved)".
 // The literal `{unit-name}` segment moved into the BODY prose, where each stage
-// writes to `<record>/construction/{unit-name}/<stage>/`. The test's intent —
+// writes to `<record>/construction/units/{unit-name}/<stage>/`. The test's intent —
 // per-unit construction stages anchor their output location to {unit-name} — is
 // preserved by counting stages whose BODY cites that per-unit path. All 5 do
 // (4-8 occurrences each), so the original ">3 of 5" threshold still holds.
@@ -278,7 +278,7 @@ describe("per-unit construction stages reference {unit-name}", () => {
     ];
     const count = unitStages.filter((s) => {
       const f = findStageFile(s);
-      return f !== null && readFileSync(f, "utf8").includes("<record>/construction/{unit-name}/");
+      return f !== null && readFileSync(f, "utf8").includes("<record>/construction/units/{unit-name}/");
     }).length;
     expect(count).toBeGreaterThan(3);
   });

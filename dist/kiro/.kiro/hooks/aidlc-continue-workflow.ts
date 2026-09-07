@@ -500,9 +500,9 @@ function isHumanWaitStop(
 // underscores remain (stage-protocol.md:333 — "blank or contains only
 // underscores"). Standard stages use `<record>/<phase>/<slug>/`; a per-unit
 // Construction directive carries its exact unit and uses
-// `<record>/construction/<unit>/<slug>/`. We never recursively accept a question
-// from a different unit: an old unanswered file must not disable enforcement for
-// the unit currently named by the engine.
+// `<record>/construction/units/<unit>/<slug>/`. We never recursively accept a
+// question from a different unit: an old unanswered file must not disable
+// enforcement for the unit currently named by the engine.
 function hasPendingQuestion(
   projectDir: string,
   slug: string,
@@ -514,7 +514,7 @@ function hasPendingQuestion(
   const normalizedPhase = phase.toLowerCase();
   const stageDirPath =
     normalizedPhase === "construction" && unit
-      ? join(docsRoot(projectDir), normalizedPhase, unit, slug)
+      ? join(docsRoot(projectDir), normalizedPhase, "units", unit, slug)
       : stageDir(projectDir, normalizedPhase, slug);
   if (!existsSync(stageDirPath)) return false;
   let files: string[];

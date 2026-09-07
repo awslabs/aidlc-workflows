@@ -138,7 +138,7 @@ function walkStage(proj: string, slug: string): void {
     const artifactDir =
       slug === "requirements-analysis"
         ? join(recordDirOf(proj), "inception", slug)
-        : join(recordDirOf(proj), "construction", "unit-alpha", slug);
+        : join(recordDirOf(proj), "construction", "units", "unit-alpha", slug);
     const artifacts =
       slug === "requirements-analysis"
         ? ["requirements.md", "requirements-analysis-questions.md"]
