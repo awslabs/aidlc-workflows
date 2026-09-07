@@ -59,6 +59,9 @@
 .thread-card { position: relative; }
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: auto; border-radius: 5px; color: #a3adbb; }
 .icon-btn:hover { background: var(--panel); color: var(--ink); }
+.thread-card-actions .icon-btn.action { margin-left: 0; }
+.thread-card-actions .icon-btn.action:hover { color: var(--rose); background: var(--rose-soft); }
+.thread-card-actions .icon-btn.action[data-remove-annotation][title="Undo edit"]:hover { color: var(--ink); background: var(--panel); }
 .thread-who .icon-btn { margin-left: auto; }
 /* Reactions: pills with the emoji and how many; yours carries the accent. */
 .reactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
@@ -77,7 +80,7 @@
    only when the agent applied it or you resolved it. */
 .thread-meta { display: inline-flex; align-items: center; gap: 6px; }
 .thread-life { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; color: var(--muted); font-size: 11px; }
-.thread-life.unsent { color: var(--ink); }
+.thread-life.unsent { color: #a3adbb; }
 .thread-life.applied, .thread-life.resolved { color: var(--green); }
 .thread-life svg { flex: none; }
 .thread-card.resolved { opacity: 0.5; }

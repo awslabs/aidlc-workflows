@@ -650,6 +650,11 @@ const UNSENT_TITLE = "The agent has not seen this yet. Send (top right) hands it
  * agent's reply sits above it) → Resolved. Plain words; a check only when the
  * agent applied it or you resolved it.
  */
+/** A quiet icon button whose word is its tooltip: Remove (bin), Undo edit (undo arrow). */
+function iconAction(attr, iconName, title) {
+  return `<button ${attr} type="button" class="icon-btn action" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${icon(iconName, { size: 14 })}</button>`;
+}
+
 function lifeLabel(kind, text, title = "") {
   const check = kind === "applied" || kind === "resolved" ? icon("checkmarkCircle", { size: 12 }) : "";
   return `<span class="thread-life ${kind}"${title ? ` title="${escapeHtml(title)}"` : ""}>${check}<span>${escapeHtml(text)}</span></span>`;
@@ -670,7 +675,7 @@ function renderDraft(draft) {
     ${headRow(draft.selection, kindSelect(draft.kind))}
     <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>drafting</span></div>
     <textarea rows="3" placeholder="${draft.kind === "edit" ? "Replacement text" : "Write a remark…"}">${escapeHtml(draft.body)}</textarea>
-    <div class="thread-card-actions">${lifeLabel("draft", "Draft")}<button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div>
+    <div class="thread-card-actions">${lifeLabel("draft", "Draft")}${iconAction("data-remove-draft", "delete", "Remove")}<button class="btn primary" data-post-draft type="button">Post</button></div>
   </article>`;
 }
 
@@ -686,7 +691,7 @@ function renderPending(annotation) {
       <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
       <textarea rows="2" placeholder="Add a reason (optional)">${escapeHtml(annotation.body || "")}</textarea>
       ${reactionsHtml(annotation.id)}
-      <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Undo edit</button></div>
+      <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}${iconAction("data-remove-annotation", "arrowUndo", "Undo edit")}</div>
     </article>`;
   }
   return `<article class="thread-card pending-card kind-${escapeHtml(normalizeKind(annotation.kind))}" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
@@ -694,7 +699,7 @@ function renderPending(annotation) {
     <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>${relativeTime(annotation.created) || "just now"}</span>${reactButton(annotation.id)}</div>
     <textarea rows="2" placeholder="Write a remark…">${escapeHtml(annotation.body || "")}</textarea>
     ${reactionsHtml(annotation.id)}
-    <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Remove</button></div>
+    <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}${iconAction("data-remove-annotation", "delete", "Remove")}</div>
   </article>`;
 }
 
@@ -725,8 +730,8 @@ function renderSent(thread) {
     ${renderReply(thread.response, `${thread.id}:reply`)}
     ${followUps.map((reply) => `<div class="thread-followup"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${reply.revision}</span></div><p>${escapeHtml(reply.body || "")}</p>${renderReply(reply.response)}</div>`).join("")}
     ${pendingReplies.map((reply) => drafts.includes(reply)
-      ? `<div class="thread-followup pending" data-draft-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>replying</span></div><textarea rows="2" placeholder="Reply…">${escapeHtml(reply.body || "")}</textarea><div class="thread-card-actions"><button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div></div>`
-      : `<div class="thread-followup pending" data-annotation-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>just now</span></div><p>${escapeHtml(reply.body || "")}</p><div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Remove</button></div></div>`).join("")}
+      ? `<div class="thread-followup pending" data-draft-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>replying</span></div><textarea rows="2" placeholder="Reply…">${escapeHtml(reply.body || "")}</textarea><div class="thread-card-actions">${iconAction("data-remove-draft", "delete", "Remove")}<button class="btn primary" data-post-draft type="button">Post</button></div></div>`
+      : `<div class="thread-followup pending" data-annotation-id="${escapeHtml(reply.id)}"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>just now</span></div><p>${escapeHtml(reply.body || "")}</p><div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}${iconAction("data-remove-annotation", "delete", "Remove")}</div></div>`).join("")}
     <div class="thread-card-actions sent-actions">${sentLife(thread, status)}${hasOpenGate() ? `${resolved ? "" : `<button data-reply-to="${escapeHtml(thread.id)}" type="button">Reply</button>`}${resolved && !resolvedSet().has(thread.id) ? "" : `<button data-resolve="${escapeHtml(thread.id)}" type="button">${resolved ? "Re-open" : "Resolve"}</button>`}` : ""}</div>
   </article>`;
 }
