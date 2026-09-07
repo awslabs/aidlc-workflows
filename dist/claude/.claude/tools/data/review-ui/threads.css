@@ -27,9 +27,16 @@
 .thread-card.pending-card.focused,
 .thread-card.focused:hover { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2); background: rgba(37, 99, 235, 0.03); }
 .thread-quote { margin: 0 0 8px; color: #5b6574; font-size: 11.5px; line-height: 1.45; }
+/* First row: what the thread is about on the left, its kind in the upper-right corner. */
+.thread-head { display: flex; align-items: flex-start; gap: 10px; }
+.thread-head .thread-quote { flex: 1; min-width: 0; margin-bottom: 6px; }
+.thread-head .thread-quote-empty { margin: 0; }
+.thread-head select, .thread-head .thread-kind { flex: none; margin-left: auto; }
+.thread-head select { max-width: 128px; padding: 3px 22px 3px 6px; border: 1px solid var(--line2); border-radius: 5px; background: #fff; font-size: 11.5px; }
 .thread-editor-row, .thread-who { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .thread-editor-row select { min-width: 0; max-width: 128px; padding: 3px 22px 3px 6px; border: 1px solid var(--line2); border-radius: 5px; background: #fff; font-size: 11.5px; }
-.thread-editor-row > span { margin-left: auto; }
+.thread-editor-row > .thread-meta { margin-left: 0; }
+.thread-editor-row { margin-bottom: 2px; }
 .thread-card textarea { width: 100%; margin-top: 8px; padding: 7px 8px; resize: vertical; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); outline: 0; font-size: 12px; line-height: 1.45; }
 .thread-card textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--soft); background: #fff; }
 .thread-card-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 7px; }

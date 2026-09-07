@@ -587,8 +587,8 @@ function sentLife(thread, status) {
 
 function renderDraft(draft) {
   return `<article class="thread-card pending-card" data-draft-id="${escapeHtml(draft.id)}" data-thread-id="${escapeHtml(draft.id)}">
-    ${quoteHtml(draft.selection)}
-    <div class="thread-editor-row">${kindSelect(draft.kind)}<span class="thread-meta">You</span></div>
+    ${headRow(draft.selection, kindSelect(draft.kind))}
+    <div class="thread-editor-row"><span class="thread-meta">You</span></div>
     <textarea rows="3" placeholder="${draft.kind === "edit" ? "Replacement text" : "Write a remark…"}">${escapeHtml(draft.body)}</textarea>
     <div class="thread-card-actions">${lifeLabel("draft", "Draft")}<button data-remove-draft type="button">Remove</button><button class="btn primary" data-post-draft type="button">Post</button></div>
   </article>`;
@@ -602,16 +602,16 @@ function renderPending(annotation) {
     const summary = editSummary(annotation.before, annotation.after_block);
     const where = (annotation.heading_path || []).slice(-1)[0] || `lines ${annotation.line_start ?? "?"}–${annotation.line_end ?? "?"}`;
     return `<article class="thread-card pending-card edit-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
-      <p class="thread-quote">${escapeHtml(where)}</p>
-      <div class="thread-editor-row"><span class="thread-kind">Edit</span><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span></div>
+      ${headRow(where, `<span class="thread-kind">Edit</span>`, { plain: true })}
+      <div class="thread-editor-row"><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span></div>
       <p class="edit-summary">${summary}</p>
       <textarea rows="1" placeholder="Why (optional) — the agent reads this with the edit">${escapeHtml(annotation.body || "")}</textarea>
       <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Undo edit</button></div>
     </article>`;
   }
   return `<article class="thread-card pending-card" data-annotation-id="${escapeHtml(annotation.id)}" data-thread-id="${escapeHtml(annotation.id)}">
-    ${quoteHtml(annotation.selection)}
-    <div class="thread-editor-row">${kindSelect(annotation.kind)}<span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span></div>
+    ${headRow(annotation.selection, kindSelect(annotation.kind))}
+    <div class="thread-editor-row"><span class="thread-meta">You · ${relativeTime(annotation.created) || "just now"}</span></div>
     <textarea rows="2" placeholder="Write a remark…">${escapeHtml(annotation.body || "")}</textarea>
     <div class="thread-card-actions">${lifeLabel("unsent", "Not sent", UNSENT_TITLE)}<button data-remove-annotation type="button">Remove</button></div>
   </article>`;
@@ -648,8 +648,8 @@ function renderSent(thread) {
   const pendingReplies = [...drafts, ...store.annotations].filter((item) => item.reply_to === thread.id);
   const resolved = status.name === "Resolved";
   return `<article class="thread-card sent-card${resolved ? " resolved" : ""}" data-thread-id="${escapeHtml(thread.id)}">
-    ${quoteHtml(thread.quote)}
-    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span><span class="thread-kind">${kindLabel(thread.kind)}</span></div>
+    ${headRow(thread.quote, `<span class="thread-kind">${kindLabel(thread.kind)}</span>`)}
+    <div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${thread.revision}</span></div>
     ${thread.diff ? `<p class="edit-summary">${diffSummary(thread.diff)}</p>` : thread.body ? `<p class="thread-body">${escapeHtml(thread.body)}</p>` : ""}
     ${renderReply(thread.response)}
     ${followUps.map((reply) => `<div class="thread-followup"><div class="thread-who"><span class="thread-avatar">Y</span><b>You</b><span>r${reply.revision}</span></div><p>${escapeHtml(reply.body || "")}</p>${renderReply(reply.response)}</div>`).join("")}
@@ -803,6 +803,12 @@ function kindSelect(kind) {
 
 function quoteHtml(value) {
   return value ? `<p class="thread-quote">“${escapeHtml(value)}”</p>` : "";
+}
+
+/** The card's first row: the quote (or place) on the left, the kind control in the upper-right corner. */
+function headRow(quote, kindHtml, { plain = false } = {}) {
+  const text = quote ? (plain ? `<p class="thread-quote">${escapeHtml(quote)}</p>` : quoteHtml(quote)) : `<p class="thread-quote thread-quote-empty"></p>`;
+  return `<div class="thread-head">${text}${kindHtml}</div>`;
 }
 
 /**
