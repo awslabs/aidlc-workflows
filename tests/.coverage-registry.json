@@ -7743,7 +7743,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -8121,7 +8121,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -10924,7 +10924,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -10980,7 +10980,7 @@
           "mechanism": "sdk"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11224,7 +11224,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11260,7 +11260,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "file": "tests/integration/t311-session-binding-writers.serial.test.ts",
           "mechanism": "cli"
         },
         {
