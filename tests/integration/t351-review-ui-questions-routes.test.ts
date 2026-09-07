@@ -10,7 +10,9 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import {
+  openQuestionsRound,
   serverInfoPath,
+  sha256Hex,
   type ServerInfo,
 } from "../../core/tools/aidlc-review-ui-shared.ts";
 
@@ -158,9 +160,12 @@ beforeAll(async () => {
     ].join("\n"),
   );
   // A complete explainer, published the way the conductor publishes it: the
-  // round record exists only once `check --guide` passes.
+  // round record exists only once `check --guide` passes - prepared, not yet
+  // open. The process that waits for the answers (the Stop hook, or
+  // `answers-wait`) opens it; only then does the daemon show the form.
   writeFileSync(join(stagePath, "requirements-analysis-questions-guide.html"), VALID_GUIDE);
   expect(checkGuide(join(stagePath, "requirements-analysis-questions-guide.html"), questionsPath)).toBe(0);
+  expect(openQuestionsRound(record, "requirements-analysis", sha256Hex(readFileSync(questionsPath)))?.state).toBe("questions");
   writeFileSync(join(stagePath, "other.md"), "# Not the current questions file\n");
   writeFileSync(
     graphPath,
