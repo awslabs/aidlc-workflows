@@ -26,13 +26,13 @@
 //   4. `/aidlc space-create teamB` → `/aidlc space teamB` → create one there; no leak.
 //   5. `/aidlc space default` → A still resumable.
 //
-// LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
+// LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.147.0 binary
 // (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
 // AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise. Serial.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeSpace,
@@ -46,11 +46,17 @@ import {
   setupWorkspaceJourney,
   type WorkspaceJourney,
 } from "../harness/fixtures.ts";
+import {
+  CODEX_AUTO_REVIEW_MIN_VERSION,
+  CODEX_AUTO_REVIEW_MIN_VERSION_LABEL,
+  codexExecArgv,
+  codexVersionAtLeast,
+  runCodexWithWindowsAclRetry,
+  writeCodexExecConfig,
+} from "../harness/exec-drive.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
-const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
-const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
 // A multi-spawn live journey. codex exec is the slowest harness — even a "cheap"
 // verb spawn can run several minutes when the model reasons before invoking the
@@ -85,17 +91,19 @@ function intentCreationToolPrompt(scope: string, args: string): string {
 
 function codexVersionOk(): boolean {
   const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
-  const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
-  if (r.status !== 0 || !m) return false;
-  const [maj, min] = [Number(m[1]), Number(m[2])];
-  return maj > 0 || min >= 145;
+  return (
+    r.status === 0 &&
+    codexVersionAtLeast(r.stdout ?? "", CODEX_AUTO_REVIEW_MIN_VERSION)
+  );
 }
 
 function skipReason(): string | null {
   if (process.env.AIDLC_CODEX_EXEC_LIVE !== "1") {
     return "set AIDLC_CODEX_EXEC_LIVE=1 to run the live codex-exec workspace journey (uses Bedrock)";
   }
-  if (!codexVersionOk()) return `codex >= 0.145.0 not found (AIDLC_CODEX_BIN=${CODEX_BIN})`;
+  if (!codexVersionOk()) {
+    return `codex >= ${CODEX_AUTO_REVIEW_MIN_VERSION_LABEL} not found (AIDLC_CODEX_BIN=${CODEX_BIN})`;
+  }
   if (!existsSync(CODEX_DIST)) return `distributable missing: ${CODEX_DIST}`;
   return null;
 }
@@ -125,28 +133,7 @@ function setupCodexJourney(): WorkspaceJourney {
     { encoding: "utf-8", cwd: REPO_ROOT },
   );
   if (trust.status !== 0) throw new Error(`trust emit failed: ${trust.stderr}`);
-  writeFileSync(
-    join(home, "config.toml"),
-    [
-      `model = "openai.gpt-5.5"`,
-      `model_provider = "amazon-bedrock"`,
-      `model_context_window = 1000000`,
-      `model_reasoning_effort = "low"`,
-      ``,
-      `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
-      ``,
-      `[shell_environment_policy]`,
-      `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
-      ``,
-      `[projects."${root}"]`,
-      `trust_level = "trusted"`,
-      ``,
-      trust.stdout,
-    ].join("\n"),
-    "utf-8",
-  );
+  writeCodexExecConfig(home, root, trust.stdout);
   return journey;
 }
 
@@ -156,7 +143,11 @@ function execCodex(
   prompt: string,
   timeoutMs: number = VERB_EXEC_MS,
 ): { rc: number; out: string } {
-  const r = spawnSync(CODEX_BIN, ["exec", prompt], {
+  // This is a mutation-only journey spread across separate headless sessions.
+  // Native Windows can revoke a sandbox user's workspace ACL between spawns;
+  // auto-review keeps workspace-write as the first attempt and reviews only a
+  // concrete denied command before Codex retries it outside the sandbox.
+  const r = spawnSync(CODEX_BIN, codexExecArgv(prompt, { approveForMe: true }), {
     cwd: proj,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -164,6 +155,18 @@ function execCodex(
     timeout: timeoutMs,
   });
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
+}
+
+function execCodexMutation(
+  proj: string,
+  home: string,
+  prompt: string,
+  mutationObserved: () => boolean,
+): { rc: number; out: string } {
+  return runCodexWithWindowsAclRetry(
+    () => execCodex(proj, home, prompt),
+    mutationObserved,
+  );
 }
 
 // The engine resolves the per-repo codekb store to the SPACE-LEVEL sibling of
@@ -290,10 +293,19 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         // --- Step 3: a SECOND isolated intent alongside A --------------------
         // Name the intent-create tool directly (mints unconditionally) so the
         // conductor does not route via `next` and advance/scope-change A.
-        const r3 = execCodex(root, home, intentCreationToolPrompt("poc", "build a standalone metrics dashboard"));
-        expect(r3.rc).toBe(0);
+        const intentCountBefore = readIntentRegistry(root).length;
+        const r3 = execCodexMutation(
+          root,
+          home,
+          intentCreationToolPrompt(
+            "poc",
+            "build a standalone metrics dashboard",
+          ),
+          () => readIntentRegistry(root).length > intentCountBefore,
+        );
         const reg3 = readIntentRegistry(root);
-        expect(reg3.length).toBe(2);
+        expect(r3.rc).toBe(0);
+        expect(reg3.length, r3.out).toBe(2);
         expect(new Set(reg3.map((e) => e.uuid)).size).toBe(2);
         for (const e of reg3) expect(e.uuid).toMatch(UUIDV7_RE);
         // A's workflow state untouched + B's creation did not bleed into A's shard.
@@ -320,9 +332,20 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(r4b.rc).toBe(0);
         expect(activeSpace(root)).toBe(TEAM_B_SLUG);
 
-        const r4c = execCodex(root, home, intentCreationToolPrompt("poc", "teamB onboarding flow"));
+        const teamBIntentCountBefore = readIntentRegistry(
+          root,
+          TEAM_B_SLUG,
+        ).length;
+        const r4c = execCodexMutation(
+          root,
+          home,
+          intentCreationToolPrompt("poc", "teamB onboarding flow"),
+          () =>
+            readIntentRegistry(root, TEAM_B_SLUG).length >
+            teamBIntentCountBefore,
+        );
         expect(r4c.rc).toBe(0);
-        expect(readIntentRegistry(root, TEAM_B_SLUG).length).toBe(1);
+        expect(readIntentRegistry(root, TEAM_B_SLUG).length, r4c.out).toBe(1);
         expect(readIntentRegistry(root, "default").length).toBe(2);
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
 

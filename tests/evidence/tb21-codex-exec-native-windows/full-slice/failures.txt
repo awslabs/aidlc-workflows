@@ -1,0 +1,3 @@
+FAIL: t-exec-codex-journey-workspace.serial (1 failed assertions)
+  error: expect(received).toBe(expected)
+  (fail) t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·space journey) > one feature spanning two repos, a 2nd intent, a non-default space — composed live over codex exec [647238.51ms]

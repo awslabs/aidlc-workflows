@@ -1,0 +1,17 @@
+AI-DLC Test Run Summary
+======================
+Timestamp: 2026-08-25T13:13:06Z
+Tiers: e2e
+Mode: debug (streaming + driver traces)
+
+Per-file results:
+  File                                     Status Assertions     Failed   Duration
+  ----                                     ------ ----------     ------   --------
+  t-exec-codex-journey-workspace.serial    PASS            1          0 754.4967294s
+
+Totals:
+  Test files: 1
+  Failed files: 0
+  Total assertions: 1
+  Failed assertions: 0
+  Result: PASS

@@ -1,0 +1,29 @@
+Test: t-exec-codex-journey-workspace.serial.test.ts
+File: <WORKSPACE>\tests\e2e\t-exec-codex-journey-workspace.serial.test.ts
+Status: FAIL
+Exit code: 1
+Timestamp: 2026-08-25T12:57:08Z
+
+--- Output ---
+bun test v1.3.14 (0d9b296a)
+
+tests\e2e\t-exec-codex-journey-workspace.serial.test.ts:
+337 |         expect(r4b.rc).toBe(0);
+338 |         expect(activeSpace(root)).toBe(TEAM_B_SLUG);
+339 |
+340 |         const r4c = execCodex(root, home, birthToolPrompt("poc", "teamB onboarding flow"));
+341 |         expect(r4c.rc).toBe(0);
+342 |         expect(readIntentRegistry(root, TEAM_B_SLUG).length).toBe(1);
+                                                                   ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: 0
+
+      at <anonymous> (<WORKSPACE>\tests\e2e\t-exec-codex-journey-workspace.serial.test.ts:342:62)
+(fail) t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·space journey) > one feature spanning two repos, a 2nd intent, a non-default space — composed live over codex exec [647238.51ms]
+
+ 0 pass
+ 1 fail
+ 27 expect() calls
+Ran 1 test across 1 file. [647.43s]

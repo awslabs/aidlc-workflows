@@ -21,6 +21,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   cpSync,
@@ -35,11 +36,25 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { parse } from "smol-toml";
+import {
+  CODEX_AUTO_REVIEW_MIN_VERSION,
+  codexExecArgv,
+  codexVersionAtLeast,
+  renderCodexExecConfig,
+  runCodexWithWindowsAclRetry,
+  shouldRetryCodexWindowsAclDenial,
+} from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const CODEX_DST = join(REPO_ROOT, "dist", "codex", ".codex");
+const CODEX_EXEC_EVIDENCE = join(
+  REPO_ROOT,
+  "tests",
+  "evidence",
+  "tb21-codex-exec-native-windows",
+);
 const TRUST_SUFFIXES = [
   "session_start:0:0",
   "user_prompt_submit:0:0",
@@ -65,6 +80,30 @@ type TrustDocument = {
 };
 
 type TrustEntries = (project: string, hooksJson?: string) => string;
+
+type CodexExecConfig = {
+  model: string;
+  model_provider: string;
+  sandbox_mode: string;
+  windows: {
+    sandbox: string;
+  };
+  model_providers: {
+    "amazon-bedrock": {
+      aws: Record<string, string>;
+    };
+  };
+  shell_environment_policy: {
+    set: {
+      AIDLC_RULES_DIR: string;
+    };
+  };
+  sandbox_workspace_write: {
+    writable_roots: string[];
+  };
+  projects: Record<string, { trust_level: string }>;
+  hooks: TrustDocument["hooks"];
+};
 
 function parseTrustDocument(source: string): TrustDocument {
   return parse(source) as unknown as TrustDocument;
@@ -494,5 +533,207 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(supported.status).toBe(0);
     expect(supported.output).toContain("codex CLI version 0.145.0 >= 0.145.0");
     expect(supported.output).toContain("immediate compact-session reload");
+  });
+
+  test("14: live exec config serializes POSIX and Windows paths with least-privilege workspace writes", () => {
+    const emitTrustEntries = trustEntries();
+    const cases = [
+      {
+        project: '/tmp/AI DLC/project "quoted"\\literal',
+        hooksJson: '/tmp/AI DLC/project "quoted"\\literal/.codex/hooks.json',
+      },
+      {
+        project: String.raw`C:\Users\Jane Doe\AI "DLC"`,
+        hooksJson: String.raw`C:\Users\Jane Doe\AI "DLC"\.codex\hooks.json`,
+      },
+    ];
+
+    for (const { project, hooksJson } of cases) {
+      const source = renderCodexExecConfig(project, emitTrustEntries(project), {
+        awsProfile: "codex-live",
+        awsRegion: "us-west-2",
+      });
+      const parsed = parse(source) as unknown as CodexExecConfig;
+
+      expect(parsed.model).toBe("openai.gpt-5.5");
+      expect(parsed.model_provider).toBe("amazon-bedrock");
+      expect(parsed.model_providers["amazon-bedrock"].aws).toEqual({
+        profile: "codex-live",
+        region: "us-west-2",
+      });
+      expect(Object.keys(parsed.model_providers["amazon-bedrock"].aws).sort()).toEqual([
+        "profile",
+        "region",
+      ]);
+      expect(parsed.sandbox_mode).toBe("workspace-write");
+      expect(parsed.windows).toEqual({
+        sandbox: "elevated",
+      });
+      expect(parsed.sandbox_workspace_write.writable_roots).toEqual([]);
+      expect(parsed.projects).toEqual({
+        [project]: {
+          trust_level: "trusted",
+        },
+      });
+      expect(parsed.shell_environment_policy.set.AIDLC_RULES_DIR).toBe(
+        "aidlc/spaces/default/memory",
+      );
+      expect(Object.keys(parsed.hooks.state)).toEqual(expectedTrustKeys(hooksJson));
+      expect(source).not.toMatch(/AWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)/);
+    }
+  });
+
+  test("15: reviewed headless approval argv preserves normal and resume ordering", () => {
+    expect(codexExecArgv("status")).toEqual(["exec", "status"]);
+    expect(codexExecArgv("mutate", { approveForMe: true })).toEqual([
+      "exec",
+      "--approve-for-me",
+      "mutate",
+    ]);
+    expect(
+      codexExecArgv("Approve", {
+        approveForMe: true,
+        resume: true,
+      }),
+    ).toEqual(["exec", "--approve-for-me", "resume", "--last", "Approve"]);
+  });
+
+  test("16: mutation live gates reject Codex 0.146 and accept 0.147", () => {
+    expect(codexVersionAtLeast("codex-cli 0.146.9", CODEX_AUTO_REVIEW_MIN_VERSION)).toBe(
+      false,
+    );
+    expect(codexVersionAtLeast("codex-cli 0.147.0", CODEX_AUTO_REVIEW_MIN_VERSION)).toBe(
+      true,
+    );
+    expect(codexVersionAtLeast("codex-cli 1.0.0", CODEX_AUTO_REVIEW_MIN_VERSION)).toBe(
+      true,
+    );
+    expect(codexVersionAtLeast("not-a-version", CODEX_AUTO_REVIEW_MIN_VERSION)).toBe(false);
+  });
+
+  test("17: Windows journey ACL denial gets one postcondition-aware retry", () => {
+    const denial =
+      "Access to the path 'C:\\Users\\USER\\AppData\\Local\\Temp\\aidlc-journey-Ab12Cd' is denied.";
+    expect(shouldRetryCodexWindowsAclDenial(denial, true, "win32")).toBe(true);
+    expect(shouldRetryCodexWindowsAclDenial(denial, false, "win32")).toBe(false);
+    expect(shouldRetryCodexWindowsAclDenial(denial, true, "linux")).toBe(false);
+    expect(
+      shouldRetryCodexWindowsAclDenial(
+        "Access to the path 'C:\\tmp\\another-project' is denied.",
+        true,
+        "win32",
+      ),
+    ).toBe(false);
+
+    let successfulInternalRetryCalls = 0;
+    const successfulInternalRetry = runCodexWithWindowsAclRetry(
+      () => {
+        successfulInternalRetryCalls++;
+        return { rc: 0, out: `${denial}\nIntent created` };
+      },
+      () => true,
+      "win32",
+    );
+    expect(successfulInternalRetryCalls).toBe(1);
+    expect(successfulInternalRetry.out).not.toContain("--- RETRY:");
+
+    let externalRetryCalls = 0;
+    const externalRetry = runCodexWithWindowsAclRetry(
+      () => {
+        externalRetryCalls++;
+        return externalRetryCalls === 1
+          ? { rc: 0, out: denial }
+          : { rc: 0, out: "Intent created on bounded retry" };
+      },
+      () => false,
+      "win32",
+    );
+    expect(externalRetryCalls).toBe(2);
+    expect(externalRetry.out).toContain(
+      "--- RETRY: Windows workspace ACL denial with unchanged mutation state ---",
+    );
+    expect(externalRetry.out).toContain("Intent created on bounded retry");
+  });
+
+  test("18: retained native-Windows evidence is redacted, complete, and checksum-bound", () => {
+    const readme = readFileSync(join(CODEX_EXEC_EVIDENCE, "README.md"), "utf-8");
+    for (const prefix of ["STAMP:", "TRACES:", "SUMMARY:", "RESULT:"]) {
+      expect(readme.match(new RegExp(`^${prefix}`, "gm"))?.length).toBe(2);
+    }
+
+    const fullDir = join(CODEX_EXEC_EVIDENCE, "full-slice");
+    const rerunDir = join(CODEX_EXEC_EVIDENCE, "journey-rerun");
+    const fullSummary = readFileSync(join(fullDir, "summary.txt"), "utf-8");
+    const fullFailures = readFileSync(join(fullDir, "failures.txt"), "utf-8");
+    const rerunSummary = readFileSync(join(rerunDir, "summary.txt"), "utf-8");
+    const rerunFailures = readFileSync(join(rerunDir, "failures.txt"), "utf-8");
+
+    expect(fullSummary).toContain("Test files: 5");
+    expect(fullSummary).toContain("Failed files: 1");
+    expect(fullSummary).toContain("Result: FAIL");
+    expect(fullFailures).toContain("FAIL: t-exec-codex-journey-workspace.serial");
+    expect(rerunSummary).toContain("Test files: 1");
+    expect(rerunSummary).toContain("Failed files: 0");
+    expect(rerunSummary).toContain("Result: PASS");
+    expect(rerunFailures.trim()).toBe("");
+    const fullTimestamp = fullSummary.match(/^Timestamp: (.+)$/m)?.[1];
+    const rerunTimestamp = rerunSummary.match(/^Timestamp: (.+)$/m)?.[1];
+    expect(fullTimestamp).toBeDefined();
+    expect(rerunTimestamp).toBeDefined();
+    expect(Date.parse(rerunTimestamp ?? "")).toBeGreaterThan(
+      Date.parse(fullTimestamp ?? ""),
+    );
+
+    for (const source of [
+      "tests/harness/exec-drive.ts",
+      "tests/e2e/t-exec-codex-journey-workspace.serial.test.ts",
+    ]) {
+      const body = readFileSync(join(REPO_ROOT, source), "utf-8");
+      const hash = createHash("sha256").update(body, "utf-8").digest("hex");
+      expect(readme).toContain(`| \`${source}\` | \`${hash}\` |`);
+    }
+
+    const expectedLogs = new Map([
+      [
+        "full-slice",
+        [
+          ["t-exec-codex-compose-front.serial.log", "PASS"],
+          ["t-exec-codex-compose-inflight.serial.log", "PASS"],
+          ["t-exec-codex-journey-workspace.serial.log", "FAIL"],
+          ["t-exec-codex-memory-include.serial.log", "PASS"],
+          ["t-exec-codex-status.serial.log", "PASS"],
+        ],
+      ],
+      ["journey-rerun", [["t-exec-codex-journey-workspace.serial.log", "PASS"]]],
+    ] as const);
+    const evidenceBodies = [readme, fullSummary, fullFailures, rerunSummary, rerunFailures];
+    for (const [stamp, expected] of expectedLogs) {
+      const dir = join(CODEX_EXEC_EVIDENCE, stamp);
+      expect(readdirSync(dir).filter((file) => file.endsWith(".log")).sort()).toEqual(
+        expected.map(([file]) => file).sort(),
+      );
+      for (const [file, status] of expected) {
+        const body = readFileSync(join(dir, file), "utf-8");
+        evidenceBodies.push(body);
+        expect(body).toContain("File: <WORKSPACE>\\tests\\e2e\\");
+        expect(body).toContain(`Status: ${status}`);
+        expect(body).toContain(status === "PASS" ? "(pass)" : "(fail)");
+        const hash = createHash("sha256").update(body, "utf-8").digest("hex");
+        expect(readme).toContain(`| \`${stamp}/${file}\` | \`${hash}\` |`);
+      }
+    }
+
+    const retained = evidenceBodies.join("\n");
+    for (const forbidden of [
+      /Administrator/i,
+      /EC2AMAZ/i,
+      /C:\\Users\\/i,
+      /\/home\/ubuntu\//i,
+      /AWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)/i,
+      /AKIA[0-9A-Z]{16}/,
+      /session id:\s*[0-9a-f-]{36}/i,
+    ]) {
+      expect(retained).not.toMatch(forbidden);
+    }
   });
 });
