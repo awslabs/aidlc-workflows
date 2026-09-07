@@ -288,9 +288,12 @@ export function openCheckpointPrompt(
   // Bound to the checkpoint the pointer says is open, so an older round's
   // prompt is never shown for a newer checkpoint of another kind.
   const wanted = checkpoint === "plan-approval" ? PLAN_APPROVAL_CHECKPOINT : SUMMARY_CONFIRMATION_CHECKPOINT;
+  // A summary checkpoint is bound to its questions file (fail closed without
+  // one); plan approval has no questions file and binds by kind and stage.
+  if (checkpoint !== "plan-approval" && !questionsFile) return null;
   const decisions = stageAuditRows(rows, stage, "DECISION_RECORDED").filter((row) =>
     auditBlockField(row.block, "Checkpoint") === wanted &&
-    (!questionsFile || auditBlockField(row.block, "Questions File") === questionsFile));
+    (checkpoint === "plan-approval" || auditBlockField(row.block, "Questions File") === questionsFile));
   const latest = decisions.at(-1);
   if (!latest) return null;
   const decision = auditBlockField(latest.block, "Decision") ?? "";
