@@ -559,7 +559,7 @@ function currentQuestionsTarget(projectDir: string, context = stateContext(proje
   const open = parseQuestionsMarkdown(questionsSource)
     .filter((question) => !question.confirmation)
     .some((question) => question.answer === null || question.answer.trim() === "");
-  const ready = questionsRoundPublished(context.current, stage.slug, sha256);
+  const ready = questionsRoundPublished(context.current, stage.slug, sha256); // open, not merely prepared
   const guide = ready ? context.current?.guide ?? null : null;
   const submitted = ready && pendingAnswerFiles(stagePath, sha256).length > 0;
   return {

@@ -374,14 +374,15 @@ export interface ReviewManifestArtifact {
  * and read by everything that shows or waits on the human — the daemon, the
  * Stop hook, `--status`. Nothing re-derives these from the stage files.
  *
- *   questions          a browser question round is published (guide passed)
+ *   prepared           the explainer passed; the terminal has not started waiting yet
+ *   questions          a browser question round is OPEN: the terminal is waiting for answers
  *   confirming         the consolidated-summary confirmation is open (terminal)
  *   awaiting-approval  an approval gate is open
  *   revising           the agent is addressing a rejected gate
  *   approved           the gate closed with an approval
  *   none               nothing waits on the human
  */
-export type CurrentReviewState = "questions" | "confirming" | "awaiting-approval" | "revising" | "approved" | "none";
+export type CurrentReviewState = "prepared" | "questions" | "confirming" | "awaiting-approval" | "revising" | "approved" | "none";
 
 /** What ends the human's part of the round; null when nothing is waiting on them. */
 export type RoundEndsWith = "answers" | "confirmation" | "decision" | null;
@@ -483,9 +484,12 @@ export function recordOfStageDir(stageDir: string): { recordDir: string; project
 }
 
 /**
- * Publish a browser question round: called by `aidlc-html.ts check --guide`
- * the moment the explainer passes. From here the daemon shows the form, the
- * Stop hook holds for `answers-NNN.json`, and both agree by construction.
+ * Prepare a browser question round: called by `aidlc-html.ts check --guide`
+ * the moment the explainer passes. The round is NOT yet open to the human -
+ * the conductor is still finishing its turn and nothing is waiting for a
+ * submission. The process that waits (the Stop hook, or `answers-wait`) opens
+ * it with `openQuestionsRound`; only then does the daemon show the form. So
+ * "the form is up" and "the terminal is waiting for it" are one fact.
  */
 export function publishQuestionsRound(
   recordDir: string,
@@ -494,7 +498,7 @@ export function publishQuestionsRound(
   const previous = readCurrentPointer(recordDir);
   const pointer: CurrentPointer = {
     version: 1,
-    state: "questions",
+    state: "prepared",
     stage: round.stage,
     unit: round.unit,
     stage_dir: round.stageDir,
@@ -506,6 +510,21 @@ export function publishQuestionsRound(
     questions_sha256: round.questionsSha256,
     guide: round.guide,
   };
+  writePointer(recordDir, pointer);
+  return pointer;
+}
+
+/**
+ * Open a prepared round: the caller is now waiting for `answers-NNN.json` for
+ * this exact questions file. Returns the open pointer, or null when there is
+ * no prepared/open round for the stage at that digest (nothing to open).
+ */
+export function openQuestionsRound(recordDir: string, stage: string, questionsSha256: string): CurrentPointer | null {
+  const current = readCurrentPointer(recordDir);
+  if (!current || current.stage !== stage || current.questions_sha256 !== questionsSha256) return null;
+  if (current.state === "questions") return current;
+  if (current.state !== "prepared") return null;
+  const pointer: CurrentPointer = { ...current, state: "questions", ends_with: "answers", updated_at: new Date().toISOString() };
   writePointer(recordDir, pointer);
   return pointer;
 }

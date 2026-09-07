@@ -102,6 +102,7 @@ import {
   stageReviewUiDir,
   writeConsumed,
   closeHumanRound,
+  openQuestionsRound,
   publishConfirmationRound,
   reviewUiEnabled,
 } from "./aidlc-review-ui-shared.ts";
@@ -1193,6 +1194,12 @@ async function handleAnswersWait(args: string[]): Promise<void> {
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const questions = projectQuestionsFile(pd, flags["questions-file"]);
   const stageDir = dirname(questions.absolute);
+  // This process is the one waiting for the answers: open the prepared round
+  // so the browser shows the form now, and not before.
+  if (reviewUiEnabled()) {
+    const record = recordDir(pd);
+    if (record) openQuestionsRound(record, flags.stage, sha256Hex(readFileSync(questions.absolute)));
+  }
 
   const ready = (): string[] =>
     pendingAnswerSubmissions(stageDir)

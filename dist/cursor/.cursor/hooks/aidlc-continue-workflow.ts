@@ -165,6 +165,7 @@ import {
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
 import {
+  openQuestionsRound,
   pendingAnswerFiles,
   pendingDecisions,
   readCurrentPointer,
@@ -648,7 +649,7 @@ function browserQuestionRound(
     if (slug.length === 0) return null;
     const pointer = readCurrentPointer(docsRoot(projectDir));
     if (
-      pointer?.state !== "questions" ||
+      (pointer?.state !== "prepared" && pointer?.state !== "questions") ||
       pointer.stage !== slug ||
       pointer.unit !== (unit ?? null) ||
       !pointer.stage_dir ||
@@ -661,6 +662,9 @@ function browserQuestionRound(
     if (!existsSync(questionsPath)) return null;
     // A file edited since publication is not the published round.
     if (sha256Hex(readFileSync(questionsPath)) !== pointer.questions_sha256) return null;
+    // This process is about to wait for the answers: open the round. The
+    // daemon shows the form from this write onward, and only from it.
+    if (!openQuestionsRound(docsRoot(projectDir), slug, pointer.questions_sha256)) return null;
     return {
       slug,
       stageDirPath: join(projectDir, ...pointer.stage_dir.split("/")),
