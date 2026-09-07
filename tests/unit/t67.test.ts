@@ -433,16 +433,20 @@ describe("t67 detect-scope --from-text keyword inference (migrated from t67 §7)
 describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §8-10)", () => {
   // §8 word-boundary false-positive guards: "debug" contains "bug",
   // "fixture" contains "fix" — \b regex must NOT match -> feature default.
-  const fallbackCase = (input: string, expected: string) => () => {
+  // Both helpers also pin the audit Source: a fallback is `freeform`; a keyword
+  // hit — including explicit prose, whose explicitness is routing metadata
+  // only — is `keyword`.
+  const sourceCase = (source: "keyword" | "freeform") => (input: string, expected: string) => () => {
     const p = proj();
     const r = detectFromText(input, p);
     expect(r.status).toBe(0);
     expect(ackScope(r)).toBe(expected);
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
-      expected,
-    );
+    const f = readAudit(p);
+    expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe(expected);
+    expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe(source);
   };
-  const keywordCase = fallbackCase;
+  const fallbackCase = sourceCase("freeform");
+  const keywordCase = sourceCase("keyword");
 
   test('20: "debug this issue" -> classic (word-boundary, no bugfix)', fallbackCase("debug this issue", "classic"));
   test('21: "fixture scope testing" -> classic (word-boundary, no bugfix)', fallbackCase("fixture scope testing", "classic"));
@@ -495,16 +499,6 @@ describe("t67 detect-scope audit + backward-compat + collision (migrated from t6
     const f = readAudit(p);
     expect(auditEventCount(f, "SCOPE_DETECTED")).toBe(1); // STRONGER: exact count
     expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("bugfix");
-    expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
-  });
-
-  test("25b: explicit prose audits Source=keyword (explicitness is routing metadata, not an audit source)", () => {
-    const p = proj();
-    const r = detectFromText("create a todo application using the express scope", p);
-    expect(r.status).toBe(0);
-    const f = readAudit(p);
-    expect(auditEventCount(f, "SCOPE_DETECTED")).toBe(1);
-    expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("express");
     expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
   });
 
