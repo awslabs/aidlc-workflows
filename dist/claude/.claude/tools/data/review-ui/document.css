@@ -257,8 +257,8 @@
 
 .selection-add {
   position: absolute;
-  left: calc(100% + 13px);
-  top: 50%;
+  right: calc(100% + 13px);
+  top: 0;
   width: 25px;
   height: 25px;
   transform: translateY(-50%);
@@ -272,6 +272,7 @@
   padding: 0;
 }
 .selection-add svg { width: 15px; height: 15px; }
+.selection-add.beside-bubble { right: calc(100% + 13px + 30px); }
 .selection-add:hover {
   border-color: var(--accent);
   background: var(--soft);

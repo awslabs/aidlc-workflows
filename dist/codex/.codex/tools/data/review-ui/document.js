@@ -289,11 +289,19 @@ function receiveHtmlAnchor(event) {
   emitCompose("comment", selection);
 }
 
+// The line-level element the caret or selection sits in: the unit a reader
+// means when they click into a paragraph, a list item, a table cell, a heading.
+function lineElementFor(node, block) {
+  const element = elementForNode(node);
+  const line = element?.closest("li, p, td, th, h1, h2, h3, h4, h5, h6, blockquote, pre, dd, dt");
+  return line && block.contains(line) ? line : block.querySelector(".blk-content") || block;
+}
+
 function captureSelection(event) {
   if (htmlFrame || event.target.closest(".gutter, .selection-add, .document-toolbar")) return;
   if (activeEdit?.armed && activeEdit.content.contains(event.target)) return;
   const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+  if (!selection || selection.rangeCount === 0) {
     store.set({ selection: null });
     return;
   }
@@ -306,8 +314,20 @@ function captureSelection(event) {
   }
   const block = blockData(start);
   if (!block) return;
-  const text = selection.toString().trim();
+  // A caret placed in a line (no highlight) offers a comment on that line,
+  // like a highlight does on its text. Marked `caret` so the C/D/G shortcuts
+  // stay off - a keystroke there is the start of an edit, not a command.
+  const caret = selection.isCollapsed || !selection.toString().trim();
+  const text = caret ? lineElementFor(range.startContainer, start).textContent.trim() : selection.toString().trim();
+  if (!text) {
+    store.set({ selection: null });
+    return;
+  }
   const lines = selectedLines(block, text);
+  // Where the affordance goes: the first line of the highlight (or the caret's
+  // line), relative to the block, so it sits in the gutter beside that line.
+  const lineRect = (caret ? lineElementFor(range.startContainer, start).getBoundingClientRect() : (range.getClientRects()[0] || range.getBoundingClientRect()));
+  const blockRect = start.getBoundingClientRect();
   const descriptor = {
     artifact: basename(store.document?.path || store.view.path || ""),
     path: store.document?.path || store.view.path,
@@ -317,25 +337,39 @@ function captureSelection(event) {
     line_start: lines.line_start,
     line_end: lines.line_end,
     heading_path: headingPath(Number(block.index)),
+    caret,
+    anchor_top: Math.max(0, lineRect.top - blockRect.top),
+    anchor_height: lineRect.height || 20,
   };
   store.set({ selection: descriptor });
 }
 
+// The add-comment trigger lives in the left gutter beside the selected line -
+// where the thread bubbles live - never on the block's far side.
 function showSelectionAffordance(selection) {
   elements.viewer?.querySelectorAll(".selection-add").forEach((button) => {
     button.remove();
   });
   if (!selection || store.view.kind !== "artifact" || selection.block === null || selection.block === undefined) return;
   const block = blockElement(selection.block);
+  // `.editing` only means the block has focus; an ARMED edit (typing began) is
+  // what hides the trigger, and armEdit clears the selection for that.
   if (!block) return;
   const button = document.createElement("button");
   button.type = "button";
   button.className = "selection-add";
   button.innerHTML = icon("commentAdd", { size: 15 });
-  button.title = "Comment on selection (C)";
-  button.setAttribute("aria-label", "Comment on selected text");
+  button.title = selection.caret ? "Comment on this line" : "Comment on selection (C)";
+  button.setAttribute("aria-label", button.title);
+  const top = (selection.anchor_top ?? 0) + (selection.anchor_height ?? 20) / 2;
+  button.style.top = `${Math.round(top)}px`;
+  // Beside an existing thread bubble on the same block, step further left.
+  if (block.querySelector(".gutter .bubble") && top < 30) button.classList.add("beside-bubble");
   button.addEventListener("mousedown", (event) => event.preventDefault());
-  button.addEventListener("click", () => emitCompose("comment", selection));
+  button.addEventListener("click", () => {
+    const { caret: _caret, anchor_top: _t, anchor_height: _h, ...anchored } = selection;
+    emitCompose("comment", anchored);
+  });
   block.append(button);
 }
 
@@ -348,7 +382,7 @@ function handleSelectionKey(event) {
     return;
   }
   if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.repeat) return;
-  if (!store.selection || store.view.kind !== "artifact") return;
+  if (!store.selection || store.selection.caret || store.view.kind !== "artifact") return;
   const target = event.target;
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
   if (activeEdit) return;
@@ -665,6 +699,8 @@ function armEdit(edit) {
   setSourceRange(edit.content, from, to);
   edit.armed = true;
   edit.wrapper.classList.add("armed");
+  // Typing is editing: the comment trigger for the caret's line steps aside.
+  store.set({ selection: null });
   refreshHistoryButtons();
 }
 
