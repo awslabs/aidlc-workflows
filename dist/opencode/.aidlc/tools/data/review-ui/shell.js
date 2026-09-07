@@ -307,14 +307,17 @@ export function pendingChangeCount() {
 function gateActions() {
   const changes = pendingChangeCount();
   if (changes > 0) {
-    const label = `Send ${changes} ${changes === 1 ? "change" : "changes"} — the agent revises`;
-    return `${actionButton("Approve anyway", "approve")}${actionButton(label, "request-changes", true)}`;
+    // A paper plane and one word; the count and what happens next are the tooltip.
+    const title = `Send ${changes} ${changes === 1 ? "change" : "changes"} to the agent — it revises and reopens the gate`;
+    return `${actionButton("Approve anyway", "approve")}${actionButton("Send", "request-changes", true, { icon: "send", title, count: changes })}`;
   }
   return `${actionButton("Request changes", "request-changes")}${actionButton("Approve", "approve", true)}`;
 }
 
-function actionButton(label, action, primary = false) {
-  return `<button type="button" class="${primary ? "btn primary" : "link"}" data-header-action="${action}">${escapeHtml(label)}</button>`;
+function actionButton(label, action, primary = false, { icon: iconName = null, title = "", count = 0 } = {}) {
+  const glyph = iconName ? icon(iconName, { size: 14 }) : "";
+  const badge = count ? `<span class="btn-count">${count}</span>` : "";
+  return `<button type="button" class="${primary ? "btn primary" : "link"}${iconName ? " btn-icon" : ""}" data-header-action="${action}"${title ? ` title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"` : ""}>${glyph}<span>${escapeHtml(label)}</span>${badge}</button>`;
 }
 
 function headerActions(view, stage) {

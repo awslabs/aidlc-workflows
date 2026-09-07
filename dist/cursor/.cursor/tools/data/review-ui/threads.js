@@ -458,7 +458,7 @@ function render() {
         <button class="threads-note-link" type="button">${generalNote ? "Edit general note" : "Add general note"}</button>
       </header>
       ${renderNoteEditor()}
-      ${pending.length || drafts.length ? `<p class="threads-pending-line" title="Nothing is applied until you send. Approve records them as notes only."><b>${pending.length + drafts.length} not sent</b> · <b>Send changes</b> hands them to the agent</p>` : ""}
+      ${pending.length || drafts.length ? `<p class="threads-pending-line" title="Nothing is applied until you send. Approve records them as notes only."><b>${pending.length + drafts.length} not sent</b> · <b>Send</b> (top right) hands them to the agent</p>` : ""}
       <div class="thread-list">${renderThreadList()}</div>
     </section>`;
   bindThreads();
@@ -562,7 +562,7 @@ function sortedSentThreads() {
     : (left.line_start || Number.MAX_SAFE_INTEGER) - (right.line_start || Number.MAX_SAFE_INTEGER));
 }
 
-const UNSENT_TITLE = "The agent has not seen this yet. Send changes (top right) hands it over; Approve records it as a note.";
+const UNSENT_TITLE = "The agent has not seen this yet. Send (top right) hands it over; Approve records it as a note.";
 
 /**
  * Where a thread is in its life, said once, bottom-left of the card, the way

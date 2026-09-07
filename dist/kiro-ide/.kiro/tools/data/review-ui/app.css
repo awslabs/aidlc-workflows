@@ -62,6 +62,10 @@ code { font: 12px var(--mono); background: var(--panel); padding: 1px 5px; borde
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--line2); border-radius: 7px; background: #fff; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .btn:hover { background: var(--panel); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Icon buttons: glyph, one word, and a small count pill. */
+.btn.btn-icon { display: inline-flex; align-items: center; gap: 6px; }
+.btn.btn-icon svg { flex: none; }
+.btn-count { min-width: 18px; padding: 0 5px; border-radius: 999px; background: rgba(255, 255, 255, 0.22); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
 .btn.primary:hover { filter: brightness(0.96); background: var(--accent); }
 .btn.warn { color: var(--rose); border-color: #f5c2cf; background: var(--rose-soft); }
 .btn[disabled] { opacity: 0.5; cursor: default; }
