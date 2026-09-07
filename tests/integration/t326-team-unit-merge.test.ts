@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin, subcommand:aidlc-unit:gate, subcommand:aidlc-unit:land, subcommand:aidlc-unit:merge-status, subcommand:aidlc-state:fold-unit-merge, audit:UNIT_MERGED, function:UNIT_MERGE_DIR, function:unitMergeTransactionPath, function:readUnitMergeTransaction, function:writeUnitMergeTransaction, function:unitMergedReceipts
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -44,6 +44,9 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+// The default also governs afterEach cleanup of several git trees per case, which exceeds bun's 5s hook default under --parallel 4.
+setDefaultTimeout(120_000);
 
 const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
